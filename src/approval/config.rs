@@ -134,6 +134,13 @@ pub fn matches_glob(value: &str, pattern: &str) -> bool {
     cached_glob_regex(pattern).is_some_and(|re| re.is_match(value))
 }
 
+/// First compiled rule in `rules` whose regex matches `target`. Used by the
+/// blocklist-then-allowlist scan in `ConfigApprovalPolicy::check` so the two
+/// arms share the find-first-match iteration.
+fn first_match(rules: &[CompiledRule], target: &str) -> Option<&CompiledRule> {
+    rules.iter().find(|r| r.regex.is_match(target))
+}
+
 /// A compiled policy rule, pairing the original glob pattern with its regex.
 #[derive(Debug, Clone)]
 struct CompiledRule {
@@ -436,35 +443,35 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
         };
 
         // 1. Blocklist takes priority (pre-compiled regexes, grouped by ActionType)
-        if let Some(rules) = self.blocklist_by_type.get(action) {
-            for rule in rules {
-                if rule.regex.is_match(target) {
-                    debug!(
-                        action = ?action,
-                        target = %redact_target(target),
-                        pattern = %rule.pattern,
-                        "Blocked by blocklist rule"
-                    );
-                    return ApprovalDecision::Deny {
-                        reason: format!("Blocked by policy rule: {}", rule.pattern),
-                    };
-                }
-            }
+        if let Some(rule) = self
+            .blocklist_by_type
+            .get(action)
+            .and_then(|r| first_match(r, target))
+        {
+            debug!(
+                action = ?action,
+                target = %redact_target(target),
+                pattern = %rule.pattern,
+                "Blocked by blocklist rule"
+            );
+            return ApprovalDecision::Deny {
+                reason: format!("Blocked by policy rule: {}", rule.pattern),
+            };
         }
 
         // 2. Allowlist overrides defaults (pre-compiled regexes, grouped by ActionType)
-        if let Some(rules) = self.allowlist_by_type.get(action) {
-            for rule in rules {
-                if rule.regex.is_match(target) {
-                    debug!(
-                        action = ?action,
-                        target = %redact_target(target),
-                        pattern = %rule.pattern,
-                        "Allowed by allowlist rule"
-                    );
-                    return ApprovalDecision::Allow;
-                }
-            }
+        if let Some(rule) = self
+            .allowlist_by_type
+            .get(action)
+            .and_then(|r| first_match(r, target))
+        {
+            debug!(
+                action = ?action,
+                target = %redact_target(target),
+                pattern = %rule.pattern,
+                "Allowed by allowlist rule"
+            );
+            return ApprovalDecision::Allow;
         }
 
         // 3. Fall back to defaults
