@@ -94,6 +94,24 @@ impl GenericAcpAdapter {
     }
 }
 
+impl GenericAcpAdapter {
+    /// `trust_level` → `PermissionPolicy`. Shared by `build_config` and
+    /// `spawn_session`; both built the same 9-line match before the helper
+    /// was extracted. Inherent method (not a trait method), so it lives on
+    /// `GenericAcpAdapter` directly rather than inside the `impl AcpAdapter`
+    /// block where the trait-method-only check would reject it.
+    fn permission_policy(&self) -> crate::acp::incoming::PermissionPolicy {
+        match self.trust_level {
+            crate::config::types::acp::TrustLevel::Full => {
+                crate::acp::incoming::PermissionPolicy::ApproveAll
+            }
+            crate::config::types::acp::TrustLevel::Disabled => {
+                crate::acp::incoming::PermissionPolicy::DenyAll
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl AcpAdapter for GenericAcpAdapter {
     fn id(&self) -> &str {
@@ -112,18 +130,7 @@ impl AcpAdapter for GenericAcpAdapter {
         self.supported_modes.clone()
     }
 
-    fn permission_policy(&self) -> crate::acp::incoming::PermissionPolicy {
-    match self.trust_level {
-        crate::config::types::acp::TrustLevel::Full => {
-            crate::acp::incoming::PermissionPolicy::ApproveAll
-        }
-        crate::config::types::acp::TrustLevel::Disabled => {
-            crate::acp::incoming::PermissionPolicy::DenyAll
-        }
-    }
-}
-
-fn build_config(&self, cwd: Option<&str>) -> AdapterConfig {
+    fn build_config(&self, cwd: Option<&str>) -> AdapterConfig {
         AdapterConfig {
             executable: self.executable.clone(),
             args: self.resolve_args(self.default_mode),
