@@ -216,8 +216,9 @@ impl SubagentTool {
         // and this one has to survive into the `AgentRuntimeConfig` literal.
         let rid_for_child = request_id.clone();
         // Phase 1 — Settled emit captures (moved into the run task).
-        let root_session_for_done = root_session;
-        let tree_agent_id_for_done = tree_agent_id;
+        // The originals (`root_session`, `tree_agent_id`) are consumed by the
+        // emit-trees hook in `done()` later in this function; the inner
+        // `tokio::spawn` below clones them again for the run task itself.
         let settle_started = std::time::Instant::now();
         // P1 data isolation (also closes a pre-existing cross-project note
         // leak): captured BEFORE the spawn boundary — `tokio::spawn` does NOT
@@ -407,11 +408,11 @@ impl SubagentTool {
             // result without racing ahead of the completed-map insert. R4
             // audit AGENTS-R4-05.
             emit_tree_event(
-                tree_agent_id_for_done.clone(),
-                root_session_for_done.clone(),
+                tree_agent_id.clone(),
+                root_session.clone(),
                 SubagentTreeEvent::Settled {
                     node_id: rid.clone(),
-                    root_session: root_session_for_done.clone(),
+                    root_session: root_session.clone(),
                     lifecycle: tree_lifecycle,
                     duration_ms: settle_started
                         .elapsed()
