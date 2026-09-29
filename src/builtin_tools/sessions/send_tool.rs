@@ -196,8 +196,7 @@ impl SessionsSendTool {
     pub const NAME: &'static str = "session_send";
 
     /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str =
-        "Send a message to another session (same or different agent). \
+    pub const DESCRIPTION: &'static str = "Send a message to another session (same or different agent). \
         Supports fire-and-forget (timeout_seconds=0) or wait-for-reply modes. \
         Use this to delegate tasks to other agents or communicate across sessions.";
 
@@ -863,7 +862,7 @@ fn build_sub_metadata(
 /// Implementation of `AlephTool` trait for `SessionsSendTool`
 #[async_trait]
 impl AlephTool for SessionsSendTool {
-    const NAME: &'static str = "session_send";
+    const NAME: &'static str = Self::NAME;
     const DESCRIPTION: &'static str = Self::DESCRIPTION;
 
     type Args = SessionsSendArgs;
@@ -1012,10 +1011,12 @@ mod tests {
         let output = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(output.status, SessionsSendStatus::Error);
         assert!(output.error.is_some());
-        assert!(output
-            .error
-            .unwrap()
-            .contains("GatewayContext not configured"));
+        assert!(
+            output
+                .error
+                .unwrap()
+                .contains("GatewayContext not configured")
+        );
     }
 
     // ============================================================================
