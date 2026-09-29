@@ -2019,7 +2019,7 @@ fn completed_row_json(request_id: &str, snap: &CompletedSnapshot) -> Value {
             "status": "completed",
             "request_id": request_id,
             "task": snap.task,
-            "result_preview": preview(final_text),
+            "result_preview": super::types::preview(final_text),
             "result_chars": final_text.chars().count(),
             "iterations": iterations,
             "tool_calls_made": tool_calls_made,
@@ -2057,16 +2057,7 @@ fn unknown_request_id(request_id: &str) -> ToolResult {
     }
 }
 
-/// UTF-8-safe head slice of a sub-agent's output, ellipsised when cut (P7 —
-/// byte slicing a model-authored string is how this panics on CJK).
-fn preview(text: &str) -> String {
-    let head: String = text.chars().take(LIST_RESULT_PREVIEW_CHARS).collect();
-    if head.chars().count() < text.chars().count() {
-        format!("{head}…")
-    } else {
-        head
-    }
-}
+
 
 /// Render a finished background sub-agent as a JSON object. `ok_status` is
 /// the `status` string for a success (`completed` / `already_completed`);

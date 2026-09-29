@@ -675,12 +675,7 @@ pub(crate) fn to_list_row(request_id: &str, recovered: &Recovered) -> Value {
             child_session,
             summary,
         } => {
-            let head: String = summary.chars().take(LIST_RESULT_PREVIEW_CHARS).collect();
-            let preview = if head.chars().count() < summary.chars().count() {
-                format!("{head}…")
-            } else {
-                head
-            };
+            let preview = super::types::preview(summary);
             json!({
                 "status": "completed_recovered",
                 "request_id": request_id,
@@ -706,13 +701,7 @@ pub(crate) fn to_list_row(request_id: &str, recovered: &Recovered) -> Value {
             "progress": progress_json(None),
         }),
         Recovered::Sidecar { record: run, .. } => {
-            let text = &run.partial_result;
-            let head: String = text.chars().take(LIST_RESULT_PREVIEW_CHARS).collect();
-            let preview = if head.chars().count() < text.chars().count() {
-                format!("{head}…")
-            } else {
-                head
-            };
+            let preview = super::types::preview(&run.partial_result);
             json!({
                 "status": crate::agents::background_persistence::settled_label(&run.record),
                 "request_id": request_id,
