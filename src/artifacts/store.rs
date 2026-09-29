@@ -235,22 +235,6 @@ async fn read_records(dir: &Path) -> Result<Vec<ArtifactRecord>, ArtifactError> 
     Ok(records)
 }
 
-/// Count the sidecars in `dir` without reading any of them.
-async fn count_sidecars(dir: &Path) -> Result<usize, std::io::Error> {
-    let mut entries = match fs::read_dir(dir).await {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(0),
-        Err(e) => return Err(e),
-    };
-    let mut count = 0;
-    while let Some(entry) = entries.next_entry().await? {
-        if entry.path().extension().and_then(|ext| ext.to_str()) == Some("json") {
-            count += 1;
-        }
-    }
-    Ok(count)
-}
-
 /// Eviction order key: lower is discarded first.
 ///
 /// Deliverables rank last because they are the *point* of the session — the
@@ -272,15 +256,6 @@ const fn eviction_rank(origin: ArtifactOrigin) -> u8 {
 /// Best-effort: the blob is already durably written when this runs, so a
 /// failure here is logged, never surfaced as a failed `put`.
 async fn evict_overflow(dir: &Path) {
-    match count_sidecars(dir).await {
-        Ok(count) if count <= MAX_ARTIFACTS_PER_SESSION => return,
-        Ok(_) => {}
-        Err(e) => {
-            warn!(path = %dir.display(), error = %e, "artifact eviction skipped: cannot list session");
-            return;
-        }
-    }
-
     let mut records = match read_records(dir).await {
         Ok(records) => records,
         Err(e) => {
