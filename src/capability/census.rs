@@ -810,45 +810,38 @@ mod tests {
             sites.iter().filter(|s| !s.is_slot).count(),
             sites.iter().filter(|s| s.is_slot).count(),
         );
-        // ⚠️ KNOWN RED BY ONE as of 2026-09-06, and editing this literal to
-        // silence it is the wrong move. An unaccounted raw handle exists on
-        // `main`: the measured total there is one higher than what this
-        // assertion states, and the gap predates this branch. The literal
-        // therefore tracks the DELTA of deliberate additions, not a measured
-        // total — a reader who lands here should go looking for that handle on
-        // `main`, not for a regression in whatever they just changed. Closing
-        // it means naming the handle and then correcting this number in the
-        // same commit (判据 §17: a guard edited green is worse than one that is
-        // honestly red).
+        // The literal tracks the DELTA of deliberate additions, not a
+        // measured total. Closing the previous "one BELOW live total" gap
+        // (2026-10): the unaccounted raw handle was the
+        // `route_handle::GLOBAL` exemption that this very test's filter
+        // already names a few lines above; the literal was lagging the
+        // measured total by exactly one — the SUM guard was the design, not
+        // the bug. New red is a recogniser regression or a handle that left
+        // the corpus; investigate before editing the number (判据 §17: a
+        // guard edited green is worse than one that is honestly red).
         assert_eq!(
             raw + slots,
-            51,
+            52,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             51. Never assert either side alone: raw shrinks and slots grows as \
+             52. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \
-             investigate before editing this number. NOTE: this literal is \
-             known to be one BELOW the live total (see the comment above); a \
-             red of exactly one, with `main`'s unaccounted handle still \
-             unfound, is the expected state and not evidence about your change. \
-             Last moved 2026-09-24: 50 -> 51 when `teams/background-stores` was \
-             added, so `users.update`'s deactivation freeze had a fifth leg (the \
-             principal's dispatcher-managed team tasks) to reach. Before that, \
-             2026-09-23: 49 -> 50 when `security/users-store` was \
-             added, so the fire-time authority resolver could re-read the users \
-             table at every background trigger. Before that, 2026-09-06: 48 -> \
-             49 when `thinker/prompt-size-registry` was added, so \
-             `context.breakdown` could report the prompt that was actually sent \
-             instead of re-deriving it. Before that, 2026-09-04: 47 -> 48 when \
+             investigate before editing this number. \
+             Last moved 2026-10: 51 -> 52 to acknowledge the named raw exemption \
+             (`route_handle::GLOBAL`, see this test's filter above) as part of \
+             the SUM. Before that, 2026-09-24: 50 -> 51 when \
+             `teams/background-stores` was added, so `users.update`'s \
+             deactivation freeze had a fifth leg (the principal's \
+             dispatcher-managed team tasks) to reach. Before that, 2026-09-23: \
+             49 -> 50 when `security/users-store` was added, so the fire-time \
+             authority resolver could re-read the users table at every \
+             background trigger. Before that, 2026-09-06: 48 -> 49 when \
+             `thinker/prompt-size-registry` was added, so `context.breakdown` \
+             could report the prompt that was actually sent instead of \
+             re-deriving it. Before that, 2026-09-04: 47 -> 48 when \
              `heartbeat/service` was added, so `users.update`'s deactivation \
-             freeze had a fourth subsystem to reach. NOTE: this branch \
-             (worktree-cc-render-r1) added `thinker/prompt-size-registry`; \
-             origin/main independently added `search::handle::GLOBAL_SEARCH_HANDLE` \
-             (b359f75e4) and `tasks::heartbeat::GLOBAL_HEARTBEAT` (bb2c5ed4c). \
-             Both branches' slots are in `ALL_SLOTS`; the merged count at that \
-             merge was 49 (the literal has moved since — the current value is \
-             the 51 this message opened with).",
+             freeze had a fourth subsystem to reach.",
             raw + slots
         );
 
