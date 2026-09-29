@@ -732,7 +732,16 @@ const BUDGETED: [&str; 12] = [
 ///     (ReasoningEmitted) and the context-slim −27 both landed in this tree —
 ///     5250 + 16 − 27 = 5239, and the guard's own measurement on the merged
 ///     tree agrees exactly.
-const CEILING: usize = 5239;
+/// +2 (5239 → 5241, 2026-09-28, fmt-only): `2b1bed6ff chore: cargo fmt
+///     across workspace` brought the crate into rustfmt 1.x compliance;
+///     rustfmt 1.x is stricter than 0.x and broke two `usize::try_from(...).
+///     unw_or(...)` field assignments in `agent.rs` (one each in the `Ok`
+///     and `Err` arms of the session-completion `match`) onto two lines
+///     each. No semantic change, no new cognition, no new consumer; the
+///     same field would have fit on one line under the older formatter.
+///     Bumping CEILING by the exact measured delta, not rounding, so the
+///     guard still catches a real regression.
+const CEILING: usize = 5241;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
