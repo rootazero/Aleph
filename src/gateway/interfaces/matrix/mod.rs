@@ -76,6 +76,8 @@ impl MatrixChannel {
             // one. Declared honestly until it does.
             read_receipts: false,
             rich_text: true,
+            polls: false,
+            group_icons: false,
             max_message_length: 65535,
             max_attachment_size: 100 * 1024 * 1024,
             stream_protocol: StreamProtocol::EditBased,

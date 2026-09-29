@@ -425,6 +425,15 @@ pub struct ChannelCapabilities {
     pub read_receipts: bool,
     /// Supports rich text/markdown
     pub rich_text: bool,
+    /// Supports creating polls in conversations (iMessage via BlueBubbles,
+    /// Telegram natively, Discord planned). `false` makes
+    /// `Channel::create_poll`'s default body return `UnsupportedFeature`
+    /// without touching the adapter, so an honest "we don't" never costs a
+    /// panic.
+    pub polls: bool,
+    /// Supports setting the icon of a group conversation. Same shape as
+    /// `polls`: `false` lets the trait default fire cleanly.
+    pub group_icons: bool,
     /// Maximum message length the transport accepts, in **characters**
     /// (0 = unknown / unlimited). Every adapter populates it from its vendor's
     /// documented character limit (telegram 4096, discord 2000, irc 400, …).
@@ -945,7 +954,9 @@ pub trait Channel: Send + Sync {
     /// be reachable through an `AlephTool`; the `CreatePoll` variant of
     /// `ChannelMessageAction` dispatches here. Channels without poll support
     /// inherit this default and surface `ChannelError::UnsupportedFeature`,
-    /// not a panic.
+    /// not a panic. The capability flag in `ChannelCapabilities::polls` is the
+    /// contract: `false` here is what `unsupported_feature(...)` reports, so
+    /// a transport can be honest without overriding the method.
     async fn create_poll(
         &self,
         _conversation_id: &ConversationId,
@@ -953,22 +964,27 @@ pub trait Channel: Send + Sync {
         _options: &[String],
         _allow_multiple: bool,
     ) -> ChannelResult<MessageId> {
-        Err(ChannelError::UnsupportedFeature(
-            "polls not supported on this channel".into(),
+        Err(unsupported_feature(
+            self.channel_type(),
+            self.capabilities().polls,
+            "polls",
         ))
     }
 
     /// Set the icon of a group conversation. Default: `UnsupportedFeature`.
     ///
     /// iMessage-native (BlueBubbles `setChatIcon` with image data).
-    /// Same R8 rationale as `create_poll`.
+    /// Same R8 rationale as `create_poll`. Capability flag:
+    /// `ChannelCapabilities::group_icons`.
     async fn set_group_icon(
         &self,
         _conversation_id: &ConversationId,
         _icon_data_url: &str,
     ) -> ChannelResult<()> {
-        Err(ChannelError::UnsupportedFeature(
-            "group icon not supported on this channel".into(),
+        Err(unsupported_feature(
+            self.channel_type(),
+            self.capabilities().group_icons,
+            "group icon",
         ))
     }
 

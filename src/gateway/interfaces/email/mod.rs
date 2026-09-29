@@ -98,6 +98,8 @@ impl EmailChannel {
             typing_indicator: false,
             read_receipts: false,
             rich_text: true,                       // HTML email
+            polls: false,
+            group_icons: false,
             max_message_length: 1_048_576,         // 1MB
             max_attachment_size: 25 * 1024 * 1024, // 25MB
             stream_protocol: Default::default(),

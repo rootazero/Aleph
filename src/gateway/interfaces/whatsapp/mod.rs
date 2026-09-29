@@ -291,6 +291,8 @@ impl WhatsAppChannel {
             typing_indicator: true,
             read_receipts: true,
             rich_text: true,
+            polls: false,
+            group_icons: false,
             max_message_length: 65536,
             max_attachment_size: 100 * 1024 * 1024,
             stream_protocol: Default::default(),

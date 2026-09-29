@@ -41,7 +41,7 @@ fn arb_pairing_data() -> impl Strategy<Value = PairingData> {
 /// Uses a fixed-size boolean vec to avoid proptest's tuple size limits.
 fn arb_channel_capabilities() -> impl Strategy<Value = ChannelCapabilities> {
     (
-        prop_vec(any::<bool>(), 11..=11), // exactly 11 booleans
+        prop_vec(any::<bool>(), 13..=13), // exactly 13 booleans (the bool fields)
         0..100_000usize,                  // max_message_length
         0..100_000_000u64,                // max_attachment_size
     )
@@ -57,6 +57,8 @@ fn arb_channel_capabilities() -> impl Strategy<Value = ChannelCapabilities> {
             typing_indicator: bools[8],
             read_receipts: bools[9],
             rich_text: bools[10],
+            polls: bools[11],
+            group_icons: bools[12],
             max_message_length: max_msg,
             max_attachment_size: max_att,
             stream_protocol: Default::default(),

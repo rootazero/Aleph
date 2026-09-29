@@ -86,6 +86,8 @@ impl FeishuChannel {
             video: false,
             reactions: true,
             replies: true,
+            polls: false,
+            group_icons: false,
             // Truthful despite the `Channel::edit` override below: that
             // override delegates to `MessageOps::edit`, which refuses
             // unconditionally. The override's *existence* is not evidence of

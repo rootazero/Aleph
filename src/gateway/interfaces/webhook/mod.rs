@@ -135,6 +135,8 @@ impl WebhookChannel {
             typing_indicator: false,
             read_receipts: false,
             rich_text: true,
+            polls: false,
+            group_icons: false,
             max_message_length: 1_048_576, // 1MB
             max_attachment_size: 0,
             stream_protocol: Default::default(),

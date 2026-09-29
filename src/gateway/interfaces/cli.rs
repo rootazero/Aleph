@@ -122,6 +122,8 @@ impl CliChannel {
                 typing_indicator: false,
                 read_receipts: false,
                 rich_text: false,
+                polls: false,
+                group_icons: false,
                 max_message_length: 0, // unlimited
                 max_attachment_size: 0,
                 stream_protocol: Default::default(),

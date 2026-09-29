@@ -38,6 +38,16 @@ pub fn bluebubbles_capabilities() -> ChannelCapabilities {
         typing_indicator: true,
         read_receipts: true,
         rich_text: false,
+        // Polls: BlueBubbles Private API helper does not list poll creation in
+        // its 22 supported features, and no REST endpoint exists. Trait default
+        // returns UnsupportedFeature. If a future BlueBubbles server adds the
+        // endpoint, flip this and add `Channel::create_poll` impl.
+        polls: false,
+        // Group icon: BlueBubbles Private API #8 — "Update group chat photo
+        // (requires MacOS 11+)" — exposed as `POST /api/v1/chat/{chatGuid}/icon`
+        // (multipart, field `icon`). Upstream reference: openclaw
+        // extensions/bluebubbles/src/chat.ts::setGroupIconBlueBubbles.
+        group_icons: true,
         max_message_length: 4000,
         max_attachment_size: 100 * 1024 * 1024,
         stream_protocol: Default::default(),
