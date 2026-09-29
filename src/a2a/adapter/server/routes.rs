@@ -168,36 +168,8 @@ async fn stream_message_send(
         .and_then(|v| v.as_str())
         .map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
 
-    if let Some(push_params) = request.params.get("pushNotificationConfig").cloned() {
-        #[derive(serde::Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct InlinePushConfig {
-            url: String,
-            #[serde(default)]
-            token: Option<String>,
-            #[serde(default)]
-            events: Vec<String>,
-        }
-        match serde_json::from_value::<InlinePushConfig>(push_params) {
-            Ok(inline) => {
-                let push_config = crate::a2a::service::notification::PushNotificationConfig {
-                    task_id: task_id.clone(),
-                    url: inline.url,
-                    token: inline.token,
-                    events: inline.events,
-                };
-                if let Err(e) = state.notification.set_config(push_config).await {
-                    return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
-                }
-            }
-            Err(e) => {
-                return sse_error(JsonRpcResponse::error(
-                    request.id.clone(),
-                    -32602,
-                    &format!("Invalid params: invalid 'pushNotificationConfig': {e}"),
-                ));
-            }
-        }
+    if let Err(e) = apply_inline_push_config(&state.notification, &request.params, &task_id).await {
+        return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
     }
 
     let session_id = request
