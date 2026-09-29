@@ -1002,9 +1002,9 @@ impl LoopTool for SubagentTool {
                 let child_cap_secs =
                     wave_aware_child_timeout_cap(prepared.len(), permits, agg_rounds);
                 let waves = u64::try_from(wave_count(prepared.len(), permits)).unwrap_or(u64::MAX);
-                for row in &mut prepared {
-                    row.3 = row.3.min(child_cap_secs);
-                }
+                prepared
+                    .iter_mut()
+                    .for_each(|row| row.3 = row.3.min(child_cap_secs));
                 // Backstop for children that never get to arm their own clock:
                 // the permit wait inside the spawner happens BEFORE its
                 // `tokio::time::timeout`, so a queued child is invisible to
