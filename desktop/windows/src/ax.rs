@@ -1150,14 +1150,14 @@ mod imp {
         unavailable()
     }
     pub(super) fn set_value(
-        _loc: aleph_protocol::desktop_bridge::methods::ax::AxLocator,
-        _value: String,
+        _loc: &aleph_protocol::desktop_bridge::methods::ax::AxLocator,
+        _value: &str,
     ) -> Result<aleph_protocol::desktop_bridge::methods::ax::AxActionResult> {
         unavailable()
     }
     pub(super) fn perform_action(
-        _loc: aleph_protocol::desktop_bridge::methods::ax::AxLocator,
-        _action: String,
+        _loc: &aleph_protocol::desktop_bridge::methods::ax::AxLocator,
+        _action: &str,
     ) -> Result<aleph_protocol::desktop_bridge::methods::ax::AxActionResult> {
         unavailable()
     }

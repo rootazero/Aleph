@@ -342,7 +342,7 @@ mod tests {
 
     // Integration test (requires a real API key)
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires FIRECRAWL_API_KEY; live API integration test"]
     async fn firecrawl_search_real_api() {
         let api_key = std::env::var("FIRECRAWL_API_KEY").expect("FIRECRAWL_API_KEY not set");
         let provider = FirecrawlProvider::new(api_key, None, false).unwrap();

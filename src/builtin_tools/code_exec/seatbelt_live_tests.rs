@@ -176,6 +176,7 @@ async fn bash_tool_runs_when_path_puts_an_unrunnable_bash_first() {
 /// Command Line Tools are installed — with `DEVELOPER_DIR` pointed at them,
 /// which is the CLT-only Mac the profile's CLT grant exists for.
 #[tokio::test]
+#[ignore = "macOS only; requires Xcode installed AND a seatbelt profile that grants writes to /var/folders/*/T/xcrun_db-* (cache for xcrun stub). Both gates are CI-host-dependent; run manually on a fully-configured Mac."]
 async fn python_runs_when_path_puts_an_unrunnable_python3_first() {
     // No developer dir at all: the stub would offer the CLT installer (a GUI
     // dialog), so do not invoke it.
