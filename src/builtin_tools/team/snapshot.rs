@@ -15,11 +15,11 @@ use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
-use crate::teams::snapshots::{
-    capture_snapshot, restore_snapshot, CreateSnapshotOutput, RestoreDiff, SnapshotMeta,
-    SqliteSnapshotStore, TeamSnapshotPayload,
-};
 use crate::teams::TeamStore;
+use crate::teams::snapshots::{
+    CreateSnapshotOutput, RestoreDiff, SnapshotMeta, SqliteSnapshotStore, TeamSnapshotPayload,
+    capture_snapshot, restore_snapshot,
+};
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -113,6 +113,14 @@ impl TeamSnapshotTool {
             current_agent_id: current_agent_id.into(),
         }
     }
+
+    /// BT-D-R4-23: gate every action against a team id with the same helper
+    /// the rest of `team_*` uses, so this tool cannot spell its own auth
+    /// call. Five call sites used to spell it by hand; one method now.
+    async fn require_auth(&self, team_id: &str) -> Result<()> {
+        crate::builtin_tools::team::require_team_auth(&*self.team_store, team_id, &self.actor())
+            .await
+    }
 }
 
 #[async_trait]
@@ -151,12 +159,7 @@ impl AlephTool for TeamSnapshotTool {
                 // caller that isn't a member could otherwise write a
                 // snapshot (which then lives in the store, and shows up in
                 // every later List for the team).
-                crate::builtin_tools::team::require_team_auth(
-                    &*self.team_store,
-                    team_id,
-                    &self.actor(),
-                )
-                .await?;
+                self.require_auth(team_id).await?;
                 let tag = args.tag.as_deref().unwrap_or("");
                 let note = args.note.as_deref().unwrap_or("");
                 let out = capture_snapshot(
@@ -179,12 +182,7 @@ impl AlephTool for TeamSnapshotTool {
                     .team_id
                     .as_deref()
                     .ok_or_else(|| AlephError::other("team_snapshot(list): team_id is required"))?;
-                crate::builtin_tools::team::require_team_auth(
-                    &*self.team_store,
-                    team_id,
-                    &self.actor(),
-                )
-                .await?;
+                self.require_auth(team_id).await?;
                 let snapshots = self.snapshot_store.list(Some(team_id)).await?;
                 TeamSnapshotOutput::List { snapshots }
             }
@@ -198,12 +196,7 @@ impl AlephTool for TeamSnapshotTool {
                     })?;
                 // BT-D-R4-23: gate using the snapshot's own team_id — the
                 // caller did not have to supply one, so we look it up.
-                crate::builtin_tools::team::require_team_auth(
-                    &*self.team_store,
-                    &meta.team_id,
-                    &self.actor(),
-                )
-                .await?;
+                self.require_auth(&meta.team_id).await?;
                 TeamSnapshotOutput::Get { meta, payload }
             }
             SnapshotAction::Restore => {
@@ -221,12 +214,7 @@ impl AlephTool for TeamSnapshotTool {
                         AlephError::NotFound(format!("snapshot `{snapshot_id}` not found"))
                     })?
                     .0;
-                crate::builtin_tools::team::require_team_auth(
-                    &*self.team_store,
-                    &meta.team_id,
-                    &self.actor(),
-                )
-                .await?;
+                self.require_auth(&meta.team_id).await?;
                 let diff = restore_snapshot(
                     self.snapshot_store.as_ref(),
                     self.team_store.as_ref(),
@@ -254,12 +242,7 @@ impl AlephTool for TeamSnapshotTool {
                         AlephError::NotFound(format!("snapshot `{snapshot_id}` not found"))
                     })?
                     .0;
-                crate::builtin_tools::team::require_team_auth(
-                    &*self.team_store,
-                    &meta.team_id,
-                    &self.actor(),
-                )
-                .await?;
+                self.require_auth(&meta.team_id).await?;
                 let existed = self.snapshot_store.delete(snapshot_id).await?;
                 TeamSnapshotOutput::Delete {
                     snapshot_id: snapshot_id.to_string(),
