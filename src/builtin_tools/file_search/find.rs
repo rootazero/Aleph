@@ -122,11 +122,12 @@ impl FindTool {
         let offset = args.offset.unwrap_or(0);
         let output_dir = self.output_dir().await;
         let path = args.path.as_deref().unwrap_or(".");
+        let respected_ignore = !args.no_ignore.unwrap_or(false);
 
         let (root, report) = walk(&WalkRequest {
             path,
             glob: Some(args.pattern.as_str()),
-            respect_ignore: !args.no_ignore.unwrap_or(false),
+            respect_ignore: respected_ignore,
             denied_paths: &self.denied_paths,
             output_dir: output_dir.as_deref(),
         })?;
@@ -142,8 +143,6 @@ impl FindTool {
         let returned = page.len();
         let next_offset =
             (offset.saturating_add(returned) < total).then(|| offset.saturating_add(returned));
-
-        let respected_ignore = !args.no_ignore.unwrap_or(false);
         let mut message = if total == 0 {
             String::from("No files matched")
         } else {
