@@ -131,32 +131,20 @@ impl SmartRouter {
 /// Extract a quoted name from intent text.
 /// Supports Chinese quotes 「xxx」 and double quotes "xxx".
 fn extract_quoted_name(text: &str) -> Option<String> {
-    // Try Chinese quotes: 「xxx」
-    if let Some(start) = text.find('\u{300C}') {
-        // 「
-        if let Some(end) = text[start..].find('\u{300D}') {
-            // 」
-            let inner_start = start + '\u{300C}'.len_utf8();
-            let inner_end = start + end;
-            if let Some(name) = text.get(inner_start..inner_end) {
-                if !name.is_empty() {
-                    return Some(name.to_string());
-                }
-            }
-        }
-    }
-    // Try double quotes: "xxx"
-    if let Some(start) = text.find('"') {
-        let after_quote = start + 1;
-        if let Some(end) = text.get(after_quote..)?.find('"') {
-            if let Some(name) = text.get(after_quote..after_quote + end) {
-                if !name.is_empty() {
-                    return Some(name.to_string());
-                }
-            }
-        }
-    }
-    None
+    // Chinese quote 「 is one byte in the source but a multi-byte UTF-8 char
+    // at runtime; use a single helper that handles the byte indexing uniformly.
+    extract_between(text, '「', '」').or_else(|| extract_between(text, '"', '"'))
+}
+
+/// First occurrence of `open` followed later by `close`, returning the slice
+/// between them. Skips empty matches (an empty quoted name is not a name).
+fn extract_between(text: &str, open: char, close: char) -> Option<String> {
+    let start = text.find(open)?;
+    let after_open = start + open.len_utf8();
+    let end_rel = text[after_open..].find(close)?;
+    let name = &text[after_open..after_open + end_rel];
+    (!name.is_empty()).then(|| name.to_string())
+}
 }
 
 #[cfg(test)]
