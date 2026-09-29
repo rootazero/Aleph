@@ -287,23 +287,24 @@ pub(super) async fn resolve_rail(
 ) -> std::result::Result<Rail, DesktopOutput> {
     let pid = resolve_target_pid(platform, screen, args)
         .await
-        .map_err(|message| DesktopOutput {
-            success: false,
-            data: None,
-            message: Some(super::recovery::with_hint(message)),
-        })?;
-
+        .map_err(|m| hint_refusal(m))?;
     choose_rail(
         screen.supports_targeted_input(),
         pid,
         allow_global_pointer,
         &args.action,
     )
-    .map_err(|message| DesktopOutput {
+    .map_err(hint_refusal)
+}
+
+/// A refusal carrying the recovery hint — every rail resolution lands on this
+/// shape, so the hint-attached `DesktopOutput` builder has one site.
+fn hint_refusal(message: String) -> DesktopOutput {
+    DesktopOutput {
         success: false,
         data: None,
         message: Some(super::recovery::with_hint(message)),
-    })
+    }
 }
 
 /// Pre-flight `type_text`'s focus, in the rail's own terms.
@@ -352,11 +353,7 @@ enum ShotSpace {
 /// Build a structured validation-failure output for a known action whose
 /// required arguments are missing or malformed.
 fn invalid_args(message: impl Into<String>) -> DesktopOutput {
-    DesktopOutput {
-        success: false,
-        data: None,
-        message: Some(message.into()),
-    }
+    DesktopOutput::failed(message)
 }
 
 /// Reject non-finite f64 values (`NaN`, `±Infinity`).
@@ -587,7 +584,7 @@ async fn resolve_element_token(
                     "could not re-resolve the element (AX query failed: {e}). Take a fresh \
                      ax_snapshot and use one of its tokens"
                 ))),
-            })
+            });
         }
     };
     let candidates: Vec<aleph_desktop::RankCandidate> = elements
@@ -1340,7 +1337,7 @@ impl super::DesktopTool {
                             success: false,
                             data: None,
                             message: Some(message),
-                        }))
+                        }));
                     }
                 };
                 let session_id = super::held_inputs::current_session_id();
@@ -1845,7 +1842,7 @@ impl super::DesktopTool {
                             success: false,
                             data: None,
                             message: Some(message),
-                        }))
+                        }));
                     }
                 };
                 let session_id = super::held_inputs::current_session_id();
@@ -1914,7 +1911,7 @@ impl super::DesktopTool {
                                  `system` with list_installed_apps enumerates both."
                                     .to_string(),
                             ),
-                        }))
+                        }));
                     }
                 };
                 match screen.quit_app(bundle_id).await {
@@ -1945,7 +1942,7 @@ impl super::DesktopTool {
                                  `system` with list_installed_apps enumerates both."
                                     .to_string(),
                             ),
-                        }))
+                        }));
                     }
                 };
                 // Prefer SystemCapability::restart_app: it encapsulates the
@@ -2289,7 +2286,7 @@ impl super::DesktopTool {
                                  or re-screenshot to confirm the result instead."
                                     .into(),
                             )),
-                        }))
+                        }));
                     }
                 };
                 // Resolve app/pid/window_id to a pid the same way the rest of
@@ -2303,7 +2300,7 @@ impl super::DesktopTool {
                             success: false,
                             data: None,
                             message: Some(super::recovery::with_hint(message)),
-                        }))
+                        }));
                     }
                 };
                 let output = super::verify_state::run_verify_state(
@@ -2328,7 +2325,7 @@ impl super::DesktopTool {
                                  fall back to click + type_text."
                                     .into(),
                             )),
-                        }))
+                        }));
                     }
                 };
                 let value = match args.text.as_deref() {
@@ -2338,7 +2335,7 @@ impl super::DesktopTool {
                             success: false,
                             data: None,
                             message: Some("set_value requires 'text'".into()),
-                        }))
+                        }));
                     }
                 };
                 let params = SetValueParams {
@@ -2366,7 +2363,7 @@ impl super::DesktopTool {
                                  fall back to click."
                                     .into(),
                             )),
-                        }))
+                        }));
                     }
                 };
                 let action = match args.ax_action_name.as_deref() {
@@ -2376,7 +2373,7 @@ impl super::DesktopTool {
                             success: false,
                             data: None,
                             message: Some("ax_action requires 'ax_action_name'".into()),
-                        }))
+                        }));
                     }
                 };
                 let params = PerformActionParams {
@@ -2601,9 +2598,11 @@ mod tests {
         // No region supplied → capture the whole display (Ok(None)), shared by
         // screenshot and screen_record alike.
         let a = args(serde_json::json!({"action": "screen_record"}));
-        assert!(screen_region_from_args(&a, "screen_record")
-            .unwrap()
-            .is_none());
+        assert!(
+            screen_region_from_args(&a, "screen_record")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -3361,7 +3360,7 @@ mod tests {
     mod element_tokens {
         use super::*;
         use crate::builtin_tools::desktop::element_ref::{self, ElementRecord};
-        use crate::builtin_tools::desktop::{held_inputs, DesktopTool};
+        use crate::builtin_tools::desktop::{DesktopTool, held_inputs};
         use aleph_desktop::traits::{
             AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
             PimCapability, PowerCapability, ScreenCapability, SystemCapability,
