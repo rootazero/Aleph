@@ -25,10 +25,9 @@ impl NoteManageTool {
             .filename
             .as_deref()
             .ok_or_else(|| AlephError::tool("filename is required for create"))?;
-        let _title = args
-            .title
-            .as_deref()
-            .ok_or_else(|| AlephError::tool("title is required for create"))?;
+        if args.title.is_none() {
+            return Err(AlephError::tool("title is required for create"));
+        }
 
         // Hard security floor (§5.1): reject injection / exfiltration /
         // persistence payloads before they land in trusted long-term memory.
