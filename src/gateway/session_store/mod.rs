@@ -546,23 +546,6 @@ pub trait SessionStore: Send + Sync {
         key: &SessionKey,
         patch: &SessionPatch,
     ) -> Result<bool, SessionStoreError>;
-    /// Accumulate one run's usage onto the session row. `cost_usd` is that
-    /// run's priced cost (0.0 when it could not be priced).
-    ///
-    /// No production caller today: a run is billed only through
-    /// `stamp_and_bill_in_range`, inside the same operation that lands its
-    /// stamp (F10). Calling this method to bill a run instead bypasses that
-    /// stamp's idempotence guard — nothing here stops a second call from
-    /// billing the same run twice. Parked, not cut (2026-09-24 review, I1).
-    async fn update_session_usage(
-        &self,
-        key: &SessionKey,
-        input_tokens: i64,
-        output_tokens: i64,
-        cost_usd: f64,
-        model: Option<&str>,
-        model_provider: Option<&str>,
-    ) -> Result<(), SessionStoreError>;
     async fn get_session_preview(
         &self,
         key: &SessionKey,

@@ -529,27 +529,6 @@ impl SessionStore for SessionManager {
         self.patch_session(key, patch).await.map_err(map_err)
     }
 
-    async fn update_session_usage(
-        &self,
-        key: &SessionKey,
-        input_tokens: i64,
-        output_tokens: i64,
-        cost_usd: f64,
-        model: Option<&str>,
-        model_provider: Option<&str>,
-    ) -> Result<(), SessionStoreError> {
-        self.update_session_usage(
-            key,
-            input_tokens,
-            output_tokens,
-            cost_usd,
-            model,
-            model_provider,
-        )
-        .await
-        .map_err(map_err)
-    }
-
     async fn get_session_preview(
         &self,
         key: &SessionKey,

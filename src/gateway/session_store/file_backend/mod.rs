@@ -844,10 +844,6 @@ impl SessionStore for FileSessionStore {
             // message rows carry real ones. The other writer of the same
             // columns is `branch_from_checkpoint` below, which seeds a NEW
             // child row once from the checkpoint's rows.
-            // (`update_session_usage` has no production caller: a run is
-            // billed only through `stamp_and_bill_in_range`, inside the
-            // stamp's own operation; calling it here instead would bypass
-            // that stamp's idempotence guard — F10.)
             if meta.derived_title.is_none() && msg.role == "user" {
                 let title = msg.content.trim();
                 let title = if title.chars().count() > 60 {
@@ -1469,32 +1465,6 @@ impl SessionStore for FileSessionStore {
         let meta = guard.commit().await?;
         self.emit_session_changed(&key_str, "patch", Some(&meta));
         Ok(true)
-    }
-
-    async fn update_session_usage(
-        &self,
-        key: &SessionKey,
-        input_tokens: i64,
-        output_tokens: i64,
-        cost_usd: f64,
-        model: Option<&str>,
-        model_provider: Option<&str>,
-    ) -> Result<(), SessionStoreError> {
-        let key_str = key.to_key_string();
-        let mut guard = self.lock_metadata(&key_str).await?;
-        if let Some(meta) = guard.existing_mut() {
-            let bill = RunBill {
-                input_tokens,
-                output_tokens,
-                cost_usd,
-                model: model.map(str::to_string),
-                model_provider: model_provider.map(str::to_string),
-            };
-            add_bill(meta, &bill);
-            let committed = guard.commit().await?;
-            self.emit_session_changed(&key_str, "usage", Some(&committed));
-        }
-        Ok(())
     }
 
     async fn get_session_preview(
@@ -2853,12 +2823,21 @@ mod branch_checkpoint_attribution_tests {
 
         const ROUNDS: i64 = 24;
         for round in 0..ROUNDS {
-            let usage = {
+            // Two writers on different fields: one flips `model`, one flips
+            // `label`. They race on the same `metadata.json` and a torn
+            // document would surface here as either field never landing.
+            let writer_model = {
                 let store = store.clone();
                 let key = key.clone();
                 tokio::spawn(async move {
                     store
-                        .update_session_usage(&key, 1, 1, 0.0, None, None)
+                        .patch_session(
+                            &key,
+                            &SessionPatch {
+                                model: Some(if round % 2 == 0 { "a".into() } else { "b".into() }),
+                                ..Default::default()
+                            },
+                        )
                         .await
                         .unwrap();
                 })
@@ -2880,7 +2859,7 @@ mod branch_checkpoint_attribution_tests {
                         .unwrap();
                 })
             };
-            usage.await.unwrap();
+            writer_model.await.unwrap();
             dial.await.unwrap();
 
             // Both halves of (1), checked separately: the direct read (what
@@ -2902,17 +2881,16 @@ mod branch_checkpoint_attribution_tests {
             );
         }
 
-        // (2): every usage update landed. Without the lock this counter is
-        // short by however many times the dial writer's document won.
+        // (2): both writers landed. Without the lock one writer's document would
+        // win every time it raced, dropping the other field's value.
         let meta = store.read_metadata(&key_str).await.unwrap().unwrap();
-        assert_eq!(
-            meta.total_tokens,
-            ROUNDS * 2,
-            "usage updates were lost to a concurrent dial write"
+        assert!(
+            meta.model.is_some(),
+            "the model write was lost to a concurrent label write"
         );
         assert!(
             meta.label.is_some(),
-            "the dial write was lost to a concurrent usage update"
+            "the label write was lost to a concurrent model write"
         );
     }
 

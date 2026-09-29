@@ -7,8 +7,8 @@ use crate::gateway::router::SessionKey;
 /// The session-row half of billing a run: add its tokens and cost, and pin
 /// the model it ran on when it names one. Returns the rows changed — 0 means
 /// there is no session row to bill, which the caller must not read as done.
-/// Shared by `update_session_usage` and the transactional
-/// `stamp_and_bill_in_range`, so the two cannot drift on what "billing" adds.
+/// Shared with the transactional `stamp_and_bill_in_range`, so the two
+/// cannot drift on what "billing" adds.
 pub(crate) fn add_usage(
     conn: &rusqlite::Connection,
     key_str: &str,
@@ -525,25 +525,39 @@ impl SessionManager {
         Ok(updated > 0)
     }
 
-    /// Accumulate one run's usage onto the session row: tokens, cost, and the
-    /// model that served it.
-    ///
-    /// `cost_usd` is this run's estimate; pass 0.0 when the run could not be
-    /// priced (an unknown provider/model). The column then stays honest-but-low
-    /// rather than being poisoned by a fabricated number.
-    ///
-    /// Until this had a production caller, the session's token columns were
-    /// permanently 0 and `estimated_cost_usd` had no column at all — while both
-    /// were surfaced to the model (the `sessions` tool) and to the Panel as
-    /// facts.
-    ///
-    /// No production caller today, either: a run is billed only through
-    /// `stamp_and_bill_in_range`, inside the same operation that lands its
-    /// stamp (F10), and that stamp is the idempotence guard against a replay.
-    /// Calling this method to bill a run bypasses that guard — nothing here
-    /// stops a second call from billing the same run twice. Parked, not cut
-    /// (2026-09-24 review, I1).
-    pub async fn update_session_usage(
+    /// Publish `session_updated` after a bill landed outside this module
+    /// (`stamp_and_bill_in_range` lives on the store trait impl, which cannot
+    /// reach `emit_session_updated`).
+    pub(crate) fn notify_usage_updated(&self, key_str: &str) {
+        self.emit_session_updated(key_str);
+    }
+
+    /// Transition session to error state with optional error message
+    pub async fn set_error(
+        &self,
+        key: &SessionKey,
+        _error_msg: Option<&str>,
+    ) -> Result<(), SessionManagerError> {
+        self.set_state(key, SessionState::Error).await
+    }
+
+    /// Transition session to stopped state (permanent)
+    pub async fn stop(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
+        self.set_state(key, SessionState::Stopped).await
+    }
+
+    /// Transition session to idle state (after running completes)
+    pub async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
+        self.set_state(key, SessionState::Idle).await
+    }
+
+    /// Test-only seed path: writes a `RunBill` directly to the session row,
+    /// bypassing `stamp_and_bill_in_range`. Used by tests that need a
+    /// non-zero `get_total_tokens` / `estimated_cost_usd` without standing up
+    /// a full message run. Production callers go through the stamp path; this
+    /// helper is `#[cfg(test)]` and therefore invisible to release builds.
+    #[cfg(test)]
+    pub(crate) async fn seed_bill_for_test(
         &self,
         key: &SessionKey,
         input_tokens: i64,
@@ -569,31 +583,5 @@ impl SessionManager {
         drop(conn);
         self.emit_session_updated(&key_str);
         Ok(())
-    }
-
-    /// Publish `session_updated` after a bill landed outside this module
-    /// (`stamp_and_bill_in_range` lives on the store trait impl, which cannot
-    /// reach `emit_session_updated`).
-    pub(crate) fn notify_usage_updated(&self, key_str: &str) {
-        self.emit_session_updated(key_str);
-    }
-
-    /// Transition session to error state with optional error message
-    pub async fn set_error(
-        &self,
-        key: &SessionKey,
-        _error_msg: Option<&str>,
-    ) -> Result<(), SessionManagerError> {
-        self.set_state(key, SessionState::Error).await
-    }
-
-    /// Transition session to stopped state (permanent)
-    pub async fn stop(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
-        self.set_state(key, SessionState::Stopped).await
-    }
-
-    /// Transition session to idle state (after running completes)
-    pub async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
-        self.set_state(key, SessionState::Idle).await
     }
 }
