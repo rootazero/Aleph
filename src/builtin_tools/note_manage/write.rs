@@ -123,12 +123,7 @@ impl NoteManageTool {
                         if let Ok(Some(e)) =
                             self.indexer.store().get_note_index(&path, agent_id).await
                         {
-                            rel.push(NoteListEntry {
-                                path: e.path,
-                                category: e.category,
-                                filename: e.filename,
-                                tags: e.tags,
-                            });
+                            rel.push(e.into());
                         }
                     }
                 }
@@ -147,12 +142,7 @@ impl NoteManageTool {
                             if e.path == note_path || rel.iter().any(|r| r.path == e.path) {
                                 continue;
                             }
-                            rel.push(NoteListEntry {
-                                path: e.path,
-                                category: e.category,
-                                filename: e.filename,
-                                tags: e.tags,
-                            });
+                            rel.push(e.into());
                         }
                     }
                     Err(e) => {
