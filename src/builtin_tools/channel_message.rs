@@ -509,11 +509,18 @@ mod tests {
             icon_data_url: None,
         };
         let err = tool.call(args).await.unwrap_err();
-        let msg = err.to_string();
+        // Empty registry: the registry returns NotConnected ("Channel not
+        // found: <id>"), which `with_hint` rewrites into the
+        // "channel_id is not a connected channel" advisory. That rewrite is
+        // exactly the routing proof we want — the action reached the
+        // registry dispatch and surfaced the transport-not-connected branch
+        // (not, say, a panic or a fake success). Once a real channel is
+        // wired (BlueBubbles), the trait default takes over and the
+        // unsupported_feature message will land instead.
         assert!(
-            msg.contains("NotConnected") || msg.contains("Unsupported"),
-            "expected channel-resolution error (NotConnected on empty registry, \
-             Unsupported once a real channel is wired), got: {msg}"
+            err.to_string().contains("not a connected channel")
+                || err.to_string().contains("Unsupported"),
+            "expected channel-resolution or Unsupported error, got: {err}"
         );
     }
 
@@ -534,10 +541,10 @@ mod tests {
             icon_data_url: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
         };
         let err = tool.call(args).await.unwrap_err();
-        let msg = err.to_string();
         assert!(
-            msg.contains("NotConnected") || msg.contains("Unsupported"),
-            "expected channel-resolution error, got: {msg}"
+            err.to_string().contains("not a connected channel")
+                || err.to_string().contains("Unsupported"),
+            "expected channel-resolution or Unsupported error, got: {err}"
         );
     }
 
