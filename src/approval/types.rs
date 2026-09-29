@@ -121,6 +121,13 @@ declare_action_types! {
     /// family as [`Self::BrowserEvaluate`], with the same Ask default.
     /// `mock_list` is a read and is not classified here.
     BrowserNetworkMock,
+    /// Start a session recording (`browser_record{action:"start"}`). A start
+    /// writes a growing video file to disk and streams the page's pixels
+    /// through an encoder — a page-visible-content capture in the same family
+    /// as [`Self::BrowserEvaluate`]'s read side, with the same Ask default.
+    /// `stop` and `status` are the off-switch and a read; neither is
+    /// classified here (an off-switch behind a gate is fail-dead, 判据 §14).
+    BrowserRecord,
     /// Edit / install / uninstall event hooks that fire arbitrary commands
     /// or HTTP requests on lifecycle events. Hooks are a control-plane
     /// write, hence operator-tier defaults already cover `hooks_manage` at
@@ -211,6 +218,7 @@ impl fmt::Display for ActionType {
             Self::BrowserIdentityOverride => "browser identity override",
             Self::BrowserSessionState => "browser session state",
             Self::BrowserNetworkMock => "browser network mock",
+            Self::BrowserRecord => "browser record",
             Self::HooksManage => "hooks manage",
             Self::DesktopClick => "desktop click",
             Self::DesktopType => "desktop type",

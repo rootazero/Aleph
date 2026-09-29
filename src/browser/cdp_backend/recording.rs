@@ -278,6 +278,10 @@ pub struct RecordingReceipt {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct RecordingStatus {
     pub recording_id: String,
+    /// The resolved absolute output path (post-uniquify for managed
+    /// defaults) — spec §4's `resolved_path`: the model never guesses where
+    /// its file is going.
+    pub path: PathBuf,
     pub elapsed_ms: u64,
     pub captured_frames: u64,
     pub dropped_frames: u64,
@@ -336,6 +340,9 @@ struct ReceiptSlot {
 
 struct ActiveRecording {
     id: String,
+    /// The resolved output path, kept so `status()` can report where the
+    /// frames are landing while the recording is still in flight.
+    path: PathBuf,
     started: Instant,
     counters: Arc<Counters>,
     stop_tx: watch::Sender<bool>,
@@ -481,6 +488,7 @@ impl RecordingRegistry {
         let slot = Arc::new(ReceiptSlot::default());
         let entry = Arc::new(ActiveRecording {
             id: id.clone(),
+            path: path.clone(),
             started: Instant::now(),
             counters: counters.clone(),
             stop_tx,
@@ -509,6 +517,7 @@ impl RecordingRegistry {
         *lock(&entry.join) = Some(join);
         Ok(RecordingStatus {
             recording_id: id,
+            path: entry.path.clone(),
             elapsed_ms: 0,
             captured_frames: 0,
             dropped_frames: 0,
@@ -562,6 +571,7 @@ impl RecordingRegistry {
             .get(&(profile.to_string(), tab_id.to_string()))
             .map(|e| RecordingStatus {
                 recording_id: e.id.clone(),
+                path: e.path.clone(),
                 elapsed_ms: e.started.elapsed().as_millis() as u64,
                 captured_frames: e.counters.captured.load(Ordering::Relaxed),
                 dropped_frames: e.counters.dropped.load(Ordering::Relaxed),
@@ -916,6 +926,72 @@ fn status_string(status: &std::process::ExitStatus) -> String {
     #[cfg(not(unix))]
     {
         "terminated".to_string()
+    }
+}
+
+/// The `browser_record` verbs, on the one backend that owns a screencast
+/// pipe (the trait's other implementors take the default refusal, which
+/// names this driver — the `pdf` precedent in `backend.rs`).
+impl super::CdpBackend {
+    /// `browser_record{action:"start"}` — capability-gated BEFORE anything
+    /// is reserved: an engine whose screencast row is not `Supported`
+    /// refuses with `UnsupportedByEngine` naming the engine that can, and no
+    /// ffmpeg/path/disk check runs against a stream that will never start
+    /// (the `route_add` gate's ordering, routes.rs).
+    pub(crate) async fn record_start(
+        &self,
+        tab_id: &str,
+        options: RecordStartOptions,
+    ) -> Result<RecordingStatus, BrowserError> {
+        super::require(
+            crate::browser::engine::capabilities(self.engine()),
+            self.engine(),
+            |c| c.screencast,
+            "record_start",
+        )?;
+        let handle = self.handle().await?;
+        let session = handle.ensure_tab(tab_id).await?;
+        self.recording_registry()
+            .start(self.profile_name(), tab_id, &session, &handle.conn, options)
+            .await
+            .map_err(|e| match e {
+                // A mid-sequence engine refusal keeps its three-class
+                // mapping (timeout / protocol / disconnect); the fail-fast
+                // variants already carry model-ready text.
+                RecordStartError::Engine(cdp) => {
+                    super::map_cdp_err(self.engine(), "Page.startScreencast", cdp)
+                }
+                other => BrowserError::ActionFailed(other.to_string()),
+            })
+    }
+
+    /// `browser_record{action:"stop"}` — the two entrances of spec §4:
+    /// `Some(recording_id)` stops by id, `None` stops the active tab's
+    /// recording. Deliberately NOT capability-gated: stop is the off-switch,
+    /// and a gate that can keep an off-switch unreachable is fail-dead
+    /// (判据 §14; the route list/remove/clear arms make the same call).
+    pub(crate) async fn record_stop(
+        &self,
+        tab_id: &str,
+        recording_id: Option<&str>,
+    ) -> Result<RecordingReceipt, BrowserError> {
+        let registry = self.recording_registry();
+        match recording_id {
+            Some(id) => registry.stop_by_id(id).await,
+            None => registry.stop(self.profile_name(), tab_id).await,
+        }
+    }
+
+    /// `browser_record{action:"status"}` — the live view, `None` when the
+    /// tab is not recording (a plain answer, not an error). Not gated, same
+    /// reasoning as [`Self::record_stop`].
+    pub(crate) async fn record_status(
+        &self,
+        tab_id: &str,
+    ) -> Result<Option<RecordingStatus>, BrowserError> {
+        Ok(self
+            .recording_registry()
+            .status(self.profile_name(), tab_id))
     }
 }
 

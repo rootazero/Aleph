@@ -230,7 +230,7 @@ async fn ffmpeg_death_mid_recording_is_detected_on_the_next_frame_write() {
 - Consumes: T2 的 `RecordingRegistry`（经 `manager.recording_registry()`）与 `RecordingReceipt/RecordingStatus`；`make_backend_and_tab_guarded`；`check_browser_approval`；dialog-gate census（`the_dialog_gate_records_every_verb_as_gated_or_not`——新动词须放置，ungated：录制是控制面操作）
 - Produces: `browser_record` 工具（RecordAction::{Start, Stop, Status}）；`screencast` 能力行
 
-- [ ] **Step 1: 工具失败测试**
+- [x] **Step 1: 工具失败测试**
 
 ```rust
 #[tokio::test]
@@ -245,9 +245,9 @@ async fn start_on_a_text_driver_profile_says_which_driver_can() {
 async fn stop_without_a_recording_says_so_plainly() { /* 不是通用错误，是「此 tab 无进行中录制」*/ }
 ```
 
-- [ ] **Step 2: Review Focus #4 测试**（路径不可写 fail-fast：测试内建只读目录，start → `PathNotWritable`，且**不产生**半成品文件与注册表残留）
-- [ ] **Step 3: 实现工具**（七处注册全数照抄 `ln`/BrowserDialogTool 样板；`RecordAction` **无默认**——action 必填，避免 `browser_record{}` 空调用歧义；start 过 approval gate（Ask 默认）、stop/status 不进；stop 双入口：`tab_id` 走 `registry.stop`、`recording_id` 走 `registry.stop_by_id`；DESCRIPTION ≤80 字符）
-- [ ] **Step 4: trait 默认方法 + 台账恢复**
+- [x] **Step 2: Review Focus #4 测试**（路径不可写 fail-fast：测试内建只读目录，start → `PathNotWritable`，且**不产生**半成品文件与注册表残留）—— **落在注册表层**：T2 的 `start_on_an_unwritable_path_fails_fast_without_residue` 已钉（无残留、不到引擎、不毒化后续 start）；工具层够不到 `registry.start`（无活 backend 时在 `make_backend_and_tab` 就停了），工具层钉的是第二道纵深——无扩展名拒 + validation-before-gate
+- [x] **Step 3: 实现工具**（七处注册全数照抄 `ln`/BrowserDialogTool 样板；`RecordAction` **无默认**——action 必填，避免 `browser_record{}` 空调用歧义；start 过 approval gate（Ask 默认）、stop/status 不进；stop 双入口：`tab_id` 走 `registry.stop`、`recording_id` 走 `registry.stop_by_id`；DESCRIPTION ≤80 字符）
+- [x] **Step 4: trait 默认方法 + 台账恢复**
 
 ```rust
 // backend.rs，紧挨 pdf 的默认臂风格：
@@ -258,7 +258,7 @@ async fn stop_without_a_recording_says_so_plainly() { /* 不是通用错误，�
 
 capability.rs 三处同步：裁清单摘除 screencast（守卫测试更新措辞为「已有 browser_record 动词派发」）、CAP_FIELDS 加行、EngineCapabilities 加字段。
 
-- [ ] **Step 5: 跑 + 证伪 + commit**（`cargo test -p alephcore --lib browser_tools::record` + `--lib capability` + `--lib browser::backend` + `--lib executor::builtin_registry`；证伪：摘 CAP_FIELDS 行 → census 红；DESCRIPTION 超限 → ratchet 红；漏一处注册 → definitions census 红）`git commit -m "browser: browser_record tool; screencast capability row restored"`
+- [x] **Step 5: 跑 + 证伪 + commit**（`cargo test -p alephcore --lib browser_tools::record` + `--lib capability` + `--lib browser::backend` + `--lib executor::builtin_registry`；证伪：摘 CAP_FIELDS 行 → census 红；DESCRIPTION 超限 → ratchet 红；漏一处注册 → definitions census 红）`git commit -m "browser: browser_record tool; screencast capability row restored"`
 
 ---
 

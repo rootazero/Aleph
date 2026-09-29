@@ -152,10 +152,7 @@ impl CdpBackend {
 
     /// The shared recording registry (owned by `ProfileManager`; handed to
     /// every backend so recordings outlive any one per-call backend).
-    ///
-    /// Called only by T3's record verbs; the `expect` fires the day they
-    /// land, so the permit removes itself.
-    #[expect(dead_code)]
+    /// Consumed by the `record_*` verb impls in `recording.rs`.
     pub(crate) fn recording_registry(&self) -> &Arc<recording::RecordingRegistry> {
         &self.recording_registry
     }
@@ -520,6 +517,26 @@ impl BrowserBackend for CdpBackend {
     ) -> Result<usize, BrowserError> {
         CdpBackend::route_clear(self, tab_id, scope).await
     }
+    async fn record_start(
+        &self,
+        tab_id: &str,
+        options: recording::RecordStartOptions,
+    ) -> Result<recording::RecordingStatus, BrowserError> {
+        CdpBackend::record_start(self, tab_id, options).await
+    }
+    async fn record_stop(
+        &self,
+        tab_id: &str,
+        recording_id: Option<&str>,
+    ) -> Result<recording::RecordingReceipt, BrowserError> {
+        CdpBackend::record_stop(self, tab_id, recording_id).await
+    }
+    async fn record_status(
+        &self,
+        tab_id: &str,
+    ) -> Result<Option<recording::RecordingStatus>, BrowserError> {
+        CdpBackend::record_status(self, tab_id).await
+    }
     async fn cookies(&self, op: &CookieOp) -> Result<String, BrowserError> {
         cookies::cookies(self, op).await
     }
@@ -672,6 +689,7 @@ pub(crate) mod test_support {
             effect_probe: Cap::Supported,
             ref_precheck: Cap::Supported,
             network_interception: Cap::Supported,
+            screencast: Cap::Supported,
             measured_on: "test fixture",
         }
     }
