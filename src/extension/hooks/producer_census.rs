@@ -219,12 +219,40 @@ fn producers_of(variant: &str, dispatchers: &BTreeSet<String>) -> Vec<String> {
 
 /// The body of `pub enum HookEvent { … }` in `types/hooks.rs`, raw (the
 /// alias strings are what is being read).
+///
+/// Line-ending tolerant: split on lines first so the search doesn't
+/// depend on whether `include_str!` saw LF (Linux/Mac checkout) or
+/// CRLF (Windows checkout with `core.autocrlf=true`). The previous
+/// `split("\n}\n")` form failed on Windows because the embedded
+/// bytes were `\r\n}\r\n` and `\n}\n` never matched — `enum_body`
+/// then returned the entire rest of the file, which the test then
+/// walked line-by-line (290 lines) instead of the 24-variant enum
+/// body. The hook events were unchanged; the assertion failed
+/// because the parser was. See producer_census_test_history for
+/// the full regression.
 fn enum_body() -> &'static str {
-    include_str!("../types/hooks.rs")
-        .split("pub enum HookEvent {")
-        .nth(1)
-        .and_then(|s| s.split("\n}\n").next())
-        .expect("HookEvent enum body")
+    let raw = include_str!("../types/hooks.rs");
+    let lines: Vec<&str> = raw.lines().collect();
+    let open_idx = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("pub enum HookEvent {"))
+        .expect("HookEvent enum opening line");
+    let close_idx = lines
+        .iter()
+        .enumerate()
+        .skip(open_idx + 1)
+        .find(|(_, l)| l.trim() == "}")
+        .map(|(i, _)| i)
+        .expect("HookEvent enum closing brace");
+    // Return only the inner body so callers can `lines()` it without
+    // the opening 'pub enum HookEvent {' or closing '}' slipping
+    // through their filters. Box::leak satisfies the &'static str
+    // signature callers expect; the 24-line slice is a one-time cost
+    // per test process.
+    let joined: &'static str = Box::leak(
+        lines[open_idx + 1..close_idx].join("\n").into_boxed_str(),
+    );
+    joined
 }
 
 /// `(alias, variant)` pairs: every alias in an attribute applies to the next

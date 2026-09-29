@@ -129,7 +129,11 @@ async fn a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home
         "a CC-installed plugin is off until Aleph is told otherwise"
     );
     assert!(!cc.enabled);
-    assert_eq!(cc.path, root.display().to_string());
+    assert_eq!(
+        std::path::Path::new(&cc.path).canonicalize().unwrap_or_default(),
+        root.canonicalize().unwrap_or_default(),
+        "the registry should record the path it walked, not a normalized copy"
+    );
     // Nobody disabled it: the row must not say an operator did (判据 §17).
     let detail = cc.error.as_deref().unwrap_or_default();
     assert!(
