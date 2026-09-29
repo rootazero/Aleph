@@ -236,6 +236,22 @@ impl LoopTool for SubagentTool {
         }
     }
 
+    /// Resolve a `team_name` to a team_id through the optional
+    /// `teammate_manager`, falling back to the raw name when no manager is
+    /// configured. Returns a fully-formed `ToolResult::Error` on failure so the
+    /// caller can short-circuit. Shared by `SendMessage` and `ReadInbox`.
+    async fn resolve_team_id(&self, team_name: &str) -> Result<String, ToolResult> {
+        let Some(mgr) = self.agent_resolution.teammate_manager.as_ref() else {
+            return Ok(team_name.to_string());
+        };
+        mgr.ensure_team(team_name, &self.agent_resolution.parent_agent_id)
+            .await
+            .map_err(|e| ToolResult::Error {
+                error: format!("Failed to resolve team '{team_name}': {e}"),
+                retryable: false,
+            })
+    }
+
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
         // Gap B follow-up — the harness Act phase forks a per-call child of
         // the run cancel and threads it here. `cancel_for_child_with(&cancel)`
@@ -276,22 +292,9 @@ impl LoopTool for SubagentTool {
                 };
 
                 // Resolve team_name to team_id via teammate_manager
-                let resolved_team_id = if let Some(ref mgr) = self.agent_resolution.teammate_manager
-                {
-                    match mgr
-                        .ensure_team(&team_name, &self.agent_resolution.parent_agent_id)
-                        .await
-                    {
-                        Ok(id) => id,
-                        Err(e) => {
-                            return ToolResult::Error {
-                                error: format!("Failed to resolve team '{team_name}': {e}"),
-                                retryable: false,
-                            };
-                        }
-                    }
-                } else {
-                    team_name.clone()
+                let resolved_team_id = match self.resolve_team_id(&team_name).await {
+                    Ok(id) => id,
+                    Err(err) => return err,
                 };
 
                 match router
@@ -337,22 +340,9 @@ impl LoopTool for SubagentTool {
                 };
 
                 // Resolve team_name to team_id via teammate_manager
-                let resolved_team_id = if let Some(ref mgr) = self.agent_resolution.teammate_manager
-                {
-                    match mgr
-                        .ensure_team(&team_name, &self.agent_resolution.parent_agent_id)
-                        .await
-                    {
-                        Ok(id) => id,
-                        Err(e) => {
-                            return ToolResult::Error {
-                                error: format!("Failed to resolve team '{team_name}': {e}"),
-                                retryable: false,
-                            };
-                        }
-                    }
-                } else {
-                    team_name.clone()
+                let resolved_team_id = match self.resolve_team_id(&team_name).await {
+                    Ok(id) => id,
+                    Err(err) => return err,
                 };
 
                 match inbox
