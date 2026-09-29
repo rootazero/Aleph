@@ -8,11 +8,11 @@ use tracing::{info, warn};
 
 use crate::error::{AlephError, Result};
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::{sanitize_title, KnowledgeNote};
+use crate::memory::notes::{KnowledgeNote, sanitize_title};
 
+use super::NoteManageTool;
 use super::args::{NoteListEntry, NoteManageArgs, NoteManageResult};
 use super::helpers::{merge_relations, related_keywords, scan_note_for_threats};
-use super::NoteManageTool;
 
 impl NoteManageTool {
     pub(super) async fn handle_create(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
@@ -51,12 +51,7 @@ impl NoteManageTool {
         }
 
         let safe_filename = sanitize_title(filename)?;
-        let file_path = self
-            .indexer
-            .memory_dir()
-            .join(agent_id)
-            .join(category)
-            .join(format!("{safe_filename}.md"));
+        let file_path = self.note_file_path(agent_id, category, &safe_filename);
         if file_path.exists() {
             return Err(AlephError::tool(format!(
                 "Note '{filename}' in '{category}' already exists. Use 'update' action instead."
@@ -215,12 +210,7 @@ impl NoteManageTool {
         scan_note_for_threats(content)?;
 
         let safe_filename = sanitize_title(filename)?;
-        let file_path = self
-            .indexer
-            .memory_dir()
-            .join(agent_id)
-            .join(category)
-            .join(format!("{safe_filename}.md"));
+        let file_path = self.note_file_path(agent_id, category, &safe_filename);
 
         if !file_path.exists() {
             return Err(AlephError::tool(format!(
