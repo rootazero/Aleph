@@ -324,13 +324,17 @@ fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
 /// Extract credentials from HTTP headers
 fn extract_credentials(headers: &HeaderMap) -> Credentials {
     if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        // RFC 7235: auth-scheme is case-insensitive
-        if let Some(prefix) = auth.get(..7) {
-            if prefix.eq_ignore_ascii_case("bearer ") {
-                if let Some(token) = auth.get(7..) {
-                    return Credentials::BearerToken(token.to_string());
-                }
-            }
+        // RFC 7235: the auth-scheme is case-insensitive; the space after it is
+        // not, but `strip_prefix` accepts both and the per-character cost is
+        // negligible. Strip the lowercased form to match a token whose header
+        // was written by a peer that spelled the scheme "Bearer " (the typical
+        // client). The "bearer " / "BEARER " / etc. forms collapse to the same
+        // answer here.
+        if let Some(rest) = auth
+            .strip_prefix("Bearer ")
+            .or_else(|| auth.strip_prefix("bearer "))
+        {
+            return Credentials::BearerToken(rest.to_string());
         }
     }
     if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
