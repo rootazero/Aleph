@@ -333,6 +333,97 @@ impl BlueBubblesApi {
             .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
         Ok(())
     }
+
+    /// Set the icon of a group chat. Requires private-api + macOS 11+ on the
+    /// server Mac (BlueBubbles helper feature #8, "Update group chat photo").
+    /// Endpoint: `POST /api/v1/chat/{chatGuid}/icon`, multipart/form-data with
+    /// a single `icon` file part.
+    ///
+    /// Upstream reference for the wire shape: openclaw
+    /// `extensions/bluebubbles/src/chat.ts::setGroupIconBlueBubbles`. The
+    /// endpoint path and `icon` field name come from there; password is
+    /// passed via the URL query string to match every other BlueBubbles REST
+    /// call.
+    ///
+    /// `icon_data_url` is a `data:` URL (RFC 2397) carrying the image payload,
+    /// matching `Channel::set_group_icon`'s public contract.
+    pub async fn set_chat_icon(
+        &self,
+        chat_guid: &str,
+        icon_data_url: &str,
+    ) -> Result<(), BbError> {
+        let (mime, bytes) = decode_data_url(icon_data_url)?;
+        let filename = mime_to_filename(&mime);
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(filename)
+            .mime_str(&mime)
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
+        let form = reqwest::multipart::Form::new().part("icon", part);
+        let encoded: String = url::form_urlencoded::byte_serialize(chat_guid.as_bytes())
+            .collect::<String>()
+            .replace('+', "%20");
+        let res = self
+            .client
+            .post(self.api_url(&format!("/api/v1/chat/{encoded}/icon")))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
+        res.error_for_status()
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
+        Ok(())
+    }
+}
+
+/// Decode a `data:` URL (RFC 2397) into `(mime, bytes)`.
+///
+/// Only base64-encoded payloads are accepted — `data:text/plain;base64,SGVsbG8=`.
+/// URL-encoded (`;charset=...` without `;base64,`) is rejected: every chat-icon
+/// image is binary, the LLM side always produces base64, and silently
+/// URL-decoding bytes can corrupt them.
+pub(crate) fn decode_data_url(s: &str) -> Result<(String, Vec<u8>), BbError> {
+    const PREFIX: &str = "data:";
+    let rest = s
+        .strip_prefix(PREFIX)
+        .ok_or_else(|| BbError::BadResponse("icon: missing data: prefix".into()))?;
+    let (meta, payload) = rest
+        .split_once(',')
+        .ok_or_else(|| BbError::BadResponse("icon: missing comma in data: URL".into()))?;
+    let mut mime = "application/octet-stream".to_string();
+    let mut is_base64 = false;
+    for piece in meta.split(';') {
+        if piece == "base64" {
+            is_base64 = true;
+        } else if let Some(m) = piece.strip_prefix("charset=") {
+            // Charset hint is ignored for binary image payloads; we only care
+            // that the bytes survive transport. Drop the hint, keep the mime.
+            let _ = m;
+        } else if !piece.is_empty() && mime == "application/octet-stream" {
+            mime = piece.to_string();
+        }
+    }
+    if !is_base64 {
+        return Err(BbError::BadResponse(
+            "icon: only base64 data: URLs are accepted".into(),
+        ));
+    }
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|e| BbError::BadResponse(format!("icon: invalid base64: {e}")))?;
+    Ok((mime, bytes))
+}
+
+/// Map an image MIME type to a filename for the multipart upload.
+fn mime_to_filename(mime: &str) -> String {
+    match mime {
+        "image/png" => "icon.png".into(),
+        "image/jpeg" => "icon.jpg".into(),
+        "image/gif" => "icon.gif".into(),
+        "image/heic" => "icon.heic".into(),
+        "image/webp" => "icon.webp".into(),
+        other => format!("icon.{}", other.split('/').next_back().unwrap_or("bin")),
+    }
 }
 
 /// Build the callback URL BlueBubbles will POST to (password in query —
@@ -540,5 +631,79 @@ mod tests {
             "a=1&password=***&b=2"
         );
         assert_eq!(redact_password("no secret here".into()), "no secret here");
+    }
+
+    // ---- decode_data_url -------------------------------------------------
+
+    /// Decodes a real PNG-ish payload. The base64 here is the 1×1 PNG used
+    /// in countless test suites (`iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=`)
+    /// — not actually validating PNG structure, just exercising the decoder.
+    #[test]
+    fn decode_data_url_accepts_base64_png() {
+        let s = "data:image/png;base64,iVBORw0KGgo=";
+        let (mime, bytes) = decode_data_url(s).expect("valid data URL");
+        assert_eq!(mime, "image/png");
+        assert_eq!(bytes, vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    }
+
+    /// The decoder defaults mime to `application/octet-stream` when the
+    /// `data:` URL omits it. Chat-icon uploads are always image/* in
+    /// practice, but the API contract doesn't require it; pin the default so
+    /// a future rewrite doesn't surface a 415 against a conformant client.
+    #[test]
+    fn decode_data_url_defaults_mime_when_omitted() {
+        let s = "data:;base64,aGVsbG8=";
+        let (mime, bytes) = decode_data_url(s).expect("mime-defaulted URL");
+        assert_eq!(mime, "application/octet-stream");
+        assert_eq!(bytes, b"hello");
+    }
+
+    /// `charset=utf-8,...;base64,...` is accepted; the charset hint is
+    /// ignored for binary payloads. Test that charset doesn't trip the
+    /// decoder (binary payloads use base64, which makes charset meaningless).
+    #[test]
+    fn decode_data_url_ignores_charset_hint() {
+        let s = "data:image/png;charset=binary;base64,aGVsbG8=";
+        let (mime, bytes) = decode_data_url(s).expect("charset hint tolerated");
+        assert_eq!(mime, "image/png");
+        assert_eq!(bytes, b"hello");
+    }
+
+    /// Plain URL-encoded (no `;base64,`) is rejected. Image bytes interpreted
+    /// as latin-1 and re-decoded as latin-1 will silently corrupt, so the
+    /// decoder must surface a clean error rather than guess.
+    #[test]
+    fn decode_data_url_rejects_non_base64() {
+        let s = "data:image/png,aGVsbG8=";
+        let err = decode_data_url(s).expect_err("non-base64 must fail");
+        assert!(format!("{err:?}").contains("only base64"));
+    }
+
+    /// No `data:` prefix, no payload: surface both as `BadResponse` so the
+    /// caller (the channel trait) can route them into a tool error rather
+    /// than panicking.
+    #[test]
+    fn decode_data_url_rejects_malformed() {
+        assert!(decode_data_url("not-a-data-url").is_err());
+        assert!(decode_data_url("data:image/png;base64").is_err()); // no comma
+        assert!(decode_data_url("data:image/png;base64,***").is_err()); // bad b64
+    }
+
+    // ---- set_chat_icon URL shape ----------------------------------------
+
+    /// The endpoint URL is `/api/v1/chat/{chatGuid}/icon` with the password
+    /// in the query string (matching every other BlueBubbles REST call).
+    /// The chatGuid is URL-encoded — `+` becomes `%20`, semicolons become
+    /// `%3B`, etc. — which is the same encoding `send_typing` and `mark_read`
+    /// use, so `set_chat_icon` joins them in the documented route shape.
+    #[test]
+    fn set_chat_icon_uses_documented_endpoint_and_encodes_chat_guid() {
+        let api = BlueBubblesApi::new("http://h:1".into(), "pw".into());
+        // Bare guid (no special chars): no encoding churn, but the trailing
+        // path is `/icon` and password lands in the query string.
+        assert_eq!(
+            api.api_url("/api/v1/chat/iMessage;-;+15555550100/icon"),
+            "http://h:1/api/v1/chat/iMessage;-;%2B15555550100/icon?password=pw"
+        );
     }
 }
