@@ -116,7 +116,7 @@ pub struct ExtensionStopHookVerifier {
 /// `total` accumulates across the lifetime of the verifier so an adversarial
 /// hook that wedges 5-of-every-6 stop attempts cannot keep doing so
 /// indefinitely. See [`MAX_TOTAL_STOP_VETOES`].
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 struct VetoCounters {
     consecutive: u32,
     total: u32,
@@ -496,5 +496,42 @@ mod tests {
         let cancel = CancellationToken::new();
         let verdict = gate.verify(&turn_ctx("s6", None), &cancel).await;
         assert!(verdict.is_continue());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cumulative_total_cap_halts_and_clears_state() {
+        // The consecutive-cap path *resets* consecutive and returns
+        // Continue, so `total` keeps accumulating. After MAX_TOTAL_STOP_VETOES
+        // vetoes the gate must Halt and clear the entry — a wedged hook
+        // cannot keep the gate going forever.
+        let executor = HookExecutor::new(vec![stop_hook_config("echo 'block: forever'")]);
+        let gate = ExtensionStopHookVerifier::new();
+        let ctx = turn_ctx("s7", Some("end_turn"));
+
+        // Push past the total cap: every cycle within consecutive caps is a
+        // veto, every cycle past consecutive caps is a Continue-with-reset,
+        // and the cumulative cap fires Halt.
+        let mut halted = false;
+        for _ in 0..(MAX_TOTAL_STOP_VETOES + MAX_CONSECUTIVE_STOP_VETOES + 2) {
+            if matches!(
+                gate.verify_with_executor(&executor, &ctx).await,
+                VerifierVerdict::Halt { .. }
+            ) {
+                halted = true;
+                break;
+            }
+        }
+        assert!(halted, "cumulative cap must eventually emit Halt");
+
+        // The Halt path calls self.clear(session) — the entry must be gone
+        // so a *new* run in the same session starts fresh. (This is the
+        // regression the design points at: a hook that wedges never gets
+        // to keep the counter alive past Halt.)
+        assert_eq!(
+            gate.veto_counters("s7"),
+            VetoCounters::default(),
+            "Halt path must clear the per-session veto entry",
+        );
     }
 }

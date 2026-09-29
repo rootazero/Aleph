@@ -40,19 +40,30 @@ capture WHAT THE MODEL SAW coming back:
               `tool` turn emits, instead of the default `file_read` probe. A
               JSON *list* of those is also accepted: turn N emits entry N,
               cycling, for claims that need two different calls in one
-              conversation. N counts every request this mock answers, and
-              on a conversation's FIRST message the server makes a
-              side-channel planning call before the run's own turn — it
-              takes turn 1 and drops its tool_use — so there the mapping is
-              off by one (entry 1 is never a real tool call). Count results
-              in `request_log` rather than trusting index = turn.
+              conversation. N here counts *run* turns, not every request —
+              planning calls (see `n_planning` below) are answered with
+              text-only and do not advance the index. If the scenario does
+              not set `n_planning`, the index matches the global request
+              counter, which is the historical behaviour every existing
+              busy-input scenario was written against.
   request_log path to append each incoming request body to, one JSON object
-              per line. Turn N+1's `messages` carry turn N's `tool_result`
-              verbatim, so this file is the only oracle for what a tool
-              actually handed the model — the tool's own RPC reply is a
-              different thing on a different path.
+              per line. Each entry carries `turn` (global request count),
+              `is_planning` (bool), `run_turn` (1-based run index, what
+              `tool_spec` keys off), and the request `body`. Turn N+1's
+              `messages` carry turn N's `tool_result` verbatim, so this
+              file is the only oracle for what a tool actually handed the
+              model — the tool's own RPC reply is a different thing on a
+              different path.
+  n_planning   integer (default 0) — the first N requests this mock answers
+              are tagged `is_planning: true` and return text-only
+              responses (no `tool_use`). Scenarios that exercise the
+              server's side-channel planning call pass the number of
+              planning calls they issue. Because the mock has no session
+              affinity, this is a process-wide counter: a scenario that
+              opens K conversations each with one planning call sets it
+              to K.
 
-Usage:  mock_anthropic.py [port] [probe_path] [plan_name] [tool_spec] [request_log]
+Usage:  mock_anthropic.py [port] [probe_path] [plan_name] [tool_spec] [request_log] [n_planning]
 """
 import json
 import os
@@ -83,10 +94,32 @@ if TOOL_SPEC_PATH:
         _spec = json.load(_fh)
 TOOL_SPECS = _spec if isinstance(_spec, list) else [_spec]
 
+# Per-connection request counter — the protocol doesn't carry one. We can't
+# tell which request is the first of a conversation from headers alone, so
+# the server's side-channel planning call (the FIRST request of every
+# conversation, before the run's own turn 1) would silently shift the
+# `tool_spec [N, ...]` indexing by one if we counted every request as a run
+# turn.
+#
+# Two knobs keep the indexing stable:
+#
+#  * `--n-planning=N` (sixth positional arg, default 0): the FIRST N requests
+#    this mock answers are tagged as planning calls. They return text-only
+#    answers (no `tool_use`) and do not advance `tool_spec` indexing — the
+#    N-th *run* turn still gets entry N. Scenarios that exercise the
+#    planning call set this to the number of conversations they open, not
+#    the number of planning calls per conversation.
+#
+#  * `request_log` (seventh positional arg) carries `turn`, `is_planning`,
+#    `n_answered_so_far`, and `body` per request, so scenarios that need
+#    exact turn→entry pairing derive the mapping themselves instead of
+#    trusting the mock's local counter.
+N_PLANNING = int(sys.argv[6]) if len(sys.argv) > 6 else 0
 
-def spec_for(turn):
-    """The tool call turn `turn` (1-based) emits."""
-    return TOOL_SPECS[(turn - 1) % len(TOOL_SPECS)]
+_n = [0]
+_n_planning_seen = [0]
+_n_run_seen = [0]
+_lock = threading.Lock()
 
 PLANS = {
     "burst-drain": [(3, "tool"), (30, "tool"), (45, "tool"), (45, "tool"), (0, "end")],
@@ -114,12 +147,20 @@ PLANS = {
 PLAN = PLANS.get(PLAN_NAME, PLANS["burst-drain"])
 
 T0 = time.monotonic()
-_n = [0]
-_lock = threading.Lock()
 
 
 def log(*a):
     print(f"{time.monotonic() - T0:7.2f}s [mock]", *a, flush=True)
+
+
+def spec_for(run_turn):
+    """The tool call the N-th *run* turn (1-based) emits.
+
+    A planning call (see `_do_post`) does not call this — it returns text-only
+    and does not advance the run-turn counter, so the N-th run turn keeps
+    getting entry N even when N_PLANNING > 0.
+    """
+    return TOOL_SPECS[(run_turn - 1) % len(TOOL_SPECS)]
 
 
 def sse(payload):
@@ -173,26 +214,49 @@ class H(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(n) or b"{}")
         with _lock:
             _n[0] += 1
-            turn = _n[0]
+            is_planning = _n_planning_seen[0] < N_PLANNING
+            if is_planning:
+                _n_planning_seen[0] += 1
+                run_turn = _n_run_seen[0]  # does not advance on planning
+            else:
+                _n_run_seen[0] += 1
+                run_turn = _n_run_seen[0]
+            n_answered = _n[0]
+            log_entry = {
+                "turn": n_answered,
+                "is_planning": is_planning,
+                "n_answered_so_far": n_answered,
+                "run_turn": run_turn,
+                "body": body,
+            }
+        # `turn` (the index into PLAN) follows the global request counter so
+        # think-time/plan-shape behaviour stays stable; `run_turn` (the
+        # index into `tool_spec`) ignores planning calls so `tool_spec [N]`
+        # still lands on the N-th *run* turn.
+        turn = n_answered
         think, kind = PLAN[turn - 1] if turn <= len(PLAN) else (0, "end")
         msgs = body.get("messages", [])
         if REQUEST_LOG:
             # Append under the same lock that hands out turn numbers, so a
-            # scenario reading this file can trust the ordering.
+            # scenario reading this file can trust the ordering. Includes
+            # `is_planning` + `run_turn` so scenarios can derive the actual
+            # mapping without trusting the mock's local counter.
             with _lock, open(REQUEST_LOG, "a") as fh:
-                fh.write(json.dumps({"turn": turn, "body": body}) + "\n")
-        log(f"turn #{turn} request ({describe(msgs)}) -> thinking {think}s, then {kind}")
+                fh.write(json.dumps(log_entry) + "\n")
+        role = "planning" if is_planning else "run"
+        log(f"turn #{turn} ({role}, run #{run_turn}) ({describe(msgs)}) -> thinking {think}s, then {kind}")
         time.sleep(think)
 
         if not body.get("stream"):
             content = [{"type": "text", "text": f"mock turn {turn}"}]
-            if kind == "tool":
+            if kind == "tool" and not is_planning:
+                spec = spec_for(run_turn)
                 content.append(
                     {
                         "type": "tool_use",
                         "id": f"toolu_{turn}",
-                        "name": spec_for(turn)["name"],
-                        "input": spec_for(turn)["input"],
+                        "name": spec["name"],
+                        "input": spec["input"],
                     }
                 )
             payload = {
@@ -201,7 +265,7 @@ class H(BaseHTTPRequestHandler):
                 "role": "assistant",
                 "model": body.get("model", "qa-mock"),
                 "content": content,
-                "stop_reason": "tool_use" if kind == "tool" else "end_turn",
+                "stop_reason": "tool_use" if kind == "tool" and not is_planning else "end_turn",
                 "usage": {"input_tokens": 10, "output_tokens": 10},
             }
             raw = json.dumps(payload).encode()
@@ -262,7 +326,7 @@ class H(BaseHTTPRequestHandler):
             )
         )
         chunk(sse({"type": "content_block_stop", "index": 0}))
-        if kind == "tool":
+        if kind == "tool" and not is_planning:
             chunk(
                 sse(
                     {
@@ -271,7 +335,7 @@ class H(BaseHTTPRequestHandler):
                         "content_block": {
                             "type": "tool_use",
                             "id": f"toolu_{turn}",
-                            "name": spec_for(turn)["name"],
+                            "name": spec_for(run_turn)["name"],
                             "input": {},
                         },
                     }
@@ -284,7 +348,7 @@ class H(BaseHTTPRequestHandler):
                         "index": 1,
                         "delta": {
                             "type": "input_json_delta",
-                            "partial_json": json.dumps(spec_for(turn)["input"]),
+                            "partial_json": json.dumps(spec_for(run_turn)["input"]),
                         },
                     }
                 )
@@ -295,7 +359,7 @@ class H(BaseHTTPRequestHandler):
                 {
                     "type": "message_delta",
                     "delta": {
-                        "stop_reason": "tool_use" if kind == "tool" else "end_turn",
+                        "stop_reason": "tool_use" if kind == "tool" and not is_planning else "end_turn",
                         "stop_sequence": None,
                     },
                     "usage": {"output_tokens": 12},

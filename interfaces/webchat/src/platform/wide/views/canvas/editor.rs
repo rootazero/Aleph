@@ -1400,3 +1400,76 @@ mod tests {
         assert_eq!(map["a"].id(), "a");
     }
 }
+
+#[cfg(test)]
+mod tests_body_visible {
+    //! Five cases the canvas window-level key gate must accept or refuse.
+    //!
+    //! The gate is the only thing standing between an arbitrary key press and
+    //! a board nobody can see — every test below reads back the gate's
+    //! verdict for one panel configuration, so future changes to the
+    //! predicate (or its callers) surface as a missed delete / space-bar pan.
+
+    use super::*;
+    use crate::state::layout::{LayoutMode, WorkspaceBody, WorkspaceState};
+
+    fn split_with_body(body: WorkspaceBody) -> WorkspaceState {
+        let ws = WorkspaceState::new();
+        // Default mode in non-wasm tests is ChatOnly. The visible path the
+        // gate cares about requires both Split mode AND the body selected.
+        ws.set_layout(LayoutMode::Split);
+        ws.body.set(body);
+        ws
+    }
+
+    #[test]
+    fn chat_route_with_canvas_visible() {
+        // Chat route + pane open on the Canvas body → the board is on screen,
+        // keyboard chords belong to it.
+        let ws = split_with_body(WorkspaceBody::Canvas);
+        assert!(canvas_body_visible("/", Some(&ws)));
+    }
+
+    #[test]
+    fn chat_route_with_other_body_visible() {
+        // Chat route + pane open on a different body (Artifacts) → the pane
+        // is open, the canvas is NOT the selected body, the gate refuses.
+        let ws = split_with_body(WorkspaceBody::Artifacts);
+        assert!(!canvas_body_visible("/", Some(&ws)));
+    }
+
+    #[test]
+    fn non_chat_route_with_canvas_visible() {
+        // The canvas is a body of the chat pane, not a global section. From
+        // /settings /memory /dashboard, even if the user somehow has the
+        // Canvas body stored, the gate must refuse — Delete / Space / paste
+        // would otherwise mutate a board nobody can see.
+        let ws = split_with_body(WorkspaceBody::Canvas);
+        assert!(!canvas_body_visible("/settings", Some(&ws)));
+        assert!(!canvas_body_visible("/memory", Some(&ws)));
+        assert!(!canvas_body_visible("/dashboard", Some(&ws)));
+    }
+
+    #[test]
+    fn chat_route_without_workspace_state_is_not_visible() {
+        // `None` for WorkspaceState (a mount without the context) reads as
+        // NOT visible. The fn docstring is explicit: an unanswerable "is
+        // it showing?" is not a licence to edit.
+        assert!(!canvas_body_visible("/", None));
+    }
+
+    #[test]
+    fn chat_route_with_collapsed_pane_is_not_visible() {
+        // The stored body survives pane collapse (see `coerce_body`) but
+        // `showing_now` only returns true while the pane is in Split mode.
+        // A collapsed pane (ChatOnly) with the Canvas body stored is not
+        // showing, even on the chat route.
+        let ws = WorkspaceState::new();
+        // Default mode in non-wasm tests is ChatOnly. Setting body to
+        // Canvas here does not change visibility — `showing_now` requires
+        // Split mode.
+        ws.body.set(WorkspaceBody::Canvas);
+        assert_eq!(ws.mode.get_untracked(), LayoutMode::ChatOnly);
+        assert!(!canvas_body_visible("/", Some(&ws)));
+    }
+}

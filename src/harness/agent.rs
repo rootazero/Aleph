@@ -721,6 +721,14 @@ impl AgentHarness {
                                 cancel,
                             )
                             .await;
+                            // Cap-hit is the counter's terminal state. The
+                            // local drops on `run()` return — §13 (constraint
+                            // lifetime must not be shorter than what it
+                            // constrains) is satisfied by the drop itself, so
+                            // we don't write `= 0` here (rustc would warn the
+                            // value is never read). The control-flow's
+                            // terminal-ness is encoded by the `break` that
+                            // follows, not by a redundant assignment.
                             break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                         }
                     } else {

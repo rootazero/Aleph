@@ -70,14 +70,31 @@ pub fn WorkspacePanel() -> impl IntoView {
 
     // The single writer of `--aleph-workspace-w` (see the module doc). `None`
     // removes the override so `:root`'s default takes over again.
+    //
+    // The publisher clamps via `clamp_width(px, viewport_w)` against the
+    // LIVE viewport at publish time, so a width persisted on a wide screen
+    // (e.g. 1280 px) does not overflow a narrow current viewport (e.g.
+    // 1200 px → `aside x=-80`). The Effect re-runs on every write to
+    // `width_px` (drag end, `clear_width`, initial load), NOT on window
+    // resize — a viewport change while no write fires leaves the previous
+    // (now-too-wide) value in place until the next write. Documented as a
+    // known limitation; the full fix needs a ResizeObserver driving
+    // `width_px.set`, which would re-render the pane chrome mid-resize and
+    // is out of scope for the bounded change.
     Effect::new(move |_| {
         let width = workspace.width_px.get();
         let Some(root) = document_root() else { return };
         match width {
             Some(px) => {
+                let viewport_w = web_sys::window()
+                    .and_then(|w| w.inner_width().ok())
+                    .and_then(|v| v.as_f64())
+                    .map(|f| f as u32)
+                    .unwrap_or(0);
+                let clamped = clamp_width(px, viewport_w);
                 let _ = root
                     .style()
-                    .set_property("--aleph-workspace-w", &format!("{px}px"));
+                    .set_property("--aleph-workspace-w", &format!("{clamped}px"));
             }
             None => {
                 let _ = root.style().remove_property("--aleph-workspace-w");

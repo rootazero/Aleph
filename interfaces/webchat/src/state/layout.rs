@@ -424,9 +424,17 @@ const fn persist_layout_mode(_mode: LayoutMode) {}
 fn read_persisted_workspace_width() -> Option<u32> {
     let storage = web_sys::window()?.local_storage().ok().flatten()?;
     let raw = storage.get_item(WORKSPACE_WIDTH_KEY).ok().flatten()?;
-    // A stored width from a wider monitor is not clamped here: the viewport
-    // is not known at construction time, and the publisher clamps against the
-    // live one anyway. Garbage parses to `None`, i.e. "use the CSS default".
+    // The stored value is read as-is at construction time (the live viewport
+    // is not known here yet) and re-published on every width change by the
+    // Effect in `components/workspace_panel.rs`, which reads the live
+    // viewport via `web_sys::window().inner_width()` and runs
+    // `clamp_width(px, viewport_w)` before `set_property`. Window resize
+    // alone does NOT re-publish: an Effect whose only reactive source is
+    // `width_px` won't re-run on a viewport change. The honest trade-off
+    // is "clamp at write, not at viewport change" — drag and load are
+    // covered, resize-while-idle overflows remain a known limitation (see
+    // CANVAS.md §9 / FEATURE_LOCATOR §6.10 follow-ups). Garbage parses to
+    // `None`, i.e. "use the CSS default".
     raw.parse::<u32>().ok()
 }
 
