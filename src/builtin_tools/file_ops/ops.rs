@@ -70,17 +70,10 @@ pub async fn execute_list(
         };
 
         let entry_path = entry.path();
-        files.push(FileInfo {
-            name: entry.file_name().to_string_lossy().to_string(),
-            path: entry_path.to_string_lossy().to_string(),
-            is_dir: metadata.is_dir(),
-            size: metadata.len(),
-            extension: entry_path
-                .extension()
-                .map(|e| e.to_string_lossy().to_string()),
-            lines: None,
-            mtime: None,
-        });
+        let mut info = FileInfo::with_path(&entry_path);
+        info.is_dir = metadata.is_dir();
+        info.size = metadata.len();
+        files.push(info);
     }
 
     // Sort: directories first, then by name
