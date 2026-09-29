@@ -146,7 +146,7 @@ impl DocGuard {
             CanvasError::Internal("commit with no canvas document to write".to_string())
         })?;
         write(&self.path, doc).await?;
-        Ok(self.doc.as_ref().expect("checked above"))
+        Ok(doc)
     }
 }
 
