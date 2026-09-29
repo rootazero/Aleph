@@ -370,9 +370,12 @@ impl AcpAdapterManager {
             session.kill().await;
         }
         for (key, _) in removed {
+            // Compute all fields before any partial move so the borrow
+            // checker doesn't see key as half-moved when session_name_opt
+            // borrows the name field.
+            let session_name = key.session_name_opt().map(str::to_owned);
             let harness_id = key.harness_id;
             let cwd = key.cwd.to_string_lossy().into_owned();
-            let session_name = key.session_name_opt().map(str::to_owned);
             self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
                 harness_id,
                 cwd,

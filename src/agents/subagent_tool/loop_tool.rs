@@ -22,8 +22,7 @@ use super::recovery::{self, Recovered};
 use super::spawn::CancelGuard;
 use super::types::{
     wave_aware_child_timeout_cap, wave_count, BatchTask, SubagentAction, BATCH_ABORT_DRAIN_SECS,
-    BATCH_CANCEL_GRACE_SECS, BATCH_FANOUT_SLACK_SECS, LIST_RESULT_PREVIEW_CHARS,
-    MAX_LISTED_COMPLETED,
+    BATCH_CANCEL_GRACE_SECS, BATCH_FANOUT_SLACK_SECS, MAX_LISTED_COMPLETED,
 };
 use super::SubagentTool;
 

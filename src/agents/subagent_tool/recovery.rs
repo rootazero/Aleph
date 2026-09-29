@@ -47,6 +47,7 @@ use crate::session::events::{ParkReason, SessionEvent, SessionEventRecord};
 use crate::session::reduction::{DanglingCall, LogContradiction, RunProgress};
 use crate::tools::runtime::ToolResult;
 
+#[allow(unused_imports)]
 use super::types::LIST_RESULT_PREVIEW_CHARS;
 
 /// How much of one recovered transcript line the parent is shown.
