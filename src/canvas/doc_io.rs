@@ -43,12 +43,15 @@ impl DocLocks {
         Self::default()
     }
 
-    /// Resolve the lock for `id`, creating it if no live holder exists.
-    ///
-    /// Upgrade-or-insert happens under the table's own mutex, so two tasks
-    /// racing on the same id always end up with the same `Arc` — the check
-    /// and the insert cannot interleave.
-    fn slot(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    /// Run `f` against the slot table, recovering from a poisoned mutex by
+    /// logging the cause and using the inner value. The table's only writers
+    /// are slot() itself; poisoning here means a panic during upgrade or
+    /// insert, and recovery keeps later lookups answering questions instead
+    /// of refusing them.
+    fn with_slots<R>(
+        &self,
+        f: impl FnOnce(&mut HashMap<String, Weak<tokio::sync::Mutex<()>>>) -> R,
+    ) -> R {
         let mut slots = self.slots.lock().unwrap_or_else(|e| {
             tracing::error!(
                 reason = %e,
@@ -56,15 +59,26 @@ impl DocLocks {
             );
             e.into_inner()
         });
-        if let Some(live) = slots.get(id).and_then(Weak::upgrade) {
-            return live;
-        }
-        if slots.len() >= PRUNE_AT {
-            slots.retain(|_, w| w.strong_count() > 0);
-        }
-        let fresh = Arc::new(tokio::sync::Mutex::new(()));
-        slots.insert(id.to_string(), Arc::downgrade(&fresh));
-        fresh
+        f(&mut *slots)
+    }
+
+    /// Resolve the lock for `id`, creating it if no live holder exists.
+    ///
+    /// Upgrade-or-insert happens under the table's own mutex, so two tasks
+    /// racing on the same id always end up with the same `Arc` — the check
+    /// and the insert cannot interleave.
+    fn slot(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.with_slots(|slots| {
+            if let Some(live) = slots.get(id).and_then(Weak::upgrade) {
+                return live;
+            }
+            if slots.len() >= PRUNE_AT {
+                slots.retain(|_, w| w.strong_count() > 0);
+            }
+            let fresh = Arc::new(tokio::sync::Mutex::new(()));
+            slots.insert(id.to_string(), Arc::downgrade(&fresh));
+            fresh
+        })
     }
 
     /// Take the canvas's write lock and read its document under it.
@@ -88,16 +102,7 @@ impl DocLocks {
     /// pruning bound.
     #[cfg(test)]
     pub(super) fn slot_count(&self) -> usize {
-        self.slots
-            .lock()
-            .unwrap_or_else(|e| {
-                tracing::error!(
-                    reason = %e,
-                    "canvas lock table poisoned: a previous holder panicked mid-insert; recovering"
-                );
-                e.into_inner()
-            })
-            .len()
+        self.with_slots(|slots| slots.len())
     }
 }
 
