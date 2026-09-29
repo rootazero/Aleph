@@ -1,0 +1,19 @@
+# Pin golden fixture text files to LF line endings.
+#
+# Why: `cargo check` invokes `include_str!` at compile time, which
+# embeds the bytes as they sit on disk. When a developer's
+# `core.autocrlf` is `true` (the Windows default), the file is
+# converted to CRLF on checkout — so the embedded bytes are CRLF.
+# The renderer under test, by contrast, emits LF. The two diverge
+# in line count and the golden-tree assertion fires
+# (`browser::page_state::build::tests::
+# the_thirteen_node_fixture_renders_the_golden_tree`).
+#
+# Fixing at the file level (eol=lf) means the bytes match
+# regardless of checkout config; the commit message on the
+# follow-up fix records the same finding.
+#
+# No other .txt in the repo is consumed as test data, so a
+# blanket rule would be wider than the bug. Add new fixtures
+# here as they appear.
+src/browser/page_state/fixtures/*.golden.txt  text eol=lf
