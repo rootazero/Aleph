@@ -1250,8 +1250,8 @@ mod tests {
     fn test_classify_bot_blocked() {
         let err = teloxide::RequestError::Api(teloxide::ApiError::BotBlocked);
         match classify_error(&err) {
-            ErrorClass::Rejected(_) => {}
-            other => panic!("Expected Rejected, got {:?}", other),
+            ErrorClass::Forbidden(ForbiddenKind::BotBlocked) => {}
+            other => panic!("Expected Forbidden(BotBlocked), got {:?}", other),
         }
     }
 
@@ -1259,8 +1259,8 @@ mod tests {
     fn test_classify_chat_not_found() {
         let err = teloxide::RequestError::Api(teloxide::ApiError::ChatNotFound);
         match classify_error(&err) {
-            ErrorClass::Rejected(_) => {}
-            other => panic!("Expected Rejected, got {:?}", other),
+            ErrorClass::Forbidden(ForbiddenKind::ChatNotFound) => {}
+            other => panic!("Expected Forbidden(ChatNotFound), got {:?}", other),
         }
     }
 
@@ -1268,8 +1268,8 @@ mod tests {
     fn test_classify_user_not_found() {
         let err = teloxide::RequestError::Api(teloxide::ApiError::UserNotFound);
         match classify_error(&err) {
-            ErrorClass::Rejected(_) => {}
-            other => panic!("Expected Rejected, got {:?}", other),
+            ErrorClass::Forbidden(ForbiddenKind::UserNotFound) => {}
+            other => panic!("Expected Forbidden(UserNotFound), got {:?}", other),
         }
     }
 
