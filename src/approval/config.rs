@@ -436,10 +436,10 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
     async fn check(&self, request: &ActionRequest) -> ApprovalDecision {
         let action = &request.action_type;
         let target = &request.target;
-        let prompt_target: &str = if request.display_target.is_empty() {
-            target.as_str()
+        let prompt_target = if request.display_target.is_empty() {
+            target
         } else {
-            request.display_target.as_str()
+            &request.display_target
         };
 
         // 1. Blocklist takes priority (pre-compiled regexes, grouped by ActionType)
