@@ -189,6 +189,18 @@ jobs:
         env:
           PROPTEST_CASES: 1024
 
+      # Focused gate for `gateway::session_manager::*`. Same target as the
+      # `--lib` step above, but with a substring filter that pins the
+      # intent: a regression that drops `seed_bill_for_test` (the test
+      # helper that replaced the dead `update_session_usage` method) would
+      # otherwise show up only as "test name not found" buried in 14.6k
+      # lines of output. Mirrors `just test-session-manager`. Cheap enough
+      # to add unconditionally — session_manager tests need no network,
+      # no proc, and finish in seconds.
+      - name: Run session_manager tests (focused)
+        shell: bash
+        run: cargo test -p alephcore --lib gateway::session_manager
+
       # The shared crates' own tests; what and why: the header of
       # scripts/test-shared.sh (also `just test-shared`).
       - name: Run shared crate tests
