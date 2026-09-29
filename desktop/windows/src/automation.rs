@@ -28,7 +28,7 @@ const START_MENU_SUBPATH: &str = r"Microsoft\Windows\Start Menu\Programs";
 ///
 /// Only `$env:APPDATA` — the **per-user** Start menu — used to be scanned. That
 /// is the smaller half by far: an installer run for all users (which is the
-/// default for Office, the browsers, the JetBrains and Visual Studio families,
+/// default for Office, the browsers, the `JetBrains` and Visual Studio families,
 /// and anything shipped by an MSI) writes into `$env:ProgramData` instead. So
 /// `list_shortcuts` reported a handful of entries on a machine with hundreds,
 /// and `run_shortcut` answered "no Start-menu shortcut named X was found" for
@@ -92,11 +92,11 @@ Write-Output "launched $($lnk.FullName)"
 /// pinned per user appears under both roots, and the same name twice reads as
 /// two applications.
 #[cfg_attr(not(windows), allow(dead_code))]
-const LIST_SHORTCUTS_SCRIPT: &str = r#"
+const LIST_SHORTCUTS_SCRIPT: &str = r"
 {{ROOTS}}
 Get-ChildItem -LiteralPath $roots -Recurse -Filter *.lnk -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty BaseName | Sort-Object -Unique
-"#;
+";
 
 /// Substitute the two fixed path fragments into a constant script.
 ///

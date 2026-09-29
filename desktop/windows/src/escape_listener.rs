@@ -65,6 +65,23 @@ impl WindowsEscapeListener {
             thread_id: AtomicU32::new(0),
         }
     }
+
+    /// Tear down the half-initialized listener state when `start`'s worker
+    /// thread reports failure (either the `SetWindowsHookExW` call itself
+    /// failed, or the worker exited before it could report). Joins the worker
+    /// so the `WH_KEYBOARD_LL` callback it owned is unregistered, then clears
+    /// the global pointer and drops the boxed `ListenerState` we already
+    /// published to it.
+    #[cfg(windows)]
+    fn cleanup_after_hook_failure(&self, worker: std::thread::JoinHandle<()>) {
+        let _ = worker.join();
+        LISTENER_PTR.store(0, Ordering::SeqCst);
+        let _ = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
 }
 
 impl Default for WindowsEscapeListener {
@@ -151,8 +168,8 @@ impl EscapeAbort for WindowsEscapeListener {
                             // SAFETY: `GetMessageW` returned a message.
                             let msg = unsafe { msg.assume_init() };
                             // SAFETY: standard message-dispatch calls.
-                            let _ = unsafe { TranslateMessage(&msg) };
-                            unsafe { DispatchMessageW(&msg) };
+                            let _ = unsafe { TranslateMessage(&raw const msg) };
+                            unsafe { DispatchMessageW(&raw const msg) };
                         }
 
                         // SAFETY: `hook` is the `HHOOK` returned above.
@@ -178,23 +195,11 @@ impl EscapeAbort for WindowsEscapeListener {
                     Ok(())
                 }
                 Ok(Err(e)) => {
-                    let _ = worker.join();
-                    LISTENER_PTR.store(0, Ordering::SeqCst);
-                    let _ = self
-                        .state
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .take();
+                    self.cleanup_after_hook_failure(worker);
                     Err(aleph_desktop::DesktopError::PlatformError(e))
                 }
                 Err(_) => {
-                    let _ = worker.join();
-                    LISTENER_PTR.store(0, Ordering::SeqCst);
-                    let _ = self
-                        .state
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .take();
+                    self.cleanup_after_hook_failure(worker);
                     Err(aleph_desktop::DesktopError::PlatformError(
                         "keyboard hook thread exited before reporting status".into(),
                     ))
@@ -311,7 +316,7 @@ extern "system" fn keyboard_hook_proc(
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
     use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, KBDLLHOOKSTRUCT, WM_KEYDOWN};
 
-    if code >= 0 && wparam.0 as u32 == WM_KEYDOWN {
+    if code >= 0 && u32::try_from(wparam.0).unwrap_or(0) == WM_KEYDOWN {
         // SAFETY: for `WH_KEYBOARD_LL` with `code >= 0`, `lparam` points to a
         // `KBDLLHOOKSTRUCT` owned by the OS for the duration of this callback.
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };

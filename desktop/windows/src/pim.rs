@@ -54,6 +54,146 @@ fn restrict_query(query: &str) -> String {
 /// the newest matches it had already found.
 const MAX_SCAN_ITEMS: u32 = 5_000;
 
+/// Outlook's `MailItem` lookup by `EntryID`. Constant text apart from the
+/// `{escaped_id}` placeholder, which is filled with `ps_escape_dq`'d input
+/// — the only caller-controlled string in the script.
+const MAIL_GET_SCRIPT: &str = r#"
+try {{
+    $outlook = New-Object -ComObject Outlook.Application
+    $ns = $outlook.GetNamespace("MAPI")
+    $item = $ns.GetItemFromID("{escaped_id}")
+    $date = $item.ReceivedTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $recipients = @($item.To -split ';' | ForEach-Object {{ $_.Trim() }})
+    $cc = @($item.CC -split ';' | ForEach-Object {{ $_.Trim() }})
+    $attachments = @()
+    foreach ($att in $item.Attachments) {{
+        $attachments += [PSCustomObject]@{{
+            filename=$att.FileName
+            mime_type="application/octet-stream"
+            size=$att.Size
+        }}
+    }}
+    [PSCustomObject]@{{
+        id=$item.EntryID
+        subject=$item.Subject
+        sender=$item.SenderName
+        recipients=$recipients
+        cc=$cc
+        bcc=@()
+        date=$date
+        body=$item.Body
+        is_read=$item.UnRead -eq $false
+        attachments=$attachments
+    }} | ConvertTo-Json -Compress
+}} catch {{
+    Write-Error "Outlook error: $_"
+    exit 1
+}}
+"#;
+
+/// Format the `mail_search` script: the four substitution points are
+/// `folder_path` (the caller's named folder, name or full path), `restrict`
+/// (the DASL `Items.Restrict` filter), `escaped_query` (the user query with
+/// PowerShell wildcards escaped), and the numeric `limit` / `max_scan` caps.
+///
+/// See the script body for the why behind the matched-name-or-full-path
+/// folder lookup, the `Restrict`-with-scan-fallback, and the null-coalescing
+/// before `.Body`/`.Subject` reads — the script is a single `try`/`catch`
+/// and any of those throwing would abort the entire search.
+fn mail_search_script(
+    folder_path: &str,
+    restrict: &str,
+    escaped_query: &str,
+    limit: u32,
+    max_scan: u32,
+) -> String {
+    // The PowerShell template references `folder_path` / `escaped_query` more
+    // than once each, so `format!("{name}", name = name)` is required — the
+    // `uninlined_format_args` lint's alternative doesn't apply here.
+    #[allow(clippy::uninlined_format_args)]
+    let _ = (folder_path, restrict, escaped_query, limit, max_scan);
+    format!(
+        r#"
+try {{
+    $outlook = New-Object -ComObject Outlook.Application
+    $ns = $outlook.GetNamespace("MAPI")
+    $targetFolder = $null
+    # Match either the leaf name or the full "Store\Path\Leaf" id.
+    # `mail_folders` returns the full path as each folder's `id`, so
+    # matching only on `Name` meant handing this tool the id its own
+    # sibling produced silently fell through to the default Inbox —
+    # the caller got results, from the wrong folder, with no signal.
+    foreach ($store in $ns.Folders) {{
+        $stack = New-Object System.Collections.Generic.Stack[object]
+        $stack.Push([PSCustomObject]@{{ F = $store; P = $store.Name }})
+        while ($stack.Count -gt 0) {{
+            $node = $stack.Pop()
+            if ($node.F.Name -eq "{folder_path}" -or $node.P -eq "{folder_path}") {{
+                $targetFolder = $node.F
+                break
+            }}
+            foreach ($sub in $node.F.Folders) {{
+                $stack.Push([PSCustomObject]@{{ F = $sub; P = "$($node.P)\$($sub.Name)" }})
+            }}
+        }}
+        if ($targetFolder) {{ break }}
+    }}
+    if (-not $targetFolder) {{
+        $targetFolder = $ns.GetDefaultFolder(6)
+    }}
+    # Let the store do the searching. A provider that refuses the
+    # query (some PST / IMAP stores have no full-text index) falls
+    # back to the bounded scan below; the -like test after it makes
+    # both paths return the same set.
+    $items = $targetFolder.Items
+    $candidates = $null
+    try {{ $candidates = $items.Restrict("{restrict}") }} catch {{ $candidates = $null }}
+    if ($null -eq $candidates) {{ $candidates = $items }}
+    try {{ $candidates.Sort("[ReceivedTime]", $true) }} catch {{ }}
+    $messages = @()
+    $count = 0
+    $scanned = 0
+    foreach ($item in $candidates) {{
+        if ($count -ge {limit}) {{ break }}
+        $scanned++
+        if ($scanned -gt {max_scan}) {{ break }}
+        # Coalesce nulls: some item types (meeting requests, receipts)
+        # have a null Body, and calling .Substring on it below would
+        # throw into the outer catch and abort the ENTIRE search on the
+        # first such match. Subject/SenderName can be null too and would
+        # break deserialization on the Rust side.
+        $subject = if ($null -eq $item.Subject) {{ "" }} else {{ $item.Subject }}
+        $sender = if ($null -eq $item.SenderName) {{ "" }} else {{ $item.SenderName }}
+        $body = if ($null -eq $item.Body) {{ "" }} else {{ $item.Body }}
+        if ($subject -like "*{escaped_query}*" -or $sender -like "*{escaped_query}*" -or $body -like "*{escaped_query}*") {{
+            $date = $item.ReceivedTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            $messages += [PSCustomObject]@{{
+                id=$item.EntryID
+                subject=$subject
+                sender=$sender
+                recipients=@($item.To)
+                date=$date
+                body_preview=$body.Substring(0, [Math]::Min(200, $body.Length))
+                is_read=$item.UnRead -eq $false
+            }}
+            $count++
+        }}
+    }}
+    $messages | ConvertTo-Json -Compress
+}} catch {{
+    Write-Error "Outlook error: $_"
+    exit 1
+}}
+"#,
+    )
+}
+
+/// Format the `mail_get` script: only the `{escaped_id}` placeholder is
+/// caller-controlled and is filled with `ps_escape_dq`'d input.
+fn mail_get_script(escaped_id: &str) -> String {
+    MAIL_GET_SCRIPT.replace("{escaped_id}", escaped_id)
+}
+
 pub struct WindowsPim;
 
 impl WindowsPim {
@@ -159,7 +299,7 @@ impl PimCapability for WindowsPim {
                 Some(MailFolder {
                     id: v.get("id")?.as_str()?.to_string(),
                     name: v.get("name")?.as_str()?.to_string(),
-                    count: v.get("count")?.as_u64()? as u32,
+                    count: u32::try_from(v.get("count")?.as_u64()?).unwrap_or(0),
                 })
             })
             .collect();
@@ -176,80 +316,12 @@ impl PimCapability for WindowsPim {
         let folder_path = ps_escape_dq(folder.unwrap_or("Inbox"));
         let escaped_query = escape_powershell_wildcards(&ps_escape_dq(query));
         let restrict = ps_escape_dq(&restrict_query(query));
-        let max_scan = MAX_SCAN_ITEMS;
-        let script = format!(
-            r#"
-            try {{
-                $outlook = New-Object -ComObject Outlook.Application
-                $ns = $outlook.GetNamespace("MAPI")
-                $targetFolder = $null
-                # Match either the leaf name or the full "Store\Path\Leaf" id.
-                # `mail_folders` returns the full path as each folder's `id`, so
-                # matching only on `Name` meant handing this tool the id its own
-                # sibling produced silently fell through to the default Inbox —
-                # the caller got results, from the wrong folder, with no signal.
-                foreach ($store in $ns.Folders) {{
-                    $stack = New-Object System.Collections.Generic.Stack[object]
-                    $stack.Push([PSCustomObject]@{{ F = $store; P = $store.Name }})
-                    while ($stack.Count -gt 0) {{
-                        $node = $stack.Pop()
-                        if ($node.F.Name -eq "{folder_path}" -or $node.P -eq "{folder_path}") {{
-                            $targetFolder = $node.F
-                            break
-                        }}
-                        foreach ($sub in $node.F.Folders) {{
-                            $stack.Push([PSCustomObject]@{{ F = $sub; P = "$($node.P)\$($sub.Name)" }})
-                        }}
-                    }}
-                    if ($targetFolder) {{ break }}
-                }}
-                if (-not $targetFolder) {{
-                    $targetFolder = $ns.GetDefaultFolder(6)
-                }}
-                # Let the store do the searching. A provider that refuses the
-                # query (some PST / IMAP stores have no full-text index) falls
-                # back to the bounded scan below; the -like test after it makes
-                # both paths return the same set.
-                $items = $targetFolder.Items
-                $candidates = $null
-                try {{ $candidates = $items.Restrict("{restrict}") }} catch {{ $candidates = $null }}
-                if ($null -eq $candidates) {{ $candidates = $items }}
-                try {{ $candidates.Sort("[ReceivedTime]", $true) }} catch {{ }}
-                $messages = @()
-                $count = 0
-                $scanned = 0
-                foreach ($item in $candidates) {{
-                    if ($count -ge {limit}) {{ break }}
-                    $scanned++
-                    if ($scanned -gt {max_scan}) {{ break }}
-                    # Coalesce nulls: some item types (meeting requests, receipts)
-                    # have a null Body, and calling .Substring on it below would
-                    # throw into the outer catch and abort the ENTIRE search on the
-                    # first such match. Subject/SenderName can be null too and would
-                    # break deserialization on the Rust side.
-                    $subject = if ($null -eq $item.Subject) {{ "" }} else {{ $item.Subject }}
-                    $sender = if ($null -eq $item.SenderName) {{ "" }} else {{ $item.SenderName }}
-                    $body = if ($null -eq $item.Body) {{ "" }} else {{ $item.Body }}
-                    if ($subject -like "*{escaped_query}*" -or $sender -like "*{escaped_query}*" -or $body -like "*{escaped_query}*") {{
-                        $date = $item.ReceivedTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-                        $messages += [PSCustomObject]@{{
-                            id=$item.EntryID
-                            subject=$subject
-                            sender=$sender
-                            recipients=@($item.To)
-                            date=$date
-                            body_preview=$body.Substring(0, [Math]::Min(200, $body.Length))
-                            is_read=$item.UnRead -eq $false
-                        }}
-                        $count++
-                    }}
-                }}
-                $messages | ConvertTo-Json -Compress
-            }} catch {{
-                Write-Error "Outlook error: $_"
-                exit 1
-            }}
-            "#
+        let script = mail_search_script(
+            &folder_path,
+            &restrict,
+            &escaped_query,
+            limit,
+            MAX_SCAN_ITEMS,
         );
 
         let output = self.run_powershell(&script).await?;
@@ -277,79 +349,14 @@ impl PimCapability for WindowsPim {
 
         let result = messages
             .into_iter()
-            .filter_map(|v| {
-                let date_str = v.get("date")?.as_str()?;
-                let date = DateTime::parse_from_rfc3339(date_str)
-                    .ok()
-                    .map(|d| d.with_timezone(&Utc))?;
-
-                let recipients = v
-                    .get("recipients")?
-                    .as_array()?
-                    .iter()
-                    .filter_map(|r| r.as_str().map(std::string::ToString::to_string))
-                    .collect();
-
-                Some(MailMessage {
-                    id: v.get("id")?.as_str()?.to_string(),
-                    subject: v
-                        .get("subject")
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    sender: v
-                        .get("sender")
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    recipients,
-                    date,
-                    body_preview: v.get("body_preview")?.as_str().unwrap_or("").to_string(),
-                    is_read: v.get("is_read")?.as_bool().unwrap_or(true),
-                })
-            })
+            .filter_map(|v| message_json_to_mail_message(&v))
             .collect();
 
         Ok(result)
     }
 
     async fn mail_get(&self, message_id: &str) -> Result<MailMessageDetail> {
-        let escaped_id = ps_escape_dq(message_id);
-        let script = format!(
-            r#"
-            try {{
-                $outlook = New-Object -ComObject Outlook.Application
-                $ns = $outlook.GetNamespace("MAPI")
-                $item = $ns.GetItemFromID("{escaped_id}")
-                $date = $item.ReceivedTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-                $recipients = @($item.To -split ';' | ForEach-Object {{ $_.Trim() }})
-                $cc = @($item.CC -split ';' | ForEach-Object {{ $_.Trim() }})
-                $attachments = @()
-                foreach ($att in $item.Attachments) {{
-                    $attachments += [PSCustomObject]@{{
-                        filename=$att.FileName
-                        mime_type="application/octet-stream"
-                        size=$att.Size
-                    }}
-                }}
-                [PSCustomObject]@{{
-                    id=$item.EntryID
-                    subject=$item.Subject
-                    sender=$item.SenderName
-                    recipients=$recipients
-                    cc=$cc
-                    bcc=@()
-                    date=$date
-                    body=$item.Body
-                    is_read=$item.UnRead -eq $false
-                    attachments=$attachments
-                }} | ConvertTo-Json -Compress
-            }} catch {{
-                Write-Error "Outlook error: $_"
-                exit 1
-            }}
-            "#
-        );
+        let script = mail_get_script(&ps_escape_dq(message_id));
 
         let output = self.run_powershell(&script).await?;
         if !output.status.success() {
@@ -365,82 +372,125 @@ impl PimCapability for WindowsPim {
             DesktopError::PlatformError(format!("Failed to parse Outlook message detail: {e}"))
         })?;
 
-        let date_str = v
-            .get("date")
-            .and_then(|d| d.as_str())
-            .unwrap_or("1970-01-01T00:00:00Z");
-        let date = DateTime::parse_from_rfc3339(date_str).ok().map_or_else(
-            || Utc.timestamp_opt(0, 0).single().unwrap_or_else(Utc::now),
-            |d| d.with_timezone(&Utc),
-        );
+        Ok(parse_mail_message_detail(message_id, &v))
+    }
+}
 
-        let recipients = v
-            .get("recipients")
-            .and_then(|r| r.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|r| r.as_str().map(std::string::ToString::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
+/// Project one Outlook `mail_search` row into [`MailMessage`].
+/// Returns `None` on any shape mismatch (the surrounding `filter_map` skips
+/// it silently — the script's null-coalescing prevents this in practice).
+fn message_json_to_mail_message(v: &serde_json::Value) -> Option<MailMessage> {
+    let date_str = v.get("date")?.as_str()?;
+    let date = DateTime::parse_from_rfc3339(date_str)
+        .ok()
+        .map(|d| d.with_timezone(&Utc))?;
 
-        let cc = v
-            .get("cc")
-            .and_then(|r| r.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|r| r.as_str().map(std::string::ToString::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
+    let recipients = v
+        .get("recipients")?
+        .as_array()?
+        .iter()
+        .filter_map(|r| r.as_str().map(std::string::ToString::to_string))
+        .collect();
 
-        let attachments = v
-            .get("attachments")
-            .and_then(|a| a.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|att| {
-                        Some(MailAttachment {
-                            filename: att.get("filename")?.as_str()?.to_string(),
-                            mime_type: att
-                                .get("mime_type")?
-                                .as_str()
-                                .unwrap_or("application/octet-stream")
-                                .to_string(),
-                            size: att.get("size")?.as_u64().unwrap_or(0),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+    Some(MailMessage {
+        id: v.get("id")?.as_str()?.to_string(),
+        subject: v
+            .get("subject")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        sender: v
+            .get("sender")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        recipients,
+        date,
+        body_preview: v.get("body_preview")?.as_str().unwrap_or("").to_string(),
+        is_read: v.get("is_read")?.as_bool().unwrap_or(true),
+    })
+}
 
-        Ok(MailMessageDetail {
-            id: message_id.to_string(),
-            subject: v
-                .get("subject")
-                .and_then(|s| s.as_str())
-                .unwrap_or("")
-                .to_string(),
-            sender: v
-                .get("sender")
-                .and_then(|s| s.as_str())
-                .unwrap_or("")
-                .to_string(),
-            recipients,
-            cc,
-            bcc: Vec::new(),
-            date,
-            body: v
-                .get("body")
-                .and_then(|s| s.as_str())
-                .unwrap_or("")
-                .to_string(),
-            is_read: v
-                .get("is_read")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(true),
-            attachments,
+/// Project the `mail_get` JSON payload into [`MailMessageDetail`].
+///
+/// Fields absent from the payload default to the empty / "unknown" forms;
+/// each `.unwrap_or(...)` documents what "missing" means for that field.
+fn parse_mail_message_detail(message_id: &str, v: &serde_json::Value) -> MailMessageDetail {
+    let date_str = v
+        .get("date")
+        .and_then(|d| d.as_str())
+        .unwrap_or("1970-01-01T00:00:00Z");
+    let date = DateTime::parse_from_rfc3339(date_str).ok().map_or_else(
+        || Utc.timestamp_opt(0, 0).single().unwrap_or_else(Utc::now),
+        |d| d.with_timezone(&Utc),
+    );
+
+    let recipients = v
+        .get("recipients")
+        .and_then(|r| r.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| r.as_str().map(std::string::ToString::to_string))
+                .collect()
         })
+        .unwrap_or_default();
+
+    let cc = v
+        .get("cc")
+        .and_then(|r| r.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| r.as_str().map(std::string::ToString::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let attachments = v
+        .get("attachments")
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|att| {
+                    Some(MailAttachment {
+                        filename: att.get("filename")?.as_str()?.to_string(),
+                        mime_type: att
+                            .get("mime_type")?
+                            .as_str()
+                            .unwrap_or("application/octet-stream")
+                            .to_string(),
+                        size: att.get("size")?.as_u64().unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    MailMessageDetail {
+        id: message_id.to_string(),
+        subject: v
+            .get("subject")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        sender: v
+            .get("sender")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        recipients,
+        cc,
+        bcc: Vec::new(),
+        date,
+        body: v
+            .get("body")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        is_read: v
+            .get("is_read")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true),
+        attachments,
     }
 }
 

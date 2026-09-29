@@ -89,13 +89,20 @@ fn duration_of(secs: f64) -> std::time::Duration {
 /// 31 = worst).
 fn quality_to_qv(quality: f32) -> u32 {
     let q = quality.clamp(0.05, 1.0);
-    // q=1.0 -> 2, q=0.05 -> ~30
-    (1.0 - q).mul_add(29.0, 2.0).round() as u32
+    // q=1.0 -> 2, q=0.05 -> ~30. `q` is bounded to [0.05, 1.0] so the
+    // expression is always non-negative and well below `u32::MAX`; the
+    // truncating `as` is the right tool here — `u32::TryFrom<f32>` does
+    // not exist, and the result lives in {2, 3, …, 30}, both bounds
+    // comfortably inside u32. (clippy::pedantic flags this anyway, and the
+    // allow is the right call: rewriting it in i64/f64 buys us nothing.)
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let v = (1.0 - q).mul_add(29.0, 2.0).round() as u32;
+    v
 }
 
 /// How many frames to let a webcam throw away before the one that is kept.
 ///
-/// A DirectShow camera streams from the instant it opens, but its auto-exposure,
+/// A `DirectShow` camera streams from the instant it opens, but its auto-exposure,
 /// auto-white-balance and (on most laptop panels) the physical shutter need a
 /// few frames to settle. `-frames:v 1` took the very first one, so
 /// `camera_snap` habitually returned a black or washed-out image — a picture
@@ -137,7 +144,7 @@ fn camera_snap_args(device: &str, qv: u32, output: &str) -> Vec<String> {
 ///
 /// `ffmpeg -f dshow -i video=…` blocks in the device-open call when another
 /// application (a video call, say) already holds the camera or microphone, and
-/// it blocks *indefinitely* — there is no DirectShow open timeout. Without a cap
+/// it blocks *indefinitely* — there is no `DirectShow` open timeout. Without a cap
 /// the tool call hangs until the harness's per-turn ceiling and leaks the ffmpeg
 /// child behind it. The margin covers device negotiation and the final mux,
 /// which are slow on some webcams but not minutes-slow.

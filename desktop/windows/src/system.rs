@@ -72,6 +72,30 @@ fn windows_version() -> String {
     }
 }
 
+/// RAII COM apartment guard for `launch_app`'s `spawn_blocking` thread.
+///
+/// `ShellExecuteW` requires the calling thread to live in an STA; a bare
+/// pool thread has no apartment, so launching anything whose association
+/// goes through such a handler failed with an opaque code. We initialise
+/// the STA here, wrap the result in this guard, and uninitialise on drop
+/// — only when the init actually added a reference (`S_OK` or `S_FALSE`;
+/// `RPC_E_CHANGED_MODE` means the thread was already in a foreign
+/// apartment, and an unbalanced `CoUninitialize` would tear it down out
+/// from under code that is not ours).
+#[cfg(windows)]
+struct ComExit(bool);
+
+#[cfg(windows)]
+impl Drop for ComExit {
+    fn drop(&mut self) {
+        if self.0 {
+            // SAFETY: balances the successful `CoInitializeEx` that
+            // produced `self.0 == true`.
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
+        }
+    }
+}
+
 pub struct WindowsSystem {
     _private: (),
 }
@@ -97,9 +121,7 @@ impl SystemCapability for WindowsSystem {
             let app_name = app_name.to_string();
             tokio::task::spawn_blocking(move || {
                 use windows::core::PCWSTR;
-                use windows::Win32::System::Com::{
-                    CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
-                };
+                use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
                 use windows::Win32::UI::Shell::ShellExecuteW;
                 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -114,15 +136,6 @@ impl SystemCapability for WindowsSystem {
                 // SAFETY: paired init/uninit on this thread only, around the one
                 // call that needs the apartment.
                 let com_ok = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
-                struct ComExit(bool);
-                impl Drop for ComExit {
-                    fn drop(&mut self) {
-                        if self.0 {
-                            // SAFETY: balances the `CoInitializeEx` above.
-                            unsafe { CoUninitialize() };
-                        }
-                    }
-                }
                 let _com = ComExit(com_ok);
 
                 let operation: Vec<u16> = "open\0".encode_utf16().collect();
@@ -216,20 +229,20 @@ impl SystemCapability for WindowsSystem {
         }
     }
 
-    /// Post a toast via the WinRT notification manager, driven from PowerShell.
+    /// Post a toast via the `WinRT` notification manager, driven from PowerShell.
     ///
     /// Title and body travel as **environment variables**, so the script text is
     /// a constant. Interpolating them doubled `'` and nothing else, which left
     /// every other PowerShell metacharacter — and, more commonly, the newlines
     /// an R5 summary is full of — free to break the string literal and fail the
     /// whole notification. (The same class of bug was fixed on the macOS
-    /// AppleScript path in 2026-07; the Windows path was not.)
+    /// `AppleScript` path in 2026-07; the Windows path was not.)
     ///
     /// # Why the script now fails loudly
     ///
     /// It had no `$ErrorActionPreference` and no `try`/`catch`, so every step
     /// could fail as a *non-terminating* error and PowerShell still exited `0`.
-    /// A machine where the WinRT projection will not load (Server Core, an N
+    /// A machine where the `WinRT` projection will not load (Server Core, an N
     /// edition, a locked-down policy) therefore posted no notification and
     /// reported delivery — the worst possible answer for the one capability
     /// whose entire purpose is to tell the user something happened. R5 says
@@ -449,14 +462,16 @@ $null = $nodes.Item(1).AppendChild($template.CreateTextNode($env:ALEPH_TOAST_BOD
                 }
 
                 let mut info = LASTINPUTINFO {
-                    cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+                    // The struct fits in a `u32` on every supported platform;
+                    // saturate defensively rather than truncate silently.
+                    cbSize: u32::try_from(std::mem::size_of::<LASTINPUTINFO>()).unwrap_or(0),
                     dwTime: 0,
                 };
 
                 // SAFETY: GetLastInputInfo writes into the struct on success;
                 // GetTickCount64 returns u64 millis since boot (no 49.7-day wrap).
                 let (ok, now_ms, last_ms) = unsafe {
-                    let ok = GetLastInputInfo(std::ptr::addr_of_mut!(info) as *mut _).as_bool();
+                    let ok = GetLastInputInfo(std::ptr::addr_of_mut!(info).cast()).as_bool();
                     (ok, GetTickCount64(), info.dwTime)
                 };
 
@@ -472,12 +487,16 @@ $null = $nodes.Item(1).AppendChild($template.CreateTextNode($env:ALEPH_TOAST_BOD
                 // combining the high 32 bits of `now_ms` with `last_ms`, then
                 // rolling back one wrap if the result is in the future.
                 let high = now_ms & 0xFFFF_FFFF_0000_0000;
-                let mut last_full = high | (last_ms as u64);
+                let mut last_full = high | u64::from(last_ms);
                 if last_full > now_ms {
                     last_full = last_full.wrapping_sub(1u64 << 32);
                 }
                 let idle_millis = now_ms.saturating_sub(last_full);
 
+                // `idle_millis` is `u64`; `f64`'s 53-bit mantissa means the
+                // cast is only lossy past ~285,000 years of uptime, so the
+                // pedantic `cast_precision_loss` is a false positive here.
+                #[allow(clippy::cast_precision_loss)]
                 Ok((idle_millis as f64) / 1000.0)
             })
             .await

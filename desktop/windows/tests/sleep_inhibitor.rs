@@ -5,7 +5,7 @@
 //! `#[ignore]` so ordinary `cargo test` skips it.
 //!
 //! To run manually from an elevated terminal:
-//!   cargo test -p aleph-desktop-windows --test sleep_inhibitor -- --ignored --nocapture
+//!   cargo test -p aleph-desktop-windows --test `sleep_inhibitor` -- --ignored --nocapture
 
 #![cfg(windows)]
 
@@ -24,7 +24,7 @@ fn system_request_contains(needle: &str) -> bool {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires an elevated shell to read SYSTEM power requests via powercfg /requests"]
 fn acquire_shows_in_powercfg_then_clears_on_drop() {
     let reason = "aleph-sleep-inhibitor-integration-test";
     assert!(

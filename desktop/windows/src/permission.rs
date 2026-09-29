@@ -85,8 +85,8 @@ const fn ungated_status(kind: PermissionKind) -> PermissionStatus {
         PermissionKind::Camera
         | PermissionKind::Microphone
         | PermissionKind::Location
-        | PermissionKind::Notifications => PermissionStatus::Unknown,
-        PermissionKind::SpeechRecognition
+        | PermissionKind::Notifications
+        | PermissionKind::SpeechRecognition
         | PermissionKind::FullDisk
         | PermissionKind::Automation
         | PermissionKind::Contacts

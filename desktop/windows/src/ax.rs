@@ -253,13 +253,15 @@ impl AccessibilityCapability for WindowsAccessibility {
     }
 
     async fn set_value(&self, params: SetValueParams) -> Result<AxActionResult> {
-        let (locator, value) = (params.locator, params.value);
-        run_blocking(move || imp::set_value(locator, value)).await
+        let locator = params.locator;
+        let value = params.value;
+        run_blocking(move || imp::set_value(&locator, &value)).await
     }
 
     async fn perform_action(&self, params: PerformActionParams) -> Result<AxActionResult> {
-        let (locator, action) = (params.locator, params.action);
-        run_blocking(move || imp::perform_action(locator, action)).await
+        let locator = params.locator;
+        let action = params.action;
+        run_blocking(move || imp::perform_action(&locator, &action)).await
     }
 }
 
@@ -331,7 +333,7 @@ mod imp {
     use aleph_protocol::desktop_bridge::methods::screen::Region;
     use windows::core::BSTR;
 
-    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::Foundation::{BOOL, HWND, RECT};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_MULTITHREADED,
@@ -448,7 +450,14 @@ mod imp {
                         "no visible top-level window for pid {pid} to root the accessibility query"
                     ))
                 })?;
-            return Ok(HWND(raw as usize as *mut core::ffi::c_void));
+            // The HWND is a pointer-sized handle but the window APIs we
+            // consulted all return it as `u32`; saturate on platforms where
+            // `usize` is narrower so the truncation is loud, not silent.
+            return Ok(HWND(usize::try_from(raw).map_err(|_| {
+                DesktopError::PlatformError(format!(
+                    "top_window_for_pid returned 0x{raw:x}, does not fit in this platform's usize"
+                ))
+            })? as *mut core::ffi::c_void));
         }
         // SAFETY: documented Win32 call; the returned handle is validated below.
         let fg = unsafe { GetForegroundWindow() };
@@ -466,10 +475,10 @@ mod imp {
     /// into `desktop_click` without rescaling.
     fn rect_to_region(r: RECT) -> Region {
         Region {
-            x: r.left as f64,
-            y: r.top as f64,
-            width: (r.right - r.left) as f64,
-            height: (r.bottom - r.top) as f64,
+            x: f64::from(r.left),
+            y: f64::from(r.top),
+            width: f64::from(r.right - r.left),
+            height: f64::from(r.bottom - r.top),
         }
     }
 
@@ -559,7 +568,7 @@ mod imp {
         // not answer either leaves this `None` — "not told", never `false`.
         let enabled = unsafe { el.CachedIsEnabled().or_else(|_| el.CurrentIsEnabled()) }
             .ok()
-            .map(|b| b.as_bool());
+            .map(BOOL::as_bool);
 
         AxElement {
             secure: Some(is_secure_element(el, &role)),
@@ -599,8 +608,7 @@ mod imp {
     fn is_offscreen(el: &IUIAutomationElement) -> bool {
         // SAFETY: cached read with a live-getter fallback.
         unsafe { el.CachedIsOffscreen().or_else(|_| el.CurrentIsOffscreen()) }
-            .map(|b| b.as_bool())
-            .unwrap_or(false)
+            .is_ok_and(BOOL::as_bool)
     }
 
     /// Whether this element masks its content.
@@ -614,8 +622,7 @@ mod imp {
     fn is_secure_element(el: &IUIAutomationElement, role: &str) -> bool {
         // SAFETY: cached read with a live-getter fallback.
         if unsafe { el.CachedIsPassword().or_else(|_| el.CurrentIsPassword()) }
-            .map(|b| b.as_bool())
-            .unwrap_or(false)
+            .is_ok_and(BOOL::as_bool)
         {
             return true;
         }
@@ -657,9 +664,7 @@ mod imp {
             // is treated as writable — `set_value` verifies by read-back anyway,
             // so a wrong "yes" costs one honest failure, a wrong "no" costs the
             // model the whole write path.
-            !unsafe { vp.CurrentIsReadOnly() }
-                .map(|b| b.as_bool())
-                .unwrap_or(false)
+            !unsafe { vp.CurrentIsReadOnly() }.is_ok_and(BOOL::as_bool)
         }));
 
         // SAFETY: pattern getters; unsupported patterns surface as Err.
@@ -842,13 +847,13 @@ mod imp {
         Ok(Some((el.clone(), summary)))
     }
 
-    /// Write `value` into the located element's UIA ValuePattern and read it
+    /// Write `value` into the located element's UIA `ValuePattern` and read it
     /// back for verification. Only returns `Ok` when a write actually occurred;
     /// "not located / not settable" is an `Err` (see the Err-vs-Ok contract).
-    pub(super) fn set_value(loc: AxLocator, value: String) -> Result<AxActionResult> {
+    pub(super) fn set_value(loc: &AxLocator, value: &str) -> Result<AxActionResult> {
         let _com = ComGuard::new();
         let uia = automation()?;
-        let (el, mut summary) = resolve(&uia, &loc)?.ok_or_else(|| {
+        let (el, mut summary) = resolve(&uia, loc)?.ok_or_else(|| {
             DesktopError::NotAvailable("no element matched role/title; try `ax_snapshot`".into())
         })?;
         // SAFETY: pattern getter; unsupported pattern surfaces as Err.
@@ -860,16 +865,13 @@ mod imp {
                 )
             })?;
         // SAFETY: read-only property getter.
-        if unsafe { vp.CurrentIsReadOnly() }
-            .map(|b| b.as_bool())
-            .unwrap_or(false)
-        {
+        if unsafe { vp.CurrentIsReadOnly() }.is_ok_and(BOOL::as_bool) {
             return Err(DesktopError::NotAvailable(
                 "element is read-only; fall back to click + type_text".into(),
             ));
         }
         // SAFETY: documented ValuePattern write.
-        unsafe { vp.SetValue(&BSTR::from(value.as_str())) }.map_err(|e| {
+        unsafe { vp.SetValue(&BSTR::from(value)) }.map_err(|e| {
             DesktopError::PlatformError(format!("ValuePattern.SetValue failed: {e}"))
         })?;
         // SAFETY: read-back for verification.
@@ -977,11 +979,11 @@ mod imp {
     /// Perform a macOS-style AX action on the located element by trying its
     /// UIA-pattern fallback chain. Unknown action → `NotImplemented` (from
     /// `ax_action_to_patterns`); no pattern usable → `NotAvailable`.
-    pub(super) fn perform_action(loc: AxLocator, action: String) -> Result<AxActionResult> {
-        let patterns = ax_action_to_patterns(&action)?;
+    pub(super) fn perform_action(loc: &AxLocator, action: &str) -> Result<AxActionResult> {
+        let patterns = ax_action_to_patterns(action)?;
         let _com = ComGuard::new();
         let uia = automation()?;
-        let (el, summary) = resolve(&uia, &loc)?.ok_or_else(|| {
+        let (el, summary) = resolve(&uia, loc)?.ok_or_else(|| {
             DesktopError::NotAvailable("no element matched role/title; try `ax_snapshot`".into())
         })?;
         for pattern in patterns {
