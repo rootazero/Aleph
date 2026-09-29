@@ -192,6 +192,50 @@ impl LoopTool for SubagentTool {
         Self::schema_value()
     }
 
+    /// Resolve an `agent_type` to an `AgentDef`, or build the `ToolResult::Error`
+    /// that should be returned to the model. Shared by the batch, aggregator,
+    /// and single-run paths in `execute` — each was a copy of the same
+    /// resolve-then-fallback dance with a different `error_prefix` ("batch task
+    /// {idx}: ", "aggregator: ", "").
+    fn resolve_agent_or_error(
+        &self,
+        agent_type: Option<&str>,
+        error_prefix: &str,
+        project_root_ref: Option<&std::path::Path>,
+    ) -> Result<AgentDef, ToolResult> {
+        if let Some(t) = agent_type {
+            if let Some(def) = self
+                .agent_resolution
+                .agent_registry
+                .resolve_spawnable(t, project_root_ref)
+            {
+                return Ok(def);
+            }
+            let available = self
+                .agent_resolution
+                .agent_registry
+                .spawnable_agent_ids(project_root_ref)
+                .join(", ");
+            return Err(ToolResult::Error {
+                error: format!(
+                    "{error_prefix}Unknown agent_type '{t}'. Available agents: {available}"
+                ),
+                retryable: false,
+            });
+        }
+        match self
+            .agent_resolution
+            .agent_registry
+            .lookup_with_overlay("default", project_root_ref)
+        {
+            Some(def) => Ok(def),
+            None => Err(ToolResult::Error {
+                error: format!("{error_prefix}No default agent registered in AgentRegistry"),
+                retryable: false,
+            }),
+        }
+    }
+
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
         // Gap B follow-up — the harness Act phase forks a per-call child of
         // the run cancel and threads it here. `cancel_for_child_with(&cancel)`
@@ -898,63 +942,17 @@ impl LoopTool for SubagentTool {
                 let mut prepared: Vec<(AgentDef, String, Option<String>, u64)> =
                     Vec::with_capacity(batch.len());
                 for (idx, batch_task) in batch.iter().enumerate() {
-                    let agent_def = if let Some(ref agent_type) = batch_task.agent_type {
-                        match self
-                            .agent_resolution
-                            .agent_registry
-                            .resolve_spawnable(agent_type, project_root_ref)
-                        {
-                            Some(def) => def,
-                            None => {
-                                let available = self
-                                    .agent_resolution
-                                    .agent_registry
-                                    .spawnable_agent_ids(project_root_ref)
-                                    .join(", ");
-                                return ToolResult::Error {
-                                    error: format!(
-                                        "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
-                                    ),
-                                    retryable: false,
-                                };
-                            }
-                        }
-                    } else if let Some(ref agent_type) = args.agent_type {
-                        match self
-                            .agent_resolution
-                            .agent_registry
-                            .resolve_spawnable(agent_type, project_root_ref)
-                        {
-                            Some(def) => def,
-                            None => {
-                                let available = self
-                                    .agent_resolution
-                                    .agent_registry
-                                    .spawnable_agent_ids(project_root_ref)
-                                    .join(", ");
-                                return ToolResult::Error {
-                                    error: format!(
-                                        "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
-                                    ),
-                                    retryable: false,
-                                };
-                            }
-                        }
-                    } else {
-                        match self
-                            .agent_resolution
-                            .agent_registry
-                            .lookup_with_overlay("default", project_root_ref)
-                        {
-                            Some(def) => def,
-                            None => {
-                                return ToolResult::Error {
-                                    error: "No default agent registered in AgentRegistry"
-                                        .to_string(),
-                                    retryable: false,
-                                };
-                            }
-                        }
+                    let agent_type = batch_task
+                        .agent_type
+                        .as_deref()
+                        .or(args.agent_type.as_deref());
+                    let agent_def = match self.resolve_agent_or_error(
+                        agent_type,
+                        &format!("batch task {idx}: "),
+                        project_root_ref,
+                    ) {
+                        Ok(def) => def,
+                        Err(err) => return err,
                     };
                     let model = batch_task.model.clone().or_else(|| args.model.clone());
                     let timeout = batch_task.timeout_secs.unwrap_or(args.timeout_secs);
@@ -1233,43 +1231,13 @@ impl LoopTool for SubagentTool {
                 // dumb). Skipped when no proposal succeeded — there is nothing
                 // to fold, so the raw batch is returned untouched.
                 if args.synthesize && !proposals.is_empty() {
-                    let aggregator_def = if let Some(ref agent_type) = args.agent_type {
-                        match self
-                            .agent_resolution
-                            .agent_registry
-                            .resolve_spawnable(agent_type, project_root_ref)
-                        {
-                            Some(def) => def,
-                            None => {
-                                let available = self
-                                    .agent_resolution
-                                    .agent_registry
-                                    .spawnable_agent_ids(project_root_ref)
-                                    .join(", ");
-                                return ToolResult::Error {
-                                    error: format!(
-                                        "aggregator: Unknown agent_type '{agent_type}'. Available agents: {available}"
-                                    ),
-                                    retryable: false,
-                                };
-                            }
-                        }
-                    } else {
-                        match self
-                            .agent_resolution
-                            .agent_registry
-                            .lookup_with_overlay("default", project_root_ref)
-                        {
-                            Some(def) => def,
-                            None => {
-                                return ToolResult::Error {
-                                    error:
-                                        "aggregator: No default agent registered in AgentRegistry"
-                                            .to_string(),
-                                    retryable: false,
-                                };
-                            }
-                        }
+                    let aggregator_def = match self.resolve_agent_or_error(
+                        args.agent_type.as_deref(),
+                        "aggregator: ",
+                        project_root_ref,
+                    ) {
+                        Ok(def) => def,
+                        Err(err) => return err,
                     };
 
                     let goal = if args.task.trim().is_empty() {
@@ -1416,41 +1384,13 @@ impl LoopTool for SubagentTool {
         // 2. Resolve agent definition (per-run project overlay first).
         let project_root = crate::projects::current_project_root();
         let project_root_ref = project_root.as_deref();
-        let agent_def = if let Some(ref agent_type) = args.agent_type {
-            match self
-                .agent_resolution
-                .agent_registry
-                .resolve_spawnable(agent_type, project_root_ref)
-            {
-                Some(def) => def,
-                None => {
-                    let available = self
-                        .agent_resolution
-                        .agent_registry
-                        .spawnable_agent_ids(project_root_ref)
-                        .join(", ");
-                    return ToolResult::Error {
-                        error: format!(
-                            "Unknown agent_type '{agent_type}'. Available agents: {available}"
-                        ),
-                        retryable: false,
-                    };
-                }
-            }
-        } else {
-            match self
-                .agent_resolution
-                .agent_registry
-                .lookup_with_overlay("default", project_root_ref)
-            {
-                Some(def) => def,
-                None => {
-                    return ToolResult::Error {
-                        error: "No default agent registered in AgentRegistry".to_string(),
-                        retryable: false,
-                    };
-                }
-            }
+        let agent_def = match self.resolve_agent_or_error(
+            args.agent_type.as_deref(),
+            "",
+            project_root_ref,
+        ) {
+            Ok(def) => def,
+            Err(err) => return err,
         };
 
         // 3. Check nesting depth
