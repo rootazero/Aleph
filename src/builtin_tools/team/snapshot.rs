@@ -121,6 +121,18 @@ impl TeamSnapshotTool {
         crate::builtin_tools::team::require_team_auth(&*self.team_store, team_id, &self.actor())
             .await
     }
+
+    /// Look up a snapshot's metadata, returning `NotFound` when the id is
+    /// unknown. Restore and Delete both fetch meta solely to learn its
+    /// `team_id` before gating; the lookup shape and error message were
+    /// identical across the two arms and now live here.
+    async fn snapshot_meta(&self, snapshot_id: &str) -> Result<SnapshotMeta> {
+        self.snapshot_store
+            .get(snapshot_id)
+            .await?
+            .ok_or_else(|| AlephError::NotFound(format!("snapshot `{snapshot_id}` not found")))
+            .map(|(meta, _payload)| meta)
+    }
 }
 
 #[async_trait]
@@ -206,14 +218,7 @@ impl AlephTool for TeamSnapshotTool {
                 // BT-D-R4-23: gate using the snapshot's own team_id BEFORE
                 // any restore mutation. Fetch just the meta first to learn
                 // the team_id, then check auth, then run the restore.
-                let meta = self
-                    .snapshot_store
-                    .get(snapshot_id)
-                    .await?
-                    .ok_or_else(|| {
-                        AlephError::NotFound(format!("snapshot `{snapshot_id}` not found"))
-                    })?
-                    .0;
+                let meta = self.snapshot_meta(snapshot_id).await?;
                 self.require_auth(&meta.team_id).await?;
                 let diff = restore_snapshot(
                     self.snapshot_store.as_ref(),
@@ -234,14 +239,7 @@ impl AlephTool for TeamSnapshotTool {
                 // before mutating. Mirrors the Get / Restore arms so
                 // Delete cannot be used to destroy another team's
                 // snapshot chain.
-                let meta = self
-                    .snapshot_store
-                    .get(snapshot_id)
-                    .await?
-                    .ok_or_else(|| {
-                        AlephError::NotFound(format!("snapshot `{snapshot_id}` not found"))
-                    })?
-                    .0;
+                let meta = self.snapshot_meta(snapshot_id).await?;
                 self.require_auth(&meta.team_id).await?;
                 let existed = self.snapshot_store.delete(snapshot_id).await?;
                 TeamSnapshotOutput::Delete {
