@@ -137,7 +137,7 @@ pub(super) async fn apply_inline_push_config(
         token: inline.token,
         events: inline.events,
     };
-    notification.set_config(push_config).await
+    notification.set_config(push_config).await.map(|_| ())
 }
 
 // --- Request Processor ---

@@ -708,7 +708,7 @@ pub(crate) fn to_list_row(request_id: &str, recovered: &Recovered) -> Value {
                 "task": run.record.task,
                 "agent": run.record.agent,
                 "result_preview": preview,
-                "result_chars": text.chars().count(),
+                "result_chars": run.partial_result.chars().count(),
                 "last_activity_ms": run.last_activity_ms,
                 // Same reason as the interrupted arm above.
                 "progress": progress_json(None),

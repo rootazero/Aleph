@@ -617,10 +617,13 @@ impl AcpAdapterManager {
         }))
         .await;
         for (key, _) in entries {
+            let harness_id = key.harness_id;
+            let cwd = key.cwd.to_string_lossy().into_owned();
+            let session_name = key.session_name_opt().map(str::to_owned);
             self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                harness_id: key.harness_id,
-                cwd: key.cwd.to_string_lossy().into_owned(),
-                session_name: key.session_name_opt().map(str::to_owned),
+                harness_id,
+                cwd,
+                session_name,
             })
             .await;
         }

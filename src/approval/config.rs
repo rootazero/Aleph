@@ -137,7 +137,7 @@ pub fn matches_glob(value: &str, pattern: &str) -> bool {
 /// First compiled rule in `rules` whose regex matches `target`. Used by the
 /// blocklist-then-allowlist scan in `ConfigApprovalPolicy::check` so the two
 /// arms share the find-first-match iteration.
-fn first_match(rules: &[CompiledRule], target: &str) -> Option<&CompiledRule> {
+fn first_match<'a>(rules: &'a [CompiledRule], target: &str) -> Option<&'a CompiledRule> {
     rules.iter().find(|r| r.regex.is_match(target))
 }
 
