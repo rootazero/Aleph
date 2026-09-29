@@ -369,8 +369,7 @@ impl BrowserSnapshotTool {
 #[async_trait]
 impl AlephTool for BrowserSnapshotTool {
     const NAME: &'static str = "browser_snapshot";
-    const DESCRIPTION: &'static str =
-        "Get a snapshot of the current browser page — an indented accessibility \
+    const DESCRIPTION: &'static str = "Get a snapshot of the current browser page — an indented accessibility \
          tree by default, or the full page-state tree with geometry and element \
          states via format=\"json\". On obscura a clickable whose only signal is \
          a JS listener gets no ref; it is still in the json tree with a rect, so \
@@ -396,7 +395,7 @@ impl AlephTool for BrowserSnapshotTool {
                     page_url: None,
                     page_title: None,
                     message: Some(message),
-                })
+                });
             }
         };
 
@@ -775,7 +774,7 @@ mod tests {
     /// the parse failure would read as a broken page rather than a bad argument.
     #[test]
     fn an_unknown_format_is_refused_rather_than_defaulted() {
-        use super::{resolve_format, SnapshotFormat};
+        use super::{SnapshotFormat, resolve_format};
         assert_eq!(resolve_format(None).unwrap(), SnapshotFormat::Text);
         assert_eq!(resolve_format(Some("text")).unwrap(), SnapshotFormat::Text);
         assert_eq!(resolve_format(Some("json")).unwrap(), SnapshotFormat::Json);

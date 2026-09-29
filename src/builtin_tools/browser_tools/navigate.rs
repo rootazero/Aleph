@@ -45,6 +45,15 @@ pub struct BrowserNavigateOutput {
     pub message: Option<String>,
 }
 
+impl BrowserNavigateOutput {
+    fn failed(message: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            message: Some(message.into()),
+        }
+    }
+}
+
 /// Navigates the browser: go back, forward, refresh, or go to a new URL.
 #[derive(Clone)]
 pub struct BrowserNavigateTool {
@@ -87,10 +96,9 @@ impl AlephTool for BrowserNavigateTool {
         // `check_input_secret_block` states for the input-side gate.
         if let NavigateAction::Goto { url } = &args.action {
             if let Err(violation) = self.manager.check_navigation(url).await {
-                return Ok(BrowserNavigateOutput {
-                    success: false,
-                    message: Some(format!("Blocked: {violation}")),
-                });
+                return Ok(BrowserNavigateOutput::failed(format!(
+                    "Blocked: {violation}"
+                )));
             }
         }
 
@@ -110,10 +118,7 @@ impl AlephTool for BrowserNavigateTool {
         )
         .await
         {
-            return Ok(BrowserNavigateOutput {
-                success: false,
-                message: Some(message),
-            });
+            return Ok(BrowserNavigateOutput::failed(message));
         }
 
         // Goto navigates the current tab to a new URL — routed through the
@@ -130,18 +135,14 @@ impl AlephTool for BrowserNavigateTool {
                                 args.profile
                             )),
                         },
-                        Err(e) => BrowserNavigateOutput {
-                            success: false,
-                            message: Some(format!(
-                                "Navigation failed: {}",
-                                super::backend_error_text(&self.manager, &e)
-                            )),
-                        },
+                        Err(e) => BrowserNavigateOutput::failed(format!(
+                            "Navigation failed: {}",
+                            super::backend_error_text(&self.manager, &e)
+                        )),
                     },
-                    Err(e) => BrowserNavigateOutput {
-                        success: false,
-                        message: Some(super::backend_error_text(&self.manager, &e)),
-                    },
+                    Err(e) => {
+                        BrowserNavigateOutput::failed(super::backend_error_text(&self.manager, &e))
+                    }
                 },
             );
         }
@@ -163,18 +164,15 @@ impl AlephTool for BrowserNavigateTool {
                     success: true,
                     message: Some(format!("Navigated {nav:?} in profile '{}'", args.profile)),
                 }),
-                Err(e) => Ok(BrowserNavigateOutput {
-                    success: false,
-                    message: Some(format!(
-                        "Navigation failed: {}",
-                        super::backend_error_text(&self.manager, &e)
-                    )),
-                }),
+                Err(e) => Ok(BrowserNavigateOutput::failed(format!(
+                    "Navigation failed: {}",
+                    super::backend_error_text(&self.manager, &e)
+                ))),
             },
-            Err(e) => Ok(BrowserNavigateOutput {
-                success: false,
-                message: Some(super::backend_error_text(&self.manager, &e)),
-            }),
+            Err(e) => Ok(BrowserNavigateOutput::failed(super::backend_error_text(
+                &self.manager,
+                &e,
+            ))),
         }
     }
 }
@@ -310,10 +308,12 @@ mod tests {
         // For a URL the SSRF floor allows, the policy is still what decides —
         // and it short-circuits before any browser work runs.
         assert!(!result.success);
-        assert!(result
-            .message
-            .unwrap()
-            .contains("denied by approval policy"));
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("denied by approval policy")
+        );
     }
 
     /// An SSRF-refused URL must be refused BEFORE the approval policy is
