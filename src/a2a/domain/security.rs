@@ -113,14 +113,10 @@ impl std::fmt::Debug for Credentials {
     }
 }
 
-const fn is_private_ip(ip: &std::net::IpAddr) -> bool {
+fn is_private_ip(ip: &std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
-        std::net::IpAddr::V6(v6) => {
-            let octets = v6.octets();
-            (octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80) // link-local fe80::/10
-                || (octets[0] & 0xfe) == 0xfc // ULA fc00::/7
-        }
+        std::net::IpAddr::V6(v6) => v6.is_unique_local() || v6.is_unicast_link_local(),
     }
 }
 
