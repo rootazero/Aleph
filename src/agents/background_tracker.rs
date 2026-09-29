@@ -296,6 +296,17 @@ pub struct CompletedSnapshot {
     pub progress_tail: Vec<SubagentProgress>,
 }
 
+impl From<&CompletedAgent> for CompletedSnapshot {
+    fn from(c: &CompletedAgent) -> Self {
+        Self {
+            task: c.task_description.clone(),
+            duration_secs: c.duration_secs,
+            outcome: c.outcome.clone(),
+            progress_tail: c.progress_tail.clone(),
+        }
+    }
+}
+
 /// Lightweight metadata for a still-running background subagent.
 #[derive(Debug, Clone)]
 pub struct RunningMeta {
@@ -850,12 +861,7 @@ impl BackgroundAgentTracker {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
             e.into_inner()
         });
-        completed.get(request_id).map(|c| CompletedSnapshot {
-            task: c.task_description.clone(),
-            duration_secs: c.duration_secs,
-            outcome: c.outcome.clone(),
-            progress_tail: c.progress_tail.clone(),
-        })
+        completed.get(request_id).map(CompletedSnapshot::from)
     }
 
     /// Park until background subagent `request_id` finishes, or until `timeout`
@@ -1183,17 +1189,7 @@ impl BackgroundAgentTracker {
         });
         in_scope
             .into_iter()
-            .map(|(id, c)| {
-                (
-                    id.clone(),
-                    CompletedSnapshot {
-                        task: c.task_description.clone(),
-                        duration_secs: c.duration_secs,
-                        outcome: c.outcome.clone(),
-                        progress_tail: c.progress_tail.clone(),
-                    },
-                )
-            })
+            .map(|(id, c)| (id.clone(), CompletedSnapshot::from(c)))
             .collect()
     }
 
