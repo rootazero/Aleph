@@ -973,9 +973,27 @@ pub trait Channel: Send + Sync {
 
     /// Set the icon of a group conversation. Default: `UnsupportedFeature`.
     ///
-    /// iMessage-native (BlueBubbles `setChatIcon` with image data).
-    /// Same R8 rationale as `create_poll`. Capability flag:
-    /// `ChannelCapabilities::group_icons`.
+    /// Implemented for BlueBubbles (Private API helper #8) and WhatsApp
+    /// (wacore `SetProfilePictureSpec::set_group`). Same R8 rationale as
+    /// `create_poll`. Capability flag: `ChannelCapabilities::group_icons`.
+    ///
+    /// ## `_icon_data_url` contract (RFC 2397)
+    ///
+    /// Must be a `data:` URL of the form
+    /// `data:[<mediatype>][;base64],<data>` — e.g.
+    /// `data:image/png;base64,iVBORw0KGgo...`. Only `;base64,` payloads
+    /// are accepted; URL-encoded payloads (no `;base64,`) are rejected
+    /// because silent latin-1 decode would corrupt binary image bytes.
+    /// The shared decoder at `crate::gateway::data_url::decode` is the
+    /// single source of truth — adapters MUST go through it (or match
+    /// its error vocabulary) rather than re-implementing the parser.
+    /// Adapters that cannot decode the data URL MUST return
+    /// `ChannelError::Internal` (or a more specific variant if the
+    /// channel's error vocabulary has one) rather than guessing.
+    ///
+    /// The `channel_message` builtin tool enforces that
+    /// `icon_data_url` is non-empty before this trait method is called;
+    /// transport-level decode failures belong here.
     async fn set_group_icon(
         &self,
         _conversation_id: &ConversationId,
