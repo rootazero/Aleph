@@ -311,39 +311,33 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
 
         // Extract this skill
         let target = skills_dir.join(&name);
-        match extract_dir_recursive(dir, &target) {
+        let version = match extract_dir_recursive(dir, &target) {
             Ok(()) => {
-                manifest.skills.insert(
-                    name.clone(),
-                    SkillEntry {
-                        source: SkillOrigin::Official,
-                        version: Some(BUNDLED_VERSION.to_string()),
-                        url: None,
-                    },
-                );
                 debug!(skill = %name, "Extracted bundled skill");
+                Some(BUNDLED_VERSION.to_string())
             }
+            // Record the skill as Official even though extraction failed.
+            // Otherwise the partially-written directory is left untracked,
+            // and the next reconcile() reclassifies it as a user-owned
+            // Local skill — which extract_skills then permanently skips,
+            // leaving a half-extracted skill that never self-heals and is
+            // mislabeled as a user skill. version=None marks it incomplete;
+            // since bundled_version is not bumped on failure, the next
+            // startup re-extracts and repairs it.
             Err(e) => {
-                // Record the skill as Official even though extraction failed.
-                // Otherwise the partially-written directory is left untracked,
-                // and the next reconcile() reclassifies it as a user-owned
-                // Local skill — which extract_skills then permanently skips,
-                // leaving a half-extracted skill that never self-heals and is
-                // mislabeled as a user skill. version=None marks it incomplete;
-                // since bundled_version is not bumped on failure, the next
-                // startup re-extracts and repairs it.
-                manifest.skills.insert(
-                    name.clone(),
-                    SkillEntry {
-                        source: SkillOrigin::Official,
-                        version: None,
-                        url: None,
-                    },
-                );
                 warn!(skill = %name, error = %e, "Failed to extract skill");
                 all_ok = false;
+                None
             }
-        }
+        };
+        manifest.skills.insert(
+            name.clone(),
+            SkillEntry {
+                source: SkillOrigin::Official,
+                version,
+                url: None,
+            },
+        );
     }
 
     all_ok
@@ -685,30 +679,22 @@ pub(crate) fn extract_skill_tree_from_dir(
             }
         }
         let target = skills_dir.join(&name);
-        match copy_tree_with_prune(&entry.path(), &target) {
-            Ok(()) => {
-                manifest.skills.insert(
-                    name.clone(),
-                    SkillEntry {
-                        source: SkillOrigin::Official,
-                        version: Some(BUNDLED_VERSION.to_string()),
-                        url: None,
-                    },
-                );
-            }
+        let version = match copy_tree_with_prune(&entry.path(), &target) {
+            Ok(()) => Some(BUNDLED_VERSION.to_string()),
             Err(e) => {
-                manifest.skills.insert(
-                    name.clone(),
-                    SkillEntry {
-                        source: SkillOrigin::Official,
-                        version: None,
-                        url: None,
-                    },
-                );
                 warn!(skill = %name, error = %e, "Failed to extract skill from checkout");
                 all_ok = false;
+                None
             }
-        }
+        };
+        manifest.skills.insert(
+            name.clone(),
+            SkillEntry {
+                source: SkillOrigin::Official,
+                version,
+                url: None,
+            },
+        );
     }
     all_ok
 }
