@@ -89,13 +89,9 @@ impl LocalVoiceTool {
         }
         let probe = req.send().await;
 
-        let or_default = |s: &str| {
-            if s.is_empty() {
-                "(server default)".to_string()
-            } else {
-                s.to_string()
-            }
-        };
+        // `serde_json::json!` accepts `&str` directly, so keep `&str` end
+        // to end and avoid three `String` allocations per probe.
+        let or_default = |s: &str| if s.is_empty() { "(server default)" } else { s };
         let summary = |reachable: bool, detail: &str| {
             serde_json::json!({
                 "endpoint": endpoint,
