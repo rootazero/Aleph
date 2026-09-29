@@ -620,7 +620,9 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
                 if let Err(rm_err) = remove_result {
                     return cleanup_tmp(rm_err);
                 }
-                std::fs::rename(&tmp, &dest).map_err(cleanup_tmp)?;
+                if let Err(e) = std::fs::rename(&tmp, &dest) {
+                    return cleanup_tmp(e);
+                }
             }
             Err(e) => return cleanup_tmp(e),
         }

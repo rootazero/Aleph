@@ -63,8 +63,13 @@ impl SelectionTable {
         let stamp = self.next_stamp;
         self.next_stamp += 1;
         if self.entries.len() >= MAX_LIVE && !self.entries.contains_key(canvas_id) {
-            if let Some((victim_key, _)) = self.entries.iter().min_by_key(|(_, e)| e.stamp) {
-                self.entries.remove(victim_key);
+            if let Some(victim_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, e)| e.stamp)
+                .map(|(k, _)| k.clone())
+            {
+                self.entries.remove(&victim_key);
             }
         }
         self.entries

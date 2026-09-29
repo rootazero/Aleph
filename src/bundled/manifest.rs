@@ -121,7 +121,9 @@ impl InstallRegistry {
                 if let Err(rm) = std::fs::remove_file(&path) {
                     return cleanup_tmp(rm);
                 }
-                std::fs::rename(&tmp_path, &path).map_err(cleanup_tmp)?;
+                if let Err(rn) = std::fs::rename(&tmp_path, &path) {
+                    return cleanup_tmp(rn);
+                }
             }
             Err(e) => return cleanup_tmp(e),
         }

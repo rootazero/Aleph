@@ -243,6 +243,40 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
                 .map(|p| p.join("main").join("output").join("documents"))
         }
     }
+
+    /// Browser engine wrapper — centralises the four-arg call shape so the
+    /// three dispatch branches in `call` stay readable.
+    async fn run_browser(
+        &self,
+        args: &PdfGenerateArgs,
+        output_path: &std::path::Path,
+    ) -> std::result::Result<PdfGenerateOutput, ToolError> {
+        browser_engine::generate(
+            args,
+            output_path,
+            self.playwright_config.as_ref(),
+            self.browser_runtime.as_ref(),
+        )
+        .await
+    }
+
+    /// `native_engine::generate` is sync CPU+IO (markdown parse, font file
+    /// read, `printpdf` build, `std::fs::write`) — running it inline stalls
+    /// the tokio worker for the full document. Move it to the blocking pool.
+    /// Also centralises the join-error mapping that three call sites used to
+    /// repeat verbatim.
+    async fn run_native(
+        &self,
+        args: &PdfGenerateArgs,
+        output_path: std::path::PathBuf,
+    ) -> std::result::Result<PdfGenerateOutput, ToolError> {
+        // `spawn_blocking` requires a `'static` closure; clone the
+        // borrowed `args` so the spawned task owns its copy.
+        let args = args.clone();
+        tokio::task::spawn_blocking(move || native_engine::generate(&args, &output_path))
+            .await
+            .map_err(|e| ToolError::Execution(format!("pdf_generate join failed: {e}")))?
+    }
 }
 
 impl Default for PdfGenerateTool {
@@ -292,36 +326,5 @@ impl AlephTool for PdfGenerateTool {
         };
 
         result.map_err(Into::into)
-    }
-
-    /// Browser engine wrapper — centralises the four-arg call shape so the
-    /// three dispatch branches in `call` stay readable.
-    async fn run_browser(
-        &self,
-        args: &PdfGenerateArgs,
-        output_path: &std::path::Path,
-    ) -> std::result::Result<PdfGenerateOutput, ToolError> {
-        browser_engine::generate(
-            args,
-            output_path,
-            self.playwright_config.as_ref(),
-            self.browser_runtime.as_ref(),
-        )
-        .await
-    }
-
-    /// `native_engine::generate` is sync CPU+IO (markdown parse, font file
-    /// read, `printpdf` build, `std::fs::write`) — running it inline stalls
-    /// the tokio worker for the full document. Move it to the blocking pool.
-    /// Also centralises the join-error mapping that three call sites used to
-    /// repeat verbatim.
-    async fn run_native(
-        &self,
-        args: &PdfGenerateArgs,
-        output_path: std::path::PathBuf,
-    ) -> std::result::Result<PdfGenerateOutput, ToolError> {
-        tokio::task::spawn_blocking(move || native_engine::generate(args, &output_path))
-            .await
-            .map_err(|e| ToolError::Execution(format!("pdf_generate join failed: {e}")))?
     }
 }
