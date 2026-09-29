@@ -193,65 +193,6 @@ impl LoopTool for SubagentTool {
     }
 
     /// Resolve an `agent_type` to an `AgentDef`, or build the `ToolResult::Error`
-    /// that should be returned to the model. Shared by the batch, aggregator,
-    /// and single-run paths in `execute` — each was a copy of the same
-    /// resolve-then-fallback dance with a different `error_prefix` ("batch task
-    /// {idx}: ", "aggregator: ", "").
-    fn resolve_agent_or_error(
-        &self,
-        agent_type: Option<&str>,
-        error_prefix: &str,
-        project_root_ref: Option<&std::path::Path>,
-    ) -> Result<AgentDef, ToolResult> {
-        if let Some(t) = agent_type {
-            if let Some(def) = self
-                .agent_resolution
-                .agent_registry
-                .resolve_spawnable(t, project_root_ref)
-            {
-                return Ok(def);
-            }
-            let available = self
-                .agent_resolution
-                .agent_registry
-                .spawnable_agent_ids(project_root_ref)
-                .join(", ");
-            return Err(ToolResult::Error {
-                error: format!(
-                    "{error_prefix}Unknown agent_type '{t}'. Available agents: {available}"
-                ),
-                retryable: false,
-            });
-        }
-        match self
-            .agent_resolution
-            .agent_registry
-            .lookup_with_overlay("default", project_root_ref)
-        {
-            Some(def) => Ok(def),
-            None => Err(ToolResult::Error {
-                error: format!("{error_prefix}No default agent registered in AgentRegistry"),
-                retryable: false,
-            }),
-        }
-    }
-
-    /// Resolve a `team_name` to a team_id through the optional
-    /// `teammate_manager`, falling back to the raw name when no manager is
-    /// configured. Returns a fully-formed `ToolResult::Error` on failure so the
-    /// caller can short-circuit. Shared by `SendMessage` and `ReadInbox`.
-    async fn resolve_team_id(&self, team_name: &str) -> Result<String, ToolResult> {
-        let Some(mgr) = self.agent_resolution.teammate_manager.as_ref() else {
-            return Ok(team_name.to_string());
-        };
-        mgr.ensure_team(team_name, &self.agent_resolution.parent_agent_id)
-            .await
-            .map_err(|e| ToolResult::Error {
-                error: format!("Failed to resolve team '{team_name}': {e}"),
-                retryable: false,
-            })
-    }
-
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
         // Gap B follow-up — the harness Act phase forks a per-call child of
         // the run cancel and threads it here. `cancel_for_child_with(&cancel)`
@@ -1492,6 +1433,69 @@ impl LoopTool for SubagentTool {
 }
 
 impl SubagentTool {
+    /// Resolve an `agent_type` to an `AgentDef`, or build the
+    /// `ToolResult::Error` that should be returned to the model. Shared by
+    /// the batch, aggregator, and single-run paths in `execute` — each was a
+    /// copy of the same resolve-then-fallback dance with a different
+    /// `error_prefix` ("batch task {idx}: ", "aggregator: ", ""). Inherent
+    /// method (not a trait method), so it lives here rather than inside the
+    /// `impl LoopTool for SubagentTool` block where the trait-method-only
+    /// check would reject it.
+    fn resolve_agent_or_error(
+        &self,
+        agent_type: Option<&str>,
+        error_prefix: &str,
+        project_root_ref: Option<&std::path::Path>,
+    ) -> Result<AgentDef, ToolResult> {
+        if let Some(t) = agent_type {
+            if let Some(def) = self
+                .agent_resolution
+                .agent_registry
+                .resolve_spawnable(t, project_root_ref)
+            {
+                return Ok(def);
+            }
+            let available = self
+                .agent_resolution
+                .agent_registry
+                .spawnable_agent_ids(project_root_ref)
+                .join(", ");
+            return Err(ToolResult::Error {
+                error: format!(
+                    "{error_prefix}Unknown agent_type '{t}'. Available agents: {available}"
+                ),
+                retryable: false,
+            });
+        }
+        match self
+            .agent_resolution
+            .agent_registry
+            .lookup_with_overlay("default", project_root_ref)
+        {
+            Some(def) => Ok(def),
+            None => Err(ToolResult::Error {
+                error: format!("{error_prefix}No default agent registered in AgentRegistry"),
+                retryable: false,
+            }),
+        }
+    }
+
+    /// Resolve a `team_name` to a team_id through the optional
+    /// `teammate_manager`, falling back to the raw name when no manager is
+    /// configured. Returns a fully-formed `ToolResult::Error` on failure so
+    /// the caller can short-circuit. Shared by `SendMessage` and `ReadInbox`.
+    async fn resolve_team_id(&self, team_name: &str) -> Result<String, ToolResult> {
+        let Some(mgr) = self.agent_resolution.teammate_manager.as_ref() else {
+            return Ok(team_name.to_string());
+        };
+        mgr.ensure_team(team_name, &self.agent_resolution.parent_agent_id)
+            .await
+            .map_err(|e| ToolResult::Error {
+                error: format!("Failed to resolve team '{team_name}': {e}"),
+                retryable: false,
+            })
+    }
+
     /// Report a `wait` that was cut short by the harness cancel token.
     ///
     /// # Why the wait listens to the token at all
