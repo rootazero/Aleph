@@ -95,15 +95,6 @@ pub enum ContextMode {
     Summary,
 }
 
-impl std::fmt::Display for ContextMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Fresh => write!(f, "Fresh"),
-            Self::Summary => write!(f, "Summary"),
-        }
-    }
-}
-
 /// Where **this** sub-agent call's starting context comes from.
 ///
 /// [`ContextMode`] answers the same question one level up — it is the *agent
