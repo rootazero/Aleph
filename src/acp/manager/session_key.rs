@@ -78,7 +78,7 @@ pub(super) fn canonicalize_cwd(cwd: &str) -> PathBuf {
     }
 }
 
-pub(super) fn normalize_path(path: &std::path::Path) -> PathBuf {
+pub(crate) fn normalize_path(path: &std::path::Path) -> PathBuf {
     use std::path::Component;
     let mut result = PathBuf::new();
     for component in path.components() {

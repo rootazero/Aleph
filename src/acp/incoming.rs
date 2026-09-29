@@ -118,7 +118,7 @@ impl IncomingHandler {
                 } else {
                     std::env::current_dir().unwrap_or_default().join(p)
                 };
-                lexical_normalize(&abs)
+                crate::acp::manager::session_key::normalize_path(&abs)
             }
             None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         };
@@ -337,7 +337,7 @@ impl IncomingHandler {
         } else {
             root.join(raw)
         };
-        let normalized = lexical_normalize(&joined);
+        let normalized = crate::acp::manager::session_key::normalize_path(&joined);
         if !normalized.starts_with(root) {
             warn!(
                 requested,
@@ -387,29 +387,6 @@ const MAX_FS_READ_BYTES: u64 = 32 * 1024 * 1024;
 /// arbitrarily large blobs into the workspace.
 const MAX_FS_WRITE_BYTES: usize = 16 * 1024 * 1024;
 
-/// Lexically normalize a path (resolve `.`/`..` without touching the
-/// filesystem). Mirrors `manager::session_key::normalize_path` but kept local
-/// to avoid widening that module's visibility.
-fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut result = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(p) => result.push(p.as_os_str()),
-            Component::RootDir => result.push(component.as_os_str()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if result.parent().is_some() {
-                    result.pop();
-                } else {
-                    result.push("..");
-                }
-            }
-            Component::Normal(name) => result.push(name),
-        }
-    }
-    result
-}
-
 /// Resolve `path` against the symlink-canonicalized `root`, walking
 /// components one at a time so a symlink pointing outside the workspace
 /// (or to a nonexistent target) is rejected *before* the syscall that
@@ -455,9 +432,9 @@ fn canonicalize_within_root(root: &Path, path: &Path) -> std::io::Result<PathBuf
                         let target = std::fs::read_link(&candidate)?;
                         let base = candidate.parent().unwrap_or_else(|| Path::new(""));
                         let resolved = if target.is_absolute() {
-                            lexical_normalize(&target)
+                            crate::acp::manager::session_key::normalize_path(&target)
                         } else {
-                            lexical_normalize(&base.join(&target))
+                            crate::acp::manager::session_key::normalize_path(&base.join(&target))
                         };
                         current = std::fs::canonicalize(&resolved)?;
                     }
