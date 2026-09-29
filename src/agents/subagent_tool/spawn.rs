@@ -197,14 +197,18 @@ impl SubagentTool {
         // X1 C2: capture on_delegation inputs before the task/registry are
         // moved into the spawned future.
         let deleg_registry = self.memory.capture_registry.clone();
-        let deleg_parent_agent_id = self.agent_resolution.parent_agent_id.clone();
-        let deleg_parent_session_id = self.memory.parent_session_id.clone();
+        // Shared source for the delegation-ctx (`_deleg_*`) and announce
+        // (`announce_*`) bindings — one clone per field instead of two.
+        let parent_agent_id = self.agent_resolution.parent_agent_id.clone();
+        let parent_session_id = self.memory.parent_session_id.clone();
+        let deleg_parent_agent_id = parent_agent_id.clone();
+        let deleg_parent_session_id = parent_session_id.clone();
         let deleg_task = task.clone();
 
         // R5 announce inputs — the gateway subscriber needs the parent's
         // agent id and session key to proactively deliver the result.
-        let announce_agent_id = self.agent_resolution.parent_agent_id.clone();
-        let announce_session_id = self.memory.parent_session_id.clone();
+        let announce_agent_id = parent_agent_id;
+        let announce_session_id = parent_session_id;
 
         let tracker = self.background.background_tracker.clone();
         let rid = request_id.clone();
