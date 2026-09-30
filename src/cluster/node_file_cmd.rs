@@ -19,6 +19,11 @@ use crate::cluster::{CommandDescriptor, NodeCommand};
 /// Per-file hard cap (raw bytes). Both sides agree; exceeding it fails fast.
 pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 
+/// Ceiling for the base64-encoded form of [`MAX_FILE_BYTES`] — every site
+/// that bounds the on-wire size derives from the same constant (4·n/3 + 4
+/// is the standard `base64::STANDARD` upper bound).
+const MAX_B64_LEN: usize = MAX_FILE_BYTES * 4 / 3 + 4;
+
 const B64: base64::engine::general_purpose::GeneralPurpose =
     base64::engine::general_purpose::STANDARD;
 
@@ -33,8 +38,7 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 /// command's control flow flat; pure and synchronous (hashing ≤8 MB is not
 /// worth a `spawn_blocking` hop).
 fn decode_verified_payload(content_b64: &str, expected_sha: &str) -> Result<Vec<u8>, String> {
-    let max_b64_len = MAX_FILE_BYTES * 4 / 3 + 4;
-    if content_b64.len() > max_b64_len {
+    if content_b64.len() > MAX_B64_LEN {
         return Err(format!(
             "file.write: base64 payload exceeds {MAX_FILE_BYTES} byte cap"
         ));
@@ -61,9 +65,6 @@ fn decode_verified_payload(content_b64: &str, expected_sha: &str) -> Result<Vec<
 /// itself doesn't enforce containment, only resolves relative paths against a
 /// base).
 async fn resolve_in_jail(path: &str, workspace_dir: &Path) -> Result<PathBuf, String> {
-    tokio::fs::create_dir_all(workspace_dir)
-        .await
-        .map_err(|e| format!("workspace dir unavailable: {e}"))?;
     // (B4-01) Reject symlinks at the workspace root itself: an attacker who
     // can race the service to delete and re-create `workspace_dir` as a
     // symlink to `/etc` would otherwise have `canonicalize` resolve `root`
@@ -78,6 +79,14 @@ async fn resolve_in_jail(path: &str, workspace_dir: &Path) -> Result<PathBuf, St
     // directory fd and using `openat` / `O_NOFOLLOW` on every descendant
     // operation (see `FileWriteCommand::run` for the leaf-level
     // `O_NOFOLLOW` work item — same class of fix).
+    //
+    // `symlink_metadata` itself returns NotFound when the path does not
+    // exist, so the explicit `create_dir_all` round-trip before it is
+    // redundant on the happy path; only the racing branch (root created
+    // between symlink_metadata and the caller's write) would need it. Skip
+    // the create_dir_all — the caller's command lifetime will surface a
+    // clearer "no such file" error than a misleading "workspace dir
+    // unavailable".
     let root_meta = tokio::fs::symlink_metadata(workspace_dir)
         .await
         .map_err(|e| format!("workspace root unresolved: {e}"))?;
@@ -207,29 +216,21 @@ impl NodeCommand for FileReadCommand {
             .and_then(|v| v.as_str())
             .ok_or("file.read: missing string field `path`")?;
         let src = resolve_in_jail(path, &self.workspace_dir).await?;
-        let metadata = match tokio::fs::metadata(&src).await {
-            Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err("file.read: not found".to_string());
-            }
-            Err(e) => return Err(format!("file.read: {e}")),
-        };
-        let size = metadata.len();
-        if size > MAX_FILE_BYTES as u64 {
-            return Err(format!(
-                "file.read: {size} bytes exceeds {MAX_FILE_BYTES} cap"
-            ));
-        }
-        // (B4-04) `tokio::fs::read` allocates the full file into memory before
-        // the size cap can reject it — an adversarial 10GB file at a known
-        // path would drive the node's allocator. Use `File::take(MAX + 1)` so
-        // the kernel only delivers `MAX_FILE_BYTES + 1` bytes regardless of
-        // the file's actual size, and reject if the buffer is over the cap.
+        // (B4-04) `tokio::fs::read` allocates the full file into memory
+        // before the size cap can reject it — an adversarial 10GB file at a
+        // known path would drive the node's allocator. Open the file and
+        // read via `File::take(MAX + 1)` so the kernel only delivers
+        // `MAX_FILE_BYTES + 1` bytes regardless of the file's actual size,
+        // and reject if the buffer is over the cap. The earlier
+        // `tokio::fs::metadata` + `Vec::with_capacity(min(size, MAX))` pair
+        // added a second syscall AND a TOCTOU window: `size` was already
+        // stale by the time the take-cap landed, so the with_capacity hint
+        // was a lie — let `Vec` grow instead.
         use tokio::io::AsyncReadExt;
-        let file = tokio::fs::File::open(&src)
+        let mut file = tokio::fs::File::open(&src)
             .await
             .map_err(|e| format!("file.read: {e}"))?;
-        let mut buf = Vec::with_capacity(std::cmp::min(size, MAX_FILE_BYTES as u64) as usize);
+        let mut buf = Vec::new();
         file.take((MAX_FILE_BYTES as u64) + 1)
             .read_to_end(&mut buf)
             .await
