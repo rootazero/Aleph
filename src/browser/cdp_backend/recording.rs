@@ -636,6 +636,11 @@ impl RecordingRegistry {
 enum Break {
     Stop,
     StreamClosed,
+    /// The recorded tab was destroyed while the engine lived on — the
+    /// `Target.targetDestroyed` event arm, which is exactly the shape the
+    /// socket-level `StreamClosed` arm cannot see (the C2 residual this
+    /// variant closes).
+    TabDestroyed,
     WriterDied,
 }
 
@@ -710,6 +715,19 @@ async fn run_recording(p: RunParams) {
                          not by the encoder"
                     );
                     last_lagged = lagged;
+                }
+                // The tab-death arm: browser-level (no session), so it must be
+                // matched BEFORE the session filter below. The tab id of a cdp
+                // backend IS the CDP targetId, so the event names this
+                // recording's tab directly. The pump's own destroyed arm is
+                // the other half of the detector; the supervisor watches the
+                // same broadcast itself rather than taking a callback, because
+                // the event is already here and a second wire would be a
+                // second thing to keep alive.
+                if ev.method == "Target.targetDestroyed"
+                    && ev.params["targetId"].as_str() == Some(key.1.as_str())
+                {
+                    break Break::TabDestroyed;
                 }
                 if ev.method != "Page.screencastFrame" || ev.session.as_ref() != Some(&session) {
                     continue;
@@ -873,6 +891,9 @@ fn build_receipt(
         Break::StreamClosed => {
             Some("tab or engine gone: the event stream closed mid-recording".to_string())
         }
+        Break::TabDestroyed => Some(
+            "the recorded tab was destroyed mid-recording (Target.targetDestroyed)".to_string(),
+        ),
         Break::WriterDied => Some(match writer_result {
             Some(Err(e)) => format!("encoder stdin write failed: {e}"),
             _ => "encoder stdin closed unexpectedly".to_string(),
@@ -1643,11 +1664,12 @@ mod tests {
         // arm — `fail_all` sets the close watch (`engine_gone` above), and
         // THAT is what the supervisor observes. The event stream itself never
         // closes (its sender lives in the connection's `Shared`, kept alive by
-        // this loop's own `conn` clones — see the `engine_gone` comment), and
-        // a tab that dies while the ENGINE lives has no detector at all: no
-        // `Target.targetDestroyed` subscription exists anywhere in the stack,
-        // so that shape hangs until someone stops it (stop's four-check
-        // receipt stays honest either way). FL §3.12 第六轮 ⓑ records both.
+        // this loop's own `conn` clones — see the `engine_gone` comment).
+        // The OTHER death shape — a tab dying while the ENGINE lives — is the
+        // `Target.targetDestroyed` arm's job since C3 Task 1, pinned by
+        // `a_target_destroyed_event_finalizes_the_recording_while_the_engine_lives`
+        // below; engines that never emit the event still hang that shape until
+        // someone stops it (stop's four-check receipt stays honest either way).
         server.drop_socket();
         // The supervisor notices the closed stream and retires the entry
         // itself — wait for THAT, so the receipt below is the auto-finalized
@@ -1900,11 +1922,118 @@ mod tests {
 
         let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        assert!(backend
+            .recording_registry()
+            .status("default", "T1")
+            .is_none());
+    }
+
+    /// **The C3 event arm: the TAB dies while the ENGINE lives.** The socket
+    /// stays up, so the `conn.closed()` watch never fires; the supervisor's
+    /// own `Target.targetDestroyed` match is what ends the recording, and the
+    /// filed receipt is a truncation, collectable by `stop_by_id`.
+    #[tokio::test]
+    async fn a_target_destroyed_event_finalizes_the_recording_while_the_engine_lives() {
+        let (server, conn) = recording_server().await;
+        let dir = tempfile::tempdir().expect("tmp");
+        let out = dir.path().join("tabdied.webm");
+        let registry = registry(Duration::from_secs(15));
+
+        registry
+            .start("p", "T1", &session_id(), &conn, opts(out.clone()))
+            .await
+            .expect("start");
+        for n in 1..=5 {
+            server.push_event(frame_event(n, JPEG_B64));
+        }
+        wait_until(
+            || ack_ids(&server).len() == 5,
+            Duration::from_secs(5),
+            "all 5 frames written and acked",
+        )
+        .await;
+
+        // The tab dies; the socket — and so the engine — stays up, which is
+        // exactly the shape the socket-level arm cannot see.
+        server.push_event(json!({
+            "method": "Target.targetDestroyed",
+            "params": { "targetId": "T1" }
+        }));
+        wait_until(
+            || registry.status("p", "T1").is_none(),
+            Duration::from_secs(10),
+            "the supervisor to auto-finalize the destroyed tab's recording",
+        )
+        .await;
+
+        let receipt = registry
+            .stop_by_id("rec1")
+            .await
+            .expect("the truncated receipt waits for its stop");
         assert!(
-            backend
-                .recording_registry()
-                .status("default", "T1")
-                .is_none()
+            !receipt.complete,
+            "a dead tab's file is never complete: {receipt:?}"
         );
+        assert!(
+            receipt
+                .truncation_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("destroyed")),
+            "the tab's destruction is the named cause: {receipt:?}"
+        );
+        assert_eq!(receipt.encoded_frames, 5);
+        assert_eq!(
+            receipt.encoder_exit, "0",
+            "the encoder finished its half cleanly"
+        );
+        assert!(receipt.size_bytes > 0);
+        assert!(
+            ffprobe_video_streams(&receipt.path).await >= 1,
+            "the honest first half is a playable file"
+        );
+    }
+
+    /// The arm names ONE tab: a destroyed event for a DIFFERENT tab must not
+    /// end this recording. Pinned positively — the recording goes on to a
+    /// complete stop — because a sleep-then-assert-alive negative would
+    /// measure the scheduler, not the filter.
+    #[tokio::test]
+    async fn a_destroyed_event_for_another_tab_leaves_the_recording_running() {
+        let (server, conn) = recording_server().await;
+        let dir = tempfile::tempdir().expect("tmp");
+        let out = dir.path().join("stillalive.webm");
+        let registry = registry(Duration::from_secs(15));
+
+        registry
+            .start("p", "T1", &session_id(), &conn, opts(out.clone()))
+            .await
+            .expect("start");
+        for n in 1..=5 {
+            server.push_event(frame_event(n, JPEG_B64));
+        }
+        server.push_event(json!({
+            "method": "Target.targetDestroyed",
+            "params": { "targetId": "T-OTHER" }
+        }));
+        // Proof the loop kept consuming past the foreign death: one more
+        // frame, captured and acked.
+        server.push_event(frame_event(6, JPEG_B64));
+        wait_until(
+            || ack_ids(&server).len() == 6,
+            Duration::from_secs(5),
+            "the frame after the foreign death is still written and acked",
+        )
+        .await;
+        assert!(
+            registry.status("p", "T1").is_some(),
+            "another tab's death must not retire this recording"
+        );
+
+        let receipt = registry.stop("p", "T1").await.expect("stop");
+        assert!(
+            receipt.complete,
+            "an undisturbed recording completes: {receipt:?}"
+        );
+        assert_eq!(receipt.encoded_frames, 6);
     }
 }

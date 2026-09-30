@@ -34,6 +34,7 @@ use aleph_cdp::{CdpEvent, SessionId};
 
 use crate::browser::engine::{EngineHandle, TabEntry, TabTable};
 use crate::browser::error::BrowserError;
+use crate::browser::tab_registry::TabRegistry;
 
 use super::CdpBackend;
 
@@ -228,7 +229,13 @@ fn claim_pump(flag: &AtomicBool) -> bool {
 /// Idempotent by [`claim_pump`] rather than by a "did we?" read: two verbs
 /// resolving the same handle concurrently is the normal case, and two pumps
 /// would record every console line twice.
-pub(super) fn ensure_pump(handle: &Arc<EngineHandle>) {
+///
+/// `identities` is the profile-manager-owned tab-identity registry, handed in
+/// so the `Target.targetDestroyed` arm can push the death into it (the
+/// event-push half of `TabRegistry::resolve_identity`). The caller wires it
+/// BEFORE claiming the slot, so the pump never observes an event it cannot
+/// report.
+pub(super) fn ensure_pump(handle: &Arc<EngineHandle>, identities: &Arc<TabRegistry>) {
     if !claim_pump(&handle.pump_started) {
         return;
     }
@@ -244,6 +251,10 @@ pub(super) fn ensure_pump(handle: &Arc<EngineHandle>) {
     // websocket — alive forever, and the pump would outlive the browser it was
     // reading. The upgrade failing IS the exit condition.
     let weak: Weak<EngineHandle> = Arc::downgrade(handle);
+    // The registry rides as an `Arc`: it is manager-owned and outlives the
+    // pump in every real topology, and holding it keeps no engine alive — the
+    // handle's `Weak` above remains the exit condition.
+    let identities = identities.clone();
     tokio::spawn(async move {
         // Ask for target lifecycle events. This is the ONLY reason a tab we did
         // not create ourselves can enter the table, and it is an event rather
@@ -280,10 +291,67 @@ pub(super) fn ensure_pump(handle: &Arc<EngineHandle>) {
                 adopt_popup(&handle, &ev).await;
                 continue;
             }
+            // The death arm, sitting beside the adoption arm it must not
+            // disturb (Review Focus #4). Folding is async for the same reason
+            // adoption is: it takes the table lock and reports to the
+            // identity registry.
+            if ev.method == "Target.targetDestroyed" {
+                fold_destroyed_target(&handle, &identities, &ev).await;
+                continue;
+            }
             let mut tabs = handle.tabs.lock().await;
             apply_event(&mut tabs, &ev);
         }
     });
+}
+
+/// Fold a `Target.targetDestroyed` into the table and the identity registry.
+///
+/// The fold is conditional on the tab being OURS: an entry that is not in the
+/// table is either a target this profile never tracked (the discovery stream
+/// is browser-wide — another profile's tab dying is not this profile's fact)
+/// or a tab `close_tab` already removed. The deliberate-close contract
+/// depends on the second case: a tab WE closed is forgotten, and its own
+/// death event — which the engine emits for every close, ours included —
+/// must not resurrect it as `TabGone` (`TabGone` is reserved for gone
+/// WITHOUT us: the page's `window.close`, an engine restart).
+///
+/// The single-threaded pump is the serialisation point: a created/destroyed
+/// pair for one target is processed in broadcast order, so no interleave can
+/// fold a tab whose adoption is still in flight inside THIS loop. (A verb
+/// racing the fold from OUTSIDE the loop resolves one lock acquisition
+/// earlier or later; both orders are honest answers.)
+async fn fold_destroyed_target(
+    handle: &Arc<EngineHandle>,
+    identities: &Arc<TabRegistry>,
+    ev: &CdpEvent,
+) {
+    let Some(target_id) = ev.params["targetId"].as_str() else {
+        return;
+    };
+    let removed = {
+        let mut tabs = handle.tabs.lock().await;
+        let removed = tabs.entries.remove(target_id);
+        if let Some(entry) = &removed {
+            if tabs.active.as_deref() == Some(target_id) {
+                // Naming ANY survivor as active would be a guess; leaving it
+                // unset lets `active_tab`'s documented last-listed fallback
+                // answer (the close path makes the same call).
+                tabs.active = None;
+            }
+            // Kept so `ensure_tab` can answer `TabGone` with the last URL the
+            // table observed — the same fact `TabRegistry::resolve_identity`
+            // carries, at the layer the verbs actually consult.
+            tabs.dead.insert(target_id.to_string(), entry.url.clone());
+        }
+        removed
+    };
+    if removed.is_none() {
+        return;
+    }
+    // The event-push half of the identity registry: `resolve_identity` answers
+    // `TabGone` from this note without waiting for a caller-fed enumeration.
+    identities.record_death(&handle.profile, target_id);
 }
 
 /// Adopt a page the page itself opened (`target=_blank`, `window.open`).
@@ -434,7 +502,7 @@ pub(super) async fn network_log(be: &CdpBackend, tab_id: &str) -> Result<String,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_cdp::testkit::FakeCdpServer;
+    use aleph_cdp::testkit::{FakeCdpServer, Responder};
     use aleph_cdp::SessionId;
     use serde_json::json;
 
@@ -940,5 +1008,185 @@ mod tests {
             "refs must survive an announcement that named no loader"
         );
         assert_eq!(tabs.entries["T1"].refs.document(), Some("L1"));
+    }
+
+    /// Wait for the pump to fold `tab` into the dead set. The pump runs in its
+    /// own task, so the fold is the assertion's synchronisation point — a bare
+    /// sleep here is how flaky tests are made.
+    async fn await_fold(handle: &Arc<EngineHandle>, tab: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if handle.tabs.lock().await.dead.contains_key(tab) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the pump never folded {tab} — the destroyed arm is not running"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// The `await_fold` twin for the adoption direction.
+    async fn await_entry(handle: &Arc<EngineHandle>, tab: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if handle.tabs.lock().await.entries.contains_key(tab) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the pump never adopted {tab} — the created arm is not running"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// **The detector itself (C3 Task 1).** A `Target.targetDestroyed` event
+    /// folds the tab out of the table, and every later verb on it answers
+    /// `TabGone` at the lookup — not after a command timeout spent on a
+    /// session that no longer exists.
+    ///
+    /// Driven through the REAL pump (`backend.handle()` starts it), because
+    /// the claim is about the wire from the event to the answer, not about a
+    /// helper (判据 §4).
+    #[tokio::test]
+    async fn a_destroyed_target_folds_the_tab_and_later_calls_answer_tab_gone() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("pre-seeded handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach ok");
+        // The listing doubles as the identity sweep, so the registry knows
+        // T1's targetId before the tab dies.
+        let _ = backend.list_tabs().await.expect("list ok");
+
+        server.push_event(json!({
+            "method": "Target.targetDestroyed",
+            "params": { "targetId": "T1" }
+        }));
+        await_fold(&handle, "T1").await;
+
+        let err = backend
+            .console_messages("T1")
+            .await
+            .expect_err("a folded tab cannot serve a verb");
+        assert!(
+            matches!(err, BrowserError::TabGone { ref tab_id, .. } if tab_id == "T1"),
+            "the answer is TabGone, immediately — not TabNotFound, not a timeout: {err:?}"
+        );
+        assert!(
+            !handle.tabs.lock().await.entries.contains_key("T1"),
+            "the dead tab is out of the live table"
+        );
+
+        // The registry's answer comes from the PUSH, not from a fresh
+        // enumeration: a live list that still carries T1 must not save it —
+        // an enumeration can lag, the destroy event was observed.
+        let reg = backend.tab_identities.clone();
+        let err = reg
+            .resolve_identity("default", "T1", &["T1".to_string()])
+            .expect_err("the pushed death beats the enumeration");
+        assert!(
+            matches!(err, BrowserError::TabGone { .. }),
+            "event push, not enumeration: {err:?}"
+        );
+    }
+
+    /// **Review Focus #4: the destroyed arm must not disturb popup adoption.**
+    /// Both arms share one pump loop; this drives a destroyed event for an
+    /// unknown target AND a created event for a real popup through the same
+    /// pump, and requires the adoption to land exactly as before.
+    #[tokio::test]
+    async fn popup_adoption_still_works_with_the_destroyed_arm_installed() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("OWNED".into()))
+            .await
+            .expect("attach ok");
+
+        // A destroyed event for a target we never heard of: the arm must not
+        // invent a dead entry for a stranger, and must not eat the event that
+        // follows it.
+        server.push_event(json!({
+            "method": "Target.targetDestroyed",
+            "params": { "targetId": "GHOST" }
+        }));
+        server.push_event(json!({
+            "method": "Target.targetCreated",
+            "params": { "targetInfo": {
+                "targetId": "POPUP", "type": "page", "openerId": "OWNED",
+                "url": "https://popup.example/", "attached": false
+            }}
+        }));
+        await_entry(&handle, "POPUP").await;
+
+        let tabs = handle.tabs.lock().await;
+        assert_eq!(tabs.entries["POPUP"].url, "https://popup.example/");
+        assert!(
+            !tabs.dead.contains_key("GHOST"),
+            "a stranger's death is not this profile's fact"
+        );
+        assert!(
+            tabs.entries.contains_key("OWNED"),
+            "the opener survives its popup's arrival"
+        );
+    }
+
+    /// A tab WE closed emits the same `targetDestroyed` the page's own
+    /// `window.close` does, and the event can win the race against
+    /// `close_tab`'s table removal. When it does, the fold must not leave the
+    /// tab marked dead: the deliberate-close contract is `TabNotFound`
+    /// afterwards, with `TabGone` reserved for gone-without-us.
+    #[tokio::test]
+    async fn a_tab_we_closed_is_not_left_marked_gone_by_its_own_death_event() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "Target.closeTarget",
+            Responder::Reply(json!({ "success": true })),
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach ok");
+        let _ = backend.list_tabs().await.expect("list ok");
+
+        // The event lands FIRST — the worst case of the race.
+        server.push_event(json!({
+            "method": "Target.targetDestroyed",
+            "params": { "targetId": "T1" }
+        }));
+        await_fold(&handle, "T1").await;
+
+        backend.close_tab("T1").await.expect("close ok");
+        assert!(
+            !handle.tabs.lock().await.dead.contains_key("T1"),
+            "a tab we closed is not left marked gone"
+        );
+        let err = backend
+            .console_messages("T1")
+            .await
+            .expect_err("a closed tab serves nothing");
+        assert!(
+            matches!(err, BrowserError::TabNotFound(_)),
+            "we closed it: TabNotFound, not TabGone — got {err:?}"
+        );
+        let reg = backend.tab_identities.clone();
+        assert!(
+            matches!(
+                reg.resolve_identity("default", "T1", &[]),
+                Err(BrowserError::TabNotFound(_))
+            ),
+            "the registry forgot it too"
+        );
     }
 }

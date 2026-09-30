@@ -183,7 +183,7 @@ impl CdpBackend {
             .registry
             .handle(self.engine, &self.req, EngineLaunch::Refuse)
             .await?;
-        events::ensure_pump(&handle);
+        events::ensure_pump(&handle, &self.tab_identities);
         Ok(handle)
     }
 
@@ -194,7 +194,7 @@ impl CdpBackend {
             .registry
             .handle(self.engine, &self.req, EngineLaunch::Allow)
             .await?;
-        events::ensure_pump(&handle);
+        events::ensure_pump(&handle, &self.tab_identities);
         Ok(handle)
     }
 

@@ -79,6 +79,12 @@ pub(super) async fn close_tab(be: &CdpBackend, tab_id: &str) -> Result<(), Brows
     {
         let mut tabs = handle.tabs.lock().await;
         tabs.entries.remove(tab_id);
+        // The death event of a close WE ordered can win the race against this
+        // removal (the engine emits `targetDestroyed` for every close, ours
+        // included). The fold must not outvote the forget: a tab we closed
+        // answers `TabNotFound` afterwards, with `TabGone` reserved for tabs
+        // that vanished without us.
+        tabs.dead.remove(tab_id);
         if tabs.active.as_deref() == Some(tab_id) {
             // The closed tab was the selected one. Naming ANY surviving tab
             // would be a guess; leaving it unset lets `active_tab`'s documented

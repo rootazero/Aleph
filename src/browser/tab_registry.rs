@@ -78,6 +78,15 @@ pub struct TabRegistry {
     /// profile → (`tab_id` → identity). Reads (`resolve_identity`,
     /// `last_url`) outnumber writes (discovery points), hence the RwLock.
     identities: RwLock<HashMap<String, HashMap<String, TabIdentity>>>,
+    /// profile → targetIds the engine's event pump reported DESTROYED.
+    ///
+    /// The event-push half of the liveness answer: a destroy the pump
+    /// observed is a fact, while a fresh enumeration is a sample that can
+    /// lag — so [`Self::resolve_identity`] consults this set BEFORE the
+    /// caller-fed `live_target_ids`. The enumeration arm stays as the
+    /// backstop for deaths the pump never saw (a lagged broadcast drops
+    /// events, and `pump_lagged` counts but cannot name them).
+    dead_targets: Mutex<HashMap<String, std::collections::HashSet<String>>>,
 }
 
 impl TabRegistry {
@@ -100,19 +109,29 @@ impl TabRegistry {
 
     /// Forget a tab after it has been closed (or is gone from the live list).
     ///
-    /// Drops the IDENTITY too: a tab Aleph deliberately closed must answer
-    /// [`BrowserError::TabNotFound`] afterwards, not `TabGone` — `TabGone` is
-    /// reserved for "gone WITHOUT us closing it" (the page's own
-    /// `window.close`, an engine restart), because the model did not do it
-    /// and needs to be told.
+    /// Drops the IDENTITY and any death note too: a tab Aleph deliberately
+    /// closed must answer [`BrowserError::TabNotFound`] afterwards, not
+    /// `TabGone` — `TabGone` is reserved for "gone WITHOUT us closing it"
+    /// (the page's own `window.close`, an engine restart), because the model
+    /// did not do it and needs to be told.
     pub fn forget(&self, profile: &str, tab_id: &str) {
+        // The target id is read out BEFORE the identity is dropped, so the
+        // death note keyed by it can go too.
+        let target = {
+            let mut ids = self.identities.write().unwrap_or_else(|e| e.into_inner());
+            ids.get_mut(profile)
+                .and_then(|tabs| tabs.remove(tab_id))
+                .and_then(|identity| identity.target_id)
+        };
         let mut map = self.tabs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(tabs) = map.get_mut(profile) {
             tabs.remove(tab_id);
         }
-        let mut ids = self.identities.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(tabs) = ids.get_mut(profile) {
-            tabs.remove(tab_id);
+        if let Some(target) = target {
+            let mut dead = self.dead_targets.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(set) = dead.get_mut(profile) {
+                set.remove(&target);
+            }
         }
     }
 
@@ -123,6 +142,23 @@ impl TabRegistry {
         map.remove(profile);
         let mut ids = self.identities.write().unwrap_or_else(|e| e.into_inner());
         ids.remove(profile);
+        let mut dead = self.dead_targets.lock().unwrap_or_else(|e| e.into_inner());
+        dead.remove(profile);
+    }
+
+    /// Record that the engine's event pump observed `target_id` destroyed.
+    ///
+    /// Called by the cdp backend's pump arm (`cdp_backend::events`), never by
+    /// a verb: a death is a fact the engine PUSHED, not something a caller
+    /// sampled. Notes about targets this registry never recorded an identity
+    /// for are kept but change no answer — `resolve_identity` needs both
+    /// halves (a recorded tab AND its observed death) before it may say
+    /// `TabGone` (判据 §8).
+    pub fn record_death(&self, profile: &str, target_id: &str) {
+        let mut dead = self.dead_targets.lock().unwrap_or_else(|e| e.into_inner());
+        dead.entry(profile.to_string())
+            .or_default()
+            .insert(target_id.to_string());
     }
 
     /// Whether any tabs are tracked for a profile — lets the reaper skip
@@ -223,24 +259,29 @@ impl TabRegistry {
         }
     }
 
-    /// Answer "is the tab I mean still the tab I mean" from the recorded
-    /// identity and a FRESH target enumeration.
+    /// Answer "is the tab I mean still the tab I mean" — event push first,
+    /// then a FRESH target enumeration as the backstop.
     ///
     /// Three answers, three different facts:
     ///
     /// - never recorded → [`BrowserError::TabNotFound`] ("I don't know this
     ///   id" — 判据 §8, not a verdict about the browser);
+    /// - recorded WITH a targetId the event pump reported destroyed →
+    ///   [`BrowserError::TabGone`], **even if `live_target_ids` still lists
+    ///   it**: the destroy was observed, the enumeration is a sample that can
+    ///   lag;
     /// - recorded WITH a targetId that `live_target_ids` no longer carries →
-    ///   [`BrowserError::TabGone`], with the last recorded URL so the reader
-    ///   can recognise which page vanished;
+    ///   the same `TabGone`, from the enumeration arm (the backstop for
+    ///   deaths the pump never saw — a lagged broadcast drops events);
     /// - anything else (target live, or no targetId was ever recorded — the
     ///   old drivers' shape, for which gone-ness is unknowable here) →
     ///   `Ok` with what was recorded.
     ///
-    /// The `targetId` check, not a listing's row order, is the arbiter:
-    /// enumeration order was measured to permute across a re-attach in the
-    /// same run (附录 D.9.19), so a position-derived answer is a guess this
-    /// function exists to NOT make.
+    /// Either way the `targetId` — never a listing's row order — is the
+    /// arbiter: enumeration order was measured to permute across a re-attach
+    /// in the same run (附录 D.9.19), so a position-derived answer is a guess
+    /// this function exists to NOT make. `TabGone` carries the last recorded
+    /// URL so the reader can recognise which page vanished.
     pub fn resolve_identity(
         &self,
         profile: &str,
@@ -251,6 +292,15 @@ impl TabRegistry {
         let Some(identity) = map.get(profile).and_then(|tabs| tabs.get(tab_id)) else {
             return Err(BrowserError::TabNotFound(tab_id.to_string()));
         };
+        if let Some(target) = &identity.target_id {
+            let dead = self.dead_targets.lock().unwrap_or_else(|e| e.into_inner());
+            if dead.get(profile).is_some_and(|set| set.contains(target)) {
+                return Err(BrowserError::TabGone {
+                    tab_id: tab_id.to_string(),
+                    last_url: identity.last_url.clone(),
+                });
+            }
+        }
         match &identity.target_id {
             Some(target) if !live_target_ids.contains(target) => Err(BrowserError::TabGone {
                 tab_id: tab_id.to_string(),
@@ -816,5 +866,70 @@ mod tests {
         reg.clear_profile("p");
         let err = reg.resolve_identity("p", "t2", &[]).unwrap_err();
         assert!(matches!(err, BrowserError::TabNotFound(_)));
+    }
+
+    /// **Event push beats enumeration.** The pump observed the destroy; a
+    /// live-target list that still carries the id is the enumeration lagging,
+    /// not the tab living. This is the upgrade from "the caller feeds a fresh
+    /// enumeration" to "the event stream pushes the fact".
+    #[test]
+    fn a_pushed_death_beats_an_enumeration_that_still_lists_the_target() {
+        let reg = TabRegistry::new();
+        reg.record_identity(
+            "p",
+            "t1",
+            Some("TARGET-1".into()),
+            Some("https://a/".into()),
+        );
+        reg.record_death("p", "TARGET-1");
+        let err = reg
+            .resolve_identity("p", "t1", &["TARGET-1".to_string()])
+            .unwrap_err();
+        assert!(
+            matches!(err, BrowserError::TabGone { ref tab_id, .. } if tab_id == "t1"),
+            "the pushed death is the answer: {err:?}"
+        );
+    }
+
+    /// `TabGone` needs BOTH halves: a tab this registry recorded AND a death
+    /// the pump reported. A death note about a target nobody recorded is not
+    /// a fact about any tab the model can name (判据 §8).
+    #[test]
+    fn a_death_note_for_an_unrecorded_tab_changes_nothing() {
+        let reg = TabRegistry::new();
+        reg.record_death("p", "TARGET-X");
+        let err = reg
+            .resolve_identity("p", "t9", &["TARGET-X".to_string()])
+            .unwrap_err();
+        assert!(matches!(err, BrowserError::TabNotFound(_)));
+    }
+
+    /// Death notes die with the identity lifecycle: `forget` (a deliberate
+    /// close) and `clear_profile` (the browser is gone) drop them, so a stale
+    /// note can never mark a LATER record of the same id gone.
+    #[test]
+    fn forget_and_clear_profile_drop_the_death_note_too() {
+        let reg = TabRegistry::new();
+        reg.record_identity("p", "t1", Some("TARGET-1".into()), None);
+        reg.record_death("p", "TARGET-1");
+        reg.forget("p", "t1");
+        // Re-recorded under the same id: no death note may survive to poison
+        // the fresh record.
+        reg.record_identity("p", "t1", Some("TARGET-1".into()), None);
+        assert!(
+            reg.resolve_identity("p", "t1", &["TARGET-1".to_string()])
+                .is_ok(),
+            "forget must drop the note"
+        );
+
+        reg.record_identity("p", "t2", Some("TARGET-2".into()), None);
+        reg.record_death("p", "TARGET-2");
+        reg.clear_profile("p");
+        reg.record_identity("p", "t2", Some("TARGET-2".into()), None);
+        assert!(
+            reg.resolve_identity("p", "t2", &["TARGET-2".to_string()])
+                .is_ok(),
+            "clear_profile must drop the note"
+        );
     }
 }
