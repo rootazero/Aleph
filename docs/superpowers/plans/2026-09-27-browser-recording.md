@@ -53,7 +53,7 @@
   - `pub struct ScreencastFrame { pub data: Vec<u8>, pub session_id: u64, pub timestamp: Option<f64> }`（**data 已解码**——wire 上的 base64 在此消失）
   - `pub fn screencast_frame(params: &serde_json::Value) -> Result<ScreencastFrame>`（事件名 `Page.screencastFrame`）
 
-- [ ] **Step 1: 写失败测试**（追加到 `crates/aleph-cdp/tests/methods.rs`，沿用 `replying()` 形状 + `received_for`/`last_params` 断言）
+- [x] **Step 1: 写失败测试**（追加到 `crates/aleph-cdp/tests/methods.rs`，沿用 `replying()` 形状 + `received_for`/`last_params` 断言）
 
 ```rust
 #[tokio::test]
@@ -82,10 +82,10 @@ async fn screencast_frame_ack_carries_the_session_id() { /* 钉 {"sessionId": n}
 async fn stop_screencast_sends_no_params() { /* 钉 json!({}) */ }
 ```
 
-- [ ] **Step 2: 跑确认红** — `cargo test -p aleph-cdp --test methods screencast 2>&1 | tail -3`（编译错即红）
-- [ ] **Step 3: 实现 `methods/screencast.rs`**（签名见 Produces；`start_screencast` 只在 Jpeg 臂放 `quality`；`max_width/max_height/every_nth_frame` 为 None 时不出现在 wire 上——CDP 对显式 null 与缺省语义不同）
-- [ ] **Step 4: 跑确认绿** — 同上命令，4 条 PASS
-- [ ] **Step 5: 证伪 + commit**：把帧 decode 改成 `data.as_str().bytes().collect()`（不解 base64）→ Step 1 测试红 → 恢复。`git commit -m "aleph-cdp: hand-written Page screencast wrappers for session recording"`
+- [x] **Step 2: 跑确认红** — `cargo test -p aleph-cdp --test methods screencast 2>&1 | tail -3`（编译错即红）
+- [x] **Step 3: 实现 `methods/screencast.rs`**（签名见 Produces；`start_screencast` 只在 Jpeg 臂放 `quality`；`max_width/max_height/every_nth_frame` 为 None 时不出现在 wire 上——CDP 对显式 null 与缺省语义不同）
+- [x] **Step 4: 跑确认绿** — 同上命令，4 条 PASS
+- [x] **Step 5: 证伪 + commit**：把帧 decode 改成 `data.as_str().bytes().collect()`（不解 base64）→ Step 1 测试红 → 恢复。`git commit -m "aleph-cdp: hand-written Page screencast wrappers for session recording"`
 
 ---
 
@@ -107,7 +107,7 @@ async fn stop_screencast_sends_no_params() { /* 钉 json!({}) */ }
   - `pub(crate) fn resolve_ffmpeg() -> Option<PathBuf>`（env `ALEPH_FFMPEG` → PATH → `~/.cache/ms-playwright/ffmpeg-1011/ffmpeg-linux`）
   - `pub(crate) fn default_recording_path(profile: &str, tab_id: &str, ext: &str) -> PathBuf`（纯函数，可单测）
 
-- [ ] **Step 1: 纯函数半失败测试**
+- [x] **Step 1: 纯函数半失败测试**
 
 ```rust
 #[test]
@@ -126,9 +126,9 @@ fn the_default_path_lands_under_the_managed_dir_with_profile_and_tab() {
 }
 ```
 
-- [ ] **Step 2: 跑确认红 → Step 3: 实现纯函数半 → Step 4: 绿 + commit `browser: recording registry skeleton with ffmpeg resolution and reservations`**
+- [x] **Step 2: 跑确认红 → Step 3: 实现纯函数半 → Step 4: 绿 + commit `browser: recording registry skeleton with ffmpeg resolution and reservations`**
 
-- [ ] **Step 5: 管线集成失败测试**（FakeCdpServer `push_event` 推 `Page.screencastFrame`；**真 ffmpeg**——PATH 可用是本机事实，测试环境同机器；帧内容：生成合法 JPEG 字节，可用 image crate 若已有依赖，否则内嵌一张最小合法 JPEG 常量）
+- [x] **Step 5: 管线集成失败测试**（FakeCdpServer `push_event` 推 `Page.screencastFrame`；**真 ffmpeg**——PATH 可用是本机事实，测试环境同机器；帧内容：生成合法 JPEG 字节，可用 image crate 若已有依赖，否则内嵌一张最小合法 JPEG 常量）
 
 ```rust
 #[tokio::test]
@@ -147,7 +147,7 @@ async fn ack_is_sent_only_after_the_frame_is_written() {
 }
 ```
 
-- [ ] **Step 6: Review Focus #1 背压测试**
+- [x] **Step 6: Review Focus #1 背压测试**
 
 ```rust
 #[tokio::test]
@@ -158,7 +158,7 @@ async fn a_slow_encoder_drops_frames_instead_of_buffering_them() {
 }
 ```
 
-- [ ] **Step 7: Review Focus #2 对抗测试**（tab 中途死）
+- [x] **Step 7: Review Focus #2 对抗测试**（tab 中途死）
 
 ```rust
 #[tokio::test]
@@ -170,7 +170,7 @@ async fn tab_death_mid_recording_auto_finalizes_a_truncated_receipt() {
 }
 ```
 
-- [ ] **Step 8: Review Focus #3 对抗测试**
+- [x] **Step 8: Review Focus #3 对抗测试**
 
 ```rust
 #[tokio::test]
@@ -190,7 +190,7 @@ async fn ffmpeg_death_mid_recording_is_detected_on_the_next_frame_write() {
 }
 ```
 
-- [ ] **Step 9: 实现管线 + verified stop**
+- [x] **Step 9: 实现管线 + verified stop**
 
 核心形状（签名与测试已定的部分不重复）：
 
@@ -210,7 +210,7 @@ async fn ffmpeg_death_mid_recording_is_detected_on_the_next_frame_write() {
 // 5. 校验四重：退出码 0 + exists + size>0 + mtime ∈ 录制窗口 → complete
 ```
 
-- [ ] **Step 10: 全绿 + 证伪**（变异：ack 移到写入前 → Step 5/6 红；删 tab 死亡自动收尾 → Step 7 红；complete 判据砍掉 mtime → 加一个「旧文件复用路径」测试红）+ commit `browser: screencast-to-ffmpeg recording pipeline with verified stop`
+- [x] **Step 10: 全绿 + 证伪**（变异：ack 移到写入前 → Step 5/6 红；删 tab 死亡自动收尾 → Step 7 红；complete 判据砍掉 mtime → 加一个「旧文件复用路径」测试红）+ commit `browser: screencast-to-ffmpeg recording pipeline with verified stop`
 
 ---
 
@@ -270,12 +270,12 @@ capability.rs 三处同步：裁清单摘除 screencast（守卫测试更新措�
 - Modify: `src/browser/engine/capability.rs`（obscura 行按实测翻转或维持，注释写测量日期/方法/版本）
 - Modify: `docs/reference/FEATURE_LOCATOR.md` §3.12 + `qa/README.md`
 
-- [ ] **Step 1: obscura 探针**（v0.2.2 本机已装）：raw CDP → `Page.startScreencast{jpeg}` → navigate 动画页 → 断言 `screencastFrame` 事件到达且 data 可 base64 解码且帧头是 JPEG magic（FFD8）→ ack → `stopScreencast`。三结局如实记（事件不到/帧不可解/全通）。
-- [ ] **Step 2: chromium 端到端冒烟**（**本项目首个 chromium 真机验证点**）：真 chrome-stable 起 CDP → 完整 start→推帧→stop→ffprobe 可解 → 绿则 chromium 行的 Supported 从「同连接推断」升级为实测，注释更新。
-- [ ] **Step 3: 表值按实测更新** + `cargo test -p alephcore --lib capability` 绿
-- [ ] **Step 4: caps.py 加 screencast 行**（判据：事件到达**且**帧可解码——C1 教训：到达 ≠ 可用）；`./qa/browser_dual/run.sh caps` 绿；**证伪**：翻转表值 → diff 红 → 恢复
-- [ ] **Step 5: 文档**：FL §3.12 Round 2 (C2) 段 + qa/README.md + 勾选计划 checkbox
-- [ ] **Step 6: 七条全量验证集**（同 C1 T4 清单；基线 19,617 passed / 7 既存红 + pty flaky——集合不许变大；T4 新增测试使 passed 数**变大是正常的**，记录实测数字）+ commit `docs: browser recording — locator entry, caps probe, plan ledger`
+- [x] **Step 1: obscura 探针**（v0.2.2 本机已装）：raw CDP → `Page.startScreencast{jpeg}` → navigate 动画页 → 断言 `screencastFrame` 事件到达且 data 可 base64 解码且帧头是 JPEG magic（FFD8）→ ack → `stopScreencast`。三结局如实记（事件不到/帧不可解/全通）。
+- [x] **Step 2: chromium 端到端冒烟**（**本项目首个 chromium 真机验证点**）：真 chrome-stable 起 CDP → 完整 start→推帧→stop→ffprobe 可解 → 绿则 chromium 行的 Supported 从「同连接推断」升级为实测，注释更新。
+- [x] **Step 3: 表值按实测更新** + `cargo test -p alephcore --lib capability` 绿
+- [x] **Step 4: caps.py 加 screencast 行**（判据：事件到达**且**帧可解码——C1 教训：到达 ≠ 可用）；`./qa/browser_dual/run.sh caps` 绿；**证伪**：翻转表值 → diff 红 → 恢复
+- [x] **Step 5: 文档**：FL §3.12 Round 2 (C2) 段 + qa/README.md + 勾选计划 checkbox
+- [x] **Step 6: 七条全量验证集**（同 C1 T4 清单；基线 19,617 passed / 7 既存红 + pty flaky——集合不许变大；T4 新增测试使 passed 数**变大是正常的**，记录实测数字）+ commit `docs: browser recording — locator entry, caps probe, plan ledger`
 
 ---
 
