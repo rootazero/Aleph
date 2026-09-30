@@ -56,16 +56,9 @@ pub struct EventFilter {
 }
 
 fn add_to_option_set(target: &mut Option<HashSet<String>>, value: &str) {
-    match target {
-        Some(ids) => {
-            ids.insert(value.to_string());
-        }
-        None => {
-            let mut set = HashSet::new();
-            set.insert(value.to_string());
-            *target = Some(set);
-        }
-    }
+    target
+        .get_or_insert_with(HashSet::new)
+        .insert(value.to_string());
 }
 
 impl EventFilter {
