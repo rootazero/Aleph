@@ -279,19 +279,18 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // pauses HOLD (link 2) and whose subresource events are reliable
     // (link 4) — re-run the probe.
     network_interception: Cap::Unsupported,
-    // **Unsupported as the fail-closed answer to an unknown, NOT a
-    // measurement (NOT_PROBED).** Nobody has pointed
-    // `Page.startScreencast` at a running obscura: the C1 Fetch probe
-    // measured a different domain, and T0's wire matrix has no screencast
-    // label. A `Supported` here would send `browser_record{action:"start"}`
-    // at an engine whose frame stream has never been observed to arrive —
-    // the recording would report frames captured from a silent stream, the
-    // exact lie the receipt's frame counts exist to expose but cannot FIX.
-    // The expiry check is the recording plan's Task 4 probe
-    // (docs/superpowers/plans/2026-09-27-browser-recording.md): raw CDP →
-    // startScreencast → assert `screencastFrame` events arrive AND decode
-    // (arrival alone is not usability — the C1 lesson).
-    screencast: Cap::Unsupported,
+    // **Supported on a MEASUREMENT (2026-09-30, pinned v0.2.2, x86_64-linux),
+    // upgraded from the fail-closed NOT_PROBED answer the row shipped with.**
+    // The recording plan's Task 4 probe (docs/superpowers/specs/
+    // 2026-09-27-browser-recording-design/probes/screencast-probe.mjs) pointed
+    // `Page.startScreencast{jpeg}` at this build and read the C1-tightened
+    // criterion — arrival alone is not usability: 12 frames, EVERY one
+    // base64-decodable AND JPEG-magic'd (FFD8), every ack accepted, and
+    // `stopScreencast` actually stopped the stream (0 frames after). The
+    // same build whose Fetch pauses are advisory serves a sound screencast —
+    // capability is per-domain, not per-binary, which is why these are two
+    // rows and not one.
+    screencast: Cap::Supported,
     // **Derived, never spelled.** `runtimes::specs` owns the pinned tag
     // (`obscura_tag!` / `OBSCURA_TAG`) and its doc says "bump this — and only
     // this — … everything else follows". A literal here made this row a second
@@ -335,13 +334,18 @@ static CHROMIUM: EngineCapabilities = EngineCapabilities {
     // docs/superpowers/plans/2026-09-24-browser-network-mock.md) is the
     // expiry check, same role it plays for `effect_probe`.
     network_interception: Cap::Supported,
-    // The screencast stream runs over the same connection and event pump
-    // that the console/evaluate verbs already run on (both measured), and
-    // the three method wrappers' wire shapes are pinned by aleph-cdp's
-    // FakeCdpServer tests — but no REAL chromium has been recorded end to
-    // end yet: the recording plan's Task 4 (chromium smoke + caps stage,
-    // docs/superpowers/plans/2026-09-27-browser-recording.md) is the expiry
-    // check, same role it plays for `network_interception`.
+    // **Measured end to end on a REAL chromium — the project's first
+    // real-chromium recording reading.** Same probe, `--engine chrome
+    // --encode` (docs/superpowers/specs/2026-09-27-browser-recording-design/
+    // probes/screencast-probe.mjs), 2026-09-30 on Chrome 151.0.7922.169
+    // (headless=new; the row's `measured_on` below keeps naming Chrome 152
+    // because the OTHER rows' readings were taken there — a re-confirmation
+    // is not a re-measurement, 判据 §18): 38 frames, every one decodable
+    // JPEG, acks accepted, clean stop — then the full production ffmpeg leg
+    // (image2pipe + `-c:v mjpeg` hint + `-c:v libvpx`): 217 frames in, exit
+    // 0, and ffprobe reads a vp8 stream back out of the webm. Until that
+    // date this row rested on the same-connection argument alone; the probe
+    // replaced the argument with a reading.
     screencast: Cap::Supported,
     // Provenance, not a freshness stamp: this row records the build the
     // capabilities were measured on. Re-confirmed unchanged on Chrome
@@ -527,11 +531,13 @@ mod tests {
         ),
         (
             "screencast",
-            "T0's wire matrix has no screencast label, and nothing has pointed \
-             Page.startScreencast at a running obscura yet; the recording plan's \
-             Task 4 probe (docs/superpowers/plans/2026-09-27-browser-recording.md) \
-             is the scheduled measurement — until it runs, obscura's row is the \
-             fail-closed answer to an unknown",
+            "T0's wire matrix has no screencast label; settled instead by the \
+             recording plan's Task 4 probe (docs/superpowers/specs/\
+             2026-09-27-browser-recording-design/probes/screencast-probe.mjs) \
+             on 2026-09-30: the pinned obscura build serves a sound stream \
+             (every frame decodable JPEG, acks accepted, clean stop), and \
+             Chrome 151.0.7922.169 passed the full encode leg (ffmpeg exit 0, \
+             ffprobe-readable vp8 webm) — a MEASURED Supported on BOTH engines",
         ),
     ];
 
@@ -801,9 +807,9 @@ mod tests {
             .collect();
         assert_eq!(
             exempt_disagreements,
-            vec!["drag", "effect_probe", "network_interception", "screencast"],
+            vec!["drag", "effect_probe", "network_interception"],
             "a matrix-exempt row other than \
-             `drag`/`effect_probe`/`network_interception`/`screencast` \
+             `drag`/`effect_probe`/`network_interception` \
              now answers differently per engine. That difference is published to the model \
              as a route, and nothing in the matrix decides it — state the \
              reading that does, beside BOTH values, and check it here"
@@ -836,15 +842,16 @@ mod tests {
             "the network_interception rows no longer name the Task 4 probe that \
              decides obscura's value"
         );
-        // screencast's disagreement is the NOT_PROBED twin of
-        // network_interception's: obscura Unsupported as the fail-closed
-        // answer to an unknown, chromium Supported on the same-connection
-        // argument — and BOTH rows must keep naming the recording plan's
-        // Task 4 probe, the scheduled measurement that settles it.
+        // screencast's disagreement CLOSED on 2026-09-30: the Task 4 probe
+        // measured obscura's stream sound (it is now `Supported` on both
+        // engines, so the row no longer appears in the exempt list above).
+        // The citation assert stays: both values rest on that probe, and a
+        // published fact whose reading nobody can read is the shape this
+        // test exists for — measured or not.
         assert!(
             production.contains("2026-09-27-browser-recording"),
-            "the screencast rows no longer name the Task 4 probe that will \
-             decide obscura's value"
+            "the screencast rows no longer name the Task 4 probe that \
+             decided both engines' values"
         );
 
         // The citation, checked rather than trusted. `driver` drives the verb
@@ -1208,12 +1215,12 @@ mod tests {
         // handshake, obscura is the fail-closed answer to an unprobed one.
         assert_eq!(json["chromium"]["network_interception"], "supported");
         assert_eq!(json["obscura"]["network_interception"], "unsupported");
-        // The second restored row, same both-ways reading: chromium serves
-        // the screencast stream (same-connection argument, Task 4 of the
-        // recording plan is the expiry check), obscura is fail-closed until
-        // that probe runs.
+        // The second restored row: BOTH engines serve the screencast stream
+        // on measurements now (obscura flipped 2026-09-30 — its row kept
+        // here so a constant-emitting `capabilities_json` still goes red on
+        // the chromium side, and so a careless flip back is caught).
         assert_eq!(json["chromium"]["screencast"], "supported");
-        assert_eq!(json["obscura"]["screencast"], "unsupported");
+        assert_eq!(json["obscura"]["screencast"], "supported");
         // The cut rows must not reappear in the published object either — this
         // is the face the QA `caps` stage and the model both read.
         for cut in ["touch", "multi_connection"] {
