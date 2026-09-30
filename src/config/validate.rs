@@ -166,143 +166,6 @@ impl Config {
             .map(|(idx, rule)| (idx + 1, rule.regex.as_str()))
             .collect()
     }
-}
-
-// =============================================================================
-// Per-field provider validators
-// =============================================================================
-//
-// Factored out of `validate_provider_configs` so the loop in there reads as a
-// straight list of "validate this field, then validate that protocol's extras"
-// — each branch becomes a one-liner instead of a deeply-nested ladder. The
-// helpers take `(name, provider)` and own exactly one failure mode each so a
-// regression can pin which field rejected the config.
-
-fn validate_provider_temperature(
-    name: &str,
-    provider: &crate::config::types::provider::ProviderConfig,
-) -> Result<()> {
-    let Some(temp) = provider.temperature else {
-        return Ok(());
-    };
-    let protocol = provider.protocol();
-    let (min, max, provider_name): (f32, f32, &str) = match protocol.as_str() {
-        "anthropic" => (0.0, 1.0, "Claude"),
-        "openai" => (0.0, 2.0, "OpenAI"),
-        "gemini" => (0.0, 2.0, "Gemini"),
-        "ollama" => (0.0, 5.0, "Ollama"),
-        _ => (0.0, 2.0, "Custom"),
-    };
-    if !(min..=max).contains(&temp) {
-        error!(provider = %name, temperature = temp, "Invalid temperature for {}", provider_name);
-        return Err(AlephError::invalid_config(format!(
-            "Provider '{name}' ({provider_name}) temperature must be between {min} and {max}, got {temp}"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_provider_max_tokens(
-    name: &str,
-    provider: &crate::config::types::provider::ProviderConfig,
-) -> Result<()> {
-    if let Some(0) = provider.max_tokens {
-        error!(provider = %name, max_tokens = 0, "Invalid max_tokens");
-        return Err(AlephError::invalid_config(format!(
-            "Provider '{name}' max_tokens must be greater than 0, got 0"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_provider_top_p(
-    name: &str,
-    provider: &crate::config::types::provider::ProviderConfig,
-) -> Result<()> {
-    if let Some(top_p) = provider.top_p {
-        if !(0.0..=1.0).contains(&top_p) {
-            error!(provider = %name, top_p = top_p, "Invalid top_p");
-            return Err(AlephError::invalid_config(format!(
-                "Provider '{name}' top_p must be between 0.0 and 1.0, got {top_p}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_provider_top_k(
-    name: &str,
-    provider: &crate::config::types::provider::ProviderConfig,
-) -> Result<()> {
-    if let Some(0) = provider.top_k {
-        error!(provider = %name, top_k = 0, "Invalid top_k");
-        return Err(AlephError::invalid_config(format!(
-            "Provider '{name}' top_k must be greater than 0, got 0"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_openai_provider(
-    name: &str,
-    provider: &crate::config::types::provider::ProviderConfig,
-) -> Result<()> {
-    if let Some(freq_pen) = provider.frequency_penalty {
-        if !(-2.0..=2.0).contains(&freq_pen) {
-            error!(provider = %name, frequency_penalty = freq_pen, "Invalid frequency_penalty");
-            return Err(AlephError::invalid_config(format!(
-                "Provider '{name}' frequency_penalty must be between -2.0 and 2.0, got {freq_pen}"
-            )));
-        }
-    }
-    if let Some(pres_pen) = provider.presence_penalty {
-        if !(-2.0..=2.0).contains(&pres_pen) {
-            error!(provider = %name, presence_penalty = pres_pen, "Invalid presence_penalty");
-            return Err(AlephError::invalid_config(format!(
-                "Provider '{name}' presence_penalty must be between -2.0 and 2.0, got {pres_pen}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_gemini_provider(
-    name: &str,
-    provider: &crate::config::types::provider::ProviderConfig,
-) -> Result<()> {
-    if let Some(ref thinking_level) = provider.thinking_level {
-        if thinking_level != "LOW" && thinking_level != "HIGH" {
-            error!(provider = %name, thinking_level = %thinking_level, "Invalid thinking_level");
-            return Err(AlephError::invalid_config(format!(
-                "Provider '{name}' thinking_level must be 'LOW' or 'HIGH', got '{thinking_level}'"
-            )));
-        }
-    }
-    if let Some(ref media_res) = provider.media_resolution {
-        if media_res != "LOW" && media_res != "MEDIUM" && media_res != "HIGH" {
-            error!(provider = %name, media_resolution = %media_res, "Invalid media_resolution");
-            return Err(AlephError::invalid_config(format!(
-                "Provider '{name}' media_resolution must be 'LOW', 'MEDIUM', or 'HIGH', got '{media_res}'"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_ollama_provider(
-    name: &str,
-    provider: &crate::config::types::provider::ProviderConfig,
-) -> Result<()> {
-    if let Some(repeat_pen) = provider.repeat_penalty {
-        if repeat_pen < 0.0 {
-            error!(provider = %name, repeat_penalty = repeat_pen, "Invalid repeat_penalty");
-            return Err(AlephError::invalid_config(format!(
-                "Provider '{name}' repeat_penalty must be >= 0.0, got {repeat_pen}"
-            )));
-        }
-    }
-    Ok(())
-}
 
     /// Validate routing rules: provider references, retired keyword rules, and
     /// regex patterns.
@@ -319,77 +182,22 @@ fn validate_ollama_provider(
                  Give it a `^/`-prefixed regex to make it a slash command, or delete it."
             );
         }
-
-        // Validate routing rules
-        for (idx, rule) in self.rules.iter().enumerate() {
-            let rule_type = rule.get_rule_type();
-
-            // Command rules require a provider (skip for builtin rules which use default_provider)
-            if rule.is_command_rule() && !rule.is_builtin {
-                match &rule.provider {
-                    Some(provider) => {
-                        if !self.providers.contains_key(provider) {
-                            error!(
-                                rule_index = idx + 1,
-                                provider = %provider,
-                                "Command rule references unknown provider"
-                            );
-                            return Err(AlephError::invalid_config(format!(
-                                "Command rule #{} references unknown provider '{}'",
-                                idx + 1,
-                                provider
-                            )));
-                        }
-                    }
-                    None => {
-                        error!(
-                            rule_index = idx + 1,
-                            regex = %rule.regex,
-                            "Command rule missing provider"
-                        );
-                        return Err(AlephError::invalid_config(format!(
-                            "Command rule #{} (regex: '{}') requires a provider",
-                            idx + 1,
-                            rule.regex
-                        )));
-                    }
-                }
-            }
-
-            debug!(
-                rule_index = idx + 1,
-                rule_type = %rule_type,
-                regex = %rule.regex,
-                is_builtin = rule.is_builtin,
-                "Validating rule"
+        if self.providers.is_empty() && self.general.default_provider.is_none() {
+            warn!(
+                "No providers configured and no default_provider set. \
+                 Recommendation: Set general.default_provider in config"
             );
-
-            // Validate regex pattern. `bounded_builder`, not `Regex::new`:
-            // the runtime compile site (`pii::rules::custom`) enforces the
-            // 1 MiB compiled-size cap, so validating WITHOUT it would both
-            // admit a pattern the runtime then rejects and let an expansion
-            // bomb (`(a{1000}){1000}{1000}`) exhaust memory during validation
-            // itself.
-            if let Err(e) = crate::security::safe_regex::bounded_builder(&rule.regex).build() {
-                error!(
-                    rule_index = idx + 1,
-                    regex = %rule.regex,
-                    error = %e,
-                    "Invalid regex pattern"
-                );
-                return Err(AlephError::invalid_config(format!(
-                    "Rule #{} has invalid regex '{}': {}",
-                    idx + 1,
-                    rule.regex,
-                    e
-                )));
-            }
         }
 
+        if self.rules.is_empty() {
+            debug!(
+                "No routing rules configured. \
+                 All requests use default_provider — this is the expected \
+                 default for LLM-sovereign routing"
+            );
+        }
         Ok(())
     }
-
-    /// Validate memory dreaming schedule and decay settings.
     fn validate_memory_config(&self) -> Result<()> {
         if self.memory.dreaming.enabled {
             if self.memory.dreaming.max_duration_seconds == 0 {
@@ -758,6 +566,144 @@ fn validate_ollama_provider(
         }
     }
 }
+
+
+// =============================================================================
+// Per-field provider validators
+// =============================================================================
+//
+// Factored out of `validate_provider_configs` so the loop in there reads as a
+// straight list of "validate this field, then validate that protocol's extras"
+// — each branch becomes a one-liner instead of a deeply-nested ladder. The
+// helpers take `(name, provider)` and own exactly one failure mode each so a
+// regression can pin which field rejected the config.
+
+fn validate_provider_temperature(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    let Some(temp) = provider.temperature else {
+        return Ok(());
+    };
+    let protocol = provider.protocol();
+    let (min, max, provider_name): (f32, f32, &str) = match protocol.as_str() {
+        "anthropic" => (0.0, 1.0, "Claude"),
+        "openai" => (0.0, 2.0, "OpenAI"),
+        "gemini" => (0.0, 2.0, "Gemini"),
+        "ollama" => (0.0, 5.0, "Ollama"),
+        _ => (0.0, 2.0, "Custom"),
+    };
+    if !(min..=max).contains(&temp) {
+        error!(provider = %name, temperature = temp, "Invalid temperature for {}", provider_name);
+        return Err(AlephError::invalid_config(format!(
+            "Provider '{name}' ({provider_name}) temperature must be between {min} and {max}, got {temp}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_provider_max_tokens(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(0) = provider.max_tokens {
+        error!(provider = %name, max_tokens = 0, "Invalid max_tokens");
+        return Err(AlephError::invalid_config(format!(
+            "Provider '{name}' max_tokens must be greater than 0, got 0"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_provider_top_p(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(top_p) = provider.top_p {
+        if !(0.0..=1.0).contains(&top_p) {
+            error!(provider = %name, top_p = top_p, "Invalid top_p");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' top_p must be between 0.0 and 1.0, got {top_p}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_provider_top_k(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(0) = provider.top_k {
+        error!(provider = %name, top_k = 0, "Invalid top_k");
+        return Err(AlephError::invalid_config(format!(
+            "Provider '{name}' top_k must be greater than 0, got 0"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_openai_provider(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(freq_pen) = provider.frequency_penalty {
+        if !(-2.0..=2.0).contains(&freq_pen) {
+            error!(provider = %name, frequency_penalty = freq_pen, "Invalid frequency_penalty");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' frequency_penalty must be between -2.0 and 2.0, got {freq_pen}"
+            )));
+        }
+    }
+    if let Some(pres_pen) = provider.presence_penalty {
+        if !(-2.0..=2.0).contains(&pres_pen) {
+            error!(provider = %name, presence_penalty = pres_pen, "Invalid presence_penalty");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' presence_penalty must be between -2.0 and 2.0, got {pres_pen}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_gemini_provider(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(ref thinking_level) = provider.thinking_level {
+        if thinking_level != "LOW" && thinking_level != "HIGH" {
+            error!(provider = %name, thinking_level = %thinking_level, "Invalid thinking_level");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' thinking_level must be 'LOW' or 'HIGH', got '{thinking_level}'"
+            )));
+        }
+    }
+    if let Some(ref media_res) = provider.media_resolution {
+        if media_res != "LOW" && media_res != "MEDIUM" && media_res != "HIGH" {
+            error!(provider = %name, media_resolution = %media_res, "Invalid media_resolution");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' media_resolution must be 'LOW', 'MEDIUM', or 'HIGH', got '{media_res}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_ollama_provider(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(repeat_pen) = provider.repeat_penalty {
+        if repeat_pen < 0.0 {
+            error!(provider = %name, repeat_penalty = repeat_pen, "Invalid repeat_penalty");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' repeat_penalty must be >= 0.0, got {repeat_pen}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod tests {

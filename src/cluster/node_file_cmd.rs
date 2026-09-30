@@ -227,7 +227,7 @@ impl NodeCommand for FileReadCommand {
         // stale by the time the take-cap landed, so the with_capacity hint
         // was a lie — let `Vec` grow instead.
         use tokio::io::AsyncReadExt;
-        let mut file = tokio::fs::File::open(&src)
+        let file = tokio::fs::File::open(&src)
             .await
             .map_err(|e| format!("file.read: {e}"))?;
         let mut buf = Vec::new();

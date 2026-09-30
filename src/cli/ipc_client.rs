@@ -179,7 +179,8 @@ fn is_loopback_host(host: &str) -> bool {
     host == "localhost"
         || host
             .parse::<std::net::IpAddr>()
-            .is_ok_and(std::net::IpAddr::is_loopback)
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
 }
 
 fn finalize<T>(resp: reqwest::blocking::Response) -> anyhow::Result<T>

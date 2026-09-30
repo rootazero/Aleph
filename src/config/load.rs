@@ -34,6 +34,22 @@ pub(crate) const fn effective_config_path_slot() -> &'static dyn SlotStatus {
     &EFFECTIVE_CONFIG_PATH
 }
 
+/// Typed shadow of `[security.ssrf]` — the strongly-typed
+/// `SecurityConfig` schema lives in the gateway layer, so we mirror the
+/// fields the Panel writes back into a private deserialise target here
+/// rather than reverse-depend on `gateway`. Lives only for the duration
+/// of [`apply_security_ssrf_overrides`].
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct SecuritySsrfOverrides {
+    enabled: Option<bool>,
+    allow_tool_private_network: Option<bool>,
+    max_redirects: Option<i64>,
+    allowed_hosts: Option<Vec<String>>,
+    blocked_hosts: Option<Vec<String>>,
+    strip_auth_on_cross_origin: Option<bool>,
+}
+
 impl Config {
     /// Get the default config path using unified directory
     ///
@@ -393,22 +409,6 @@ impl Config {
             user_rules_count = self.rules.len(),
             "Processing user-defined routing rules (AI-first mode)"
         );
-    }
-
-    /// Typed shadow of `[security.ssrf]` — the strongly-typed
-    /// `SecurityConfig` schema lives in the gateway layer, so we mirror the
-    /// fields the Panel writes back into a private deserialise target here
-    /// rather than reverse-depend on `gateway`. Lives only for the duration
-    /// of [`apply_security_ssrf_overrides`].
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    struct SecuritySsrfOverrides {
-        enabled: Option<bool>,
-        allow_tool_private_network: Option<bool>,
-        max_redirects: Option<i64>,
-        allowed_hosts: Option<Vec<String>>,
-        blocked_hosts: Option<Vec<String>>,
-        strip_auth_on_cross_origin: Option<bool>,
     }
 
     /// Mirror `[security.ssrf]` fields into `Config.ssrf` so that the Panel-
