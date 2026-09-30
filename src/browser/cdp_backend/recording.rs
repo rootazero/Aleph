@@ -147,7 +147,11 @@ fn playwright_ffmpeg() -> Option<PathBuf> {
 /// Characters that are safe in a filename component of every supported
 /// filesystem; everything else becomes `_`. Engine-chosen tab ids are
 /// arbitrary strings, and a `/` must never become a directory.
-fn sanitize_component(s: &str) -> String {
+///
+/// `pub(crate)` since C3: `browser_qa`'s evidence paths
+/// (`builtin_tools::browser_tools::qa`) share the rule — a second copy of
+/// "what is safe in a filename" would drift (判据 §1).
+pub(crate) fn sanitize_component(s: &str) -> String {
     s.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
@@ -177,7 +181,10 @@ pub(crate) fn default_recording_path(profile: &str, tab_id: &str, ext: &str) -> 
 /// second recording started within the same UTC second never clobbers the
 /// first one's file. Existence is checked at START; host-owned files are never
 /// overwritten silently (spec §3: 永不自动删, and never silently replaced).
-fn uniquify(path: PathBuf) -> PathBuf {
+///
+/// `pub(crate)` since C3: `browser_qa`'s evidence screenshots share the
+/// no-clobber rule.
+pub(crate) fn uniquify(path: PathBuf) -> PathBuf {
     if !path.exists() {
         return path;
     }

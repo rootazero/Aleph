@@ -3039,6 +3039,14 @@ mod tests {
             // useful: this is how a model finds out what opened the dialog.
             "console_messages",
             "network_log",
+            // C3 accounting note — `browser_qa` adds NO verb to this census:
+            // it is a tool-layer orchestration over wait_for (the trait
+            // default, which polls through `evaluate` — itself ungated
+            // below), console_messages, network_log and screenshot, every one
+            // of them ungated, so a QA run works while a dialog is pending
+            // and never needs the dialog door. A `browser_qa` NAME entry here
+            // would fail GUARD half two (not a verb on the trait impl) — the
+            // registration is this comment, by design.
             // Mock-route management is control-plane: these read or rewrite
             // Aleph's own rule table and toggle the Fetch handshake — the
             // engine answers both while a renderer-side dialog is pending

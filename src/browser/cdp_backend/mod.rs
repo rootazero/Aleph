@@ -690,6 +690,7 @@ pub(crate) mod test_support {
             ref_precheck: Cap::Supported,
             network_interception: Cap::Supported,
             screencast: Cap::Supported,
+            error_events: Cap::Supported,
             measured_on: "test fixture",
         }
     }

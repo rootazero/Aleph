@@ -25,6 +25,7 @@
 //! constant table — no regex. Every row carries its rationale in a comment
 //! and at least one pinned test below.
 
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// How a [`BenignRule`] pattern matches against a URL.
@@ -213,7 +214,10 @@ pub enum CheckOutcome {
 }
 
 /// One entry of a verdict array: which check, and what happened.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Serialize` (added with the T3 tool): the wire verdict (spec §3) carries
+/// these verbatim as its three arrays' `{check, detail}` elements.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CheckEntry {
     pub check: String,
     pub detail: String,

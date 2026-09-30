@@ -171,6 +171,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "browser_scroll",
             "browser_pdf",
             "browser_record",
+            "browser_qa",
             "browser_network",
             "browser_dialog",
             "browser_drag",

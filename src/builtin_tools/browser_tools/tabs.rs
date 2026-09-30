@@ -457,6 +457,7 @@ mod tests {
         ("pdf", include_str!("pdf.rs")),
         ("press_key", include_str!("press_key.rs")),
         ("profile_tool", include_str!("profile_tool.rs")),
+        ("qa", include_str!("qa.rs")),
         ("record", include_str!("record.rs")),
         ("resize", include_str!("resize.rs")),
         ("screenshot", include_str!("screenshot.rs")),
