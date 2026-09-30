@@ -1435,8 +1435,7 @@ mod tests {
         // downstream reconstruction. `opts` injects no explicit encoder, so
         // the chain ran — compare against the chain's answer on this machine
         // rather than a literal (PATH vs bundle is a machine fact).
-        let (_, chain_label) =
-            resolve_ffmpeg_labeled().expect("ffmpeg resolves on this machine");
+        let (_, chain_label) = resolve_ffmpeg_labeled().expect("ffmpeg resolves on this machine");
         assert_eq!(status.ffmpeg_source, chain_label);
         // …and the live view reports the SAME label, not a re-resolution.
         assert_eq!(
@@ -1901,9 +1900,11 @@ mod tests {
 
         let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
-        assert!(backend
-            .recording_registry()
-            .status("default", "T1")
-            .is_none());
+        assert!(
+            backend
+                .recording_registry()
+                .status("default", "T1")
+                .is_none()
+        );
     }
 }
