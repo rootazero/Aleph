@@ -78,13 +78,9 @@ impl Default for FileOpSupersedeStage {
 }
 
 /// Minimum number of ops on the same path required to consider it for
-/// supersession (one obsolete + one current).
-///
-/// A `pub` field until the compaction file ledger arrived and made the tool
-/// tables a shared concern: nothing outside this file had ever written it, or
-/// the three tool-name `Vec`s beside it, so all four were withdrawn (R10). The
-/// tables now live in [`crate::context::file_ops`], where the ledger reads the
-/// same ones — a second copy is exactly the drift this consolidation prevents.
+/// supersession (one obsolete + one current). The tool-name tables sit in
+/// [`crate::context::file_ops`] so the ledger reads the same ones — a second
+/// copy here would be the drift this constant is the only local part of.
 const MIN_OPS_PER_PATH: usize = 2;
 
 impl FileOpSupersedeStage {
