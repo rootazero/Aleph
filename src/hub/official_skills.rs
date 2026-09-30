@@ -8,8 +8,7 @@
 use crate::bundled::{BUNDLED_SKILLS, OFFICIAL_SKILLS_REPO};
 use crate::domain::skill::{SkillManifest, SkillSource};
 use crate::domain::Entity; // brings `manifest.id()` into scope (status.rs does the same)
-use crate::hub::catalog_client::ALEPH_HUB_ID;
-use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
+use crate::hub::types::{ExtensionEntry, ExtensionKind, InstallSpec};
 use crate::skill::manifest::parse_skill_content;
 
 /// Project one bundled skill into a Hub catalog entry. `dir_name` is the bundle
@@ -24,7 +23,7 @@ fn project_skill(dir_name: &str, manifest: &SkillManifest) -> ExtensionEntry {
     };
     super::official_plugins::aleph_hub_official_entry(
         ExtensionKind::Skill,
-        &manifest.id(),
+        manifest.id().as_str(),
         manifest.name().to_string(),
         manifest.description().to_string(),
         OFFICIAL_SKILLS_REPO,

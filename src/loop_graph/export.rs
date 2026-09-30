@@ -34,7 +34,7 @@ use std::fmt::Write as _;
 
 use crate::error::Result;
 use crate::loop_graph::store::LoopGraphStore;
-use crate::loop_graph::types::{EdgeKind, NodeKind};
+use crate::loop_graph::types::{EdgeKind, GraphEdge, GraphNode, NodeKind};
 
 /// Format the graph as a Graphviz DOT document. The output is stable for a
 /// stable graph (sorted nodes, sorted edges, deterministic attribute order),
@@ -111,15 +111,6 @@ pub fn to_dot(store: &LoopGraphStore, agent_id: &str) -> Result<String> {
 /// graph view without re-reading SQLite, and `governance_metrics` uses it to
 /// log the topology at audit boundaries.
 pub fn to_json(store: &LoopGraphStore, agent_id: &str) -> Result<String> {
-    let mut nodes = store.list_nodes(agent_id)?;
-    let mut edges = store.list_edges(agent_id)?;
-    nodes.sort_by(|a, b| (a.kind.as_str(), a.id.as_str()).cmp(&(b.kind.as_str(), b.id.as_str())));
-    // Same total order as `to_dot` — (from_id, to_id, kind) lexicographic. An
-    // earlier draft cross-wired the tuple fields ((a.from, b.from, a.kind)
-    // against (b.from, a.to, b.kind)), which is not a total order at all: it
-    // compared one edge's kind against the OTHER edge's to_id. `sort_by`
-    // tolerated it silently and produced an arbitrary permutation, so DOT and
-    // JSON disagreed about edge order and byte-diffs against the audit log
     // Same total order as `to_dot` — (from_id, to_id, kind) lexicographic —
     // so the two exporters serialize the same graph field-for-field. (Both
     // reach that order through `sorted_topology`; the comment lives on the
