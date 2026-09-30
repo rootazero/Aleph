@@ -8,16 +8,12 @@ use std::time::Duration;
 use super::cheap_poison;
 use super::compaction_cache::{
     carryover_get, carryover_put, carryover_remove, CompactionCache, SummaryReuse,
-    COMPACTION_CARRYOVER,
+    CACHE_EXTEND_MIN_MESSAGES, CACHE_EXTEND_MIN_TOKENS, COMPACTION_CARRYOVER,
 };
 use super::compaction_window::{
     estimate_tokens, first_message_text, hash_window, select_window_end, serialize_transcript,
     snap_boundary_forward, strip_context_summary_prefix,
 };
-// Re-export so the `crate::context::compact::compactor::serialize_transcript` path
-// (and the doc-link in `deterministic_truncation`) keep working — the move
-// would otherwise narrow visibility from `pub(crate)` to `pub(super)`.
-pub(crate) use super::compaction_window::serialize_transcript;
 use super::preserve::{
     is_summary_text, preserved_user_messages, PRESERVED_USER_TOKEN_BUDGET, SUMMARY_MARKER,
 };
@@ -1285,6 +1281,7 @@ pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
 #[cfg(test)]
 mod tests {
     use super::super::summary_utils::TRANSCRIPT_MSG_MAX_CHARS;
+    use super::super::compaction_cache::CARRYOVER_MAX_SESSIONS;
     use super::*;
     use crate::providers::message::ContentBlock;
     use crate::providers::mock::MockProvider;
