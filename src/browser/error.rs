@@ -153,6 +153,13 @@ pub enum BrowserError {
     #[error("No active browser session for '{0}'. Call open/goto first.")]
     NoSession(String),
 
+    /// A `browser_record` stop/status asked about a recording that is not
+    /// running and has no finalized receipt waiting — a plain fact, not a
+    /// transport failure. Carries the tab id (or recording id) that was asked
+    /// about.
+    #[error("no recording in progress for '{0}' — browser_record{{action:\"status\"}} lists what IS running")]
+    NoActiveRecording(String),
+
     /// A `switch_engine` to the engine that is already running. Refused rather
     /// than answered `Ok`: a no-op reported as a success is indistinguishable
     /// from a switch that worked, and the model would believe it had taken the
@@ -620,6 +627,9 @@ mod tests {
             // page, and the recovery is the same on both engines.
             BrowserError::EffectNotDelivered { .. } => RecoverySignal::VerbOnly,
             BrowserError::Cdp { .. } => RecoverySignal::EngineOnly,
+            // Names `browser_record{action:"status"}` — the listing of what
+            // IS recording. No engine field: the answer is the same on both.
+            BrowserError::NoActiveRecording(_) => RecoverySignal::VerbOnly,
             // Names the engine and NO verb, on purpose: the profile is already
             // where the caller asked to be, so there is nothing for it to
             // call. Naming `switch_engine` here would point at the very call

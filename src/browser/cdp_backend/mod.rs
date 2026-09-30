@@ -65,6 +65,7 @@ mod evaluate;
 mod events;
 pub(crate) mod migration;
 mod navigate;
+pub(crate) mod recording;
 pub(crate) mod routes;
 mod screenshot;
 mod snapshot;
@@ -95,6 +96,10 @@ pub struct CdpBackend {
     /// — and the per-tab interception loops' kill switches — must live longer
     /// than any one backend.
     routes: Arc<routes::RouteRegistry>,
+    /// The profile-manager-owned recording registry. Same residency argument
+    /// as `routes` above: a recording (and its ffmpeg pipeline) must outlive
+    /// the per-call backend that started it.
+    recording_registry: Arc<recording::RecordingRegistry>,
     /// The effect-arrival verdict of the most recent probed verb
     /// (click / type / fill). A latch rather than a return value because the
     /// trait's `Result<(), BrowserError>` shape is fixed across three
@@ -114,6 +119,7 @@ impl CdpBackend {
         command_timeout: Duration,
         tab_identities: Arc<TabRegistry>,
         routes: Arc<routes::RouteRegistry>,
+        recording_registry: Arc<recording::RecordingRegistry>,
     ) -> Self {
         // ONE spelling of "which profile this backend drives": `req.profile`.
         // The registry keys on it, and this constructor once ALSO took a
@@ -139,8 +145,16 @@ impl CdpBackend {
             command_timeout,
             tab_identities,
             routes,
+            recording_registry,
             effect_verdict: std::sync::Mutex::new(None),
         }
+    }
+
+    /// The shared recording registry (owned by `ProfileManager`; handed to
+    /// every backend so recordings outlive any one per-call backend).
+    /// Consumed by the `record_*` verb impls in `recording.rs`.
+    pub(crate) fn recording_registry(&self) -> &Arc<recording::RecordingRegistry> {
+        &self.recording_registry
     }
 
     /// Record the effect-arrival verdict of the probed verb currently
@@ -503,6 +517,26 @@ impl BrowserBackend for CdpBackend {
     ) -> Result<usize, BrowserError> {
         CdpBackend::route_clear(self, tab_id, scope).await
     }
+    async fn record_start(
+        &self,
+        tab_id: &str,
+        options: recording::RecordStartOptions,
+    ) -> Result<recording::RecordingStatus, BrowserError> {
+        CdpBackend::record_start(self, tab_id, options).await
+    }
+    async fn record_stop(
+        &self,
+        tab_id: &str,
+        recording_id: Option<&str>,
+    ) -> Result<recording::RecordingReceipt, BrowserError> {
+        CdpBackend::record_stop(self, tab_id, recording_id).await
+    }
+    async fn record_status(
+        &self,
+        tab_id: &str,
+    ) -> Result<Option<recording::RecordingStatus>, BrowserError> {
+        CdpBackend::record_status(self, tab_id).await
+    }
     async fn cookies(&self, op: &CookieOp) -> Result<String, BrowserError> {
         cookies::cookies(self, op).await
     }
@@ -632,6 +666,7 @@ pub(crate) mod test_support {
             TEST_TIMEOUT,
             std::sync::Arc::new(crate::browser::tab_registry::TabRegistry::new()),
             std::sync::Arc::new(super::routes::RouteRegistry::new()),
+            std::sync::Arc::new(super::recording::RecordingRegistry::new(TEST_TIMEOUT)),
         );
         (registry, backend)
     }
@@ -654,6 +689,7 @@ pub(crate) mod test_support {
             effect_probe: Cap::Supported,
             ref_precheck: Cap::Supported,
             network_interception: Cap::Supported,
+            screencast: Cap::Supported,
             measured_on: "test fixture",
         }
     }
@@ -915,7 +951,7 @@ mod tests {
     fn no_verb_is_left_unwired() {
         let marker = concat!("CDP_VERB", "_NOT_WIRED");
         let helper = concat!("not_yet", "_wired");
-        let scanned: [(&str, &str); 12] = [
+        let scanned: [(&str, &str); 13] = [
             ("mod.rs", include_str!("mod.rs")),
             ("actions.rs", include_str!("actions.rs")),
             ("cookies.rs", include_str!("cookies.rs")),
@@ -924,6 +960,7 @@ mod tests {
             ("events.rs", include_str!("events.rs")),
             ("migration.rs", include_str!("migration.rs")),
             ("navigate.rs", include_str!("navigate.rs")),
+            ("recording.rs", include_str!("recording.rs")),
             ("routes.rs", include_str!("routes.rs")),
             ("screenshot.rs", include_str!("screenshot.rs")),
             ("snapshot.rs", include_str!("snapshot.rs")),

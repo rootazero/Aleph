@@ -67,14 +67,16 @@ impl Cap {
 /// This table is published to the model through
 /// `browser_session{action:"capabilities"}`, so a row with no verb behind it
 /// tells the model Aleph can do something no tool can reach — a capability
-/// with no client is not delivered. Three rows were cut on exactly that test:
-/// `touch` (no `browser_tap`; nothing dispatches `Input.dispatchTouchEvent`),
-/// `screencast` (nothing calls `Page.startScreencast` at HEAD or in Tasks
-/// 12-19) and `multi_connection` (an architectural property, not a verb — it
+/// with no client is not delivered. Two rows were cut on exactly that test:
+/// `touch` (no `browser_tap`; nothing dispatches `Input.dispatchTouchEvent`)
+/// and `multi_connection` (an architectural property, not a verb — it
 /// belongs in the live-view design notes, not in a table the model reads as a
-/// menu). A fourth, `network_interception`, was cut under the same rule when
-/// no verb dispatched `Fetch.*`, and is RESTORED now that `browser_network`'s
-/// mock actions do (docs/superpowers/plans/2026-09-24-browser-network-mock.md).
+/// menu). Two more were cut under the same rule and later RESTORED when a
+/// verb arrived to dispatch them: `network_interception` (restored with
+/// `browser_network`'s mock actions,
+/// docs/superpowers/plans/2026-09-24-browser-network-mock.md) and
+/// `screencast` (restored with `browser_record`,
+/// docs/superpowers/plans/2026-09-27-browser-recording.md).
 pub struct EngineCapabilities {
     /// `browser_dialog` — `Page.handleJavaScriptDialog`, plus the
     /// `Page.javascriptDialogOpening` event the backend tracks to know a
@@ -132,6 +134,12 @@ pub struct EngineCapabilities {
     /// (`Fetch.enable` plus the per-tab `requestPaused` loop) that only the
     /// cdp backend drives.
     pub network_interception: Cap,
+    /// `browser_record`'s three actions — `start`, `stop`, `status` — served
+    /// by the `Page.startScreencast` frame stream (plus `screencastFrameAck`
+    /// pacing and `Page.stopScreencast`) that only the cdp backend drives;
+    /// the frames feed an ffmpeg encoder, so the row covers the engine's
+    /// half of the pipe, not the encoder's.
+    pub screencast: Cap,
     /// The build each row above was measured against. A capability claim with
     /// no measurement date is a list that expires without telling anyone.
     pub measured_on: &'static str,
@@ -142,7 +150,7 @@ pub struct EngineCapabilities {
 /// being described, serialised or falsified, so Task 16's
 /// `cap_fields_covers_every_cap_typed_field_of_the_struct` derives the expected
 /// set from this file's own source (判据 §3).
-pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 8] = [
+pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 9] = [
     ("js_dialogs", |c| c.js_dialogs),
     ("drag", |c| c.drag),
     ("file_upload", |c| c.file_upload),
@@ -151,6 +159,7 @@ pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 8] = [
     ("effect_probe", |c| c.effect_probe),
     ("ref_precheck", |c| c.ref_precheck),
     ("network_interception", |c| c.network_interception),
+    ("screencast", |c| c.screencast),
 ];
 
 static OBSCURA: EngineCapabilities = EngineCapabilities {
@@ -270,6 +279,18 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // pauses HOLD (link 2) and whose subresource events are reliable
     // (link 4) — re-run the probe.
     network_interception: Cap::Unsupported,
+    // **Supported on a MEASUREMENT (2026-09-30, pinned v0.2.2, x86_64-linux),
+    // upgraded from the fail-closed NOT_PROBED answer the row shipped with.**
+    // The recording plan's Task 4 probe (docs/superpowers/specs/
+    // 2026-09-27-browser-recording-design/probes/screencast-probe.mjs) pointed
+    // `Page.startScreencast{jpeg}` at this build and read the C1-tightened
+    // criterion — arrival alone is not usability: 12 frames, EVERY one
+    // base64-decodable AND JPEG-magic'd (FFD8), every ack accepted, and
+    // `stopScreencast` actually stopped the stream (0 frames after). The
+    // same build whose Fetch pauses are advisory serves a sound screencast —
+    // capability is per-domain, not per-binary, which is why these are two
+    // rows and not one.
+    screencast: Cap::Supported,
     // **Derived, never spelled.** `runtimes::specs` owns the pinned tag
     // (`obscura_tag!` / `OBSCURA_TAG`) and its doc says "bump this — and only
     // this — … everything else follows". A literal here made this row a second
@@ -313,6 +334,19 @@ static CHROMIUM: EngineCapabilities = EngineCapabilities {
     // docs/superpowers/plans/2026-09-24-browser-network-mock.md) is the
     // expiry check, same role it plays for `effect_probe`.
     network_interception: Cap::Supported,
+    // **Measured end to end on a REAL chromium — the project's first
+    // real-chromium recording reading.** Same probe, `--engine chrome
+    // --encode` (docs/superpowers/specs/2026-09-27-browser-recording-design/
+    // probes/screencast-probe.mjs), 2026-09-30 on Chrome 151.0.7922.169
+    // (headless=new; the row's `measured_on` below keeps naming Chrome 152
+    // because the OTHER rows' readings were taken there — a re-confirmation
+    // is not a re-measurement, 判据 §18): 38 frames, every one decodable
+    // JPEG, acks accepted, clean stop — then the full production ffmpeg leg
+    // (image2pipe + `-c:v mjpeg` hint + `-c:v libvpx`): 217 frames in, exit
+    // 0, and ffprobe reads a vp8 stream back out of the webm. Until that
+    // date this row rested on the same-connection argument alone; the probe
+    // replaced the argument with a reading.
+    screencast: Cap::Supported,
     // Provenance, not a freshness stamp: this row records the build the
     // capabilities were measured on. Re-confirmed unchanged on Chrome
     // 153.0.8010.36 (2026-09-13) — recorded here rather than by editing the
@@ -464,7 +498,7 @@ mod tests {
     /// ran the three premises against the real pinned-tag binary and the
     /// row is now a measured `Unsupported` (see the `OBSCURA` row for the
     /// evidence and what would open the gate).
-    const NOT_PROBED: [(&str, &str); 4] = [
+    const NOT_PROBED: [(&str, &str); 5] = [
         (
             "drag",
             "T0's Input.dispatchDragEvent label measures a method no browser_* verb \
@@ -494,6 +528,16 @@ mod tests {
              Fetch.enable answers and events arrive, but navigation pauses are \
              advisory (the request completes unanswered) and subresource pauses \
              are unreliable — a MEASURED Unsupported, not an unknown",
+        ),
+        (
+            "screencast",
+            "T0's wire matrix has no screencast label; settled instead by the \
+             recording plan's Task 4 probe (docs/superpowers/specs/\
+             2026-09-27-browser-recording-design/probes/screencast-probe.mjs) \
+             on 2026-09-30: the pinned obscura build serves a sound stream \
+             (every frame decodable JPEG, acks accepted, clean stop), and \
+             Chrome 151.0.7922.169 passed the full encode leg (ffmpeg exit 0, \
+             ffprobe-readable vp8 webm) — a MEASURED Supported on BOTH engines",
         ),
     ];
 
@@ -572,14 +616,17 @@ mod tests {
         assert_eq!(supported_by(|c| c.file_upload), Some(Engine::Chromium));
     }
 
-    /// The four rows R39 cut, asserted as ABSENT.
+    /// The two rows R39 cut, asserted as ABSENT.
     ///
     /// A cut that is only recorded in a comment comes back: the next reader
-    /// measures obscura's screencast, finds it works, and adds the row without
-    /// noticing that no verb reaches it. The table is a menu the model reads
-    /// (`browser_session{action:"capabilities"}`), so a row it cannot order is
-    /// worse than a missing one — 判据 §9, and 判据 §17's "point at the line
-    /// that renders it" applied to a capability instead of a UI string.
+    /// measures obscura's touch handling, finds it works, and adds the row
+    /// without noticing that no verb reaches it. The table is a menu the
+    /// model reads (`browser_session{action:"capabilities"}`), so a row it
+    /// cannot order is worse than a missing one — 判据 §9, and 判据 §17's
+    /// "point at the line that renders it" applied to a capability instead
+    /// of a UI string. (`screencast` USED to be on this list; it left it the
+    /// day `browser_record`'s three actions became the verbs that dispatch
+    /// it — the restoration the struct doc records.)
     #[test]
     fn no_capability_row_exists_without_a_verb_that_dispatches_it() {
         let src = include_str!("capability.rs");
@@ -587,10 +634,6 @@ mod tests {
             (
                 "touch",
                 "no browser_tap verb; nothing dispatches Input.dispatchTouchEvent",
-            ),
-            (
-                "screencast",
-                "nothing calls Page.startScreencast at HEAD or in Tasks 12-19",
             ),
             ("multi_connection", "an architectural property, not a verb"),
         ] {
@@ -638,6 +681,12 @@ mod tests {
             ("network_interception", "mock_list"),
             ("network_interception", "mock_remove"),
             ("network_interception", "mock_clear"),
+            // Session recording is one row behind three actions of ONE verb;
+            // same naming rule as the mock routes.
+            ("screencast", "browser_record"),
+            ("screencast", "start"),
+            ("screencast", "stop"),
+            ("screencast", "status"),
         ] {
             assert!(
                 CAP_FIELDS.iter().any(|(n, _)| *n == name),
@@ -759,7 +808,8 @@ mod tests {
         assert_eq!(
             exempt_disagreements,
             vec!["drag", "effect_probe", "network_interception"],
-            "a matrix-exempt row other than `drag`/`effect_probe`/`network_interception` \
+            "a matrix-exempt row other than \
+             `drag`/`effect_probe`/`network_interception` \
              now answers differently per engine. That difference is published to the model \
              as a route, and nothing in the matrix decides it — state the \
              reading that does, beside BOTH values, and check it here"
@@ -791,6 +841,17 @@ mod tests {
             production.contains("2026-09-24-browser-network-mock"),
             "the network_interception rows no longer name the Task 4 probe that \
              decides obscura's value"
+        );
+        // screencast's disagreement CLOSED on 2026-09-30: the Task 4 probe
+        // measured obscura's stream sound (it is now `Supported` on both
+        // engines, so the row no longer appears in the exempt list above).
+        // The citation assert stays: both values rest on that probe, and a
+        // published fact whose reading nobody can read is the shape this
+        // test exists for — measured or not.
+        assert!(
+            production.contains("2026-09-27-browser-recording"),
+            "the screencast rows no longer name the Task 4 probe that \
+             decided both engines' values"
         );
 
         // The citation, checked rather than trusted. `driver` drives the verb
@@ -1154,9 +1215,15 @@ mod tests {
         // handshake, obscura is the fail-closed answer to an unprobed one.
         assert_eq!(json["chromium"]["network_interception"], "supported");
         assert_eq!(json["obscura"]["network_interception"], "unsupported");
+        // The second restored row: BOTH engines serve the screencast stream
+        // on measurements now (obscura flipped 2026-09-30 — its row kept
+        // here so a constant-emitting `capabilities_json` still goes red on
+        // the chromium side, and so a careless flip back is caught).
+        assert_eq!(json["chromium"]["screencast"], "supported");
+        assert_eq!(json["obscura"]["screencast"], "supported");
         // The cut rows must not reappear in the published object either — this
         // is the face the QA `caps` stage and the model both read.
-        for cut in ["touch", "screencast", "multi_connection"] {
+        for cut in ["touch", "multi_connection"] {
             assert!(
                 json["obscura"].get(cut).is_none(),
                 "`{cut}` is back in the published capability object (R39)"

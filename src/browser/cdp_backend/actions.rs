@@ -3048,6 +3048,16 @@ mod tests {
             "route_list",
             "route_remove",
             "route_clear",
+            // Session recording is the same control-plane shape as the mock
+            // routes: these read or steer Aleph's own RecordingRegistry (and
+            // the screencast/ffmpeg pipeline it owns), none of them acts on
+            // the blocked page's content, and the engine answers screencast
+            // commands while a renderer-side dialog is pending. Gating the
+            // off-switch (`record_stop`) behind a dialog the page opened
+            // would be a gate with no door (判据 §14).
+            "record_start",
+            "record_stop",
+            "record_status",
             // Tab lifecycle: these do not act on the blocked page's content.
             // `open_tab` and `switch_tab` are how a model gets AWAY from a
             // wedged tab, so gating them would take away the escape.

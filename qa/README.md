@@ -69,7 +69,15 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # (about:blank must still be the document), the page
                                    # receiving the mock body — and measured Unsupported
                                    # on v0.2.2: navigation pauses are advisory, so the
-                                   # real page completes unanswered)
+                                   # real page completes unanswered;
+                                   # round-2/C2's screencast probed since 2026-09-30
+                                   # under the C1-tightened criterion (arrival alone is
+                                   # not usability): >=3 frames, EVERY one base64-
+                                   # decodable AND JPEG-magic'd (FFD8), acked after the
+                                   # check, and stopScreencast actually stops (frames
+                                   # in flight during the stop round-trip are not
+                                   # counted — the engine sent them before processing
+                                   # stop) — measured Supported on v0.2.2)
 ./qa/browser_dual/run.sh escape    # the host this branch is BUILT for: no playwright-cli
                                    # anywhere (PATH scrubbed, fnm env unset, scratch
                                    # ledger). obscura still opens AND so does a Chrome
@@ -956,6 +964,19 @@ document, and the read-back answers a clean null on the new document —
 indistinguishable from "never landed"). So obscura's row stays `Unsupported`,
 now as a measured verdict on v0.2.2 rather than a fail-closed unknown, and its
 probe asserts the refusal reaches the model, never a fabricated verification.
+Round-2/C2 (2026-09-30) added the `screencast` row: `Page.startScreencast{jpeg}`
+is fired at the Aleph-launched obscura and the frames are READ, under the
+C1-tightened criterion — arrival alone is not usability, a frame counts only
+when its data base64-decodes AND starts with the JPEG magic (FFD8); every frame
+is acked after its check (the production pacing direction), the probe's own rAF
+loop is asserted to advance first (a silent stream on a frozen page would blame
+the engine for the fixture), and "frames after stop" counts only frames
+arriving after stop RESOLVED — obscura measurably has 1–2 in flight during the
+stop round-trip, and counting those would certify a tighter stop than the
+engine promised. Measured Supported on v0.2.2 (12/12 decodable, acks accepted,
+clean stop), and the chromium row's first real-machine reading (Chrome 151,
+full ffmpeg encode leg included) lives in the probe that certified it:
+`docs/superpowers/specs/2026-09-27-browser-recording-design/probes/`.
 
 **`switch` is the only place spec §5.5's "the login survives" is a fact rather
 than an intention.** Its load-bearing claims are the two no RPC can see: the

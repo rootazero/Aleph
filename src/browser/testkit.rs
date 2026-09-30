@@ -424,6 +424,41 @@ impl BrowserBackend for FakeBackend {
         self.record(format!("pdf:{}", output_path.display()))
     }
 
+    // The record verbs: the fake owns no screencast pipe, so it answers
+    // honestly — start fails by name, stop reports the plain fact that
+    // nothing is recording, status answers `None`. What the census
+    // (`fake_backend_implements_every_backend_method`) requires is that the
+    // calls are ANSWERED here, never silently served by a trait default.
+    async fn record_start(
+        &self,
+        tab_id: &str,
+        _options: super::cdp_backend::recording::RecordStartOptions,
+    ) -> Result<super::cdp_backend::recording::RecordingStatus, BrowserError> {
+        self.record(format!("record_start:{tab_id}"))?;
+        Err(BrowserError::ActionFailed(
+            "FakeBackend cannot record (no screencast pipe)".into(),
+        ))
+    }
+
+    async fn record_stop(
+        &self,
+        tab_id: &str,
+        recording_id: Option<&str>,
+    ) -> Result<super::cdp_backend::recording::RecordingReceipt, BrowserError> {
+        self.record(format!("record_stop:{tab_id}:{recording_id:?}"))?;
+        Err(BrowserError::NoActiveRecording(
+            recording_id.unwrap_or(tab_id).to_string(),
+        ))
+    }
+
+    async fn record_status(
+        &self,
+        tab_id: &str,
+    ) -> Result<Option<super::cdp_backend::recording::RecordingStatus>, BrowserError> {
+        self.record(format!("record_status:{tab_id}"))?;
+        Ok(None)
+    }
+
     async fn switch_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
         self.record(format!("switch_tab:{tab_id}"))
     }

@@ -393,6 +393,9 @@ impl Default for ConfigApprovalPolicy {
     ///   posture `system_tool`'s `clipboard_read` arm wants — so this line
     ///   changes no behaviour and states an intent that "absent" could not.
     /// - Hooks manage → Ask (control-plane write)
+    /// - Browser record start → Ask (writes a growing video file; the page's
+    ///   pixels stream through an encoder — same family as evaluate's read).
+    ///   stop/status are not gated: an off-switch behind a gate is fail-dead.
     fn default() -> Self {
         let mut defaults = HashMap::new();
         defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
@@ -413,6 +416,7 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::BrowserIdentityOverride, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserSessionState, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserNetworkMock, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserRecord, DefaultDecision::Ask);
         defaults.insert(ActionType::HooksManage, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopClick, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopType, DefaultDecision::Ask);
