@@ -126,14 +126,15 @@ async def probe_obscura(ws_url, page_url, led):
                            {"type": "dragOver", "x": 10, "y": 10, "data": {"items": []}}, s)
         found["drag"] = "supported" if "error" not in r and await ev("window.__dragged") else "unsupported"
 
-        # `touch`, `screencast` and `multi_connection` are NOT probed here,
+        # `touch` and `multi_connection` are NOT probed here,
         # and their absence is the point: R39 cut them from the capability
         # table because no `browser_*` verb dispatches them. A QA stage that
         # kept probing them would be measuring something the table no longer
         # claims — and the diff below would fail on the prober's surplus
         # rather than on a wrong claim. (`network_interception` LEFT that
         # list when `browser_network`'s mock actions became its verb, and is
-        # probed at the end of this function.)
+        # probed at the end of this function; `screencast` left it when
+        # `browser_record` became its verb, and is probed right after.)
         doc = await cdp.call("DOM.getDocument", {"depth": -1}, s)
         root = doc["result"]["root"]
         file_id = find_node(root, "input", "file")
@@ -331,6 +332,96 @@ async def probe_obscura(ws_url, page_url, led):
                     await cdp.call("Fetch.disable", {}, s2)
             await cdp.call("Target.closeTarget", {"targetId": tid2})
         found["network_interception"] = ni
+
+        # screencast — the frame stream `browser_record{action:"start"}` is
+        # built on, probed under the C1-tightened criterion: frame ARRIVAL is
+        # not usability. A frame counts only when its `data` base64-decodes
+        # AND starts with the JPEG magic (FFD8) — an engine may emit
+        # undecodable or non-JPEG payloads, and a row certified on arrival
+        # alone would send `browser_record` at a stream ffmpeg cannot eat.
+        # Every frame is acked AFTER its check (the production pacing —
+        # recording.rs writes first, acks second), and stopScreencast must
+        # actually stop the stream. The full measurement with the encode leg
+        # is docs/superpowers/specs/2026-09-27-browser-recording-design/
+        # probes/screencast-probe.mjs (2026-09-30: obscura served 12 frames,
+        # all decodable JPEG, acks accepted, 0 frames after stop).
+        #
+        # Session `s` is on index.html here — effect_probe's premise 3
+        # navigated it away from the caps page. Harmless: any document does,
+        # because a screencast emits on REPAINT and the probe installs its own
+        # rAF loop rather than growing an animation into a fixture other
+        # probes read. The loop's advance is asserted first (判据 §2 — a
+        # silent stream on a frozen page would blame the engine for the
+        # fixture).
+        sc = "unsupported"
+        await ev("window.__scSpin = true; window.__scTick = 0;"
+                 "(function spin(){ if (!window.__scSpin) return;"
+                 " window.__scTick++;"
+                 " document.body.style.background ="
+                 " (window.__scTick % 2) ? '#ffffff' : '#dddddd';"
+                 " requestAnimationFrame(spin); })()")
+        tick0 = await ev("window.__scTick ?? -1")
+        await asyncio.sleep(0.7)
+        tick1 = await ev("window.__scTick ?? -1")
+        led.check("screencast's fixture integrity: the rAF loop actually advances",
+                  isinstance(tick0, (int, float)) and isinstance(tick1, (int, float))
+                  and tick1 > tick0 >= 0,
+                  f"tick0={tick0} tick1={tick1}")
+        st = await cdp.call("Page.startScreencast", {"format": "jpeg", "quality": 80}, s)
+        if "error" in st:
+            led.log(f"  screencast: startScreencast refused: {json.dumps(st)[:200]}")
+        else:
+            usable, bad, ack_err = 0, 0, 0
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 9
+            while usable < 3 and loop.time() < deadline:
+                fr = await cdp.wait_event("Page.screencastFrame", s,
+                                          timeout=max(0.5, deadline - loop.time()))
+                if not fr:
+                    break
+                ok_frame = False
+                try:
+                    buf = base64.b64decode(str(fr.get("data", "")))
+                    ok_frame = len(buf) > 2 and buf[0] == 0xFF and buf[1] == 0xD8
+                except Exception:
+                    ok_frame = False
+                if ok_frame:
+                    usable += 1
+                else:
+                    bad += 1
+                ack = await cdp.call("Page.screencastFrameAck",
+                                     {"sessionId": fr.get("sessionId")}, s)
+                if "error" in ack:
+                    ack_err += 1
+            # "After stop" means after stop RESOLVED — the window the spec
+            # probe (screencast-probe.mjs) measured, whose late-frame listener
+            # attached only once stop had answered. Frames stashed during the
+            # stop round-trip were sent by the engine BEFORE it processed the
+            # request (localhost makes the gap milliseconds, but measured
+            # 2026-09-30: obscura can have exactly one in flight), and counting
+            # them would certify a tighter stop than the engine promised.
+            # `wait_event` drains the stash FIFO before reading the wire, so
+            # those are exactly the first `settled` matches popped below. The
+            # drain is ALSO bounded in count: an engine that ignores stop
+            # entirely streams forever, and 1s-quiet alone would never exit
+            # (and the red would be the hang, not the claim).
+            sp = await cdp.call("Page.stopScreencast", {}, s)
+            settled = sum(
+                1 for m in cdp.events
+                if m.get("method") == "Page.screencastFrame" and m.get("sessionId") == s)
+            popped_after_stop = 0
+            for _ in range(50):
+                if not await cdp.wait_event("Page.screencastFrame", s, timeout=1.0):
+                    break
+                popped_after_stop += 1
+            late = max(0, popped_after_stop - settled)
+            await ev("window.__scSpin = false")
+            led.log(f"  screencast: usable={usable} bad={bad} ack_errors={ack_err} "
+                    f"stop={'ok' if 'error' not in sp else json.dumps(sp)[:160]} "
+                    f"frames_after_stop={late} (in-flight during stop={settled})")
+            if usable >= 3 and bad == 0 and ack_err == 0 and "error" not in sp and late == 0:
+                sc = "supported"
+        found["screencast"] = sc
 
         return found
 
