@@ -529,17 +529,15 @@ impl AgentHarness {
                     call_id = %call.id,
                     "cross-batch dedup: refusing identical repeat of a previously-failed call",
                 );
-                let synthetic = crate::tools::service::ToolError::Execution {
-                    name: call.name.clone(),
-                    cause: CROSS_BATCH_REFUSED_CAUSE.to_string(),
-                };
-                self.emit_tool_error(
-                    session_id, turn_id, &call, synthetic, started, iteration, callback,
+                self.emit_cross_batch_refusal(
+                    session_id,
+                    turn_id,
+                    &call,
+                    started,
+                    iteration,
+                    callback,
                 )
                 .await;
-                if let Some(ref tracker) = self.stall_tracker {
-                    tracker.record_activity().await;
-                }
                 continue;
             }
 
@@ -877,23 +875,15 @@ impl AgentHarness {
                     call_id = %call.id,
                     "cross-batch dedup (parallel): refusing identical repeat of a previously-failed call",
                 );
-                let synthetic = crate::tools::service::ToolError::Execution {
-                    name: call.name.clone(),
-                    cause: CROSS_BATCH_REFUSED_CAUSE.to_string(),
-                };
-                self.emit_tool_error(
+                self.emit_cross_batch_refusal(
                     session_id,
                     turn_id,
                     call,
-                    synthetic,
                     started_at[idx],
                     iteration,
                     callback,
                 )
                 .await;
-                if let Some(ref tracker) = self.stall_tracker {
-                    tracker.record_activity().await;
-                }
                 continue;
             }
         }
@@ -1137,6 +1127,41 @@ impl AgentHarness {
     }
 
     /// Compose the LLM-facing error body for a failed tool call: the upstream
+    /// Synthetic ToolError + emit + stall-tracker poke for a cross-batch
+    /// dedup refusal. Both the serial `act` loop and the parallel `act_parallel`
+    /// PASS 0 hit this when `(tool, args)` already failed earlier in the run;
+    /// only the surrounding `tracing::warn!` differs (parallel suffix). The
+    /// two callers do not share a future, so each must own its own `started`
+    /// — the serial loop's per-call `Instant`, the parallel loop's
+    /// `started_at[idx]`.
+    async fn emit_cross_batch_refusal(
+        &self,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        call: &NativeToolCall,
+        started: Instant,
+        iteration: usize,
+        callback: &mut dyn HarnessCallback,
+    ) {
+        let synthetic = crate::tools::service::ToolError::Execution {
+            name: call.name.clone(),
+            cause: CROSS_BATCH_REFUSED_CAUSE.to_string(),
+        };
+        self.emit_tool_error(
+            session_id,
+            turn_id,
+            call,
+            synthetic,
+            started,
+            iteration,
+            callback,
+        )
+        .await;
+        if let Some(ref tracker) = self.stall_tracker {
+            tracker.record_activity().await;
+        }
+    }
+
     /// `to_string()` followed by a single-line persistence hint that names the
     /// error kind, recommends concrete alternative tools, and reminds the
     /// model the ladder must be climbed before giving up (the persistence
