@@ -66,6 +66,7 @@ pub fn primer_entries() -> Vec<ExtensionEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hub::{ExtensionCategory, TrustTier};
 
     const SAMPLE: &str = "---\nname: PDF Tools\ndescription: Work with PDFs.\n---\nBody.";
 

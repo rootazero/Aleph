@@ -315,7 +315,6 @@ where
     R: alephcore::executor::ToolRegistry + 'static,
 {
     use alephcore::gateway::handlers::agent::{build_run_request, AgentRunParams};
-    use alephcore::gateway::handlers::chat::SendParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
     use serde::Serialize;
     use serde_json::{json, Value};
@@ -328,7 +327,7 @@ where
     }
 
     // Parse params
-    let params: SendParams = match request.params {
+    let params: AgentRunParams = match request.params {
         Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map)) {
             Ok(p) => p,
             Err(e) => {
@@ -349,7 +348,7 @@ where
     };
 
     // Validate message
-    if params.message.trim().is_empty() {
+    if params.input.trim().is_empty() {
         return alephcore::gateway::JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
@@ -428,7 +427,7 @@ where
     // here (`attachments: Vec::new()`, `model_override: None`, no
     // `platform` / `caller_role` / `conversation_id`).
     let run_params = AgentRunParams {
-        input: params.message.clone(),
+        input: params.input.clone(),
         session_key: params.session_key,
         channel: params.channel,
         peer_id: None, // Panel has no per-user peer IDs
@@ -463,7 +462,7 @@ where
     // its own copy of "parse, then serialize", which is one more place for
     // the four surfaces to disagree about what `/foo` means.
     engine
-        .stamp_slash_mode(&params.message, &mut run_request.metadata)
+        .stamp_slash_mode(&params.input, &mut run_request.metadata)
         .await;
 
     // Spawn onto the shared per-session busy wait lane (same queue the inbound

@@ -42,16 +42,6 @@ impl FeedbackFloorLoader {
         Arc::new(Self { memory_dir })
     }
 
-    /// Scan `{agent_id}/feedback/*.md` and return the High/Critical rules,
-    /// Critical-first then most-recently-updated, capped at [`FLOOR_CAP`].
-    ///
-    /// Never errors: a missing directory or an unreadable/unparseable file
-    /// simply yields fewer entries.
-    pub async fn load(&self, agent_id: &str) -> Vec<FeedbackFloorEntry> {
-        self.load_many(std::slice::from_ref(&agent_id.to_string()))
-            .await
-    }
-
     /// The floor across every partition this session may read.
     ///
     /// The writer and the reader used to disagree about where feedback lives.
@@ -190,7 +180,7 @@ mod tests {
     async fn missing_dir_returns_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let loader = FeedbackFloorLoader::new(tmp.path().to_path_buf());
-        assert!(loader.load("default").await.is_empty());
+        assert!(loader.load_many(&["default".to_string()]).await.is_empty());
     }
 
     #[tokio::test]
@@ -202,7 +192,7 @@ mod tests {
         write_feedback(tmp.path(), "crit-rule", "critical", "never force-push main").await;
 
         let loader = FeedbackFloorLoader::new(tmp.path().to_path_buf());
-        let entries = loader.load("default").await;
+        let entries = loader.load_many(&["default".to_string()]).await;
 
         let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(paths.len(), 2, "only high + critical are always-on");
@@ -222,7 +212,7 @@ mod tests {
             write_feedback(tmp.path(), &format!("rule-{i}"), "high", "a rule").await;
         }
         let loader = FeedbackFloorLoader::new(tmp.path().to_path_buf());
-        let entries = loader.load("default").await;
+        let entries = loader.load_many(&["default".to_string()]).await;
         assert_eq!(entries.len(), FLOOR_CAP);
     }
 
