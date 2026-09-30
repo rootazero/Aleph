@@ -22,27 +22,15 @@ fn project_skill(dir_name: &str, manifest: &SkillManifest) -> ExtensionEntry {
         git_ref: None,
         sha256: None,
     };
-    ExtensionEntry {
-        id: format!("{ALEPH_HUB_ID}:{}", manifest.id()),
-        kind: ExtensionKind::Skill,
-        category: ExtensionCategory::Other,
-        name: manifest.name().to_string(),
-        description: manifest.description().to_string(),
-        author: None,
-        icon: None,
-        tags: vec![ExtensionKind::Skill.as_str().to_string()],
-        version: None,
-        source_id: ALEPH_HUB_ID.to_string(),
-        repo_url: Some(OFFICIAL_SKILLS_REPO.to_string()),
-        trust_tier: TrustTier::Official,
-        requires_config: spec.requires_config(),
-        config_schema: None,
-        installed: false,
-        enabled: false,
-        update_available: false,
-        via: Some(ALEPH_HUB_ID.to_string()),
-        install_spec: Some(spec),
-    }
+    super::official_plugins::aleph_hub_official_entry(
+        ExtensionKind::Skill,
+        &manifest.id(),
+        manifest.name().to_string(),
+        manifest.description().to_string(),
+        OFFICIAL_SKILLS_REPO,
+        None,
+        spec,
+    )
 }
 
 /// Project the in-binary bundled official skills into Hub catalog entries.
