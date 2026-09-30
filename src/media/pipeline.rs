@@ -151,12 +151,6 @@ impl MediaPipeline {
     }
 }
 
-impl Default for MediaPipeline {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
