@@ -223,9 +223,18 @@ fn codec_args_for(path: &Path) -> Result<Vec<String>, RecordStartError> {
 /// Writability is tested by DOING (create-write-delete a probe file), never by
 /// guessing from permission bits: root writes to /proc and read-only mounts
 /// laugh at mode bits (Review Focus #4).
+///
+/// The probe name must NOT contain the substring ".aleph":
+/// `utils::paths::tests::no_hand_rolled_aleph_home_outside_the_allowlist`
+/// scans at FILE level for `dirs::home_dir()` + ".aleph" together, and this
+/// file legitimately has the former (`playwright_ffmpeg` resolves the
+/// ms-playwright cache, a real-HOME path that ALEPH_HOME redirection must NOT
+/// rewrite). The only Aleph-rooted path here — `default_recording_path` —
+/// already goes through `get_config_dir()`, so the file is genuinely clean
+/// and the name stays out of the guard's way.
 fn probe_writable(dir: &Path) -> std::io::Result<()> {
     let probe = dir.join(format!(
-        ".aleph-rec-probe-{}-{}",
+        ".rec-probe-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1560,13 +1569,19 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        // The budget is a guard, not the assertion — the condition is the
+        // synchronisation point. 10s proved load-sensitive: under a
+        // concurrent workspace compile + swap pressure (2026-09-30, this
+        // machine) 200 in-process frames timed it out twice while passing
+        // in 2.3s alone. 30s keeps the red meaningful (a wedged pipeline
+        // still fails fast enough to matter) without flaking on a busy box.
         wait_until(
             || {
                 registry
                     .status("p", "T1")
                     .is_some_and(|s| s.captured_frames == 200)
             },
-            Duration::from_secs(10),
+            Duration::from_secs(30),
             "all 200 frames captured",
         )
         .await;
@@ -1625,7 +1640,15 @@ mod tests {
         )
         .await;
 
-        // The tab dies: the connection (and with it the event stream) closes.
+        // The tab dies: the SOCKET is dropped, which is the connection-death
+        // arm — `fail_all` sets the close watch (`engine_gone` above), and
+        // THAT is what the supervisor observes. The event stream itself never
+        // closes (its sender lives in the connection's `Shared`, kept alive by
+        // this loop's own `conn` clones — see the `engine_gone` comment), and
+        // a tab that dies while the ENGINE lives has no detector at all: no
+        // `Target.targetDestroyed` subscription exists anywhere in the stack,
+        // so that shape hangs until someone stops it (stop's four-check
+        // receipt stays honest either way). FL §3.12 第六轮 ⓑ records both.
         server.drop_socket();
         // The supervisor notices the closed stream and retires the entry
         // itself — wait for THAT, so the receipt below is the auto-finalized
