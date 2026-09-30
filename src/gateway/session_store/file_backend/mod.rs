@@ -516,17 +516,29 @@ impl FileSessionStore {
         key_str: &str,
         messages: &[MessageRecord],
     ) -> Result<(), SessionStoreError> {
-        let mut contents = String::new();
-        for msg in messages {
-            let line = serde_json::to_string(msg)
-                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
-            contents.push_str(&line);
-            contents.push('\n');
-        }
-        crate::utils::atomic_write::atomic_write_file(&self.transcript_path(key_str), &contents)
-            .await
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Write transcript failed: {e}")))
+        write_transcript_atomic(&self.transcript_path(key_str), messages).await
     }
+}
+
+/// Serialize `messages` as newline-joined JSON and write them atomically.
+/// Centralised so the path-construction + error-mapping pair is one place —
+/// `truncate_messages`, `delete_messages_from_seq`, `branch_from_checkpoint`,
+/// and `restore_checkpoint` all redo the same five lines and the same
+/// error string.
+async fn write_transcript_atomic(
+    path: &std::path::Path,
+    messages: &[MessageRecord],
+) -> Result<(), SessionStoreError> {
+    let mut contents = String::new();
+    for msg in messages {
+        let line = serde_json::to_string(msg)
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
+        contents.push_str(&line);
+        contents.push('\n');
+    }
+    crate::utils::atomic_write::atomic_write_file(path, &contents)
+        .await
+        .map_err(|e| SessionStoreError::DatabaseError(format!("Write transcript failed: {e}")))
 }
 
 /// The metadata half of billing a run — the file twin of SQLite's
@@ -543,6 +555,68 @@ fn add_bill(meta: &mut SessionMetadata, bill: &RunBill) {
     }
     if let Some(mp) = &bill.model_provider {
         meta.model_provider = Some(mp.clone());
+    }
+}
+
+/// Take the `identity_meta` off `meta` (defaulting to an empty one when the
+/// session was created before identity existed), hand `&mut` to `f`, and put
+/// it back. Centralises the take-or-init dance so the four callers that
+/// mutate a single `custom` key cannot drift on the empty-fallback shape.
+fn with_identity_meta<R>(
+    meta: &mut SessionMetadata,
+    f: impl FnOnce(&mut SessionIdentityMeta) -> R,
+) -> R {
+    let mut identity = meta
+        .identity_meta
+        .take()
+        .unwrap_or_else(|| SessionIdentityMeta::from_json_str(None));
+    let out = f(&mut identity);
+    meta.identity_meta = Some(identity);
+    out
+}
+
+/// Construct a fresh `SessionMetadata` for the given key, with
+/// `message_count` and `parent_session_key` supplied by the caller (a
+/// brand-new session has neither, a branch-from-checkpoint has both).
+/// Centralised so the two call sites cannot drift on a field — there are
+/// ~22 fields and only the three caller-controlled ones differ.
+fn new_session_meta(
+    key: &SessionKey,
+    message_count: i64,
+    parent_session_key: Option<String>,
+) -> SessionMetadata {
+    let key_str = key.to_key_string();
+    let agent_id = key.agent_id().to_string();
+    let now = chrono::Utc::now().timestamp();
+    SessionMetadata {
+        key: key_str,
+        agent_id,
+        session_type: match key {
+            SessionKey::Main { .. } => "main",
+            SessionKey::DirectMessage { .. } => "peer",
+            SessionKey::Task { .. } => "task",
+            SessionKey::Ephemeral { .. } => "ephemeral",
+            SessionKey::Group { .. } => "group",
+            SessionKey::Subagent { .. } => "subagent",
+        }
+        .to_string(),
+        created_at: now,
+        last_active_at: now,
+        message_count,
+        total_tokens: 0,
+        auto_reset_at: None,
+        state: Some(SessionState::Created),
+        topic: None,
+        status: None,
+        identity_meta: None,
+        label: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        model: None,
+        model_provider: None,
+        parent_session_key,
+        compaction_count: 0,
+        ..Default::default()
     }
 }
 
@@ -571,37 +645,7 @@ impl SessionStore for FileSessionStore {
             return guard.commit().await;
         }
 
-        let now = chrono::Utc::now().timestamp();
-        let mut meta = SessionMetadata {
-            key: key_str.clone(),
-            agent_id: key.agent_id().to_string(),
-            session_type: match key {
-                SessionKey::Main { .. } => "main",
-                SessionKey::DirectMessage { .. } => "peer",
-                SessionKey::Task { .. } => "task",
-                SessionKey::Ephemeral { .. } => "ephemeral",
-                SessionKey::Group { .. } => "group",
-                SessionKey::Subagent { .. } => "subagent",
-            }
-            .to_string(),
-            created_at: now,
-            last_active_at: now,
-            message_count: 0,
-            total_tokens: 0,
-            auto_reset_at: None,
-            state: Some(SessionState::Created),
-            topic: None,
-            status: None,
-            identity_meta: None,
-            label: None,
-            input_tokens: 0,
-            output_tokens: 0,
-            model: None,
-            model_provider: None,
-            parent_session_key: None,
-            compaction_count: 0,
-            ..Default::default()
-        };
+        let mut meta = new_session_meta(key, 0, None);
         // P1 data isolation: stamp owner/scope from the ambient dispatch
         // scope before persisting. No-op (leaves both `None`) outside any
         // `scope::with_scope` context — cron/internal/A2A creators.
@@ -931,18 +975,7 @@ impl SessionStore for FileSessionStore {
             .sum();
 
         let path = self.transcript_path(&key_str);
-        let mut contents = String::new();
-        for msg in &messages {
-            let line = serde_json::to_string(msg)
-                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
-            contents.push_str(&line);
-            contents.push('\n');
-        }
-        crate::utils::atomic_write::atomic_write_file(&path, &contents)
-            .await
-            .map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
-            })?;
+        write_transcript_atomic(&path, &messages).await?;
 
         let mut guard = self.lock_metadata(&key_str).await?;
         if let Some(meta) = guard.existing_mut() {
@@ -978,18 +1011,7 @@ impl SessionStore for FileSessionStore {
         }
 
         let path = self.transcript_path(&key_str);
-        let mut contents = String::new();
-        for msg in &kept {
-            let line = serde_json::to_string(msg)
-                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
-            contents.push_str(&line);
-            contents.push('\n');
-        }
-        crate::utils::atomic_write::atomic_write_file(&path, &contents)
-            .await
-            .map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
-            })?;
+        write_transcript_atomic(&path, &kept).await?;
 
         let mut guard = self.lock_metadata(&key_str).await?;
         if let Some(meta) = guard.existing_mut() {
@@ -1022,56 +1044,17 @@ impl SessionStore for FileSessionStore {
                 "Checkpoint {checkpoint_id} not found or empty"
             )));
         }
-        let now = chrono::Utc::now().timestamp();
-        let mut meta = SessionMetadata {
-            key: new_key_str.clone(),
-            agent_id: new_key.agent_id().to_string(),
-            session_type: match new_key {
-                SessionKey::Main { .. } => "main",
-                SessionKey::DirectMessage { .. } => "peer",
-                SessionKey::Task { .. } => "task",
-                SessionKey::Ephemeral { .. } => "ephemeral",
-                SessionKey::Group { .. } => "group",
-                SessionKey::Subagent { .. } => "subagent",
-            }
-            .to_string(),
-            created_at: now,
-            last_active_at: now,
-            message_count: checkpoint_messages.len() as i64,
-            total_tokens: 0,
-            auto_reset_at: None,
-            state: Some(SessionState::Created),
-            topic: None,
-            status: None,
-            identity_meta: None,
-            label: None,
-            input_tokens: 0,
-            output_tokens: 0,
-            model: None,
-            model_provider: None,
-            parent_session_key: Some(key_str),
-            compaction_count: 0,
-            ..Default::default()
-        };
-        let path = self.transcript_path(&new_key_str);
-        let mut contents = String::new();
+        let mut meta = new_session_meta(new_key, checkpoint_messages.len() as i64, Some(key_str.clone()));
         for msg in &checkpoint_messages {
             meta.total_tokens += msg.input_tokens + msg.output_tokens;
             meta.input_tokens += msg.input_tokens;
             meta.output_tokens += msg.output_tokens;
-            let line = serde_json::to_string(msg)
-                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
-            contents.push_str(&line);
-            contents.push('\n');
         }
+        let path = self.transcript_path(&new_key_str);
         tokio::fs::create_dir_all(self.session_dir(&new_key_str))
             .await
             .map_err(|e| SessionStoreError::DatabaseError(format!("Create dir failed: {e}")))?;
-        crate::utils::atomic_write::atomic_write_file(&path, &contents)
-            .await
-            .map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
-            })?;
+        write_transcript_atomic(&path, &checkpoint_messages).await?;
         // P1 data isolation: this is a freshly-created session (new_key), so
         // it gets the same owner/scope stamp `get_or_create`'s CREATE branch
         // gives every other new session — no-op outside any `scope::
@@ -1099,18 +1082,7 @@ impl SessionStore for FileSessionStore {
             )));
         }
         let path = self.transcript_path(&key_str);
-        let mut contents = String::new();
-        for msg in &checkpoint_messages {
-            let line = serde_json::to_string(msg)
-                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
-            contents.push_str(&line);
-            contents.push('\n');
-        }
-        crate::utils::atomic_write::atomic_write_file(&path, &contents)
-            .await
-            .map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
-            })?;
+        write_transcript_atomic(&path, &checkpoint_messages).await?;
         let mut guard = self.lock_metadata(&key_str).await?;
         let meta = guard
             .existing_mut()
@@ -1171,14 +1143,11 @@ impl SessionStore for FileSessionStore {
 
             meta.state = Some(SessionState::Stopped);
             if let Some(t) = topic {
-                let mut identity_meta = meta
-                    .identity_meta
-                    .take()
-                    .unwrap_or_else(|| SessionIdentityMeta::from_json_str(None));
-                identity_meta
-                    .custom
-                    .insert("topic".to_string(), serde_json::json!(t));
-                meta.identity_meta = Some(identity_meta);
+                with_identity_meta(meta, |identity_meta| {
+                    identity_meta
+                        .custom
+                        .insert("topic".to_string(), serde_json::json!(t));
+                });
             }
         }
         let meta = guard.commit().await?;
@@ -1190,14 +1159,11 @@ impl SessionStore for FileSessionStore {
         let key_str = key.to_key_string();
         let mut guard = self.lock_metadata(&key_str).await?;
         if let Some(meta) = guard.existing_mut() {
-            let mut identity_meta = meta
-                .identity_meta
-                .take()
-                .unwrap_or_else(|| SessionIdentityMeta::from_json_str(None));
-            identity_meta
-                .custom
-                .insert("topic".to_string(), serde_json::json!(topic));
-            meta.identity_meta = Some(identity_meta);
+            with_identity_meta(meta, |identity_meta| {
+                identity_meta
+                    .custom
+                    .insert("topic".to_string(), serde_json::json!(topic));
+            });
             guard.commit().await?;
         }
         Ok(())
@@ -1266,11 +1232,7 @@ impl SessionStore for FileSessionStore {
             // SessionMetadata so `list_sessions` (which deserializes the full
             // on-disk meta) surfaces it for the Panel to restore. `None` clears
             // the key (revert to the default agent workspace).
-            let mut identity_meta = meta
-                .identity_meta
-                .take()
-                .unwrap_or_else(|| SessionIdentityMeta::from_json_str(None));
-            match project_root.map(str::trim).filter(|p| !p.is_empty()) {
+            with_identity_meta(meta, |identity_meta| match project_root.map(str::trim).filter(|p| !p.is_empty()) {
                 Some(path) => {
                     identity_meta
                         .custom
@@ -1279,8 +1241,7 @@ impl SessionStore for FileSessionStore {
                 None => {
                     identity_meta.custom.remove("project_root");
                 }
-            }
-            meta.identity_meta = Some(identity_meta);
+            });
             guard.commit().await?;
         }
         Ok(())
@@ -1442,25 +1403,25 @@ impl SessionStore for FileSessionStore {
                     meta.model_provider = Some(provider.clone());
                 }
                 if patch.status.is_some() || patch.metadata.is_some() {
-                    let mut identity = meta.identity_meta.take().unwrap_or_default();
-                    if let Some(status) = &patch.status {
-                        identity
-                            .custom
-                            .insert("status".to_string(), serde_json::json!(status));
-                    }
-                    // Merged key-by-key, nulls included — byte-for-byte what
-                    // sqlite does. A `null` is how the Panel clears a setting
-                    // ("follow the global tier"), and both readers treat a null
-                    // and an absent key alike (`custom.get(k)?.as_str()?`).
-                    // Deviating here (e.g. removing the key instead) would
-                    // reintroduce, in the opposite direction, exactly the
-                    // backend divergence this fix exists to kill.
-                    if let Some(extra) = patch.metadata.as_ref().and_then(|m| m.as_object()) {
-                        for (k, v) in extra {
-                            identity.custom.insert(k.clone(), v.clone());
+                    with_identity_meta(meta, |identity| {
+                        if let Some(status) = &patch.status {
+                            identity
+                                .custom
+                                .insert("status".to_string(), serde_json::json!(status));
                         }
-                    }
-                    meta.identity_meta = Some(identity);
+                        // Merged key-by-key, nulls included — byte-for-byte what
+                        // sqlite does. A `null` is how the Panel clears a setting
+                        // ("follow the global tier"), and both readers treat a null
+                        // and an absent key alike (`custom.get(k)?.as_str()?`).
+                        // Deviating here (e.g. removing the key instead) would
+                        // reintroduce, in the opposite direction, exactly the
+                        // backend divergence this fix exists to kill.
+                        if let Some(extra) = patch.metadata.as_ref().and_then(|m| m.as_object()) {
+                            for (k, v) in extra {
+                                identity.custom.insert(k.clone(), v.clone());
+                            }
+                        }
+                    });
                 }
             }
             // Nothing to patch: the guard drops uncommitted.

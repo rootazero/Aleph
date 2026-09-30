@@ -19,6 +19,15 @@ use std::time::Duration;
 use crate::goal::{GateOutcome, Goal, GoalStatus, PursuitMode};
 use crate::looping::types::fmt_duration_ms;
 
+/// Truncate `s` to at most `n` characters. Uses char counting (not bytes) so
+/// the cap is honest for multi-byte UTF-8 — taking 300 bytes of a UTF-8 string
+/// could slice mid-codepoint and the downstream `String::push_str` would
+/// refuse; char-count avoids the panic and keeps the limit semantics stable
+/// across scripts.
+fn truncate_chars(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
 /// Render accumulated lessons (the state file) for injection into a
 /// continuation prompt. Empty → empty string (regression-safe: no prompt change
 /// when there are no lessons). Newest last, matching their append order.
@@ -28,7 +37,7 @@ fn render_lessons(goal: &Goal) -> String {
     }
     let mut s = String::from("\n\nLessons from earlier iterations (avoid repeating these):\n");
     for lesson in &goal.lessons {
-        let trimmed: String = lesson.chars().take(300).collect();
+        let trimmed = truncate_chars(lesson, 300);
         s.push_str(&format!("- {trimmed}\n"));
     }
     s
@@ -445,7 +454,7 @@ pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, tokens_now: u64, now
     // next hook re-blocked it (one wasted autonomous run + a contradictory note).
     let reopened = goal.clone().with_status(GoalStatus::Active, now_ms);
     if should_continue(&reopened, tokens_now, now_ms) {
-        let trimmed: String = reason.chars().take(300).collect();
+        let trimmed = truncate_chars(reason, 300);
         let note = format!("Objective gate vetoed completion: {trimmed}");
         reopened
             .with_note(Some(note), now_ms)
@@ -465,7 +474,7 @@ pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, tokens_now: u64, now
 /// into the next round (R9: intelligence lives in the prompt).
 #[must_use]
 pub fn gate_failure_prompt(goal: &Goal, reason: &str) -> String {
-    let trimmed: String = reason.chars().take(600).collect();
+    let trimmed = truncate_chars(reason, 600);
     let lessons = render_lessons(goal);
     format!(
         "[Your standing goal is NOT done — the objective gate rejected your \

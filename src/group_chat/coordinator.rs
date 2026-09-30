@@ -40,22 +40,20 @@ pub fn build_coordinator_prompt(
         prompt.push_str(&format!("Discussion topic: {t}\n\n"));
     }
 
-    // Persona list. Persona id/name are operator-supplied (inline --role or
-    // preset config) and may contain `"`. We replace `"` with the Unicode
-    // right-double-quote (U+201D) so the JSON-shape sample the LLM is asked to
-    // mimic stays well-formed and a `"`-laden name cannot smuggle a second
-    // key=value pair past the parser.
-    fn quote_field(s: &str) -> String {
-        s.replace('"', "\u{201D}")
-    }
+    // Persona id/name are operator-supplied (inline --role or preset config).
+    // Strip control characters (so an embedded `\n` cannot splice a fake
+    // instruction line) and replace `"` with the Unicode right-double-quote
+    // (U+201D) so the JSON-shape sample stays well-formed. Defensive
+    // typography, not injection defense — the output is text for the model,
+    // not executable content.
     prompt.push_str("Available personas:\n");
     for p in personas {
         let truncated = truncate_chars(&p.system_prompt, SYSTEM_PROMPT_TRUNCATE_LEN);
         prompt.push_str(&format!(
             "- id=\"{}\" name=\"{}\" prompt=\"{}\"\n",
-            quote_field(&p.id),
-            quote_field(&p.name),
-            quote_field(truncated),
+            json_safe_field(&p.id),
+            json_safe_field(&p.name),
+            json_safe_field(truncated),
         ));
     }
     prompt.push('\n');
@@ -153,12 +151,7 @@ pub fn build_persona_prompt(
     // the Unicode right-double-quote so quoting stays well-formed. This is
     // defensive typography, not injection defense — the output is text for
     // the model, not executable content.
-    let safe_name: String = persona
-        .name
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect::<String>()
-        .replace('"', "\u{201D}");
+    let safe_name = json_safe_field(&persona.name);
     prompt.push_str(&format!("You are \"{safe_name}\".\n\n"));
 
     // Coordinator guidance
@@ -189,9 +182,16 @@ pub fn build_persona_prompt(
 // Helpers
 // =============================================================================
 
-/// Truncate a string to at most `max_len` characters.
-///
-/// Uses char counting to avoid panicking on multi-byte UTF-8 boundaries.
+/// Sanitize an operator-supplied string for embedding in a JSON-shape prompt
+/// sample. Strips control characters and replaces `"` with the Unicode
+/// right-double-quote (U+201D) so a `"`-laden value cannot smuggle a second
+/// `key=value` pair past the parser.
+fn json_safe_field(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .replace('"', "\u{201D}")
+}
 
 /// Strip markdown code fences (` ```json ... ``` `) from LLM output.
 fn strip_markdown_fences(s: &str) -> &str {
