@@ -299,15 +299,18 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // capability is per-domain, not per-binary, which is why these are two
     // rows and not one.
     screencast: Cap::Supported,
-    // **Unsupported as the fail-closed answer to an unknown (判据 §8) —
-    // NOT_PROBED, with the probe owed.** The folding rides the same event
-    // pump as `Runtime.consoleAPICalled` (measured working on this build),
-    // which argues FOR arrival — but this engine has a silent-miss precedent
-    // in exactly this class: `Page.javascriptDialogOpening` never reports
-    // (see the `js_dialogs` row), and an argument from a sibling event is
-    // not a measurement of THIS one. What flips the row: C3 Task 4's
-    // `qa/browser_dual` caps line — trigger a page exception, assert an
-    // `[error]` line ARRIVES (arrival, not folding: the fold is ours).
+    // **Unsupported on a MEASUREMENT (2026-10-01, pinned v0.2.2, x86_64-linux)
+    // — the fail-closed NOT_PROBED answer the row shipped with is spent.**
+    // The same-pump argument (`Runtime.consoleAPICalled`, measured working on
+    // this build) argued FOR arrival — and lost. Two independent readings
+    // fired an async throw whose callback was PROVEN to run (a window flag
+    // set before the throw, 判据 §2): `qa/browser_dual`'s caps line and the
+    // spec-side probe (docs/superpowers/specs/2026-09-30-browser-qa-design/
+    // probes/qa-events-probe.mjs). `Runtime.exceptionThrown` never arrived
+    // within 10 s on either. The `Page.javascriptDialogOpening` silent miss
+    // (see the `js_dialogs` row) is now a pattern, not an anecdote: this
+    // build does not broadcast its Runtime-domain page faults. What flips
+    // the row: a build that emits the event — re-run the caps line.
     error_events: Cap::Unsupported,
     // **Derived, never spelled.** `runtimes::specs` owns the pinned tag
     // (`obscura_tag!` / `OBSCURA_TAG`) and its doc says "bump this — and only
@@ -365,13 +368,16 @@ static CHROMIUM: EngineCapabilities = EngineCapabilities {
     // date this row rested on the same-connection argument alone; the probe
     // replaced the argument with a reading.
     screencast: Cap::Supported,
-    // **Same-pump inference, not a direct measurement.** `Runtime.
-    // exceptionThrown` arrives over the same event pump and the same
-    // `Runtime.enable` subscription as `Runtime.consoleAPICalled`, which the
-    // console verb already runs on in production (and which `qa/browser_dual`
-    // exercises); C3 Task 4's caps line (trigger a page exception, assert the
-    // `[error]` line) is the expiry check, same role it plays for
-    // `effect_probe`.
+    // **Measured 2026-10-01 on Chrome 151.0.7922.169 (headless=new) — the
+    // same-pump inference the row shipped with is replaced by a reading.**
+    // The spec-side probe (docs/superpowers/specs/2026-09-30-browser-qa-
+    // design/probes/qa-events-probe.mjs, `--engine chrome`) fired an async
+    // throw and `Runtime.exceptionThrown` arrived naming the probe marker
+    // (exceptionDetails, uncaught). The pump and the `Runtime.enable`
+    // subscription are shared with `Runtime.consoleAPICalled`, as the old
+    // inference said; what changed is that THIS event's arrival is now a
+    // fact rather than an argument from the sibling. `qa/browser_dual`'s
+    // caps line keeps the obscura half honest.
     error_events: Cap::Supported,
     // Provenance, not a freshness stamp: this row records the build the
     // capabilities were measured on. Re-confirmed unchanged on Chrome
@@ -567,11 +573,13 @@ mod tests {
         ),
         (
             "error_events",
-            "T0's wire matrix has no Runtime.exceptionThrown label; the row ships \
-             fail-closed on obscura (NOT_PROBED — the C3 Task 4 caps line owes the \
-             arrival reading: trigger a page exception, assert an [error] line) and \
-             rests on the same-pump inference on chromium (Runtime.consoleAPICalled, \
-             the sibling event, is exercised by qa/browser_dual's console stage)",
+            "T0's wire matrix has no Runtime.exceptionThrown label; settled by C3 \
+             Task 4 on 2026-10-01 (qa/browser_dual's caps line + docs/superpowers/\
+             specs/2026-09-30-browser-qa-design/probes/qa-events-probe.mjs): the \
+             pinned obscura build NEVER emits the event (the throwing callback was \
+             proven to run — a MEASURED Unsupported, the second silent-miss of its \
+             kind), while Chrome 151.0.7922.169 delivers it naming the marker — a \
+             MEASURED Supported",
         ),
     ];
 
@@ -878,18 +886,18 @@ mod tests {
             "the network_interception rows no longer name the Task 4 probe that \
              decides obscura's value"
         );
-        // error_events' disagreement rests on the silent-miss PRECEDENT on
-        // the obscura side (the same engine whose javascriptDialogOpening
-        // never reports is asked to deliver Runtime.exceptionThrown — an
-        // argument from a sibling event is not a measurement of this one)
-        // and on the same-pump inference on the chromium side. Both rows
-        // must keep naming the precedent and the pump, or the route
-        // published to the model rests on an argument nobody can read.
+        // error_events' disagreement rests on MEASUREMENTS on both sides
+        // since 2026-10-01 (C3 Task 4): obscura never emits
+        // Runtime.exceptionThrown (the throwing callback proven to run — the
+        // second silent-miss of its kind, after javascriptDialogOpening),
+        // chromium delivers it (Chrome 151, qa-events-probe). Both rows must
+        // keep naming the probe and the precedent, or the route published to
+        // the model rests on an argument nobody can read.
         assert!(
             production.contains("javascriptDialogOpening")
-                && production.contains("same event pump"),
+                && production.contains("qa-events-probe"),
             "the error_events rows no longer state the precedent (obscura) and the \
-             inference (chromium) they rest on"
+             probe (both engines) they rest on"
         );
         // screencast's disagreement CLOSED on 2026-09-30: the Task 4 probe
         // measured obscura's stream sound (it is now `Supported` on both

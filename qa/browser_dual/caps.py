@@ -423,6 +423,43 @@ async def probe_obscura(ws_url, page_url, led):
                 sc = "supported"
         found["screencast"] = sc
 
+        # error_events — the `Runtime.exceptionThrown` event `browser_qa`'s
+        # check_errors dimension is folded from (cdp_backend/events.rs turns it
+        # into the console ring's `[error]` lines). C1-tightened criterion:
+        # ARRIVAL counts, and arrival of OUR exception — the marker string must
+        # ride the event's exceptionDetails, so no stray exception from the
+        # fixture can certify the row. The trigger is an ASYNC throw: a
+        # synchronous throw inside Runtime.evaluate comes back in the call's
+        # own exceptionDetails and an engine is entitled to never broadcast it
+        # as an event. This engine has a silent-miss precedent in exactly this
+        # class (`Page.javascriptDialogOpening`, the js_dialogs row), so the
+        # same-pump argument from consoleAPICalled is NOT accepted as evidence
+        # — the row flips on this reading alone. Session `s` is on index.html
+        # here with Runtime.enabled from the top of this probe; any document
+        # does, because the throw is the fixture. The stash is drained of any
+        # earlier exceptionThrown first: wait_event pops the stash FIFO before
+        # reading the wire, and a stale event would answer for ours.
+        cdp.events = [m for m in cdp.events
+                      if not (m.get("method") == "Runtime.exceptionThrown"
+                              and m.get("sessionId") == s)]
+        marker = "caps-error-probe-7f3a"
+        await cdp.call("Runtime.evaluate",
+                       {"expression": f"setTimeout(function(){{ window.__errFired = '{marker}';"
+                                      f" throw new Error('{marker}'); }},50)",
+                        "returnByValue": True}, s)
+        thrown = await cdp.wait_event("Runtime.exceptionThrown", s, timeout=10)
+        arrived = thrown is not None and marker in json.dumps(thrown)
+        # Fixture integrity, asserted (判据 §2): the callback sets the flag
+        # BEFORE it throws, so a set flag proves the throw happened and the
+        # silence above is the engine's — not a callback that never ran.
+        fired = await ev("window.__errFired")
+        led.check("error_events' fixture integrity: the throwing callback actually ran",
+                  fired == marker, str(fired))
+        led.log(f"  error_events: Runtime.exceptionThrown "
+                f"{'arrived naming the probe marker' if arrived else 'did NOT arrive within 10s'}"
+                + ("" if arrived else f" (got={json.dumps(thrown)[:160]})"))
+        found["error_events"] = "supported" if arrived else "unsupported"
+
         return found
 
 
@@ -483,6 +520,34 @@ async def main():
         port = int(http.rsplit(":", 1)[1])
 
         measured = await probe_obscura(f"ws://127.0.0.1:{port}/devtools/browser", a.page_url, led)
+
+        # --- error_events' tool face (C3) -----------------------------------
+        # The raw probe above measures the ENGINE's half (exceptionThrown
+        # arrival on a raw session). This half reads what `browser_qa`'s
+        # check_errors actually consumes: the same async throw fired on
+        # Aleph's OWN managed tab must surface in the console ring as an
+        # `[error]` line carrying the marker — the fold is ours (events.rs),
+        # the arrival is the engine's. Asserted only when the engine half
+        # measured supported: an engine that never emits the event has nothing
+        # to fold, and redding the stage for that would blame our code for the
+        # engine's silence (判据 §2).
+        tf_marker = "caps-error-probe-9c4d"
+        ok, body = await rpc.invoke("browser_evaluate", {
+            "profile": "default",
+            "script": f"setTimeout(function(){{throw new Error('{tf_marker}')}},50)",
+        })
+        led.check("the error_events tool-face trigger evaluates on the managed tab",
+                  ran(ok, body), json.dumps(body)[:200])
+        await asyncio.sleep(1.0)
+        ok, body = await rpc.invoke("browser_console", {"profile": "default"})
+        console_blob = json.dumps(body)
+        if measured.get("error_events") == "supported":
+            led.check("…and the thrown error reaches the console ring as an [error] line",
+                      ran(ok, body) and "[error]" in console_blob and tf_marker in console_blob,
+                      console_blob[:300])
+        else:
+            led.log("  error_events tool-face: engine half measured unsupported — the "
+                    "[error] fold is not asserted (cannot fold an event that never arrived)")
 
         # --- ref_precheck (round-1 B4), probed at the GATEWAY layer ---------
         # The check lives in `browser_tools::mod::precheck_ref`, one layer ABOVE
