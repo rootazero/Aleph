@@ -110,8 +110,6 @@ impl Config {
     fn validate_provider_configs(&self) -> Result<()> {
         // Validate provider configurations
         for (name, provider) in &self.providers {
-            let protocol = provider.protocol();
-
             // Note: api_key is a runtime-only field populated from the encrypted vault
             // at startup, so we don't validate credentials at config-load time.
 
@@ -123,111 +121,20 @@ impl Config {
                 )));
             }
 
-            // Validate temperature if specified (provider-specific ranges)
-            if let Some(temp) = provider.temperature {
-                let (min, max, provider_name): (f32, f32, &str) = match protocol.as_str() {
-                    "anthropic" => (0.0, 1.0, "Claude"),
-                    "openai" => (0.0, 2.0, "OpenAI"),
-                    "gemini" => (0.0, 2.0, "Gemini"),
-                    "ollama" => (0.0, 5.0, "Ollama"),
-                    _ => (0.0, 2.0, "Custom"),
-                };
-
-                if !(min..=max).contains(&temp) {
-                    error!(provider = %name, temperature = temp, "Invalid temperature for {}", provider_name);
-                    return Err(AlephError::invalid_config(format!(
-                        "Provider '{name}' ({provider_name}) temperature must be between {min} and {max}, got {temp}"
-                    )));
-                }
-            }
-
-            // Validate max_tokens if specified
-            if let Some(max_tokens) = provider.max_tokens {
-                if max_tokens == 0 {
-                    error!(provider = %name, max_tokens = max_tokens, "Invalid max_tokens");
-                    return Err(AlephError::invalid_config(format!(
-                        "Provider '{name}' max_tokens must be greater than 0, got {max_tokens}"
-                    )));
-                }
-            }
-
-            // Validate top_p if specified
-            if let Some(top_p) = provider.top_p {
-                if !(0.0..=1.0).contains(&top_p) {
-                    error!(provider = %name, top_p = top_p, "Invalid top_p");
-                    return Err(AlephError::invalid_config(format!(
-                        "Provider '{name}' top_p must be between 0.0 and 1.0, got {top_p}"
-                    )));
-                }
-            }
-
-            // Validate top_k if specified
-            if let Some(top_k) = provider.top_k {
-                if top_k == 0 {
-                    error!(provider = %name, top_k = top_k, "Invalid top_k");
-                    return Err(AlephError::invalid_config(format!(
-                        "Provider '{name}' top_k must be greater than 0, got {top_k}"
-                    )));
-                }
-            }
-
-            // Validate OpenAI-specific parameters
-            if protocol == "openai" {
-                if let Some(freq_pen) = provider.frequency_penalty {
-                    if !(-2.0..=2.0).contains(&freq_pen) {
-                        error!(provider = %name, frequency_penalty = freq_pen, "Invalid frequency_penalty");
-                        return Err(AlephError::invalid_config(format!(
-                            "Provider '{name}' frequency_penalty must be between -2.0 and 2.0, got {freq_pen}"
-                        )));
-                    }
-                }
-
-                if let Some(pres_pen) = provider.presence_penalty {
-                    if !(-2.0..=2.0).contains(&pres_pen) {
-                        error!(provider = %name, presence_penalty = pres_pen, "Invalid presence_penalty");
-                        return Err(AlephError::invalid_config(format!(
-                            "Provider '{name}' presence_penalty must be between -2.0 and 2.0, got {pres_pen}"
-                        )));
-                    }
-                }
-            }
-
-            // Validate Gemini-specific parameters
-            if protocol == "gemini" {
-                if let Some(ref thinking_level) = provider.thinking_level {
-                    if thinking_level != "LOW" && thinking_level != "HIGH" {
-                        error!(provider = %name, thinking_level = %thinking_level, "Invalid thinking_level");
-                        return Err(AlephError::invalid_config(format!(
-                            "Provider '{name}' thinking_level must be 'LOW' or 'HIGH', got '{thinking_level}'"
-                        )));
-                    }
-                }
-
-                if let Some(ref media_res) = provider.media_resolution {
-                    if media_res != "LOW" && media_res != "MEDIUM" && media_res != "HIGH" {
-                        error!(provider = %name, media_resolution = %media_res, "Invalid media_resolution");
-                        return Err(AlephError::invalid_config(format!(
-                            "Provider '{name}' media_resolution must be 'LOW', 'MEDIUM', or 'HIGH', got '{media_res}'"
-                        )));
-                    }
-                }
-            }
-
-            // Validate Ollama-specific parameters
-            if protocol == "ollama" {
-                if let Some(repeat_pen) = provider.repeat_penalty {
-                    if repeat_pen < 0.0 {
-                        error!(provider = %name, repeat_penalty = repeat_pen, "Invalid repeat_penalty");
-                        return Err(AlephError::invalid_config(format!(
-                            "Provider '{name}' repeat_penalty must be >= 0.0, got {repeat_pen}"
-                        )));
-                    }
-                }
+            validate_provider_temperature(name, provider)?;
+            validate_provider_max_tokens(name, provider)?;
+            validate_provider_top_p(name, provider)?;
+            validate_provider_top_k(name, provider)?;
+            match provider.protocol().as_str() {
+                "openai" => validate_openai_provider(name, provider)?,
+                "gemini" => validate_gemini_provider(name, provider)?,
+                "ollama" => validate_ollama_provider(name, provider)?,
+                _ => {}
             }
 
             debug!(
                 provider = %name,
-                protocol = %protocol,
+                protocol = %provider.protocol(),
                 timeout_seconds = provider.timeout_seconds,
                 "Provider validated"
             );
@@ -259,6 +166,143 @@ impl Config {
             .map(|(idx, rule)| (idx + 1, rule.regex.as_str()))
             .collect()
     }
+}
+
+// =============================================================================
+// Per-field provider validators
+// =============================================================================
+//
+// Factored out of `validate_provider_configs` so the loop in there reads as a
+// straight list of "validate this field, then validate that protocol's extras"
+// — each branch becomes a one-liner instead of a deeply-nested ladder. The
+// helpers take `(name, provider)` and own exactly one failure mode each so a
+// regression can pin which field rejected the config.
+
+fn validate_provider_temperature(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    let Some(temp) = provider.temperature else {
+        return Ok(());
+    };
+    let protocol = provider.protocol();
+    let (min, max, provider_name): (f32, f32, &str) = match protocol.as_str() {
+        "anthropic" => (0.0, 1.0, "Claude"),
+        "openai" => (0.0, 2.0, "OpenAI"),
+        "gemini" => (0.0, 2.0, "Gemini"),
+        "ollama" => (0.0, 5.0, "Ollama"),
+        _ => (0.0, 2.0, "Custom"),
+    };
+    if !(min..=max).contains(&temp) {
+        error!(provider = %name, temperature = temp, "Invalid temperature for {}", provider_name);
+        return Err(AlephError::invalid_config(format!(
+            "Provider '{name}' ({provider_name}) temperature must be between {min} and {max}, got {temp}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_provider_max_tokens(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(0) = provider.max_tokens {
+        error!(provider = %name, max_tokens = 0, "Invalid max_tokens");
+        return Err(AlephError::invalid_config(format!(
+            "Provider '{name}' max_tokens must be greater than 0, got 0"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_provider_top_p(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(top_p) = provider.top_p {
+        if !(0.0..=1.0).contains(&top_p) {
+            error!(provider = %name, top_p = top_p, "Invalid top_p");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' top_p must be between 0.0 and 1.0, got {top_p}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_provider_top_k(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(0) = provider.top_k {
+        error!(provider = %name, top_k = 0, "Invalid top_k");
+        return Err(AlephError::invalid_config(format!(
+            "Provider '{name}' top_k must be greater than 0, got 0"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_openai_provider(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(freq_pen) = provider.frequency_penalty {
+        if !(-2.0..=2.0).contains(&freq_pen) {
+            error!(provider = %name, frequency_penalty = freq_pen, "Invalid frequency_penalty");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' frequency_penalty must be between -2.0 and 2.0, got {freq_pen}"
+            )));
+        }
+    }
+    if let Some(pres_pen) = provider.presence_penalty {
+        if !(-2.0..=2.0).contains(&pres_pen) {
+            error!(provider = %name, presence_penalty = pres_pen, "Invalid presence_penalty");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' presence_penalty must be between -2.0 and 2.0, got {pres_pen}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_gemini_provider(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(ref thinking_level) = provider.thinking_level {
+        if thinking_level != "LOW" && thinking_level != "HIGH" {
+            error!(provider = %name, thinking_level = %thinking_level, "Invalid thinking_level");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' thinking_level must be 'LOW' or 'HIGH', got '{thinking_level}'"
+            )));
+        }
+    }
+    if let Some(ref media_res) = provider.media_resolution {
+        if media_res != "LOW" && media_res != "MEDIUM" && media_res != "HIGH" {
+            error!(provider = %name, media_resolution = %media_res, "Invalid media_resolution");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' media_resolution must be 'LOW', 'MEDIUM', or 'HIGH', got '{media_res}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_ollama_provider(
+    name: &str,
+    provider: &crate::config::types::provider::ProviderConfig,
+) -> Result<()> {
+    if let Some(repeat_pen) = provider.repeat_penalty {
+        if repeat_pen < 0.0 {
+            error!(provider = %name, repeat_penalty = repeat_pen, "Invalid repeat_penalty");
+            return Err(AlephError::invalid_config(format!(
+                "Provider '{name}' repeat_penalty must be >= 0.0, got {repeat_pen}"
+            )));
+        }
+    }
+    Ok(())
+}
 
     /// Validate routing rules: provider references, retired keyword rules, and
     /// regex patterns.
