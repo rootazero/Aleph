@@ -9,6 +9,17 @@
 //! strategy reads it before paying a side-channel summarization call.
 
 mod cheap_poison;
+/// Cross-run fingerprint-cache carry-over for [`ContextCompactor`](compactor) —
+/// the process-wide per-session slot that survives a run boundary, plus the
+/// zero-cost session-memory reuse wiring. Private to the compaction module
+/// because both are loaded into `ContextCompactor` at construction time and
+/// nothing outside this directory constructs or inspects either.
+mod compaction_cache;
+/// Pure window-construction helpers shared by every compaction path (window
+/// selection, fingerprint hashing, transcript serialization). Private to the
+/// compaction module because each helper is an internal step of one of the
+/// drain sites the compactor orchestrates.
+pub(crate) mod compaction_window;
 pub mod compactor;
 pub mod directive;
 /// Event-level cut-boundary guards shared by the drain sites that cut into
