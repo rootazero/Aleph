@@ -39,17 +39,28 @@ use crate::loop_graph::types::{EdgeKind, NodeKind};
 /// Format the graph as a Graphviz DOT document. The output is stable for a
 /// stable graph (sorted nodes, sorted edges, deterministic attribute order),
 /// so caching by bytes is safe.
-pub fn to_dot(store: &LoopGraphStore, agent_id: &str) -> Result<String> {
+/// Read the agent's topology in a deterministic order shared by every
+/// exporter (DOT, JSON) so two exports of the same graph agree field-by-field
+/// even when the store's natural insertion order differs. The total orders
+/// here are the contract the per-exporter tests in this file pin — changing
+/// either comparator breaks `json_bytes_are_identical_for_shuffled_insertion_order`
+/// and the `dot/json` cross-format byte-equality checks.
+fn sorted_topology(
+    store: &LoopGraphStore,
+    agent_id: &str,
+) -> Result<(Vec<GraphNode>, Vec<GraphEdge>)> {
     let mut nodes = store.list_nodes(agent_id)?;
     let mut edges = store.list_edges(agent_id)?;
     nodes.sort_by(|a, b| (a.kind.as_str(), a.id.as_str()).cmp(&(b.kind.as_str(), b.id.as_str())));
     edges.sort_by(|a, b| {
-        (a.from_id.as_str(), a.to_id.as_str(), a.kind.as_str()).cmp(&(
-            b.from_id.as_str(),
-            b.to_id.as_str(),
-            b.kind.as_str(),
-        ))
+        (a.from_id.as_str(), a.to_id.as_str(), a.kind.as_str())
+            .cmp(&(b.from_id.as_str(), b.to_id.as_str(), b.kind.as_str()))
     });
+    Ok((nodes, edges))
+}
+
+pub fn to_dot(store: &LoopGraphStore, agent_id: &str) -> Result<String> {
+    let (nodes, edges) = sorted_topology(store, agent_id)?;
 
     let mut out = String::new();
     out.push_str(&format!("// loop_graph export, agent={agent_id}\n"));
@@ -109,14 +120,11 @@ pub fn to_json(store: &LoopGraphStore, agent_id: &str) -> Result<String> {
     // compared one edge's kind against the OTHER edge's to_id. `sort_by`
     // tolerated it silently and produced an arbitrary permutation, so DOT and
     // JSON disagreed about edge order and byte-diffs against the audit log
-    // were meaningless — the exact property the header comment promises.
-    edges.sort_by(|a, b| {
-        (a.from_id.as_str(), a.to_id.as_str(), a.kind.as_str()).cmp(&(
-            b.from_id.as_str(),
-            b.to_id.as_str(),
-            b.kind.as_str(),
-        ))
-    });
+    // Same total order as `to_dot` — (from_id, to_id, kind) lexicographic —
+    // so the two exporters serialize the same graph field-for-field. (Both
+    // reach that order through `sorted_topology`; the comment lives on the
+    // helper.)
+    let (nodes, edges) = sorted_topology(store, agent_id)?;
 
     let payload = serde_json::json!({
         "agent_id": agent_id,
