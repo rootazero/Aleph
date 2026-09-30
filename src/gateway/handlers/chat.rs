@@ -20,77 +20,16 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, IN
 use super::super::router::SessionKey;
 use super::super::session_store::SessionStore;
 use super::super::visibility;
-use super::agent::{AgentRunManager, AgentRunParams, Attachment};
+use super::agent::{AgentRunManager, AgentRunParams};
 use super::parse_params;
 
 // ============================================================================
 // Request/Response Types
 // ============================================================================
 
-/// Parameters for chat.send request
-#[derive(Debug, Clone, Deserialize)]
-pub struct SendParams {
-    /// User message content
-    pub message: String,
-    /// Optional session key (auto-generated if not provided)
-    #[serde(default)]
-    pub session_key: Option<String>,
-    /// Channel identifier (e.g., "gui:window1", "cli:term1")
-    #[serde(default)]
-    pub channel: Option<String>,
-    /// Whether to stream events (default: true)
-    #[serde(default = "default_stream")]
-    pub stream: bool,
-    /// Thinking level for LLM reasoning depth
-    #[serde(default)]
-    pub thinking: Option<String>,
-    /// File attachments sent with the message
-    #[serde(default)]
-    pub attachments: Vec<Attachment>,
-    /// Explicit target agent ID (bypasses channel binding resolution)
-    #[serde(default)]
-    pub agent_id: Option<String>,
-    /// Optional absolute project root. When set, the agent's tool calls
-    /// run inside this directory instead of `~/.aleph/workspaces/{agent_id}`.
-    /// Used by the desktop Panel's "Enter Project" flow to scope a chat to
-    /// a user-picked folder. Must be an absolute path; relative paths and
-    /// non-existent directories are rejected by the gateway handler.
-    #[serde(default)]
-    pub project_root: Option<String>,
-    /// Per-turn model override sent by the chat-window model picker.
-    /// When `None`, the gateway falls back to the agent's configured
-    /// model + its fallback chain. See
-    /// [`crate::gateway::model_override::ModelOverride`].
-    #[serde(default)]
-    pub model_override: Option<crate::gateway::model_override::ModelOverride>,
-    /// Execution tier picked in the composer. Carried on the message because a
-    /// brand-new conversation has no session to write it to yet — see
-    /// [`AgentRunParams::exec_tier`].
-    #[serde(default)]
-    pub exec_tier: Option<String>,
-    /// Session usage mode (chat / work / code) picked in the composer. Same
-    /// first-message carriage as `exec_tier` — see [`AgentRunParams::mode`].
-    #[serde(default)]
-    pub mode: Option<String>,
-    /// Per-session memory mode (`"on"` / `"off"`). Same first-message carriage
-    /// as `exec_tier` / `mode` — see [`AgentRunParams::memory`].
-    #[serde(default)]
-    pub memory: Option<String>,
-    /// True when this message is an ASR-transcribed spoken utterance (the
-    /// Panel voice loop). Forwarded to [`AgentRunParams::voice_input`] so the
-    /// session gets the voice-mode prompt layer and the `[voice]` model pin.
-    #[serde(default)]
-    pub voice_input: bool,
-    /// Open this conversation in a project room (P2). Only consulted when the
-    /// session does not exist yet — a session's scope is immutable. See
-    /// [`AgentRunParams::project_id`].
-    #[serde(default)]
-    pub project_id: Option<String>,
-}
-
-const fn default_stream() -> bool {
-    true
-}
+// `chat.send` accepts the same shape as `agent.run` — see
+// `AgentRunParams::input` (`#[serde(alias = "message")]`). One shared struct,
+// no field-by-field copy. Historical `SendParams` is gone.
 
 /// Response for chat.send request
 #[derive(Debug, Clone, Serialize)]
@@ -251,34 +190,25 @@ pub async fn handle_send(
     request: JsonRpcRequest,
     run_manager: Arc<AgentRunManager>,
 ) -> JsonRpcResponse {
-    // Parse params
-    let params: SendParams = match parse_params(&request) {
+    // Parse params — `chat.send` accepts the same shape as `agent.run` (the
+    // `input` field carries `serde(alias = "message")` so historical clients
+    // sending `"message"` continue to deserialize). One shared struct, no
+    // field-by-field copy.
+    let params: AgentRunParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
     // Validate message
-    if params.message.trim().is_empty() {
+    if params.input.trim().is_empty() {
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Message cannot be empty");
     }
 
-    // Convert to AgentRunParams
+    // `peer_id` is a chat-only concept (per-peer sessions); chat.send never
+    // sets it.
     let agent_params = AgentRunParams {
-        input: params.message,
-        session_key: params.session_key,
-        channel: params.channel,
         peer_id: None,
-        stream: params.stream,
-        thinking: params.thinking,
-        attachments: params.attachments,
-        agent_id: params.agent_id,
-        project_root: params.project_root,
-        model_override: params.model_override,
-        exec_tier: params.exec_tier,
-        mode: params.mode,
-        memory: params.memory,
-        voice_input: params.voice_input,
-        project_id: params.project_id,
+        ..params
     };
 
     // Start the run
@@ -1245,8 +1175,8 @@ mod tests {
             "stream": true
         });
 
-        let params: SendParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.message, "Hello, world!");
+        let params: AgentRunParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.input, "Hello, world!");
         assert_eq!(params.session_key, Some("agent:main:main".to_string()));
         assert!(params.stream);
         assert!(params.thinking.is_none());
@@ -1258,8 +1188,8 @@ mod tests {
             "message": "Test"
         });
 
-        let params: SendParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.message, "Test");
+        let params: AgentRunParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.input, "Test");
         assert!(params.session_key.is_none());
         assert!(params.channel.is_none());
         assert!(params.stream); // default true

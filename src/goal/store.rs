@@ -10,6 +10,16 @@ use crate::error::{AlephError, Result};
 use crate::goal::pursuit;
 use crate::goal::types::{Goal, GoalStatus};
 
+/// Wall-clock milliseconds since the Unix epoch, or `0` if the system clock
+/// is somehow before the epoch. The `map_or(0, ...)` keeps the public API
+/// fail-soft (no panic on a misconfigured host clock) at the cost of any
+/// pre-1970 timestamp — not a real concern in production.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
 /// A claimed continuation presumed dead once this long past its due wake — the
 /// pursuit then re-claims instead of staying blocked forever on a marker whose
 /// task was killed (daemon crash, panicked task). Same grace the loop's tick
@@ -161,16 +171,7 @@ impl GoalStore {
 
     /// Upsert the goal for its session (replaces any existing one).
     pub fn put(&self, goal: &Goal) -> Result<()> {
-        let json = serde_json::to_string(goal)
-            .map_err(|e| AlephError::other(format!("goal serialize: {e}")))?;
-        self.lock()
-            .execute(
-                "INSERT INTO goals (session_id, json) VALUES (?1, ?2)
-                 ON CONFLICT(session_id) DO UPDATE SET json = excluded.json",
-                rusqlite::params![goal.session_id, json],
-            )
-            .map_err(|e| AlephError::other(format!("goal put: {e}")))?;
-        Ok(())
+        Self::put_locked(&self.lock(), goal)
     }
 
     /// Fetch the goal for `session_id`, if any. A missing row is `Ok(None)`;
@@ -178,17 +179,7 @@ impl GoalStore {
     /// prompt assembly). Real DB errors propagate via `?` rather than being
     /// silently swallowed as "not found".
     pub fn get(&self, session_id: &str) -> Result<Option<Goal>> {
-        use rusqlite::OptionalExtension;
-        let conn = self.lock();
-        let row: Option<String> = conn
-            .query_row(
-                "SELECT json FROM goals WHERE session_id = ?1",
-                rusqlite::params![session_id],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| AlephError::other(format!("goal get: {e}")))?;
-        Ok(row.and_then(|j| serde_json::from_str::<Goal>(&j).ok()))
+        Self::get_locked(&self.lock(), session_id)
     }
 
     /// Remove the standing goal for `session_id` (no-op if absent).
@@ -802,9 +793,7 @@ impl GoalStore {
     /// this reports what the freeze CHANGED, the counter reports what the
     /// principal OWNS. See [`Self::count_owned_by`].
     pub fn pause_all_owned_by(&self, user_id: &str) -> Result<usize> {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64);
+        let now_ms = now_ms();
         let conn = self.lock();
         let mut stmt = conn
             .prepare("SELECT json FROM goals")
