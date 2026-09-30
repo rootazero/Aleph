@@ -349,6 +349,66 @@ impl AgentHarness {
             .unwrap_or_else(|e| e.into_inner()) = reason;
     }
 
+    /// Cap-site helper for the timeout-driven caps (`StallTimeout` and
+    /// `TurnTimeout`): record `hit_limit`, set the terminate reason, and run
+    /// the boundary grace turn under [`GRACE_TIMEOUT_BUDGET`] — a per-turn /
+    /// stall timeout means the underlying step is likely slow or hung, so the
+    /// salvage call must not itself wait another full `turn_timeout`. The
+    /// other cap sites use [`Self::force_done_with_grace`] (no timeout wrap)
+    /// because they already have their own bail-out path.
+    async fn force_done_with_timeout(
+        &self,
+        session: &SessionId,
+        callback: &mut dyn HarnessCallback,
+        iterations: usize,
+        reason: TerminateReason,
+        cancel: &CancellationToken,
+    ) {
+        self.hit_limit.store(true, Ordering::Relaxed);
+        self.set_terminate_reason(reason);
+        if tokio::time::timeout(
+            GRACE_TIMEOUT_BUDGET,
+            self.fire_boundary_grace_turn(
+                session,
+                callback,
+                iterations,
+                crate::harness::agent::think::GraceReason::Timeout,
+                cancel,
+            ),
+        )
+        .await
+        .is_err()
+        {
+            tracing::warn!(
+                ?session,
+                grace_budget_secs = GRACE_TIMEOUT_BUDGET.as_secs(),
+                "grace turn exceeded its budget and was abandoned; \
+                 terminal summary may be incomplete",
+            );
+        }
+    }
+
+    /// Cap-site helper for the non-timeout caps (`ConsecutiveFailureCap`,
+    /// `VerifierVeto`, `HitMaxIterations` — including the follow-up
+    /// continuation re-check that bumps `iterations` past `max_iterations`):
+    /// record `hit_limit`, set the terminate reason, and run the boundary
+    /// grace turn unguarded. The timeout-driven caps use
+    /// [`Self::force_done_with_timeout`] instead.
+    async fn force_done_with_grace(
+        &self,
+        session: &SessionId,
+        callback: &mut dyn HarnessCallback,
+        iterations: usize,
+        reason: TerminateReason,
+        grace_reason: crate::harness::agent::think::GraceReason,
+        cancel: &CancellationToken,
+    ) {
+        self.hit_limit.store(true, Ordering::Relaxed);
+        self.set_terminate_reason(reason);
+        self.fire_boundary_grace_turn(session, callback, iterations, grace_reason, cancel)
+            .await;
+    }
+
     /// Fold one provider `TokenUsage` into the accumulated breakdown.
     /// Called from `think.rs` alongside the existing `total_tokens`
     /// `fetch_add` so the two counters stay in lockstep.
@@ -489,30 +549,16 @@ impl AgentHarness {
                         ?elapsed,
                         "stall watchdog tripped; forcing Done with hit_limit",
                     );
-                    self.hit_limit.store(true, Ordering::Relaxed);
-                    self.set_terminate_reason(TerminateReason::StallTimeout {
-                        elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
-                    });
-                    if tokio::time::timeout(
-                        GRACE_TIMEOUT_BUDGET,
-                        self.fire_boundary_grace_turn(
-                            &current_session,
-                            callback,
-                            iterations,
-                            crate::harness::agent::think::GraceReason::Timeout,
-                            cancel,
-                        ),
+                    self.force_done_with_timeout(
+                        &current_session,
+                        callback,
+                        iterations,
+                        TerminateReason::StallTimeout {
+                            elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
+                        },
+                        cancel,
                     )
-                    .await
-                    .is_err()
-                    {
-                        tracing::warn!(
-                            ?current_session,
-                            grace_budget_secs = GRACE_TIMEOUT_BUDGET.as_secs(),
-                            "grace turn exceeded its budget and was abandoned; \
-                             terminal summary may be incomplete",
-                        );
-                    }
+                    .await;
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
             }
@@ -533,31 +579,17 @@ impl AgentHarness {
                         ?elapsed,
                         "per-turn timeout tripped; forcing Done with hit_limit",
                     );
-                    self.hit_limit.store(true, Ordering::Relaxed);
-                    self.set_terminate_reason(TerminateReason::TurnTimeout {
-                        phase: "Think".into(),
-                        elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
-                    });
-                    if tokio::time::timeout(
-                        GRACE_TIMEOUT_BUDGET,
-                        self.fire_boundary_grace_turn(
-                            &current_session,
-                            callback,
-                            iterations,
-                            crate::harness::agent::think::GraceReason::Timeout,
-                            cancel,
-                        ),
+                    self.force_done_with_timeout(
+                        &current_session,
+                        callback,
+                        iterations,
+                        TerminateReason::TurnTimeout {
+                            phase: "Think".into(),
+                            elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
+                        },
+                        cancel,
                     )
-                    .await
-                    .is_err()
-                    {
-                        tracing::warn!(
-                            ?current_session,
-                            grace_budget_secs = GRACE_TIMEOUT_BUDGET.as_secs(),
-                            "grace turn exceeded its budget and was abandoned; \
-                             terminal summary may be incomplete",
-                        );
-                    }
+                    .await;
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
                 Err(e) => {
@@ -673,18 +705,15 @@ impl AgentHarness {
                                         cap,
                                         "consecutive failure cap reached; forcing Done",
                                     );
-                                    self.hit_limit.store(true, Ordering::Relaxed);
-                                    self.set_terminate_reason(
+                                    self.force_done_with_grace(
+                                        &current_session,
+                                        callback,
+                                        iterations,
                                         TerminateReason::ConsecutiveFailureCap {
                                             consecutive: consecutive_failure_turns
                                                 .try_into()
                                                 .unwrap_or(u32::MAX),
                                         },
-                                    );
-                                    self.fire_boundary_grace_turn(
-                                        &current_session,
-                                        callback,
-                                        iterations,
                                         crate::harness::agent::think::GraceReason::ConsecutiveFailureCap,
                                         cancel,
                                     )
@@ -706,17 +735,16 @@ impl AgentHarness {
                                 max_vetos = self.deps.robustness_profile.steer_max,
                                 "verifier veto limit reached; forcing Done to prevent infinite loop",
                             );
-                            self.hit_limit.store(true, Ordering::Relaxed);
-                            self.set_terminate_reason(TerminateReason::VerifierVeto {
-                                vetos: verifier_veto_count.try_into().unwrap_or(u32::MAX),
-                            });
                             // Surface a context-rich terminal message instead
                             // of a silent HitLimit break. The remaining steps are
                             // already in the prompt (the `[verifier veto]` events).
-                            self.fire_boundary_grace_turn(
+                            self.force_done_with_grace(
                                 &current_session,
                                 callback,
                                 iterations,
+                                TerminateReason::VerifierVeto {
+                                    vetos: verifier_veto_count.try_into().unwrap_or(u32::MAX),
+                                },
                                 crate::harness::agent::think::GraceReason::VerifierVeto,
                                 cancel,
                             )
@@ -736,19 +764,18 @@ impl AgentHarness {
                     }
                     if let Some(limit) = cap {
                         if iterations >= limit {
-                            self.hit_limit.store(true, Ordering::Relaxed);
-                            self.set_terminate_reason(TerminateReason::HitMaxIterations {
-                                used: iterations.try_into().unwrap_or(u32::MAX),
-                            });
                             // C1: rescue a runaway that ended on an unresolved
                             // tool_use so the user gets a terminal summary
                             // instead of an empty / mid-thought response.
                             // No-op when the last assistant turn already has
                             // text — well-behaved capped runs pay nothing.
-                            self.fire_boundary_grace_turn(
+                            self.force_done_with_grace(
                                 &current_session,
                                 callback,
                                 iterations,
+                                TerminateReason::HitMaxIterations {
+                                    used: iterations.try_into().unwrap_or(u32::MAX),
+                                },
                                 crate::harness::agent::think::GraceReason::MaxIterations,
                                 cancel,
                             )
@@ -804,14 +831,13 @@ impl AgentHarness {
                         // HitMaxIterations accounting). Mirror the Continue arm.
                         if let Some(limit) = cap {
                             if iterations >= limit {
-                                self.hit_limit.store(true, Ordering::Relaxed);
-                                self.set_terminate_reason(TerminateReason::HitMaxIterations {
-                                    used: iterations.try_into().unwrap_or(u32::MAX),
-                                });
-                                self.fire_boundary_grace_turn(
+                                self.force_done_with_grace(
                                     &current_session,
                                     callback,
                                     iterations,
+                                    TerminateReason::HitMaxIterations {
+                                        used: iterations.try_into().unwrap_or(u32::MAX),
+                                    },
                                     crate::harness::agent::think::GraceReason::MaxIterations,
                                     cancel,
                                 )
