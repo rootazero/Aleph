@@ -156,7 +156,7 @@ pub fn tick_prompt(state: &LoopState, tokens_now: u64, now_ms: u64) -> String {
 /// (iteration cap, wall-clock deadline, token budget). Empty when no bound is
 /// set or its inputs are unavailable. Always starts with a leading space so the
 /// caller can append directly without re-spacing.
-fn remaining_quota_clause(state: &LoopState, n: u64, tokens_now: u64, now_ms: u64) -> String {
+fn remaining_quota_clause(state: &LoopState, n: u32, tokens_now: u64, now_ms: u64) -> String {
     let mut quota = String::new();
     if let Some(max) = state.max_iterations {
         quota.push_str(&format!(" {} tick(s) left before the cap.", max - n));

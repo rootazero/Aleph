@@ -8,6 +8,11 @@ pub struct RetrievalResult {
 }
 
 pub struct ContextComptroller {
+    // `ComptrollerConfig` was emptied (its similarity/fold/token_budget knobs
+    // were dead data) but is still passed by every caller and threaded through
+    // `new` to keep the serialized config handle stable. When the dead knobs
+    // come back, they'll be read here; until then, allow the unused field.
+    #[allow(dead_code)]
     config: ComptrollerConfig,
 }
 
