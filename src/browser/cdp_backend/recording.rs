@@ -89,17 +89,22 @@ fn ffmpeg_candidates() -> Vec<(String, Option<PathBuf>)> {
     ]
 }
 
-/// First `Some` in priority order — the single decision rule for
-/// [`resolve_ffmpeg`], extracted so the priority is testable without mutating
-/// process-global env (which would race the pipeline tests).
-fn pick_ffmpeg(candidates: &[(String, Option<PathBuf>)]) -> Option<PathBuf> {
-    candidates.iter().find_map(|(_, p)| p.clone())
+/// First `Some` in priority order, WITH its source label — the single
+/// decision rule for [`resolve_ffmpeg`], extracted so the priority is
+/// testable without mutating process-global env (which would race the
+/// pipeline tests). The label rides along because spec §4's start answer
+/// names WHERE the encoder came from (`ffmpeg_source`), and a label
+/// reconstructed downstream would be a second guess at this one decision.
+fn pick_ffmpeg(candidates: &[(String, Option<PathBuf>)]) -> Option<(String, PathBuf)> {
+    candidates
+        .iter()
+        .find_map(|(label, p)| p.clone().map(|p| (label.clone(), p)))
 }
 
-/// The encoder binary: `ALEPH_FFMPEG` → PATH → the playwright bundle
-/// (spec §3 的解析链).
-pub(crate) fn resolve_ffmpeg() -> Option<PathBuf> {
-    pick_ffmpeg(&ffmpeg_candidates())
+/// The encoder binary and where it came from: `ALEPH_FFMPEG` → PATH → the
+/// playwright bundle (spec §3 的解析链，§4 的 `ffmpeg_source`).
+pub(crate) fn resolve_ffmpeg_labeled() -> Option<(PathBuf, String)> {
+    pick_ffmpeg(&ffmpeg_candidates()).map(|(label, p)| (p, label))
 }
 
 /// `which(1)` by hand: the first executable named `name` on PATH. (The `which`
@@ -285,6 +290,10 @@ pub struct RecordingStatus {
     pub elapsed_ms: u64,
     pub captured_frames: u64,
     pub dropped_frames: u64,
+    /// Where the encoder binary came from (spec §4's `ffmpeg_source`) — the
+    /// resolution chain's label (`ALEPH_FFMPEG env`, `ffmpeg on PATH`, the
+    /// playwright bundle) or the explicit-injection seam's.
+    pub ffmpeg_source: String,
 }
 
 /// Everything `start` needs beyond who/where to record. A struct rather than
@@ -343,6 +352,9 @@ struct ActiveRecording {
     /// The resolved output path, kept so `status()` can report where the
     /// frames are landing while the recording is still in flight.
     path: PathBuf,
+    /// The encoder source label, kept so `status()` reports the same
+    /// `ffmpeg_source` the start answer did.
+    ffmpeg_source: String,
     started: Instant,
     counters: Arc<Counters>,
     stop_tx: watch::Sender<bool>,
@@ -410,10 +422,15 @@ impl RecordingRegistry {
             });
         }
 
-        // 1. The encoder binary.
-        let ffmpeg = match options.ffmpeg.clone() {
-            Some(explicit) => explicit,
-            None => resolve_ffmpeg().ok_or_else(|| RecordStartError::NoFfmpeg {
+        // 1. The encoder binary, with its source label kept (spec §4's
+        // `ffmpeg_source` — the receipt of WHERE the encoder came from, so a
+        // surprise codec build is diagnosable from the start answer alone).
+        let (ffmpeg, ffmpeg_source) = match options.ffmpeg.clone() {
+            Some(explicit) => (
+                explicit,
+                "RecordStartOptions::ffmpeg (explicit, not the resolution chain)".to_string(),
+            ),
+            None => resolve_ffmpeg_labeled().ok_or_else(|| RecordStartError::NoFfmpeg {
                 searched: ffmpeg_candidates()
                     .into_iter()
                     .map(|(label, _)| label)
@@ -489,6 +506,7 @@ impl RecordingRegistry {
         let entry = Arc::new(ActiveRecording {
             id: id.clone(),
             path: path.clone(),
+            ffmpeg_source: ffmpeg_source.clone(),
             started: Instant::now(),
             counters: counters.clone(),
             stop_tx,
@@ -521,6 +539,7 @@ impl RecordingRegistry {
             elapsed_ms: 0,
             captured_frames: 0,
             dropped_frames: 0,
+            ffmpeg_source: entry.ffmpeg_source.clone(),
         })
     }
 
@@ -575,6 +594,7 @@ impl RecordingRegistry {
                 elapsed_ms: e.started.elapsed().as_millis() as u64,
                 captured_frames: e.counters.captured.load(Ordering::Relaxed),
                 dropped_frames: e.counters.dropped.load(Ordering::Relaxed),
+                ffmpeg_source: e.ffmpeg_source.clone(),
             })
     }
 
@@ -1007,14 +1027,16 @@ mod tests {
         let path = PathBuf::from("/usr/bin/ffmpeg");
         let pw = PathBuf::from("/pw/ffmpeg-linux");
 
-        // All three present → env wins.
+        // All three present → env wins, and the answer NAMES its source
+        // (spec §4's `ffmpeg_source` — the label is part of the decision,
+        // not a downstream reconstruction).
         assert_eq!(
             pick_ffmpeg(&[
                 ("env".into(), Some(env.clone())),
                 ("path".into(), Some(path.clone())),
                 ("playwright".into(), Some(pw.clone())),
             ]),
-            Some(env),
+            Some(("env".to_string(), env)),
             "ALEPH_FFMPEG outranks everything"
         );
         // env absent → PATH hit wins over the playwright bundle.
@@ -1024,7 +1046,7 @@ mod tests {
                 ("path".into(), Some(path.clone())),
                 ("playwright".into(), Some(pw.clone())),
             ]),
-            Some(path),
+            Some(("path".to_string(), path)),
             "PATH outranks the playwright fallback"
         );
         // Only the playwright bundle → it is the answer.
@@ -1034,7 +1056,7 @@ mod tests {
                 ("path".into(), None),
                 ("playwright".into(), Some(pw.clone())),
             ]),
-            Some(pw),
+            Some(("playwright".to_string(), pw)),
             "the playwright bundle is the last resort, not never"
         );
         // Nothing anywhere → None, and the caller reports the search log.
@@ -1048,12 +1070,20 @@ mod tests {
     fn resolve_ffmpeg_finds_the_one_on_this_machines_path() {
         // A machine fact the plan relies on: /usr/bin/ffmpeg n9.0.1 is on PATH
         // here, so the resolution chain must come back non-empty with an
-        // existing file.
-        let found = resolve_ffmpeg().expect("ffmpeg resolves on this machine (PATH or bundle)");
+        // existing file — and a source label from the chain itself (spec §4's
+        // `ffmpeg_source`, not a downstream guess).
+        let (found, source) =
+            resolve_ffmpeg_labeled().expect("ffmpeg resolves on this machine (PATH or bundle)");
         assert!(
             found.is_file(),
             "resolved ffmpeg must exist: {}",
             found.display()
+        );
+        assert!(
+            ffmpeg_candidates()
+                .iter()
+                .any(|(label, _)| *label == source),
+            "the source label names one of the chain's rungs: {source}"
         );
     }
 
@@ -1387,10 +1417,26 @@ mod tests {
         let out = dir.path().join("session.webm");
         let registry = registry(Duration::from_secs(15));
 
-        registry
+        let status = registry
             .start("p", "T1", &session_id(), &conn, opts(out.clone()))
             .await
             .expect("start");
+        // spec §4's `ffmpeg_source`: start's answer names WHERE the encoder
+        // came from, and the label is the resolution chain's own, not a
+        // downstream reconstruction. `opts` injects no explicit encoder, so
+        // the chain ran — compare against the chain's answer on this machine
+        // rather than a literal (PATH vs bundle is a machine fact).
+        let (_, chain_label) =
+            resolve_ffmpeg_labeled().expect("ffmpeg resolves on this machine");
+        assert_eq!(status.ffmpeg_source, chain_label);
+        // …and the live view reports the SAME label, not a re-resolution.
+        assert_eq!(
+            registry
+                .status("p", "T1")
+                .expect("live while recording")
+                .ffmpeg_source,
+            chain_label
+        );
         for n in 1..=30 {
             server.push_event(frame_event(n, JPEG_B64));
         }
@@ -1633,7 +1679,7 @@ mod tests {
         );
         let registry = registry(Duration::from_secs(10));
 
-        registry
+        let status = registry
             .start(
                 "p",
                 "T1",
@@ -1643,6 +1689,14 @@ mod tests {
             )
             .await
             .expect("start");
+        // The explicit-injection seam is labeled as such — a stub-encoder
+        // test reading "ffmpeg on PATH" here would be the label lying about
+        // the decision that was actually made.
+        assert!(
+            status.ffmpeg_source.contains("explicit"),
+            "the injected encoder's source label must say so: {}",
+            status.ffmpeg_source
+        );
         for n in 1..=5 {
             server.push_event(frame_event(n, JPEG_B64));
         }

@@ -375,8 +375,16 @@ const ANSWER_FAILURE_LIMIT: u32 = 3;
 /// caller BEFORE `Fetch.enable` was sent (a connection's broadcast starts at
 /// subscription, so subscribing inside the task would open a gap).
 ///
-/// Exit paths, all clean: the event stream closes (engine gone), or answers
-/// fail [`ANSWER_FAILURE_LIMIT`] times in a row (session gone). Either way the
+/// Exit paths, all clean: answers fail [`ANSWER_FAILURE_LIMIT`] times in a
+/// row, or the event stream closes. The FIRST is the real detector and covers
+/// both deaths named in Review Focus #2 — a dead session rejects every
+/// answer, and a dead ENGINE fails every answer too. The second is nominal,
+/// never observed in practice: the broadcast's sender lives in the
+/// connection's `Shared`, which this loop's own `conn` clone keeps alive, so
+/// `EventStream::next() == None` is unreachable here (recording.rs's
+/// `engine_gone` watch names the same fact from the other side — the close
+/// watch, not the event stream, is the only socket-death signal a subscriber
+/// can observe). Either way the
 /// registry entry is removed on the way out, so a later `ensure` re-arms
 /// instead of mistaking a corpse for a running loop.
 async fn run_loop(
