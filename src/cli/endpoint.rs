@@ -28,11 +28,11 @@ pub fn build_endpoint_url(addr: SocketAddr, tls: bool) -> String {
         IpAddr::V6(Ipv6Addr::UNSPECIFIED) => IpAddr::V6(Ipv6Addr::LOCALHOST),
         other => other,
     };
-    let host_str = match host {
-        IpAddr::V4(v4) => v4.to_string(),
-        IpAddr::V6(_) => format!("[{host}]"),
-    };
-    format!("{scheme}://{host_str}:{}", addr.port())
+    // `SocketAddr::Display` already brackets IPv6 (`[::1]:port`); rebuild the
+    // SocketAddr from the mapped host so we get one canonical formatter
+    // rather than hand-rolling the V4/V6 distinction.
+    let bound = SocketAddr::new(host, addr.port());
+    format!("{scheme}://{bound}")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,8 +54,11 @@ impl IpcEndpoint {
     }
 }
 
-#[must_use]
-pub(crate) fn endpoint_path(data_dir: &Path) -> PathBuf {
+/// Path to the `.ipc-endpoint.json` file inside `data_dir`.
+///
+/// Kept module-private — only the read/write/remove helpers below and the
+/// `cfg(test)` cases need it.
+fn endpoint_path(data_dir: &Path) -> PathBuf {
     data_dir.join(ENDPOINT_FILENAME)
 }
 
@@ -71,8 +74,17 @@ pub fn write_endpoint(data_dir: &Path, endpoint: &IpcEndpoint) -> std::io::Resul
         if let Err(e) = std::fs::set_permissions(&path, perm) {
             // Don't leave a possibly world-readable file on disk if the
             // chmod step fails — the endpoint URL and PID are sensitive and
-            // a half-secured file is worse than a missing one.
-            let _ = std::fs::remove_file(&path);
+            // a half-secured file is worse than a missing one. Surface the
+            // cleanup outcome so a residual file is observable instead of
+            // being silently dropped on an error path the operator is
+            // already looking at.
+            if let Err(cleanup) = std::fs::remove_file(&path) {
+                warn!(
+                    path = %path.display(),
+                    error = %cleanup,
+                    "failed to remove endpoint file after chmod failure",
+                );
+            }
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 format!("failed to restrict endpoint file permissions: {e}"),

@@ -105,6 +105,14 @@ where
 /// instead of a plain string so callers can distinguish lock contention
 /// from other failures.
 fn acquire_or_held(data_dir: &Path) -> anyhow::Result<InstanceLock> {
+    // `pid` arrives as `i32` from the OS layer (kernel pid_t is signed on
+    // every supported platform). `LockHolder` carries `u32` so the
+    // `Display` impl can format it without a sign-conditional. The kernel
+    // invariant — every running process has `pid > 0` — makes the cast
+    // safe; the local allow documents the precondition at the conversion
+    // boundary instead of asking clippy::cast_sign_loss to be silenced
+    // crate-wide.
+    #[allow(clippy::cast_sign_loss)]
     let (holder, lock_path) = match instance_lock::try_acquire(data_dir)? {
         AcquireOutcome::Acquired(lock) => return Ok(lock),
         AcquireOutcome::HeldByLive { pid, lock_path } => {
@@ -142,52 +150,66 @@ where
             let lock = acquire_or_held(data_dir)?;
             local(&lock)
         }
-        CommandPolicy::LockOrIpc { route, method } => match acquire_or_held(data_dir) {
-            Ok(lock) => local(&lock),
-            Err(e) => {
-                if e.downcast_ref::<LockHeldError>().is_some() {
-                    // Lock is held — try forwarding to the running server. If
-                    // the holder releases between our acquire-or-held check
-                    // and the IPC request landing, the forward will fail
-                    // with a confusing "server is initializing or crashed"
-                    // error. Retry local acquisition once: if the lock is
-                    // now free we run `local`. The second lock error is
-                    // logged at warn; if it is the strictly more informative
-                    // error (e.g. PermissionDenied because data_dir mode
-                    // changed) we surface it instead of the IPC error.
-                    match crate::cli::ipc_client::forward_to_server::<T>(
-                        data_dir, method, route, ipc_body,
-                    ) {
-                        Ok(out) => Ok(out),
-                        Err(fwd_err) => match acquire_or_held(data_dir) {
-                            Ok(lock) => local(&lock),
-                            Err(lock_err) => {
-                                // Stay defensive: if the second lock error is
-                                // not LockHeld (e.g. PermissionDenied,
-                                // NotFound on data_dir), it is more
-                                // informative than the IPC error. The
-                                // LockHeld case keeps the IPC error because
-                                // the lock IS held — the IPC error is the
-                                // next-most-actionable signal.
-                                if lock_err.downcast_ref::<LockHeldError>().is_some() {
-                                    Err(fwd_err)
-                                } else {
-                                    tracing::warn!(
-                                        ipc_error = %fwd_err,
-                                        lock_error = %lock_err,
-                                        "lock state changed between IPC failure and retry; \
-                                         surfacing lock error (more informative than IPC)"
-                                    );
-                                    Err(lock_err)
-                                }
-                            }
-                        },
-                    }
-                } else {
-                    Err(e)
-                }
+        CommandPolicy::LockOrIpc { route, method } => lock_or_ipc_dispatch::<L, T>(
+            data_dir,
+            route,
+            method,
+            ipc_body,
+            local,
+        ),
+    }
+}
+
+/// `LockOrIpc` arm of `try_with_policy`, factored out so the retry-with-
+/// fallback decision is a straight-line read rather than four nested
+/// matches. Contract: if the lock is free on entry, run `local`. If held,
+/// forward to the server; if the forward fails, retry the local acquire
+/// once and surface whichever error is more actionable.
+///
+/// The second lock error is preferred over the IPC error when it is *not*
+/// `LockHeldError` (e.g. PermissionDenied from a mode change on `data_dir`)
+/// because that is strictly more informative than "server is initializing
+/// or crashed". A second `LockHeldError` keeps the IPC error — the lock
+/// is in fact held, so the next-most-actionable signal wins.
+fn lock_or_ipc_dispatch<L, T>(
+    data_dir: &Path,
+    route: &'static str,
+    method: HttpMethod,
+    ipc_body: serde_json::Value,
+    local: L,
+) -> anyhow::Result<T>
+where
+    L: FnOnce(&InstanceLock) -> anyhow::Result<T>,
+    T: serde::de::DeserializeOwned,
+{
+    match acquire_or_held(data_dir) {
+        Ok(lock) => local(&lock),
+        Err(e) => {
+            if e.downcast_ref::<LockHeldError>().is_none() {
+                return Err(e);
             }
-        },
+            match crate::cli::ipc_client::forward_to_server::<T>(
+                data_dir, method, route, ipc_body,
+            ) {
+                Ok(out) => Ok(out),
+                Err(fwd_err) => match acquire_or_held(data_dir) {
+                    Ok(lock) => local(&lock),
+                    Err(lock_err) => {
+                        if lock_err.downcast_ref::<LockHeldError>().is_some() {
+                            Err(fwd_err)
+                        } else {
+                            tracing::warn!(
+                                ipc_error = %fwd_err,
+                                lock_error = %lock_err,
+                                "lock state changed between IPC failure and retry; \
+                                 surfacing lock error (more informative than IPC)"
+                            );
+                            Err(lock_err)
+                        }
+                    }
+                },
+            }
+        }
     }
 }
 
