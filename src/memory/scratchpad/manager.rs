@@ -1488,17 +1488,29 @@ mod tests {
         manager.write("# Objective\nhello\n").await.unwrap();
         assert_eq!(manager.read().await.unwrap(), "# Objective\nhello\n");
         // No `.aleph_atomic_*` staging files survive a successful write.
+        // Log + bail out on a `read_dir` error so a permissions failure
+        // does not silently pass the `leftovers.is_empty()` assertion
+        // below (the loop body would have run zero times).
         let mut read_dir = tokio::fs::read_dir(manager.scratchpad_path().parent().unwrap())
             .await
             .unwrap();
         let mut leftovers = Vec::new();
-        while let Ok(Some(entry)) = read_dir.next_entry().await {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .contains(".aleph_atomic_")
-            {
-                leftovers.push(entry);
+        loop {
+            match read_dir.next_entry().await {
+                Ok(Some(entry)) => {
+                    if entry
+                        .file_name()
+                        .to_string_lossy()
+                        .contains(".aleph_atomic_")
+                    {
+                        leftovers.push(entry);
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!(error = %e, "atomic-temp check: read_dir failed");
+                    break;
+                }
             }
         }
         assert!(leftovers.is_empty(), "no atomic temp files should remain");
