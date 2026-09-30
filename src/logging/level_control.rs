@@ -150,19 +150,18 @@ fn init_log_level() {
         // a global `info` from a per-crate override doesn't silently win.
         let mut chosen: Option<LogLevel> = None;
         for directive in rust_log.split(',') {
-            let Some((maybe_target, maybe_value)) = directive.split_once('=') else {
-                // Plain level directive.
-                if let Some(lvl) = LogLevel::parse(directive) {
-                    chosen = Some(lvl);
+            // `target=value` — only adopt when the target names us; a plain
+            // directive (no `=`) applies globally and falls through.
+            let value = match directive.split_once('=') {
+                None => directive,
+                Some((target, value)) => {
+                    if !is_alephcore_target(target.trim()) {
+                        continue;
+                    }
+                    value
                 }
-                continue;
             };
-            // `target=value` — only adopt it when the target names us.
-            let target = maybe_target.trim();
-            if !is_alephcore_target(target) {
-                continue;
-            }
-            if let Some(lvl) = LogLevel::parse(maybe_value) {
+            if let Some(lvl) = LogLevel::parse(value) {
                 chosen = Some(lvl);
             }
         }
@@ -173,13 +172,13 @@ fn init_log_level() {
 }
 
 /// Heuristic: a directive's target refers to `alephcore` when it is the
-/// crate name, the crate's library alias, an absolute path under it, or a
+/// crate name, the crate's library alias, an absolute path under it, the
+/// `aleph-server` binary's normalized target (`aleph_server`), or any future
 /// binary with the `aleph-` prefix.
 fn is_alephcore_target(target: &str) -> bool {
     matches!(target, "alephcore" | "aleph")
         || target.starts_with("alephcore::")
         || target.starts_with("aleph_server")
-        || target.starts_with("aleph-cli")
         || target.starts_with("aleph-")
 }
 
