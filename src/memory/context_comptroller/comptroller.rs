@@ -23,7 +23,6 @@ impl ContextComptroller {
     #[must_use]
     pub fn arbitrate(&self, results: RetrievalResult, budget: TokenBudget) -> ArbitratedContext {
         let mut tokens_saved = 0;
-        let _ = &self.config; // config retained for future use
 
         // Sort by similarity score (descending) for priority-based selection
         let mut kept_facts = results.facts;
