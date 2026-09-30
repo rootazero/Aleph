@@ -148,18 +148,25 @@ pub fn get_defaults_override() -> &'static DefaultsOverride {
 /// Returns `DefaultsOverride::default()` if the file does not exist or cannot
 /// be parsed. Logs warnings on parse errors.
 pub fn load_defaults_override(path: &Path) -> DefaultsOverride {
+    load_override_file::<DefaultsOverride>(path, "defaults override")
+}
+
+/// Shared reader for `load_defaults_override` and
+/// `presets_override::load_presets_override` — same exact structure, only
+/// the type and the human-readable `kind` string differ. Returns
+/// `T::default()` on missing file or parse failure, with a `warn!` that
+/// names the file path so an operator chasing a broken override has a
+/// breadcrumb.
+pub(crate) fn load_override_file<T>(path: &Path, kind: &str) -> T
+where
+    T: Default + serde::de::DeserializeOwned,
+{
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return DefaultsOverride::default();
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return T::default(),
         Err(e) => {
-            warn!(
-                "Failed to read defaults override file {}: {}",
-                path.display(),
-                e
-            );
-            return DefaultsOverride::default();
+            warn!("Failed to read {kind} file {}: {}", path.display(), e);
+            return T::default();
         }
     };
 
@@ -167,11 +174,11 @@ pub fn load_defaults_override(path: &Path) -> DefaultsOverride {
         Ok(parsed) => parsed,
         Err(e) => {
             warn!(
-                "Failed to parse defaults override file {}: {}",
+                "Failed to parse {kind} file {}: {}",
                 path.display(),
                 e
             );
-            DefaultsOverride::default()
+            T::default()
         }
     }
 }

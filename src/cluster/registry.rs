@@ -58,27 +58,18 @@ pub struct NodeSession {
 /// `Option`, making ambiguity explicitly visible to callers). Maps openclaw
 /// `node-match.ts` multi-level matching, but expressed as a type-safe enum —
 /// making "ambiguity" a non-ignorable first-class state rather than a stringly error.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ResolveError {
     /// No online node matches this name/id.
+    #[error("no online node matches")]
     NotFound,
     /// Multiple online nodes match — includes readable candidate labels
     /// (`name (short-id)`) for LLM disambiguation.
+    #[error("ambiguous — matches: {}", .0.join(", "))]
     Ambiguous(Vec<String>),
     /// Internal state inconsistency: the id returned by match_id is missing from nodes_by_id.
+    #[error("internal node lookup failed for '{name_or_id}'")]
     NodeNotFound { name_or_id: String },
-}
-
-impl std::fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotFound => write!(f, "no online node matches"),
-            Self::Ambiguous(c) => write!(f, "ambiguous — matches: {}", c.join(", ")),
-            Self::NodeNotFound { name_or_id } => {
-                write!(f, "internal node lookup failed for '{name_or_id}'")
-            }
-        }
-    }
 }
 
 /// Serialized external view for `environments.list` (thin rendering contract,
@@ -532,58 +523,34 @@ pub fn maybe_register_node(
     // (B1-08) A connect frame from a node without `device_name` is
     // suspicious: every shipped runtime sends the field. Surface the absence
     // so an operator chasing an "anonymous" fleet entry has a breadcrumb.
-    let device_name = match params
-        .and_then(|p| p.get("device_name"))
-        .and_then(|v| v.as_str())
-    {
-        Some(s) => s.to_string(),
-        None => {
-            tracing::warn!(
-                device_id = %device_id,
-                conn_id = %conn_id,
-                "cluster node connect frame omitted device_name; falling back to \"unknown\""
-            );
-            "unknown".to_string()
-        }
-    };
+    let device_name = params_str(params, "device_name").unwrap_or_else(|| {
+        tracing::warn!(
+            device_id = %device_id,
+            conn_id = %conn_id,
+            "cluster node connect frame omitted device_name; falling back to \"unknown\""
+        );
+        "unknown".to_string()
+    });
     // (B1-02) Parse failures used to silently downgrade to an empty list. A
     // node with no declared commands is registered as "online but every
     // command denied" — confusing for the operator, and lets a peer hold
     // fleet slots with malformed frames. Log and downgrade; only `commands`
     // is gating (every node ships `bash`), so an empty commands list keeps
     // the registration but is loud about it.
-    let declared_commands: Vec<CommandDescriptor> = match params
-        .and_then(|p| p.get("commands"))
-        .map(|v| serde_json::from_value::<Vec<CommandDescriptor>>(v.clone()))
-    {
-        Some(Ok(v)) => v,
-        Some(Err(e)) => {
-            tracing::warn!(
-                device_id = %device_id,
-                node = %device_name,
-                error = %e,
-                "cluster node connect frame carried malformed commands; registering with empty catalog"
-            );
-            Vec::new()
-        }
-        None => Vec::new(),
-    };
-    let tags: Vec<String> = match params
-        .and_then(|p| p.get("tags"))
-        .map(|v| serde_json::from_value::<Vec<String>>(v.clone()))
-    {
-        Some(Ok(v)) => v,
-        Some(Err(e)) => {
-            tracing::warn!(
-                device_id = %device_id,
-                node = %device_name,
-                error = %e,
-                "cluster node connect frame carried malformed tags; registering with empty tag list"
-            );
-            Vec::new()
-        }
-        None => Vec::new(),
-    };
+    let declared_commands: Vec<CommandDescriptor> = params_typed(
+        params,
+        "commands",
+        device_id,
+        &device_name,
+        "commands; registering with empty catalog",
+    );
+    let tags: Vec<String> = params_typed(
+        params,
+        "tags",
+        device_id,
+        &device_name,
+        "tags; registering with empty tag list",
+    );
     let version: Option<String> = match params.and_then(|p| p.get("version")) {
         None => None,
         Some(v) => match v.as_str() {
@@ -630,6 +597,51 @@ pub fn maybe_register_node(
         connected_at: now_unix(),
     });
     true
+}
+
+/// Read a string field from the connect-frame params, returning `Some(s)`
+/// when present and a UTF-8 string, `None` otherwise. Centralises the
+/// `params.and_then(|p| p.get(K)).and_then(|v| v.as_str()).map(str::to_string)`
+/// shape that every connect-frame field-share read follows.
+fn params_str(params: Option<&Value>, key: &str) -> Option<String> {
+    params
+        .and_then(|p| p.get(key))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+/// Read a typed field from the connect-frame params, returning the parsed
+/// value on success and `Default::default()` on either absence or a
+/// deserialisation failure. The `fallback_msg` suffix is the second half of
+/// the `cluster node connect frame carried malformed <fallback_msg>` warn
+/// line — the caller has already decided what the empty default means in
+/// its own domain (commands → empty catalog, tags → empty list).
+fn params_typed<T>(
+    params: Option<&Value>,
+    key: &str,
+    device_id: &str,
+    device_name: &str,
+    fallback_msg: &str,
+) -> T
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    match params
+        .and_then(|p| p.get(key))
+        .map(|v| serde_json::from_value::<T>(v.clone()))
+    {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => {
+            tracing::warn!(
+                device_id = %device_id,
+                node = %device_name,
+                error = %e,
+                "cluster node connect frame carried malformed {fallback_msg}"
+            );
+            T::default()
+        }
+        None => T::default(),
+    }
 }
 
 fn now_unix() -> i64 {

@@ -24,7 +24,7 @@ use tracing::warn;
 
 use crate::cluster::normalize_node_key;
 use crate::cluster::registry::truncate_on_char_boundary;
-use crate::gateway::security::store::{DeviceUpsertData, SecurityStore};
+use crate::gateway::security::store::{DeviceRow, DeviceUpsertData, SecurityStore};
 
 /// Admission decision for a node `connect`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +104,18 @@ enum NameMatch {
     None,
     /// Several do; carries the count for an actionable operator message.
     Ambiguous(usize),
+}
+
+impl NameMatch {
+    /// Flatten the unique arm to `Option<String>`; the other two stay `None`.
+    /// Used by `resolve_enrolled_node` which only needs an id, not the
+    /// disambiguation counts (the deregister path treats both as `None`).
+    fn into_id(self) -> Option<String> {
+        match self {
+            Self::Unique(id) => Some(id),
+            Self::None | Self::Ambiguous(_) => None,
+        }
+    }
 }
 
 /// Match active `role=node` devices by normalized name.
@@ -334,6 +346,10 @@ pub struct DeregisterOutcome {
 /// "no row matches", so an operator told "no online or enrolled node
 /// matches" could not distinguish a real miss from a wedged store.
 fn resolve_enrolled_node(store: &SecurityStore, q: &str) -> Option<String> {
+    // One read of `list_devices`, then both the exact-id and the
+    // normalized-name checks walk the same `Vec`. The previous shape called
+    // `store.list_devices()` directly and then `match_by_name` which called
+    // it again — two full table scans per offline-lookup.
     let devices = match store.list_devices() {
         Ok(d) => d,
         Err(e) => {
@@ -351,17 +367,29 @@ fn resolve_enrolled_node(store: &SecurityStore, q: &str) -> Option<String> {
     {
         return Some(d.device_id.clone());
     }
-    match match_by_name(store, q) {
-        Ok(NameMatch::Unique(id)) => Some(id),
-        Ok(NameMatch::None | NameMatch::Ambiguous(_)) => None,
-        Err(e) => {
-            tracing::warn!(
-                query = %q,
-                error = %e,
-                "resolve_enrolled_node: name-lookup store read failed; reporting as not-found"
-            );
-            None
-        }
+    match_name_in(&devices, q).into_id()
+}
+
+/// Match active `role=node` devices in `devices` by normalized name — same
+/// semantics as [`match_by_name`] but over an already-loaded `Vec`, so
+/// `resolve_enrolled_node` can fold the exact-id and name checks into a
+/// single store read.
+fn match_name_in(devices: &[DeviceRow], q: &str) -> NameMatch {
+    let key = normalize_node_key(q);
+    if key.is_empty() {
+        return NameMatch::None;
+    }
+    let mut hits = devices
+        .iter()
+        .filter(|d| d.role == "node" && normalize_node_key(&d.device_name) == key);
+    let Some(first) = hits.next() else {
+        return NameMatch::None;
+    };
+    let extra = hits.count();
+    if extra > 0 {
+        NameMatch::Ambiguous(extra + 1)
+    } else {
+        NameMatch::Unique(first.device_id.clone())
     }
 }
 
