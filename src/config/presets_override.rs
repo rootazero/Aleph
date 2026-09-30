@@ -7,7 +7,8 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::warn;
+
+use crate::config::defaults_override::load_override_file;
 
 // =============================================================================
 // Provider preset overrides
@@ -102,32 +103,7 @@ pub struct PresetsOverride {
 /// Returns `PresetsOverride::default()` if the file does not exist or cannot be parsed.
 /// Logs warnings on parse errors.
 pub fn load_presets_override(path: &Path) -> PresetsOverride {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return PresetsOverride::default();
-        }
-        Err(e) => {
-            warn!(
-                "Failed to read presets override file {}: {}",
-                path.display(),
-                e
-            );
-            return PresetsOverride::default();
-        }
-    };
-
-    match toml::from_str(&content) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            warn!(
-                "Failed to parse presets override file {}: {}",
-                path.display(),
-                e
-            );
-            PresetsOverride::default()
-        }
-    }
+    load_override_file::<PresetsOverride>(path, "presets override")
 }
 
 // =============================================================================

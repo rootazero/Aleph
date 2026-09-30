@@ -77,6 +77,42 @@ fn guard_against_section_loss(
     Ok(())
 }
 
+/// Strict chmod-0600 with `AlephError::invalid_config` mapping — used by
+/// `save_to_file` where the file is the canonical artifact and an unset
+/// permission is a hard failure.
+#[cfg(unix)]
+fn enforce_0600_strict(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(path)
+        .map_err(|e| {
+            error!(path = %path.display(), error = %e, "Failed to get file metadata");
+            AlephError::invalid_config(format!("Failed to get file metadata: {e}"))
+        })?
+        .permissions();
+    perms.set_mode(0o600); // Owner read/write only
+    fs::set_permissions(path, perms).map_err(|e| {
+        error!(path = %path.display(), error = %e, "Failed to set file permissions to 600");
+        AlephError::invalid_config(format!("Failed to set file permissions: {e}"))
+    })?;
+    debug!(path = %path.display(), "Set file permissions to 600 (owner read/write only)");
+    Ok(())
+}
+
+/// Best-effort chmod-0600 with `tracing::warn` on failure — used by
+/// `save_incremental_to_file` where the write already succeeded and tightening
+/// the mode is a defensive nicety, not a precondition for the write.
+#[cfg(unix)]
+fn enforce_0600_warn(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(metadata) = fs::metadata(path) {
+        let mut perms = metadata.permissions();
+        perms.set_mode(0o600);
+        if let Err(e) = fs::set_permissions(path, perms) {
+            tracing::warn!("Failed to set config file permissions: {}", e);
+        }
+    }
+}
+
 /// Write `contents` to `path` atomically: temp file (same directory, so the
 /// rename stays on one filesystem) + fsync + rename. The target is never in
 /// a partially written state, even on crash or power loss mid-write.
@@ -334,21 +370,7 @@ impl Config {
         // Set file permissions to 600 (owner read/write only) for security
         // This protects API keys stored in the config file
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(path)
-                .map_err(|e| {
-                    error!(path = %path.display(), error = %e, "Failed to get file metadata");
-                    AlephError::invalid_config(format!("Failed to get file metadata: {e}"))
-                })?
-                .permissions();
-            perms.set_mode(0o600); // Owner read/write only
-            fs::set_permissions(path, perms).map_err(|e| {
-                error!(path = %path.display(), error = %e, "Failed to set file permissions to 600");
-                AlephError::invalid_config(format!("Failed to set file permissions: {e}"))
-            })?;
-            debug!(path = %path.display(), "Set file permissions to 600 (owner read/write only)");
-        }
+        enforce_0600_strict(path)?;
 
         info!(
             path = %path.display(),
@@ -449,18 +471,10 @@ impl Config {
         // Write with atomic operation (same as save_to_file)
         write_atomically(path, &new_contents)?;
 
-        // Set permissions on Unix
+        // Set permissions on Unix (best-effort: write already succeeded,
+        // tightening the mode is a defensive nicety, not a precondition).
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = fs::metadata(path) {
-                let mut perms = metadata.permissions();
-                perms.set_mode(0o600);
-                if let Err(e) = fs::set_permissions(path, perms) {
-                    tracing::warn!("Failed to set config file permissions: {}", e);
-                }
-            }
-        }
+        enforce_0600_warn(path);
 
         info!(
             sections = ?sections,
