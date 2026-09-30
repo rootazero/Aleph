@@ -45,16 +45,11 @@ impl LogLevel {
         let s = s.trim().trim_matches('\"');
         if let Ok(n) = s.parse::<u8>() {
             // 0..=4 are the five known variants; anything else is out of
-            // range (e.g. `"9"`) and should parse as `None` rather than
-            // silently fall back to `Info` via `from_u8`.
-            return match n {
-                0 => Some(Self::Error),
-                1 => Some(Self::Warn),
-                2 => Some(Self::Info),
-                3 => Some(Self::Debug),
-                4 => Some(Self::Trace),
-                _ => None,
-            };
+            // range (e.g. `"9"`) and parses as `None` rather than silently
+            // falling back to `Info` via `from_u8`. Both call sites go
+            // through the same `from_u8_opt` so the variant assignments
+            // cannot drift apart.
+            return Self::from_u8_opt(n);
         }
         if s.eq_ignore_ascii_case("error") {
             Some(Self::Error)
@@ -91,13 +86,22 @@ impl LogLevel {
     /// value was corrupt — leaving the reported level lying about the live
     /// filter the setter just installed.
     fn from_u8(value: u8) -> Self {
+        Self::from_u8_opt(value).unwrap_or(Self::Info)
+    }
+
+    /// Strict variant of `from_u8`: returns `None` for out-of-range bytes
+    /// instead of falling back to `Info`. Shared with `LogLevel::parse`, which
+    /// wants `None` (not silent fallback) when a wire-supplied string carries
+    /// an out-of-range numeric like `"9"`. Single source of truth for the
+    /// 0..=4 → variant mapping so the two callers cannot drift apart.
+    fn from_u8_opt(value: u8) -> Option<Self> {
         match value {
-            0 => Self::Error,
-            1 => Self::Warn,
-            2 => Self::Info,
-            3 => Self::Debug,
-            4 => Self::Trace,
-            _ => Self::Info,
+            0 => Some(Self::Error),
+            1 => Some(Self::Warn),
+            2 => Some(Self::Info),
+            3 => Some(Self::Debug),
+            4 => Some(Self::Trace),
+            _ => None,
         }
     }
 }
@@ -214,10 +218,12 @@ fn try_self_heal(raw: u8) {
 
 /// Set the log level dynamically.
 ///
-/// Atomically swaps the reported level into the global atomic (CAS loop so
-/// concurrent `set_log_level` callers cannot lose intermediate writes to
-/// the audit log), and asks the shared logging backend to apply the same
-/// level to the live `EnvFilter`.
+/// Atomically swaps the reported level into the global atomic and asks the
+/// shared logging backend to apply the same level to the live `EnvFilter`.
+/// Serialization between concurrent `set_log_level` callers is provided by
+/// [`SET_LOCK`] (held across both the atomic and the filter update below),
+/// not by a CAS loop on the atomic — `AtomicU8::swap` is fine on its own once
+/// the writers are serialized.
 ///
 /// Returns `Ok(())` if both the atomic and the filter were updated. If the
 /// filter update fails (e.g. shared logging was never installed), returns
