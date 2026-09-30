@@ -133,6 +133,23 @@ pub struct OwnedGenerationPreset {
 // Merge functions
 // =============================================================================
 
+/// Return `partial`'s value when present, else the built-in's `&str` cloned
+/// into an owned `String`. Centralises the `Option<String> -> String`
+/// "override wins, else fall back to default" shape that both
+/// [`merge_provider_preset`] and [`merge_generation_preset`] repeat per
+/// field. Both builtin sources are `&'static str` (`&str` for the typed
+/// values), so the second arm does not allocate until the fallback fires.
+fn t_or(override_: Option<String>, builtin: &str) -> String {
+    override_.unwrap_or_else(|| builtin.to_string())
+}
+
+/// Return `partial`'s value when present, else the supplied literal default.
+/// Same shape as [`t_or`] but used when there is no built-in to merge with
+/// (e.g. `partial_to_provider_preset`'s `"openai"` / `"#808080"` defaults).
+fn t_or_default(override_: Option<String>, default: &str) -> String {
+    override_.unwrap_or_else(|| default.to_string())
+}
+
 /// Merge a `PartialProviderPreset` (user override) onto a built-in `ProviderPreset`.
 ///
 /// For each field, the user override wins if present; otherwise the built-in value is used.
@@ -141,22 +158,10 @@ pub fn merge_provider_preset(
     partial: &PartialProviderPreset,
 ) -> OwnedProviderPreset {
     OwnedProviderPreset {
-        base_url: partial
-            .base_url
-            .clone()
-            .unwrap_or_else(|| builtin.base_url.to_string()),
-        protocol: partial
-            .protocol
-            .clone()
-            .unwrap_or_else(|| builtin.protocol.to_string()),
-        color: partial
-            .color
-            .clone()
-            .unwrap_or_else(|| builtin.color.to_string()),
-        default_model: partial
-            .default_model
-            .clone()
-            .unwrap_or_else(|| builtin.default_model.to_string()),
+        base_url: t_or(partial.base_url.clone(), builtin.base_url),
+        protocol: t_or(partial.protocol.clone(), builtin.protocol),
+        color: t_or(partial.color.clone(), builtin.color),
+        default_model: t_or(partial.default_model.clone(), builtin.default_model),
     }
 }
 
@@ -167,14 +172,8 @@ pub fn merge_provider_preset(
 pub fn partial_to_provider_preset(partial: &PartialProviderPreset) -> Option<OwnedProviderPreset> {
     Some(OwnedProviderPreset {
         base_url: partial.base_url.clone()?,
-        protocol: partial
-            .protocol
-            .clone()
-            .unwrap_or_else(|| "openai".to_string()),
-        color: partial
-            .color
-            .clone()
-            .unwrap_or_else(|| "#808080".to_string()),
+        protocol: t_or_default(partial.protocol.clone(), "openai"),
+        color: t_or_default(partial.color.clone(), "#808080"),
         default_model: partial.default_model.clone().unwrap_or_default(),
     })
 }
@@ -185,10 +184,7 @@ pub fn merge_generation_preset(
     partial: &PartialGenerationPreset,
 ) -> OwnedGenerationPreset {
     OwnedGenerationPreset {
-        default_model: partial
-            .default_model
-            .clone()
-            .unwrap_or_else(|| builtin.default_model.to_string()),
+        default_model: t_or(partial.default_model.clone(), builtin.default_model),
         base_url: partial
             .base_url
             .clone()
