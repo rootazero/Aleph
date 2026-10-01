@@ -543,24 +543,6 @@ pub enum McpCommand {
         respond_to: oneshot::Sender<Option<McpServerStatusDetail>>,
     },
 
-    /// Get aggregated tools from all servers
-    AggregateTools {
-        /// Response channel
-        respond_to: oneshot::Sender<Vec<McpTool>>,
-    },
-
-    /// Get aggregated resources from all servers
-    AggregateResources {
-        /// Response channel
-        respond_to: oneshot::Sender<Vec<McpResource>>,
-    },
-
-    /// Get aggregated prompts from all servers
-    AggregatePrompts {
-        /// Response channel
-        respond_to: oneshot::Sender<Vec<McpPrompt>>,
-    },
-
     /// Get aggregated server-provided `instructions` from all servers.
     /// Feeds `McpInstructionsLayer` so each connected server's usage guidance
     /// reaches the system prompt.
@@ -634,9 +616,6 @@ impl std::fmt::Debug for McpCommand {
                 .debug_struct("GetStatus")
                 .field("server_id", server_id)
                 .finish(),
-            Self::AggregateTools { .. } => f.debug_struct("AggregateTools").finish(),
-            Self::AggregateResources { .. } => f.debug_struct("AggregateResources").finish(),
-            Self::AggregatePrompts { .. } => f.debug_struct("AggregatePrompts").finish(),
             Self::AggregateInstructions { .. } => f.debug_struct("AggregateInstructions").finish(),
             Self::Shutdown { .. } => f.debug_struct("Shutdown").finish(),
             Self::SetSamplingCallback { .. } => f.debug_struct("SetSamplingCallback").finish(),

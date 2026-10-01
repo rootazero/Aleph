@@ -34,7 +34,7 @@
 //!   literals ARE scraped; the same shape anywhere else fails the census.
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::method_admin;
 
     use std::collections::{BTreeMap, BTreeSet};
@@ -137,7 +137,6 @@ mod tests {
         ("clarification.resolve", Class::Open),
         ("cluster.deregister", Class::Admin),
         ("cluster.enroll", Class::Admin),
-        ("command.execute", Class::Open),
         ("commands.list", Class::Open),
         ("config.get", Class::Admin),
         ("config.get_tool_permissions", Class::Open),
@@ -266,21 +265,10 @@ mod tests {
         ("logs.getLevel", Class::Admin),
         ("logs.setLevel", Class::Admin),
         ("loop.list", Class::Open),
-        ("mcp.add", Class::Admin),
         ("mcp.cancel_approval", Class::Admin),
-        ("mcp.delete", Class::Admin),
         ("mcp.list", Class::Admin),
         ("mcp.list_pending_approvals", Class::Admin),
-        ("mcp.logs", Class::Admin),
-        ("mcp.prompts", Class::Admin),
-        ("mcp.resources", Class::Admin),
         ("mcp.respond_approval", Class::Admin),
-        ("mcp.restart", Class::Admin),
-        ("mcp.start", Class::Admin),
-        ("mcp.status", Class::Admin),
-        ("mcp.stop", Class::Admin),
-        ("mcp.tools", Class::Admin),
-        ("mcp.update", Class::Admin),
         ("mcp_config.create", Class::Admin),
         ("mcp_config.delete", Class::Admin),
         ("mcp_config.get", Class::Admin),
@@ -309,13 +297,7 @@ mod tests {
         ("moa.savePreset", Class::Admin),
         ("moa.setDefault", Class::Admin),
         ("moa.setSaveTraces", Class::Admin),
-        ("plugin.config.get", Class::Admin),
-        ("plugin.config.set", Class::Admin),
-        ("plugin.disable", Class::Admin),
-        ("plugin.enable", Class::Admin),
         ("plugin.install", Class::Admin),
-        ("plugin.installFromZip", Class::Admin),
-        ("plugin.list", Class::Admin),
         ("plugin.marketplace.add", Class::Admin),
         ("plugin.marketplace.browse", Class::Admin),
         ("plugin.marketplace.install", Class::Admin),
@@ -507,7 +489,14 @@ mod tests {
     /// `src/**/*.rs`. Returns the swept methods (with the file that
     /// registers them) and any registration-shaped call the receiver rules
     /// could not classify.
-    fn sweep_rpc_methods() -> (BTreeMap<String, String>, Vec<String>) {
+    ///
+    /// `pub(crate)`, narrowest form that works: `method_authz.rs`'s own
+    /// `#[cfg(test)]` tests use this as the oracle for "is this RPC method
+    /// registered ANYWHERE in production source" (including the boot-time
+    /// registrations in the separate `aleph-server` binary crate under
+    /// `src/bin/`, which this sweep walks like any other file under `src/`)
+    /// — the same fact this module's own guards already trust it for.
+    pub(crate) fn sweep_rpc_methods() -> (BTreeMap<String, String>, Vec<String>) {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 return;

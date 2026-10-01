@@ -3457,9 +3457,15 @@ mod tests {
     /// all of it `hooks_manage` (2_219 -> 2_151). The round had first grown
     /// it to 2_304 without anyone running this guard: `3d21be979` +7
     /// (`aleph hooks test` -> `aleph-server hooks test` in `command`'s doc)
-    /// and `3c111de88` +78 (`matcher`'s subject semantics), measured per
-    /// commit through `schema_for!`; the other two commits that touched the
-    /// file changed no doc on a schema type, so they contribute nothing.
+    /// and `3c111de88` +78 (`matcher`'s subject semantics). How each number
+    /// was obtained, since they were not all obtained the same way: 2_219
+    /// (base) and 2_304 (at `b7fa15f4e`) are this guard's own readings; the
+    /// 2_226 after `3d21be979` is a mirror of the args struct at that commit,
+    /// measured with this guard's expression and calibrated against both of
+    /// those readings - the guard was never run at that commit; `df928dfe0`
+    /// and `67fde2a25` are 0 by construction (their diffs touch no doc on a
+    /// schema type), not measured; 2_151 is this guard's reading after the
+    /// trim.
     /// Paid back by trimming, not by raising: `command` no longer repeats
     /// the approval spelling the DESCRIPTION already carries (one copy fewer
     /// to keep in step - the rename had to edit both), `only_unreachable`

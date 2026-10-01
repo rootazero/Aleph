@@ -243,8 +243,7 @@ impl InboundMessageRouter {
         };
 
         // Delegate scoring (canonical name + aliases, edit-distance + substring
-        // fast-path) to the registry's shared suggester so the channel router
-        // and the panel `command.execute` RPC path stay in lockstep.
+        // fast-path) to the registry's suggester rather than scoring inline.
         let suggestions: Vec<String> = parser
             .tool_registry()
             .suggest_commands(unknown_cmd, 3)

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::ops::read_file_bytes;
-use super::path_utils::get_denied_paths;
+use super::path_utils::{get_denied_paths, DeniedPath};
 use super::read_cache::{ReadCache, ReadCacheDecision};
 use super::text::{clamp_line, is_binary, read_window_tokens, DEFAULT_READ_LINE_LIMIT};
 use crate::context::budget::pressure::{chars_for_result_token_budget, estimate_tokens_smart};
@@ -91,7 +91,7 @@ pub struct FileReadTool {
     /// Maximum file size allowed for read operations (default 100 MB).
     max_read_size: u64,
     /// Security-denied path patterns.
-    denied_paths: Vec<String>,
+    denied_paths: Vec<DeniedPath>,
     /// Optional `ToolContext` handle for workspace-scoped output path resolution.
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
     /// Cross-turn fingerprint store that collapses repeated reads of an

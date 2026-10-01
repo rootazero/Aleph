@@ -48,7 +48,9 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::edit_match::{apply_ranges, locate, locate_lines, LocateResult};
-use super::path_utils::{check_and_resolve_path, get_denied_paths, resolve_for_removal};
+use super::path_utils::{
+    check_and_resolve_path, get_denied_paths, resolve_for_removal, DeniedPath,
+};
 use super::text::is_binary;
 use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
@@ -118,7 +120,7 @@ const MAX_PATCH_OPS: usize = 500;
 
 /// The `apply_patch` builtin tool.
 pub struct ApplyPatchTool {
-    denied_paths: Vec<String>,
+    denied_paths: Vec<DeniedPath>,
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }
 
@@ -682,7 +684,11 @@ make several coordinated edits at once."#;
 
     fn resolve_via(
         &self,
-        resolver: fn(&Path, &[String], Option<&Path>) -> std::result::Result<PathBuf, ToolError>,
+        resolver: fn(
+            &Path,
+            &[DeniedPath],
+            Option<&Path>,
+        ) -> std::result::Result<PathBuf, ToolError>,
         path: &str,
         output_dir: Option<&Path>,
     ) -> std::result::Result<PathBuf, String> {

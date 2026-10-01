@@ -777,9 +777,9 @@ plugin that declares no schema accepts anything.
 An explicit `env` entry in `.mcp.json` wins over an injected one: the author's
 own value beats a convention.
 
-Read and write it over JSON-RPC (`plugin.config.get` / `plugin.config.set`) or
-conversationally with the `plugin_manage` tool
-(`action='config_get'` / `action='config_set'`). `config_set` **replaces** the
+Read and write it conversationally with the `plugin_manage` tool
+(`action='config_get'` / `action='config_set'`) — the only face plugin config
+has; there is no JSON-RPC method for it. `config_set` **replaces** the
 whole object, so read it first and send the merged result. Changes take effect
 on the next `action='reload'` — reloading tears down the plugin's MCP servers
 and background services, so it is never implicit.

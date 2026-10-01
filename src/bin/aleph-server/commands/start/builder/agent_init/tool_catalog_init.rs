@@ -9,7 +9,7 @@
 //!
 //! Side effects preserved exactly: registers `commands.list` / `tools.catalog`
 //! / `tools.invoke` / `tools.effective` / `tools.cancel_call` /
-//! `tools.in_flight` / `command.execute` handlers, injects the `CommandParser`
+//! `tools.in_flight` handlers, injects the `CommandParser`
 //! into the deferred `command_parser_cell`, and spawns the
 //! `MemoryProducerScheduler` (handle intentionally leaked for server lifetime).
 
@@ -401,28 +401,15 @@ pub(super) async fn init_tool_catalog(
         }
     }
 
-    // Wire command.execute to resolve slash commands via CommandParser + ToolRegistry
+    // Build the one CommandParser and hand it to chat.send / agent.run via the
+    // deferred cell (created earlier). `command.execute` — the second RPC face
+    // for the same parser — was cut 2026-09-20 (zero clients).
     {
         let parser = Arc::new(alephcore::command::CommandParser::new(tool_catalog.clone()));
-
-        // Inject parser into chat.send handler (created earlier, uses deferred cell)
-        {
-            let mut cell = command_parser_cell.write().await;
-            *cell = Some(parser.clone());
-        }
-
-        let reg = tool_catalog.clone();
-        server
-            .handlers_mut()
-            .register("command.execute", move |req| {
-                let p = parser.clone();
-                let r = reg.clone();
-                async move {
-                    alephcore::gateway::handlers::commands::handle_execute(req, p, r).await
-                }
-            });
+        let mut cell = command_parser_cell.write().await;
+        *cell = Some(parser);
         if !daemon {
-            println!("  command.execute: wired to unified command parser + registry");
+            println!("  CommandParser: injected into chat.send / agent.run");
         }
     }
 

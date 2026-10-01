@@ -179,10 +179,9 @@ impl ExtensionManager {
     /// error, and is exactly what a plugin with no `config_schema` should see.
     ///
     /// Stored form: any `{{secret:NAME}}` reference is returned verbatim. This
-    /// is what the display faces want — `plugin_manage(config_get / show)`
-    /// puts this text in the model's context and `plugin.config.get` puts it
-    /// in Panel, and neither is a place for a decrypted credential. Code
-    /// handing configuration to plugin code wants
+    /// is what the display face wants — `plugin_manage(config_get / show)`
+    /// puts this text in the model's context, and that is not a place for a
+    /// decrypted credential. Code handing configuration to plugin code wants
     /// [`Self::plugin_settings_for_runtime`] instead.
     pub async fn plugin_settings(&self, plugin_id: &str) -> serde_json::Value {
         self.plugins_config.read().await.settings_json(plugin_id)

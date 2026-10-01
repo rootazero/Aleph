@@ -23,7 +23,6 @@
 //! | `hooks::executor` → `plugin_settings_env` | runtime | the hook subprocess needs the real value |
 //! | slash-command inline shell → `plugin_settings_env` | **stored, secrets removed** | whoever sends the `/command` picks its arguments, and its output goes into the model's context ([`SettingsForm::WithoutSecrets`]) |
 //! | `plugin_manage(config_get / show)` | **stored** | this text goes into the model's context |
-//! | `plugin.config.get` RPC | **stored** | this text goes to Panel |
 //!
 //! Resolving inside `plugin_settings` itself would have been one line and
 //! would have piped every configured secret into the transcript and the

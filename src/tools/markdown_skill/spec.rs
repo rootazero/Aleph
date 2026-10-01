@@ -1,7 +1,7 @@
 //! Aleph Skill Specification
 //!
-//! Data structures for parsing and representing Markdown-based CLI skills.
-//! Compatible with `OpenClaw` SKILL.md format while adding Aleph-specific extensions.
+//! Data structures for parsing and representing Markdown-based CLI skills
+//! (SKILL.md frontmatter + Aleph-specific `metadata.aleph.*` extensions).
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -25,7 +25,7 @@ pub struct AlephSkillSpec {
     /// Short description for LLM
     pub description: String,
 
-    /// `OpenClaw` + Aleph metadata
+    /// Skill metadata (`requires.bins` + Aleph extensions)
     #[serde(default)]
     pub metadata: SkillMetadata,
 
@@ -34,20 +34,16 @@ pub struct AlephSkillSpec {
     pub markdown_content: String,
 }
 
-/// Skill metadata (`OpenClaw` compatible + Aleph extensions)
+/// Skill metadata (required binaries + Aleph extensions)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillMetadata {
-    /// `OpenClaw` compatibility: required binaries
+    /// Required binaries (`metadata.requires.bins`)
     #[serde(default)]
     pub requires: RequiresSpec,
 
     /// Aleph extensions (optional)
     #[serde(default)]
     pub aleph: Option<AlephExtensions>,
-
-    /// `OpenClaw` metadata namespace (`ClawHub` compatibility)
-    #[serde(default)]
-    pub openclaw: Option<OpenClawMetadata>,
 }
 
 /// Required binaries specification
@@ -80,45 +76,6 @@ pub struct AlephExtensions {
     /// Docker execution configuration
     #[serde(default)]
     pub docker: Option<DockerConfig>,
-}
-
-/// `OpenClaw` metadata namespace — compatible with `ClawHub` skill format.
-///
-/// Allows SKILL.md files from `ClawHub` to work natively in Aleph.
-/// Both `aleph` and `openclaw` namespaces can coexist.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct OpenClawMetadata {
-    #[serde(default)]
-    pub emoji: Option<String>,
-    #[serde(default, rename = "primaryEnv")]
-    pub primary_env: Option<String>,
-    #[serde(default)]
-    pub homepage: Option<String>,
-    #[serde(default)]
-    pub os: Option<Vec<String>>,
-    #[serde(default)]
-    pub always: Option<bool>,
-    #[serde(default)]
-    pub install: Option<Vec<OpenClawInstallSpec>>,
-}
-
-/// `OpenClaw` install specification
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenClawInstallSpec {
-    pub id: String,
-    pub kind: String,
-    #[serde(default)]
-    pub formula: Option<String>,
-    #[serde(default)]
-    pub package: Option<String>,
-    #[serde(default)]
-    pub url: Option<String>,
-    #[serde(default)]
-    pub bins: Option<Vec<String>>,
-    #[serde(default)]
-    pub label: Option<String>,
-    #[serde(default)]
-    pub os: Option<Vec<String>>,
 }
 
 /// Security specification
@@ -250,10 +207,10 @@ impl Default for SecuritySpec {
 // docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md
 //
 // The conversion is intentionally lossy: AlephSkillSpec's CLI-tool-flavored
-// metadata (requires.bins, aleph.security, openclaw.*, docker config) does
+// metadata (requires.bins, aleph.security, docker config) does
 // not currently map onto SkillManifest's DDD-aggregate fields (EligibilitySpec,
 // InvocationPolicy, InstallSpec). Phase 2 absorbs those fields onto
-// SkillManifest as `markdown_cli_extras` and `openclaw_compat`; until then,
+// SkillManifest as `markdown_cli_extras`; until then,
 // this bridge captures only the identity/content axis.
 // ---------------------------------------------------------------------------
 
@@ -265,7 +222,7 @@ impl From<&AlephSkillSpec> for crate::domain::skill::SkillManifest {
             spec.name.clone(),
             spec.description.clone(),
             SkillContent::new(spec.markdown_content.clone()),
-            // Default to Global (most clawhub-installed skills land in ~/.aleph/skills/).
+            // Default to Global (most installed skills land in ~/.aleph/skills/).
             // Phase 2 plumbing will derive this from the on-disk path.
             SkillSource::Global,
         )
@@ -364,5 +321,92 @@ metadata:
             manifest.source(),
             crate::domain::skill::SkillSource::Global
         ));
+    }
+
+    /// Source-level census: the retired upstream skill dialect must not come
+    /// back as code. Its two DTOs were parsed and never read for six months;
+    /// a `metadata.<dialect>.*` block in a SKILL.md is now an unknown key that
+    /// serde ignores, and that is the whole compatibility story.
+    ///
+    /// Needles are assembled with `concat!` so this file cannot match itself.
+    /// Comment lines and `// …` tails are stripped first: a parity remark
+    /// ("mirrors <dialect>'s default") is attribution, not code. What remains
+    /// is allowed in exactly two files — the ACP preset that HOSTS that agent
+    /// (R3, not plugin compat) and the harness-name list beside it.
+    #[test]
+    fn the_removed_skill_dialect_has_no_code_hits_outside_the_acp_preset() {
+        const NEEDLES: [&str; 2] = [concat!("open", "claw"), concat!("claw", "hub")];
+        const ALLOWED: [&str; 2] = [
+            "src/config/types/acp.rs",
+            "src/builtin_tools/team/member_add.rs",
+        ];
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut offenders: Vec<String> = Vec::new();
+        let mut allowed_hits = 0usize;
+        let mut checked_files = 0usize;
+
+        let mut stack = vec![root.join("src")];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let Ok(src) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                checked_files += 1;
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let is_allowed = ALLOWED.contains(&rel.as_str());
+                for (lineno, line) in src.lines().enumerate() {
+                    let code = line.trim_start();
+                    if code.starts_with("//") {
+                        continue;
+                    }
+                    // Drop a trailing `// …` remark; the needle never sits in a
+                    // string that also contains " // ".
+                    let code = code.split(" //").next().unwrap_or(code);
+                    let lower = code.to_lowercase();
+                    if !NEEDLES.iter().any(|n| lower.contains(n)) {
+                        continue;
+                    }
+                    if is_allowed {
+                        allowed_hits += 1;
+                    } else {
+                        offenders.push(format!("{rel}:{} — {}", lineno + 1, code.trim()));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            checked_files > 100,
+            "census scanned only {checked_files} files — it is not looking where it thinks it is"
+        );
+        // Self-check: the ACP preset is the reason the allow-list exists. If it
+        // is ever removed, this census must say so rather than pass vacuously.
+        assert!(
+            allowed_hits >= 4,
+            "expected the ACP preset + harness list to produce >= 4 hits, found {allowed_hits} — \
+             the allow-list is stale, re-derive it"
+        );
+        assert!(
+            offenders.is_empty(),
+            "the retired skill dialect is back as code (fields, types, fixtures or test names). \
+             Parity comments are fine; code is not:\n  {}",
+            offenders.join("\n  ")
+        );
     }
 }

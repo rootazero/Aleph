@@ -3,7 +3,7 @@
 use std::path::Path;
 use tracing::{debug, info};
 
-use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern};
+use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern, DeniedPath};
 use super::types::{
     is_skipped_dir_path, FileInfo, FileOpsOutput, DEFAULT_ENTRY_LIMIT, SKIPPED_DIRS,
 };
@@ -13,7 +13,7 @@ use crate::builtin_tools::error::ToolError;
 pub async fn execute_search(
     dir: &Path,
     pattern: &str,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&std::path::Path>,
     limit: Option<usize>,
 ) -> Result<FileOpsOutput, ToolError> {

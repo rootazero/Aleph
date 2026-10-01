@@ -235,9 +235,8 @@ impl ToolQuery {
     ///
     /// Both the canonical `name` and every alias are scored; the tool's best
     /// (lowest) distance wins. Returns canonical names (no leading `/`),
-    /// nearest first. Powers the "did you mean?" reply on both the channel
-    /// router (`try_send_unknown_command_help`) and the panel `command.execute`
-    /// RPC path, replacing per-call-site inline scoring.
+    /// nearest first. Powers the channel router's "did you mean?" reply
+    /// (`try_send_unknown_command_help`).
     pub async fn suggest_commands(&self, needle: &str, max: usize) -> Vec<String> {
         use crate::builtin_tools::meta_tools::levenshtein_distance;
 

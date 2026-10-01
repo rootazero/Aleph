@@ -17,7 +17,7 @@ use super::notes;
 use super::scan::{build_regex, render, scan_text, ScanOptions};
 use super::walk::{display_path, walk, WalkRequest};
 use crate::builtin_tools::error::ToolError;
-use crate::builtin_tools::file_ops::{get_denied_paths, is_binary};
+use crate::builtin_tools::file_ops::{get_denied_paths, is_binary, DeniedPath};
 use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 use crate::error::Result;
 use async_trait::async_trait;
@@ -125,7 +125,7 @@ pub struct GrepOutput {
 /// Repository-aware content search.
 #[derive(Clone)]
 pub struct GrepTool {
-    denied_paths: Vec<String>,
+    denied_paths: Vec<DeniedPath>,
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }
 
@@ -733,7 +733,9 @@ mod tests {
 
         let canonical = dir.path().canonicalize().unwrap();
         let tool = GrepTool {
-            denied_paths: vec![canonical.join("creds").to_string_lossy().to_string()],
+            denied_paths: vec![DeniedPath::literal(
+                canonical.join("creds").to_string_lossy(),
+            )],
             tool_context_handle: None,
         };
         let out = tool.run(args(&dir, "needle")).await.unwrap();

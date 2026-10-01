@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::edit_match::{apply_ranges, locate, LocateResult};
-use super::path_utils::{check_and_resolve_path, get_denied_paths};
+use super::path_utils::{check_and_resolve_path, get_denied_paths, DeniedPath};
 use super::text::{clamp_line, is_binary};
 use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
@@ -227,7 +227,7 @@ pub struct FileEditOutput {
 /// String-replacement file editing tool
 pub struct FileEditTool {
     /// Denied path patterns (security)
-    denied_paths: Vec<String>,
+    denied_paths: Vec<DeniedPath>,
     /// Optional `ToolContext` handle for workspace-scoped output path resolution
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }

@@ -233,7 +233,7 @@ fn scan_skill_directory_inner(dir: &std::path::Path, verdicts: &mut Vec<ScanVerd
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        // Skip hidden files/dirs (e.g. .git, .clawhub.json)
+        // Skip hidden files/dirs (e.g. .git, .DS_Store)
         if path
             .file_name()
             .and_then(|n| n.to_str())

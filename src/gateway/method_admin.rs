@@ -228,14 +228,16 @@ const ADMIN_PREFIXES: &[&str] = &[
     "extensions.", // Aleph Hub install surface (catalog/installed/toggle/
     // uninstall/disclosure/install) — replaces the brief's placeholder
     // `hub.`, which no registered method matches.
-    "mcp.",        // MCP server lifecycle (add/update/delete/start/stop/restart/…).
+    "mcp.",        // MCP server inventory (`mcp.list`) + the three approval verbs.
     "mcp_config.", // MCP Settings-page CRUD against the vault.
     "skills.",     // skill install/update/remove (status/update/install_dep/remove).
     "bundled.",    // bundled.sync — re-syncs the official skills/plugins snapshot.
-    "plugins.",    // plugin lifecycle, legacy plural namespace.
-    "plugin.",     // plugin lifecycle, canonical singular namespace (both registered).
-    "hooks.",      // server-wide hook file admin (~/.aleph/hooks.json).
-    "runtimes.",   // sandbox/runtime capability install (list/refresh/install).
+    "plugins.",    // plugin lifecycle, plural namespace — the one every client calls.
+    "plugin.",     // plugin lifecycle, singular namespace — only the verbs with a
+    // client survive here (install/uninstall/update/reload, marketplace.*); the
+    // rest were cut 2026-09-20 (both prefixes still registered, so both stay Admin).
+    "hooks.",    // server-wide hook file admin (~/.aleph/hooks.json).
+    "runtimes.", // sandbox/runtime capability install (list/refresh/install).
     // --- Agent-persona / shared config (server-global, not per-user) ---
     "identity.", // agent SOUL.md / persona file admin (get/set/clear/list).
     "moa.",      // shared mixture-of-agents presets (save/delete/setDefault/…) —
@@ -723,7 +725,7 @@ mod tests {
             "logs.setLevel",
             // extension / capability install
             "extensions.install",
-            "mcp.add",
+            "mcp.list",
             "mcp_config.create",
             "skills.remove",
             "bundled.sync",
@@ -937,7 +939,6 @@ mod tests {
             "trace.tool_output",
             "gateway.metrics.run_concurrency",
             "session.compact",
-            "command.execute",
             "commands.list",
         ] {
             assert!(!method_requires_admin(m), "{m} must stay open to members");
