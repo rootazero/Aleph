@@ -32,6 +32,12 @@ mod event_snap;
 /// reason [`plan_carry`] is: the only legitimate producer is a drain.
 mod file_carry;
 pub mod fit;
+/// The fold ledger: lazy per-fold payback verdicts (`judge_fold`) over the
+/// fold registry's token accounting plus the `compactor:<agent>` metering
+/// channel. Pure functions only — no background sweep, no hot-path cost; the
+/// `core/fold-economics` doctor check calls in when someone asks whether a
+/// fold net-saved tokens or cost more than it will ever repay.
+pub mod fold_ledger;
 /// The fold registry: a derived, read-only view over `FoldRecorded` /
 /// `CompactionPerformed` events that makes every compaction's retired span
 /// addressable. No parallel table — `session_events` stays the single source
