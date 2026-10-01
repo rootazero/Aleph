@@ -54,6 +54,45 @@ pub struct SessionActor {
     idle_timeout: Duration,
 }
 
+/// Apply observer + broadcaster side effects for one freshly appended event,
+/// shared between `SessionActor::finish_emitted` and the SessionWoken emission
+/// path in `in_process::spawn_actor`. Observer panic is isolated so a
+/// misbehaving observer cannot strand the broadcast or the caller's reply —
+/// the event is durable in storage either way. `broadcast::Sender::send` only
+/// fails when `rx_cnt == 0`; a full buffer is reported as `RecvError::Lagged`
+/// on the receiver side, not an error on the producer.
+pub(crate) fn notify_appended(
+    id: &SessionId,
+    record: &SessionEventRecord,
+    observer: Option<&Arc<dyn SessionEventObserver>>,
+    broadcaster: &broadcast::Sender<SessionEventRecord>,
+) {
+    if let Some(obs) = observer {
+        // `catch_unwind` is sound here: the closure takes `id: &SessionId`
+        // and `record: &SessionEventRecord`, both `RefUnwindSafe`.
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            obs.on_appended(id, record);
+        }))
+        .is_err()
+        {
+            tracing::error!(
+                id = ?id,
+                seq = record.seq,
+                "SessionEventObserver panicked during append notification; \
+                 continuing (event already durable)"
+            );
+        }
+    }
+    if let Err(_record) = broadcaster.send(record.clone()) {
+        tracing::debug!(
+            id = ?id,
+            seq = record.seq,
+            "broadcast had no receivers during append notification; \
+             event is durable in the SSOT log only"
+        );
+    }
+}
+
 impl SessionActor {
     pub fn new(
         id: SessionId,
@@ -164,52 +203,7 @@ impl SessionActor {
             event,
             created_at_ms: at,
         };
-        // Observer notification must not be allowed
-        // to kill the actor: a panicking observer
-        // used to strand the broadcast and the
-        // caller's reply, with the event durable
-        // in storage but neither subscriber nor
-        // caller told. `catch_unwind` is sound
-        // here because the closure only takes
-        // `&self.id` and `&record`, both
-        // `RefUnwindSafe`.
-        if let Some(obs) = &self.observer {
-            let id = &self.id;
-            let record_ref = &record;
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                obs.on_appended(id, record_ref);
-            }))
-            .is_err()
-            {
-                tracing::error!(
-                    id = ?self.id,
-                    seq,
-                    "SessionActor observer panicked; \
-                     continuing (event already durable)"
-                );
-            }
-        }
-        // Broadcast send. A `SendError` here means
-        // *zero receivers* — tokio's
-        // `broadcast::Sender::send` ONLY fails when
-        // `rx_cnt == 0`; a full
-        // `BROADCAST_BUFFER` (=256) does NOT error
-        // and instead lets the lagging receiver
-        // observe `RecvError::Lagged` on its next
-        // `recv()` (which is exactly where it can
-        // tell — the producer side cannot, which is
-        // why there is no separate "lagger" warn
-        // here). The previous `&& receiver_count >
-        // 0` guard was dead because `Err` ⇔ `rx_cnt
-        // == 0`; an audit caught it.
-        if let Err(_record) = self.broadcaster.send(record) {
-            tracing::debug!(
-                id = ?self.id,
-                seq,
-                "SessionActor broadcast had no receivers; \
-                 event is durable in the SSOT log only"
-            );
-        }
+        notify_appended(&self.id, &record, self.observer.as_ref(), &self.broadcaster);
     }
 
     /// Rebuilds `head_seq` from the store's own allocation counter.
