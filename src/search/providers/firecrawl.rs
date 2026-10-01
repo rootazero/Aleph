@@ -81,8 +81,10 @@ impl FirecrawlProvider {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
         let trimmed = base_url.trim_end_matches('/').to_string();
-        let scheme_lower = trimmed.to_lowercase();
-        if !scheme_lower.starts_with("http://") && !scheme_lower.starts_with("https://") {
+        if !(trimmed.len() >= 7
+            && (trimmed[..7].eq_ignore_ascii_case("http://")
+                || (trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("https://"))))
+        {
             return Err(AlephError::invalid_config(
                 "Firecrawl base URL must use http:// or https:// scheme",
             ));
