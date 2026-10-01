@@ -478,8 +478,9 @@ impl DenialLedger {
             );
             return false;
         }
+        let session_key = session.to_string();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if !guard.by_session.contains_key(session) {
+        if !guard.by_session.contains_key(&session_key) {
             // New session: enforce the bound before inserting so the map and
             // the FIFO order stay in lockstep (mirrors the grant store).
             while guard.order.len() >= MAX_SESSIONS {
@@ -490,9 +491,9 @@ impl DenialLedger {
                     None => break,
                 }
             }
-            guard.order.push_back(session.to_string());
+            guard.order.push_back(session_key.clone());
         }
-        let denials = guard.by_session.entry(session.to_string()).or_default();
+        let denials = guard.by_session.entry(session_key).or_default();
         // Distinct intents in a row, not clicks in a row — see the doc above.
         let first_refusal_of_this_intent = !denials.counts.contains_key(fingerprint);
         *denials.counts.entry(fingerprint.to_string()).or_insert(0) += 1;
