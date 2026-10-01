@@ -45,7 +45,7 @@
 - Consumes: `aleph_cdp::methods::target::*`（5 方法已齐全）；事件泵 loop（events.rs:254 起）；TabTable
 - Produces: 死 tab 上任何后续动词 → `BrowserError::TabGone` **立即**（不等命令超时）；录制中 tab 死亡 → 自动 finalize 截断回执（`stop_by_id` 可取，complete=false）；`WaitCondition::SelectorGone(String)`
 
-- [ ] **Step 1: 失败测试**
+- [x] **Step 1: 失败测试**
 
 ```rust
 #[tokio::test]
@@ -71,8 +71,8 @@ async fn selector_gone_waits_for_absence_not_text() {
 }
 ```
 
-- [ ] **Step 2: 跑确认红 → Step 3: 实现**（destroyed arm 解析 targetId → TabTable 折叠 + 通知录制 registry；SelectorGone 轮询 JS = `!document.querySelector(sel)`，与 Selector 臂同机械反向）
-- [ ] **Step 4: 绿 + 证伪**（删 destroyed arm → Step 1 前两条红；SelectorGone 实现错接 TextGone 逻辑 → 第四条红）+ commit `browser: targetDestroyed arm folds dead tabs; WaitCondition::SelectorGone`
+- [x] **Step 2: 跑确认红 → Step 3: 实现**（destroyed arm 解析 targetId → TabTable 折叠 + 通知录制 registry；SelectorGone 轮询 JS = `!document.querySelector(sel)`，与 Selector 臂同机械反向）
+- [x] **Step 4: 绿 + 证伪**（删 destroyed arm → Step 1 前两条红；SelectorGone 实现错接 TextGone 逻辑 → 第四条红）+ commit `browser: targetDestroyed arm folds dead tabs; WaitCondition::SelectorGone`
 
 ---
 
@@ -89,8 +89,8 @@ async fn selector_gone_waits_for_absence_not_text() {
   - `pub enum Impact { Actionable, Benign }` + `pub fn classify_network_failure(url: &str, resource_hint: &str) -> Impact`（常量表 substring 匹配：favicon.ico、analytics/telemetry 域、.map sourcemap → Benign；其余 Actionable——表是数据，注释写清每行依据）
   - `pub enum CheckOutcome { Pass, Fail{detail}, Warn{detail}, Unverified{reason} }` + `pub struct Verdict { passed, failed_checks, warnings, unverified, summary }` + `pub fn assemble(...) -> Verdict`（passed 充要条件 + summary 必须报「通过 X 项、Y 项无法证实」）
 
-- [ ] **Step 1: 失败测试**（计数对齐边界=Review Focus #3 两例；分级器表每行至少一钉；assemble 的 passed 充要条件双向钉：unverified 非空 → passed=false 且 summary 含「无法证实」）
-- [ ] **Step 2: 跑确认红 → Step 3: 实现 → Step 4: 绿 + 证伪**（减法改布尔去重 → 边界红；passed 判据砍掉 unverified → 红）+ commit `browser: qa verdict logic — counted baseline subtraction and failure classifier`
+- [x] **Step 1: 失败测试**（计数对齐边界=Review Focus #3 两例；分级器表每行至少一钉；assemble 的 passed 充要条件双向钉：unverified 非空 → passed=false 且 summary 含「无法证实」）
+- [x] **Step 2: 跑确认红 → Step 3: 实现 → Step 4: 绿 + 证伪**（减法改布尔去重 → 边界红；passed 判据砍掉 unverified → 红）+ commit `browser: qa verdict logic — counted baseline subtraction and failure classifier`
 
 ---
 
@@ -105,7 +105,7 @@ async fn selector_gone_waits_for_absence_not_text() {
 - Consumes: T1 的 TabGone 即时裁决与 `WaitCondition::SelectorGone`；T2 的 `Baseline/subtract/classify_network_failure/assemble/Verdict`；trait 动词 `wait_for`/`console_messages`/`network_log`/screenshot
 - Produces: `browser_qa` 工具——输入字段与 verdict 形状以 spec §3 为准（expected_text/expected_selector/gone_selector/check_console/check_errors/check_network/screenshot/timeout_ms → `{passed, failed_checks, warnings, unverified, summary, evidence}`），DESCRIPTION 用 spec 实测 80B 版本原文
 
-- [ ] **Step 1: 失败测试**
+- [x] **Step 1: 失败测试**
 
 ```rust
 #[tokio::test]
@@ -126,7 +126,7 @@ async fn qa_on_a_dead_tab_answers_tab_gone_immediately() { /* T1 事件的端到
 async fn description_stays_within_the_80_byte_discipline() { /* ≤80 钉 */ }
 ```
 
-- [ ] **Step 2: 跑确认红 → Step 3: 实现**（管线序按 spec §2①；等待委托 wait_for；150ms 沉淀；减法/分级调 T2 纯函数；screenshot 证据复用既有动词）→ **Step 4: 绿 + 证伪**（摘一处注册 → 对应 census 红；DESCRIPTION 超限 → ratchet 红）+ commit `browser: browser_qa tool — one-call diagnostic verdict with honest tri-state`
+- [x] **Step 2: 跑确认红 → Step 3: 实现**（管线序按 spec §2①；等待委托 wait_for；150ms 沉淀；减法/分级调 T2 纯函数；screenshot 证据复用既有动词）→ **Step 4: 绿 + 证伪**（摘一处注册 → 对应 census 红；DESCRIPTION 超限 → ratchet 红）+ commit `browser: browser_qa tool — one-call diagnostic verdict with honest tri-state`
 
 ---
 
@@ -137,9 +137,9 @@ async fn description_stays_within_the_80_byte_discipline() { /* ≤80 钉 */ }
 - Modify: `src/browser/engine/capability.rs`（obscura 行按实测翻转或维持）
 - Modify: `docs/reference/FEATURE_LOCATOR.md` §3.12（C3 段 + ①②③挂号项关账）+ `qa/README.md`
 
-- [ ] **Step 1: caps 行 + 真机跑 + 证伪**（翻转表值 → diff 红 → 恢复）
-- [ ] **Step 2: 文档**（C3 段：落地清单、三态语义、与参考的 tool_result 翻转分歧登记、死亡检测器关 C2 残余、刻意不做；挂号项关账：①关闭 ②③降级路径交付）
-- [ ] **Step 3: 七条全量验证集**（基线 20,324 passed / 6 既存红——C3 新增测试 passed 变大正常，实测数字进 commit body）+ commit `docs: browser_qa — locator entry, caps probe, plan ledger`
+- [x] **Step 1: caps 行 + 真机跑 + 证伪**（翻转表值 → diff 红 → 恢复）
+- [x] **Step 2: 文档**（C3 段：落地清单、三态语义、与参考的 tool_result 翻转分歧登记、死亡检测器关 C2 残余、刻意不做；挂号项关账：①关闭 ②③降级路径交付）
+- [x] **Step 3: 七条全量验证集**（基线 20,324 passed / 6 既存红——C3 新增测试 passed 变大正常，实测数字进 commit body）+ commit `docs: browser_qa — locator entry, caps probe, plan ledger`
 
 ---
 
