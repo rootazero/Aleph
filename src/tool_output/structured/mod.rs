@@ -32,6 +32,7 @@ mod diff;
 mod json;
 mod log;
 mod search;
+mod crush;
 
 /// Recognized structured content types worth a tailored reducer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,6 +329,27 @@ pub fn reduce_within(text: &str, budget_tokens: Option<usize>) -> Option<Reducti
         // and `reduce_json` reported a 91-byte saving on a 91 KB document as a
         // success, so `Some(_)` carried no size guarantee for the caller at all.
         if let Some(reduction) = reduced.filter(|r| r.is_meaningful_shrink(text)) {
+            // Crush path (spec §2b): for the two high-variance kinds, when the
+            // reducer's artifact still exceeds the caller's byte allowance,
+            // fall back to lossy line-importance selection. `crush_within`
+            // re-checks the fit itself and declines when the existing
+            // artifact already fits — the lossy path only runs when no
+            // lossless one is left.
+            if let Some(budget) = budget_tokens {
+                if matches!(kind, ContentKind::Log | ContentKind::Search) {
+                    if let Some(body) = crush::crush_within(text, kind, budget) {
+                        let kept = crush::kept_line_count(&body);
+                        return Some(Reduction {
+                            kind,
+                            body,
+                            tally: Tally::Lines {
+                                kept,
+                                total: lines.len(),
+                            },
+                        });
+                    }
+                }
+            }
             return Some(reduction);
         }
     }
@@ -522,6 +544,53 @@ pub(super) fn is_error_signal(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::context::budget::pressure::chars_for_result_token_budget;
+
+    /// Routing the crush path end-to-end: at a generous budget the artifact
+    /// the router returns is the structured reducer's own; at a tight budget
+    /// the returned body fits the caller's allowance — which only the lossy
+    /// crusher can achieve for this input, where the reducer's artifact
+    /// demonstrably exceeds it.
+    #[test]
+    fn crush_routes_only_when_the_reducer_artifact_exceeds_the_budget() {
+        let mut s = String::from("$ cargo test\n");
+        for i in 0..200 {
+            s.push_str(&format!("test case_{i} ... ok\n"));
+        }
+        for k in 0..12 {
+            s.push_str(&format!("test suite::integration::checks::validation::fail_{k} ... FAILED\n"));
+        }
+        s.push_str("test result: FAILED. 12 failed; 200 passed\n");
+
+        let wide = reduce_within(&s, Some(8_000)).expect("wide reduces");
+        assert!(
+            wide.render().len() <= chars_for_result_token_budget(8_000),
+            "the wide artifact fits its allowance"
+        );
+        assert!(
+            wide.body.contains("fail_11"),
+            "the wide artifact keeps every failure line"
+        );
+
+        let tight = reduce_within(&s, Some(200)).expect("tight reduces");
+        let allowance = chars_for_result_token_budget(200);
+        assert!(
+            tight.render().len() <= allowance,
+            "the routed artifact must fit the caller's allowance: {} > {allowance}\n{}",
+            tight.render().len(),
+            tight.body
+        );
+        assert!(
+            tight.body.contains("fail_0"),
+            "highest-priority failures survive the crush:\n{}",
+            tight.body
+        );
+        assert!(
+            tight.tally.kept() < wide.tally.kept(),
+            "the crushed artifact keeps strictly fewer lines than the reducer's"
+        );
+    }
 
     #[test]
     fn prose_is_not_classified() {
