@@ -174,6 +174,7 @@ fn describe_condition(condition: &WaitCondition) -> String {
         WaitCondition::Text(t) => format!("Text '{t}'"),
         WaitCondition::TextGone(t) => format!("Text gone '{t}'"),
         WaitCondition::Selector(s) => format!("Selector '{s}'"),
+        WaitCondition::SelectorGone(s) => format!("Selector gone '{s}'"),
         WaitCondition::UrlContains(u) => format!("URL containing '{u}'"),
         WaitCondition::Time(ms) => format!("Delay {ms}ms"),
     }

@@ -514,6 +514,7 @@ mod tests {
                 *tabs = TabTable {
                     entries,
                     active: None,
+                    dead: Default::default(),
                 };
                 assert!(
                     tabs.entries.len() > 1 && tabs.active.is_none(),

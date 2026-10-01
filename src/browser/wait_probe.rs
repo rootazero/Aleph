@@ -62,6 +62,16 @@ pub(crate) fn wait_probe_func(condition: &WaitCondition) -> String {
                  ? {WAIT_PROBE_FOUND:?} : 'absent'; }} catch (e) {{ return {WAIT_PROBE_ERROR:?}; }} }}"
             )
         }
+        WaitCondition::SelectorGone(selector) => {
+            let needle = serde_json::to_string(selector).unwrap_or_else(|_| "\"\"".into());
+            // The Selector arm INVERTED: the element's absence is the found
+            // condition. Same try/catch — a malformed selector is a caller
+            // error, never silently read as "gone".
+            format!(
+                "() => {{ try {{ return document.querySelector({needle}) === null \
+                 ? {WAIT_PROBE_FOUND:?} : 'absent'; }} catch (e) {{ return {WAIT_PROBE_ERROR:?}; }} }}"
+            )
+        }
         WaitCondition::UrlContains(substr) => {
             let needle = serde_json::to_string(substr).unwrap_or_else(|_| "\"\"".into());
             format!("() => location.href.includes({needle}) ? {WAIT_PROBE_FOUND:?} : 'absent'")
@@ -281,5 +291,67 @@ mod tests {
             "Time must short-circuit before any evaluate — got {:?}",
             backend.calls()
         );
+    }
+
+    /// **Review Focus #5: `SelectorGone` is the `Selector` arm inverted, never
+    /// the `TextGone` arm.** The two "gone" waits watch different things — an
+    /// element's PRESENCE vs a string's CONTENT — and a spinner whose text
+    /// changed but which is still in the DOM must keep this wait waiting.
+    #[test]
+    fn selector_gone_probe_is_the_selector_arm_inverted_never_the_text_arm() {
+        let f = wait_probe_func(&WaitCondition::SelectorGone("#spinner".into()));
+        assert!(f.starts_with("() => "));
+        assert!(
+            f.contains("document.querySelector(\"#spinner\") === null"),
+            "absence of the ELEMENT resolves it: {f}"
+        );
+        assert!(f.contains("\"ALEPH_WAIT_FOUND\""));
+        // A malformed selector is a caller error, same as the Selector arm —
+        // never silently read as "gone".
+        assert!(f.contains("catch (e)"), "{f}");
+        assert!(f.contains("\"ALEPH_WAIT_ERROR\""), "{f}");
+        // The discriminator against a TextGone wiring: the text of the page
+        // is not consulted at all.
+        assert!(
+            !f.contains("innerText"),
+            "a text-content probe would resolve while the element still stands: {f}"
+        );
+    }
+
+    /// The wait resolves when the probe reports the element absent — and not
+    /// one poll earlier. (The "text changed but the element is still there"
+    /// case answers `absent` from the probe: the condition does NOT hold,
+    /// which is the whole distinction from TextGone — the JS shape above is
+    /// what makes that true, and the loop below is what honours it.)
+    #[tokio::test]
+    async fn selector_gone_resolves_only_when_the_element_leaves() {
+        let backend = FakeBackend::new(None).with_evaluate_responses([
+            "\"absent\"".to_string(),
+            "\"absent\"".to_string(),
+            format!("\"{WAIT_PROBE_FOUND}\""),
+        ]);
+        let found = poll_wait_for(
+            &backend,
+            "1",
+            &WaitCondition::SelectorGone("#s".into()),
+            5_000,
+        )
+        .await
+        .expect("a resolving probe is not an error");
+        assert!(found);
+        assert_eq!(
+            backend.calls().len(),
+            3,
+            "two present-polls then the gone-poll: {:?}",
+            backend.calls()
+        );
+
+        // The element never leaves: the condition not holding is an answer,
+        // not an error.
+        let backend = FakeBackend::new(None).with_evaluate_responses(["\"absent\""]);
+        let found = poll_wait_for(&backend, "1", &WaitCondition::SelectorGone("#s".into()), 0)
+            .await
+            .expect("a timeout is an answer, not an error");
+        assert!(!found);
     }
 }

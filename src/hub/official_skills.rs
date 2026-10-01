@@ -66,6 +66,9 @@ pub fn primer_entries() -> Vec<ExtensionEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Dropped from the parent's imports by cea4632b3 as production-unused —
+    // but the assertions below read them. Test-only, on purpose.
+    use crate::hub::types::{ExtensionCategory, TrustTier};
 
     const SAMPLE: &str = "---\nname: PDF Tools\ndescription: Work with PDFs.\n---\nBody.";
 

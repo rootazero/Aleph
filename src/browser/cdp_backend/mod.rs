@@ -183,7 +183,7 @@ impl CdpBackend {
             .registry
             .handle(self.engine, &self.req, EngineLaunch::Refuse)
             .await?;
-        events::ensure_pump(&handle);
+        events::ensure_pump(&handle, &self.tab_identities);
         Ok(handle)
     }
 
@@ -194,7 +194,7 @@ impl CdpBackend {
             .registry
             .handle(self.engine, &self.req, EngineLaunch::Allow)
             .await?;
-        events::ensure_pump(&handle);
+        events::ensure_pump(&handle, &self.tab_identities);
         Ok(handle)
     }
 
@@ -690,6 +690,7 @@ pub(crate) mod test_support {
             ref_precheck: Cap::Supported,
             network_interception: Cap::Supported,
             screencast: Cap::Supported,
+            error_events: Cap::Supported,
             measured_on: "test fixture",
         }
     }

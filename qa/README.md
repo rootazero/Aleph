@@ -77,7 +77,16 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # check, and stopScreencast actually stops (frames
                                    # in flight during the stop round-trip are not
                                    # counted — the engine sent them before processing
-                                   # stop) — measured Supported on v0.2.2)
+                                   # stop) — measured Supported on v0.2.2;
+                                   # round-2/C3's error_events probed since 2026-10-01:
+                                   # an ASYNC throw whose callback is proven to have
+                                   # run (a window flag set before the throw), the
+                                   # Runtime.exceptionThrown event must arrive naming
+                                   # the probe marker — measured Unsupported on v0.2.2
+                                   # (the event NEVER arrives, the second silent-miss
+                                   # of its kind after Page.javascriptDialogOpening);
+                                   # the tool face ([error] in the console ring) is
+                                   # asserted only when the engine half delivers)
 ./qa/browser_dual/run.sh escape    # the host this branch is BUILT for: no playwright-cli
                                    # anywhere (PATH scrubbed, fnm env unset, scratch
                                    # ledger). obscura still opens AND so does a Chrome
@@ -977,6 +986,26 @@ engine promised. Measured Supported on v0.2.2 (12/12 decodable, acks accepted,
 clean stop), and the chromium row's first real-machine reading (Chrome 151,
 full ffmpeg encode leg included) lives in the probe that certified it:
 `docs/superpowers/specs/2026-09-27-browser-recording-design/probes/`.
+Round-2/C3 (2026-10-01) added the `error_events` row: an ASYNC throw (a
+synchronous one is entitled to live only in the evaluate call's own
+exceptionDetails) whose callback is PROVEN to have run — a window flag is set
+before the throw, so a silent event stream is attributable to the engine and
+never to the fixture (判据 §2) — and the `Runtime.exceptionThrown` event must
+arrive naming the probe marker. Measured Unsupported on v0.2.2: the event
+never arrives (two independent readings — this stage and
+`docs/superpowers/specs/2026-09-30-browser-qa-design/probes/qa-events-probe.mjs`
+— agree), the second silent-miss of its kind after
+`Page.javascriptDialogOpening`. The same probe took the hitchhiked reading
+C3 Task 1's death detector needed: obscura DOES emit `Target.targetDestroyed`
+for the `Target.closeTarget` shape (targetId matched), while `Page.close` is
+unimplemented on this build (recorded unprovocable, not a reading); chromium
+(Chrome 151) delivers both destroy shapes AND the exception event, which
+upgraded its `error_events` row from the same-pump inference to a measurement.
+The tool face of `error_events` — the `[error]` line Aleph's own event pump
+folds into the console ring, which is what `browser_qa`'s check_errors
+consumes — is asserted only when the engine half delivers: an engine that
+never emits the event has nothing to fold, and redding the stage for that
+would blame our code for the engine's silence.
 
 **`switch` is the only place spec §5.5's "the login survives" is a fact rather
 than an intention.** Its load-bearing claims are the two no RPC can see: the

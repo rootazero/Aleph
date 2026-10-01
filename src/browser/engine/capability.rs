@@ -140,6 +140,13 @@ pub struct EngineCapabilities {
     /// the frames feed an ffmpeg encoder, so the row covers the engine's
     /// half of the pipe, not the encoder's.
     pub screencast: Cap,
+    /// `browser_qa`'s `check_errors` dimension — the engine's
+    /// `Runtime.exceptionThrown` events, which the cdp backend's event pump
+    /// folds into the console ring as `[error]` lines
+    /// (`cdp_backend::events.rs`). The same pump already serves
+    /// `Runtime.consoleAPICalled`, so the row is about whether THIS event
+    /// arrives, not whether events do.
+    pub error_events: Cap,
     /// The build each row above was measured against. A capability claim with
     /// no measurement date is a list that expires without telling anyone.
     pub measured_on: &'static str,
@@ -150,7 +157,7 @@ pub struct EngineCapabilities {
 /// being described, serialised or falsified, so Task 16's
 /// `cap_fields_covers_every_cap_typed_field_of_the_struct` derives the expected
 /// set from this file's own source (判据 §3).
-pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 9] = [
+pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 10] = [
     ("js_dialogs", |c| c.js_dialogs),
     ("drag", |c| c.drag),
     ("file_upload", |c| c.file_upload),
@@ -160,6 +167,7 @@ pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 9] = [
     ("ref_precheck", |c| c.ref_precheck),
     ("network_interception", |c| c.network_interception),
     ("screencast", |c| c.screencast),
+    ("error_events", |c| c.error_events),
 ];
 
 static OBSCURA: EngineCapabilities = EngineCapabilities {
@@ -291,6 +299,19 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // capability is per-domain, not per-binary, which is why these are two
     // rows and not one.
     screencast: Cap::Supported,
+    // **Unsupported on a MEASUREMENT (2026-10-01, pinned v0.2.2, x86_64-linux)
+    // — the fail-closed NOT_PROBED answer the row shipped with is spent.**
+    // The same-pump argument (`Runtime.consoleAPICalled`, measured working on
+    // this build) argued FOR arrival — and lost. Two independent readings
+    // fired an async throw whose callback was PROVEN to run (a window flag
+    // set before the throw, 判据 §2): `qa/browser_dual`'s caps line and the
+    // spec-side probe (docs/superpowers/specs/2026-09-30-browser-qa-design/
+    // probes/qa-events-probe.mjs). `Runtime.exceptionThrown` never arrived
+    // within 10 s on either. The `Page.javascriptDialogOpening` silent miss
+    // (see the `js_dialogs` row) is now a pattern, not an anecdote: this
+    // build does not broadcast its Runtime-domain page faults. What flips
+    // the row: a build that emits the event — re-run the caps line.
+    error_events: Cap::Unsupported,
     // **Derived, never spelled.** `runtimes::specs` owns the pinned tag
     // (`obscura_tag!` / `OBSCURA_TAG`) and its doc says "bump this — and only
     // this — … everything else follows". A literal here made this row a second
@@ -347,6 +368,17 @@ static CHROMIUM: EngineCapabilities = EngineCapabilities {
     // date this row rested on the same-connection argument alone; the probe
     // replaced the argument with a reading.
     screencast: Cap::Supported,
+    // **Measured 2026-10-01 on Chrome 151.0.7922.169 (headless=new) — the
+    // same-pump inference the row shipped with is replaced by a reading.**
+    // The spec-side probe (docs/superpowers/specs/2026-09-30-browser-qa-
+    // design/probes/qa-events-probe.mjs, `--engine chrome`) fired an async
+    // throw and `Runtime.exceptionThrown` arrived naming the probe marker
+    // (exceptionDetails, uncaught). The pump and the `Runtime.enable`
+    // subscription are shared with `Runtime.consoleAPICalled`, as the old
+    // inference said; what changed is that THIS event's arrival is now a
+    // fact rather than an argument from the sibling. `qa/browser_dual`'s
+    // caps line keeps the obscura half honest.
+    error_events: Cap::Supported,
     // Provenance, not a freshness stamp: this row records the build the
     // capabilities were measured on. Re-confirmed unchanged on Chrome
     // 153.0.8010.36 (2026-09-13) — recorded here rather than by editing the
@@ -498,7 +530,7 @@ mod tests {
     /// ran the three premises against the real pinned-tag binary and the
     /// row is now a measured `Unsupported` (see the `OBSCURA` row for the
     /// evidence and what would open the gate).
-    const NOT_PROBED: [(&str, &str); 5] = [
+    const NOT_PROBED: [(&str, &str); 6] = [
         (
             "drag",
             "T0's Input.dispatchDragEvent label measures a method no browser_* verb \
@@ -538,6 +570,16 @@ mod tests {
              (every frame decodable JPEG, acks accepted, clean stop), and \
              Chrome 151.0.7922.169 passed the full encode leg (ffmpeg exit 0, \
              ffprobe-readable vp8 webm) — a MEASURED Supported on BOTH engines",
+        ),
+        (
+            "error_events",
+            "T0's wire matrix has no Runtime.exceptionThrown label; settled by C3 \
+             Task 4 on 2026-10-01 (qa/browser_dual's caps line + docs/superpowers/\
+             specs/2026-09-30-browser-qa-design/probes/qa-events-probe.mjs): the \
+             pinned obscura build NEVER emits the event (the throwing callback was \
+             proven to run — a MEASURED Unsupported, the second silent-miss of its \
+             kind), while Chrome 151.0.7922.169 delivers it naming the marker — a \
+             MEASURED Supported",
         ),
     ];
 
@@ -687,6 +729,8 @@ mod tests {
             ("screencast", "start"),
             ("screencast", "stop"),
             ("screencast", "status"),
+            // The exception fold is one row behind ONE dimension of ONE verb.
+            ("error_events", "browser_qa"),
         ] {
             assert!(
                 CAP_FIELDS.iter().any(|(n, _)| *n == name),
@@ -807,9 +851,9 @@ mod tests {
             .collect();
         assert_eq!(
             exempt_disagreements,
-            vec!["drag", "effect_probe", "network_interception"],
+            vec!["drag", "effect_probe", "network_interception", "error_events"],
             "a matrix-exempt row other than \
-             `drag`/`effect_probe`/`network_interception` \
+             `drag`/`effect_probe`/`network_interception`/`error_events` \
              now answers differently per engine. That difference is published to the model \
              as a route, and nothing in the matrix decides it — state the \
              reading that does, beside BOTH values, and check it here"
@@ -841,6 +885,19 @@ mod tests {
             production.contains("2026-09-24-browser-network-mock"),
             "the network_interception rows no longer name the Task 4 probe that \
              decides obscura's value"
+        );
+        // error_events' disagreement rests on MEASUREMENTS on both sides
+        // since 2026-10-01 (C3 Task 4): obscura never emits
+        // Runtime.exceptionThrown (the throwing callback proven to run — the
+        // second silent-miss of its kind, after javascriptDialogOpening),
+        // chromium delivers it (Chrome 151, qa-events-probe). Both rows must
+        // keep naming the probe and the precedent, or the route published to
+        // the model rests on an argument nobody can read.
+        assert!(
+            production.contains("javascriptDialogOpening")
+                && production.contains("qa-events-probe"),
+            "the error_events rows no longer state the precedent (obscura) and the \
+             probe (both engines) they rest on"
         );
         // screencast's disagreement CLOSED on 2026-09-30: the Task 4 probe
         // measured obscura's stream sound (it is now `Supported` on both
@@ -1221,6 +1278,10 @@ mod tests {
         // the chromium side, and so a careless flip back is caught).
         assert_eq!(json["chromium"]["screencast"], "supported");
         assert_eq!(json["obscura"]["screencast"], "supported");
+        // The C3 row: chromium serves the exception fold on the same-pump
+        // inference; obscura ships fail-closed until the caps line probes it.
+        assert_eq!(json["chromium"]["error_events"], "supported");
+        assert_eq!(json["obscura"]["error_events"], "unsupported");
         // The cut rows must not reappear in the published object either — this
         // is the face the QA `caps` stage and the model both read.
         for cut in ["touch", "multi_connection"] {

@@ -53,8 +53,9 @@ pub enum BrowserError {
     #[error("Tab not found: {0}")]
     TabNotFound(String),
 
-    /// A tab this profile previously recorded is gone from the browser: its
-    /// targetId is absent from the live target enumeration.
+    /// A tab this profile previously recorded is gone from the browser: the
+    /// engine reported its target destroyed, or its targetId is absent from
+    /// a live target enumeration.
     ///
     /// Distinct from [`Self::TabNotFound`], which means "this registry never
     /// heard of that id" (判据 §8 — the two answers license different
@@ -62,11 +63,12 @@ pub enum BrowserError {
     /// can recognise WHICH page vanished; it never claims anything about the
     /// page's state beyond that last observation.
     ///
-    /// Produced by [`super::tab_registry::TabRegistry::resolve_identity`] when
-    /// a recorded target is absent from a fresh enumeration — the page's own
-    /// `window.close`, a browser restart, a re-attach onto a browser whose
-    /// tabs changed. The recovery it names is a fresh listing, because every
-    /// id the model holds may be stale, not only this one.
+    /// Produced by the event pump's `Target.targetDestroyed` fold
+    /// (`engine::EngineHandle::ensure_tab` answering from the table's dead
+    /// set) and by [`super::tab_registry::TabRegistry::resolve_identity`] —
+    /// the page's own `window.close`, a browser restart, a re-attach onto a
+    /// browser whose tabs changed. The recovery it names is a fresh listing,
+    /// because every id the model holds may be stale, not only this one.
     #[error("{}", tab_gone_text(tab_id, last_url))]
     TabGone {
         tab_id: String,

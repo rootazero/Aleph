@@ -738,6 +738,7 @@ fn condition_label(condition: &WaitCondition) -> String {
         WaitCondition::Text(t) => format!("text '{t}'"),
         WaitCondition::TextGone(t) => format!("text_gone '{t}'"),
         WaitCondition::Selector(s) => format!("selector '{s}'"),
+        WaitCondition::SelectorGone(s) => format!("selector_gone '{s}'"),
         WaitCondition::UrlContains(u) => format!("url_contains '{u}'"),
         WaitCondition::Time(ms) => format!("delay {ms}ms"),
     }
