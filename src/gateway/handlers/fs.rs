@@ -768,14 +768,15 @@ mod tests {
         // compared with — from `$HOME` (`~` entries) and `$ALEPH_HOME` (the
         // config-file entries), so a test that moves either in between hands
         // the two halves different lists.
+        // the two halves different lists. Both are held, unchanged, for the
+        // whole body: `get_denied_paths()` resolves `<config_dir>` from
+        // `$ALEPH_HOME` and `~/…` from `$HOME` — here, and again inside the
+        // handler — so a test that repoints either in between turns an entry
+        // listed here into one the handler does not deny, and the assertion
+        // reads a race as a leak. One acquire, not two: `HomeEnvGuards` is
+        // not reentrant, and a second acquire in this same body deadlocked
+        // the test against ITSELF, hanging every `--lib` run behind it.
         let _env = crate::runtimes::post_install::HomeEnvGuards::acquire();
-
-        // `get_denied_paths()` resolves `<config_dir>` from `$ALEPH_HOME` and
-        // `~/…` from `$HOME` — here, and again inside the handler. A test that
-        // repoints either in between turns an entry listed here into one the
-        // handler does not deny, so the assertion reads a race as a leak. Both
-        // are held, unchanged, for the whole body.
-        let _env = crate::runtimes::post_install::HomeEnvGuards::acquire_and_keep();
 
         let mut checked = 0usize;
         for entry in get_denied_paths() {
