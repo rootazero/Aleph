@@ -148,7 +148,9 @@ async fn validate_url_full_inner(
     // 127.0.0.1 / 169.254.169.254. (Previously this used `SsrfPolicy::disabled()`,
     // which waived all IP checks and was a DNS-rebinding SSRF bypass.)
     if is_allowlisted(host, &policy.allowed_hosts) {
-        let port = url.port_or_known_default().unwrap_or(80);
+        let port = url
+            .port_or_known_default()
+            .expect("validate_scheme already restricted to http/https with known defaults");
         let pinned = resolve_and_validate(host, port, &SsrfPolicy::for_allowlisted_host()).await?;
         return Ok((url, pinned));
     }
@@ -166,7 +168,9 @@ async fn validate_url_full_inner(
     }
 
     // DNS resolution + IP validation
-    let port = url.port_or_known_default().unwrap_or(80);
+    let port = url
+        .port_or_known_default()
+        .expect("validate_scheme already restricted to http/https with known defaults");
     let pinned = resolve_and_validate(host, port, policy).await?;
 
     Ok((url, pinned))

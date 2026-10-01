@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::error::Result;
 use crate::media::detect::{detect_by_extension, detect_from_path};
 use crate::media::{MediaInput, MediaPipeline, MediaType};
-use crate::security::ssrf::{validate_url_async, SsrfPolicy};
+use crate::security::ssrf::{validate_url_with_pinned, SsrfPolicy};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -154,7 +154,7 @@ Examples:
                         "`url` must be http:// or https:// (got '{scheme}://')"
                     )));
                 }
-                validate_url_async(url, &SsrfPolicy::default())
+                validate_url_with_pinned(url, &SsrfPolicy::default())
                     .await
                     .map_err(|e| {
                         crate::error::AlephError::tool(format!(

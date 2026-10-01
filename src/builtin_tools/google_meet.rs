@@ -396,7 +396,7 @@ impl AlephTool for GoogleMeetTool {
         // attempt could turn the bridge into a confused deputy
         // for any host on its network. Validate here.
         if let Some(meeting) = args.meeting.as_deref() {
-            crate::security::ssrf::validate_url_async(meeting, &self.ssrf_policy)
+            crate::security::ssrf::validate_url_with_pinned(meeting, &self.ssrf_policy)
                 .await
                 .map_err(|e| {
                     AlephError::tool(format!(

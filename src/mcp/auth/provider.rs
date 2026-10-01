@@ -118,7 +118,7 @@ impl OAuthProvider {
     /// posted to a bad endpoint would leak. Reuse the shared SSRF policy.
     async fn ensure_ssrf_safe(&self, url: &str, purpose: &str) -> Result<()> {
         let policy = crate::security::ssrf::SsrfPolicy::default();
-        match crate::security::ssrf::validate_url_async(url, &policy).await {
+        match crate::security::ssrf::validate_url_with_pinned(url, &policy).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 tracing::warn!(

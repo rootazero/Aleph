@@ -21,7 +21,7 @@ use crate::a2a::port::{AgentHealth, AgentResolver, RegisteredAgent};
 use crate::a2a::service::CardRegistry;
 use crate::a2a::sub_agent::A2ASubAgent;
 use crate::error::{AlephError, Result};
-use crate::security::ssrf::{validate_url_async, SsrfPolicy};
+use crate::security::ssrf::{validate_url_with_pinned, SsrfPolicy};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -305,7 +305,7 @@ impl AlephTool for A2AAgentsTool {
                 // `http://169.254.169.254/latest/meta-data/` or
                 // `http://127.0.0.1:8123/` would be happily registered and
                 // called on every smart-route, with the persisted token
-                // attached. validate_url_async returns the same
+                // attached. validate_url_with_pinned returns the same
                 // host-policy decision web_fetch uses, so the operator's
                 // existing config controls both surfaces.
                 let url_for_card = url::Url::parse(&url)
@@ -317,7 +317,7 @@ impl AlephTool for A2AAgentsTool {
                          refusing to register a non-HTTP A2A agent"
                     )));
                 }
-                validate_url_async(
+                validate_url_with_pinned(
                     &url,
                     // Plumb the operator's `[ssrf]` config through
                     // A2AToolDeps instead of the hard-coded default.

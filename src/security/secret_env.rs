@@ -68,10 +68,11 @@ const SECRET_SUFFIXES: &[&str] = &[
 ];
 
 /// Substring markers that flag a name as credential-bearing regardless of
-/// position. `_SECRET` only matches the suffix (`FOO_SECRET`), not the
-/// substring (`SECRET_FOO`); the substring form catches the common
-/// `MY_*_SECRET_NAME` shape that real-world deployments use.
-const SECRET_SUBSTRINGS: &[&str] = &["SECRET", "PASSWORD", "PRIVATE_KEY", "CREDENTIAL"];
+/// position. The suffix list (`_SECRET`, `_PASSWORD`, `_PRIVATE_KEY`,
+/// `_CREDENTIALS`) already covers the suffix shape, so this list only carries
+/// substrings without a matching suffix rule — `CREDENTIAL` for names like
+/// `MY_CREDENTIAL_STORE_TOKEN` that don't end in `_CREDENTIALS`.
+const SECRET_SUBSTRINGS: &[&str] = &["CREDENTIAL"];
 
 #[must_use]
 pub fn is_secret_env(name: &str) -> bool {

@@ -26,7 +26,7 @@ const WEB_FETCH_FALLBACK_NAME: &str = "web-fetch-fallback";
 /// Search provider registry and router
 ///
 /// This module manages multiple search providers and routes requests
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// What a search returned, together with what it could not do.
 ///
@@ -314,17 +314,14 @@ impl SearchRegistry {
         // constructed provider to default so the working backends stay
         // reachable. (`any_added` guarantees `providers` is non-empty here.)
         if !registry.providers.contains_key(&registry.default_provider) {
-            let mut names: Vec<&String> = registry.providers.keys().collect();
-            names.sort();
-            if let Some(promoted) = names.first() {
+            if let Some(promoted) = registry.providers.keys().min() {
                 log::warn!(
                     "[search] default_provider '{}' was not constructed (missing config?); \
                      promoting '{}' to default so usable backends remain reachable",
                     registry.default_provider,
                     promoted
                 );
-                // rust-doctor-disable-next-line excessive-clone
-                registry.default_provider = (*promoted).clone();
+                registry.default_provider = promoted.clone();
             }
         }
         if let Some(ref fallbacks) = cfg.fallback_providers {
@@ -517,7 +514,7 @@ impl SearchRegistry {
         // that is never adjacent (`[default, ...fallbacks]`). Missing that
         // would consult the same backend twice, spend its quota twice, and
         // count its failure twice against the chain.
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         let mut names: Vec<String> = std::iter::once(self.default_provider.clone())
             .chain(self.fallback_providers.iter().cloned())
             .filter(|n| self.providers.contains_key(n))
@@ -526,7 +523,7 @@ impl SearchRegistry {
         // Read health once per name rather than once per comparison, which
         // also gives the log line below something to say without a second
         // pass over the map.
-        let degraded: std::collections::HashSet<String> = names
+        let degraded: HashSet<String> = names
             .iter()
             .filter(|n| self.health.is_degraded(n))
             .cloned()
@@ -544,18 +541,18 @@ impl SearchRegistry {
             // the config file to answer — and the recorded failure kind is
             // what tells the operator whether to wait (quota) or to fix
             // something (auth) before the demotion expires on its own.
-            let mut names: Vec<String> = degraded
+            let mut demoted_names: Vec<String> = degraded
                 .iter()
                 .map(|n| match self.health.last_failure_kind(n) {
                     Some(kind) => format!("{n} ({})", kind.as_str()),
                     None => n.clone(),
                 })
                 .collect();
-            names.sort_unstable();
+            demoted_names.sort_unstable();
             log::info!(
                 target: "search",
                 "demoted after a recent failure (still asked if those ahead do not answer): {}",
-                names.join(", ")
+                demoted_names.join(", ")
             );
         }
         names
@@ -572,7 +569,7 @@ impl SearchRegistry {
     fn resolve_named(&self, names: &[String]) -> Result<Vec<(String, &Arc<dyn SearchProvider>)>> {
         let mut resolved = Vec::with_capacity(names.len());
         let mut missing: Vec<&str> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         for name in names {
             if !seen.insert(name.as_str()) {
                 continue; // naming a backend twice asks it once
@@ -710,7 +707,7 @@ impl SearchRegistry {
     ) -> Result<MultiSearchAnswer> {
         // Distinct, non-empty, in asking order: asking the same question
         // twice spends the chain's quota twice for the same answer.
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         let queries: Vec<String> = queries
             .iter()
             .map(|q| q.trim().to_string())
@@ -733,7 +730,7 @@ impl SearchRegistry {
         let mut per_query: Vec<Vec<SearchResult>> = Vec::with_capacity(queries.len());
         let mut providers: Vec<String> = Vec::new();
         let mut notes: Vec<String> = Vec::new();
-        let mut seen_notes = std::collections::HashSet::new();
+        let mut seen_notes = HashSet::new();
         let mut failures: Vec<(&String, AlephError)> = Vec::new();
 
         for (query, outcome) in queries.iter().zip(outcomes) {

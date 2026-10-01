@@ -249,17 +249,18 @@ impl WebFetchSerpFallback {
         self.lock_cooldowns().insert(name, Instant::now());
     }
 
-    /// Acquire the cooldown map lock, recovering from poisoning.
+    /// Acquire the cooldown map lock.
     ///
-    /// Cool-down writes are non-panicking (`HashMap::insert`), so the
-    /// only way the mutex can be poisoned is by a panic on a different
-    /// thread *while* the lock is held — which the existing code
-    /// (`is_cooling_down`, `note_failure`) cannot trigger. Recovering
-    /// via `into_inner()` rather than propagating the poison error
-    /// keeps the fallback path infallible: a stale poison would
-    /// otherwise lock out every mirror until process restart.
+    /// Cool-down writes are non-panicking (`HashMap::insert`), so the only
+    /// way the mutex can be poisoned is by a panic on a different thread
+    /// *while* the lock is held — which the existing code (`is_cooling_down`,
+    /// `note_failure`) cannot trigger. Propagating keeps the fallback path
+    /// honest: a poisoned lock should be surfaced, not silently recovered,
+    /// because no in-process call path can produce one.
     fn lock_cooldowns(&self) -> MutexGuard<'_, HashMap<&'static str, Instant>> {
-        self.cooldowns.lock().unwrap_or_else(|e| e.into_inner())
+        self.cooldowns
+            .lock()
+            .expect("lock held across non-panicking HashMap ops")
     }
 
     /// Test-only: drop all cool-down state. Wiring tests want to
