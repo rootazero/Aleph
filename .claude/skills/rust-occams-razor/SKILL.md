@@ -1,5 +1,5 @@
 ---
-name: simplifying-rust-with-occams-razor
+name: rust-occams-razor
 description: Use when refactoring, simplifying, reviewing, or decomposing an existing Rust codebase while preserving observable behavior, public contracts, concurrency semantics, and performance characteristics.
 ---
 

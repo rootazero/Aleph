@@ -425,6 +425,15 @@ pub struct ChannelCapabilities {
     pub read_receipts: bool,
     /// Supports rich text/markdown
     pub rich_text: bool,
+    /// Supports creating polls in conversations (iMessage via BlueBubbles,
+    /// Telegram natively, Discord planned). `false` makes
+    /// `Channel::create_poll`'s default body return `UnsupportedFeature`
+    /// without touching the adapter, so an honest "we don't" never costs a
+    /// panic.
+    pub polls: bool,
+    /// Supports setting the icon of a group conversation. Same shape as
+    /// `polls`: `false` lets the trait default fire cleanly.
+    pub group_icons: bool,
     /// Maximum message length the transport accepts, in **characters**
     /// (0 = unknown / unlimited). Every adapter populates it from its vendor's
     /// documented character limit (telegram 4096, discord 2000, irc 400, …).
@@ -935,6 +944,65 @@ pub trait Channel: Send + Sync {
             self.channel_type(),
             self.capabilities().reactions,
             "reactions",
+        ))
+    }
+
+    /// Create a poll in the given conversation. Default: `UnsupportedFeature`.
+    ///
+    /// iMessage-native (BlueBubbles exposes `createPoll` against a chat_guid).
+    /// R8 (tools = everything) requires that a chat op with an implementation
+    /// be reachable through an `AlephTool`; the `CreatePoll` variant of
+    /// `ChannelMessageAction` dispatches here. Channels without poll support
+    /// inherit this default and surface `ChannelError::UnsupportedFeature`,
+    /// not a panic. The capability flag in `ChannelCapabilities::polls` is the
+    /// contract: `false` here is what `unsupported_feature(...)` reports, so
+    /// a transport can be honest without overriding the method.
+    async fn create_poll(
+        &self,
+        _conversation_id: &ConversationId,
+        _question: &str,
+        _options: &[String],
+        _allow_multiple: bool,
+    ) -> ChannelResult<MessageId> {
+        Err(unsupported_feature(
+            self.channel_type(),
+            self.capabilities().polls,
+            "polls",
+        ))
+    }
+
+    /// Set the icon of a group conversation. Default: `UnsupportedFeature`.
+    ///
+    /// Implemented for BlueBubbles (Private API helper #8) and WhatsApp
+    /// (wacore `SetProfilePictureSpec::set_group`). Same R8 rationale as
+    /// `create_poll`. Capability flag: `ChannelCapabilities::group_icons`.
+    ///
+    /// ## `_icon_data_url` contract (RFC 2397)
+    ///
+    /// Must be a `data:` URL of the form
+    /// `data:[<mediatype>][;base64],<data>` — e.g.
+    /// `data:image/png;base64,iVBORw0KGgo...`. Only `;base64,` payloads
+    /// are accepted; URL-encoded payloads (no `;base64,`) are rejected
+    /// because silent latin-1 decode would corrupt binary image bytes.
+    /// The shared decoder at `crate::gateway::data_url::decode` is the
+    /// single source of truth — adapters MUST go through it (or match
+    /// its error vocabulary) rather than re-implementing the parser.
+    /// Adapters that cannot decode the data URL MUST return
+    /// `ChannelError::Internal` (or a more specific variant if the
+    /// channel's error vocabulary has one) rather than guessing.
+    ///
+    /// The `channel_message` builtin tool enforces that
+    /// `icon_data_url` is non-empty before this trait method is called;
+    /// transport-level decode failures belong here.
+    async fn set_group_icon(
+        &self,
+        _conversation_id: &ConversationId,
+        _icon_data_url: &str,
+    ) -> ChannelResult<()> {
+        Err(unsupported_feature(
+            self.channel_type(),
+            self.capabilities().group_icons,
+            "group icon",
         ))
     }
 

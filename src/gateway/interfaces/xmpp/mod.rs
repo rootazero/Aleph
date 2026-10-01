@@ -104,6 +104,8 @@ impl XmppChannel {
             // XEP-0184 receipts are not wired: no `mark_read` override exists.
             read_receipts: false,
             rich_text: false, // Using plain text for simplicity
+            polls: false,
+            group_icons: false,
             max_message_length: 65535,
             max_attachment_size: 0,
             stream_protocol: Default::default(),

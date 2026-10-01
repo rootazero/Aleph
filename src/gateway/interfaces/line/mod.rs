@@ -76,6 +76,8 @@ impl LineChannel {
             typing_indicator: true,
             read_receipts: false,
             rich_text: true,
+            polls: false,
+            group_icons: false,
             max_message_length: 5000,
             max_attachment_size: 50 * 1024 * 1024,
             // NOT EditBased: `edit` below returns `UnsupportedFeature`

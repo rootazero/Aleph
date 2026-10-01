@@ -34,7 +34,8 @@ pub struct SkillStatusEntry {
     #[serde(default)]
     pub emoji: Option<String>,
     pub source: serde_json::Value,
-    /// Human-readable source label for grouping and display (e.g. "Bundled", "Global", "Plugin")
+    /// Human-readable source label for grouping and display (e.g. "Official",
+    /// "Aleph", "Claude", "Agents", "Workspace", "Plugin: X")
     #[serde(default)]
     pub source_label: String,
     #[serde(default)]
@@ -423,6 +424,23 @@ fn SkillList(
             });
         }
     }
+
+    // Stable display order: first-appearance order reshuffles whenever the
+    // RPC's skill ordering changes, which reads as the page rearranging
+    // itself. Pin the known labels; plugins sort among themselves by label
+    // and anything unrecognised lands last rather than vanishing.
+    fn group_rank(label: &str) -> (u8, &str) {
+        match label {
+            "Official" => (0, ""),
+            "Aleph" => (1, ""),
+            "Agents" => (2, ""),
+            "Claude" => (3, ""),
+            "Workspace" => (4, ""),
+            l if l.starts_with("Plugin: ") => (5, l),
+            _ => (6, label),
+        }
+    }
+    groups.sort_by(|a, b| group_rank(&a.source_label).cmp(&group_rank(&b.source_label)));
 
     let groups = StoredValue::new(groups);
 
@@ -964,8 +982,16 @@ fn SkillDetailDialog(
                         </div>
                     </div>
 
-                    // Remove button (for non-bundled skills)
-                    {if skill_for_settings.source_label != "Bundled" {
+                    // Remove button (hidden for read-only sources: Official
+                    // and the compat roots). Matches on the structured
+                    // `source.type`, not the display label — a label rename
+                    // must not resurrect the button for a source the core
+                    // refuses to remove (`skill_manage::mutable_skill_file`
+                    // rejects bundled/compat writes).
+                    {if !matches!(
+                        skill_for_settings.source.get("type").and_then(|t| t.as_str()),
+                        Some("bundled") | Some("compat")
+                    ) {
                         view! {
                             <div class="pt-2 border-t border-border">
                                 <button

@@ -580,10 +580,12 @@ pub fn find_git_root(start: &std::path::Path) -> Option<PathBuf> {
 ///
 /// 1. **Project level** (traverse up from current directory to git root):
 ///    - `.aleph/skills/` - Aleph native
+///    - `.agents/skills/` - shared cross-tool convention
 ///    - `.claude/skills/` - Claude Code compatibility
 ///
 /// 2. **User level** (global):
 ///    - `~/.aleph/skills` - Aleph native
+///    - `~/.agents/skills` - shared cross-tool convention
 ///    - `~/.claude/skills` - Claude Code compatibility
 ///
 /// # Arguments
@@ -609,18 +611,15 @@ fn collect_project_skills_dirs(
     let mut dirs = Vec::new();
     let mut current = start_dir.to_path_buf();
     loop {
-        // Check .aleph/skills/
-        let aleph_skills = current.join(".aleph").join("skills");
-        if aleph_skills.is_dir() && !dirs.contains(&aleph_skills) {
-            info!(path = %aleph_skills.display(), "Found project-level .aleph/skills");
-            dirs.push(aleph_skills);
-        }
-
-        // Check .claude/skills/ (Claude Code compatibility)
-        let claude_skills = current.join(".claude").join("skills");
-        if claude_skills.is_dir() && !dirs.contains(&claude_skills) {
-            info!(path = %claude_skills.display(), "Found project-level .claude/skills");
-            dirs.push(claude_skills);
+        // Per level, in first-occurrence-win order: native .aleph, then the
+        // shared convention's canonical .agents, then the .claude compat
+        // copy (usually a symlink or duplicate of the .agents one).
+        for flavor in [".aleph", ".agents", ".claude"] {
+            let skills = current.join(flavor).join("skills");
+            if skills.is_dir() && !contains_equivalent(&dirs, &skills) {
+                info!(path = %skills.display(), "Found project-level {flavor}/skills");
+                dirs.push(skills);
+            }
         }
 
         // Stop at git root or if we've reached filesystem root
@@ -822,7 +821,7 @@ fn collect_plugin_skills_from_root(plugins_root: &Path, dirs: &mut Vec<PathBuf>)
         let direct = entry_path.join("skills");
         if direct.is_dir() {
             // Direct layout: <plugins_root>/<plugin>/skills
-            if !dirs.contains(&direct) {
+            if !contains_equivalent(dirs, &direct) {
                 dirs.push(direct);
             }
         } else if let Ok(sub_entries) = std::fs::read_dir(&entry_path) {
@@ -831,7 +830,7 @@ fn collect_plugin_skills_from_root(plugins_root: &Path, dirs: &mut Vec<PathBuf>)
             // `scan_plugin_parent`'s "no direct manifest → scan subdirs" branch.
             for sub in sub_entries.flatten() {
                 let skills = sub.path().join("skills");
-                if skills.is_dir() && !dirs.contains(&skills) {
+                if skills.is_dir() && !contains_equivalent(dirs, &skills) {
                     dirs.push(skills);
                 }
             }
@@ -875,7 +874,7 @@ fn agent_skills_dir(dirs: &mut Vec<PathBuf>) {
         if is_safe_agent_id(&agent_id) {
             if let Ok(config_dir) = get_config_dir() {
                 let agent_skills = config_dir.join("agents").join(&agent_id).join("skills");
-                if agent_skills.is_dir() && !dirs.contains(&agent_skills) {
+                if agent_skills.is_dir() && !contains_equivalent(dirs, &agent_skills) {
                     info!(
                         path = %agent_skills.display(),
                         agent_id = %agent_id,
@@ -889,7 +888,8 @@ fn agent_skills_dir(dirs: &mut Vec<PathBuf>) {
 }
 
 /// The user-level skills roots, whether or not they exist: `~/.aleph/skills`
-/// and — when a home directory is known — `~/.claude/skills`.
+/// and — when a home directory is known — `~/.agents/skills` and
+/// `~/.claude/skills`.
 ///
 /// One derivation for two questions: where [`get_all_skills_dirs`] looks at
 /// user level ([`user_skills_dirs`]), and whether a directory `skill_read`
@@ -897,11 +897,18 @@ fn agent_skills_dir(dirs: &mut Vec<PathBuf>) {
 /// pre-grant requires (`gateway::execution_engine::slash_skill_pregrant`).
 /// A project's upward walk can reach these same directories when no git root
 /// bounds it, so "which tier found it" cannot answer the second question.
-pub(crate) fn user_skills_roots() -> Result<(PathBuf, Option<PathBuf>)> {
+///
+/// Both compat roots (`~/.agents`, `~/.claude`) resolve through the same
+/// cross-platform home ladder as `~/.aleph` (HOME → USERPROFILE →
+/// HOMEDRIVE+HOMEPATH), so the macOS/Linux/Windows match is inherited.
+pub(crate) fn user_skills_roots() -> Result<(PathBuf, Option<PathBuf>, Option<PathBuf>)> {
+    let global_agents = get_home_dir()
+        .ok()
+        .map(|home| home.join(".agents").join("skills"));
     let global_claude = get_home_dir()
         .ok()
         .map(|home| home.join(".claude").join("skills"));
-    Ok((get_skills_dir()?, global_claude))
+    Ok((get_skills_dir()?, global_agents, global_claude))
 }
 
 /// Every directory a typed `/<skill>` may pre-grant its `allowed-tools:`
@@ -917,8 +924,9 @@ pub(crate) fn user_skills_roots() -> Result<(PathBuf, Option<PathBuf>)> {
 /// validates at the next boot.
 pub(crate) fn pregrant_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Ok((aleph, claude)) = user_skills_roots() {
+    if let Ok((aleph, agents, claude)) = user_skills_roots() {
         roots.push(aleph);
+        roots.extend(agents);
         roots.extend(claude);
     }
     roots.extend(crate::discovery::aleph_plugins_dir().ok());
@@ -927,24 +935,32 @@ pub(crate) fn pregrant_roots() -> Vec<PathBuf> {
 }
 
 /// Append global user-level skills directories to `dirs`.
+///
+/// Order encodes the same-id tie rule: `.agents` (the shared convention's
+/// canonical install location) precedes `.claude` (typically a copy or
+/// symlink of the same skill), and `skill_read`/`skill_list` resolve a name
+/// by first occurrence.
 fn user_skills_dirs(dirs: &mut Vec<PathBuf>) -> Result<()> {
-    let (global_aleph, global_claude) = user_skills_roots()?;
-    if global_aleph.is_dir() && !dirs.contains(&global_aleph) {
+    let (global_aleph, global_agents, global_claude) = user_skills_roots()?;
+    if global_aleph.is_dir() && !contains_equivalent(dirs, &global_aleph) {
         info!(path = %global_aleph.display(), "Found global ~/.aleph/skills");
         dirs.push(global_aleph);
     }
 
-    if let Some(global_claude) = global_claude {
-        info!(path = %global_claude.display(), "Checking global directories");
-        if global_claude.is_dir() && !dirs.contains(&global_claude) {
-            info!(path = %global_claude.display(), "Found global ~/.claude/skills");
-            dirs.push(global_claude);
+    for (root, label) in [
+        (global_agents, "~/.agents/skills"),
+        (global_claude, "~/.claude/skills"),
+    ] {
+        let Some(root) = root else { continue };
+        if root.is_dir() && !contains_equivalent(dirs, &root) {
+            info!(path = %root.display(), "Found global {label}");
+            dirs.push(root);
         } else {
             info!(
-                path = %global_claude.display(),
-                exists = global_claude.exists(),
-                is_dir = global_claude.is_dir(),
-                "~/.claude/skills not found or not a directory"
+                path = %root.display(),
+                exists = root.exists(),
+                is_dir = root.is_dir(),
+                "{label} not found, not a directory, or already collected"
             );
         }
     }
@@ -952,9 +968,18 @@ fn user_skills_dirs(dirs: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// Push `dir` into `dirs` if it's a directory that isn't already present.
+/// `dirs.contains(dir)` by filesystem identity (canonicalize-compare via
+/// [`equivalent`]), not literal spelling — a symlinked $HOME or a macOS
+/// `/var` vs `/private/var` spelling must not enqueue the same physical
+/// skills directory twice (Layer-0 dedup).
+fn contains_equivalent(dirs: &[PathBuf], dir: &std::path::Path) -> bool {
+    dirs.iter().any(|d| equivalent(d, dir))
+}
+
+/// Push `dir` into `dirs` if it's a directory that isn't already present
+/// (by filesystem identity — see [`contains_equivalent`]).
 fn push_if_new_skills_dir(dirs: &mut Vec<PathBuf>, dir: &std::path::Path, label: &str) {
-    if dir.is_dir() && !dirs.iter().any(|d| d.as_path() == dir) {
+    if dir.is_dir() && !contains_equivalent(dirs, dir) {
         info!(path = %dir.display(), "Found {label}");
         dirs.push(dir.to_path_buf());
     }
@@ -2076,9 +2101,11 @@ mod tests {
         let project = temp_dir.path().join("project");
         let global_aleph = aleph_home.join("skills");
         let legacy_aleph = home.join(".aleph").join("skills");
+        let global_agents = home.join(".agents").join("skills");
         let global_claude = home.join(".claude").join("skills");
         std::fs::create_dir_all(&global_aleph).unwrap();
         std::fs::create_dir_all(&legacy_aleph).unwrap();
+        std::fs::create_dir_all(&global_agents).unwrap();
         std::fs::create_dir_all(&global_claude).unwrap();
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir(project.join(".git")).unwrap();
@@ -2090,8 +2117,39 @@ mod tests {
         };
 
         assert!(dirs.contains(&global_aleph));
+        assert!(dirs.contains(&global_agents));
         assert!(dirs.contains(&global_claude));
         assert!(!dirs.contains(&legacy_aleph));
+        // Tie-rule order: .agents precedes .claude, so skill_read's
+        // first-occurrence-wins name lookup resolves to the shared
+        // convention's canonical copy.
+        let pos = |d: &PathBuf| dirs.iter().position(|x| x == d).unwrap();
+        assert!(pos(&global_agents) < pos(&global_claude));
+    }
+
+    /// The user's canonical dedup scenario at project level: `.agents/skills`
+    /// is a symlink to the real `.claude/skills` (or vice versa). Canonical
+    /// identity must keep the physical directory in the list exactly once.
+    #[cfg(unix)]
+    #[test]
+    fn project_skills_dirs_dedup_symlinked_flavors() {
+        let temp_dir = TempDir::new().unwrap();
+        let project = temp_dir.path().join("project");
+        let real = project.join(".claude/skills");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(project.join(".agents")).unwrap();
+        std::os::unix::fs::symlink(&real, project.join(".agents/skills")).unwrap();
+        std::fs::create_dir(project.join(".git")).unwrap();
+
+        let dirs = collect_project_skills_dirs(&project, Some(&project));
+        assert_eq!(
+            dirs.len(),
+            1,
+            "symlinked .agents/skills → .claude/skills must dedup to one: {dirs:?}"
+        );
+        // First-occurrence order keeps the .agents spelling (the canonical
+        // install location of the shared convention).
+        assert!(dirs[0].ends_with(".agents/skills"), "{dirs:?}");
     }
 
     #[test]

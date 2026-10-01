@@ -791,12 +791,16 @@ impl SessionStore for FileSessionStore {
 
     async fn reset_session(&self, key: &SessionKey) -> Result<bool, SessionStoreError> {
         let key_str = key.to_key_string();
+        // Lock FIRST: without this the transcript deletion and the meta
+        // commit raced against `append_message` / `stamp_and_bill_in_range`
+        // and could leave a meta count out of sync with the on-disk file.
+        // (Twin of the truncate / delete / restore TOCTOU; same fix.)
+        let mut guard = self.lock_metadata(&key_str).await?;
         let transcript = self.transcript_path(&key_str);
         let deleted = transcript.exists();
         if deleted {
             tokio::fs::remove_file(&transcript).await.ok();
         }
-        let mut guard = self.lock_metadata(&key_str).await?;
         if let Some(meta) = guard.existing_mut() {
             meta.message_count = 0;
             meta.last_active_at = chrono::Utc::now().timestamp();
@@ -888,10 +892,6 @@ impl SessionStore for FileSessionStore {
             // message rows carry real ones. The other writer of the same
             // columns is `branch_from_checkpoint` below, which seeds a NEW
             // child row once from the checkpoint's rows.
-            // (`update_session_usage` has no production caller: a run is
-            // billed only through `stamp_and_bill_in_range`, inside the
-            // stamp's own operation; calling it here instead would bypass
-            // that stamp's idempotence guard — F10.)
             if meta.derived_title.is_none() && msg.role == "user" {
                 let title = msg.content.trim();
                 let title = if title.chars().count() > 60 {
@@ -963,8 +963,14 @@ impl SessionStore for FileSessionStore {
         keep_count: usize,
     ) -> Result<TruncateResult, SessionStoreError> {
         let key_str = key.to_key_string();
+        // Lock FIRST: the transcript rewrite + meta update must be one
+        // critical section. The previous order (read → write → lock → meta)
+        // raced with concurrent append_message / stamp_and_bill_in_range and
+        // could leave a meta count out of sync with the on-disk file.
+        let mut guard = self.lock_metadata(&key_str).await?;
         let mut messages = self.read_transcript(&key_str, None).await?;
         if keep_count >= messages.len() {
+            // Nothing to truncate; drop the guard without committing.
             return Ok(TruncateResult::default());
         }
 
@@ -973,13 +979,12 @@ impl SessionStore for FileSessionStore {
             .iter()
             .map(|m| (m.input_tokens.max(0) as u64).saturating_add(m.output_tokens.max(0) as u64))
             .sum();
+        let new_count = messages.len();
 
-        let path = self.transcript_path(&key_str);
-        write_transcript_atomic(&path, &messages).await?;
+        self.write_transcript_locked(&guard, &key_str, &messages).await?;
 
-        let mut guard = self.lock_metadata(&key_str).await?;
         if let Some(meta) = guard.existing_mut() {
-            meta.message_count = messages.len() as i64;
+            meta.message_count = new_count as i64;
             guard.commit().await?;
         }
 
@@ -995,6 +1000,8 @@ impl SessionStore for FileSessionStore {
         from_seq: u64,
     ) -> Result<usize, SessionStoreError> {
         let key_str = key.to_key_string();
+        // Lock FIRST — same TOCTOU reason as `truncate_messages`.
+        let mut guard = self.lock_metadata(&key_str).await?;
         let messages = self.read_transcript(&key_str, None).await?;
         let before = messages.len();
 
@@ -1007,13 +1014,12 @@ impl SessionStore for FileSessionStore {
             .collect();
         let removed = before - kept.len();
         if removed == 0 {
+            // Drop the guard without committing.
             return Ok(0);
         }
 
-        let path = self.transcript_path(&key_str);
-        write_transcript_atomic(&path, &kept).await?;
+        self.write_transcript_locked(&guard, &key_str, &kept).await?;
 
-        let mut guard = self.lock_metadata(&key_str).await?;
         if let Some(meta) = guard.existing_mut() {
             meta.message_count = kept.len() as i64;
             guard.commit().await?;
@@ -1075,15 +1081,19 @@ impl SessionStore for FileSessionStore {
         checkpoint_id: &str,
     ) -> Result<SessionMetadata, SessionStoreError> {
         let key_str = key.to_key_string();
+        // Lock FIRST: read checkpoint + rewrite transcript + update meta
+        // must be one critical section. Without the lock a concurrent
+        // append / stamp could observe the old (post-checkpoint) meta
+        // count alongside the freshly-restored transcript, or vice versa.
+        let mut guard = self.lock_metadata(&key_str).await?;
         let checkpoint_messages = self.read_checkpoint(&key_str, checkpoint_id).await?;
         if checkpoint_messages.is_empty() {
             return Err(SessionStoreError::NotFound(format!(
                 "Checkpoint {checkpoint_id} not found or empty"
             )));
         }
-        let path = self.transcript_path(&key_str);
-        write_transcript_atomic(&path, &checkpoint_messages).await?;
-        let mut guard = self.lock_metadata(&key_str).await?;
+self.write_transcript_locked(&guard, &key_str, &checkpoint_messages)
+            .await?;
         let meta = guard
             .existing_mut()
             .ok_or_else(|| SessionStoreError::NotFound(format!("Session {key_str} not found")))?;
@@ -1430,32 +1440,6 @@ impl SessionStore for FileSessionStore {
         let meta = guard.commit().await?;
         self.emit_session_changed(&key_str, "patch", Some(&meta));
         Ok(true)
-    }
-
-    async fn update_session_usage(
-        &self,
-        key: &SessionKey,
-        input_tokens: i64,
-        output_tokens: i64,
-        cost_usd: f64,
-        model: Option<&str>,
-        model_provider: Option<&str>,
-    ) -> Result<(), SessionStoreError> {
-        let key_str = key.to_key_string();
-        let mut guard = self.lock_metadata(&key_str).await?;
-        if let Some(meta) = guard.existing_mut() {
-            let bill = RunBill {
-                input_tokens,
-                output_tokens,
-                cost_usd,
-                model: model.map(str::to_string),
-                model_provider: model_provider.map(str::to_string),
-            };
-            add_bill(meta, &bill);
-            let committed = guard.commit().await?;
-            self.emit_session_changed(&key_str, "usage", Some(&committed));
-        }
-        Ok(())
     }
 
     async fn get_session_preview(
@@ -2814,12 +2798,21 @@ mod branch_checkpoint_attribution_tests {
 
         const ROUNDS: i64 = 24;
         for round in 0..ROUNDS {
-            let usage = {
+            // Two writers on different fields: one flips `model`, one flips
+            // `label`. They race on the same `metadata.json` and a torn
+            // document would surface here as either field never landing.
+            let writer_model = {
                 let store = store.clone();
                 let key = key.clone();
                 tokio::spawn(async move {
                     store
-                        .update_session_usage(&key, 1, 1, 0.0, None, None)
+                        .patch_session(
+                            &key,
+                            &SessionPatch {
+                                model: Some(if round % 2 == 0 { "a".into() } else { "b".into() }),
+                                ..Default::default()
+                            },
+                        )
                         .await
                         .unwrap();
                 })
@@ -2841,7 +2834,7 @@ mod branch_checkpoint_attribution_tests {
                         .unwrap();
                 })
             };
-            usage.await.unwrap();
+            writer_model.await.unwrap();
             dial.await.unwrap();
 
             // Both halves of (1), checked separately: the direct read (what
@@ -2863,18 +2856,100 @@ mod branch_checkpoint_attribution_tests {
             );
         }
 
-        // (2): every usage update landed. Without the lock this counter is
-        // short by however many times the dial writer's document won.
+        // (2): both writers landed. Without the lock one writer's document would
+        // win every time it raced, dropping the other field's value.
         let meta = store.read_metadata(&key_str).await.unwrap().unwrap();
-        assert_eq!(
-            meta.total_tokens,
-            ROUNDS * 2,
-            "usage updates were lost to a concurrent dial write"
+        assert!(
+            meta.model.is_some(),
+            "the model write was lost to a concurrent label write"
         );
         assert!(
             meta.label.is_some(),
-            "the dial write was lost to a concurrent usage update"
+            "the label write was lost to a concurrent model write"
         );
+    }
+
+    /// Regression for the truncate/append lock-ordering TOCTOU. The pre-fix
+    /// order was: truncate read transcript → atomic_write_file transcript →
+    /// lock metadata → update message_count. An interleaving `append_message`
+    /// between the write and the meta lock could leave the new meta count
+    /// describing the OLD file (or vice versa). With the lock acquired
+    /// first, both ops see each other.
+    ///
+    /// We can't guarantee a race fires every run, but we CAN guarantee the
+    /// post-condition holds across many rounds: at quiescence, the on-disk
+    /// transcript line count must equal `meta.message_count`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_truncate_and_append_leave_transcript_and_meta_in_sync() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::from_key_string("agent:truncapp:main").unwrap();
+        store.get_or_create(&key).await.unwrap();
+
+        // Seed a transcript of 16 user messages.
+        for i in 0..16 {
+            let msg = MessageRecord {
+                id: format!("seed-{i}"),
+                role: "user".into(),
+                content: format!("seed content {i}"),
+                timestamp: i as i64,
+                metadata: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_call_id: None,
+                tool_name: None,
+            };
+            store.append_message(&key, msg).await.unwrap();
+        }
+        let store = Arc::new(store);
+
+        const ROUNDS: i64 = 24;
+        for round in 0..ROUNDS {
+            // Half the time truncate to keep_count=4, half the time keep_count=8.
+            // Mixed with a parallel append — the post-condition (transcript len
+            // == meta.message_count) is the property the lock order guarantees.
+            let keep_count = if round % 2 == 0 { 4usize } else { 8usize };
+            let t = {
+                let store = store.clone();
+                let key = key.clone();
+                tokio::spawn(async move {
+                    store.truncate_messages(&key, keep_count).await.unwrap();
+                })
+            };
+            let a = {
+                let store = store.clone();
+                let key = key.clone();
+                tokio::spawn(async move {
+                    let msg = MessageRecord {
+                        id: format!("round-{round}"),
+                        role: "user".into(),
+                        content: format!("round {round} content"),
+                        timestamp: 1_000 + round,
+                        metadata: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        tool_call_id: None,
+                        tool_name: None,
+                    };
+                    store.append_message(&key, msg).await.unwrap();
+                })
+            };
+            t.await.unwrap();
+            a.await.unwrap();
+
+            // Post-condition: transcript line count == meta.message_count.
+            let key_str = key.to_key_string();
+            let messages = store.read_transcript(&key_str, None).await.unwrap();
+            let meta = store.read_metadata(&key_str).await.unwrap().unwrap();
+            assert_eq!(
+                messages.len() as i64,
+                meta.message_count,
+                "round {round}: transcript has {} lines but meta reports {} — \
+                 the lock-order fix regressed; transcript rewrite and meta \
+                 update are no longer one critical section",
+                messages.len(),
+                meta.message_count
+            );
+        }
     }
 
     /// Zero-change guarantee: branching with no ambient scope (cron,

@@ -537,6 +537,7 @@ dependencies = [
  "user-idle",
  "uuid",
  "vte",
+ "wacore",
  "walkdir",
  "whatsapp-rust",
  "whatsapp-rust-tokio-transport",

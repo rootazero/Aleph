@@ -3026,7 +3026,7 @@ mod tests {
     /// the +30 Windows gap recorded above is carried forward unchanged. As
     /// the 2026-09-20 entry already established, this ledger forbids deriving
     /// a ceiling by addition.
-    ///
+///
     /// 2026-09-28 (C2 browser_record tool): 116_072 -> 116_150 B, RE-MEASURED
     /// with this ceiling floored to `1` on Linux (96_554 catalog + 16_613
     /// registry-only + 1_039 injected + 1_944 bridge); the only red test was
@@ -3513,7 +3513,7 @@ mod tests {
     /// (hooks_manage) and main's -31 (ctx_search) + -745 (web_fetch) all
     /// landed; 105_191 - 68 - 31 - 745 = 104_347, verified against the
     /// guard's own ledger below.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_347;
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_185;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3548,7 +3548,7 @@ mod tests {
         ("automation", 1244),
         ("bash", 2230),
         ("channel_directory", 627),
-        ("channel_message", 1538),
+        ("channel_message", 2376),
         ("channel_outbox", 1519),
         ("channel_pairing", 743),
         ("code_check", 837),

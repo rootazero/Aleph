@@ -1113,11 +1113,11 @@ async fn test_get_total_tokens_none_then_accumulates() {
     assert_eq!(manager.get_total_tokens(&key).await.unwrap(), Some(0));
 
     manager
-        .update_session_usage(&key, 100, 40, 0.25, None, None)
+        .seed_bill_for_test(&key, 100, 40, 0.25, None, None)
         .await
         .unwrap();
     manager
-        .update_session_usage(&key, 10, 5, 0.05, None, None)
+        .seed_bill_for_test(&key, 10, 5, 0.05, None, None)
         .await
         .unwrap();
     // Cumulative input+output across both turns: 140 + 15 = 155.
@@ -1153,7 +1153,7 @@ async fn goal_tree_budget_sums_own_plus_member_deltas_only() {
     let own_key = SessionKey::main("leader");
     manager.get_or_create(&own_key).await.unwrap();
     manager
-        .update_session_usage(&own_key, 100, 40, 0.0, None, None)
+        .seed_bill_for_test(&own_key, 100, 40, 0.0, None, None)
         .await
         .unwrap();
 
@@ -1161,7 +1161,7 @@ async fn goal_tree_budget_sums_own_plus_member_deltas_only() {
     let member_key = SessionKey::task("worker", "team", "task-1");
     manager.get_or_create(&member_key).await.unwrap();
     manager
-        .update_session_usage(&member_key, 200, 60, 0.0, None, None)
+        .seed_bill_for_test(&member_key, 200, 60, 0.0, None, None)
         .await
         .unwrap();
 
@@ -1169,7 +1169,7 @@ async fn goal_tree_budget_sums_own_plus_member_deltas_only() {
     let stray_key = SessionKey::task("worker", "team", "stray");
     manager.get_or_create(&stray_key).await.unwrap();
     manager
-        .update_session_usage(&stray_key, 9_999, 9_999, 0.0, None, None)
+        .seed_bill_for_test(&stray_key, 9_999, 9_999, 0.0, None, None)
         .await
         .unwrap();
 

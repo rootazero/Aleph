@@ -333,6 +333,59 @@ impl BlueBubblesApi {
             .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
         Ok(())
     }
+
+    /// Set the icon of a group chat. Requires private-api + macOS 11+ on the
+    /// server Mac (BlueBubbles helper feature #8, "Update group chat photo").
+    /// Endpoint: `POST /api/v1/chat/{chatGuid}/icon`, multipart/form-data with
+    /// a single `icon` file part.
+    ///
+    /// Upstream reference for the wire shape: openclaw
+    /// `extensions/bluebubbles/src/chat.ts::setGroupIconBlueBubbles`. The
+    /// endpoint path and `icon` field name come from there; password is
+    /// passed via the URL query string to match every other BlueBubbles REST
+    /// call.
+    ///
+    /// `icon_data_url` is a `data:` URL (RFC 2397) carrying the image payload,
+    /// matching `Channel::set_group_icon`'s public contract.
+    pub async fn set_chat_icon(
+        &self,
+        chat_guid: &str,
+        icon_data_url: &str,
+    ) -> Result<(), BbError> {
+        let (mime, bytes) = crate::gateway::data_url::decode(icon_data_url)
+            .map_err(|e| BbError::BadResponse(format!("icon data URL: {e}")))?;
+        let filename = mime_to_filename(&mime);
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(filename)
+            .mime_str(&mime)
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
+        let form = reqwest::multipart::Form::new().part("icon", part);
+        let encoded: String = url::form_urlencoded::byte_serialize(chat_guid.as_bytes())
+            .collect::<String>()
+            .replace('+', "%20");
+        let res = self
+            .client
+            .post(self.api_url(&format!("/api/v1/chat/{encoded}/icon")))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
+        res.error_for_status()
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
+        Ok(())
+    }
+}
+
+/// Map an image MIME type to a filename for the multipart upload.
+fn mime_to_filename(mime: &str) -> String {
+    match mime {
+        "image/png" => "icon.png".into(),
+        "image/jpeg" => "icon.jpg".into(),
+        "image/gif" => "icon.gif".into(),
+        "image/heic" => "icon.heic".into(),
+        "image/webp" => "icon.webp".into(),
+        other => format!("icon.{}", other.split('/').next_back().unwrap_or("bin")),
+    }
 }
 
 /// Build the callback URL BlueBubbles will POST to (password in query —
@@ -540,5 +593,31 @@ mod tests {
             "a=1&password=***&b=2"
         );
         assert_eq!(redact_password("no secret here".into()), "no secret here");
+    }
+
+    // ---- set_chat_icon URL shape ----------------------------------------
+
+    /// The endpoint URL is `/api/v1/chat/{chatGuid}/icon` with the password
+    /// in the query string (matching every other BlueBubbles REST call).
+    /// The chatGuid is URL-encoded — `+` becomes `%20`, semicolons become
+    /// `%3B`, etc. — which is the same encoding `send_typing` and `mark_read`
+    /// use, so `set_chat_icon` joins them in the documented route shape.
+    #[test]
+    fn set_chat_icon_uses_documented_endpoint_and_encodes_chat_guid() {
+        let api = BlueBubblesApi::new("http://h:1".into(), "pw".into());
+        // `api_url()` does NOT encode the path itself — it only encodes
+        // the password for the query string. `set_chat_icon` (and every
+        // other BlueBubbles method that takes a chat guid) byte-serializes
+        // the chat guid before interpolating it into the path. Mirror that
+        // here so the assertion names the right shape.
+        let encoded: String = url::form_urlencoded::byte_serialize(
+            "iMessage;-;+15555550100".as_bytes(),
+        )
+        .collect::<String>()
+        .replace('+', "%20");
+        assert_eq!(
+            api.api_url(&format!("/api/v1/chat/{encoded}/icon")),
+            "http://h:1/api/v1/chat/iMessage%3B-%3B%2B15555550100/icon?password=pw"
+        );
     }
 }

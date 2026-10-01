@@ -68,10 +68,13 @@ impl ScopeKey {
         use crate::discovery::{DiscoveryScope, GlobalRoot};
         match &d.scope {
             DiscoveryScope::Project { root } => Self::project(root),
-            // Claude Code's cache is a per-user tree with no project; joined
-            // here by name, not by `_`.
+            // Claude Code's cache and the shared agents root are per-user
+            // trees with no project; joined here by name, not by `_`.
             DiscoveryScope::Global(
-                GlobalRoot::Aleph | GlobalRoot::Claude | GlobalRoot::ClaudeCache,
+                GlobalRoot::Aleph
+                | GlobalRoot::Claude
+                | GlobalRoot::Agents
+                | GlobalRoot::ClaudeCache,
             ) => Self::Global,
         }
     }
@@ -504,6 +507,7 @@ mod tests {
         for global in [
             GlobalRoot::Aleph,
             GlobalRoot::Claude,
+            GlobalRoot::Agents,
             GlobalRoot::ClaudeCache,
         ] {
             let d = DiscoveredPath::global(plugin_dir.clone(), global, 10);

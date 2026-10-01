@@ -420,6 +420,19 @@ check-shell: _stage-shell-placeholders
 test:
     cargo test -p alephcore --lib
 
+# Focused gate for `gateway::session_manager::*` tests.
+#
+# Why a separate recipe when `just test` already covers them: a focused gate
+# pins the intent (a regression that drops `seed_bill_for_test` would
+# otherwise only show up as "test name not found in the lib output"), and
+# it is the cheap leg the spend-metering PRs (the one that CUT
+# `update_session_usage` and the audit fixes that wired it back as a
+# `#[cfg(test)]` helper) lean on for fast feedback. Runs the same path
+# filter the CI workflow uses; chained from `test` so a focused failure
+# cannot pass silently.
+test-session-manager:
+    cargo test -p alephcore --lib gateway::session_manager
+
 # Run desktop crate tests
 test-desktop:
     cargo test -p aleph-desktop --lib
@@ -458,7 +471,7 @@ test-loom:
 test-logic: test-proptest test-loom
 
 # Run all tests (core + desktop + proptest + shared crates)
-test-all: test test-desktop-all test-proptest test-shared check-phase5 check-wiring
+test-all: test test-desktop-all test-proptest test-shared test-session-manager check-phase5 check-wiring
 
 # Re-verify the tests marked `#[ignore]` because they pass in isolation but
 # flake under the full `cargo test --lib` parallel fan-out on a contended

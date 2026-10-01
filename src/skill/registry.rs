@@ -31,6 +31,18 @@ impl SkillRegistry {
         match self.manifests.get(&id) {
             Some(existing) if existing.priority() >= manifest.priority() => {
                 // Existing has equal or higher priority — reject the newcomer.
+                // The equal-priority case is the same-id tie (e.g. a skill
+                // installed in both `~/.agents/skills` and `~/.claude/skills`):
+                // first-registered wins, and the scan order is what makes the
+                // winner deterministic — log the drop so a silent "wrong copy
+                // won" is debuggable. (Manifests carry no source path, so the
+                // log names the provenance labels, not the directories.)
+                tracing::debug!(
+                    skill_id = %id,
+                    kept = %existing.source().provenance(),
+                    dropped = %manifest.source().provenance(),
+                    "duplicate skill id dropped (equal-or-lower priority)"
+                );
                 false
             }
             _ => {
@@ -157,6 +169,36 @@ mod tests {
         let id = SkillId::new("git:commit");
         let got = reg.get(&id).unwrap();
         assert_eq!(*got.source(), SkillSource::Workspace);
+    }
+
+    #[test]
+    fn dedup_same_priority_first_registration_wins() {
+        // The ~/.agents-vs-~/.claude same-id tie: both classify Bundled, so
+        // "first-registered wins" is the whole mechanism — and the scan order
+        // (agents root before claude root) is what makes the winner
+        // deterministic. This pins the register-side half of that rule.
+        let mut reg = SkillRegistry::new();
+        let agents_copy = SkillManifest::new(
+            SkillId::new("shared:skill"),
+            "agents-copy",
+            "installed under ~/.agents/skills",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
+        );
+        assert!(reg.register(agents_copy));
+        let claude_copy = SkillManifest::new(
+            SkillId::new("shared:skill"),
+            "claude-copy",
+            "duplicated under ~/.claude/skills",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
+        );
+        assert!(!reg.register(claude_copy));
+        assert_eq!(reg.len(), 1);
+        assert_eq!(
+            reg.get(&SkillId::new("shared:skill")).unwrap().name(),
+            "agents-copy"
+        );
     }
 
     #[test]

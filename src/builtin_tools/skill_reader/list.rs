@@ -112,13 +112,18 @@ impl ListSkillsTool {
 
     /// Determine source type based on path.
     ///
-    /// "global" = installed under `~/.aleph/` or `~/.claude/` (skills, extensions, plugins).
-    /// Everything else is "project" (workspace-local).
+    /// "global" = installed under `~/.aleph/`, `~/.agents/`, or `~/.claude/`
+    /// (skills, extensions, plugins). Everything else is "project"
+    /// (workspace-local).
     fn get_source_type(&self, skill_dir: &Path) -> String {
         if let Ok(home) = crate::utils::paths::get_home_dir() {
             let aleph_root = home.join(".aleph");
+            let agents_root = home.join(".agents");
             let claude_root = home.join(".claude");
-            if skill_dir.starts_with(&aleph_root) || skill_dir.starts_with(&claude_root) {
+            if skill_dir.starts_with(&aleph_root)
+                || skill_dir.starts_with(&agents_root)
+                || skill_dir.starts_with(&claude_root)
+            {
                 return "global".to_string();
             }
         }

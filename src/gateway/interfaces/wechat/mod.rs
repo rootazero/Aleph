@@ -71,6 +71,8 @@ impl WeChatChannel {
             typing_indicator: true,
             read_receipts: false,
             rich_text: false,
+            polls: false,
+            group_icons: false,
             max_message_length: 4000,
             max_attachment_size: 10 * 1024 * 1024,
             // NOT EditBased: `edit` below returns `UnsupportedFeature`

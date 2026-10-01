@@ -3,9 +3,9 @@
 //! Implements the multi-directory scanning strategy with upward traversal.
 
 use super::paths::{
-    aleph_home_dir, claude_home_dir, find_dir_upward, find_git_root, AGENT_FILE, ALEPH_HOME_DIR,
-    CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR, PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE,
-    SKILL_FILE,
+    agents_home_dir, aleph_home_dir, claude_home_dir, find_dir_upward, find_git_root,
+    AGENT_FILE, AGENTS_HOME_DIR, ALEPH_HOME_DIR, CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR,
+    PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE, SKILL_FILE,
 };
 use super::types::{
     DiscoveredPath, DiscoveryScope, GlobalRoot, PluginDiscovery, ProjectPluginParent, ScanDirectory,
@@ -23,6 +23,8 @@ pub(crate) struct DirectoryScanner {
     aleph_home: PathBuf,
     /// Claude home directory (~/.claude/)
     claude_home: Option<PathBuf>,
+    /// Shared agents home directory (~/.agents/)
+    agents_home: Option<PathBuf>,
     /// Git root directory (if found)
     git_root: Option<PathBuf>,
     /// Working directory
@@ -61,6 +63,18 @@ impl DirectoryScanner {
             None
         };
 
+        // Shared agents home (~/.agents) is optional: scan only if it
+        // exists. Independent of the Claude knob — it is its own root, not
+        // part of the Claude compatibility surface.
+        let agents_home = match agents_home_dir() {
+            Ok(p) if p.exists() => Some(p),
+            Ok(_) => None,
+            Err(e) => {
+                debug!("agents home unavailable, skipping .agents scan: {e}");
+                None
+            }
+        };
+
         // Find git root if scanning project dirs
         let git_root = if config.scan_project_dirs {
             find_git_root(&config.working_dir)
@@ -71,6 +85,7 @@ impl DirectoryScanner {
         debug!(
             aleph_home = ?aleph_home,
             claude_home = ?claude_home,
+            agents_home = ?agents_home,
             git_root = ?git_root,
             working_dir = ?config.working_dir,
             "DirectoryScanner initialized"
@@ -79,6 +94,7 @@ impl DirectoryScanner {
         Ok(Self {
             aleph_home,
             claude_home,
+            agents_home,
             git_root,
             working_dir: config.working_dir.clone(),
             config: config.clone(),
@@ -95,20 +111,39 @@ impl DirectoryScanner {
     /// Get all directories to scan, in priority order
     ///
     /// Priority order (lowest to highest):
-    /// 1. Claude global (~/.claude/) - priority 0
-    /// 2. Aleph global (~/.aleph/) - priority 10
-    /// 3. Project-level .claude/ directories - priority 20+
-    /// 4. Project-level .aleph/ directories - priority 40+ (native, wins over
-    ///    the project `.claude/` compat dirs on a name clash)
+    /// 1. Agents global (~/.agents/) - priority 0
+    /// 2. Claude global (~/.claude/) - priority 1
+    /// 3. Aleph global (~/.aleph/) - priority 10
+    /// 4. Project-level .agents/ directories - priority 20+
+    /// 5. Project-level .claude/ directories - priority 30+
+    /// 6. Project-level .aleph/ directories - priority 40+ (native, wins over
+    ///    the project compat dirs on a name clash)
+    ///
+    /// The `.agents` root sorts BEFORE `.claude` at both tiers on purpose:
+    /// the registry keeps the first-registered manifest on a same-priority
+    /// id clash (`SkillRegistry::register`), and `.agents` is the canonical
+    /// install location of the shared-skills convention (`.claude` typically
+    /// holds copies or symlinks of the same skills), so the scan order is
+    /// what makes ".agents wins the tie" a rule rather than an accident.
     fn get_all_directories(&self) -> DiscoveryResult<Vec<ScanDirectory>> {
         let mut dirs = Vec::new();
 
-        // 1. Claude global (lowest priority, read-only)
+        // 1. Agents global (shared cross-tool root; scanned first so its
+        //    copy wins a Bundled-vs-Bundled id tie against the Claude one)
+        if let Some(ref agents_home) = self.agents_home {
+            dirs.push(ScanDirectory::new(
+                agents_home.clone(),
+                DiscoveryScope::Global(GlobalRoot::Agents),
+                0,
+            ));
+        }
+
+        // 2. Claude global (compat, read-only)
         if let Some(ref claude_home) = self.claude_home {
             dirs.push(ScanDirectory::new(
                 claude_home.clone(),
                 DiscoveryScope::Global(GlobalRoot::Claude),
-                0,
+                1,
             ));
         }
 
@@ -121,16 +156,39 @@ impl DirectoryScanner {
             ));
         }
 
-        // 3 & 4. Project-level `.claude/` and `.aleph/` directories (upward
-        // traversal). Same shape — find dirs upward, skip the one that is the
-        // matching global so it is not double-counted with the global entry
-        // added above, push the rest as project scopes with priority
-        // `base + i` (deeper = higher priority). Base priority differs because
-        // native Aleph project dirs outrank the `.claude/` compat dirs.
+// 3-5. Project-level `.agents/`, `.claude/`, `.aleph/` directories
+        // (upward traversal). Same shape — find dirs upward, skip the one
+        // that is the matching global so it is not double-counted with the
+        // global entry added above, push the rest as project scopes with
+        // priority `base + i` (deeper = higher priority). Base priorities
+        // differ because:
+        // - `.agents` sorts BEFORE `.claude` at both tiers on purpose
+        //   (see function-level comment: registry keeps first-registered
+        //   on same-priority id clash, and `.agents` is the canonical
+        //   install location of the shared-skills convention).
+        // - native Aleph project dirs outrank the `.claude/` compat dirs.
         if self.config.scan_project_dirs {
-            self.collect_project_dirs(&mut dirs, CLAUDE_HOME_DIR, 20, self.claude_home.as_deref())?;
+            self.collect_project_dirs(&mut dirs, AGENTS_HOME_DIR, 20, self.agents_home.as_deref())?;
+            self.collect_project_dirs(&mut dirs, CLAUDE_HOME_DIR, 30, self.claude_home.as_deref())?;
             self.collect_project_dirs(&mut dirs, ALEPH_HOME_DIR, 40, Some(&self.aleph_home))?;
         }
+
+        // Layer-0 dedup: the same physical directory reached through two
+        // spellings (a symlinked $HOME, macOS `/var` vs `/private/var`, a
+        // root reached both as global and via the upward walk) must scan
+        // once. Canonical spelling is the identity; a root that fails to
+        // canonicalize (does not exist yet) keeps its literal spelling.
+        let mut seen: Vec<PathBuf> = Vec::with_capacity(dirs.len());
+        dirs.retain(|d| {
+            let key = std::fs::canonicalize(&d.path).unwrap_or_else(|_| d.path.clone());
+            if seen.contains(&key) {
+                debug!("scan root {:?} deduped against an earlier spelling", d.path);
+                false
+            } else {
+                seen.push(key);
+                true
+            }
+        });
 
         trace!("Scan directories: {:?}", dirs);
         Ok(dirs)
@@ -401,6 +459,19 @@ fn classify_entry(
     if is_hidden(path) {
         return;
     }
+    // Layer-1 dedup observability: a symlinked component is skipped by
+    // design — every known root is scanned at its real location, so the
+    // link's target is discovered there exactly once and the link itself
+    // would only duplicate it. A link whose target lives OUTSIDE every
+    // known root stays invisible (the documented security boundary); say so
+    // in the log, or "why didn't my skill load" is undebuggable.
+    if meta.file_type().is_symlink() {
+        debug!(
+            "skipping symlinked {} entry {:?}; the target root is scanned at its real location",
+            component_name, path
+        );
+        return;
+    }
     let is_component = if meta.file_type().is_dir() {
         // Skip directories without a marker file for the component type.
         // e.g. ~/.aleph/agents/{id}/ without agent.md is Aleph's identity
@@ -569,6 +640,7 @@ mod tests {
         let scanner = DirectoryScanner {
             aleph_home: root.join(".aleph"),
             claude_home: None,
+            agents_home: None,
             git_root: Some(root.clone()),
             working_dir: root.join("project"),
             config,
@@ -599,6 +671,7 @@ mod tests {
         let scanner = DirectoryScanner {
             aleph_home: root.join(".aleph"),
             claude_home: None,
+            agents_home: None,
             git_root: Some(root.clone()),
             working_dir: root.join("project"),
             config,
@@ -630,6 +703,7 @@ mod tests {
         let scanner = DirectoryScanner {
             aleph_home: empty_home.path().to_path_buf(),
             claude_home: None,
+            agents_home: None,
             git_root: Some(root.to_path_buf()),
             working_dir: root.join("project"),
             config: DiscoveryConfig {
@@ -671,6 +745,7 @@ mod tests {
         let scanner = DirectoryScanner {
             aleph_home: empty_home.path().to_path_buf(),
             claude_home: None,
+            agents_home: None,
             git_root: Some(root.to_path_buf()),
             working_dir: root.join("project"),
             config: DiscoveryConfig {
@@ -700,6 +775,152 @@ mod tests {
     }
 
     #[test]
+    fn test_scanner_discovers_agents_global_and_project_with_tie_order() {
+        // The shared `~/.agents` root is scanned at both tiers, and at each
+        // tier its priority sorts BEFORE the `.claude` compat band — the
+        // scan order is what makes ".agents wins the same-id Bundled tie"
+        // (registry keeps the first-registered manifest) a rule, not an
+        // accident of directory enumeration.
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir(root.join(".git")).unwrap();
+
+        let agents_home = root.join("home/.agents");
+        let claude_home = root.join("home/.claude");
+        for (dir, name) in [
+            (agents_home.join("skills/agents-global"), "agents-global"),
+            (claude_home.join("skills/claude-global"), "claude-global"),
+            (
+                root.join("project/.agents/skills/agents-proj"),
+                "agents-proj",
+            ),
+            (
+                root.join("project/.claude/skills/claude-proj"),
+                "claude-proj",
+            ),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("SKILL.md"), format!("---\nname: {name}\n---\n")).unwrap();
+        }
+
+        let empty_home = TempDir::new().unwrap();
+        let scanner = DirectoryScanner {
+            aleph_home: empty_home.path().to_path_buf(),
+            claude_home: Some(claude_home),
+            agents_home: Some(agents_home),
+            git_root: Some(root.to_path_buf()),
+            working_dir: root.join("project"),
+            config: DiscoveryConfig {
+                working_dir: root.join("project"),
+                scan_claude_dirs: true,
+                scan_project_dirs: true,
+                max_upward_depth: 10,
+                claude_home_override: None,
+            },
+        };
+
+        let skills = scanner.discover_component("skills").unwrap();
+        let entry = |name: &str| {
+            skills
+                .iter()
+                .find(|s| s.path.ends_with(name))
+                .unwrap_or_else(|| panic!("{name} must be discovered: {skills:?}"))
+        };
+        assert_eq!(
+            entry("agents-global").scope,
+            DiscoveryScope::Global(GlobalRoot::Agents)
+        );
+        assert!(entry("agents-global").priority < entry("claude-global").priority);
+        assert!(entry("agents-proj").priority < entry("claude-proj").priority);
+        assert!(entry("agents-proj").priority > entry("claude-global").priority);
+    }
+
+    /// The user's canonical dedup scenario: a skill really installed under
+    /// `~/.agents/skills`, with a symlink of the same name under
+    /// `~/.claude/skills`. The target is discovered once at its real
+    /// location; the symlink is skipped — exactly one entry, no duplicate.
+    #[cfg(unix)]
+    #[test]
+    fn test_symlinked_skill_is_discovered_once_at_its_real_location() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let agents_home = root.join("home/.agents");
+        let claude_home = root.join("home/.claude");
+
+        let real = agents_home.join("skills/shared-skill");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("SKILL.md"), "---\nname: shared-skill\n---\n").unwrap();
+        std::fs::create_dir_all(claude_home.join("skills")).unwrap();
+        std::os::unix::fs::symlink(&real, claude_home.join("skills/shared-skill")).unwrap();
+
+        let empty_home = TempDir::new().unwrap();
+        let scanner = DirectoryScanner {
+            aleph_home: empty_home.path().to_path_buf(),
+            claude_home: Some(claude_home),
+            agents_home: Some(agents_home),
+            git_root: None,
+            working_dir: root.to_path_buf(),
+            config: DiscoveryConfig {
+                working_dir: root.to_path_buf(),
+                scan_claude_dirs: true,
+                scan_project_dirs: false,
+                max_upward_depth: 0,
+                claude_home_override: None,
+            },
+        };
+
+        let skills = scanner.discover_component("skills").unwrap();
+        assert_eq!(
+            skills.len(),
+            1,
+            "symlinked copy must not double-discover: {skills:?}"
+        );
+        assert!(skills[0].path.ends_with("shared-skill"));
+        assert_eq!(
+            skills[0].scope,
+            DiscoveryScope::Global(GlobalRoot::Agents),
+            "the discovered copy is the real one, reached via the .agents root"
+        );
+    }
+
+    /// Layer-0 root dedup: two roots naming the same physical directory
+    /// (here via a symlinked spelling, as with a symlinked $HOME) scan once.
+    #[cfg(unix)]
+    #[test]
+    fn test_scan_roots_dedup_by_canonical_identity() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let real = root.join("real-shared");
+        std::fs::create_dir_all(real.join("skills/s")).unwrap();
+        std::fs::write(real.join("skills/s/SKILL.md"), "---\nname: s\n---\n").unwrap();
+        let alias = root.join("alias-shared");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+        let empty_home = TempDir::new().unwrap();
+        let scanner = DirectoryScanner {
+            aleph_home: empty_home.path().to_path_buf(),
+            claude_home: Some(alias),
+            agents_home: Some(real),
+            git_root: None,
+            working_dir: root.to_path_buf(),
+            config: DiscoveryConfig {
+                working_dir: root.to_path_buf(),
+                scan_claude_dirs: true,
+                scan_project_dirs: false,
+                max_upward_depth: 0,
+                claude_home_override: None,
+            },
+        };
+
+        let skills = scanner.discover_component("skills").unwrap();
+        assert_eq!(
+            skills.len(),
+            1,
+            "same physical root via two spellings must scan once: {skills:?}"
+        );
+    }
+
+    #[test]
     fn test_discover_component_skips_hidden_md_files() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
@@ -710,6 +931,7 @@ mod tests {
         let scanner = DirectoryScanner {
             aleph_home: root.join(".aleph"),
             claude_home: None,
+            agents_home: None,
             git_root: None,
             working_dir: root.to_path_buf(),
             config: DiscoveryConfig {
@@ -750,6 +972,7 @@ mod tests {
         let scanner = DirectoryScanner {
             aleph_home: root.join(".aleph"),
             claude_home: None,
+            agents_home: None,
             git_root: None,
             working_dir: root.to_path_buf(),
             config: DiscoveryConfig::default(),
@@ -783,6 +1006,7 @@ mod tests {
         let scanner = DirectoryScanner {
             aleph_home: root.join(".aleph"),
             claude_home: None,
+            agents_home: None,
             git_root: None,
             working_dir: root.to_path_buf(),
             config: DiscoveryConfig::default(),
@@ -825,6 +1049,7 @@ mod tests {
         let scanner = DirectoryScanner {
             aleph_home: root.join(".aleph"),
             claude_home: None,
+            agents_home: None,
             git_root: None,
             working_dir: root.to_path_buf(),
             config: DiscoveryConfig::default(),
@@ -893,6 +1118,7 @@ mod tests {
         let scanner = DirectoryScanner {
             aleph_home: home.path().join(".aleph"),
             claude_home: None,
+            agents_home: None,
             git_root: None,
             working_dir: home.path().to_path_buf(),
             config: DiscoveryConfig {

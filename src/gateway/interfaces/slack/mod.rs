@@ -113,7 +113,9 @@ impl SlackChannel {
             deletion: true,
             typing_indicator: true,
             read_receipts: false,
-            rich_text: true, // Slack mrkdwn support
+            rich_text: true,
+            polls: false,
+            group_icons: false, // Slack mrkdwn support
             max_message_length: 3000,
             max_attachment_size: 1_073_741_824, // 1GB
             stream_protocol: Default::default(),

@@ -104,6 +104,8 @@ impl MattermostChannel {
             typing_indicator: true,
             read_receipts: false,
             rich_text: true, // Mattermost supports standard Markdown
+            polls: false,
+            group_icons: false,
             max_message_length: 16383,
             max_attachment_size: 100 * 1024 * 1024, // 100MB
             stream_protocol: Default::default(),

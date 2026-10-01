@@ -206,7 +206,10 @@ impl SkillSystem {
     async fn scan_roots(&self) -> Vec<PathBuf> {
         let mut roots = self.inner.skill_dirs.read().await.clone();
         for published in crate::utils::paths::plugin_skill_dirs() {
-            if !roots.contains(&published.dir) {
+            // Filesystem-identity dedup, not literal spelling: a published
+            // plugin dir reached through a symlinked $HOME is the same root
+            // the base list may already carry under another spelling.
+            if !roots.iter().any(|r| crate::utils::paths::equivalent(r, &published.dir)) {
                 roots.push(published.dir);
             }
         }
@@ -742,6 +745,16 @@ fn scan_directory(dir: &Path, source: SkillSource) -> Vec<SkillManifest> {
 
         if let Ok(file_type) = entry.file_type() {
             if file_type.is_symlink() {
+                // Layer-1 dedup by design: every known root is scanned at its
+                // real location, so a symlink's target is discovered there
+                // exactly once; following the link would only register the
+                // same skill twice. A link pointing outside every known root
+                // stays invisible (documented security boundary) — say so,
+                // or "why didn't my skill load" is undebuggable.
+                tracing::debug!(
+                    "skipping symlinked skill entry {:?}; its target root is scanned at its real location",
+                    path
+                );
                 continue;
             }
         }
@@ -778,8 +791,13 @@ fn is_skill_file(path: &Path) -> bool {
 ///
 /// Scans the canonical user-level locations:
 /// - `~/.aleph/skills/` — Aleph native global skills
+/// - `~/.agents/skills/` — shared cross-tool convention
 /// - `~/.claude/skills/` — Claude Code compatibility
 ///
+/// Order encodes the same-id tie rule (`SkillRegistry::register` keeps the
+/// first-registered manifest on a same-priority clash): `.agents` — the
+/// shared convention's canonical install location — precedes `.claude`,
+/// which typically holds a copy or symlink of the same skill.
 /// Only directories that actually exist are returned.
 #[must_use]
 pub fn default_skill_dirs() -> Vec<PathBuf> {
@@ -792,6 +810,10 @@ pub fn default_skill_dirs() -> Vec<PathBuf> {
     }
 
     if let Ok(home) = crate::utils::paths::get_home_dir() {
+        let agents_skills = home.join(".agents").join("skills");
+        if agents_skills.exists() {
+            dirs.push(agents_skills);
+        }
         let claude_skills = home.join(".claude").join("skills");
         if claude_skills.exists() {
             dirs.push(claude_skills);
@@ -884,8 +906,11 @@ fn plugin_id_from_path(path: &Path) -> Option<String> {
 ///   Plugin(<dir>) — the fail-closed fallback for an unloaded plugin
 /// - Under `~/.aleph/skills/` with manifest marking official → Bundled
 /// - Under `~/.aleph/skills/` otherwise → Global
-/// - Contains `.aleph/skills` but not under home → Workspace
-/// - Otherwise → Bundled (e.g. Claude Code compatibility paths)
+/// - Contains a `.aleph/skills` component pair but not under home → Workspace
+/// - Contains a `.claude/skills` / `.agents/skills` component pair →
+///   Compat(Claude) / Compat(Agents) — the shared compat roots, named so the
+///   Panel can group them and the model can see where the words came from
+/// - Otherwise → Bundled
 pub fn guess_source(path: &Path) -> SkillSource {
     use std::sync::OnceLock;
 
@@ -905,8 +930,6 @@ pub fn guess_source(path: &Path) -> SkillSource {
     // Cache the bundled manifest to avoid re-reading from disk on every call.
     static CACHED_MANIFEST: OnceLock<Option<crate::bundled::manifest::InstallRegistry>> =
         OnceLock::new();
-
-    let path_str = path.to_string_lossy();
 
     if let Ok(global_skills) = crate::utils::paths::get_skills_dir() {
         let resolved_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -929,12 +952,63 @@ pub fn guess_source(path: &Path) -> SkillSource {
         }
     }
 
-    if path_str.contains(".aleph/skills") {
+    if is_workspace_aleph_skills(path) {
         return SkillSource::Workspace;
     }
 
-    // Claude Code compatibility paths (.claude/skills) or plugin skills
+    // Compatibility roots (.claude/skills, .agents/skills), user- or
+    // project-level; anything else (or plugin skills) stays Bundled.
+    if let Some(root) = compat_root_of(path) {
+        return SkillSource::Compat(root);
+    }
     SkillSource::Bundled
+}
+
+/// The compat root a path sits under: `Some(Claude)` for a
+/// `<…>/.claude/skills/…` component pair, `Some(Agents)` for `.agents`.
+/// Component-wise like [`is_workspace_aleph_skills`] — a string
+/// `contains(".claude/skills")` would never match on Windows.
+fn compat_root_of(path: &Path) -> Option<crate::domain::skill::CompatRoot> {
+    use crate::domain::skill::CompatRoot;
+    let comps: Vec<&std::ffi::OsStr> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    comps.windows(2).find_map(|w| {
+        if w[1] != std::ffi::OsStr::new("skills") {
+            return None;
+        }
+        if w[0] == std::ffi::OsStr::new(".claude") {
+            Some(CompatRoot::Claude)
+        } else if w[0] == std::ffi::OsStr::new(".agents") {
+            Some(CompatRoot::Agents)
+        } else {
+            None
+        }
+    })
+}
+
+/// True when `path` sits under a `<…>/.aleph/skills/` component pair — the
+/// workspace-level marker.
+///
+/// Component-wise, NOT a string `contains(".aleph/skills")`: the string form
+/// hardcodes the `/` separator and therefore never matches on Windows (where
+/// the path renders as `.aleph\skills`), silently misclassifying every
+/// workspace skill as `Bundled` — the lowest override priority.
+fn is_workspace_aleph_skills(path: &Path) -> bool {
+    let comps: Vec<&std::ffi::OsStr> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    comps.windows(2).any(|w| {
+        w[0] == std::ffi::OsStr::new(".aleph") && w[1] == std::ffi::OsStr::new("skills")
+    })
 }
 
 #[cfg(test)]
@@ -949,9 +1023,11 @@ mod tests {
         let aleph_home = temp_dir.path().join("aleph-home");
         let global_aleph = aleph_home.join("skills");
         let legacy_aleph = home.join(".aleph").join("skills");
+        let global_agents = home.join(".agents").join("skills");
         let global_claude = home.join(".claude").join("skills");
         std::fs::create_dir_all(&global_aleph).unwrap();
         std::fs::create_dir_all(&legacy_aleph).unwrap();
+        std::fs::create_dir_all(&global_agents).unwrap();
         std::fs::create_dir_all(&global_claude).unwrap();
 
         let dirs = {
@@ -961,8 +1037,13 @@ mod tests {
         };
 
         assert!(dirs.contains(&global_aleph));
+        assert!(dirs.contains(&global_agents));
         assert!(dirs.contains(&global_claude));
         assert!(!dirs.contains(&legacy_aleph));
+        // Tie-rule order: the .agents copy is registered (and wins a
+        // same-id Bundled tie) before the .claude one.
+        let pos = |d: &PathBuf| dirs.iter().position(|x| x == d).unwrap();
+        assert!(pos(&global_agents) < pos(&global_claude));
     }
 
     #[test]
@@ -1138,6 +1219,46 @@ Content two."#,
     fn guess_source_workspace() {
         let path = PathBuf::from("/some/project/.aleph/skills/git/SKILL.md");
         assert_eq!(guess_source(&path), SkillSource::Workspace);
+    }
+
+    #[test]
+    fn guess_source_agents_compat_path_is_bundled() {
+        // The shared cross-tool root gets the same compat PRIORITY as
+        // ~/.claude (both == Bundled's 1), but is named distinctly so the
+        // Panel can group it and the model can see the provenance.
+        use crate::domain::skill::CompatRoot;
+        let user_level = PathBuf::from("/home/u/.agents/skills/foo/SKILL.md");
+        assert_eq!(
+            guess_source(&user_level),
+            SkillSource::Compat(CompatRoot::Agents)
+        );
+        let project_level = PathBuf::from("/some/project/.agents/skills/foo/SKILL.md");
+        assert_eq!(
+            guess_source(&project_level),
+            SkillSource::Compat(CompatRoot::Agents)
+        );
+        let claude_user = PathBuf::from("/home/u/.claude/skills/foo/SKILL.md");
+        assert_eq!(
+            guess_source(&claude_user),
+            SkillSource::Compat(CompatRoot::Claude)
+        );
+        let claude_project = PathBuf::from("/some/project/.claude/skills/foo/SKILL.md");
+        assert_eq!(
+            guess_source(&claude_project),
+            SkillSource::Compat(CompatRoot::Claude)
+        );
+    }
+
+    #[test]
+    fn guess_source_skills_prefixed_dir_is_not_workspace() {
+        // Regression: the old string `contains(".aleph/skills")` matched
+        // `.aleph/skills-old/…` as a substring. The component-wise check
+        // requires the exact `.aleph` + `skills` pair (and is what makes the
+        // check separator-agnostic — the string form never matched
+        // `.aleph\skills` on Windows, misclassifying workspace skills as
+        // Bundled there).
+        let path = PathBuf::from("/some/project/.aleph/skills-old/git/SKILL.md");
+        assert_eq!(guess_source(&path), SkillSource::Bundled);
     }
 
     #[test]

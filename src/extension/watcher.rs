@@ -123,6 +123,7 @@ impl ExtensionWatcher {
     ///
     /// Watches:
     /// - `~/.claude/` (global, Claude Code compatible)
+    /// - `~/.agents/` (global, shared cross-tool convention)
     /// - `~/.aleph/` (global)
     /// - `~/.aleph/projects/<id>/` (project-level, if `project_id` provided)
     ///
@@ -135,16 +136,21 @@ impl ExtensionWatcher {
     {
         let mut watch_dirs = Vec::new();
 
-        // Global directories. `.claude` is Claude Code's own directory and
-        // stays on the real home; `.aleph` is OUR state and must follow
-        // `ALEPH_HOME`, or the watcher watches a tree nobody writes to.
+        // Global directories. `.claude`/`.agents` are other tools' shared
+        // directories and stay on the real home; `.aleph` is OUR state and
+        // must follow `ALEPH_HOME`, or the watcher watches a tree nobody
+        // writes to.
         if let Some(home) = dirs::home_dir() {
             let claude_global = home.join(".claude");
+            let agents_global = home.join(".agents");
             let aleph_global =
                 crate::utils::paths::get_config_dir().unwrap_or_else(|_| home.join(".aleph"));
 
             if claude_global.exists() {
                 watch_dirs.push(claude_global);
+            }
+            if agents_global.exists() {
+                watch_dirs.push(agents_global);
             }
             if aleph_global.exists() {
                 watch_dirs.push(aleph_global);

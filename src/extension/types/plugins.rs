@@ -146,7 +146,8 @@ impl PluginOrigin {
             // then say where the plugin came from.
             crate::discovery::DiscoverySource::Project => Self::Workspace,
             crate::discovery::DiscoverySource::AlephGlobal
-            | crate::discovery::DiscoverySource::ClaudeGlobal => Self::Global,
+            | crate::discovery::DiscoverySource::ClaudeGlobal
+            | crate::discovery::DiscoverySource::AgentsGlobal => Self::Global,
             // Claude Code's cache: not exempt from the trust policy either —
             // another tool installed it, and the operator never chose it here.
             crate::discovery::DiscoverySource::ClaudeCache => Self::ClaudeCache,

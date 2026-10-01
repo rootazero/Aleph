@@ -66,6 +66,7 @@ struct FakeWaRuntimeInner {
     sent_reactions: Mutex<Vec<(String, String, String)>>,
     sent_typing: Mutex<Vec<String>>,
     sent_reads: Mutex<Vec<String>>,
+    sent_group_pictures: Mutex<Vec<(String, usize)>>, // (group_jid, byte_len)
 }
 
 impl FakeWaRuntime {
@@ -94,6 +95,7 @@ impl FakeWaRuntime {
             sent_reactions: Mutex::new(Vec::new()),
             sent_typing: Mutex::new(Vec::new()),
             sent_reads: Mutex::new(Vec::new()),
+            sent_group_pictures: Mutex::new(Vec::new()),
         });
         Arc::new(Self {
             inner,
@@ -106,6 +108,14 @@ impl FakeWaRuntime {
     /// non-default starting point before `start()`.
     pub async fn set_pairing_state(&self, state: PairingState) {
         *self.inner.pairing.lock().await = state;
+    }
+
+    /// Snapshot of every (group_jid, byte_len) tuple the fake recorded
+    /// for `set_group_picture`. Exists so tests can assert the channel
+    /// routed the data URL through decode + send without reaching for
+    /// a real WhatsApp connection.
+    pub async fn sent_group_pictures(&self) -> Vec<(String, usize)> {
+        self.inner.sent_group_pictures.lock().await.clone()
     }
 
     /// Snapshot the fake's current pairing state.
@@ -363,6 +373,25 @@ impl WaRuntime for FakeWaRuntime {
             message_id.to_string(),
             emoji.to_string(),
         ));
+        Ok(())
+    }
+
+    async fn set_group_picture(
+        &self,
+        group_jid: &str,
+        image_data: Vec<u8>,
+    ) -> Result<(), WaRuntimeError> {
+        // Fake stores (jid, byte_len) — the bytes themselves are not
+        // round-tripped because the runtime contract is "did the call
+        // reach a real path", not "did the bytes survive". Tests that
+        // need the bytes can swap to a higher-fidelity fake or use a
+        // recording wrapper.
+        let byte_len = image_data.len();
+        self.inner
+            .sent_group_pictures
+            .lock()
+            .await
+            .push((group_jid.to_string(), byte_len));
         Ok(())
     }
 

@@ -98,6 +98,8 @@ impl IrcChannel {
             typing_indicator: false,
             read_receipts: false,
             rich_text: false,        // IRC has minimal formatting (mIRC codes)
+            polls: false,
+            group_icons: false,
             max_message_length: 400, // Conservative PRIVMSG limit
             max_attachment_size: 0,
             stream_protocol: Default::default(),

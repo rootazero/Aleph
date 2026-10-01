@@ -73,6 +73,8 @@ impl QQChannel {
             typing_indicator: false,
             read_receipts: false,
             rich_text: true,
+            polls: false,
+            group_icons: false,
             max_message_length: 4000,
             max_attachment_size: 8 * 1024 * 1024,
             stream_protocol: crate::gateway::channel::StreamProtocol::None,

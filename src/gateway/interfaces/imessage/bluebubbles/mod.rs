@@ -38,6 +38,16 @@ pub fn bluebubbles_capabilities() -> ChannelCapabilities {
         typing_indicator: true,
         read_receipts: true,
         rich_text: false,
+        // Polls: BlueBubbles Private API helper does not list poll creation in
+        // its 22 supported features, and no REST endpoint exists. Trait default
+        // returns UnsupportedFeature. If a future BlueBubbles server adds the
+        // endpoint, flip this and add `Channel::create_poll` impl.
+        polls: false,
+        // Group icon: BlueBubbles Private API #8 — "Update group chat photo
+        // (requires MacOS 11+)" — exposed as `POST /api/v1/chat/{chatGuid}/icon`
+        // (multipart, field `icon`). Upstream reference: openclaw
+        // extensions/bluebubbles/src/chat.ts::setGroupIconBlueBubbles.
+        group_icons: true,
         max_message_length: 4000,
         max_attachment_size: 100 * 1024 * 1024,
         stream_protocol: Default::default(),
@@ -266,6 +276,32 @@ impl Channel for BlueBubblesChannel {
         }
         self.api
             .send_typing(&guid)
+            .await
+            .map_err(|e| ChannelError::SendFailed(e.to_string()))
+    }
+
+    async fn set_group_icon(
+        &self,
+        conversation_id: &ConversationId,
+        icon_data_url: &str,
+    ) -> ChannelResult<()> {
+        // The trait contract gates on capabilities.group_icons (we declare
+        // true), but the underlying BlueBubbles endpoint requires private-api
+        // on the server Mac (helper feature #8). Check both: capability flag
+        // is the channel-shape contract; private-api is the runtime gate.
+        // Without private-api, fail loudly rather than pretending success.
+        if !self.server_caps.read().await.private_api {
+            return Err(ChannelError::UnsupportedFeature(
+                "setGroupIcon requires BlueBubbles private-api".to_string(),
+            ));
+        }
+        let guid = self
+            .api
+            .resolve_chat_guid(conversation_id.as_str(), &self.guid_cache)
+            .await
+            .ok_or_else(|| ChannelError::SendFailed("chat not found".to_string()))?;
+        self.api
+            .set_chat_icon(&guid, icon_data_url)
             .await
             .map_err(|e| ChannelError::SendFailed(e.to_string()))
     }

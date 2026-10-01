@@ -827,25 +827,93 @@ mod tests {
         assert!(cut <= 2, "cut must be pulled out of the span, cut={cut}");
     }
 
-    /// Every `RunStarted` in the retired prefix must have its `RunFinished`
-    /// there too — the property `snap_out_of_open_run` exists to hold, stated
-    /// without depending on exact indices.
+    /// Every `RunFinished` in the kept tail must have its pairing `RunStarted`
+    /// (the LAST opener with the same `run_id` strictly before it) also in
+    /// the tail — mirroring `snap_out_of_open_run`'s pairing exactly.
+    ///
+    /// The earlier wording ("any RunStarted with this id in the prefix")
+    /// assumed each `run_id` appeared at most once in the log; that broke
+    /// the moment the engine started re-using one id across fallback retries
+    /// (see `a_reused_run_id_snaps_to_the_opener_its_closer_pairs_with` in
+    /// `event_snap.rs`). A first opener under an id can sit in the retired
+    /// prefix while a later opener under the same id is the closer's actual
+    /// pair — the snap pulls the cut back to the LATER opener, leaving the
+    /// earlier one retired, which this invariant allows.
     fn assert_invariant_run_markers_balanced(events: &[SessionEventRecord], cut: usize) {
-        let closed_in_tail: Vec<&str> = events[cut..]
-            .iter()
-            .filter_map(|r| match &r.event {
-                SessionEvent::RunFinished { run_id, .. } => Some(run_id.as_str()),
-                _ => None,
-            })
-            .collect();
-        for record in &events[..cut] {
-            if let SessionEvent::RunStarted { run_id, .. } = &record.event {
+        for (tail_offset, record) in events[cut..].iter().enumerate() {
+            let SessionEvent::RunFinished { run_id, .. } = &record.event else {
+                continue;
+            };
+            let closer_pos = cut + tail_offset;
+            // rposition in events[..closer_pos]: the LAST opener under this
+            // id that sits before this closer. That's the pair.
+            let opener_pos = events[..closer_pos].iter().rposition(|r| {
+                matches!(&r.event, SessionEvent::RunStarted { run_id: id, .. } if id == run_id)
+            });
+            if let Some(pos) = opener_pos {
                 assert!(
-                    !closed_in_tail.contains(&run_id.as_str()),
-                    "run {run_id} would be retired while its close stays live"
+                    pos >= cut,
+                    "run {run_id}'s pairing opener at {pos} is in retired prefix while \
+                     its close at {closer_pos} stays live"
                 );
             }
         }
+    }
+
+    /// Reused-id regression at the `manual.rs` assertion site: the snap
+    /// helper test in `event_snap.rs` covers the snap function itself, but
+    /// `assert_invariant_run_markers_balanced` is the property the manual
+    /// compact path is contracted to hold — pin it here too so a future
+    /// rewrite of either side cannot quietly drop the reused-id case.
+    #[test]
+    fn a_reused_run_id_invariant_holds_at_the_snapped_cut() {
+        // Same shape as `event_snap::a_reused_run_id_snaps_to_the_opener_its_closer_pairs_with`.
+        let run = "run-1".to_string();
+        let events = vec![
+            rec(
+                1,
+                SessionEvent::RunStarted {
+                    run_id: run.clone(),
+                    at: now_ms(),
+                    project_root: None,
+                    envelope: None,
+                },
+            ),
+            user(2, "older"),
+            rec(
+                3,
+                SessionEvent::RunFinished {
+                    run_id: run.clone(),
+                    outcome: RunOutcome::Completed,
+                    at: now_ms(),
+                },
+            ),
+            rec(
+                4,
+                SessionEvent::RunStarted {
+                    run_id: run.clone(),
+                    at: now_ms(),
+                    project_root: None,
+                    envelope: None,
+                },
+            ),
+            user(5, "newer"),
+            user(6, "newer"),
+            rec(
+                7,
+                SessionEvent::RunFinished {
+                    run_id: run,
+                    outcome: RunOutcome::Completed,
+                    at: now_ms(),
+                },
+            ),
+        ];
+        // The closer at 7 pairs with the opener at 4 (LAST opener under this
+        // id before it). The cut must be at or before 4. The snap helper
+        // would push to 3 if the input cut were 5, but the invariant only
+        // cares that the FINAL cut satisfies the property; assert at 3
+        // (the snap output).
+        assert_invariant_run_markers_balanced(&events, 3);
     }
 
     #[test]

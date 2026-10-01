@@ -334,6 +334,12 @@ inquire = "0.7"
 loom = { version = "0.7", optional = true }
 whatsapp-rust = { version = "0.5", default-features = false, features = ["tokio-runtime", "tokio-transport", "sqlite-storage"] }
 whatsapp-rust-tokio-transport = "0.5"
+# Pinned to the same version whatsapp-rust 0.5 depends on. Direct dep
+# because we need `wacore::iq::contacts::SetProfilePictureSpec` to set a
+# group's profile picture — whatsapp-rust only re-exports the
+# SetProfilePictureResponse (own profile), not the Spec. Bumping
+# whatsapp-rust without re-aligning this dep is a wire-format bug.
+wacore = { version = "=0.5.0", default-features = false }
 matrix-sdk = { version = "0.16", default-features = false, features = ["native-tls", "sqlite"] }
 mime = "0.3"
 aleph-logging = { path = "shared/logging" }

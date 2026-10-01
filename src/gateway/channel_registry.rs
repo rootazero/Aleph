@@ -743,6 +743,47 @@ impl ChannelRegistry {
         channel.send_typing(conversation_id).await
     }
 
+    /// Create a poll in a conversation through a specific channel.
+    ///
+    /// R8 (tools = everything): iMessage's BlueBubbles adapter exposes
+    /// `createPoll`; this is the single channel-registry entry point the
+    /// `channel_message` tool dispatches through. Channels without poll
+    /// support inherit the trait default `ChannelError::UnsupportedFeature`.
+    pub async fn create_poll(
+        &self,
+        channel_id: &ChannelId,
+        conversation_id: &ConversationId,
+        question: &str,
+        options: &[String],
+        allow_multiple: bool,
+    ) -> ChannelResult<super::channel::MessageId> {
+        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
+            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
+        })?;
+        let channel = channel_arc.read().await;
+        channel
+            .create_poll(conversation_id, question, options, allow_multiple)
+            .await
+    }
+
+    /// Set the icon of a group conversation through a specific channel.
+    ///
+    /// iMessage-native (BlueBubbles `setChatIcon`). Same R8 rationale as
+    /// `create_poll`. `icon_data_url` is a `data:` URL carrying the image
+    /// payload; adapters are responsible for parsing it.
+    pub async fn set_group_icon(
+        &self,
+        channel_id: &ChannelId,
+        conversation_id: &ConversationId,
+        icon_data_url: &str,
+    ) -> ChannelResult<()> {
+        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
+            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
+        })?;
+        let channel = channel_arc.read().await;
+        channel.set_group_icon(conversation_id, icon_data_url).await
+    }
+
     /// List addressable conversations on a specific channel.
     ///
     /// Read half of the outbound API: `send`/`edit`/`react` all need a

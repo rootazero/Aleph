@@ -106,7 +106,9 @@ impl NostrChannel {
             deletion: false, // NIP-09 exists but relays may ignore
             typing_indicator: false,
             read_receipts: false,
-            rich_text: false, // Plain text only
+            rich_text: false,
+            polls: false,
+            group_icons: false, // Plain text only
             max_message_length: 65535,
             max_attachment_size: 0,
             stream_protocol: Default::default(),

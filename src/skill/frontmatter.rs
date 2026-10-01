@@ -4,7 +4,7 @@
 //!
 //! | path | root | produces |
 //! |---|---|---|
-//! | [`crate::skill::manifest`] | `~/.aleph/skills`, `~/.claude/skills`, project dirs, **and every active plugin's `<root>/skills`** | `SkillManifest` |
+//! | [`crate::skill::manifest`] | `~/.aleph/skills`, `~/.agents/skills`, `~/.claude/skills`, project dirs, **and every active plugin's `<root>/skills`** | `SkillManifest` |
 //! | [`crate::extension::manifest::parsers`] | `{plugin_dir}/skills/*/SKILL.md`, `{plugin_dir}/commands/*.md` | `SkillRegistration` |
 //! | [`crate::tools::markdown_skill::parser`] | whatever `skills.install` names | `AlephSkillSpec` |
 //!

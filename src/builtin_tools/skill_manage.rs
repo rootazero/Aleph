@@ -291,9 +291,10 @@ impl SkillManageTool {
             .await
             .ok_or_else(|| AlephError::tool(format!("Skill not found: {}", id.as_str())))?;
         match manifest.source() {
-            SkillSource::Bundled => {
+            SkillSource::Bundled | SkillSource::Compat(_) => {
                 return Err(AlephError::tool(format!(
-                    "Bundled skills are read-only; cannot {action} '{}'. Create a copy with action='create' instead.",
+                    "Bundled and compat (.claude/.agents) skills are read-only here; cannot {action} '{}'. \
+                     Edit compat skills in their own directory, or create a copy with action='create'.",
                     id.as_str()
                 )));
             }

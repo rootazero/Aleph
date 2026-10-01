@@ -221,6 +221,8 @@ impl DiscordChannel {
             typing_indicator: true,
             read_receipts: false,
             rich_text: true, // Markdown support
+            polls: true,    // Discord supports polls via API; stub returns Unsupported until adapter is wired
+            group_icons: false,
             max_message_length: 2000,
             max_attachment_size: 25 * 1024 * 1024, // 25MB for normal, 100MB for Nitro
             // Reply streaming: the generic ReplyEmitter drives send→edit via our

@@ -174,7 +174,11 @@ impl TelegramChannel {
             deletion: true,
             typing_indicator: true,
             read_receipts: false,
-            rich_text: true, // Markdown/HTML support
+            rich_text: true,
+            // Telegram Bot API `sendPoll` (chat_id, question, options[2..10])
+            // is stable since 2020. Wired in `create_poll` below.
+            polls: true,
+            group_icons: false, // Markdown/HTML support
             max_message_length: 4096,
             max_attachment_size: 50 * 1024 * 1024, // 50MB
             stream_protocol: crate::gateway::channel::StreamProtocol::EditBased,
@@ -904,6 +908,66 @@ impl Channel for TelegramChannel {
         .await
     }
 
+    async fn create_poll(
+        &self,
+        conversation_id: &ConversationId,
+        question: &str,
+        options: &[String],
+        allow_multiple: bool,
+    ) -> ChannelResult<MessageId> {
+        // Telegram's `sendPoll` rejects <2 or >10 options (validation done by
+        // the bot API itself). The Channel trait's `create_poll` default does
+        // not pre-validate; we mirror the bot API floor so the error message
+        // names the constraint instead of a generic 400.
+        if options.len() < 2 {
+            return Err(ChannelError::SendFailed(
+                "create_poll requires at least 2 options".into(),
+            ));
+        }
+        if options.len() > 10 {
+            return Err(ChannelError::SendFailed(
+                "create_poll accepts at most 10 options".into(),
+            ));
+        }
+
+        let (chat_id, thread_id) =
+            delivery::parse_conversation_id(conversation_id.as_str())?;
+        let chat_id_i64 = chat_id.0;
+
+        let instance = self
+            .bot_instances
+            .iter()
+            .find(|inst| {
+                self.config_resolver
+                    .resolve(&inst.account_id, chat_id_i64, thread_id)
+                    .is_some()
+            })
+            .ok_or_else(|| {
+                ChannelError::ConfigError(format!(
+                    "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
+                     Ensure the chat_id is covered by allowed_groups or account config"
+                ))
+            })?;
+
+        // `send_poll` returns a `Message` carrying the poll id; we surface
+        // the message id (the Channel trait only has MessageId — downstream
+        // callers that want the poll id can call `bot.get_chat(chat_id)` and
+        // inspect, or open a follow-up that extends the trait).
+        let opts: Vec<teloxide::types::InputPollOption> = options
+            .iter()
+            .cloned()
+            .map(teloxide::types::InputPollOption::from)
+            .collect();
+        let mut req = instance.bot.send_poll(chat_id, question, opts);
+        if allow_multiple {
+            req = req.allows_multiple_answers(true);
+        }
+        let msg = req.send().await.map_err(|e| {
+            ChannelError::SendFailed(format!("sendPoll failed: {e}"))
+        })?;
+        Ok(MessageId::new(msg.id.0.to_string()))
+    }
+
     async fn edit(
         &self,
         conversation_id: &ConversationId,
@@ -1025,7 +1089,53 @@ mod tests {
         assert!(caps.attachments);
         assert!(caps.images);
         assert!(caps.replies);
+        assert!(
+            caps.polls,
+            "Telegram has stable sendPoll — wire must reflect it"
+        );
         assert_eq!(caps.max_message_length, 4096);
+    }
+
+    #[tokio::test]
+    async fn create_poll_enforces_telegram_option_floor() {
+        // Telegram's bot API rejects <2 / >10 options. The Channel impl
+        // pre-validates so the error names the constraint (the bot API
+        // would surface a generic 400). Pin the floor here so a future
+        // edit cannot silently lower the gate and let an empty poll
+        // reach teloxide.
+        let config = TelegramConfigV2 {
+            accounts: vec![
+                crate::gateway::interfaces::telegram::config_v2::TelegramAccountConfig {
+                id: "default".to_string(),
+                bot_token: "123:ABC".to_string(),
+                token_fingerprint: None,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let channel = TelegramChannel::new("telegram-test", config);
+
+        let cid = ConversationId::new("123456");
+        // 1 option -> floor violation, no bot instance required because the
+        // pre-validation runs first.
+        let err = channel
+            .create_poll(&cid, "Lunch?", &["OnlyOne".into()], false)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("at least 2"),
+            "expected floor violation, got: {err}"
+        );
+        // 11 options -> ceiling violation.
+        let many: Vec<String> = (0..11).map(|i| format!("opt{i}")).collect();
+        let err = channel
+            .create_poll(&cid, "Lunch?", &many, false)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("at most 10"),
+            "expected ceiling violation, got: {err}"
+        );
     }
 
     #[test]

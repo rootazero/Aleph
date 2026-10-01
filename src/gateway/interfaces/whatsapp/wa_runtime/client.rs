@@ -333,6 +333,38 @@ impl RealWaRuntime {
         Ok(())
     }
 
+    /// Set the profile picture of a group conversation.
+    ///
+    /// Wire shape (per wacore 0.5 `SetProfilePictureSpec`):
+    /// ```xml
+    /// <iq type="set" xmlns="w:profile:picture" to="<group_jid>">
+    ///   <picture type="image">{jpeg bytes}</picture>
+    /// </iq>
+    /// ```
+    ///
+    /// WhatsApp's protocol doesn't have a "remove group icon" path
+    /// distinguishable from setting an empty one; the channel layer
+    /// treats `image_data` as required and never calls this with
+    /// empty bytes.
+    pub async fn set_group_picture(
+        &self,
+        group_jid: &str,
+        image_data: Vec<u8>,
+    ) -> ChannelResult<()> {
+        self.ensure_connected()?;
+        let client = self.get_client().await?;
+        let jid: whatsapp_rust::Jid = group_jid
+            .parse()
+            .map_err(|e| ChannelError::Internal(format!("Invalid group JID: {e}")))?;
+
+        let spec = wacore::iq::contacts::SetProfilePictureSpec::set_group(&jid, image_data);
+        client
+            .execute(spec)
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to set group icon: {e}")))?;
+        Ok(())
+    }
+
     fn ensure_connected(&self) -> ChannelResult<()> {
         if self.state.get() != ConnectionState::Connected {
             return Err(ChannelError::NotConnected("WhatsApp not connected".into()));
@@ -414,6 +446,19 @@ impl WaRuntime for RealWaRuntime {
         emoji: &str,
     ) -> Result<(), WaRuntimeError> {
         Self::send_reaction(self, conversation_id, message_id, emoji)
+            .await
+            .map_err(|e| match e {
+                ChannelError::NotConnected(m) => WaRuntimeError::NotConnected(m),
+                other => WaRuntimeError::Internal(other.to_string()),
+            })
+    }
+
+    async fn set_group_picture(
+        &self,
+        group_jid: &str,
+        image_data: Vec<u8>,
+    ) -> Result<(), WaRuntimeError> {
+        Self::set_group_picture(self, group_jid, image_data)
             .await
             .map_err(|e| match e {
                 ChannelError::NotConnected(m) => WaRuntimeError::NotConnected(m),
