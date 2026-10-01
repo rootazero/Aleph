@@ -6,7 +6,8 @@ use crate::builtin_tools::skill_reader::{
 use crate::builtin_tools::{
     AutomationTool, BashExecTool, CodeExecTool, CtxSearchTool, DesktopTool, FileEditTool,
     FileOpsTool, FileReadTool, FileWriteTool, MediaTool, PdfGenerateTool, PermissionTool, PimTool,
-    ReadConfigGuideTool, RecallEventsTool, ScratchpadTool, SearchTool, SelfManageTool, SystemTool,
+    ReadConfigGuideTool, RecallEventsTool, ScratchpadTool, SearchTool, SelfManageTool,
+    SessionDecompressTool, SystemTool,
 };
 use crate::tool_metadata::{ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
@@ -161,6 +162,13 @@ impl BuiltinToolRegistry {
             RecallEventsTool::DESCRIPTION,
             <RecallEventsTool as AlephTool>::MAX_RESULT_TOKENS,
             schema::<crate::builtin_tools::recall_events::RecallEventsArgs>("recall_events"),
+        );
+        reg(
+            tools,
+            "session_decompress",
+            SessionDecompressTool::DESCRIPTION,
+            <SessionDecompressTool as AlephTool>::MAX_RESULT_TOKENS,
+            schema::<crate::builtin_tools::SessionDecompressArgs>("session_decompress"),
         );
         reg(
             tools,

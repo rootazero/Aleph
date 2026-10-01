@@ -272,6 +272,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         tools: &[
             "session_new",
             "session_compact",
+            "session_decompress",
             "session_rename",
             "session_set_mode",
         ],
