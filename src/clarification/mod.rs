@@ -237,6 +237,10 @@ impl ClarificationRequest {
 
     /// The first question. Every request has one by construction.
     ///
+    /// `pub(crate)` — the only caller is `session::ask_user_frame` which
+    /// uses it as the cursor-past-end fallback. Wider visibility invites
+    /// drift between the public constructors and the field-level invariant.
+    ///
     /// Returns `Option` rather than panicking: now that `questions` is
     /// `pub(crate)`, in-crate callers CAN bypass [`Self::new`] (struct
     /// literal inside the module is still possible), so the API honours
@@ -244,7 +248,7 @@ impl ClarificationRequest {
     /// panic. All production call sites going through `new()` / `text()` /
     /// `select()` see a `Some`.
     #[must_use]
-    pub fn first(&self) -> Option<&ClarificationQuestion> {
+    pub(crate) fn first(&self) -> Option<&ClarificationQuestion> {
         // debug-assert the invariant the docstring promises — release builds
         // return None quietly while `cargo test` catches any drift.
         debug_assert!(

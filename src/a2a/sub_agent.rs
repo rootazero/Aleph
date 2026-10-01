@@ -281,21 +281,7 @@ impl A2ASubAgent {
     }
 }
 
-/// Emit a `RawMemory(Delegation{child_agent_id})` row in a fire-and-forget spawn.
-///
-/// Carries the delegation prompt and sub-agent summary so `CompressionService`
-/// can distil durable lessons for the parent agent's long-term memory.
-/// The parent `agent_id` is taken from `request.parent_agent_id`
-/// (falls back to `"default"` when absent — direct callers with no turn context).
-#[allow(dead_code)] // test-only helper
-pub(crate) fn emit_delegation_raw(
-    writer: Arc<dyn RawMemoryStore>,
-    request: &SubAgentRequest,
-    result: &SubAgentResult,
-    child_agent_id: impl Into<String>,
-) {
-    emit_delegation_raw_with_registry(writer, request, result, child_agent_id, None);
-}
+
 
 /// SubAgentRequest/Result shaped wrapper around `emit_delegation_primitives`.
 /// Kept as the entry point for the A2A path which still has those types in
@@ -611,7 +597,7 @@ mod spec1_tests {
             "Completed: found 3 key insights",
         );
 
-        emit_delegation_raw(writer, &request, &result, "trading-agent-id");
+        emit_delegation_raw_with_registry(writer, &request, &result, "trading-agent-id", None);
 
         // Fire-and-forget: let the spawned task complete.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -656,7 +642,7 @@ mod spec1_tests {
             .with_parent_agent("parent-agent-007");
         let result = crate::agents::sub_agents::SubAgentResult::success(request.id.clone(), "Done");
 
-        emit_delegation_raw(writer, &request, &result, "child-007");
+        emit_delegation_raw_with_registry(writer, &request, &result, "child-007", None);
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 

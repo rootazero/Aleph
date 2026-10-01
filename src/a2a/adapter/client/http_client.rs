@@ -52,6 +52,24 @@ struct JsonRpcErrorData {
     message: String,
 }
 
+/// Build the JSON-RPC `params` shape shared by `message/send` and
+/// `message/stream`: `{taskId, message, sessionId?}`. Centralizes the
+/// `taskId`/`message`/`sessionId` JSON object so the sync and streaming
+/// callers cannot drift on field naming or null-vs-absent.
+fn build_message_params(task_id: &str, message: &A2AMessage, session_id: Option<&str>) -> Value {
+    let mut params = json!({
+        "taskId": task_id,
+        "message": message,
+    });
+    if let Some(sid) = session_id {
+        params
+            .as_object_mut()
+            .expect("invariant: params created as a JSON object literal")
+            .insert("sessionId".to_string(), json!(sid));
+    }
+    params
+}
+
 impl A2AClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         // Disable HTTP redirect following. The `base_url` is operator
@@ -219,17 +237,9 @@ impl A2AClient {
         message: &A2AMessage,
         session_id: Option<&str>,
     ) -> A2AResult<A2ATask> {
-        let mut params = json!({
-            "taskId": task_id,
-            "message": message,
-        });
-        if let Some(sid) = session_id {
-            params
-                .as_object_mut()
-                .expect("invariant: params created as a JSON object literal")
-                .insert("sessionId".to_string(), json!(sid));
-        }
-        let result = self.rpc_call("message/send", params).await?;
+        let result = self
+            .rpc_call("message/send", build_message_params(task_id, message, session_id))
+            .await?;
         serde_json::from_value(result).map_err(|e| A2AError::ParseError(e.to_string()))
     }
 
@@ -245,21 +255,11 @@ impl A2AClient {
         message: &A2AMessage,
         session_id: Option<&str>,
     ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>> {
-        let mut params = json!({
-            "taskId": task_id,
-            "message": message,
-        });
-        if let Some(sid) = session_id {
-            params
-                .as_object_mut()
-                .expect("invariant: params created as a JSON object literal")
-                .insert("sessionId".to_string(), json!(sid));
-        }
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: uuid::Uuid::new_v4().to_string(),
             method: "message/stream".to_string(),
-            params,
+            params: build_message_params(task_id, message, session_id),
         };
 
         let url = format!("{}/a2a/stream", self.base_url);

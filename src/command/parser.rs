@@ -131,10 +131,23 @@ impl CommandParser {
         })
     }
 
-    /// Get a reference to the underlying `ToolCatalog`
+    /// Get a reference to the underlying `ToolCatalog`.
+    ///
+    /// Returns `&ToolCatalog` (auto-deref from the inner `Arc`) — all current
+    /// callers treat it as a borrowed catalog; clone `Arc<ToolCatalog>` from
+    /// `Self::tool_registry_arc` if a shared-owner handle is needed.
     #[must_use]
-    pub const fn tool_registry(&self) -> &Arc<ToolCatalog> {
+    pub fn tool_registry(&self) -> &ToolCatalog {
         &self.tool_registry
+    }
+
+    /// Clone the underlying `Arc<ToolCatalog>` for shared ownership.
+    ///
+    /// Split from `tool_registry()` so the common borrowed-reference path
+    /// does not pay for an `Arc` in its return type.
+    #[must_use]
+    pub fn tool_registry_arc(&self) -> Arc<ToolCatalog> {
+        Arc::clone(&self.tool_registry)
     }
 }
 

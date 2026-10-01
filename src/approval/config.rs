@@ -134,6 +134,13 @@ pub fn matches_glob(value: &str, pattern: &str) -> bool {
     cached_glob_regex(pattern).is_some_and(|re| re.is_match(value))
 }
 
+/// First compiled rule in `rules` whose regex matches `target`. Used by the
+/// blocklist-then-allowlist scan in `ConfigApprovalPolicy::check` so the two
+/// arms share the find-first-match iteration.
+fn first_match<'a>(rules: &'a [CompiledRule], target: &str) -> Option<&'a CompiledRule> {
+    rules.iter().find(|r| r.regex.is_match(target))
+}
+
 /// A compiled policy rule, pairing the original glob pattern with its regex.
 #[derive(Debug, Clone)]
 struct CompiledRule {
@@ -386,6 +393,9 @@ impl Default for ConfigApprovalPolicy {
     ///   posture `system_tool`'s `clipboard_read` arm wants — so this line
     ///   changes no behaviour and states an intent that "absent" could not.
     /// - Hooks manage → Ask (control-plane write)
+    /// - Browser record start → Ask (writes a growing video file; the page's
+    ///   pixels stream through an encoder — same family as evaluate's read).
+    ///   stop/status are not gated: an off-switch behind a gate is fail-dead.
     fn default() -> Self {
         let mut defaults = HashMap::new();
         defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
@@ -406,6 +416,7 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::BrowserIdentityOverride, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserSessionState, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserNetworkMock, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserRecord, DefaultDecision::Ask);
         defaults.insert(ActionType::HooksManage, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopClick, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopType, DefaultDecision::Ask);
@@ -429,42 +440,42 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
     async fn check(&self, request: &ActionRequest) -> ApprovalDecision {
         let action = &request.action_type;
         let target = &request.target;
-        let prompt_target: &str = if request.display_target.is_empty() {
-            target.as_str()
+        let prompt_target = if request.display_target.is_empty() {
+            target
         } else {
-            request.display_target.as_str()
+            &request.display_target
         };
 
         // 1. Blocklist takes priority (pre-compiled regexes, grouped by ActionType)
-        if let Some(rules) = self.blocklist_by_type.get(action) {
-            for rule in rules {
-                if rule.regex.is_match(target) {
-                    debug!(
-                        action = ?action,
-                        target = %redact_target(target),
-                        pattern = %rule.pattern,
-                        "Blocked by blocklist rule"
-                    );
-                    return ApprovalDecision::Deny {
-                        reason: format!("Blocked by policy rule: {}", rule.pattern),
-                    };
-                }
-            }
+        if let Some(rule) = self
+            .blocklist_by_type
+            .get(action)
+            .and_then(|r| first_match(r, target))
+        {
+            debug!(
+                action = ?action,
+                target = %redact_target(target),
+                pattern = %rule.pattern,
+                "Blocked by blocklist rule"
+            );
+            return ApprovalDecision::Deny {
+                reason: format!("Blocked by policy rule: {}", rule.pattern),
+            };
         }
 
         // 2. Allowlist overrides defaults (pre-compiled regexes, grouped by ActionType)
-        if let Some(rules) = self.allowlist_by_type.get(action) {
-            for rule in rules {
-                if rule.regex.is_match(target) {
-                    debug!(
-                        action = ?action,
-                        target = %redact_target(target),
-                        pattern = %rule.pattern,
-                        "Allowed by allowlist rule"
-                    );
-                    return ApprovalDecision::Allow;
-                }
-            }
+        if let Some(rule) = self
+            .allowlist_by_type
+            .get(action)
+            .and_then(|r| first_match(r, target))
+        {
+            debug!(
+                action = ?action,
+                target = %redact_target(target),
+                pattern = %rule.pattern,
+                "Allowed by allowlist rule"
+            );
+            return ApprovalDecision::Allow;
         }
 
         // 3. Fall back to defaults

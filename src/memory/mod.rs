@@ -52,8 +52,6 @@ pub mod transcript_indexer;
 
 #[cfg(test)]
 mod integration_tests;
-#[cfg(all(test, feature = "loom"))]
-mod loom_concurrency;
 #[cfg(test)]
 mod proptest_enums;
 

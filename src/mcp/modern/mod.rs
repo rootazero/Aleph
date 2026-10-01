@@ -217,12 +217,13 @@ impl RequestMeta {
         let mut params = match params {
             Some(Value::Object(map)) => map,
             None | Some(Value::Null) => Map::new(),
+            // Unreachable in practice: every caller in the codebase passes
+            // either `None` or `Some(Value::Object(...))`. The
+            // `debug_assert!` documents the precondition; the `return other`
+            // keeps the non-object value flowing unchanged rather than
+            // silently rewriting it (which would corrupt the protocol).
             Some(other) => {
                 debug_assert!(false, "MCP request params must be a JSON object");
-                tracing::error!(
-                    "MCP request params were not a JSON object; \
-                     required _meta could not be attached"
-                );
                 return other;
             }
         };

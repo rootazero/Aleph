@@ -3039,6 +3039,14 @@ mod tests {
             // useful: this is how a model finds out what opened the dialog.
             "console_messages",
             "network_log",
+            // C3 accounting note — `browser_qa` adds NO verb to this census:
+            // it is a tool-layer orchestration over wait_for (the trait
+            // default, which polls through `evaluate` — itself ungated
+            // below), console_messages, network_log and screenshot, every one
+            // of them ungated, so a QA run works while a dialog is pending
+            // and never needs the dialog door. A `browser_qa` NAME entry here
+            // would fail GUARD half two (not a verb on the trait impl) — the
+            // registration is this comment, by design.
             // Mock-route management is control-plane: these read or rewrite
             // Aleph's own rule table and toggle the Fetch handshake — the
             // engine answers both while a renderer-side dialog is pending
@@ -3048,6 +3056,16 @@ mod tests {
             "route_list",
             "route_remove",
             "route_clear",
+            // Session recording is the same control-plane shape as the mock
+            // routes: these read or steer Aleph's own RecordingRegistry (and
+            // the screencast/ffmpeg pipeline it owns), none of them acts on
+            // the blocked page's content, and the engine answers screencast
+            // commands while a renderer-side dialog is pending. Gating the
+            // off-switch (`record_stop`) behind a dialog the page opened
+            // would be a gate with no door (判据 §14).
+            "record_start",
+            "record_stop",
+            "record_status",
             // Tab lifecycle: these do not act on the blocked page's content.
             // `open_tab` and `switch_tab` are how a model gets AWAY from a
             // wedged tab, so gating them would take away the escape.

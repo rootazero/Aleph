@@ -40,18 +40,47 @@ fn project_plugin(entry: &MarketplacePluginEntry) -> ExtensionEntry {
         git_ref: None,
         sha256: None,
     };
+    aleph_hub_official_entry(
+        ExtensionKind::Plugin,
+        &entry.name,
+        entry.name.clone(),
+        entry.description.clone().unwrap_or_default(),
+        OFFICIAL_PLUGINS_REPO,
+        entry.version.clone(),
+        spec,
+    )
+}
+
+/// Build an official Aleph-Hub catalog entry for a bundled extension
+/// (plugin or skill). Shared by `project_plugin` here and `project_skill`
+/// in `official_skills` because the entry shape — `aleph-hub:<slug>` id,
+/// `Other` category, `Official` trust tier, `kind.as_str()` tag, fresh
+/// install state, `aleph-hub` via label, optional bundled repo URL — is
+/// identical for both bundled kinds; only `kind`, `name`, `description`,
+/// `version`, and the bundled repo URL differ. The MCP official-primer has
+/// its own construction (category comes from a preset mapping, not always
+/// `Other`) and lives in `official_mcp`.
+pub(crate) fn aleph_hub_official_entry(
+    kind: ExtensionKind,
+    slug: &str,
+    name: String,
+    description: String,
+    repo_url: &str,
+    version: Option<String>,
+    spec: InstallSpec,
+) -> ExtensionEntry {
     ExtensionEntry {
-        id: format!("{ALEPH_HUB_ID}:{}", entry.name),
-        kind: ExtensionKind::Plugin,
+        id: format!("{ALEPH_HUB_ID}:{slug}"),
+        kind,
         category: ExtensionCategory::Other,
-        name: entry.name.clone(),
-        description: entry.description.clone().unwrap_or_default(),
+        name,
+        description,
         author: None,
         icon: None,
-        tags: vec![ExtensionKind::Plugin.as_str().to_string()],
-        version: entry.version.clone(),
+        tags: vec![kind.as_str().to_string()],
+        version,
         source_id: ALEPH_HUB_ID.to_string(),
-        repo_url: Some(OFFICIAL_PLUGINS_REPO.to_string()),
+        repo_url: Some(repo_url.to_string()),
         trust_tier: TrustTier::Official,
         requires_config: spec.requires_config(),
         config_schema: None,

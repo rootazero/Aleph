@@ -61,18 +61,3 @@ pub fn instance(agent_id: &str) -> (AgentInstance, Arc<dyn SessionStore>, TempDi
     let instance = AgentInstance::new(config, sm.clone()).expect("instance");
     (instance, sm, temp)
 }
-
-/// Build a fully-instantiated `AgentInstance` with both backing tempdirs
-/// owned by the caller (returned as a tuple alongside the instance).
-///
-/// Two-tempdir flavor because some tests want to drop the session store
-/// before the workspace (e.g. shutdown ordering tests).
-#[allow(dead_code)]
-#[must_use]
-pub fn instance_with_sm(
-    agent_id: &str,
-) -> (AgentInstance, Arc<dyn SessionStore>, TempDir, TempDir) {
-    let (instance, sm, instance_temp) = instance(agent_id);
-    let (_sm, sm_temp) = session_store();
-    (instance, sm, instance_temp, sm_temp)
-}

@@ -83,9 +83,15 @@ impl MediaProvider for ImageMediaProvider {
     }
 
     fn supported_types(&self) -> Vec<MediaType> {
-        vec![MediaType::Image {
-            format: MediaImageFormat::Png,
-        }]
+        // PNG/JPEG/WebP reach the vision pipeline successfully; Gif/Svg/Heic
+        // are routed in but rejected inside `convert_input` with
+        // `UnsupportedFormat`. Mirror `to_vision_format` here so the declared
+        // surface matches the actual one.
+        vec![
+            MediaType::Image { format: MediaImageFormat::Png },
+            MediaType::Image { format: MediaImageFormat::Jpeg },
+            MediaType::Image { format: MediaImageFormat::WebP },
+        ]
     }
 
     async fn process(

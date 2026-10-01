@@ -4,6 +4,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
+use super::cdp_backend::recording::{RecordStartOptions, RecordingReceipt, RecordingStatus};
 use super::cdp_backend::routes::{NewRouteRule, RouteRuleInfo, RouteScope};
 use super::engine::Engine;
 use super::error::BrowserError;
@@ -205,6 +206,46 @@ pub trait BrowserBackend: Send + Sync {
     async fn route_clear(&self, tab_id: &str, scope: RouteScope) -> Result<usize, BrowserError> {
         let _ = (tab_id, scope);
         Err(unsupported_by_driver("route_clear", BrowserDriver::Cdp))
+    }
+
+    /// Start recording the tab to a video file (`browser_record{action:"start"}`).
+    /// One active recording per tab; the returned status carries the
+    /// recording id and the RESOLVED output path.
+    ///
+    /// Not universal: a screencast pipe (`Page.startScreencast` frames into
+    /// an ffmpeg encoder) is something only the cdp backend owns, so the
+    /// default names that driver (see [`Self::pdf`] for why the refusal
+    /// names the door that opens).
+    async fn record_start(
+        &self,
+        tab_id: &str,
+        options: RecordStartOptions,
+    ) -> Result<RecordingStatus, BrowserError> {
+        let _ = (tab_id, options);
+        Err(unsupported_by_driver("record_start", BrowserDriver::Cdp))
+    }
+
+    /// Stop a recording and return its verified receipt
+    /// (`browser_record{action:"stop"}`). Two entrances: `Some(recording_id)`
+    /// stops by id, `None` stops `tab_id`'s recording. A tab with nothing
+    /// recording is [`BrowserError::NoActiveRecording`], a plain fact — not a
+    /// transport failure. Not universal — see [`Self::record_start`].
+    async fn record_stop(
+        &self,
+        tab_id: &str,
+        recording_id: Option<&str>,
+    ) -> Result<RecordingReceipt, BrowserError> {
+        let _ = (tab_id, recording_id);
+        Err(unsupported_by_driver("record_stop", BrowserDriver::Cdp))
+    }
+
+    /// The live view of `tab_id`'s recording (`browser_record{action:"status"}`):
+    /// `Some` while one runs, `None` when it does not — including when a
+    /// finished-but-uncollected receipt exists, because that recording is NOT
+    /// in progress. Not universal — see [`Self::record_start`].
+    async fn record_status(&self, tab_id: &str) -> Result<Option<RecordingStatus>, BrowserError> {
+        let _ = tab_id;
+        Err(unsupported_by_driver("record_status", BrowserDriver::Cdp))
     }
 
     /// Print-to-PDF — writes PDF to `output_path`.

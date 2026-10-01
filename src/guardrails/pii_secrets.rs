@@ -26,8 +26,8 @@ use crate::security::runtime_guard::{
 
 const NAME: &str = "pii_secrets";
 
-/// Maximum recursion depth for [`PiiSecretsGuardrail::scan_tool_args`]. See
-/// the doc comment on the function for the DoS rationale.
+/// Maximum recursion depth for [`PiiSecretsGuardrail::scan_tool_args_at_depth`].
+/// See the doc comment on the function for the DoS rationale.
 const MAX_SCAN_DEPTH: u32 = 32;
 /// Branching-width cap on tool-arg scans. Bounds the number of JSON nodes
 /// visited per scan so a pathologically shallow-but-wide input (e.g. a
@@ -186,17 +186,6 @@ impl PiiSecretsGuardrail {
     /// `Block { class: Unexpected }` rather than scanning a partial tree
     /// (which would let a deep leaf evade inspection). Legitimate tool args
     /// nest <10 levels; 32 leaves generous headroom.
-    fn scan_tool_args<'a>(
-        &'a self,
-        value: &'a Value,
-        resolver_ref: Option<&'a dyn AsyncSecretResolver>,
-        warnings: &'a mut Vec<String>,
-        sources: &'a mut Vec<String>,
-        nodes: &'a mut u32,
-    ) -> BoxFuture<'a, Result<Value, GuardrailDecision>> {
-        self.scan_tool_args_at_depth(value, resolver_ref, warnings, sources, 0, nodes)
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn scan_tool_args_at_depth<'a>(
         &'a self,
@@ -394,7 +383,7 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
         // E0515 (returning value referencing local variable).
         let mut nodes: u32 = 0;
         let resolved = match self
-            .scan_tool_args(args, resolver_ref, &mut warnings, &mut sources, &mut nodes)
+            .scan_tool_args_at_depth(args, resolver_ref, &mut warnings, &mut sources, 0, &mut nodes)
             .await
         {
             Ok(v) => v,

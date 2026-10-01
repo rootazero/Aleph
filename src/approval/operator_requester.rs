@@ -105,16 +105,24 @@ impl OperatorApprovalRequester {
     }
 
     /// The key to publish on the `Approval*` frames for this instance.
-    ///
-    /// Empty for a config-tier escalation: `session_identity_of` reads an empty
-    /// key as [`crate::gateway::event_visibility::SessionIdentity::OperatorOnly`],
-    /// the same classification a cluster-node approval already gets, so no new
-    /// wire field and no new arm are needed.
-    fn frame_session_key(&self, session_key: &str) -> String {
-        if self.operator_only {
-            String::new()
-        } else {
-            session_key.to_string()
+    /// Resolve `approval_id` with a `Deny("unavailable")` and return the
+    /// matching `ApprovalResponse`. Shared by the `Ok(0)` (no operator
+    /// surface) and `Err(_)` (publish failed) arms — both deny with the same
+    /// reason so the caller cannot tell which leg of the bus failure tripped
+    /// the gate, and a caller who could legitimately distinguish them can
+    /// still log the cause at the call site (the warn! lives there).
+    fn deny_unavailable(&self, approval_id: &str) -> ApprovalResponse {
+        self.manager.resolve(
+            approval_id,
+            ApprovalDecisionType::Deny,
+            Some("unavailable".to_string()),
+        );
+        ApprovalResponse {
+            outcome: ApprovalOutcome::Denied,
+            deny_reason: Some(
+                "approval notification could not be delivered to the operator surface"
+                    .to_string(),
+            ),
         }
     }
 
@@ -236,7 +244,14 @@ impl ApprovalRequester for OperatorApprovalRequester {
         record.operator_only = self.operator_only;
         // Pairing key for the client: which tool row this card belongs under.
         let tool_call_id = record.tool_call_id.clone();
-        let frame_session_key = self.frame_session_key(&session_key_str);
+        // Empty for a config-tier escalation: `session_identity_of` reads an empty
+        // key as `SessionIdentity::OperatorOnly`, the same classification a
+        // cluster-node approval already gets, so no new wire field is needed.
+        let frame_session_key = if self.operator_only {
+            String::new()
+        } else {
+            session_key_str.clone()
+        };
         // Register the pending entry BEFORE publishing the event, so an operator
         // who resolves the instant they see it cannot race ahead of
         // registration (resolve-before-register would otherwise be lost and the
@@ -270,34 +285,12 @@ impl ApprovalRequester for OperatorApprovalRequester {
                     id = %approval_id,
                     "ApprovalRequested reached no subscribers (Ok(0)); denying so caller is not stranded"
                 );
-                self.manager.resolve(
-                    &approval_id,
-                    ApprovalDecisionType::Deny,
-                    Some("unavailable".to_string()),
-                );
-                return ApprovalResponse {
-                    outcome: ApprovalOutcome::Denied,
-                    deny_reason: Some(
-                        "approval notification could not be delivered to the operator surface"
-                            .to_string(),
-                    ),
-                };
+                return self.deny_unavailable(&approval_id);
             }
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "failed to publish ApprovalRequested for config approval");
-                self.manager.resolve(
-                    &approval_id,
-                    ApprovalDecisionType::Deny,
-                    Some("unavailable".to_string()),
-                );
-                return ApprovalResponse {
-                    outcome: ApprovalOutcome::Denied,
-                    deny_reason: Some(
-                        "approval notification could not be delivered to the operator surface"
-                            .to_string(),
-                    ),
-                };
+                return self.deny_unavailable(&approval_id);
             }
         }
 

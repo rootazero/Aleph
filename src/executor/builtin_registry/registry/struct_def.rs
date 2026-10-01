@@ -219,6 +219,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) browser_hover_tool: crate::builtin_tools::browser_tools::BrowserHoverTool,
     pub(crate) browser_scroll_tool: crate::builtin_tools::browser_tools::BrowserScrollTool,
     pub(crate) browser_pdf_tool: crate::builtin_tools::browser_tools::BrowserPdfTool,
+    pub(crate) browser_record_tool: crate::builtin_tools::browser_tools::BrowserRecordTool,
+    pub(crate) browser_qa_tool: crate::builtin_tools::browser_tools::BrowserQaTool,
     pub(crate) browser_network_tool: crate::builtin_tools::browser_tools::BrowserNetworkTool,
     pub(crate) browser_dialog_tool: crate::builtin_tools::browser_tools::BrowserDialogTool,
     pub(crate) browser_drag_tool: crate::builtin_tools::browser_tools::BrowserDragTool,

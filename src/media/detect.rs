@@ -147,12 +147,13 @@ fn detect_document_magic(bytes: &[u8]) -> Option<MediaType> {
     // ZIP-based (DOCX/XLSX/PPTX/JAR/etc): PK\x03\x04
     // Cannot distinguish DOCX from XLSX/PPTX/ZIP by magic bytes alone;
     // precise detection requires parsing the ZIP's [Content_Types].xml.
-    // Default to Docx as the most common document format.
+    // Return `Unknown` so callers fall back to extension-based detection
+    // (`.docx`, `.xlsx`, `.pptx`, `.zip`) rather than mis-routing an
+    // XLSX/PPTX/JAR into the Word-only text-document provider, which
+    // would surface a misleading `NoProvider` instead of the real
+    // classification.
     if bytes.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
-        return Some(MediaType::Document {
-            format: DocFormat::Docx,
-            pages: None,
-        });
+        return Some(MediaType::Unknown);
     }
     None
 }

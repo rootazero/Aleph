@@ -281,12 +281,6 @@ impl CompactionCircuitBreaker {
     const fn reset(&mut self) {
         self.consecutive_count = 0;
     }
-
-    /// Record that a compaction succeeded in reducing pressure.
-    /// Resets the counter so the breaker re-arms.
-    const fn record_success(&mut self) {
-        self.consecutive_count = 0;
-    }
 }
 
 // =============================================================================
@@ -592,7 +586,7 @@ impl ContextBudget {
         let after = after.calibrated(self.calibration.unwrap_or(1.0));
         self.publish(split);
         if before.ratio - after.ratio >= COMPACTION_EFFECTIVE_DROP {
-            self.circuit_breaker.record_success();
+            self.circuit_breaker.reset();
         }
         self.last_pressure = Some(after);
     }

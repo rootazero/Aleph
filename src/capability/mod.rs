@@ -242,13 +242,10 @@ impl<T: 'static> MutableCapabilitySlot<T> {
     /// happened — the "报成功的 no-op" class this round exists to remove.
     #[must_use]
     pub fn update(&'static self, v: T) -> bool {
-        match self.value.get() {
-            Some(cell) => {
-                cell.store(Arc::new(v));
-                true
-            }
-            None => false,
-        }
+        self.value.get().is_some_and(|cell| {
+            cell.store(Arc::new(v));
+            true
+        })
     }
 
     #[inline]

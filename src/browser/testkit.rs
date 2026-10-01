@@ -58,6 +58,17 @@ pub(crate) struct FakeBackend {
     calls: Mutex<Vec<String>>,
     fail_at: Option<usize>,
     failure_message: String,
+    /// A full error value for the `fail_at` call, when the test needs a
+    /// structured variant (e.g. `TabGone`) rather than an `ActionFailed`
+    /// carrying [`Self::failure_message`]. `Mutex<Option<…>>` because
+    /// `BrowserError` is not `Clone`: the value is `take()`n on the hit, and
+    /// a second hit (or none set) falls back to the message arm.
+    failure_error: Mutex<Option<BrowserError>>,
+    /// What `wait_for` answers (default: `true` — the fake resolves every
+    /// condition immediately). `browser_qa`'s failed-expectation path needs a
+    /// backend that can answer `Ok(false)`, the "condition did not hold"
+    /// verdict that is NOT an error.
+    wait_found: bool,
     /// What `list_tabs` answers, already parsed. Held as rows rather than
     /// text so the fake returns exactly what the trait promises; the builder
     /// still takes listing TEXT, because a test that is about a driver's
@@ -91,6 +102,8 @@ impl FakeBackend {
             calls: Mutex::new(Vec::new()),
             fail_at,
             failure_message: DEFAULT_FAILURE_MESSAGE.to_string(),
+            failure_error: Mutex::new(None),
+            wait_found: true,
             tabs: super::tab_registry::parse_tab_lines(DEFAULT_TABS_TEXT),
             snapshot_text: String::new(),
             presented: None,
@@ -106,6 +119,19 @@ impl FakeBackend {
     /// (default: [`DEFAULT_FAILURE_MESSAGE`]).
     pub(crate) fn with_failure_message(mut self, message: impl Into<String>) -> Self {
         self.failure_message = message.into();
+        self
+    }
+
+    /// The full error the `fail_at` call returns, for tests whose subject is
+    /// a structured variant (e.g. `TabGone`) rather than message text.
+    pub(crate) fn with_failure_error(self, err: BrowserError) -> Self {
+        *self.failure_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err);
+        self
+    }
+
+    /// What `wait_for` answers (default: `true`).
+    pub(crate) fn with_wait_found(mut self, found: bool) -> Self {
+        self.wait_found = found;
         self
     }
 
@@ -190,6 +216,14 @@ impl FakeBackend {
         let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         calls.push(entry);
         if self.fail_at == Some(calls.len()) {
+            if let Some(err) = self
+                .failure_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+            {
+                return Err(err);
+            }
             return Err(BrowserError::ActionFailed(self.failure_message.clone()));
         }
         Ok(())
@@ -357,7 +391,7 @@ impl BrowserBackend for FakeBackend {
         _timeout_ms: u64,
     ) -> Result<bool, BrowserError> {
         self.record(format!("wait:{condition:?}"))?;
-        Ok(true)
+        Ok(self.wait_found)
     }
 
     async fn console_messages(&self, _tab_id: &str) -> Result<String, BrowserError> {
@@ -422,6 +456,41 @@ impl BrowserBackend for FakeBackend {
 
     async fn pdf(&self, _tab_id: &str, output_path: &Path) -> Result<(), BrowserError> {
         self.record(format!("pdf:{}", output_path.display()))
+    }
+
+    // The record verbs: the fake owns no screencast pipe, so it answers
+    // honestly — start fails by name, stop reports the plain fact that
+    // nothing is recording, status answers `None`. What the census
+    // (`fake_backend_implements_every_backend_method`) requires is that the
+    // calls are ANSWERED here, never silently served by a trait default.
+    async fn record_start(
+        &self,
+        tab_id: &str,
+        _options: super::cdp_backend::recording::RecordStartOptions,
+    ) -> Result<super::cdp_backend::recording::RecordingStatus, BrowserError> {
+        self.record(format!("record_start:{tab_id}"))?;
+        Err(BrowserError::ActionFailed(
+            "FakeBackend cannot record (no screencast pipe)".into(),
+        ))
+    }
+
+    async fn record_stop(
+        &self,
+        tab_id: &str,
+        recording_id: Option<&str>,
+    ) -> Result<super::cdp_backend::recording::RecordingReceipt, BrowserError> {
+        self.record(format!("record_stop:{tab_id}:{recording_id:?}"))?;
+        Err(BrowserError::NoActiveRecording(
+            recording_id.unwrap_or(tab_id).to_string(),
+        ))
+    }
+
+    async fn record_status(
+        &self,
+        tab_id: &str,
+    ) -> Result<Option<super::cdp_backend::recording::RecordingStatus>, BrowserError> {
+        self.record(format!("record_status:{tab_id}"))?;
+        Ok(None)
     }
 
     async fn switch_tab(&self, tab_id: &str) -> Result<(), BrowserError> {

@@ -156,89 +156,21 @@ impl DirectoryScanner {
             ));
         }
 
-        // 4. Project-level compat + native directories (upward traversal)
+// 3-5. Project-level `.agents/`, `.claude/`, `.aleph/` directories
+        // (upward traversal). Same shape — find dirs upward, skip the one
+        // that is the matching global so it is not double-counted with the
+        // global entry added above, push the rest as project scopes with
+        // priority `base + i` (deeper = higher priority). Base priorities
+        // differ because:
+        // - `.agents` sorts BEFORE `.claude` at both tiers on purpose
+        //   (see function-level comment: registry keeps first-registered
+        //   on same-priority id clash, and `.agents` is the canonical
+        //   install location of the shared-skills convention).
+        // - native Aleph project dirs outrank the `.claude/` compat dirs.
         if self.config.scan_project_dirs {
-            let stop = self.git_root.as_deref();
-
-            // Project-level .agents/ directories (shared convention, band 20+).
-            // Scanned before the project .claude/ band so its copy wins the
-            // Bundled tie, mirroring the global tier.
-            let agents_dirs = find_dir_upward(
-                AGENTS_HOME_DIR,
-                &self.working_dir,
-                stop,
-                self.config.max_upward_depth,
-            )?;
-            for (i, dir) in agents_dirs.into_iter().rev().enumerate() {
-                // Same guard as the `.aleph`/`.claude` blocks: an unbounded
-                // upward walk can re-discover the global `~/.agents`.
-                if self
-                    .agents_home
-                    .as_deref()
-                    .is_some_and(|ah| crate::utils::paths::equivalent(&dir, ah))
-                {
-                    continue;
-                }
-                let priority = 20u32.saturating_add(i as u32);
-                match ScanDirectory::project(dir, priority) {
-                    Some(sd) => dirs.push(sd),
-                    None => debug!("project .agents dir with no parent skipped"),
-                }
-            }
-
-            // Project-level .claude/ directories (band 30+).
-            let claude_dirs = find_dir_upward(
-                CLAUDE_HOME_DIR,
-                &self.working_dir,
-                stop,
-                self.config.max_upward_depth,
-            )?;
-
-            // Reverse to get proper priority (deeper = higher priority)
-            for (i, dir) in claude_dirs.into_iter().rev().enumerate() {
-                // Same guard as the `.aleph` block below: when no git root
-                // bounds the upward walk it can re-discover the global
-                // `~/.claude`; skip it so it is not double-counted with the
-                // ClaudeGlobal entry above (otherwise the Project-priority
-                // copy wins the sort and global components are mislabeled).
-                if self
-                    .claude_home
-                    .as_deref()
-                    .is_some_and(|ch| crate::utils::paths::equivalent(&dir, ch))
-                {
-                    continue;
-                }
-                let priority = 30u32.saturating_add(i as u32);
-                match ScanDirectory::project(dir, priority) {
-                    Some(sd) => dirs.push(sd),
-                    None => debug!("project .claude dir with no parent skipped"),
-                }
-            }
-
-            // 6. Project-level .aleph/ directories (upward traversal). Native
-            //    Aleph project skills/commands/agents — the parity counterpart of
-            //    the `.claude/` block above, previously missing so a project's
-            //    `.aleph/skills` never reached the `<available_skills>` index.
-            //    Higher priority than the project `.claude/` compat dirs.
-            let aleph_dirs = find_dir_upward(
-                ALEPH_HOME_DIR,
-                &self.working_dir,
-                stop,
-                self.config.max_upward_depth,
-            )?;
-            for (i, dir) in aleph_dirs.into_iter().rev().enumerate() {
-                // The upward walk can re-discover the global `~/.aleph` when no
-                // git root bounds it; skip it so it is not double-counted with
-                // the AlephGlobal entry added above.
-                if crate::utils::paths::equivalent(&dir, &self.aleph_home) {
-                    continue;
-                }
-                let priority = 40u32.saturating_add(i as u32);
-                match ScanDirectory::project(dir, priority) {
-                    Some(sd) => dirs.push(sd),
-                    None => debug!("project .aleph dir with no parent skipped"),
-                }
-            }
+            self.collect_project_dirs(&mut dirs, AGENTS_HOME_DIR, 20, self.agents_home.as_deref())?;
+            self.collect_project_dirs(&mut dirs, CLAUDE_HOME_DIR, 30, self.claude_home.as_deref())?;
+            self.collect_project_dirs(&mut dirs, ALEPH_HOME_DIR, 40, Some(&self.aleph_home))?;
         }
 
         // Layer-0 dedup: the same physical directory reached through two
@@ -260,6 +192,38 @@ impl DirectoryScanner {
 
         trace!("Scan directories: {:?}", dirs);
         Ok(dirs)
+    }
+
+    /// Walk upward from `working_dir`, push each `dirname` hit as a project
+    /// scope at `base_priority + depth` (deeper = higher priority). When no
+    /// git root bounds the walk, the matching global root can be re-discovered
+    /// — `global_to_skip` filters it so the global and project scopes do not
+    /// both list the same directory (otherwise the project-priority copy
+    /// would win the sort and global components would be mislabeled).
+    fn collect_project_dirs(
+        &self,
+        out: &mut Vec<ScanDirectory>,
+        dirname: &str,
+        base_priority: u32,
+        global_to_skip: Option<&Path>,
+    ) -> DiscoveryResult<()> {
+        let dirs = find_dir_upward(
+            dirname,
+            &self.working_dir,
+            self.git_root.as_deref(),
+            self.config.max_upward_depth,
+        )?;
+        for (i, dir) in dirs.into_iter().rev().enumerate() {
+            if global_to_skip.is_some_and(|g| crate::utils::paths::equivalent(&dir, g)) {
+                continue;
+            }
+            let priority = base_priority.saturating_add(i as u32);
+            match ScanDirectory::project(dir, priority) {
+                Some(sd) => out.push(sd),
+                None => debug!("project {dirname} dir with no parent skipped"),
+            }
+        }
+        Ok(())
     }
 
     /// Discover a specific component type (skills, commands, agents, plugins)

@@ -1,0 +1,29 @@
+<!doctype html>
+<!-- screencast-page.html — the animated fixture the screencast probe records.
+     Screencast frames are repaint-driven, so the page must repaint
+     CONTINUOUSLY: a hue-cycling background plus a moving block, driven by
+     rAF. `window.__ticks` is the probe's control reading — a page whose
+     animation loop does not advance cannot convict a silent frame stream. -->
+<html>
+<head><title>screencast-probe</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background: hsl(0, 70%, 60%); }
+  #box { position: absolute; width: 120px; height: 120px; background: #fff; top: 40px; left: 0; }
+</style>
+</head>
+<body>
+<div id="box"></div>
+<script>
+  window.__ticks = 0;
+  var box = document.getElementById('box');
+  function tick(t) {
+    window.__ticks += 1;
+    document.body.style.background = 'hsl(' + (window.__ticks * 7 % 360) + ',70%,60%)';
+    box.style.left = (40 + 300 * Math.abs(Math.sin(window.__ticks / 20))) + 'px';
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>

@@ -14,8 +14,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::notes;
-use super::scan::{build_regex, render, scan_text, ScanOptions};
-use super::walk::{display_path, walk, WalkRequest};
+use super::scan::{ScanOptions, build_regex, render, scan_text};
+use super::walk::{WalkRequest, display_path, walk};
 use crate::builtin_tools::error::ToolError;
 use crate::builtin_tools::file_ops::{get_denied_paths, is_binary, DeniedPath};
 use crate::builtin_tools::{notify_tool_result, notify_tool_start};
@@ -192,10 +192,11 @@ impl GrepTool {
 
         let output_dir = self.output_dir().await;
         let path = args.path.as_deref().unwrap_or(".");
+        let respected_ignore = !args.no_ignore.unwrap_or(false);
         let (root, mut report) = walk(&WalkRequest {
             path,
             glob: args.glob.as_deref(),
-            respect_ignore: !args.no_ignore.unwrap_or(false),
+            respect_ignore: respected_ignore,
             denied_paths: &self.denied_paths,
             output_dir: output_dir.as_deref(),
         })?;
@@ -307,7 +308,6 @@ impl GrepTool {
         // Say what was found AND what was withheld, naming the lever each
         // time. The clauses that `find` owes too come from `notes`, so an
         // omission cannot be spelled one way here and another way there.
-        let respected_ignore = !args.no_ignore.unwrap_or(false);
         let mut message = if universe == 0 {
             format!("No matches in {files_scanned} file(s) searched")
         } else {

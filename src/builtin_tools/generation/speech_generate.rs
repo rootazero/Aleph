@@ -14,7 +14,7 @@ use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
 use crate::gateway::media::{detect_mime, MediaItem};
 use crate::generation::{
-    GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
+    GenerationData, GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
 use crate::tools::AlephTool;
 
@@ -200,17 +200,14 @@ impl SpeechGenerateTool {
 
         debug!(provider = %provider_name, "Using provider for speech generation");
 
-        // Build generation parameters
-        let mut params = GenerationParams::new();
-        if let Some(voice) = args.voice.clone() {
-            params.voice = Some(voice);
-        }
-        if let Some(speed) = args.speed {
-            params.speed = Some(speed);
-        }
-        if let Some(format) = args.format.clone() {
-            params.format = Some(format);
-        }
+        // Build generation parameters. voice/format are cloned because they
+        // also appear in the output struct; speed is `Copy` so no clone needed.
+        let params = GenerationParams {
+            voice: args.voice.clone(),
+            speed: args.speed,
+            format: args.format.clone(),
+            ..GenerationParams::default()
+        };
 
         // Create generation request
         let request = GenerationRequest::speech(&args.text).with_params(params);
@@ -230,13 +227,13 @@ impl SpeechGenerateTool {
 
         // Determine location and type from the generation data
         let (audio_location, location_type, size_bytes) = match &output.data {
-            crate::generation::GenerationData::Url(url) => {
+            GenerationData::Url(url) => {
                 (url.clone(), "url".to_string(), output.metadata.size_bytes)
             }
-            crate::generation::GenerationData::LocalPath(path) => {
+            GenerationData::LocalPath(path) => {
                 (path.clone(), "file".to_string(), output.metadata.size_bytes)
             }
-            crate::generation::GenerationData::Bytes(bytes) => {
+            GenerationData::Bytes(bytes) => {
                 // Convert bytes to base64 data URL
                 use base64::Engine;
                 let base64_data = base64::engine::general_purpose::STANDARD.encode(bytes);

@@ -311,39 +311,33 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
 
         // Extract this skill
         let target = skills_dir.join(&name);
-        match extract_dir_recursive(dir, &target) {
+        let version = match extract_dir_recursive(dir, &target) {
             Ok(()) => {
-                manifest.skills.insert(
-                    name.clone(),
-                    SkillEntry {
-                        source: SkillOrigin::Official,
-                        version: Some(BUNDLED_VERSION.to_string()),
-                        url: None,
-                    },
-                );
                 debug!(skill = %name, "Extracted bundled skill");
+                Some(BUNDLED_VERSION.to_string())
             }
+            // Record the skill as Official even though extraction failed.
+            // Otherwise the partially-written directory is left untracked,
+            // and the next reconcile() reclassifies it as a user-owned
+            // Local skill — which extract_skills then permanently skips,
+            // leaving a half-extracted skill that never self-heals and is
+            // mislabeled as a user skill. version=None marks it incomplete;
+            // since bundled_version is not bumped on failure, the next
+            // startup re-extracts and repairs it.
             Err(e) => {
-                // Record the skill as Official even though extraction failed.
-                // Otherwise the partially-written directory is left untracked,
-                // and the next reconcile() reclassifies it as a user-owned
-                // Local skill — which extract_skills then permanently skips,
-                // leaving a half-extracted skill that never self-heals and is
-                // mislabeled as a user skill. version=None marks it incomplete;
-                // since bundled_version is not bumped on failure, the next
-                // startup re-extracts and repairs it.
-                manifest.skills.insert(
-                    name.clone(),
-                    SkillEntry {
-                        source: SkillOrigin::Official,
-                        version: None,
-                        url: None,
-                    },
-                );
                 warn!(skill = %name, error = %e, "Failed to extract skill");
                 all_ok = false;
+                None
             }
-        }
+        };
+        manifest.skills.insert(
+            name.clone(),
+            SkillEntry {
+                source: SkillOrigin::Official,
+                version,
+                url: None,
+            },
+        );
     }
 
     all_ok
@@ -578,6 +572,12 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
                 .as_nanos()
         );
         let tmp = target.join(&tmp_name);
+        // On any error below, drop the staging file so the next extractor does
+        // not find a half-written one (create_new(true) would block on it).
+        let cleanup_tmp = |e: std::io::Error| -> std::io::Result<()> {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        };
         // BUNDLED-R4-04: refuse to write if the tmp path already exists.
         // The tmp name is predictable from PID + counter + nanos, so a
         // co-resident process running as the same user could
@@ -593,10 +593,8 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
             .open(&tmp)
             .and_then(|mut f| std::io::Write::write_all(&mut f, file.contents()));
         if let Err(e) = write_result {
-            // Clean up the (possibly partial) temp file so we don't leak it.
-            let _ = std::fs::remove_file(&tmp);
             if e.kind() == std::io::ErrorKind::AlreadyExists {
-                return Err(std::io::Error::new(
+                return cleanup_tmp(std::io::Error::new(
                     e.kind(),
                     format!(
                         "refusing to extract: tmp path {tmp_name:?} already exists in \
@@ -604,10 +602,11 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
                     ),
                 ));
             }
-            return Err(e);
+            return cleanup_tmp(e);
         }
-        if let Err(e) = std::fs::rename(&tmp, &dest) {
-            if e.kind() == std::io::ErrorKind::AlreadyExists {
+        match std::fs::rename(&tmp, &dest) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 // BUNDLED-R4-02: destination may be a directory (not a file),
                 // which `remove_file` cannot delete and would cause the
                 // rename to fail and the skill to be marked `version: None`
@@ -619,18 +618,13 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
                     Err(e2) => Err(e2),
                 };
                 if let Err(rm_err) = remove_result {
-                    let _ = std::fs::remove_file(&tmp);
-                    return Err(rm_err);
+                    return cleanup_tmp(rm_err);
                 }
                 if let Err(e) = std::fs::rename(&tmp, &dest) {
-                    let _ = std::fs::remove_file(&tmp);
-                    return Err(e);
+                    return cleanup_tmp(e);
                 }
-            } else {
-                // Clean up the temp file so we don't leak partial extractions.
-                let _ = std::fs::remove_file(&tmp);
-                return Err(e);
             }
+            Err(e) => return cleanup_tmp(e),
         }
     }
 
@@ -687,30 +681,22 @@ pub(crate) fn extract_skill_tree_from_dir(
             }
         }
         let target = skills_dir.join(&name);
-        match copy_tree_with_prune(&entry.path(), &target) {
-            Ok(()) => {
-                manifest.skills.insert(
-                    name.clone(),
-                    SkillEntry {
-                        source: SkillOrigin::Official,
-                        version: Some(BUNDLED_VERSION.to_string()),
-                        url: None,
-                    },
-                );
-            }
+        let version = match copy_tree_with_prune(&entry.path(), &target) {
+            Ok(()) => Some(BUNDLED_VERSION.to_string()),
             Err(e) => {
-                manifest.skills.insert(
-                    name.clone(),
-                    SkillEntry {
-                        source: SkillOrigin::Official,
-                        version: None,
-                        url: None,
-                    },
-                );
                 warn!(skill = %name, error = %e, "Failed to extract skill from checkout");
                 all_ok = false;
+                None
             }
-        }
+        };
+        manifest.skills.insert(
+            name.clone(),
+            SkillEntry {
+                source: SkillOrigin::Official,
+                version,
+                url: None,
+            },
+        );
     }
     all_ok
 }

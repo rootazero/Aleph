@@ -152,21 +152,7 @@ fn tokens_from_outcome(outcome: &CompletedOutcome) -> Option<u64> {
     }
 }
 
-/// W24 — one progress event rendered as a single line of the cross-process
-/// activity trail. Uses [`progress_activity`] for the verb so the persisted
-/// trail and the live tree read the same vocabulary.
-fn persisted_activity_line(event: &SubagentProgress) -> String {
-    let mut line = format!("step {} {}", event.step, progress_activity(event.kind));
-    if let Some(tool) = &event.tool_name {
-        line.push_str(" tool=");
-        line.push_str(tool);
-    }
-    if let Some(preview) = &event.preview {
-        line.push_str(" :: ");
-        line.push_str(preview);
-    }
-    line
-}
+
 
 pub struct BackgroundAgentTracker {
     running: RwLock<HashMap<String, RunningAgent>>,
@@ -294,6 +280,17 @@ pub struct CompletedSnapshot {
     /// B18 — up to `PROGRESS_TAIL_LEN` final progress events, chronological.
     /// The failure path folds these into the error string it hands the model.
     pub progress_tail: Vec<SubagentProgress>,
+}
+
+impl From<&CompletedAgent> for CompletedSnapshot {
+    fn from(c: &CompletedAgent) -> Self {
+        Self {
+            task: c.task_description.clone(),
+            duration_secs: c.duration_secs,
+            outcome: c.outcome.clone(),
+            progress_tail: c.progress_tail.clone(),
+        }
+    }
 }
 
 /// Lightweight metadata for a still-running background subagent.
@@ -850,12 +847,7 @@ impl BackgroundAgentTracker {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
             e.into_inner()
         });
-        completed.get(request_id).map(|c| CompletedSnapshot {
-            task: c.task_description.clone(),
-            duration_secs: c.duration_secs,
-            outcome: c.outcome.clone(),
-            progress_tail: c.progress_tail.clone(),
-        })
+        completed.get(request_id).map(CompletedSnapshot::from)
     }
 
     /// Park until background subagent `request_id` finishes, or until `timeout`
@@ -1183,17 +1175,7 @@ impl BackgroundAgentTracker {
         });
         in_scope
             .into_iter()
-            .map(|(id, c)| {
-                (
-                    id.clone(),
-                    CompletedSnapshot {
-                        task: c.task_description.clone(),
-                        duration_secs: c.duration_secs,
-                        outcome: c.outcome.clone(),
-                        progress_tail: c.progress_tail.clone(),
-                    },
-                )
-            })
+            .map(|(id, c)| (id.clone(), CompletedSnapshot::from(c)))
             .collect()
     }
 
@@ -1354,13 +1336,24 @@ impl BackgroundAgentTracker {
             agent.progress.pop_front();
         }
         let tool_count = agent.tool_count;
-        let trail_line = persisted_activity_line(&event);
+        // W24 — one progress event rendered as a single line of the
+        // cross-process activity trail. Uses `progress_activity` for the verb
+        // so the persisted trail and the live tree read the same vocabulary.
+        let mut trail_line = format!("step {} {}", event.step, progress_activity(event.kind));
+        if let Some(tool) = &event.tool_name {
+            trail_line.push_str(" tool=");
+            trail_line.push_str(tool);
+        }
+        if let Some(preview) = &event.preview {
+            trail_line.push_str(" :: ");
+            trail_line.push_str(preview);
+        }
         agent.progress.push_back(event);
         drop(running);
-        // W24 — the same signal, appended to the cross-process trail so a
-        // restart can still show what the child was doing when its daemon
-        // died. Filtered by `background_persistence` to ids it knows about, so
-        // sync fan-out / presence-only registrations write nothing; a complete
+        // The same signal, appended to the cross-process trail so a restart
+        // can still show what the child was doing when its daemon died.
+        // Filtered by `background_persistence` to ids it knows about, so sync
+        // fan-out / presence-only registrations write nothing; a complete
         // no-op until the boot path enables persistence.
         crate::agents::background_persistence::record_activity(request_id, &trail_line);
         Some(tool_count)

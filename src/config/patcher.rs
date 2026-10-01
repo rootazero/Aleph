@@ -273,9 +273,7 @@ impl ConfigPatcher {
         // 2. Read current config as JSON (read lock)
         let config_json = {
             let config = self.config.read().await;
-            serde_json::to_value(&*config).map_err(|e| {
-                AlephError::invalid_config(format!("Failed to serialize config to JSON: {e}"))
-            })?
+            config_to_json(&config)?
         };
 
         // 3. Get old values for diff
@@ -431,9 +429,7 @@ impl ConfigPatcher {
         // an external edit to land in between.
         self.check_conflict().await?;
 
-        let latest_json = serde_json::to_value(&*config).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to serialize latest config to JSON: {e}"))
-        })?;
+        let latest_json = config_to_json(&config)?;
         let mut re_patched = latest_json;
         set_nested_value(&mut re_patched, &request.path, &request.patch)?;
         // Re-validate the value actually being committed. A concurrent
@@ -617,9 +613,7 @@ impl ConfigPatcher {
         // 3. Compute current → restored diff.
         let current_json = {
             let config = self.config.read().await;
-            serde_json::to_value(&*config).map_err(|e| {
-                AlephError::invalid_config(format!("Failed to serialize config to JSON: {e}"))
-            })?
+            config_to_json(&config)?
         };
         let restored_json = serde_json::to_value(&restored).map_err(|e| {
             AlephError::invalid_config(format!("Failed to serialize restored config to JSON: {e}"))
@@ -698,6 +692,17 @@ impl ConfigPatcher {
 // =============================================================================
 // Helper Functions (pub(crate) for use by RPC handlers)
 // =============================================================================
+
+/// Serialize a `Config` to `serde_json::Value` with the project's standard
+/// `AlephError::invalid_config` mapping. Three call sites in this module
+/// (apply, commit_patch, rollback) need the same exact error message; one
+/// helper keeps the wording in lockstep so a future grep for
+/// "Failed to serialize config" lands every site.
+fn config_to_json(config: &Config) -> Result<serde_json::Value> {
+    serde_json::to_value(config).map_err(|e| {
+        AlephError::invalid_config(format!("Failed to serialize config to JSON: {e}"))
+    })
+}
 
 /// Navigate a dot-separated path into a JSON value.
 ///

@@ -519,17 +519,12 @@ impl AgentRuntime {
                 .collect::<String>(),
             Err(_) => String::new(),
         };
-        let transcript = match &result {
-            Ok(run_result) => SubagentTranscript {
-                agent_id: agent_id.clone(),
-                agent_type: agent_type.clone(),
-                task_summary: task_summary.clone(),
-                outcome: TranscriptOutcome::Success,
-                iterations: run_result.iterations,
-                duration_ms,
-                tokens_used: run_result.total_tokens,
-                key_findings: key_findings.clone(),
-            },
+        let (outcome, iterations, tokens_used) = match &result {
+            Ok(run_result) => (
+                TranscriptOutcome::Success,
+                run_result.iterations,
+                run_result.total_tokens,
+            ),
             Err(e) => {
                 // Match the spawner's exact wall-clock-timeout prefix
                 // ("Sub-agent timed out after Ns") rather than a loose substring —
@@ -540,17 +535,18 @@ impl AgentRuntime {
                 } else {
                     TranscriptOutcome::Error(e.clone())
                 };
-                SubagentTranscript {
-                    agent_id: agent_id.clone(),
-                    agent_type: agent_type.clone(),
-                    task_summary: task_summary.clone(),
-                    outcome,
-                    iterations: 0,
-                    duration_ms,
-                    tokens_used: 0,
-                    key_findings: key_findings.clone(),
-                }
+                (outcome, 0, 0)
             }
+        };
+        let transcript = SubagentTranscript {
+            agent_id: agent_id.clone(),
+            agent_type: agent_type.clone(),
+            task_summary,
+            outcome,
+            iterations,
+            duration_ms,
+            tokens_used,
+            key_findings,
         };
 
         tracing::info!(

@@ -89,7 +89,13 @@ impl LocalVoiceTool {
         }
         let probe = req.send().await;
 
-        let or_default = |s: &str| {
+        // `serde_json::json!` requires an owned value here — returning a
+        // `&str` borrowed from `local.*` would force the borrowed slice
+        // to outlive the `serde_json::Value` it ends up inside, which the
+        // borrow checker refuses across the macro expansion. Build the
+        // String once per non-empty field; the empty branch reuses the
+        // same literal so there is no allocation when the field is unset.
+        let or_default = |s: &str| -> String {
             if s.is_empty() {
                 "(server default)".to_string()
             } else {

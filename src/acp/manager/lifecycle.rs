@@ -617,14 +617,16 @@ impl AcpAdapterManager {
         }))
         .await;
         for (key, _) in entries {
+            // Compute all fields before any partial move so the borrow
+            // checker doesn't see key as half-moved when session_name_opt
+            // borrows the name field.
+            let session_name = key.session_name_opt().map(str::to_owned);
+            let harness_id = key.harness_id;
+            let cwd = key.cwd.to_string_lossy().into_owned();
             self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                harness_id: key.harness_id,
-                cwd: key.cwd.to_string_lossy().into_owned(),
-                session_name: if key.name.is_empty() {
-                    None
-                } else {
-                    Some(key.name)
-                },
+                harness_id,
+                cwd,
+                session_name,
             })
             .await;
         }

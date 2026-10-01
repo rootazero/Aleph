@@ -12,9 +12,9 @@ use crate::memory::notes::canonicalize_category;
 use crate::memory::notes::sanitize_title;
 use crate::memory::notes::store::NoteStore;
 
+use super::NoteManageTool;
 use super::args::{NoteListEntry, NoteManageArgs, NoteManageResult, SearchAdvisory};
 use super::helpers::{bound_chars, validate_category};
-use super::NoteManageTool;
 
 /// Per-note content cap in `query` results. A single sprawling note must not
 /// crowd out the other hits (or the context window).
@@ -371,7 +371,7 @@ impl NoteManageTool {
                         return Err(AlephError::tool(format!(
                             "Note '{safe_filename}' not found. Pass `category` if you know it, \
                              or use the `query` action to search."
-                        )))
+                        )));
                     }
                     1 => hits.remove(0),
                     _ => {
@@ -380,7 +380,7 @@ impl NoteManageTool {
                              Pass `category` to say which one.",
                             hits.len(),
                             hits.join(", ")
-                        )))
+                        )));
                     }
                 }
             }
@@ -402,7 +402,7 @@ impl NoteManageTool {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Err(AlephError::tool(format!(
                     "Note '{note_path}' does not exist."
-                )))
+                )));
             }
             Err(e) => return Err(AlephError::tool(format!("Failed to read note: {e}"))),
         };
@@ -501,12 +501,7 @@ impl NoteManageTool {
         let entries: Vec<NoteListEntry> = all_entries
             .into_iter()
             .take(limit)
-            .map(|e| NoteListEntry {
-                path: e.path.clone(),
-                category: e.category.clone(),
-                filename: e.filename.clone(),
-                tags: e.tags,
-            })
+            .map(NoteListEntry::from)
             .collect();
 
         let category_label = args

@@ -348,6 +348,11 @@ fn parse_sse_response(body: &str, expected_id: u64) -> Option<JsonRpcResponse> {
                 if data.len() + piece.len() > MAX_SSE_DATA_LINE_BYTES {
                     overflow = true;
                     data.clear();
+                    // Once any `data:` line exceeds the cap the response is
+                    // unrecoverable (this event cannot match `expected_id`).
+                    // Stop iterating so a hostile server cannot pin the parser
+                    // in a no-op loop with thousands of trailing empty lines.
+                    break;
                 } else {
                     if !data.is_empty() {
                         data.push('\n');

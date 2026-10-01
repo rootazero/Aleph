@@ -5,6 +5,8 @@
 //! keeping them apart is the point: an export of the whole conversation is
 //! evidence, not a deliverable.
 
+use std::fmt::Write as _;
+
 use super::markdown::{escape_text, render_markdown};
 use super::page::{render_artifacts, render_page_head, wrap_document};
 use super::{ExportArtifact, ExportMessage};
@@ -49,13 +51,16 @@ fn render_transcript(messages: &[ExportMessage]) -> String {
 
     let mut out = String::from("<section class=\"transcript\">\n");
     for msg in messages {
-        out.push_str("<article class=\"msg msg--");
-        out.push_str(&role_slug(&msg.role));
-        out.push_str("\">\n<div class=\"msg-head\"><span class=\"role\">");
-        out.push_str(&escape_text(&msg.role));
-        out.push_str("</span><span class=\"ts\">");
-        out.push_str(&escape_text(&msg.timestamp));
-        out.push_str("</span></div>\n<div class=\"msg-body prose\">\n");
+        let _ = write!(
+            out,
+            "<article class=\"msg msg--{slug}\">\
+             \n<div class=\"msg-head\"><span class=\"role\">{role}</span>\
+             <span class=\"ts\">{ts}</span></div>\n\
+             <div class=\"msg-body prose\">\n",
+            slug = role_slug(&msg.role),
+            role = escape_text(&msg.role),
+            ts = escape_text(&msg.timestamp),
+        );
         out.push_str(&render_markdown(&msg.text));
         out.push_str("\n</div>\n</article>\n");
     }

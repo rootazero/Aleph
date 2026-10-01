@@ -435,7 +435,9 @@ impl UnifiedToolsConfig {
     /// Check if shell service is enabled.
     ///
     /// `pub(crate)` — no production caller; native shell gating is read via
-    /// `native.shell` directly.
+    /// `native.shell` directly. Note the inverted default: an unset shell
+    /// tool is *not* "enabled" (security-default), unlike the rest of the
+    /// `is_none_or` family.
     #[allow(dead_code)] // lib build doesn't compile `#[cfg(test)]`; the in-module test exercises this
     pub(crate) fn is_shell_enabled(&self) -> bool {
         self.enabled && self.native.shell.as_ref().is_some_and(|c| c.enabled)

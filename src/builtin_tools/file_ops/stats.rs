@@ -139,18 +139,11 @@ pub async fn execute_stats(
         // and that answer must survive whatever the row budget does.
         total_files += 1;
         if files.len() < cap {
-            files.push(FileInfo {
-                name: path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                path: path.to_string_lossy().to_string(),
-                is_dir: false,
-                size,
-                extension: path.extension().map(|e| e.to_string_lossy().to_string()),
-                lines,
-                mtime,
-            });
+            let mut info = FileInfo::with_path(&path);
+            info.size = size;
+            info.lines = lines;
+            info.mtime = mtime;
+            files.push(info);
         }
     }
 

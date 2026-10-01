@@ -652,6 +652,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "browser_record",
+        description: <crate::builtin_tools::browser_tools::record::BrowserRecordTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_qa",
+        description: <crate::builtin_tools::browser_tools::qa::BrowserQaTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "browser_network",
         description: <crate::builtin_tools::browser_tools::network::BrowserNetworkTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
@@ -1274,9 +1284,9 @@ pub fn create_tool_boxed(
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
         | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
         | "browser_exec" | "browser_console" | "browser_hover" | "browser_scroll"
-        | "browser_pdf" | "browser_network" | "browser_dialog" | "browser_drag"
-        | "browser_upload" | "browser_resize" | "browser_emulate" | "browser_cookies"
-        | "browser_session" | "browser_profile" => None,
+        | "browser_pdf" | "browser_record" | "browser_qa" | "browser_network" | "browser_dialog"
+        | "browser_drag" | "browser_upload" | "browser_resize" | "browser_emulate"
+        | "browser_cookies" | "browser_session" | "browser_profile" => None,
         // Skill management tools — always available
         // Phase 2: share the process-wide initialized SkillSystem so
         // skill_status/install/manage see the same registry as the gateway.
@@ -3016,7 +3026,39 @@ mod tests {
     /// the +30 Windows gap recorded above is carried forward unchanged. As
     /// the 2026-09-20 entry already established, this ledger forbids deriving
     /// a ceiling by addition.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 116_102;
+///
+    /// 2026-09-28 (C2 browser_record tool): 116_072 -> 116_150 B, RE-MEASURED
+    /// with this ceiling floored to `1` on Linux (96_554 catalog + 16_613
+    /// registry-only + 1_039 injected + 1_944 bridge); the only red test was
+    /// this one and the delta (+78 B) is `browser_record`'s whole DESCRIPTION
+    /// (78 bytes, itself pinned ≤80 by the tool's own
+    /// `description_stays_within_the_80_byte_discipline`). Three questions:
+    /// (1) the action inventory (start/stop/status) and the `driver="cdp"`
+    /// gate are runtime facts the model cannot infer — the refusal only names
+    /// the door AFTER a wasted call; (2) every per-field detail (fps range,
+    /// quality, codec-by-extension, the managed default's location) lives in
+    /// the JsonSchema doc comments, not here — the description names the verb
+    /// and the three actions, nothing more; (3) no other tool names the
+    /// record surface — the capability table is a runtime answer
+    /// (`browser_session{action:"capabilities"}`), not catalog bytes.
+    ///
+    /// 2026-10-01 (C3 browser_qa tool): 116_150 -> 116_230 B, measured by
+    /// this test's own failure line on Linux (96_634 catalog + 16_613
+    /// registry-only + 1_039 injected + 1_944 bridge); the delta (+80 B) is
+    /// `browser_qa`'s whole DESCRIPTION (80 bytes, pinned ≤80 and
+    /// byte-for-byte by the tool's own
+    /// `description_stays_within_the_80_byte_discipline`). Three questions:
+    /// (1) the verb's existence and its one-call verdict shape are not
+    /// inferable — the alternative (hand-assembling wait_for + console +
+    /// network + screenshot) is exactly what the tool replaces, and no
+    /// refusal anywhere names it; (2) every per-field detail (expectation
+    /// polarity, the three check flags' driver split, the screenshot
+    /// evidence rule, the timeout window) lives in the JsonSchema doc
+    /// comments — the description names the verb and the check dimensions,
+    /// nothing more; (3) no other tool names the QA surface — the
+    /// `error_events` row is a runtime answer
+    /// (`browser_session{action:"capabilities"}`), not catalog bytes.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 116_230;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3754,6 +3796,21 @@ mod tests {
     /// catalog-description ceiling sums `BUILTIN_TOOL_DEFINITIONS` directly,
     /// independent of `unconditional_registry_map()`, and already counts it
     /// (see `CATALOG_DESCRIPTION_CEILING_BYTES`'s own 2026-09-02 entry).
+    ///
+    /// 2026-09-28: 132 -> 133 for `browser_record` (C2) — class (b), like
+    /// every other `browser_*` tool already counted here: its schema
+    /// registers through the browser tool loop in
+    /// `builder/constructor/mod.rs`, which needs the live `ProfileManager`
+    /// wiring (`BuiltinToolRegistry::with_config`) and is therefore outside
+    /// what `unconditional_registry_map()` can build. The production wiring
+    /// is pinned by the dispatch census in `dispatchable.rs` plus the
+    /// catalog/group/dispatch registrations the C2 Task 3 ledger lists.
+    ///
+    /// 2026-10-01: 133 -> 134 for `browser_qa` (C3) — class (b), same shape
+    /// as `browser_record`: the schema registers through the same browser
+    /// tool loop, and the production wiring is pinned by the same
+    /// `dispatchable.rs` census plus the nine-site registration ledger the
+    /// C3 plan's Global Constraints enumerate.
     #[test]
     fn tools_without_an_unconditional_schema_are_pinned() {
         let map = unconditional_registry_map();
@@ -3770,8 +3827,8 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 132,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 132 \
+            missing.len() <= 134,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 134 \
              recorded here, so `registry_schema_bytes_ratchet` does not bound them. Three ways in, \
              and they are not equally fine. (a) The tool ships with no parameters at all — free, \
              and fine. (b) It registers only once a dependency is live, so its schema is unmeasured \
@@ -4066,6 +4123,8 @@ mod tests {
         assert!(names.contains(&"browser_hover".to_string()));
         assert!(names.contains(&"browser_scroll".to_string()));
         assert!(names.contains(&"browser_pdf".to_string()));
+        assert!(names.contains(&"browser_record".to_string()));
+        assert!(names.contains(&"browser_qa".to_string()));
         assert!(names.contains(&"browser_network".to_string()));
         assert!(names.contains(&"browser_dialog".to_string()));
         assert!(names.contains(&"browser_profile".to_string()));

@@ -738,6 +738,42 @@ mod tests {
         assert!(err.to_string().contains("route_clear"), "{err}");
     }
 
+    /// The three record verbs stay on the trait default for this backend — a
+    /// text driver owns no screencast pipe — and the default arm must refuse
+    /// NAMING the driver that serves them (same rule as the route verbs
+    /// above; `unsupported_by_driver`, the `pdf` precedent).
+    ///
+    /// This test cannot live in backend.rs for the reason the route-default
+    /// test gives above: the fake-backend census scans that file for
+    /// trait-method declarations and would count a test function as a verb.
+    #[tokio::test]
+    async fn the_record_defaults_refuse_naming_the_driver_that_serves_them() {
+        use crate::browser::cdp_backend::recording::RecordStartOptions;
+        let backend = test_backend();
+
+        let err = backend
+            .record_start("t1", RecordStartOptions::default())
+            .await
+            .expect_err("the default arm refuses");
+        let text = err.to_string();
+        assert!(
+            text.contains("record_start") && text.contains("driver = \"cdp\""),
+            "the refusal names the verb and the door: {text}"
+        );
+
+        let err = backend
+            .record_stop("t1", None)
+            .await
+            .expect_err("the default arm refuses");
+        assert!(err.to_string().contains("record_stop"), "{err}");
+
+        let err = backend
+            .record_status("t1")
+            .await
+            .expect_err("the default arm refuses");
+        assert!(err.to_string().contains("record_status"), "{err}");
+    }
+
     /// The staging directory has to be CREATED, not merely resolved.
     ///
     /// `browser_state_dir` joins path components and nothing else, and the CLI

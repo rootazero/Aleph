@@ -18,6 +18,9 @@ pub mod open;
 pub mod pdf;
 pub mod press_key;
 pub mod profile_tool;
+pub mod qa;
+pub(crate) mod qa_verdict;
+pub mod record;
 pub(crate) mod recovery;
 pub mod resize;
 pub mod screenshot;
@@ -36,7 +39,7 @@ use crate::browser::manager::ProfileManager;
 use crate::browser::tab_registry;
 use crate::browser::types::TabLine;
 use crate::security::content_sanitizer::{
-    sanitize_external_text, wrap_external_content, ContentSource,
+    ContentSource, sanitize_external_text, wrap_external_content,
 };
 
 use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
@@ -779,6 +782,8 @@ pub use open::{BrowserOpenArgs, BrowserOpenOutput, BrowserOpenTool};
 pub use pdf::{BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool};
 pub use press_key::{BrowserPressKeyArgs, BrowserPressKeyOutput, BrowserPressKeyTool};
 pub use profile_tool::{BrowserProfileArgs, BrowserProfileOutput, BrowserProfileTool};
+pub use qa::{BrowserQaArgs, BrowserQaOutput, BrowserQaTool};
+pub use record::{BrowserRecordArgs, BrowserRecordOutput, BrowserRecordTool};
 pub use resize::{BrowserResizeArgs, BrowserResizeOutput, BrowserResizeTool};
 pub use screenshot::{BrowserScreenshotArgs, BrowserScreenshotOutput, BrowserScreenshotTool};
 pub use scroll::{BrowserScrollArgs, BrowserScrollOutput, BrowserScrollTool};
@@ -1064,13 +1069,15 @@ mod tests {
         let rows = |text: &str| tab_registry::parse_tab_lines(text);
 
         // Cloud metadata endpoint reached via redirect → blocked.
-        assert!(current_page_block(
-            &manager,
-            &rows("1: http://169.254.169.254/latest/meta-data"),
-            "1"
-        )
-        .await
-        .is_some());
+        assert!(
+            current_page_block(
+                &manager,
+                &rows("1: http://169.254.169.254/latest/meta-data"),
+                "1"
+            )
+            .await
+            .is_some()
+        );
 
         // Loopback → blocked.
         assert!(
@@ -1087,9 +1094,11 @@ mod tests {
         );
 
         // Non-http schemes carry no network target → skipped.
-        assert!(current_page_block(&manager, &rows("1: about:blank"), "1")
-            .await
-            .is_none());
+        assert!(
+            current_page_block(&manager, &rows("1: about:blank"), "1")
+                .await
+                .is_none()
+        );
 
         // No matching tab → nothing to check.
         assert!(
@@ -1310,10 +1319,12 @@ mod tests {
             recovery.category,
             recovery::BrowserFailureCategory::StaleRef
         );
-        assert!(recovery
-            .next_actions
-            .iter()
-            .any(|a| a.tool == "browser_snapshot"));
+        assert!(
+            recovery
+                .next_actions
+                .iter()
+                .any(|a| a.tool == "browser_snapshot")
+        );
     }
 
     /// The drift signal: resolve says "live" (same loader — an SPA
@@ -1532,6 +1543,8 @@ mod approval_wiring_census {
         ("pdf", include_str!("pdf.rs")),
         ("press_key", include_str!("press_key.rs")),
         ("profile_tool", include_str!("profile_tool.rs")),
+        ("qa", include_str!("qa.rs")),
+        ("record", include_str!("record.rs")),
         ("resize", include_str!("resize.rs")),
         ("screenshot", include_str!("screenshot.rs")),
         ("scroll", include_str!("scroll.rs")),

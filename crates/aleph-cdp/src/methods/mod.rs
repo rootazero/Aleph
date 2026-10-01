@@ -15,6 +15,7 @@ pub mod input;
 pub mod network;
 pub mod page;
 pub mod runtime;
+pub mod screencast;
 pub mod target;
 
 use serde::de::DeserializeOwned;

@@ -81,6 +81,14 @@ pub enum WaitCondition {
     TextGone(String),
     /// A CSS selector matches at least one element.
     Selector(String),
+    /// A CSS selector matches NO element — the inverse of [`Self::Selector`],
+    /// the wait for a spinner / overlay to leave the DOM.
+    ///
+    /// Distinct from [`Self::TextGone`]: an element can change its TEXT while
+    /// staying in the DOM, and `TextGone` resolves there while this wait must
+    /// not. The two "gone" arms poll different facts, and the probes must not
+    /// share logic (Review Focus #5).
+    SelectorGone(String),
     /// The tab's current URL contains this substring.
     UrlContains(String),
     /// Plain delay in milliseconds (openclaw `time` parity) — for animations

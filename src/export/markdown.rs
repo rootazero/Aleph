@@ -77,7 +77,11 @@ pub(super) fn escape_attr(s: &str) -> String {
 ///    a true relative URL or a hostile one, and only the former is safe to
 ///    forward.
 fn sanitize_link_url(url: &str) -> String {
-    let trimmed = url.trim();
+    // Trim once into an owned String so the four return paths below can move
+    // it out without re-allocating — three of them were `trimmed.to_string()`,
+    // the fourth returned a literal, and a percent-decode path never reached
+    // the kept copy.
+    let trimmed = url.trim().to_owned();
     // Strip ASCII whitespace + control chars from the head so a URL like
     // "\tjavascript:alert(1)" doesn't get past the scheme check by hiding
     // its scheme behind an invisible prefix.
@@ -94,15 +98,15 @@ fn sanitize_link_url(url: &str) -> String {
         // already invalid in a scheme per RFC 3986 and would only appear
         // here as an evasion attempt.
         let decoded = percent_decode_scheme(raw_scheme).to_lowercase();
-        if decoded == "http" || decoded == "https" || decoded == "mailto" {
-            return trimmed.to_string();
+        if matches!(decoded.as_str(), "http" | "https" | "mailto") {
+            return trimmed;
         }
         // Disallowed scheme: render as a no-op anchor instead. The scheme is
         // echoed back for debuggability and is escaped by the HTML writer.
         return format!("#disallowed-{decoded}");
     }
     // Relative URLs carry no scheme and cannot execute.
-    trimmed.to_string()
+    trimmed
 }
 
 /// Percent-decode a string per RFC 3986 §2.1 + §2.4. Only the printable ASCII
@@ -124,25 +128,16 @@ fn percent_decode_scheme(s: &str) -> String {
                 }
             }
         }
-        // Advance one full UTF-8 char. `s.is_char_boundary(i)` guards against
-        // panicking if a prior percent decode landed mid-multibyte sequence.
-        if s.is_char_boundary(i) {
-            // review(export): `is_char_boundary(i)` plus the only advances (1 byte
-            // for ASCII pass-through, 3 bytes for a consumed `%xx`) guarantee
-            // `s[i..]` is non-empty and starts on a char boundary, so `next()`
-            // cannot return None. `expect` documents that proof for both readers
-            // and `#![deny(clippy::unwrap_used)]` rather than re-asserting it.
-            let ch = s[i..]
-                .chars()
-                .next()
-                .expect("is_char_boundary(i) implies s[i..] is non-empty");
-            out.push(ch);
-            i += ch.len_utf8();
-        } else {
-            // Shouldn't happen because we only ever advance by 1 byte (ASCII
-            // pass-through) or 3 bytes (consumed `%xx`), but stay defensive.
-            i += 1;
-        }
+        // Advance one full UTF-8 char. The only advance paths are +1 byte
+        // (ASCII pass-through) and +3 bytes (consumed `%xx`), both of which
+        // land on a char boundary, so `s[i..]` always starts at one and is
+        // non-empty while `i < s.len()`.
+        let ch = s[i..]
+            .chars()
+            .next()
+            .expect("i is on a char boundary and i < s.len()");
+        out.push(ch);
+        i += ch.len_utf8();
     }
     out
 }

@@ -51,6 +51,14 @@ fn run(cmd: &mut Command, ok_codes: &[i32]) -> Res {
     }
 }
 
+/// Run `program args…` and check its exit code. The most common case in this
+/// file: every supervisor invocation is a flat argv. The PathBuf-only cases
+/// still fall through to `run` because `Command::args` can't take `OsStr`
+/// alongside `&str`.
+fn run_cmd(program: &str, args: &[&str], ok_codes: &[i32]) -> Res {
+    run(Command::new(program).args(args), ok_codes)
+}
+
 // ----------------------------------------------------------------------------
 #[cfg(target_os = "macos")]
 mod platform {
@@ -100,21 +108,11 @@ mod platform {
     }
 
     pub fn enable() -> Res {
-        run(
-            Command::new("launchctl")
-                .arg("enable")
-                .arg(service_target()?),
-            &[],
-        )
+        run_cmd("launchctl", &["enable", &service_target()?], &[])
     }
 
     pub fn disable() -> Res {
-        run(
-            Command::new("launchctl")
-                .arg("disable")
-                .arg(service_target()?),
-            &[],
-        )
+        run_cmd("launchctl", &["disable", &service_target()?], &[])
     }
 
     pub fn status() -> Res {
@@ -153,12 +151,7 @@ mod platform {
         // login session (what a home server wants). May require polkit/root on
         // some distros — warn but don't fail the install.
         if let Ok(user) = std::env::var("USER") {
-            if run(
-                Command::new("loginctl").arg("enable-linger").arg(&user),
-                &[],
-            )
-            .is_err()
-            {
+            if run_cmd("loginctl", &["enable-linger", &user], &[]).is_err() {
                 eprintln!(
                     "note: could not enable linger; the server starts at login, not boot. \
                      Run `sudo loginctl enable-linger {user}` for boot autostart."
@@ -230,36 +223,24 @@ mod platform {
         )?;
         let _ = std::fs::remove_file(&xml_path);
         // Start now (next logon would otherwise be the first run).
-        let _ = run(
-            Command::new("schtasks").args(["/Run", "/TN", TASK_NAME]),
-            &[],
-        );
+        let _ = run_cmd("schtasks", &["/Run", "/TN", TASK_NAME], &[]);
         println!("Installed scheduled task {TASK_NAME} (starts at logon).");
         Ok(())
     }
 
     pub fn uninstall() -> Res {
-        let _ = run(
-            Command::new("schtasks").args(["/Delete", "/TN", TASK_NAME, "/F"]),
-            &[1],
-        );
+        let _ = run_cmd("schtasks", &["/Delete", "/TN", TASK_NAME, "/F"], &[1]);
         let _ = std::fs::remove_file(launcher_path()?);
         println!("Removed scheduled task {TASK_NAME}.");
         Ok(())
     }
 
     pub fn enable() -> Res {
-        run(
-            Command::new("schtasks").args(["/Change", "/TN", TASK_NAME, "/ENABLE"]),
-            &[],
-        )
+        run_cmd("schtasks", &["/Change", "/TN", TASK_NAME, "/ENABLE"], &[])
     }
 
     pub fn disable() -> Res {
-        run(
-            Command::new("schtasks").args(["/Change", "/TN", TASK_NAME, "/DISABLE"]),
-            &[],
-        )
+        run_cmd("schtasks", &["/Change", "/TN", TASK_NAME, "/DISABLE"], &[])
     }
 
     pub fn status() -> Res {

@@ -300,6 +300,19 @@ pub struct EngineHandle {
 pub struct TabTable {
     pub entries: HashMap<String, TabEntry>,
     pub active: Option<String>,
+    /// Tabs the engine told us died (`Target.targetDestroyed`), folded out of
+    /// `entries` by the event pump: targetId → the URL the table last
+    /// observed. This is what lets [`EngineHandle::ensure_tab`] answer
+    /// [`BrowserError::TabGone`] — "gone WITHOUT us closing it" — instead of
+    /// the blanket `TabNotFound`, which would tell the model the id was never
+    /// ours (two different facts, two different recoveries: the registry's
+    /// `forget` doc owns the distinction).
+    ///
+    /// A tab WE closed is removed from here too (`close_tab` clears it):
+    /// the death event of a deliberate close can win the race against the
+    /// close path's own table removal, and the fold must not outvote the
+    /// forget.
+    pub dead: HashMap<String, String>,
 }
 
 /// Per-tab state that outlives a single call.
@@ -385,6 +398,7 @@ impl EngineHandle {
             tabs: tokio::sync::Mutex::new(TabTable {
                 entries,
                 active: Some(tab_id),
+                dead: HashMap::new(),
             }),
             pump_started: std::sync::atomic::AtomicBool::new(false),
             pump_lagged: std::sync::atomic::AtomicU64::new(0),
@@ -449,18 +463,29 @@ impl EngineHandle {
 
     /// The session attached to `tab_id`. **A lookup, never an attach.**
     ///
-    /// An unknown tab is `TabNotFound`: acting on a tab that does not exist is
-    /// the fail-closed direction, and inventing one here would make a typo look
-    /// like a working page. Every verb that operates on a tab which must
-    /// already exist calls this — `navigate`, `snapshot`, `evaluate`,
-    /// `screenshot`, the dialog and cookie paths — and only the verbs that
-    /// legitimately bring a tab into existence call [`Self::attach_tab`].
+    /// Three answers for three different facts: a live tab is its session; a
+    /// tab the engine's event pump folded after `Target.targetDestroyed` is
+    /// [`BrowserError::TabGone`] — immediately, without spending a command
+    /// timeout on a session that no longer exists; anything else is
+    /// `TabNotFound` ("I don't know this id"), because acting on a tab that
+    /// does not exist is the fail-closed direction and inventing one here
+    /// would make a typo look like a working page. Every verb that operates
+    /// on a tab which must already exist calls this — `navigate`, `snapshot`,
+    /// `evaluate`, `screenshot`, the dialog and cookie paths — and only the
+    /// verbs that legitimately bring a tab into existence call
+    /// [`Self::attach_tab`].
     pub async fn ensure_tab(&self, tab_id: &str) -> Result<aleph_cdp::SessionId, BrowserError> {
         let tabs = self.tabs.lock().await;
-        tabs.entries
-            .get(tab_id)
-            .map(|e| e.session.clone())
-            .ok_or_else(|| BrowserError::TabNotFound(tab_id.to_string()))
+        if let Some(entry) = tabs.entries.get(tab_id) {
+            return Ok(entry.session.clone());
+        }
+        if let Some(last_url) = tabs.dead.get(tab_id) {
+            return Err(BrowserError::TabGone {
+                tab_id: tab_id.to_string(),
+                last_url: Some(last_url.clone()),
+            });
+        }
+        Err(BrowserError::TabNotFound(tab_id.to_string()))
     }
 
     /// Attach to `target`, enable the three domains this driver listens on, and

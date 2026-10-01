@@ -620,6 +620,12 @@ impl ToolRegistry for BuiltinToolRegistry {
             "browser_pdf" => {
                 Box::pin(async move { self.browser_pdf_tool.call_json(arguments).await })
             }
+            "browser_record" => {
+                Box::pin(async move { self.browser_record_tool.call_json(arguments).await })
+            }
+            "browser_qa" => {
+                Box::pin(async move { self.browser_qa_tool.call_json(arguments).await })
+            }
             "browser_network" => {
                 Box::pin(async move { self.browser_network_tool.call_json(arguments).await })
             }

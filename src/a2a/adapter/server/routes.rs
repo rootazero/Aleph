@@ -17,7 +17,8 @@ use crate::a2a::domain::{AgentCard, UpdateEvent};
 use crate::a2a::port::authenticator::{A2AAuthContext, A2AAuthPrincipal};
 
 use super::request_processor::{
-    A2ARequestProcessor, A2AServerState, JsonRpcRequest, JsonRpcResponse,
+    apply_inline_push_config, A2ARequestProcessor, A2AServerState, JsonRpcRequest,
+    JsonRpcResponse,
 };
 
 /// Build the axum router for A2A endpoints.
@@ -168,36 +169,8 @@ async fn stream_message_send(
         .and_then(|v| v.as_str())
         .map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
 
-    if let Some(push_params) = request.params.get("pushNotificationConfig").cloned() {
-        #[derive(serde::Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct InlinePushConfig {
-            url: String,
-            #[serde(default)]
-            token: Option<String>,
-            #[serde(default)]
-            events: Vec<String>,
-        }
-        match serde_json::from_value::<InlinePushConfig>(push_params) {
-            Ok(inline) => {
-                let push_config = crate::a2a::service::notification::PushNotificationConfig {
-                    task_id: task_id.clone(),
-                    url: inline.url,
-                    token: inline.token,
-                    events: inline.events,
-                };
-                if let Err(e) = state.notification.set_config(push_config).await {
-                    return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
-                }
-            }
-            Err(e) => {
-                return sse_error(JsonRpcResponse::error(
-                    request.id.clone(),
-                    -32602,
-                    &format!("Invalid params: invalid 'pushNotificationConfig': {e}"),
-                ));
-            }
-        }
+    if let Err(e) = apply_inline_push_config(&state.notification, &request.params, &task_id).await {
+        return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
     }
 
     let session_id = request
@@ -352,13 +325,17 @@ fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
 /// Extract credentials from HTTP headers
 fn extract_credentials(headers: &HeaderMap) -> Credentials {
     if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        // RFC 7235: auth-scheme is case-insensitive
-        if let Some(prefix) = auth.get(..7) {
-            if prefix.eq_ignore_ascii_case("bearer ") {
-                if let Some(token) = auth.get(7..) {
-                    return Credentials::BearerToken(token.to_string());
-                }
-            }
+        // RFC 7235: the auth-scheme is case-insensitive; the space after it is
+        // not, but `strip_prefix` accepts both and the per-character cost is
+        // negligible. Strip the lowercased form to match a token whose header
+        // was written by a peer that spelled the scheme "Bearer " (the typical
+        // client). The "bearer " / "BEARER " / etc. forms collapse to the same
+        // answer here.
+        if let Some(rest) = auth
+            .strip_prefix("Bearer ")
+            .or_else(|| auth.strip_prefix("bearer "))
+        {
+            return Credentials::BearerToken(rest.to_string());
         }
     }
     if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {

@@ -738,6 +738,7 @@ fn condition_label(condition: &WaitCondition) -> String {
         WaitCondition::Text(t) => format!("text '{t}'"),
         WaitCondition::TextGone(t) => format!("text_gone '{t}'"),
         WaitCondition::Selector(s) => format!("selector '{s}'"),
+        WaitCondition::SelectorGone(s) => format!("selector_gone '{s}'"),
         WaitCondition::UrlContains(u) => format!("url_contains '{u}'"),
         WaitCondition::Time(ms) => format!("delay {ms}ms"),
     }
@@ -1460,8 +1461,7 @@ async fn run_one(
 #[async_trait]
 impl AlephTool for BrowserExecTool {
     const NAME: &'static str = "browser_exec";
-    const DESCRIPTION: &'static str =
-        "Run a whole browser sub-procedure in ONE call: an ordered list of write steps and the \
+    const DESCRIPTION: &'static str = "Run a whole browser sub-procedure in ONE call: an ordered list of write steps and the \
          reads (snapshot, evaluate, screenshot, console, network), whose text comes back in \
          results[].output — a screenshot arrives as a viewable image block. Prefer one call per \
          sub-procedure — navigate, act, wait, read — over a call per action. Every step runs its \
@@ -1958,15 +1958,19 @@ mod tests {
         assert_eq!(results[0].status, "navigated");
         // Writes carry no output; the reads do, and they are what the model
         // would otherwise have spent whole extra turns to obtain.
-        assert!(results[1]
-            .output
-            .as_deref()
-            .is_some_and(|o| o.contains("[ref=e9]")));
+        assert!(
+            results[1]
+                .output
+                .as_deref()
+                .is_some_and(|o| o.contains("[ref=e9]"))
+        );
         assert!(results[2].output.is_none());
-        assert!(results[5]
-            .output
-            .as_deref()
-            .is_some_and(|o| o.contains("[ref=e9]")));
+        assert!(
+            results[5]
+                .output
+                .as_deref()
+                .is_some_and(|o| o.contains("[ref=e9]"))
+        );
         // The typed text is never echoed back in a step label.
         assert!(
             !results[2].action.contains("hello"),

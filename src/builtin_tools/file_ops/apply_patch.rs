@@ -92,6 +92,27 @@ pub struct FileOutcome {
     pub change: Option<Box<aleph_protocol::FileChange>>,
 }
 
+impl FileOutcome {
+    /// Attach an "unavailable" `FileChange` to the side-channel after an I/O
+    /// failure: `commit()` raised a tool error, so the presentation must say
+    /// `kind, why` rather than an empty `0/0` row, and the `kind` is fixed
+    /// by the `Effect` arm that produced the failure. Folds the six
+    /// `FileOutcome { change: Some(Box::new(...)), ..fail(...) }` constructions
+    /// of `commit()` into a single line each.
+    fn with_tool_failure(
+        mut self,
+        change_path: &std::path::Path,
+        kind: aleph_protocol::FileChangeKind,
+    ) -> Self {
+        self.change = Some(Box::new(aleph_protocol::FileChange::unavailable(
+            change_path.to_string_lossy(),
+            kind,
+            aleph_protocol::Unavailable::ToolFailed,
+        )));
+        self
+    }
+}
+
 /// Aggregate output for one `apply_patch` invocation.
 #[derive(Debug, Clone, Serialize)]
 pub struct ApplyPatchOutput {
@@ -793,18 +814,12 @@ impl Planned {
             Effect::Add { path, body } => {
                 if let Some(parent) = path.parent() {
                     if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                        return FileOutcome {
-                            change: Some(Box::new(aleph_protocol::FileChange::unavailable(
-                                path.to_string_lossy(),
-                                aleph_protocol::FileChangeKind::Created,
-                                aleph_protocol::Unavailable::ToolFailed,
-                            ))),
-                            ..fail(
-                                "add",
-                                &src,
-                                format!("failed to create parent {}: {}", parent.display(), e),
-                            )
-                        };
+                        return fail(
+                            "add",
+                            &src,
+                            format!("failed to create parent {}: {}", parent.display(), e),
+                        )
+                        .with_tool_failure(&path, aleph_protocol::FileChangeKind::Created);
                     }
                 }
                 // Atomic write-back (stage to temp + fsync + rename), matching
@@ -826,14 +841,8 @@ impl Planned {
                             change: Some(Box::new(change)),
                         }
                     }
-                    Err(e) => FileOutcome {
-                        change: Some(Box::new(aleph_protocol::FileChange::unavailable(
-                            path.to_string_lossy(),
-                            aleph_protocol::FileChangeKind::Created,
-                            aleph_protocol::Unavailable::ToolFailed,
-                        ))),
-                        ..fail("add", &src, format!("write failed: {e}"))
-                    },
+                    Err(e) => fail("add", &src, format!("write failed: {e}"))
+                        .with_tool_failure(&path, aleph_protocol::FileChangeKind::Created),
                 }
             }
             Effect::Delete { path, old } => match tokio::fs::remove_file(&path).await {
@@ -862,14 +871,8 @@ impl Planned {
                         change: Some(Box::new(change)),
                     }
                 }
-                Err(e) => FileOutcome {
-                    change: Some(Box::new(aleph_protocol::FileChange::unavailable(
-                        path.to_string_lossy(),
-                        aleph_protocol::FileChangeKind::Deleted,
-                        aleph_protocol::Unavailable::ToolFailed,
-                    ))),
-                    ..fail("delete", &src, format!("delete failed: {e}"))
-                },
+                Err(e) => fail("delete", &src, format!("delete failed: {e}"))
+                    .with_tool_failure(&path, aleph_protocol::FileChangeKind::Deleted),
             },
             Effect::Update {
                 write_to,
@@ -881,57 +884,37 @@ impl Planned {
                 if let Err(e) =
                     crate::utils::atomic_write::atomic_write_file(&write_to, &content).await
                 {
-                    return FileOutcome {
-                        change: Some(Box::new(aleph_protocol::FileChange::unavailable(
-                            write_to.to_string_lossy(),
-                            aleph_protocol::FileChangeKind::Modified,
-                            aleph_protocol::Unavailable::ToolFailed,
-                        ))),
-                        ..fail("update", &src, format!("write-back failed: {e}"))
-                    };
+                    return fail("update", &src, format!("write-back failed: {e}"))
+                        .with_tool_failure(&write_to, aleph_protocol::FileChangeKind::Modified);
                 }
                 let final_path = match rename {
                     Some((from, to)) => {
                         if let Some(parent) = to.parent() {
                             if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                                return FileOutcome {
-                                    change: Some(Box::new(
-                                        aleph_protocol::FileChange::unavailable(
-                                            to.to_string_lossy(),
-                                            aleph_protocol::FileChangeKind::Modified,
-                                            aleph_protocol::Unavailable::ToolFailed,
-                                        ),
-                                    )),
-                                    ..fail(
-                                        "update",
-                                        &src,
-                                        format!(
-                                            "failed to create move-to parent {}: {}",
-                                            parent.display(),
-                                            e
-                                        ),
-                                    )
-                                };
-                            }
-                        }
-                        if let Err(e) = tokio::fs::rename(&from, &to).await {
-                            return FileOutcome {
-                                change: Some(Box::new(aleph_protocol::FileChange::unavailable(
-                                    to.to_string_lossy(),
-                                    aleph_protocol::FileChangeKind::Modified,
-                                    aleph_protocol::Unavailable::ToolFailed,
-                                ))),
-                                ..fail(
+                                return fail(
                                     "update",
                                     &src,
                                     format!(
-                                        "rename {} → {} failed: {}",
-                                        from.display(),
-                                        to.display(),
+                                        "failed to create move-to parent {}: {}",
+                                        parent.display(),
                                         e
                                     ),
                                 )
-                            };
+                                .with_tool_failure(&to, aleph_protocol::FileChangeKind::Modified);
+                            }
+                        }
+                        if let Err(e) = tokio::fs::rename(&from, &to).await {
+                            return fail(
+                                "update",
+                                &src,
+                                format!(
+                                    "rename {} → {} failed: {}",
+                                    from.display(),
+                                    to.display(),
+                                    e
+                                ),
+                            )
+                            .with_tool_failure(&to, aleph_protocol::FileChangeKind::Modified);
                         }
                         to
                     }

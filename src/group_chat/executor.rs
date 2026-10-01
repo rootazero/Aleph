@@ -294,7 +294,7 @@ impl GroupChatExecutor {
         };
 
         // Step 3: Parse the coordinator plan, fallback on failure
-        let plan = parse_coordinator_plan(&coordinator_raw).unwrap_or_else(|e| {
+        let mut plan = parse_coordinator_plan(&coordinator_raw).unwrap_or_else(|e| {
             tracing::warn!(
                 subsystem = "group_chat",
                 error = %e,
@@ -354,9 +354,8 @@ impl GroupChatExecutor {
         // mutating session.history or persisting to DB. If any persona call
         // fails, the snapshot is restored and no partial turn is committed.
         let mut prior_discussion = String::new();
-        let mut sorted_respondents = plan.respondents.clone();
-        sorted_respondents.sort_by_key(|r| r.order);
-        let total_respondents = sorted_respondents.len();
+        let total_respondents = plan.respondents.len();
+        plan.respondents.sort_by_key(|r| r.order);
         let session_id = session.id.clone();
 
         struct PreparedResponse {
@@ -366,7 +365,7 @@ impl GroupChatExecutor {
             content: String,
         }
         let mut prepared: Vec<PreparedResponse> = Vec::with_capacity(total_respondents);
-        for (i, respondent) in sorted_respondents.iter().enumerate() {
+        for (i, respondent) in plan.respondents.iter().enumerate() {
             // Find the persona in the session participants
             let persona = session
                 .participants

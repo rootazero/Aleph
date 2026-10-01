@@ -33,11 +33,6 @@ impl MemoryProducerScheduler {
         }
     }
 
-    pub const fn with_tick_duration(mut self, d: Duration) -> Self {
-        self.tick_duration = d;
-        self
-    }
-
     /// Spawn the tokio background task. Returns a `JoinHandle` so the caller
     /// can abort it on shutdown.
     pub fn spawn(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
