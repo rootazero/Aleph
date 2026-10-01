@@ -41,7 +41,7 @@ impl MediaPipeline {
         prompt: Option<&str>,
     ) -> Result<MediaOutput, MediaError> {
         if let MediaInput::Url { url } = input {
-            crate::security::ssrf::validate_url_async(
+            crate::security::ssrf::validate_url_with_pinned(
                 url,
                 &crate::security::ssrf::SsrfPolicy::default(),
             )

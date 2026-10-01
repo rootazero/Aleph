@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::a2a::domain::{A2AError, TaskStatusUpdateEvent};
 use crate::a2a::port::A2AResult;
-use crate::security::ssrf::{validate_url_async, SsrfPolicy};
+use crate::security::ssrf::{validate_url_with_pinned, SsrfPolicy};
 use crate::sync_primitives::AsyncRwLock;
 
 /// Configuration for push notifications on a task
@@ -75,7 +75,7 @@ impl NotificationService {
         // can only ever fail, and the failure surfaces as a `tracing::warn!` in
         // the daemon it will never read. Rejecting here is the only synchronous
         // signal the caller gets.
-        validate_url_async(&config.url, &SsrfPolicy::default())
+        validate_url_with_pinned(&config.url, &SsrfPolicy::default())
             .await
             .map(|(_, _pinned)| ())
             .map_err(|e| {

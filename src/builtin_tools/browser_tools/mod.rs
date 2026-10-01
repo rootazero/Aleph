@@ -832,7 +832,7 @@ mod tests {
     ///
     /// **An IP literal, not a hostname.** `current_page_block` reaches
     /// `BrowserSsrfGuard::check_url` (`network_policy.rs`) →
-    /// `ssrf::validate_url_async`, which RESOLVES the host. `ok.example` is an
+    /// `ssrf::validate_url_with_pinned`, which RESOLVES the host. `ok.example` is an
     /// RFC 2606 reserved name that resolves nowhere, so a hostname here makes
     /// the "must pass" assertion fail offline and on CI. `post_nav.rs`'s
     /// `passes_public_landed_url` needs a hostname and therefore installs a

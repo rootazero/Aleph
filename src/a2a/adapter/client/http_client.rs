@@ -77,7 +77,7 @@ impl A2AClient {
         // redirects lets that host pivot into Aleph's private network
         // (e.g. a 302 to `http://169.254.169.254/...` or an internal
         // admin endpoint). Rejecting redirects forces every hop through
-        // the higher-level SSRF gate (`security::ssrf::validate_url_async`)
+        // the higher-level SSRF gate (`security::ssrf::validate_url_with_pinned`)
         // when callers opt into it.
         //
         // Builder config is fully static (a redirect policy toggle) — the

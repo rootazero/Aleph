@@ -119,8 +119,8 @@ pub(crate) async fn resolve_and_validate(
 }
 
 async fn lookup(host: &str, port: u16) -> Result<Vec<SocketAddr>, SsrfError> {
-    let lookup_addr = format!("{host}:{port}");
-    tokio::net::lookup_host(&lookup_addr)
+    let lookup_addr = (host, port);
+    tokio::net::lookup_host(lookup_addr)
         .await
         .map_err(|e| SsrfError::DnsResolutionFailed {
             host: host.to_string(),

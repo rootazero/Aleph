@@ -8,7 +8,7 @@
 //! These providers are **not** wired into `web_fetch`. A provider receives the
 //! target URL as a string and resolves/follows it from its own network
 //! position, so the SSRF DNS pin from
-//! [`crate::security::ssrf::validate_url_async`] cannot be enforced on the
+//! [`crate::security::ssrf::validate_url_with_pinned`] cannot be enforced on the
 //! fetch that actually happens — neither provider API accepts a pre-resolved
 //! address, and validate-then-delegate reopens the DNS-rebinding /
 //! redirect-to-internal gap the SSRF gate exists to close. The registry and
