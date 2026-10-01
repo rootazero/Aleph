@@ -1,0 +1,52 @@
+{
+  "module": "src/providers (batch B1: gemini + codex + singles)",
+  "reviewer": "minimax-m3",
+  "summary": "Most files in this batch are in good shape: gemini schema sanitizer is well-tested, gemini-types are an honest wire-shape mirror, the Codex OAuth flow has a credential-redacting Debug impl, probe.rs is documented as a single source of truth, and model_override_provider.rs carries incident-history comments on each non-obvious choice. Two Medium findings warrant fixing: Ollama error mapping ignores HTTP status codes, and the Codex browser-flow leaks its fixed callback port on caller cancellation. Two Low findings: a duplicated default-token-lifetime fallback and a stale docstring example.",
+  "totals": {"critical": 0, "high": 0, "medium": 2, "low": 2},
+  "findings": [
+    {
+      "id": "P-B-001",
+      "severity": "Medium",
+      "category": "error-handling",
+      "file": "src/providers/ollama.rs",
+      "line": 405,
+      "title": "OllamaProvider::handle_error never classifies HTTP status codes",
+      "description": "handle_error inspects response.status() but only uses it for a log line and the fallback message. The only structured case it special-cases is `error_msg contains \"model\" && contains \"not found\"` (good — surfaces a missing-model in the user-actionable form). Every other 4xx/5xx — including 401 (auth header rejected), 403 (forbidden), 429 (rate limit) and 503 (server overloaded, common while a large model is loading into memory) — funnels into `AlephError::provider(...)`. Callers that classify errors for retry/backoff (`failover/`, the harness retry layer, the gateway RPC's transient-vs-permanent split) cannot tell an Ollama \"still loading\" 503 from a payload-validation 400, so transient failures may not be retried and permanent ones may be retried indefinitely. A 401 is also returned to the user as a generic provider error rather than as the credential problem it actually is.",
+      "fix_proposal": "Branch on `response.status()` before falling through to the body parse, e.g.:\n\nmatch status.as_u16() {\n    401 | 403 => return AlephError::authentication(\"ollama\", format!(\"Ollama rejected the request (HTTP {status}); check any auth header configured for this endpoint\")),\n    429 => return AlephError::rate_limit(format!(\"Ollama rate-limited (HTTP {status}): {error_msg}\")),\n    503 => return AlephError::provider(format!(\"Ollama is busy or still loading the model (HTTP 503): {error_msg}\")),\n    _ => { /* existing fallback */ }\n}\n\nLocal Ollama deployments rarely return 401/429, so the main practical win is the 503 branch — large models can take tens of seconds to load and the current mapping makes that look like a permanent failure.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-B-002",
+      "severity": "Medium",
+      "category": "async",
+      "file": "src/providers/codex/auth.rs",
+      "line": 301,
+      "title": "authorize_via_browser leaks the localhost:1455 callback server on caller cancellation",
+      "description": "authorize_via_browser spawns the axum callback server bound to the hard-coded CALLBACK_PORT (1455, mandated by OpenAI's redirect_uri) into a tokio task (`server_handle`, line 301), then aborts that handle ONLY in explicit early-return paths (lines 314, 324, 328, 335, 344) or after success. If the caller's future is dropped between the spawn and any of those abort calls — e.g., the gateway handler times out, the user navigates away in the desktop shell, or the supervising task is cancelled while waiting for the user to complete the browser dance — there is no abort. The detached axum task keeps listening on 1455 indefinitely (or until process exit), so every subsequent Codex login attempt fails at the `TcpListener::bind` step with \"Failed to bind localhost:1455 — is another login in progress?\". The `Failed to open browser` path is correctly aborted (and even has a comment explaining why), so the fix pattern is already known to the author; it just needs to extend to the cancellation case.",
+      "fix_proposal": "Wrap the spawned task in a guard that aborts on drop, e.g.:\n\nstruct AbortOnDrop(tokio::task::JoinHandle<()>);\nimpl Drop for AbortOnDrop {\n    fn drop(&mut self) { self.0.abort(); }\n}\n\n// ...\nlet server_handle = AbortOnDrop(tokio::spawn(async move { axum::serve(...).await }));\n\nThen replace every `server_handle.abort();` with `let _ = server_handle;` (explicitly consume the guard so Drop runs the abort), or just `drop(server_handle);` at each existing abort site. The guard makes the leak impossible regardless of how the future terminates.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-B-003",
+      "severity": "Low",
+      "category": "duplicate",
+      "file": "src/providers/codex/auth.rs",
+      "line": 388,
+      "title": "expires_in.unwrap_or(3600) fallback duplicated in exchange and refresh",
+      "description": "Both `exchange_code_for_token` (line 388: `let expires_in = token_resp.expires_in.unwrap_or(3600);`) and `refresh` (line 449: identical line) silently fall back to a 3600-second lifetime if the server omits `expires_in`. The value is duplicated, magic, and the two sites can drift apart if one is ever changed. There is no `tracing::warn!` to surface that the server's normal response shape is missing the field, so a server-side bug (e.g., dropping `expires_in` from the JSON envelope) would be invisible until tokens started failing mid-flight.",
+      "fix_proposal": "Hoist the default into a named constant and have both call sites use it, e.g.:\n\n/// Default token lifetime when the server omits `expires_in` from its response.\n/// `unwrap_or`ing this is fallback behaviour, not a normal case — the helpers\n/// below log when they have to.\nconst DEFAULT_TOKEN_LIFETIME_SECS: u64 = 3600;\n\n// in exchange_code_for_token / refresh:\nlet expires_in = match token_resp.expires_in {\n    Some(s) => s,\n    None => {\n        tracing::warn!(\"OAuth token response missing `expires_in`; falling back to {DEFAULT_TOKEN_LIFETIME_SECS}s\");\n        DEFAULT_TOKEN_LIFETIME_SECS\n    }\n};",
+      "confidence": "high"
+    },
+    {
+      "id": "P-B-004",
+      "severity": "Low",
+      "category": "api-surface",
+      "file": "src/providers/mock.rs",
+      "line": 60,
+      "title": "MockProvider docstring example uses the pre-Removed process signature",
+      "description": "The module-level docstring (`src/providers/mock.rs:38-90`) contains a `rust,ignore` example that calls `provider.process(\"input\", None).await.unwrap()` and compares the result directly to a `&str`. The current `AiProvider::process` signature takes `RequestPayload<'_>` and returns `ProviderResponse`; the live usage pattern (used by every test in the same module, e.g. line 175, 200, 213) is `provider.process(RequestPayload::new(&msgs)).await.unwrap()` then `response.text_content()`. Because the example is marked `rust,ignore` rustdoc does not compile it, so the docs build is green — but a new user copy-pasting from these docs gets a hard signature mismatch and has to reverse-engineer the real one from the tests or the trait definition. The example also claims `provider.process(\"input\", None).await` returns the response, when the current method returns `Result<ProviderResponse>`.",
+      "fix_proposal": "Rewrite the example block to match the current API, e.g.:\n\n/// ```rust,ignore\n/// use alephcore::providers::MockProvider;\n/// use crate::providers::message::UnifiedMessage;\n/// use crate::providers::adapter::RequestPayload;\n///\n/// # tokio_test::block_on(async {\n/// let provider = MockProvider::new(\"mock response\");\n/// let msgs = [UnifiedMessage::user(\"any input\")];\n/// let response = provider.process(RequestPayload::new(&msgs)).await.unwrap();\n/// assert_eq!(response.text_content(), \"mock response\");\n/// # })\n/// ```",
+      "confidence": "high"
+    }
+  ]
+}

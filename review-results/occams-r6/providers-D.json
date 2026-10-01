@@ -1,0 +1,30 @@
+{
+  "module": "src/providers (batch D: model_*/moa/presets/responses)",
+  "reviewer": "claude-opus-4-6",
+  "summary": "Batch D is in unusually good shape: MoA fan-out/cadence/circuit-breaker invariants are documented and enforced, preset storage delegates concurrency to ConfigPatcher, registry keys/aliases/base_urls verified collision-free, and capability data is drift-test guarded and conservative (e.g. claude-opus-4-5 max_output 64k matches the non-beta default). Only two low-severity issues: silently dropped unparseable SSE frames, and one unnecessarily public function.",
+  "totals": { "critical": 0, "high": 0, "medium": 0, "low": 2 },
+  "findings": [
+    {
+      "id": "P-D-001",
+      "severity": "Low",
+      "category": "error-handling",
+      "file": "src/providers/responses/shared.rs",
+      "line": 361,
+      "title": "Unparseable SSE frames silently conflated with [DONE] sentinel",
+      "description": "parse_sse_data returns None both for the literal \"[DONE]\" sentinel and for any frame that fails to deserialize (serde_json::from_str(data).ok()). The sole production caller (parse_sse_event_multi in src/providers/protocols/openai_responses/mod.rs:584) then returns without any log line — \"[DONE] sentinel or unparseable\". So a truncated or malformed SSE frame — including a mid-stream provider error whose shape doesn't match a known StreamEvent variant — vanishes with no diagnostic, leaving the consumer with a silently incomplete/empty stream that is indistinguishable from a clean end-of-stream. The doc comment on StreamEvent (types.rs:380, 'Other events are accepted but ignored') is also inaccurate: serde's internally-tagged enum REJECTS unknown `type` values outright rather than accepting-and-ignoring them, so 'ignored' actually means 'parse failure fed into the same None arm as [DONE]'.",
+      "fix_proposal": "Distinguish the two None cases at the call site or in the helper, e.g.:\n\npub(crate) fn parse_sse_data(data: &str) -> Option<StreamEvent> {\n    if data == \"[DONE]\" {\n        return None;\n    }\n    match serde_json::from_str(data) {\n        Ok(ev) => Some(ev),\n        Err(e) => {\n            tracing::debug!(target: \"aleph::openai_responses_sse\", error = %e, frame = %data, \"dropping unparseable SSE frame\");\n            None\n        }\n    }\n}",
+      "confidence": "high"
+    },
+    {
+      "id": "P-D-002",
+      "severity": "Low",
+      "category": "api-surface",
+      "file": "src/providers/presets/mod.rs",
+      "line": 436,
+      "title": "apply_temperature_policy is pub but has exactly one in-crate caller",
+      "description": "apply_temperature_policy is exported as `pub const fn` on the providers::presets module (which is `pub mod` at src/providers/mod.rs:84), but its only production caller is temperature_for_base_url in the same file (mod.rs:453); the remaining uses are unit tests in the same crate. Nothing in gateway/orchestrator/interfaces consumes it directly. Every additional pub item on a pub module is API surface that external crates (webchat already depends on alephcore) can latch onto, making future signature changes breaking. It can be a private `const fn` — tests in presets/tests.rs are in the same crate and still compile.",
+      "fix_proposal": "Change line 436 from `pub const fn apply_temperature_policy(` to `const fn apply_temperature_policy(` (or `pub(crate) const fn` if presets/tests.rs sits in a separate test target that needs the visibility).",
+      "confidence": "high"
+    }
+  ]
+}

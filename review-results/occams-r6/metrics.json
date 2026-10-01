@@ -1,0 +1,40 @@
+{
+  "module": "src/metrics",
+  "reviewer": "kimi-for-coding",
+  "summary": "Small, well-documented module; write-once policy binding, RAII timer, and Drop-side logging are all clean (no locks, no panics in production paths). Two Low-severity visibility observations only; the historically flagged issues (3x-duplicated 2.0 constant, duplicate threshold math, bench-only StageTimer) are already fixed or explicitly settled by prior audits and are not re-reported.",
+  "totals": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 2
+  },
+  "findings": [
+    {
+      "id": "M-001",
+      "severity": "Low",
+      "category": "api-surface",
+      "file": "src/metrics/mod.rs",
+      "line": 92,
+      "title": "init_metrics_runtime is pub but has only crate-internal callers",
+      "description": "src/metrics/mod.rs lives under `pub mod metrics` (src/lib.rs:96), so `pub fn init_metrics_runtime` is part of the crate's external API. Its only callers are inside the crate (src/config/load.rs:260 and src/config/load.rs:369, both in Config::load). Letting external crates install the process-wide metrics runtime is almost certainly not an intended contract; nothing downstream in this workspace uses it. NOTE: reducing visibility to pub(crate) is a breaking API change for any external consumer of alephcore, so only do it if a semver-major window is acceptable.",
+      "fix_proposal": "pub(crate) fn init_metrics_runtime(policy: &crate::config::MetricsPolicy) {",
+      "confidence": "medium"
+    },
+    {
+      "id": "M-002",
+      "severity": "Low",
+      "category": "api-surface",
+      "file": "src/metrics/mod.rs",
+      "line": 112,
+      "title": "pub fn on a module-private struct is unnameable surface",
+      "description": "`struct MetricsRuntime` (src/metrics/mod.rs:41) is private to the module, so the `pub` on `impl MetricsRuntime { pub fn warning_threshold_ms(...) }` grants nothing — the method is unnameable outside src/metrics/ anyway. It is read only by StageTimer::drop in the same file. The redundant `pub` (and `#[must_use]`, whose warning would also never fire externally) is dead surface area that suggests wider availability than exists. Non-breaking to tighten since the item is already unnameable externally.",
+      "fix_proposal": "fn warning_threshold_ms(&self, target_ms: u64) -> u64 {",
+      "confidence": "high"
+    }
+  ],
+  "notes_on_settled_prior_findings": [
+    "StageTimer has zero production callers in src/ (only benches/performance_benchmarks.rs and the lib.rs:275 re-export): explicitly accepted by commit 5b697ed06 (R10 carve-out keeping bench/public API). Re-reporting would re-litigate a settled decision.",
+    "The previously reported 2.0 constant triplication and MetricsPolicy::warning_threshold_ms duplicate math are fixed: DEFAULT_WARNING_MULTIPLIER is now defined once at src/config/types/policies/metrics.rs:50 and re-exported pub(crate) into src/metrics/mod.rs:33, and the policy-side duplicate method no longer exists.",
+    "Drop-side double-logging is intentional: the slow-warning branch returns early so a slow stage logs warn! only once and is not also echoed at debug level."
+  ]
+}
