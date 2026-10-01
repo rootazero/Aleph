@@ -176,7 +176,7 @@ pub struct SessionDecompressArgs {
 
 ## 6. 开放问题（实现时裁决，均在 spec 记录裁决结果）
 
-- **O1**：自动压缩（compactor.rs 三策略）目前是瞬态摘要、不改事件日志——`FoldRecorded` 是否覆盖自动压缩？倾向：覆盖压力驱动 LlmSummary（它是事实上的折叠），deterministic truncation 不记（无摘要产物可寻址）。实现 agent 裁决并记录理由。
+- **O1**：自动压缩（compactor.rs 三策略）目前是瞬态摘要、不改事件日志——`FoldRecorded` 是否覆盖自动压缩？倾向：覆盖压力驱动 LlmSummary（它是事实上的折叠），deterministic truncation 不记（无摘要产物可寻址）。~~实现 agent 裁决并记录理由~~ **已裁决（T1，2026-10-01）：不覆盖自动压缩，compactor.rs 零改动**。代码现实推翻了倾向：(a) 自动压缩操作的是瞬态 `Vec<UnifiedMessage>`（prompt 重建时的内存消息列表），没有 SessionService 句柄、不写事件日志、不退休任何事件——`FoldRecorded` 的 `from_seq/to_seq` 语义是「被 `Retire::Through` 软退休的事件区间」，自动压缩在事件日志里没有对应坐标，落库会制造谎言（fold 声称区间已折叠，但事件仍 live，decompress/list_folds 语义随之崩坏）；(b) 为它补写路径需要给 compactor 新增事件写句柄并伪造坐标，违背「不引入新瞬态注入路径」的最小侵入架构决策（§3.1b）；(c) 自动压缩产物的跨轮可寻址性已由 COMPACTION_CARRYOVER 指纹缓存承担（T5 领域），`FoldRecorded` 只覆盖真正编辑事件日志的压缩（manual 路径）。DeterministicTruncation 不记（无摘要产物），与原倾向一致。
 - **O2**：fold_id 生成格式取仓内既有 id 模式（实现时连线，不新造轮子）。
 - **O3**：decompress 渲染器复用 recall/session_search 的哪个渲染路径，以实现时连线结果为准（先探索再写码）。
 

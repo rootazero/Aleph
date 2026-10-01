@@ -1165,7 +1165,8 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::RunStarted { .. }
         | SessionEvent::RunFinished { .. }
         | SessionEvent::ResumeAttempted { .. }
-        | SessionEvent::CompactionPerformed { .. } => None,
+        | SessionEvent::CompactionPerformed { .. }
+        | SessionEvent::FoldRecorded { .. } => None,
     }
 }
 
@@ -1209,6 +1210,7 @@ pub(crate) const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::SubagentSpawned { .. } => "subagent_spawned",
         SessionEvent::SubagentReturned { .. } => "subagent_returned",
         SessionEvent::CompactionPerformed { .. } => "compaction_performed",
+        SessionEvent::FoldRecorded { .. } => "fold_recorded",
         SessionEvent::SessionForked { .. } => "session_forked",
         SessionEvent::Error { .. } => "error",
     }

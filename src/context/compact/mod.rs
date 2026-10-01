@@ -32,6 +32,11 @@ mod event_snap;
 /// reason [`plan_carry`] is: the only legitimate producer is a drain.
 mod file_carry;
 pub mod fit;
+/// The fold registry: a derived, read-only view over `FoldRecorded` /
+/// `CompactionPerformed` events that makes every compaction's retired span
+/// addressable. No parallel table — `session_events` stays the single source
+/// of truth.
+pub mod folds;
 /// Re-emit the newest screenshot below the summary, so the image the preflight
 /// image-stripping stage deliberately protects survives the drain that runs
 /// immediately after it on the same vector.
