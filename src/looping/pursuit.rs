@@ -143,8 +143,20 @@ pub fn tick_prompt(state: &LoopState, tokens_now: u64, now_ms: u64) -> String {
         );
     }
 
-    // Remaining-quota clause so the model can pace itself against the bound it
-    // is running under, exactly as goal pursuit surfaces "N/max".
+    let quota = remaining_quota_clause(state, n, tokens_now, now_ms);
+    let pace = cadence_hint(state);
+    format!(
+        "{prompt}\n\n[Timer loop — tick {n}. This runs on a schedule and will \
+         not self-stop.{quota} To end it, call loop(action='stop').{pace}]",
+        prompt = state.prompt,
+    )
+}
+
+/// One-line description of how much room the loop has left against each bound
+/// (iteration cap, wall-clock deadline, token budget). Empty when no bound is
+/// set or its inputs are unavailable. Always starts with a leading space so the
+/// caller can append directly without re-spacing.
+fn remaining_quota_clause(state: &LoopState, n: u32, tokens_now: u64, now_ms: u64) -> String {
     let mut quota = String::new();
     if let Some(max) = state.max_iterations {
         quota.push_str(&format!(" {} tick(s) left before the cap.", max - n));
@@ -167,18 +179,18 @@ pub fn tick_prompt(state: &LoopState, tokens_now: u64, now_ms: u64) -> String {
             ));
         }
     }
+    quota
+}
 
-    let pace = match state.cadence {
+/// One-line hint that points the model at the cadence-control verb (only
+/// model-paced loops expose `update`; fixed-cadence loops have nothing to add).
+fn cadence_hint(state: &LoopState) -> &'static str {
+    match state.cadence {
         Cadence::ModelPaced { .. } => {
             " To change the cadence, call loop(action='update', next_wake='8m')."
         }
         Cadence::Fixed { .. } => "",
-    };
-    format!(
-        "{prompt}\n\n[Timer loop — tick {n}. This runs on a schedule and will \
-         not self-stop.{quota} To end it, call loop(action='stop').{pace}]",
-        prompt = state.prompt,
-    )
+    }
 }
 
 /// User-facing reason when the iteration cap stops the loop.
@@ -197,7 +209,7 @@ pub fn cap_reached_note(state: &LoopState) -> String {
 
 /// User-facing reason when the wall-clock deadline stops the loop.
 #[must_use]
-pub fn deadline_reached_note(_state: &LoopState) -> String {
+pub fn deadline_reached_note() -> String {
     "Loop stopped: reached its time limit.".to_string()
 }
 
@@ -223,7 +235,7 @@ pub fn stop_reason_note(state: &LoopState, tokens_now: u64, now_ms: u64) -> Stri
     if state.over_budget(tokens_now) {
         budget_reached_note(state)
     } else if state.deadline_ms.is_some_and(|d| now_ms != 0 && now_ms > d) {
-        deadline_reached_note(state)
+        deadline_reached_note()
     } else {
         cap_reached_note(state)
     }
@@ -437,7 +449,7 @@ mod tests {
     #[test]
     fn notes_mention_reason() {
         assert!(cap_reached_note(&fixed().with_max_iterations(Some(2))).contains("iteration"));
-        assert!(deadline_reached_note(&fixed()).contains("time"));
+        assert!(deadline_reached_note().contains("time"));
     }
 
     #[test]

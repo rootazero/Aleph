@@ -24,6 +24,13 @@ use crate::memory::notes::KnowledgeNote;
 ///
 /// R7: the model judges its own output (confidence / whether to contradict); the
 /// gate is a deterministic threshold, not a re-judgement.
+//
+// `CandidateNote` owns every LLM-authored field it receives, so each arm
+// clones out of the borrowed `PageOp`. Twelve per-line suppressions were
+// noise — every clone here is intentional and the same shape applies to
+// both arms — so consolidate into one block-level allow with the contract
+// stated up front.
+#[allow(clippy::excessive_clones)]
 pub(crate) fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<CandidateNote> {
     match op {
         PageOp::Create {
@@ -41,15 +48,10 @@ pub(crate) fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<Candi
                 .map(|(c, _)| c.to_string())
                 .unwrap_or_default();
             let note = KnowledgeNote {
-                // rust-doctor-disable-next-line excessive-clone
                 title: title.clone(),
-                // rust-doctor-disable-next-line excessive-clone
                 category: category.clone(),
-                // rust-doctor-disable-next-line excessive-clone
                 tags: tags.clone(),
-                // rust-doctor-disable-next-line excessive-clone
                 facts: facts.clone(),
-                // rust-doctor-disable-next-line excessive-clone
                 links: links.clone(),
                 confidence: confidence.clamp(0.0, 1.0),
                 severity: *severity,
@@ -86,9 +88,7 @@ pub(crate) fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<Candi
                 title: note_path
                     .split_once('/')
                     .map(|(_, f)| f.to_string())
-                    // rust-doctor-disable-next-line excessive-clone
                     .unwrap_or_else(|| note_path.clone()),
-                // rust-doctor-disable-next-line excessive-clone
                 category: category.clone(),
                 facts: vec![new_claim.clone()],
                 ..KnowledgeNote::default()

@@ -378,33 +378,8 @@ impl LoopState {
                 ));
             }
         }
-        if matches!(self.cadence, Cadence::ModelPaced { .. }) {
-            match self.next_wake_ms {
-                Some(wake) if now_ms != 0 && wake > now_ms => {
-                    parts.push(format!("next wake: in {}", fmt_duration_ms(wake - now_ms)));
-                }
-                Some(_) => parts.push("next wake: due now".to_string()),
-                None => parts.push("next wake: unset (uses fallback)".to_string()),
-            }
-        }
-        // A fixed-cadence loop knows its next fire too: `try_claim_tick` clears
-        // `next_wake_ms` (meaningless for Fixed) but stamps the absolute wake into
-        // `pending_tick_wake_ms` when it enqueues the tick. Surface it so a fixed
-        // watch-loop reports when it next runs, mirroring the model-paced next-wake
-        // line above. Cleared during a firing tick (`confirm_fire`) → omitted then.
-        // When `wake == now_ms` (due now) or the wake is past, render "due now"
-        // instead of dropping the line — the model-paced arm above already does
-        // this and the symmetry matches the user-visible shape across cadences.
-        if matches!(self.cadence, Cadence::Fixed { .. }) {
-            if let Some(wake) = self.pending_tick_wake_ms {
-                if now_ms != 0 {
-                    if wake > now_ms {
-                        parts.push(format!("next tick: in {}", fmt_duration_ms(wake - now_ms)));
-                    } else {
-                        parts.push("next tick: due now".to_string());
-                    }
-                }
-            }
+        if let Some(line) = next_tick_line(self, now_ms) {
+            parts.push(line);
         }
         if let Some(reason) = &self.stop_reason {
             parts.push(format!("reason: {reason}"));
@@ -466,31 +441,46 @@ impl LoopState {
                 parts.push(format!("time left: {}", fmt_duration_ms(deadline - now_ms)));
             }
         }
-        if matches!(self.cadence, Cadence::ModelPaced { .. }) {
-            match self.next_wake_ms {
-                Some(wake) if now_ms != 0 && wake > now_ms => {
-                    parts.push(format!("next wake: in {}", fmt_duration_ms(wake - now_ms)));
-                }
-                Some(_) => parts.push("next wake: due now".to_string()),
-                None => parts.push("next wake: unset (uses fallback)".to_string()),
-            }
-        }
-        // Fixed-cadence next fire rides the transient tail too — see
-        // `human_summary` for why `pending_tick_wake_ms` (not `next_wake_ms`)
-        // holds the known wake for a fixed loop. Mirror the model-paced arm
-        // for due-now / past-wake so both renderers stay in lockstep.
-        if matches!(self.cadence, Cadence::Fixed { .. }) {
-            if let Some(wake) = self.pending_tick_wake_ms {
-                if now_ms != 0 {
-                    if wake > now_ms {
-                        parts.push(format!("next tick: in {}", fmt_duration_ms(wake - now_ms)));
-                    } else {
-                        parts.push("next tick: due now".to_string());
-                    }
-                }
-            }
+        if let Some(line) = next_tick_line(self, now_ms) {
+            parts.push(line);
         }
         parts
+    }
+}
+
+/// Renders the single "next fire" line for the current cadence. Returns
+/// `Some(line)` for model-paced (always) and fixed-cadence with a pending
+/// wake (omitted only when the clock is unavailable — `pending_tick_wake_ms`
+/// is absolute so a relative countdown needs a reference), or `None` when
+/// the cadence has no known wake. Shared by [`LoopState::human_summary`]
+/// (tool reply) and [`LoopState::live_status`] (cache-safe transient tail)
+/// so the two countdowns cannot drift.
+fn next_tick_line(state: &LoopState, now_ms: u64) -> Option<String> {
+    match state.cadence {
+        Cadence::ModelPaced { .. } => Some(match state.next_wake_ms {
+            // `now_ms == 0` (clock unavailable) still gets a sensible line —
+            // "unset" tells the operator the fallback cadence is in effect
+            // rather than swallowing the line.
+            Some(wake) if now_ms != 0 && wake > now_ms => {
+                format!("next wake: in {}", fmt_duration_ms(wake - now_ms))
+            }
+            Some(_) => "next wake: due now".to_string(),
+            None => "next wake: unset (uses fallback)".to_string(),
+        }),
+        // A fixed-cadence loop knows its next fire too: `try_claim_tick` clears
+        // `next_wake_ms` (meaningless for Fixed) but stamps the absolute wake into
+        // `pending_tick_wake_ms` when it enqueues the tick. Cleared during a firing
+        // tick (`confirm_fire`) → omitted then. "due now" mirrors the model-paced
+        // arm above so the user-visible shape stays in lockstep across cadences.
+        Cadence::Fixed { .. } => state.pending_tick_wake_ms.and_then(|wake| {
+            if now_ms == 0 {
+                None
+            } else if wake > now_ms {
+                Some(format!("next tick: in {}", fmt_duration_ms(wake - now_ms)))
+            } else {
+                Some("next tick: due now".to_string())
+            }
+        }),
     }
 }
 
@@ -728,9 +718,6 @@ mod tests {
 
         // Once the baseline is captured, the unenforced hint disappears.
         let captured = l.with_baseline(1_000);
-        assert!(captured
-            .human_summary(1_000)
-            .contains("token budget: 50000"));
         assert!(captured
             .human_summary(1_000)
             .contains("token budget: 50000"));
