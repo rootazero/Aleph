@@ -50,10 +50,14 @@ pub mod context_estimate;
 #[cfg(test)]
 mod tests;
 
-// Re-export every item that was `pub` / `pub(crate)` at the old path so
-// external callers (`...::harness_bridge::X`) keep working unchanged.
-pub use context_blocks::{
-    active_execution_plan, active_standing_goal, active_strategy, active_timer_loop,
+// `active_strategy` is called from `gateway::execution_engine::run_loop::inner`
+// (src/gateway/execution_engine/run_loop/inner.rs:1270), so it must remain `pub`.
+pub use context_blocks::active_strategy;
+// The rest are orchestrator-internal: every other caller lives inside the
+// orchestrator crate and reaches them via the `context_blocks` module directly
+// (or via the `pub(crate)` re-export below).
+pub(crate) use context_blocks::{
+    active_execution_plan, active_standing_goal, active_timer_loop,
     compute_runtime_state_blocks, live_deadline_status,
 };
 // Producer-side bound for `StandingGoalLayer`, asserted by

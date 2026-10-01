@@ -391,60 +391,6 @@ pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> 
     Ok(())
 }
 
-/// Migrate to add `paired_users` table for pairing persistence.
-///
-/// Stores which Telegram users are paired (allowed to interact) per channel,
-/// enabling pairing state to survive restarts.
-///
-/// # Safety
-/// - Uses IF NOT EXISTS for idempotent table creation
-/// - Uses savepoint for atomic migration
-pub fn migrate_add_paired_users(conn: &Connection) -> Result<(), AlephError> {
-    conn.execute_batch("SAVEPOINT migration_paired_users")
-        .map_err(|e| AlephError::config(format!("Failed to begin paired_users migration: {e}")))?;
-
-    let table_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='paired_users'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_paired_users") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_paired_users failed");
-            }
-            AlephError::config(format!("Failed to check paired_users table: {e}"))
-        })?;
-
-    if table_exists == 0 {
-        conn.execute_batch(
-            r#"
-            CREATE TABLE paired_users (
-                channel_id TEXT NOT NULL,
-                user_id INTEGER NOT NULL,
-                paired_at TEXT NOT NULL,
-                PRIMARY KEY(channel_id, user_id)
-            )
-            "#,
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_paired_users") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_paired_users failed");
-            }
-            AlephError::config(format!("Failed to create paired_users table: {e}"))
-        })?;
-
-        tracing::info!("Created paired_users table");
-    } else {
-        tracing::debug!("paired_users table already exists, skipping creation");
-    }
-
-    conn.execute_batch("RELEASE migration_paired_users")
-        .map_err(|e| AlephError::config(format!("Failed to commit paired_users migration: {e}")))?;
-
-    Ok(())
-}
-
 /// Migrate to add `sticker_descriptions` table for Telegram sticker cache.
 ///
 /// Stores LLM-generated descriptions of stickers so they can be reused

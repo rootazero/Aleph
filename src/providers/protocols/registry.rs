@@ -11,6 +11,23 @@ use once_cell::sync::Lazy;
 use reqwest::Client;
 use std::collections::HashMap;
 
+/// Acquire a write lock, recovering from poisoning.
+///
+/// Centralises the recovery policy: a poisoned mutex is a signal that a prior
+/// holder panicked mid-update, and the lock is still usable. The standard
+/// library's `Mutex::lock().unwrap_or_else(|e| e.into_inner())` does the same
+/// thing inline; this helper keeps the recovery decision in one place so future
+/// audits of "do we want to panic on poison instead?" only touch this site.
+fn write_recover<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    lock.write().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Acquire a read lock, recovering from poisoning. See [`write_recover`] for
+/// the rationale.
+fn read_recover<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Global protocol registry instance (built-in protocols registered at init time)
 pub static PROTOCOL_REGISTRY: Lazy<ProtocolRegistry> = Lazy::new(|| {
     let registry = ProtocolRegistry::new();
@@ -48,7 +65,7 @@ impl ProtocolRegistry {
 
     /// Register built-in protocols
     pub fn register_builtin(&self) {
-        let mut builtin = self.builtin.write().unwrap_or_else(|e| e.into_inner());
+        let mut builtin = write_recover(&self.builtin);
 
         builtin.insert(
             "openai".to_string(),
@@ -92,37 +109,24 @@ impl ProtocolRegistry {
 
     /// Register a dynamic protocol
     pub fn register(&self, name: String, protocol: Arc<dyn ProtocolAdapter>) -> Result<()> {
-        self.dynamic
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(name, protocol);
+        write_recover(&self.dynamic).insert(name, protocol);
         Ok(())
     }
 
     /// Unregister a dynamic protocol
     pub fn unregister(&self, name: &str) {
-        self.dynamic
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(name);
+        write_recover(&self.dynamic).remove(name);
     }
 
     /// Get a protocol by name
     pub fn get(&self, name: &str) -> Option<Arc<dyn ProtocolAdapter>> {
         // 1. Check dynamic protocols first
-        if let Some(protocol) = self
-            .dynamic
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(name)
-        {
+        if let Some(protocol) = read_recover(&self.dynamic).get(name) {
             return Some(protocol.clone());
         }
 
         // 2. Fall back to built-in protocols
-        self.builtin
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
+        read_recover(&self.builtin)
             .get(name)
             .map(|factory| {
                 let client = crate::providers::protocols::http_client::build_provider_http_client();
@@ -132,20 +136,11 @@ impl ProtocolRegistry {
 
     /// List all available protocol names
     pub fn list_protocols(&self) -> Vec<String> {
-        let mut protocols: Vec<String> = self
-            .builtin
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
+        let mut protocols: Vec<String> = read_recover(&self.builtin)
             .keys()
             .cloned()
             .collect();
-        protocols.extend(
-            self.dynamic
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .keys()
-                .cloned(),
-        );
+        protocols.extend(read_recover(&self.dynamic).keys().cloned());
         protocols.sort();
         protocols
     }

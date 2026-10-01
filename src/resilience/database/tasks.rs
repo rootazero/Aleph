@@ -203,8 +203,16 @@ impl StateDatabase {
                 // the uncommitted `tx` here is the correct rollback path —
                 // no rows were touched, and we never paid the cost of the
                 // side executes below.
+                //
+                // The WHERE clause matches only on `id`, so this fires for
+                // both "task vanished" and "task already in a status where
+                // the row is invisible to us" — but a no-op update on an
+                // existing row would have returned `updated == 1` and
+                // overwritten the status. So in practice: if we got 0
+                // rows, the task_id genuinely does not exist; status
+                // equality is NOT a cause here (the UPDATE clobbers).
                 return Err(AlephError::config(format!(
-                    "update_task_status: task_id {task_id:?} not found (or already in status {status:?})"
+                    "update_task_status: task_id {task_id:?} not found"
                 )));
             }
 
@@ -235,38 +243,6 @@ impl StateDatabase {
             tx.commit()
                 .map_err(|e| AlephError::config(format!("Failed to commit transaction: {e}")))?;
             Ok(())
-        })
-        .await
-    }
-
-    /// Get all tasks for a session
-    pub async fn get_tasks_by_session(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<AgentTask>, AlephError> {
-        let session_id = session_id.to_string();
-        self.with_conn(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT id, parent_session_id, agent_id, task_prompt, status,
-                           risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
-                           recursion_depth, parent_task_id, created_at, updated_at,
-                           started_at, completed_at, metadata_json
-                    FROM agent_tasks
-                    WHERE parent_session_id = ?1
-                    ORDER BY created_at DESC
-                    "#,
-                )
-                .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
-
-            let tasks = stmt
-                .query_map(params![session_id], agent_task_from_row)
-                .map_err(|e| AlephError::config(format!("Failed to query tasks: {e}")))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| AlephError::config(format!("Failed to collect tasks: {e}")))?;
-
-            Ok(tasks)
         })
         .await
     }

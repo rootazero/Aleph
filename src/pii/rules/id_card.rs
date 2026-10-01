@@ -148,8 +148,12 @@ impl IdCardRule {
     /// neighbours and `.` is not alphanumeric. Without this guard a token
     /// like `"ratio: 1.11010119900307002X"` would be redacted as an ID.
     ///
-    /// Mirrors the same helper in `BankCardRule` so the two digit-heavy
-    /// rules agree on what "decimal context" means.
+    /// Note: this helper is *not* identical to `BankCardRule::is_decimal_context`.
+    /// BankCardRule only flags a trailing digit after `.`, whereas this helper
+    /// additionally flags `e`/`E` (scientific-notation continuation). The drift
+    /// is deliberate — 18-digit ID-card spans can embed inside larger floats
+    /// that use exponent notation, but bank-card numbers do not have that
+    /// exposure. Keep them divergent; do not unify.
     fn is_decimal_context(text: &str, start: usize, end: usize) -> bool {
         let bytes = text.as_bytes();
         if start > 0 && bytes[start - 1] == b'.' {

@@ -7,7 +7,7 @@
 //! and accepts false positives), this engine is tuned for precision —
 //! false positives degrade LLM comprehension.
 
-pub mod allowlist;
+pub(crate) mod allowlist;
 pub mod engine;
 pub mod rules;
 

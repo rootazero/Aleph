@@ -433,7 +433,7 @@ pub fn get_merged_preset(
 /// (user override) silently miss the lookup, which is the right default —
 /// users overriding `base_url` have opted out of preset assumptions.
 #[must_use]
-pub const fn apply_temperature_policy(
+const fn apply_temperature_policy(
     policy: Option<TemperaturePolicy>,
     raw: Option<f32>,
 ) -> Option<f32> {
