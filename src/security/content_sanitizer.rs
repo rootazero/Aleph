@@ -200,7 +200,8 @@ pub fn wrap_external_content(content: &str, source: ContentSource) -> String {
 /// pipeline the body path runs (sans the heavy `scrub_special_tokens`), used
 /// for both the wrap-content label and any caller that needs to scrub a
 /// structured metadata field that has no body to scrub.
-fn sanitize_label_text(raw: &str) -> String {
+fn sanitize_label_text<S: AsRef<str>>(raw: S) -> String {
+    let raw = raw.as_ref();
     let normalized = normalize_homoglyphs(raw);
     let (stripped, _) = crate::security::unicode_guard::strip_invisible_chars(&normalized);
     let escaped = stripped

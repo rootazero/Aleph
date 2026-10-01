@@ -346,8 +346,8 @@ impl RuntimeSecurityGuard {
             )
         {
             return Ok(GuardResult::Blocked {
-                reason: "Leak detector found sensitive data in resolved outbound content"
-                    .to_string(),
+                reason:
+                    "Leak detector found sensitive data in resolved outbound content".to_string(),
             });
         }
 
@@ -367,10 +367,6 @@ impl RuntimeSecurityGuard {
         }
     }
 
-    })
-        }
-    }
-
     /// Run both leak detectors against `current_text` and either Block the
     /// outbound or apply `Redact`-action findings in place. Shared by step 2
     /// (placeholder-bearing text) and step 5 (post-substitution text); the two
@@ -381,7 +377,7 @@ impl RuntimeSecurityGuard {
         current_text: &mut String,
         reasons: &mut Vec<String>,
         context: &SecurityContext,
-        block_reason: &str,
+        #[allow(unused_variables)] block_reason: &str,
         redact_reason: &str,
     ) -> LeakScanAction {
         let exec_scan = {

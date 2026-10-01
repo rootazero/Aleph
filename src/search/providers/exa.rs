@@ -129,12 +129,12 @@ impl ExaProvider {
         // budget is about snippets, and the body budget on the other side
         // (20 000 chars) is above what this field accepts anyway, so capping
         // here could only shorten something the caller explicitly wanted.
-        if !options.include_full_content
-            && let Some(budget) = options.snippet_budget_chars
-        {
-            return ExaText::Capped {
-                max_characters: budget.clamp(1, MAX_CHARACTERS_CEILING),
-            };
+        if !options.include_full_content {
+            if let Some(budget) = options.snippet_budget_chars {
+                return ExaText::Capped {
+                    max_characters: budget.clamp(1, MAX_CHARACTERS_CEILING),
+                };
+            }
         }
         // No budget declared — every caller but the tool face. Unchanged
         // behaviour: a caller that has not said what it keeps has not

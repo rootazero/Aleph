@@ -386,7 +386,7 @@ pub(crate) fn is_marker(event: &SessionEvent) -> bool {
 /// What [`reduce_disposition`] may be handed: the run markers and the two
 /// message kinds that decide "was the user answered". Anything else in a
 /// slice is the raw-log-by-mistake shape and is refused.
-fn is_disposition_bearing(event: &SessionEvent) -> bool {
+pub(crate) fn is_disposition_bearing(event: &SessionEvent) -> bool {
     is_marker(event)
         || matches!(
             event,

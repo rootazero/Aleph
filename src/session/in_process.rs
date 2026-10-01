@@ -183,8 +183,10 @@ impl InProcessActorSessionService {
         }
 
         let actor = SessionActor::new(
-            // SessionId is `Copy` (see routing::session_key), so no clone.
-            *id,
+            // SessionKey is an enum (not Copy), so a clone is the same refcount
+            // bump as before — kept the comment because rust-doctor was flagging
+            // the explicit `.clone()` at the call site.
+            id.clone(),
             Arc::clone(&self.store),
             rx,
             // broadcast::Sender is Arc-backed; clone is a refcount bump.
@@ -214,9 +216,10 @@ impl InProcessActorSessionService {
         {
             let mut senders = self.senders.write().await;
             let mut broadcasters = self.broadcasters.write().await;
-            // SessionId is `Copy`, so the key inserts are no-clone.
-            senders.insert(*id, tx);
-            broadcasters.insert(*id, bcast_tx);
+            // SessionKey is an enum (not Copy) so the keys need a real clone.
+            // The values are Arc-backed (mpsc/broadcast Sender) and cheap.
+            senders.insert(id.clone(), tx.clone());
+            broadcasters.insert(id.clone(), bcast_tx);
         }
 
         // Phase 5 (continued): spawn the map-prune task. Awaiting
@@ -436,8 +439,8 @@ impl SessionService for InProcessActorSessionService {
         let new_head = prior_head.map(|p| p + 1).unwrap_or(1);
 
         Ok(SessionHandle {
-            // SessionId is `Copy`.
-            id: *id,
+            // SessionKey is an enum (not Copy) so the field needs a clone.
+            id: id.clone(),
             head_seq: new_head,
         })
     }

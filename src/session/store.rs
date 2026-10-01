@@ -439,7 +439,7 @@ struct EncodedRow {
     event_type: &'static str,
     payload: String,
     created_at: i64,
-    fts_body: Option<Cow<'_, str>>,
+    fts_body: Option<String>,
 }
 
 /// The schema version stamped on every row as `"v"`. Bumped when the payload
@@ -1230,7 +1230,7 @@ const MAX_FTS_BODY_CHARS: usize = 8_000;
 /// This is mechanical field extraction — not semantic classification — so it
 /// stays on the right side of R7 (LLM sovereignty): the model decides what is
 /// relevant via its query; we only surface the raw text it can match against.
-fn render_event_text(event: &SessionEvent) -> Option<Cow<'_, str>> {
+fn render_event_text(event: &SessionEvent) -> Option<String> {
     let raw: Cow<'_, str> = match event {
         SessionEvent::UserMessage { content, .. } => Cow::Borrowed(&content.text),
         SessionEvent::AssistantMessage { content, .. } => Cow::Borrowed(&content.text),
@@ -1264,13 +1264,10 @@ fn render_json(value: &serde_json::Value) -> Cow<'_, str> {
 }
 
 /// UTF-8-safe truncation to at most `max` characters (project rule P7).
-///
-/// Returns a [`Cow`] so the common no-truncation case borrows the input
-/// without allocating; the truncation path still owns its substring.
-fn cap_chars(s: &str, max: usize) -> Cow<'_, str> {
+fn cap_chars(s: &str, max: usize) -> String {
     match s.char_indices().nth(max) {
-        Some((byte_idx, _)) => Cow::Owned(s[..byte_idx].to_string()),
-        None => Cow::Borrowed(s),
+        Some((byte_idx, _)) => s[..byte_idx].to_string(),
+        None => s.to_string(),
     }
 }
 
