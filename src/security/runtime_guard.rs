@@ -81,6 +81,14 @@ pub enum GuardResult {
     Warned { text: String, warnings: Vec<String> },
 }
 
+/// Outcome of [`RuntimeSecurityGuard::leak_scan_block_or_redact`].
+enum LeakScanAction {
+    /// No block; redactions (if any) have been applied in place.
+    Proceed,
+    /// Block the outbound — caller turns this into a [`GuardResult::Blocked`].
+    Block,
+}
+
 /// Central orchestrator for runtime security checks.
 pub struct RuntimeSecurityGuard {
     config: SecurityGuardConfig,
@@ -233,55 +241,22 @@ impl RuntimeSecurityGuard {
         }
 
         // 2. Leak Detection (on text still containing placeholders)
-        if self.config.leak_detection {
-            let exec_scan = {
-                let detector = self.exec_leak_detector.lock().await;
-                detector.scan_outbound(&current_text)
-            };
-
-            let secret_scan = {
-                let detector = self.secret_leak_detector.lock().await;
-                detector.scan_outbound(&current_text)
-            };
-
-            let has_blocks =
-                exec_scan.has_blocks() || matches!(secret_scan, LeakDecision::Block { .. });
-
-            if has_blocks {
-                let detail = format!(
-                    "outbound leak blocked; exec_findings={}, secret_block={}",
-                    exec_scan.findings.len(),
-                    matches!(secret_scan, LeakDecision::Block { .. })
-                );
-                self.log_audit(
+        if self.config.leak_detection
+            && matches!(
+                self.leak_scan_block_or_redact(
+                    &mut current_text,
+                    &mut reasons,
                     &context,
-                    AuditEventType::ExecBlocked,
-                    AuditSeverity::Critical,
-                    detail,
+                    "Leak detector found sensitive data in outbound content",
+                    "Outbound leak detector redacted sensitive token",
                 )
-                .await;
-                return Ok(GuardResult::Blocked {
-                    reason: "Leak detector found sensitive data in outbound content".to_string(),
-                });
-            }
-
-            // Honor `Redact`-action findings (e.g. bearer tokens). Without this
-            // the matched secret would pass through untouched, since it is
-            // neither a block nor a warning.
-            if exec_scan.has_redacts() {
-                current_text = {
-                    let detector = self.exec_leak_detector.lock().await;
-                    detector.redact(&current_text)
-                };
-                reasons.push("Outbound leak detector redacted sensitive token".to_string());
-                self.log_audit(
-                    &context,
-                    AuditEventType::LeakWarning,
-                    AuditSeverity::Warn,
-                    "outbound leak detector redacted sensitive token".to_string(),
-                )
-                .await;
-            }
+                .await,
+                LeakScanAction::Block
+            )
+        {
+            return Ok(GuardResult::Blocked {
+                reason: "Leak detector found sensitive data in outbound content".to_string(),
+            });
         }
 
         // 3. PII Filtering
@@ -356,53 +331,24 @@ impl RuntimeSecurityGuard {
         // scan against the substituted string. Without this pass a tool
         // call that echoes the resolved value slips past both the exec and
         // secret leak detectors.
-        if self.config.leak_detection && !ordered.is_empty() {
-            let exec_post_scan = {
-                let detector = self.exec_leak_detector.lock().await;
-                detector.scan_outbound(&current_text)
-            };
-            let secret_post_scan = {
-                let detector = self.secret_leak_detector.lock().await;
-                detector.scan_outbound(&current_text)
-            };
-            let post_has_blocks = exec_post_scan.has_blocks()
-                || matches!(secret_post_scan, LeakDecision::Block { .. });
-            if post_has_blocks {
-                let detail = format!(
-                    "outbound leak blocked post-substitution; \
-                     exec_findings={}, secret_block={}",
-                    exec_post_scan.findings.len(),
-                    matches!(secret_post_scan, LeakDecision::Block { .. }),
-                );
-                self.log_audit(
+        if self.config.leak_detection
+            && !ordered.is_empty()
+            && matches!(
+                self.leak_scan_block_or_redact(
+                    &mut current_text,
+                    &mut reasons,
                     &context,
-                    AuditEventType::ExecBlocked,
-                    AuditSeverity::Critical,
-                    detail,
+                    "Leak detector found sensitive data in resolved outbound content",
+                    "Outbound leak detector redacted sensitive token after secret resolution",
                 )
-                .await;
-                return Ok(GuardResult::Blocked {
-                    reason: "Leak detector found sensitive data in resolved outbound content"
-                        .to_string(),
-                });
-            }
-            if exec_post_scan.has_redacts() {
-                current_text = {
-                    let detector = self.exec_leak_detector.lock().await;
-                    detector.redact(&current_text)
-                };
-                reasons.push(
-                    "Outbound leak detector redacted sensitive token after secret resolution"
-                        .to_string(),
-                );
-                self.log_audit(
-                    &context,
-                    AuditEventType::LeakWarning,
-                    AuditSeverity::Warn,
-                    "outbound leak detector redacted sensitive token post-substitution".to_string(),
-                )
-                .await;
-            }
+                .await,
+                LeakScanAction::Block
+            )
+        {
+            return Ok(GuardResult::Blocked {
+                reason: "Leak detector found sensitive data in resolved outbound content"
+                    .to_string(),
+            });
         }
 
         // Assemble final result
@@ -419,6 +365,61 @@ impl RuntimeSecurityGuard {
                 warnings,
             })
         }
+    }
+
+    })
+        }
+    }
+
+    /// Run both leak detectors against `current_text` and either Block the
+    /// outbound or apply `Redact`-action findings in place. Shared by step 2
+    /// (placeholder-bearing text) and step 5 (post-substitution text); the two
+    /// differ only in the user-facing reason wording for the block decision
+    /// and the audit log line.
+    async fn leak_scan_block_or_redact(
+        &self,
+        current_text: &mut String,
+        reasons: &mut Vec<String>,
+        context: &SecurityContext,
+        block_reason: &str,
+        redact_reason: &str,
+    ) -> LeakScanAction {
+        let exec_scan = {
+            let detector = self.exec_leak_detector.lock().await;
+            detector.scan_outbound(current_text)
+        };
+        let secret_scan = {
+            let detector = self.secret_leak_detector.lock().await;
+            detector.scan_outbound(current_text)
+        };
+        if exec_scan.has_blocks() || matches!(secret_scan, LeakDecision::Block { .. }) {
+            let detail = format!(
+                "outbound leak blocked; exec_findings={}, secret_block={}",
+                exec_scan.findings.len(),
+                matches!(secret_scan, LeakDecision::Block { .. })
+            );
+            self.log_audit(
+                context,
+                AuditEventType::ExecBlocked,
+                AuditSeverity::Critical,
+                detail,
+            )
+            .await;
+            return LeakScanAction::Block;
+        }
+        if exec_scan.has_redacts() {
+            let detector = self.exec_leak_detector.lock().await;
+            *current_text = detector.redact(current_text);
+            reasons.push(redact_reason.to_string());
+            self.log_audit(
+                context,
+                AuditEventType::LeakWarning,
+                AuditSeverity::Warn,
+                redact_reason.to_string(),
+            )
+            .await;
+        }
+        LeakScanAction::Proceed
     }
 
     fn apply_filter_result(

@@ -183,27 +183,35 @@ pub fn wrap_external_content(content: &str, source: ContentSource) -> String {
     // attributes verbatim and the model would read it as a forged marker.
     // Funnel the label through the same homoglyph-fold + invisible-strip
     // + fence-prefix escape the body sees, in that order.
-    let source_label = {
-        let raw = source.as_label();
-        let normalized = normalize_homoglyphs(&raw);
-        let (stripped, _) = crate::security::unicode_guard::strip_invisible_chars(&normalized);
-        // The literal-prefix escape catches exact `<<<EXTERNAL_` bytes, but
-        // whitespace/case variants (`<<< EXTERNAL_UNTRUSTED_CONTENT >>>`),
-        // full-width/CJK angle brackets, and soft-hyphen splits still read as a
-        // boundary to the model. The body path runs `replace_forged_markers`
-        // for the same reason — the label must too, otherwise a URL or tool
-        // name containing a forged marker slips into the fence header
-        // attribute and the model reads it as a real boundary.
-        let escaped = stripped
-            .replace("<<<EXTERNAL_", "<<<ESCAPED_EXTERNAL_")
-            .replace("<<<END_EXTERNAL_", "<<<ESCAPED_END_EXTERNAL_");
-        replace_forged_markers(&escaped)
-    };
+    let source_label = sanitize_label_text(source.as_label());
     let scrubbed = sanitize_external_text(content);
 
     format!(
         "<<<EXTERNAL_UNTRUSTED_CONTENT id=\"{id}\" source=\"{source_label}\">\n{scrubbed}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"{id}\">",
     )
+}
+
+/// Normalize a short metadata field (URL, tool name, server name) so it is
+/// safe to embed inside an `EXTERNAL_UNTRUSTED_CONTENT` boundary's
+/// `source="…"` attribute. A label carrying a homoglyph-spelled
+/// `<<<EXTERNAL_…` substring, invisible/zero-width bytes, or a literal
+/// `<<<EXTERNAL_` prefix would otherwise leak into the fence header and the
+/// model would read it as a forged boundary marker. This is the four-step
+/// pipeline the body path runs (sans the heavy `scrub_special_tokens`), used
+/// for both the wrap-content label and any caller that needs to scrub a
+/// structured metadata field that has no body to scrub.
+fn sanitize_label_text(raw: &str) -> String {
+    let normalized = normalize_homoglyphs(raw);
+    let (stripped, _) = crate::security::unicode_guard::strip_invisible_chars(&normalized);
+    let escaped = stripped
+        .replace("<<<EXTERNAL_", "<<<ESCAPED_EXTERNAL_")
+        .replace("<<<END_EXTERNAL_", "<<<ESCAPED_END_EXTERNAL_");
+    // The literal-prefix escape catches exact `<<<EXTERNAL_` bytes, but
+    // whitespace/case variants (`<<< EXTERNAL_UNTRUSTED_CONTENT >>>`),
+    // full-width/CJK angle brackets, and soft-hyphen splits still read as a
+    // boundary to the model. The body path runs `replace_forged_markers`
+    // for the same reason — the label must too.
+    replace_forged_markers(&escaped)
 }
 
 /// The content transforms of [`wrap_external_content`] **without** the boundary
@@ -220,18 +228,8 @@ pub fn wrap_external_content(content: &str, source: ContentSource) -> String {
 /// quietly *lose* coverage on everything in between.
 #[must_use]
 pub fn sanitize_external_text(content: &str) -> String {
-    let normalized = normalize_homoglyphs(content);
-    let (cleaned, _) = crate::security::unicode_guard::strip_invisible_chars(&normalized);
-    let escaped = cleaned
-        .replace("<<<EXTERNAL_", "<<<ESCAPED_EXTERNAL_")
-        .replace("<<<END_EXTERNAL_", "<<<ESCAPED_END_EXTERNAL_");
-    // Forged-marker pass: the literal-prefix escape above only catches the
-    // exact byte sequence. Whitespace/case variants (`<<< EXTERNAL_UNTRUSTED
-    // CONTENT >>>`), full-width/CJK angle-bracket spellings, and soft-hyphen
-    // splits still read as a boundary to the model — replace them with an
-    // inert placeholder instead.
-    let forged_clean = replace_forged_markers(&escaped);
-    scrub_special_tokens(&forged_clean).0
+    let label_cleaned = sanitize_label_text(content);
+    scrub_special_tokens(&label_cleaned).0
 }
 
 /// Opening line prefix of the boundary emitted by [`wrap_external_content`].
