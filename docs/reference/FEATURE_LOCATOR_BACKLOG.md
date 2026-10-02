@@ -132,7 +132,7 @@
 | # | 项目 | 模块 | 类型 | 工作量 | 严重度/置信 | 决策点 |
 |---|------|------|------|--------|-----------|--------|
 | H1 | 插件 bundled `.mcp.json` 被解析后丢弃（非 MCP-kind 插件的 `CapabilityDeclaration::McpServer` 在 `dispatch` 被 no-op，loader 仅对 `PluginKind::Mcp` 读 `.mcp.json`） | 3.10 | broken-wiring | M | **High / 0.9** | 连线进 loader/manager **或** 停止非 MCP-kind 适配器发该 cap |
-| H2 | `parse_mcp_config_file` 丢弃 server-name map key → 无名 `McpServerConfig`（无法按名注册/拆卸） | 3.10 | dead-field | S | Med / 0.85 | 随 H1，把 name 带进声明 |
+| ~~H2~~ | ~~`parse_mcp_config_file` 丢弃 server-name map key → 无名 `McpServerConfig`（无法按名注册/拆卸）~~ | 3.10 | dead-field | S | Med / 0.85 | ✅ **已闭合**：`CapabilityDeclaration::McpServer` 现携带 `crate::mcp::McpManagerConfig`（含 `id` / `name`，由 `extension::mcp_config::parse_declared_servers` 产出）；无名的 `extension::types::McpServerConfig` 已零消费者并于 2026-10-02 删除 |
 | H3 | MCP `ApprovalHandler` 全子系统零消费者（`client.rs` 仅派发 `sampling/createMessage`，其余 server 请求丢弃） | 3.9 | dead/unwired | M | Med / 0.9 | 接入 `client.rs` request_handler **或** YAGNI 删 `approval.rs`+协议类型 |
 | H4 | `McpResourceManager`/`McpPromptManager` 仅测试构造（live 路径走 `McpReadResourceTool`/`McpGetPromptTool` 直连 handle） | 3.9 | dead-abstraction | S | Med / 0.92 | 删两 struct（P6 YAGNI）**或** builtins 改走 manager 单点 |
 | H5 | Resource subscribe/unsubscribe 死路（`client.subscribe_resource` 无非测试 caller）+ `resources/updated` 通知未路由（`classify_list_change` 只映 `*_list_changed`） | 3.9 | broken-wiring | M | Med / 0.88 | 补 `resources/updated` 臂并发事件 **或** 删订阅管线 |

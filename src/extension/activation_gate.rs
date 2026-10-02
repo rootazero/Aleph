@@ -80,10 +80,13 @@ pub enum GatePosture {
 /// `None` for anything else — including `None` itself (unset), the empty
 /// string, and a typo (`"Fatel"`, `"1"`, `"yes"`).
 ///
-/// Split out from [`posture_from_env`] so recognition is a pure, testable
-/// predicate, separate from what a caller does when it comes back `None`
-/// (the boot call site logs it; this function stays free of I/O so a test
-/// can assert on the classification directly rather than on log output).
+/// Recognition is a pure, testable predicate, separate from what a caller
+/// does when it comes back `None`. The only caller is the boot call site in
+/// `src/bin/aleph-server/commands/start/builder/agent_init/mod.rs`: it
+/// `warn!`s on a set-but-unrecognised value and then defaults to
+/// [`GatePosture::Log`], so a misspelling can never kill a daemon. This
+/// function stays free of I/O so a test can assert on the classification
+/// directly rather than on log output.
 #[must_use]
 pub fn classify_env_value(value: Option<&str>) -> Option<GatePosture> {
     match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
@@ -91,18 +94,6 @@ pub fn classify_env_value(value: Option<&str>) -> Option<GatePosture> {
         Some("log") => Some(GatePosture::Log),
         _ => None,
     }
-}
-
-/// `ALEPH_ACTIVATION_GATE`: only the word `fatal` (any case) is fatal;
-/// anything else, including a typo, is `Log` — a misspelling must not be
-/// able to kill a daemon. An unrecognised value (as opposed to unset or
-/// the word `log`) is logged by the caller — see the boot call site in
-/// `src/bin/aleph-server/commands/start/builder/agent_init/mod.rs`, which
-/// calls [`classify_env_value`] itself to tell "unset"/"log" apart from a
-/// typo before falling back to this function's default.
-#[must_use]
-pub fn posture_from_env(value: Option<&str>) -> GatePosture {
-    classify_env_value(value).unwrap_or(GatePosture::Log)
 }
 
 #[cfg(test)]
@@ -163,36 +154,17 @@ mod tests {
         assert!(assess(&PluginRegistry::new()).is_clean());
     }
 
-    #[test]
-    fn posture_defaults_to_log_and_only_the_word_fatal_is_fatal() {
-        assert!(matches!(posture_from_env(None), GatePosture::Log));
-        assert!(matches!(posture_from_env(Some("log")), GatePosture::Log));
-        assert!(matches!(
-            posture_from_env(Some("fatal")),
-            GatePosture::Fatal
-        ));
-        assert!(matches!(
-            posture_from_env(Some("FATAL")),
-            GatePosture::Fatal
-        ));
-        // An unrecognised value must not silently become fatal — nor silently
-        // become "log": it is logged as unrecognised by the caller; here it
-        // maps to Log so a typo cannot kill a daemon.
-        assert!(matches!(posture_from_env(Some("yes")), GatePosture::Log));
-    }
-
-    /// `posture_from_env`'s default (previous test) hides WHETHER a value
-    /// was recognised behind the single `Log` result it shares with "unset"
-    /// and the word `log` itself — the caller needs to tell those apart to
-    /// log an unrecognised value instead of swallowing it silently.
-    /// `classify_env_value` is the pure predicate that makes that
-    /// distinguishable and testable without capturing log output.
+    /// The caller needs to tell "unrecognised" apart from "unset" and the
+    /// word `log` (to `warn!` on a typo instead of swallowing it), so the
+    /// predicate keeps them distinct: only the two words are recognised, in
+    /// any case, and nothing else is coerced into either posture.
     #[test]
     fn classify_env_value_tells_unrecognised_apart_from_unset_and_log() {
         assert_eq!(classify_env_value(None), None);
         assert_eq!(classify_env_value(Some("log")), Some(GatePosture::Log));
         assert_eq!(classify_env_value(Some("LOG")), Some(GatePosture::Log));
         assert_eq!(classify_env_value(Some("fatal")), Some(GatePosture::Fatal));
+        assert_eq!(classify_env_value(Some("FATAL")), Some(GatePosture::Fatal));
         assert_eq!(
             classify_env_value(Some(" Fatal  ")),
             Some(GatePosture::Fatal)

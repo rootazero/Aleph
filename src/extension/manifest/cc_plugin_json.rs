@@ -589,7 +589,7 @@ mod tests {
               "aleph": {
                 "runtime": "wasm",
                 "tools": [{"name": "t", "handler": "h"}],
-                "commands": [{"name": "c", "handler": "h"}],
+                "commands": [{"name": "c", "description": "d"}],
                 "prompt": {"file": "SYSTEM.md", "scope": "system"},
                 "config_schema": {"type": "object"},
                 "config_ui_hints": {"k": {"label": "K"}}
@@ -612,7 +612,7 @@ handler = "h"
 
 [[aleph.commands]]
 name = "c"
-handler = "h"
+description = "d"
 
 [aleph.prompt]
 file = "SYSTEM.md"

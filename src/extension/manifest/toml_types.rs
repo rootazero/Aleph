@@ -214,14 +214,23 @@ fn default_hook_priority() -> String {
     "normal".to_string()
 }
 
-/// Command definition section
+/// Command definition section (`[[commands]]` / `[[aleph.commands]]`).
+///
+/// It declares nothing that loads: a plugin `/command` is a Markdown file under
+/// `commands/` (`parsers::parse_commands_dir`), and every entry here is
+/// `warn!`ed as registering nothing (`declared_sections::declared_capabilities`).
+///
+/// There is no `handler` field. It used to turn the handler NAME into the
+/// command's prompt content, so `/deploy` sent the literal string
+/// `handleDeploy` to the model. Serde ignores unknown keys here (no
+/// `deny_unknown_fields` anywhere in the manifest structs), so a manifest that
+/// still has `handler` parses fine; the per-entry warning is what keeps that
+/// from being a silent no-op. `prompt_file` is parsed but nothing reads it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandSection {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    #[serde(default)]
-    pub handler: Option<String>,
     #[serde(default)]
     pub prompt_file: Option<String>,
 }

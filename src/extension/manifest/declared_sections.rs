@@ -49,7 +49,8 @@ pub struct AlephSuperset {
     pub tools: Vec<ToolSection>,
     /// `[[hooks]]` — event hooks declared inline.
     pub hooks: Vec<HookSection>,
-    /// `[[commands]]` — handler-backed `/commands`.
+    /// `[[commands]]` — registers nothing; each entry is `warn!`ed (see
+    /// [`CommandSection`]).
     pub commands: Vec<CommandSection>,
     /// `[prompt]` — a prompt file injected into the agent context.
     pub prompt: Option<PromptSection>,
@@ -82,7 +83,8 @@ pub struct DeclaredSections<'a> {
     pub tools: &'a [ToolSection],
     /// `[[hooks]]` — event hooks.
     pub hooks: &'a [HookSection],
-    /// `[[commands]]` — handler-backed `/commands`.
+    /// `[[commands]]` — registers nothing; each entry is `warn!`ed (see
+    /// [`CommandSection`]).
     pub commands: &'a [CommandSection],
     /// `[[services]]` — background services, gated on `permissions.background`.
     pub services: &'a [ServiceSection],
@@ -137,26 +139,20 @@ pub fn declared_capabilities(
         }
     }
 
-    // [[commands]] — handler-backed commands. Markdown `commands/` files are a
-    // separate, directory-implied path (`parsers::parse_commands_dir`).
+    // [[commands]] — declares nothing that loads. A plugin `/command` is a
+    // Markdown file under `commands/` (`parsers::parse_commands_dir`). The
+    // section used to have a `handler` field whose NAME became the command's
+    // prompt content (`/deploy` sent the string `handleDeploy` to the model);
+    // that field is gone, and serde ignores the key if a manifest still has
+    // it, so each entry is named here rather than dropped without a word.
     for command in sections.commands {
-        let Some(handler) = command
-            .handler
-            .clone()
-            .filter(|handler| !handler.is_empty())
-        else {
-            continue;
-        };
-        capabilities.push(CapabilityDeclaration::Skill(
-            crate::extension::SkillRegistration {
-                name: command.name.clone(),
-                description: command.description.clone().unwrap_or_default(),
-                content: handler,
-                skill_type: crate::extension::SkillType::Command,
-                plugin_id: plugin_id.to_string(),
-                ..Default::default()
-            },
-        ));
+        tracing::warn!(
+            plugin = %plugin_id,
+            command = %command.name,
+            "[[commands]] entry registers nothing (the `handler` field was removed); \
+             ship the command as commands/{}.md instead",
+            command.name
+        );
     }
 
     // [[hooks]] — event hooks.
@@ -232,6 +228,40 @@ mod tests {
         assert!(!caps
             .iter()
             .any(|c| matches!(c, CapabilityDeclaration::Tool(_))));
+    }
+
+    /// A `[[commands]] handler = "x"` entry must not become a `/command` whose
+    /// prompt is the string `"x"` (the old branch did exactly that). Parsed
+    /// from real TOML so the leftover key goes through serde the way an
+    /// installed manifest's would.
+    #[test]
+    fn a_commands_entry_with_a_leftover_handler_registers_no_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let superset: AlephSuperset = toml::from_str(
+            r#"
+[[commands]]
+name = "deploy"
+description = "Deploy to production"
+handler = "handleDeploy"
+"#,
+        )
+        .unwrap();
+        assert_eq!(superset.commands.len(), 1, "the entry itself still parses");
+        let caps = declared_capabilities(
+            dir.path(),
+            "p",
+            &DeclaredSections {
+                commands: &superset.commands,
+                ..Default::default()
+            },
+            &[],
+        );
+        assert!(
+            !caps
+                .iter()
+                .any(|c| matches!(c, CapabilityDeclaration::Skill(_))),
+            "[[commands]] must not register a skill/command: {caps:?}"
+        );
     }
 
     /// Services are the one section whose translation is permission-gated, and

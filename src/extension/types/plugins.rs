@@ -49,18 +49,24 @@ pub struct PluginInfo {
 
 /// Plugin origin - where the plugin was discovered from
 ///
-/// Higher priority origins override lower priority ones when plugins
-/// have the same name.
+/// The origin does NOT decide which copy wins when two plugins share an id.
+/// That contest is decided by the scanner's `DiscoveredPlugin::priority`
+/// (`src/discovery/scanner.rs`, ascending sort: Claude Code cache < global
+/// < project), walked highest-first by `discover_and_mount`
+/// (`src/extension/lifecycle.rs`), where the first successful parse of an id
+/// wins and later copies get a "shadowed" diagnostic. The origin is a label
+/// for the wire (`PluginRow.origin`), the default-enable rule
+/// ([`Self::enabled_by_default`]) and the owner trust policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginOrigin {
-    /// From explicit config (highest priority)
+    /// From explicit config (no producer today; see [`Self::classify`])
     Config,
     /// From workspace .aleph/ directory
     Workspace,
     /// From global ~/.aleph/ directory
     Global,
-    /// Bundled with core (lowest priority)
+    /// Bundled with core (no producer today; see [`Self::classify`])
     Bundled,
     /// Installed by Claude Code under `~/.claude/plugins/cache/…`
     /// (`GlobalRoot::ClaudeCache`): read-only, and off until `plugins.toml`
@@ -72,17 +78,6 @@ pub enum PluginOrigin {
 }
 
 impl PluginOrigin {
-    /// Get the priority of this origin (higher = takes precedence)
-    #[must_use]
-    pub const fn priority(&self) -> u8 {
-        match self {
-            Self::Config => 4,
-            Self::Workspace => 3,
-            Self::Global => 2,
-            Self::Bundled | Self::ClaudeCache => 1,
-        }
-    }
-
     /// Stable lowercase wire label (`PluginRow.origin`); equal to the serde
     /// spelling.
     #[must_use]
