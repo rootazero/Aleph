@@ -60,6 +60,7 @@
 //! lookup entirely and stay byte-identical.
 
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 use crate::orchestrator::dispatch::TokenBreakdown;
 use crate::providers::model_catalog::prefix_matches;
@@ -151,10 +152,10 @@ struct PriceTier {
 /// `model_prefix` that prefix-matches wins. Order more-specific prefixes
 /// before broader catch-alls. Sources are vendor pricing pages as of
 /// 2026-07; refresh by bumping the literals here and recompiling.
-const PRICE_TABLE: &[(&str, &[Rates])] = &[
+static PRICE_TABLE: LazyLock<Vec<(&'static str, Vec<Rates>)>> = LazyLock::new(|| vec![
     (
         "anthropic",
-        &[
+        vec![
             Rates {
                 // Generation-5 flagship.
                 model_prefix: "claude-fable-5",
@@ -278,7 +279,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     ),
     (
         "openai",
-        &[
+        vec![
             // GPT-5 family (openclaw catalog). Dotted specifics precede the
             // broad `gpt-5` fallback. 5.6 is the current default.
             //
@@ -546,7 +547,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     ),
     (
         "google",
-        &[
+        vec![
             Rates {
                 // Gemini 3.1 Pro (current default). $2/$12 for ≤200K input; the
                 // >200K step-up ($4/$18) now lives in `TIER_TABLE`. Must
@@ -677,7 +678,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         // legacy deepseek-chat / deepseek-reasoner aliases retire 2026-07-24
         // and now bill at v4-flash rates. Prior figures were stale V3 and
         // mis-scaled (v4-pro was ~4x too high, v4-flash cache_read 10x).
-        &[
+        vec![
             Rates {
                 // ¥3 in / ¥6 out / ¥0.025 cache-hit.
                 model_prefix: "deepseek-v4-pro",
@@ -719,7 +720,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     ),
     (
         "xai",
-        &[
+        vec![
             // Grok 4.x generations: dotted/suffixed specifics precede the
             // `grok-4` base, which precedes the grok-3-era broad fallback.
             Rates {
@@ -836,7 +837,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     ),
     (
         "mistral",
-        &[
+        vec![
             // Magistral reasoning family (pi-mono 2026-09, models.dev
             // mistral): $0.50/$1.50 small + $0.50/$1.80 medium on the small
             // and medium rungs; both reasoning-on and tool-capable. Must
@@ -986,7 +987,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     ),
     (
         "moonshot",
-        &[
+        vec![
             // K3 flagship, published USD rates (platform.kimi.ai
             // /docs/pricing/chat-k3): $3 in / $15 out, $0.30 on a cache hit.
             // Must precede the broad `kimi` row, which would price it 5x low.
@@ -1068,7 +1069,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     // already knew the vendor — estimates silently degraded to Unknown.
     (
         "zai",
-        &[
+        vec![
             // GLM 4.x family (pi-mono 2026-09, zai catalog). All four
             // 4.x tiers are reasoning models with distinct published rates
             // (z.ai USD); the vision SKUs (`4.5v`, `4.6v`) are slightly
@@ -1185,7 +1186,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     // ── Alibaba / Qwen (DashScope) ───────────────────────────────────────
     (
         "qwen",
-        &[
+        vec![
             // Qwen QwQ — reasoning-tier Qwen, 131K / 16K (pi-mono 2026-09,
             // groq catalog). Must precede `qwen` so the reasoning-on flag
             // is correct on QwQ ids; broad `qwen` is reasoning-off.
@@ -1230,7 +1231,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     // now resolves, so this section is consulted.
     (
         "minimax",
-        &[
+        vec![
             Rates {
                 // M3 (current default) — without this row the default id
                 // reports CostStatus::Unknown. Must precede minimax-m2.
@@ -1321,7 +1322,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     // only for readability — the prefixes do not overlap.
     (
         "baidu",
-        &[
+        vec![
             Rates {
                 model_prefix: "ernie-5.1",
                 input_per_mtok: Some(0.591),
@@ -1346,7 +1347,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     // RMB → USD @ ~7.2; best-effort (Doubao tiers shift often).
     (
         "doubao",
-        &[
+        vec![
             Rates {
                 // Seed 2.1 Pro and Seed Evolving share the top tier — 2x the
                 // Turbo rate the family row below carries, so both need to
@@ -1392,7 +1393,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         // catalog (2026-08). `cacheWrite: 0` there means "not billed
         // separately", recorded as None — not as free.
         "stepfun",
-        &[
+        vec![
             Rates {
                 model_prefix: "step-3.7-flash",
                 input_per_mtok: Some(0.2),
@@ -1417,7 +1418,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         // is a prefix of `mimo-v2.5-pro` and would otherwise underprice the
         // flagship 3x (the prefix-shadow guard enforces the order).
         "xiaomi",
-        &[
+        vec![
             Rates {
                 // The `-ultraspeed` SKU (beta) is 3x the pro rate (models.dev
                 // xiaomi, 2026-08-15); without this row it billed at the pro
@@ -1451,7 +1452,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         // Meituan LongCat. Source: openclaw `longcat` plugin catalog
         // (2026-08). Cache write is billed at the input rate.
         "meituan",
-        &[Rates {
+        vec![Rates {
             model_prefix: "longcat-2.0",
             input_per_mtok: Some(0.75),
             output_per_mtok: Some(2.95),
@@ -1469,7 +1470,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         // entry of its own and resolves to the `sonar` row — recorded here so
         // the next refresh does not re-discover it.
         "perplexity",
-        &[
+        vec![
             Rates {
                 model_prefix: "sonar-reasoning-pro",
                 input_per_mtok: Some(2.0),
@@ -1504,7 +1505,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             },
         ],
     ),
-];
+]);
 
 /// Long-context pricing tiers, parallel to [`PRICE_TABLE`] and keyed the same
 /// way `(provider, model_prefix)`. Kept separate (mirroring
@@ -1513,7 +1514,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
 /// models with a published >threshold premium appear here. Tiers within an
 /// entry are sorted ascending by `min_input_tokens`; the highest threshold the
 /// prompt has crossed wins. Sources are vendor pricing pages as of 2026-08.
-const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
+static TIER_TABLE: LazyLock<Vec<(&'static str, &'static str, Vec<PriceTier>)>> = LazyLock::new(|| vec![
     (
         "google",
         // Gemini 3.1 Pro (current `gemini` preset default, 1M window): the base
@@ -1523,7 +1524,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
         // was billed at half price. Must precede `gemini-2.5-pro` only in
         // spirit (distinct prefixes); order here is newest-first for reading.
         "gemini-3.1-pro",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 200_000,
             input_per_mtok: Some(4.0),
             output_per_mtok: Some(18.0),
@@ -1536,7 +1537,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
         "google",
         // Gemini 2.5 Pro: prompts over 200K input tokens bill at ~2x.
         "gemini-2.5-pro",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 200_000,
             input_per_mtok: Some(2.50),
             output_per_mtok: Some(15.0),
@@ -1553,7 +1554,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
     (
         "openai",
         "gpt-5.6-terra",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 272_000,
             input_per_mtok: Some(4.0),
             output_per_mtok: Some(18.0),
@@ -1565,7 +1566,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
     (
         "openai",
         "gpt-5.6-luna",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 272_000,
             input_per_mtok: Some(0.40),
             output_per_mtok: Some(1.80),
@@ -1578,7 +1579,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
         "openai",
         // Covers plain `gpt-5.6` and `-sol`, which share the flagship quote.
         "gpt-5.6",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 272_000,
             input_per_mtok: Some(10.0),
             output_per_mtok: Some(45.0),
@@ -1590,7 +1591,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
     (
         "openai",
         "gpt-5.5-pro",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 272_000,
             input_per_mtok: Some(60.0),
             output_per_mtok: Some(270.0),
@@ -1602,7 +1603,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
     (
         "openai",
         "gpt-5.5",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 272_000,
             input_per_mtok: Some(10.0),
             output_per_mtok: Some(45.0),
@@ -1614,7 +1615,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
     (
         "openai",
         "gpt-5.4-pro",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 272_000,
             input_per_mtok: Some(60.0),
             output_per_mtok: Some(270.0),
@@ -1630,13 +1631,13 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
         // without these rows the broad `gpt-5.4` tier would reach them by
         // prefix and double-bill every long mini/nano prompt.
         "gpt-5.4-mini",
-        &[],
+        vec![],
     ),
-    ("openai", "gpt-5.4-nano", &[]),
+    ("openai", "gpt-5.4-nano", vec![]),
     (
         "openai",
         "gpt-5.4",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 272_000,
             input_per_mtok: Some(5.0),
             output_per_mtok: Some(22.50),
@@ -1651,7 +1652,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
         // minimax, 2026-08-15). Closes the documented under-estimate left by
         // the 2026-08-13 base-rate correction.
         "minimax-m3",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 512_000,
             input_per_mtok: Some(0.60),
             output_per_mtok: Some(2.40),
@@ -1666,7 +1667,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
         // xai, 2026-08-15). 4.6/4.5 share the $4/$12 step-up; 4.3 (the
         // preset default) doubles its own base.
         "grok-4.6",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 200_000,
             input_per_mtok: Some(4.0),
             output_per_mtok: Some(12.0),
@@ -1678,7 +1679,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
     (
         "xai",
         "grok-4.5",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 200_000,
             input_per_mtok: Some(4.0),
             output_per_mtok: Some(12.0),
@@ -1690,7 +1691,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
     (
         "xai",
         "grok-4.3",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 200_000,
             input_per_mtok: Some(2.50),
             output_per_mtok: Some(5.0),
@@ -1719,7 +1720,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
         // 4.x beta's 2x/1.5x multipliers onto it, which over-estimated every
         // long-context run on the current default by roughly 2x.
         "claude-sonnet-4-6",
-        &[],
+        vec![],
     ),
     (
         "anthropic",
@@ -1727,7 +1728,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
         // bill input/cache at 2x and output at 1.5x. Pre-4.6 only — see the
         // negative row above.
         "claude-sonnet-4",
-        &[PriceTier {
+        vec![PriceTier {
             min_input_tokens: 200_000,
             input_per_mtok: Some(6.0),
             output_per_mtok: Some(22.50),
@@ -1736,7 +1737,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
             reasoning_per_mtok: None,
         }],
     ),
-];
+]);
 
 /// Lower-case the provider id and accept a few common synonyms so callers
 /// can pass the raw provider name from `ProviderConfig` without tagging.
@@ -1767,7 +1768,7 @@ pub use aleph_protocol::providers::{RateBasis, RateCard};
 /// (needed for the parallel [`TIER_TABLE`] lookup) and how we got there.
 #[derive(Debug, Clone, Copy)]
 struct ResolvedRates {
-    rates: &'static Rates,
+    rates: Rates,
     vendor_key: &'static str,
     basis: RateBasis,
 }
@@ -1814,13 +1815,14 @@ const QUOTA_BILLED_MODELS: &[&str] = &[
 
 /// Find the first [`Rates`] row in `vendor`'s section that prefix-matches an
 /// already-canonicalised model id.
-fn rates_in(vendor: &str, canonical_model: &str) -> Option<&'static Rates> {
+fn rates_in(vendor: &str, canonical_model: &str) -> Option<Rates> {
     PRICE_TABLE
         .iter()
         .find(|(p, _)| *p == vendor)?
         .1
         .iter()
         .find(|r| prefix_matches(canonical_model, r.model_prefix))
+        .copied()
 }
 
 /// Resolve the [`Rates`] entry for a `(provider, model)` pair, or `None` when
@@ -1867,14 +1869,14 @@ fn lookup_rates(provider: &str, model: &str) -> Option<ResolvedRates> {
 /// Resolve the [`PriceTier`] slice for an already-canonicalised
 /// `(provider_key, model)` pair, or `None` when the model is flat-priced
 /// (the common case). Same prefix-match semantics as [`lookup_rates`].
-fn lookup_tiers(provider_key: &str, canonical_model: &str) -> Option<&'static [PriceTier]> {
+fn lookup_tiers(provider_key: &str, canonical_model: &str) -> Option<Vec<PriceTier>> {
     if provider_key.is_empty() {
         return None;
     }
     TIER_TABLE
         .iter()
         .find(|(p, prefix, _)| *p == provider_key && prefix_matches(canonical_model, prefix))
-        .map(|(_, _, tiers)| *tiers)
+        .map(|(_, _, tiers)| tiers.clone())
 }
 
 /// Return the rates in effect for a prompt of `prompt_tokens` input tokens:
