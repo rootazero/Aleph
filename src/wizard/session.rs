@@ -140,7 +140,20 @@ pub trait WizardFlow: Send + Sync {
     }
 }
 
-/// Wizard session managing the flow execution
+/// Wizard session managing the flow execution.
+///
+/// # Concurrency contract
+///
+/// A `WizardSession` is owned by **exactly one in-flight `next()` at a time**.
+/// The receiver is held inside `self.step_rx` behind an async-aware `Mutex`,
+/// and `next()` blocks on `.lock().await` for the entire duration of one
+/// poll. Two concurrent `next()` calls would serialise on that lock and
+/// every step would go to whichever caller acquired it last; the other
+/// caller would either hang or, after `try_lock` short-circuit, see the
+/// session's terminal status and miss the buffered steps. The router
+/// (`gateway/handlers/wizard.rs`) serialises `WizardSession` ownership on
+/// its own state machine, so clients consume `next()` strictly
+/// sequentially.
 pub struct WizardSession {
     id: String,
     status: Arc<RwLock<WizardStatus>>,
