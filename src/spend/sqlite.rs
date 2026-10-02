@@ -128,10 +128,15 @@ impl SpendLedger for SqliteSpendLedger {
         // forever once a corrupt row lands). Mirror the InMemory backend's
         // guard: coerce to 0.0 + bump unpriced_calls so the 'this call had
         // a price it couldn't represent' signal is loud and the ceiling
-        // continues to evaluate against a real number.
+        // continues to evaluate against a real number. The InMemory branch
+        // for `Delta::Partial(non_finite)` only bumps `unpriced_calls` and
+        // leaves `partial_calls` alone — a partial *that cannot be priced
+        // at all* is no longer a partial; the partial_calls counter is
+        // reserved for calls whose price was a lower bound, not absent.
+        // Zero out the partial contribution here so both ends agree.
         let (delta_usd, delta_unpriced, delta_partial): (f64, i64, i64) = if !delta_usd.is_finite()
         {
-            (0.0, delta_unpriced.saturating_add(1), delta_partial)
+            (0.0, delta_unpriced.saturating_add(1), 0)
         } else {
             (delta_usd, delta_unpriced, delta_partial)
         };
