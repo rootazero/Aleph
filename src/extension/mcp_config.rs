@@ -739,15 +739,15 @@ mod tests {
     fn bare_and_absolute_commands_are_kept_as_written() {
         let (_tmp, root) = command_fixture();
         assert_eq!(command_of("node", &root).unwrap(), "node");
-        // Absolute anywhere — outside the root, even nonexistent.
-        assert_eq!(
-            command_of("/usr/bin/python3", &root).unwrap(),
-            "/usr/bin/python3"
-        );
-        assert_eq!(
-            command_of("/nonexistent/interp", &root).unwrap(),
-            "/nonexistent/interp"
-        );
+        // Absolute anywhere — outside the root, even nonexistent. "Absolute"
+        // is platform-relative (`Path::is_absolute`): a rooted `/x` is NOT
+        // absolute on Windows and would be root-prefixed, then refused.
+        #[cfg(unix)]
+        let (abs_interp, abs_missing) = ("/usr/bin/python3", "/nonexistent/interp");
+        #[cfg(windows)]
+        let (abs_interp, abs_missing) = (r"C:\qa-abs\python3.exe", r"C:\nonexistent\interp");
+        assert_eq!(command_of(abs_interp, &root).unwrap(), abs_interp);
+        assert_eq!(command_of(abs_missing, &root).unwrap(), abs_missing);
     }
 
     #[test]
