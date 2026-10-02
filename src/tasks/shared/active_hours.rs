@@ -196,25 +196,6 @@ impl ActiveHoursSchedule {
     }
 }
 
-/// Convenience helper for callers that just need to push `next_due_ms`
-/// forward to the next window boundary. Returns `None` if the schedule
-/// has no future opening within the next 7 days.
-#[must_use]
-pub fn next_due_after_gate(
-    schedule: &ActiveHoursSchedule,
-    fallback_next_due_ms: i64,
-    now_ms: i64,
-) -> Option<i64> {
-    if schedule.is_open_at(fallback_next_due_ms) {
-        Some(fallback_next_due_ms)
-    } else {
-        // Search from the later of `now` and the fallback so the result is
-        // always an actual opening. Using `next_open_after(now).max(fallback)`
-        // could land on a `fallback` that itself falls in a closed window.
-        schedule.next_open_after(now_ms.max(fallback_next_due_ms))
-    }
-}
-
 // ── Tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -368,23 +349,5 @@ mod tests {
             ],
         };
         assert!(sched.validate().is_err());
-    }
-
-    #[test]
-    fn next_due_after_gate_short_circuits_when_open() {
-        let sched = business_hours_utc();
-        let now = ms(2024, 1, 3, 10, 0); // Wed 10:00 UTC
-        let next_due = now + 60_000; // 10:01 UTC, still in window
-        assert_eq!(next_due_after_gate(&sched, next_due, now), Some(next_due));
-    }
-
-    #[test]
-    fn next_due_after_gate_pushes_to_window_start() {
-        let sched = business_hours_utc();
-        let now = ms(2024, 1, 3, 18, 0); // Wed evening (closed)
-        let next_due = ms(2024, 1, 3, 18, 5); // would-be next due (still closed)
-        let result = next_due_after_gate(&sched, next_due, now).unwrap();
-        // Should snap forward to Thu 09:00.
-        assert_eq!(result, ms(2024, 1, 4, 9, 0));
     }
 }
