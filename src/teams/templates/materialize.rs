@@ -527,85 +527,70 @@ async fn provision_member(
     })
 }
 
+/// Append a markdown section to an existing agent's SOUL.md, idempotently.
+///
+/// `heading_marker` is the exact substring (without the leading "## ") used both
+/// for the rendered heading AND for the idempotency check — if SOUL.md already
+/// contains a section whose heading starts with this marker, the call is a
+/// no-op. This is what keeps repeated materialization calls from stacking
+/// duplicate sections.
+///
+/// The two callers (`inject_strategy_prompt` for the team's strategy frame,
+/// `inject_role_prompt` for a member's role frame) each pass their own marker
+/// so the two can coexist in one SOUL.md. A read error on the existing SOUL
+/// is a hard skip — falling back to an empty string would silently truncate
+/// the agent's persona on the following write.
+async fn append_soul_section(
+    deps: &MaterializeDeps,
+    agent_id: &str,
+    heading_marker: &str,
+    body: &str,
+) {
+    let Some(instance) = deps.registry.get(agent_id).await else {
+        return;
+    };
+    let soul_path = instance.agent_dir().join("SOUL.md");
+    let marker_in_heading = format!("## {heading_marker}");
+    let section = format!("\n\n---\n\n{marker_in_heading}\n\n{body}\n");
+    let result = if soul_path.exists() {
+        let existing = match tokio::fs::read_to_string(&soul_path).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    path = %soul_path.display(),
+                    error = %e,
+                    "team_template: failed to read SOUL.md, skipping section injection"
+                );
+                return;
+            }
+        };
+        if existing.contains(&marker_in_heading) {
+            return;
+        }
+        tokio::fs::write(&soul_path, format!("{existing}{section}")).await
+    } else {
+        tokio::fs::write(&soul_path, section.trim_start_matches('\n')).await
+    };
+    if let Err(e) = result {
+        warn!(
+            path = %soul_path.display(),
+            error = %e,
+            "team_template: failed to inject section into SOUL.md"
+        );
+    }
+}
+
 /// Append a team-strategy section to an existing agent's SOUL.md,
 /// idempotently. R3 (`ClawTeam` parity): team-scope counterpart of
 /// [`inject_role_prompt`]. Same I/O pattern; different section heading
 /// so the two can coexist in one SOUL.md without ambiguity.
 async fn inject_strategy_prompt(deps: &MaterializeDeps, agent_id: &str, body: &str) {
-    let Some(instance) = deps.registry.get(agent_id).await else {
-        return;
-    };
-    let soul_path = instance.agent_dir().join("SOUL.md");
-    let section = format!("\n\n---\n\n## Team Strategy\n\n{body}\n");
-    let result = if soul_path.exists() {
-        // Read the existing SOUL.md; on a read error we must NOT fall back to an
-        // empty string, because the subsequent write would then truncate the
-        // file to just `section`, silently destroying the agent's persona.
-        let existing = match tokio::fs::read_to_string(&soul_path).await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(
-                    path = %soul_path.display(),
-                    error = %e,
-                    "team_template: failed to read SOUL.md, skipping strategy injection"
-                );
-                return;
-            }
-        };
-        if existing.contains("## Team Strategy") {
-            return;
-        }
-        tokio::fs::write(&soul_path, format!("{existing}{section}")).await
-    } else {
-        tokio::fs::write(&soul_path, section.trim_start_matches('\n')).await
-    };
-    if let Err(e) = result {
-        warn!(
-            path = %soul_path.display(),
-            error = %e,
-            "team_template: failed to inject strategy prompt into SOUL.md"
-        );
-    }
+    append_soul_section(deps, agent_id, "Team Strategy", body).await;
 }
 
 /// Append a role prompt section to an existing agent's SOUL.md, idempotently.
 async fn inject_role_prompt(deps: &MaterializeDeps, agent_id: &str, role: &str, body: &str) {
-    let Some(instance) = deps.registry.get(agent_id).await else {
-        return;
-    };
-    let soul_path = instance.agent_dir().join("SOUL.md");
-    let section = format!("\n\n---\n\n## Team Role ({role})\n\n{body}\n");
-
-    let result = if soul_path.exists() {
-        // See `inject_strategy_prompt`: a read error must skip the injection,
-        // never `unwrap_or_default()` — an empty fallback would truncate the
-        // existing SOUL.md on the following write.
-        let existing = match tokio::fs::read_to_string(&soul_path).await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(
-                    path = %soul_path.display(),
-                    error = %e,
-                    "team_template: failed to read SOUL.md, skipping role injection"
-                );
-                return;
-            }
-        };
-        if existing.contains(&format!("## Team Role ({role})")) {
-            return;
-        }
-        tokio::fs::write(&soul_path, format!("{existing}{section}")).await
-    } else {
-        tokio::fs::write(&soul_path, section.trim_start_matches('\n')).await
-    };
-
-    if let Err(e) = result {
-        warn!(
-            path = %soul_path.display(),
-            error = %e,
-            "team_template: failed to inject role prompt into SOUL.md"
-        );
-    }
+    append_soul_section(deps, agent_id, &format!("Team Role ({role})"), body).await;
 }
 
 // Errors thrown by helpers wrap `AlephError` only via `Materialize` so the

@@ -620,7 +620,7 @@ impl TeamStore for SqliteTeamStore {
         let now = now_epoch();
         let kind_str = input.kind.as_str();
 
-        let affected = conn
+        conn
             .execute(
                 r#"
             INSERT INTO team_members (
@@ -648,21 +648,14 @@ impl TeamStore for SqliteTeamStore {
             )
             .map_err(db_err)?;
 
-        if affected == 0 {
-            // Already a member — return the existing record
-            let member = conn
-                .prepare_cached(
-                    "SELECT team_id, agent_id, role, joined_at, kind, acp_harness_id, acp_cwd, acp_session_name FROM team_members WHERE team_id = ?1 AND agent_id = ?2",
-                )
-                .map_err(db_err)?
-                .query_row(params![input.team_id, input.agent_id], read_member_row)
-                .map_err(db_err)?;
-            return Ok(member);
-        }
         drop(conn);
 
-        // Fires on first enrollment and on role/kind re-upsert alike — the
-        // timeline records the latest membership shape either way.
+        // SQLite's upsert reports `changes() == 1` on BOTH the insert and the
+        // update paths regardless of whether the column values actually
+        // changed, so MemberAdded fires on first enrollment AND on role/kind
+        // re-upsert alike — the timeline records the latest membership shape
+        // either way. Listeners that need to ignore no-op re-upserts should
+        // compare roles themselves.
         broadcast_team_event(
             &input.team_id,
             crate::event::AlephEvent::TeamMemberAdded {
