@@ -13,8 +13,9 @@
 //!
 //! ## Quality tag (Task 5 / spec §2a)
 //!
-//! Every [`CompactionCache`] entry carries a [`SummaryQuality`] tag. The
-//! carry-over slot only accepts [`SummaryQuality::Full`] entries — degraded
+//! Every cache write is quality-gated: `ContextCompactor::store_cache` only
+//! seeds the carry-over slot for [`SummaryQuality::Full`] summaries — the
+//! degraded
 //! ones (produced by the truncation fallback when the LLM call failed, timed
 //! out, or returned no `<summary>` block) stay on this run's per-instance
 //! cache so the same run can keep reusing the fallback summary instead of
@@ -72,13 +73,19 @@ pub(super) enum SummaryQuality {
 /// `[Context Summary]…` text that replaces them. `quality` records whether
 /// the summary came from the LLM path (`Full`) or the truncation fallback
 /// (`Degraded`); the cross-run carry-over slot only accepts the former.
+///
+/// The quality tag intentionally does NOT travel with the entry: the
+/// `Full`-only gate is applied by `ContextCompactor::store_cache` at write
+/// time, before the entry is constructed, so a stored entry is never
+/// re-checked for quality. The field used to ride along on the struct but
+/// was written at both construction sites and read nowhere outside tests
+/// (audit 2026-10-01) — the gate is logic, not data.
 #[derive(Clone)]
 pub(super) struct CompactionCache {
     pub(super) start: usize,
     pub(super) end: usize,
     pub(super) hash: u64,
     pub(super) summary: String,
-    pub(super) quality: SummaryQuality,
 }
 
 /// Wiring for the zero-API-cost session-summary reuse path: the memory backend

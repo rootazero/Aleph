@@ -316,6 +316,13 @@ fn build_event_payload_value(
     if let Some(e) = context.tool_error {
         payload.insert("tool_error".into(), Value::Bool(e));
     }
+    // Ingress telemetry for `ToolResultPersist` (audit 2026-10-01, C2):
+    // parsed back into real JSON so a hook can `jq '.ingress_reductions'`;
+    // a value that fails to parse ships as the raw string.
+    if let Some(r) = &context.ingress_reductions {
+        let parsed: Value = serde_json::from_str(r).unwrap_or_else(|_| Value::String(r.clone()));
+        payload.insert("ingress_reductions".into(), parsed);
+    }
     // Omitted when unknown (outside a run) — see `SessionFacts::cwd`.
     if let Some(c) = &facts.cwd {
         payload.insert("cwd".into(), Value::String(c.to_string_lossy().to_string()));
@@ -1430,6 +1437,35 @@ mod tests {
     /// test` spawn from.
     fn stdin_json(event: HookEvent, ctx: &HookContext) -> String {
         command_hook_invocation("true", &event.canonical_name(), ctx, None, "test").stdin
+    }
+
+    /// The ingress reductions summary rides the `ToolResultPersist` payload as
+    /// real JSON (not an escaped string), and stays entirely absent when the
+    /// fire site had nothing to report — hooks written before the key existed
+    /// must see byte-identical payloads (audit 2026-10-01, C2).
+    #[test]
+    fn tool_result_persist_payload_carries_ingress_reductions_as_json() {
+        let ctx = HookContext::new("s").with_ingress_reductions(
+            r#"{"compressed":false,"reductions":[{"field":"stdout","method":"Distilled","tokens_before":5000,"tokens_after":60}]}"#,
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdin_json(HookEvent::ToolResultPersist, &ctx)).unwrap();
+        let ingress = &parsed["ingress_reductions"];
+        assert_eq!(ingress["compressed"], serde_json::json!(false));
+        assert_eq!(ingress["reductions"][0]["field"], "stdout");
+        assert_eq!(ingress["reductions"][0]["method"], "Distilled");
+        assert_eq!(ingress["reductions"][0]["tokens_before"], 5000);
+        assert_eq!(ingress["reductions"][0]["tokens_after"], 60);
+
+        let bare: serde_json::Value = serde_json::from_str(&stdin_json(
+            HookEvent::ToolResultPersist,
+            &HookContext::new("s"),
+        ))
+        .unwrap();
+        assert!(
+            bare.get("ingress_reductions").is_none(),
+            "unset summary must omit the key: {bare}"
+        );
     }
 
     /// The inventory reads the matcher the way the executor does: a
