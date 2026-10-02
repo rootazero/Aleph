@@ -107,18 +107,23 @@ enum MessageKind {
     System,
 }
 
-/// O(1) sampled content fingerprint for cache validation: length plus the
-/// first and last 32 bytes. A full hash would re-scan every settled message
-/// on every frame — the exact cost the cache exists to avoid — while a bare
-/// length can't tell a same-length replacement apart from a hit.
+/// Full content fingerprint for cache validation.
+///
+/// The previous version sampled only the first and last 32 bytes plus the
+/// length — a same-length replacement whose middle differs produced the same
+/// fingerprint, and the cache served stale lines for a message whose text
+/// had in fact changed. Hashing the full bytes makes that class of
+/// collision effectively impossible (DefaultHasher's 64-bit output is
+/// collision-resistant for the transcript sizes a TUI holds).
+///
+/// The "re-scan every settled message on every frame" concern from the
+/// earlier comment is mis-framed: `DefaultHasher` hashes ~1 GB/s, so even
+/// a 100-message × 10 KB transcript hashes in ~1 ms, well under one frame
+/// at 60 fps. The cache saves *rendering*, which is the expensive part.
 fn content_fingerprint(content: &str) -> u64 {
     use std::hash::{Hash, Hasher};
-    let bytes = content.as_bytes();
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    bytes.len().hash(&mut h);
-    let edge = 32.min(bytes.len());
-    bytes[..edge].hash(&mut h);
-    bytes[bytes.len() - edge..].hash(&mut h);
+    content.hash(&mut h);
     h.finish()
 }
 
