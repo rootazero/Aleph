@@ -108,3 +108,30 @@ D1–D3 均为「裁决 + 注释固化」级，不阻断任何接线。
 - **Layer-3 spill 的完整生命周期**：turn_budget record 的计数来源（`cumulative`）与 ContextIndexWiring 只在 offload 接线处确认存在，未审计 spill 后的检索质量。
 - **structured/crush/diff 各 reducer 内部正确性**：审计目标是「接线」而非 reducer 语义；crush 仅 Log|Search 的路由已确认接线，reducer 输出质量未评估。
 - **error path 的 `sanitize_tool_error` 全部分支**：确认了 cap 与刻意绕过注释，未逐分支验证 PII 清洗矩阵。
+
+---
+
+## 修复记录（2026-10-02）
+
+分支 `fix/admission-clippy`（基 main @ fa9e4c19e）。两个提交：
+
+| 提交 | 说明 | 文件数 |
+|------|------|--------|
+| `8e06f8ad9` | `context: fix admission audit findings C1+C2+D1+D2+D3 and drop write-only cache quality tag` | 6 |
+| `5af3580f9` | `clippy: zero out -D warnings on alephcore --all-targets`（纯 lint，无行为变化） | 23 |
+
+逐条映射：
+
+| 审计项 | 处置 |
+|--------|------|
+| **C1+D1** | `tool_result_pruning.rs` 删掉 pub 字段 `min_tokens_to_prune`，拆成两个带 doc 的模块级 const：`PRUNE_THRESHOLD_TOKENS`（"值得动手剪的旧结果下限"，用于占位 hint 门与双 token 门）与 `STRUCTURED_TARGET_BUDGET_TOKENS`（"structured 应压缩到的目标预算"，用于 `reduce_within`；doc 注明 200 预算使 crush 对 Log\|Search 生效是 spec §2b budgeted 路径的**期望行为**）。两者值均 200，行为不变。`ToolResultPruningStage` 随之成为单元结构体，全部 `::default()` 调用点（preflight.rs、13 处测试）改为裸构造（`5af3580f9` 内）。 |
+| **C2** | 采纳「挂 hook payload」方案：`HookContext` 新增 `pub ingress_reductions: Option<String>`（derive Default ⇒ 旧构造点/反序列化点向后兼容，缺的字段为 None）；dispatch.rs 的 ToolResultPersist 触发点在 persisted 路径有 shrink 摘要时 `.with_ingress_reductions(...)` 捎带，摘要为 JSON（`{"compressed":bool,"reductions":[{field,method,tokens_before,tokens_after}]}`，`method` 为 `ReductionMethod` 的 Debug 名），双 gate 下（未过 budget 门 / 无 reductions）不发该字段。tracing::debug 保留。新增 3 个测试（summary 构造、absent gate、payload JSON 透传）。 |
+| **X1** | **基线已修，无需动作**：`compressor.rs:201` 的 `#[cfg(test)]` 由上游 `086450ee1 audit: review/severed-wire fixes` 加入，模块外零调用者。 |
+| **D2** | 注释固化：`fresh_tail` 取「消息尾部最近的 N 条工具结果」的位置语义是刻意的（hermes 移植惯例）；注释说明工具结果落入剪枝窗口的条件（按 token 超限触发、窗口按预算和条数取）。 |
+| **D3** | 注释固化：Json 块重建为 Text 块在 `as_model_text` 扁平化下 wire-equivalent（`providers/anthropic/proto_impl.rs:298-301`）；若未来 cache_control 打戳落在 tool-result 块上需重新验证。 |
+| **quality 字段** | **选 (a) 删除**。理由：`CompactionCache` 无任何 serde/持久化（进程内 static `COMPACTION_CARRYOVER`，state.db 无 schema 牵连）；`Full` 闸门在 `store_cache` 内**先于构造**以参数判定，字段从未被生产读回（clippy `never read` 实锤），它只是写时打标。删字段、保留 `store_cache(quality)` 签名与 `SummarizerOutcome.quality`；测试改锚行为（Degraded ⇒ 本地有 + carry-over 无；Full ⇒ carry-over `expect` + 正文断言），守卫强度不减。 |
+
+验证（2026-10-02 实测）：
+
+- `cargo clippy -p alephcore --all-targets -- -D warnings` → **exit 0**（含基线 E0603 修复：`harness_bridge/mod.rs` 恢复 `pub use context_blocks::compute_runtime_state_blocks`——模块私有，集成测试 `tests/runtime_state_e2e.rs` 无公开路径可达，与其 doc「供单测练习」的意图一致）。
+- 窄域测试全绿：`context::budget` 99 / `tools::scoped` 205 / `orchestrator::` 269 / `tool_output` 169 / `context::compact` 168 / `extension::` 722 通过；`extension::` 另有 5 个失败为 **Windows 环境既有失败**（POSIX 路径假设 `/usr/bin/python3`、Unix `true`、路径分隔符、worktree plugins 扫描），全部位于未触碰文件，与本修复无关。
