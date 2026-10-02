@@ -1,6 +1,6 @@
 # Extension System
 
-> Plugin architecture with WASM and Node.js runtimes
+> Plugin architecture: WASM runtime, MCP-kind external servers, static (Markdown) plugins
 
 ---
 
@@ -8,7 +8,7 @@
 
 Aleph's extension system allows third-party tools via:
 - **WASM Plugins**: Fast, sandboxed WebAssembly modules
-- **Node.js Plugins**: JavaScript/TypeScript extensions
+- **MCP-kind Plugins**: any-language external servers (Node.js, Python, …) reached over MCP stdio / HTTP — see "Node plugins run as MCP stdio servers" below
 - **Manifest-driven**: Declarative plugin definitions
 
 **Location**: `src/extension/`
@@ -33,12 +33,12 @@ Aleph's extension system allows third-party tools via:
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                     Plugin Runtimes                       │   │
 │  │  ┌────────────────────┐  ┌────────────────────┐         │   │
-│  │  │    WASM Runtime    │  │  Node.js Runtime   │         │   │
-│  │  │    (Extism)        │  │    (IPC)           │         │   │
+│  │  │    WASM Runtime    │  │  MCP-kind (extern) │         │   │
+│  │  │    (Extism)        │  │  stdio / http srv  │         │   │
 │  │  │                    │  │                    │         │   │
-│  │  │ • Sandboxed        │  │ • Stdio comm       │         │   │
-│  │  │ • Fast startup     │  │ • Process mgmt     │         │   │
-│  │  │ • Limited I/O      │  │ • Full Node API    │         │   │
+│  │  │ • Sandboxed        │  │ • Any language     │         │   │
+│  │  │ • Fast startup     │  │ • Tools via bridge │         │   │
+│  │  │ • Limited I/O      │  │ • No hook channel  │         │   │
 │  │  └────────────────────┘  └────────────────────┘         │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
@@ -55,7 +55,7 @@ Aleph's extension system allows third-party tools via:
 ~/.aleph/plugins/
 ├── my-plugin/
 │   ├── aleph_plugin.toml    # Plugin manifest
-│   ├── package.json          # (Node.js) or
+│   ├── .mcp.json             # (MCP-kind: declares the external server) or
 │   ├── plugin.wasm           # (WASM)
 │   └── src/
 │       └── index.ts
@@ -73,8 +73,8 @@ description = "My awesome plugin"
 author = "Your Name"
 
 [runtime]
-type = "nodejs"  # or "wasm"
-entry = "dist/index.js"
+type = "wasm"    # wasm | mcp | static — the real key is [aleph] runtime, see PLUGIN_SYSTEM.md「Runtime 模型」
+entry = "plugin.wasm"
 
 [[tools]]
 name = "my_tool"
@@ -140,80 +140,28 @@ pub fn my_tool(input: String) -> FnResult<String> {
 
 ---
 
-## Node.js Runtime
+## Node plugins run as MCP stdio servers
 
-**Location**: `src/extension/runtime/nodejs/`
+There is no Node.js runtime in Aleph and there never was one on disk (`ls src/extension/runtime/` →
+`mod.rs` and `wasm/` only; `PluginKind` is `Wasm | Mcp | Static`). A plugin written in Node.js — or
+Python, Go, anything — is an **MCP-kind plugin**: `[aleph] runtime = "mcp"` plus a `.mcp.json` naming
+the command to spawn (a Claude Code `plugin.json` may instead declare `mcpServers` inline or by path,
+and is then MCP-kind without an `aleph` block). At mount, `register_transient_servers`
+(`src/extension/registrar/mcp_registrar.rs`) hands each server to
+`McpManagerHandle::add_transient_server_detached`, the tool bridge (`src/mcp/tool_bridge.rs`)
+registers its tools, and `unmount` stops it (EffectScope step `"mcp_server"`). Use the official MCP
+SDK for your language; do not speak a private JSON-RPC-over-stdio dialect — nothing on the host side
+answers it.
 
-### Architecture
+MCP has no hook channel: an MCP-kind plugin contributes **tools** (and skills / agents / commands as
+static files), not `PreToolUse` / `PostToolUse` handlers. Hooks are `hooks.json` entries
+(`command` / `http` / `prompt` / `agent`) or WASM exports.
 
-```rust
-pub struct NodejsRuntime {
-    processes: HashMap<String, Child>,
-}
-
-impl NodejsRuntime {
-    pub async fn start(&mut self, plugin: &PluginManifest) -> Result<()> {
-        let child = Command::new("node")
-            .arg(&plugin.entry)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?;
-
-        self.processes.insert(plugin.name.clone(), child);
-    }
-
-    pub async fn call(
-        &self,
-        plugin: &str,
-        method: &str,
-        args: Value,
-    ) -> Result<Value> {
-        // JSON-RPC over stdio
-        let request = json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": args,
-            "id": uuid()
-        });
-
-        self.send_request(plugin, request).await
-    }
-}
-```
-
-### Plugin Template
-
-```typescript
-// index.ts
-import { createServer } from '@aleph/plugin-sdk';
-
-const server = createServer({
-  name: 'my-plugin',
-  tools: {
-    my_tool: async (args: { input: string }) => {
-      return { result: `Processed: ${args.input}` };
-    }
-  }
-});
-
-server.start();
-```
-
-### SDK (TypeScript)
-
-```typescript
-// @aleph/plugin-sdk
-export interface PluginServer {
-  name: string;
-  tools: Record<string, ToolHandler>;
-}
-
-export type ToolHandler = (args: unknown) => Promise<unknown>;
-
-export function createServer(config: PluginServer): Server {
-  return new Server(config);
-}
-```
+> Until 2026-09-20 this section described a `NodejsRuntime` at `src/extension/runtime/nodejs/` and an
+> `@aleph/plugin-sdk` npm package (`packages/plugin-sdk/`, 906 lines of TypeScript with no host).
+> Both were doc-only; both are gone. The sibling repo still carries the phantom dialect:
+> `plugins/media-office/src/index.js:349` (`method === "plugin.call"`) and `:264` (`onPostToolUse`) —
+> follow-up in Aleph-plugins, not here.
 
 ---
 
@@ -299,7 +247,7 @@ Plugin Directory Found
 ┌─────────────────────────────────────────┐
 │ 3. Select runtime                        │
 │    WASM → WasmRuntime                   │
-│    Node.js → NodejsRuntime              │
+│    MCP  → McpManager (transient server) │
 └─────────────────────────────────────────┘
     │
     ▼
@@ -387,10 +335,6 @@ impl AlephToolDyn for SkillTool {
         "enabled": true,
         "memoryLimit": "256MB",
         "timeoutMs": 30000
-      },
-      "nodejs": {
-        "enabled": true,
-        "nodeVersion": "20"
       }
     },
     "hotReload": true
@@ -435,8 +379,8 @@ name = "My Plugin"                  # Display name
 version = "1.0.0"                   # SemVer version
 description = "Does something useful"
 author = "Your Name"
-kind = "nodejs"                     # nodejs | wasm | static
-entry = "dist/index.js"             # Entry point for nodejs/wasm
+kind = "wasm"                       # wasm | mcp | static
+entry = "plugin.wasm"               # Entry point (wasm only; mcp uses .mcp.json)
 
 [permissions]
 network = ["connect:https://*"]     # Network permissions
@@ -623,7 +567,7 @@ To migrate from V1 manifest format:
 
 1. Rename `package.json` or `aleph_plugin.json` to `aleph_plugin.toml`
 2. Convert JSON structure to TOML
-3. Add `kind` field (`nodejs`, `wasm`, or `static`)
+3. Add `kind` field (`mcp`, `wasm`, or `static`)
 4. Update `runtime.type` to `kind` and `runtime.entry` to `entry`
 5. Add optional hook and prompt configurations
 

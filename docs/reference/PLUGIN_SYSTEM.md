@@ -677,8 +677,8 @@ manifest 缓存的 key 覆盖 kind 的每个输入（含插件根的 `.mcp.json`
 需要：从 WASM 模块导出函数列表中发现并注册 tools。
 
 ### Aleph-plugins 仓库
-当前状态：目录结构已迁移到 CC 兼容格式（`.claude-plugin/plugin.toml`），Node.js 插件标记为 `runtime = "mcp"` 但 `src/index.js` 仍是旧 IPC 格式。
-需要：将每个 Node.js 插件的入口文件改为 MCP Server SDK 实现。
+当前状态：目录结构已迁移到 CC 兼容格式（`.claude-plugin/plugin.toml`），Node.js 插件标记为 `runtime = "mcp"` 但 `src/index.js` 仍是旧 IPC 格式——那个格式（`method === "plugin.call"`）从来没有宿主，例：`plugins/media-office/src/index.js:349`；其 `:264 onPostToolUse` 是无人能调的 JS hook handler。本仓 2026-09-20 删掉了同形状的 `examples/plugins/media-video`。
+需要：将每个 Node.js 插件的入口文件改为 MCP Server SDK 实现（兄弟仓 Aleph-plugins 的 follow-up）。
 
 ---
 
