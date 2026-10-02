@@ -24,7 +24,7 @@ pub fn store_path() -> Option<std::path::PathBuf> {
     crate::connection::marker_path("trusted-certs")
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PendingRecord {
     pub host: String,
     pub fp: String,
@@ -75,20 +75,7 @@ pub fn approve_cert(
     host: String,
     fingerprint: String,
 ) -> Result<(), String> {
-    let record = {
-        let mut guard = state
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match guard.take() {
-            Some(r) if r.host == host && r.fp == fingerprint => r,
-            Some(other) => {
-                *guard = Some(other);
-                return Err("pending cert host or fingerprint mismatch — the displayed certificate changed; reload the trust page to review the new one".into());
-            }
-            None => return Err("no pending cert".into()),
-        }
-    };
+    let record = take_matching_record(state.inner(), &host, &fingerprint)?;
     let path = store_path().ok_or("home dir not found")?;
     let mut store = TrustStore::load(&path);
     store
@@ -100,6 +87,31 @@ pub fn approve_cert(
     Ok(())
 }
 
+/// Take the pending record iff `host` *and* `fingerprint` both match the
+/// stored one. On a fingerprint mismatch (the TOCTOU race C-2), the stored
+/// record is *preserved* — `guard` is re-filled with the new record so the
+/// trust page can re-render and the user can re-review instead of having
+/// their click silently approve a cert they never saw. Extracted as a pure
+/// helper so the contract is unit-testable without a `tauri::AppHandle`.
+fn take_matching_record(
+    state: &PendingCert,
+    host: &str,
+    fingerprint: &str,
+) -> Result<PendingRecord, String> {
+    let mut guard = state
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match guard.take() {
+        Some(r) if r.host == host && r.fp == fingerprint => Ok(r),
+        Some(other) => {
+            *guard = Some(other);
+            Err("pending cert host or fingerprint mismatch — the displayed certificate changed; reload the trust page to review the new one".into())
+        }
+        None => Err("no pending cert".into()),
+    }
+}
+
 #[tauri::command]
 pub fn reject_cert(state: tauri::State<'_, PendingCert>) {
     let mut guard = state
@@ -108,4 +120,87 @@ pub fn reject_cert(state: tauri::State<'_, PendingCert>) {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *guard = None;
     set_trust_pending(false);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cert_trust::CertInfo;
+
+    fn fixture(host: &str, fp: &str) -> PendingRecord {
+        PendingRecord {
+            host: host.into(),
+            fp: fp.into(),
+            info: CertInfo {
+                sans: vec!["127.0.0.1".into()],
+                subject: "CN=test".into(),
+                reason: format!("self-signed for {host}"),
+            },
+            changed_from: None,
+        }
+    }
+
+    fn put(state: &PendingCert, r: PendingRecord) {
+        *state.0.lock().unwrap() = Some(r);
+    }
+
+    #[test]
+    fn take_matching_returns_record_on_exact_match() {
+        let state = PendingCert::default();
+        put(&state, fixture("gw.example", "AAA"));
+        let r = take_matching_record(&state, "gw.example", "AAA").expect("match");
+        assert_eq!(r.host, "gw.example");
+        assert_eq!(r.fp, "AAA");
+        assert!(take_matching_record(&state, "gw.example", "AAA").is_err(), "drained");
+    }
+
+    #[test]
+    fn take_matching_rejects_wrong_fingerprint_and_preserves_record() {
+        let state = PendingCert::default();
+        put(&state, fixture("gw.example", "AAA"));
+        let err = take_matching_record(&state, "gw.example", "BBB").unwrap_err();
+        assert!(err.contains("mismatch"), "got: {err}");
+        // The record must still be there — the UI re-renders and the user
+        // re-reviews; silently dropping it would let a stale page approve
+        // a different cert on retry.
+        let r = take_matching_record(&state, "gw.example", "AAA").expect("still present");
+        assert_eq!(r.fp, "AAA");
+    }
+
+    #[test]
+    fn take_matching_rejects_wrong_host_and_preserves_record() {
+        let state = PendingCert::default();
+        put(&state, fixture("gw.example", "AAA"));
+        let err = take_matching_record(&state, "other.example", "AAA").unwrap_err();
+        assert!(err.contains("mismatch"), "got: {err}");
+        let r = take_matching_record(&state, "gw.example", "AAA").expect("still present");
+        assert_eq!(r.host, "gw.example");
+    }
+
+    /// T-1: regression test for C-2. Simulates a second TLS challenge that
+    /// overwrites the pending record between page-load and user click. The
+    /// first click must (a) reject and (b) preserve the *new* record so the
+    /// page can re-render. Without the e6b57be4a fingerprint guard, this
+    /// would be a silent auth bypass.
+    #[test]
+    fn fingerprint_change_during_review_is_rejected_not_bypassed() {
+        let state = PendingCert::default();
+        // Page loads with cert A.
+        put(&state, fixture("gw.example", "AAA"));
+
+        // A second TLS challenge overwrites the pending record with cert B.
+        // The page is still showing cert A's SHA-256.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        put(&state, fixture("gw.example", "BBB"));
+
+        // User clicks Trust — the click carries the *page-captured*
+        // fingerprint A. Without e6b57be4a's guard this would silently pin B.
+        let err = take_matching_record(&state, "gw.example", "AAA").unwrap_err();
+        assert!(err.contains("mismatch"), "got: {err}");
+
+        // The new record B is preserved — not lost — so the page can
+        // re-render the cert and the user can re-review.
+        let r = take_matching_record(&state, "gw.example", "BBB").expect("B survived");
+        assert_eq!(r.fp, "BBB");
+    }
 }
