@@ -9,6 +9,8 @@
 //! can run on one machine with independent targets); a missing file means Local
 //! (zero regression on first run).
 
+use std::sync::OnceLock;
+use tokio::sync::watch;
 use url::Url;
 
 /// Default Gateway port when the user omits one.
@@ -292,6 +294,32 @@ pub fn marker_exists() -> bool {
     target_marker().is_some_and(|m| m.exists())
 }
 
+/// Subscribe to "the operator switched the connection target" events. Each
+/// successful [`set_connection_target`] (and [`clear_connection_target`])
+/// publishes a tick; long-lived subscribers — most importantly the
+/// notification WebSocket in [`crate::notify::run_notification_bridge`] —
+/// observe it and close their old Gateway-bound stream so the next iteration
+/// reconnects to the new target. Without this, a Remote-A → Remote-B switch
+/// would keep the bridge subscribed to A indefinitely, route A's
+/// `surface.notify` events to a stale Panel, and never see B's events.
+pub fn target_change_rx() -> watch::Receiver<()> {
+    target_change_tx().subscribe()
+}
+
+fn target_change_tx() -> &'static watch::Sender<()> {
+    static TX: OnceLock<watch::Sender<()>> = OnceLock::new();
+    TX.get_or_init(|| watch::channel(()).0)
+}
+
+/// Publish a target-change tick. Called after a successful target write so
+/// every subscriber drops and re-dials. Subscribers that started after the
+/// previous tick don't see *that* tick but DO see the next one — losing
+/// one notification across the lifetime of a long-running bridge is the
+/// cost of being late to subscribe, not a correctness bug.
+fn signal_target_change() {
+    let _ = target_change_tx().send(());
+}
+
 /// Load the persisted target; missing/unreadable/unparsable → Local
 /// (fail-safe: a corrupt marker must never strand the user on a broken
 /// remote — it falls back to the always-available local daemon).
@@ -414,6 +442,12 @@ pub fn set_connection_target(app: tauri::AppHandle, raw: String) -> Result<(), S
         ConnectionTarget::Local => crate::external_link::set_remote_host(None),
     }
     crate::reroute_for_target(&app, target);
+    // W-18: tell long-lived subscribers (notification bridge, future status
+    // indicators) that the target moved. Subscribers receive the tick, close
+    // the old stream, and the next loop iteration reads the new
+    // ConnectionTarget. Without this a Remote-A → Remote-B switch leaves the
+    // bridge subscribed to A indefinitely.
+    signal_target_change();
     Ok(())
 }
 
@@ -883,5 +917,46 @@ mod tests {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),
         }
+    }
+
+    /// W-18: the global target-change watch must publish ticks on demand.
+    /// This test pins the watch wiring itself — the *integration* with
+    /// `set_connection_target` is harder to assert without bringing up a
+    /// `tauri::AppHandle`, but the publish half is the actual new code, so
+    /// that is what we lock down.
+    #[tokio::test]
+    async fn target_change_signal_publishes_a_tick() {
+        let mut rx = target_change_rx();
+        // Mark the initial value as seen so the next `changed()` actually
+        // waits for a *new* tick.
+        rx.borrow_and_update();
+        signal_target_change();
+        // A wait_with timeout so a regression (no tick) fails loudly instead
+        // of hanging the test binary.
+        let got = tokio::time::timeout(std::time::Duration::from_millis(200), rx.changed()).await;
+        assert!(
+            got.is_ok(),
+            "signal_target_change did not publish within 200ms"
+        );
+        // `changed()` returning Ok itself proves a tick arrived — the value
+        // is auto-marked-as-read once changed() resolves. Nothing more to
+        // assert without a second tick.
+    }
+
+    /// W-18: multiple subscribers see the same signal_target_change tick.
+    /// Long-lived subscribers (the notification bridge is the canonical one)
+    /// spawn their own watch::Receiver via `target_change_rx()`; the static
+    /// `OnceLock<watch::Sender>` must serve them all from one channel.
+    #[tokio::test]
+    async fn target_change_signal_reaches_multiple_subscribers() {
+        let mut a = target_change_rx();
+        let mut b = target_change_rx();
+        a.borrow_and_update();
+        b.borrow_and_update();
+        signal_target_change();
+        let ta = tokio::time::timeout(std::time::Duration::from_millis(200), a.changed()).await;
+        let tb = tokio::time::timeout(std::time::Duration::from_millis(200), b.changed()).await;
+        assert!(ta.is_ok(), "subscriber a missed the tick");
+        assert!(tb.is_ok(), "subscriber b missed the tick");
     }
 }
