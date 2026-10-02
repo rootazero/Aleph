@@ -154,8 +154,9 @@ SDK for your language; do not speak a private JSON-RPC-over-stdio dialect — no
 answers it.
 
 MCP has no hook channel: an MCP-kind plugin contributes **tools** (and skills / agents / commands as
-static files), not `PreToolUse` / `PostToolUse` handlers. Hooks are `hooks.json` entries
-(`command` / `http` / `prompt` / `agent`) or WASM exports.
+static files), not `PreToolUse` / `PostToolUse` handlers. A plugin's hooks are `hooks.json` `command`
+actions (its `prompt` / `http` / `agent` actions are dropped with a warning,
+`src/extension/manifest/parsers.rs`; only user-settings hooks run all four) or WASM exports.
 
 > Until 2026-09-20 this section described a `NodejsRuntime` at `src/extension/runtime/nodejs/` and an
 > `@aleph/plugin-sdk` npm package (`packages/plugin-sdk/`, 906 lines of TypeScript with no host).
