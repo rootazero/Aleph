@@ -225,14 +225,13 @@ fn default_hook_priority() -> String {
 /// `handleDeploy` to the model. Serde ignores unknown keys here (no
 /// `deny_unknown_fields` anywhere in the manifest structs), so a manifest that
 /// still has `handler` parses fine; the per-entry warning is what keeps that
-/// from being a silent no-op. `prompt_file` is parsed but nothing reads it.
+/// from being a silent no-op. There is no `prompt_file` field either: it was
+/// parsed but never read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandSection {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    #[serde(default)]
-    pub prompt_file: Option<String>,
 }
 
 /// Service definition section

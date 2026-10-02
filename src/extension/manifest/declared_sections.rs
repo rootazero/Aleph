@@ -149,8 +149,8 @@ pub fn declared_capabilities(
         tracing::warn!(
             plugin = %plugin_id,
             command = %command.name,
-            "[[commands]] entry registers nothing (the `handler` field was removed); \
-             ship the command as commands/{}.md instead",
+            "[[commands]] entry registers nothing (its `handler` / `prompt_file` fields were \
+             removed); ship the command as commands/{}.md instead",
             command.name
         );
     }
@@ -243,6 +243,7 @@ mod tests {
 name = "deploy"
 description = "Deploy to production"
 handler = "handleDeploy"
+prompt_file = "commands/deploy.md"
 "#,
         )
         .unwrap();
