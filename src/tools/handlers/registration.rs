@@ -128,32 +128,15 @@ pub async fn register_mcp_tools(
                     // aligned so a future list-filter that respects catalog-side
                     // `requires_confirmation` does not disagree with the dispatch
                     // layer.
-                    let mut builder = UnifiedTool::new(
+                    let builder = UnifiedTool::new(
                         format!("mcp:{server_id}:{qualified}"),
                         qualified.clone(),
                         tool.description.clone(),
                         CatalogToolSource::Mcp {
                             server: server_id.to_string(),
                         },
-                    );
-                    if tool.requires_confirmation {
-                        builder = builder.with_requires_confirmation(true);
-                    }
-                    if !tool.read_only && tool.requires_confirmation {
-                        // Mutating + confirm-gated tools bump the safety level so
-                        // panel/cli-only gating kicks in for destructiveHint=true
-                        // servers.
-                        builder = builder.with_safety_level(
-                            crate::tool_metadata::ToolSafetyLevel::IrreversibleHighRisk,
-                        );
-                    } else if !tool.read_only {
-                        // Mutating without explicit confirm: register at the
-                        // lowest mutating level so the catalog reflects the
-                        // fact that this tool changes state, but does not
-                        // trigger the panel/cli-only gate on its own.
-                        builder = builder
-                            .with_safety_level(crate::tool_metadata::ToolSafetyLevel::Reversible);
-                    }
+                    )
+                    .populate_safety_profile(tool.read_only, tool.requires_confirmation);
                     disp.register_with_conflict_resolution(builder).await;
                 }
                 registered.push(qualified);
