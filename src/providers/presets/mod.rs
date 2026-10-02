@@ -350,6 +350,7 @@ pub fn model_roster(
             &id,
             operator_base_url,
             source,
+            None,
         );
         out.push(RosterModel {
             id,

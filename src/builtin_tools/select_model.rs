@@ -285,6 +285,7 @@ fn caveat_for_model(model: &str, provider: Option<&str>) -> Option<String> {
         model,
         None,
         crate::providers::model_catalog::ModelSource::Configured,
+        None,
     );
     if matches!(
         record.lifecycle.status,

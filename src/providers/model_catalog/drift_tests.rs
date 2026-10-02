@@ -507,6 +507,7 @@ fn lookup_rates_vendor_inferred_resolves_aggregator_id() {
         "anthropic/claude-sonnet-5",
         Some("https://openrouter.ai/api/v1"),
         ModelSource::Configured,
+        None,
     );
     let cost = openrouter
         .cost
@@ -530,6 +531,7 @@ fn lookup_rates_vendor_inferred_resolves_aggregator_id() {
         "anthropic.claude-sonnet-5",
         Some("https://bedrock-runtime.us-east-1.amazonaws.com"),
         ModelSource::Configured,
+        None,
     );
     let cost = bedrock
         .cost
@@ -551,6 +553,7 @@ fn lookup_rates_vendor_inferred_resolves_aggregator_id() {
         "llama-3.3-70b-versatile",
         Some("https://api.groq.com/openai/v1"),
         ModelSource::Configured,
+        None,
     );
     match groq.cost.as_ref().map(|c| c.basis) {
         None | Some(RateBasis::Direct) => {}

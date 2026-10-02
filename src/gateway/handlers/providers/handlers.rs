@@ -1182,6 +1182,7 @@ pub async fn handle_catalog(
                 preset.default_model,
                 Some(preset.base_url),
                 crate::providers::model_catalog::ModelSource::PresetDefault,
+                None,
             );
 
             // The picker roster merges through the same leaf the failover
@@ -1300,6 +1301,7 @@ pub async fn handle_catalog(
                 &default_model,
                 cfg.base_url.as_deref(),
                 crate::providers::model_catalog::ModelSource::Configured,
+                cfg.model_defs.iter().find(|d| d.id == default_model),
             );
             CatalogEntry {
                 id: name.clone(),
