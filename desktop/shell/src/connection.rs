@@ -245,6 +245,31 @@ fn default_port_for(raw: &str, scheme: &str) -> u16 {
     }
 }
 
+/// True iff `tail` (the bytes immediately following a `host:` colon) is a
+/// sequence of ASCII digits terminated by `/`, `?`, `#`, or end-of-string.
+/// Anything else — `host:abc`, `host:443abc`, `host:80abc` — is not a port.
+///
+/// `host:80?bt=...` is therefore an explicit port 80 followed by a query
+/// string, not a port labelled `80?bt=...`. The older split('/').next()
+/// form returned `false` for this input because `split` reached end-of-string
+/// without finding a separator and handed the whole `80?bt=...` back, then
+/// `is_ascii_digit()` rejected the `?`.
+fn port_tail_is_explicit(tail: &str) -> bool {
+    match tail.find(|c: char| !c.is_ascii_digit()) {
+        Some(end) => {
+            let after = &tail[end..];
+            after.is_empty()
+                || after.starts_with('/')
+                || after.starts_with('?')
+                || after.starts_with('#')
+        }
+        // All digits until end of string — still an explicit port (it may
+        // happen to equal the scheme default; the user wrote it explicitly
+        // and we honour the literal).
+        None => !tail.is_empty(),
+    }
+}
+
 /// Detect whether the raw user input already contains an explicit port number.
 /// Handles forms: `host:port`, `http://host:port`, `https://host:port`,
 /// including IPv6 (`[::1]:port`).  Returns false when only a scheme default
@@ -268,16 +293,12 @@ fn has_explicit_port_in_input(raw: &str) -> bool {
         // port is present), so check for `:` directly at `idx`.
         Some(idx) if after_scheme.starts_with('[') => {
             after_scheme[idx..].starts_with(':')
-                && after_scheme[idx + 1..]
-                    .split('/')
-                    .next()
-                    .is_some_and(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+                && port_tail_is_explicit(&after_scheme[idx + 1..])
         }
-        // Plain host:port — digits after the `:` (before any `/`).
-        Some(colon) => after_scheme[colon + 1..]
-            .split('/')
-            .next()
-            .is_some_and(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())),
+        // Plain host:port — digits after the `:`, terminated by `/`, `?`,
+        // `#`, or end-of-string. `host:80?bt=...` is an explicit port 80
+        // followed by a query string, not a port labelled `80?bt=...`.
+        Some(colon) => port_tail_is_explicit(&after_scheme[colon + 1..]),
         None => false,
     }
 }
@@ -546,6 +567,46 @@ mod tests {
     fn host_port_gets_http() {
         let t = ConnectionTarget::parse("box.lan:9000").unwrap();
         assert_eq!(t.to_persisted(), "http://box.lan:9000");
+    }
+
+    #[test]
+    fn explicit_port_followed_by_query_string_is_respected() {
+        // W-32 regression: the older split('/').next() form misread the
+        // query string as part of the port and silently rewrote `80` to
+        // the scheme default (443). Explicit ports win regardless of the
+        // character that follows them — `/`, `?`, `#`, end-of-string.
+        let t = ConnectionTarget::parse("https://box.lan:9999?bt=token").unwrap();
+        assert_eq!(t.to_persisted(), "https://box.lan:9999");
+        if let ConnectionTarget::Remote(url) = t {
+            assert_eq!(url.port(), Some(9999));
+            assert_eq!(url.query(), Some("bt=token"));
+        } else {
+            panic!("expected Remote target");
+        }
+    }
+
+    #[test]
+    fn explicit_port_followed_by_hash_is_respected() {
+        let t = ConnectionTarget::parse("http://box.lan:9999#frag").unwrap();
+        assert_eq!(t.to_persisted(), "http://box.lan:9999");
+        if let ConnectionTarget::Remote(url) = t {
+            assert_eq!(url.port(), Some(9999));
+            assert_eq!(url.fragment(), Some("frag"));
+        } else {
+            panic!("expected Remote target");
+        }
+    }
+
+    #[test]
+    fn explicit_port_followed_by_path_is_respected() {
+        let t = ConnectionTarget::parse("http://box.lan:9999/abc").unwrap();
+        assert_eq!(t.to_persisted(), "http://box.lan:9999");
+        if let ConnectionTarget::Remote(url) = t {
+            assert_eq!(url.port(), Some(9999));
+            assert_eq!(url.path(), "/abc");
+        } else {
+            panic!("expected Remote target");
+        }
     }
 
     #[test]
