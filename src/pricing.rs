@@ -137,7 +137,7 @@ struct Rates {
 /// rate; a [`PriceTier`] overrides it once `min_input_tokens` is reached.
 /// Components left `None` inherit the base [`Rates`] value, so a tier never
 /// silently drops a rate the base had.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct PriceTier {
     /// Tier applies when the prompt's input-token count is `>=` this value.
     min_input_tokens: u32,
@@ -1977,7 +1977,7 @@ pub fn estimate(provider: &str, model: &str, breakdown: &TokenBreakdown) -> Cost
     let effective = effective_rates(
         resolved.vendor_key,
         &canonicalize_model(model),
-        resolved.rates,
+        &resolved.rates,
         prompt_tokens,
     );
     let (usd, status) = apply_rates(breakdown, &effective);
@@ -2002,7 +2002,7 @@ mod tests {
     /// vendor knowledge in several parallel tables.
     #[test]
     fn every_price_table_vendor_is_resolvable() {
-        for (vendor, _) in PRICE_TABLE {
+        for (vendor, _) in PRICE_TABLE.iter() {
             assert_eq!(
                 canonical_provider(vendor),
                 *vendor,
@@ -2010,7 +2010,7 @@ mod tests {
                  canonical_provider — its rates are unreachable (drift)"
             );
         }
-        for (vendor, _, _) in TIER_TABLE {
+        for (vendor, _, _) in TIER_TABLE.iter() {
             assert_eq!(
                 canonical_provider(vendor),
                 *vendor,
@@ -2029,7 +2029,7 @@ mod tests {
     /// sees shadowing that only exists once separators are folded.
     #[test]
     fn no_price_row_is_shadowed_by_an_earlier_broader_prefix() {
-        for (vendor, rows) in PRICE_TABLE {
+        for (vendor, rows) in PRICE_TABLE.iter() {
             for (i, later) in rows.iter().enumerate() {
                 for earlier in &rows[..i] {
                     assert!(
@@ -2069,12 +2069,17 @@ mod tests {
             rate_card("openai", "gpt-5.6")
         );
         // `PriceTier` is not `PartialEq` (nothing in production compares two),
-        // so identity of the resolved static slice is the assertion.
+        // so equality of the resolved slices is the assertion. Pointer
+        // identity would have been stronger, but `TIER_TABLE` is a `LazyLock`
+        // so each call hands out a fresh `Vec` clone.
         let dashed = lookup_tiers("google", &canonicalize_model("gemini-2-5-pro"));
         let dotted = lookup_tiers("google", &canonicalize_model("gemini-2.5-pro"));
         assert!(dotted.is_some(), "the dotted spelling is the table's own");
         assert!(
-            matches!((dashed, dotted), (Some(a), Some(b)) if std::ptr::eq(a, b)),
+            matches!(
+                (dashed, dotted),
+                (Some(a), Some(b)) if a.as_slice() == b.as_slice()
+            ),
             "gemini-2-5-pro missed the long-context tier its dotted twin gets"
         );
     }
@@ -3016,7 +3021,7 @@ mod tests {
         // Negative rows: present, deliberately empty.
         for model in ["gpt-5.4-mini", "gpt-5.4-nano"] {
             assert_eq!(
-                lookup_tiers("openai", model).map(<[_]>::len),
+                lookup_tiers("openai", model).as_ref().map(Vec::as_slice).map(<[_]>::len),
                 Some(0),
                 "{model}: must be explicitly flat, not reached by the gpt-5.4 tier"
             );
@@ -3123,7 +3128,10 @@ mod tests {
         assert!(lookup_tiers("google", "gemini-2.5-pro").is_some()); // 4.6 resolves to the *negative* row — present, deliberately empty —
                                                                      // so the broad `claude-sonnet-4` beta row can never reach it.
         assert_eq!(
-            lookup_tiers("anthropic", "claude-sonnet-4-6").map(<[_]>::len),
+            lookup_tiers("anthropic", "claude-sonnet-4-6")
+                .as_ref()
+                .map(Vec::as_slice)
+                .map(<[_]>::len),
             Some(0)
         );
         assert!(!lookup_tiers("anthropic", "claude-sonnet-4-5")
