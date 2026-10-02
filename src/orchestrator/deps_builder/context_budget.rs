@@ -461,12 +461,19 @@ pub fn build_context_budget_config(
         circuit_breaker_max: 3,
         max_splits: 3,
         // Fold-nudge growth step: operator-tunable (R9), with the spec O2
-        // constant as the single source for the default. Zero is honoured
-        // verbatim — it turns the nudge into an every-turn advisory, which
-        // is noisy but is exactly what the operator asked for.
-        fold_nudge_growth_tokens: cb
-            .fold_nudge_growth_tokens
-            .unwrap_or(crate::thinker::nudges::FOLD_NUDGE_GROWTH_TOKENS),
+        // constant as the single source for the default. Zero is refused
+        // (P7-style): it would turn the nudge into an every-turn advisory —
+        // pure noise on every prompt — so it falls back to the default with
+        // a warning rather than being honoured verbatim.
+        fold_nudge_growth_tokens: match cb.fold_nudge_growth_tokens {
+            Some(0) => {
+                tracing::warn!(
+                    "context_budget: fold_nudge_growth_tokens=0 would nudge every turn; using default"
+                );
+                crate::thinker::nudges::FOLD_NUDGE_GROWTH_TOKENS
+            }
+            other => other.unwrap_or(crate::thinker::nudges::FOLD_NUDGE_GROWTH_TOKENS),
+        },
     })
 }
 
@@ -738,6 +745,24 @@ mod tests {
         )
         .expect("enabled → Some");
         assert_eq!(custom.fold_nudge_growth_tokens, 5_000);
+
+        // Zero would nudge every turn — refused, falling back to the default
+        // (P7-style defensive validation, same block as the threshold
+        // ordering checks).
+        let zero = build_context_budget_config(
+            &cfg_with_context_budget(Some(ContextBudgetToml {
+                fold_nudge_growth_tokens: Some(0),
+                ..ContextBudgetToml::default()
+            })),
+            "primary",
+            &[],
+        )
+        .expect("enabled → Some");
+        assert_eq!(
+            zero.fold_nudge_growth_tokens,
+            crate::thinker::nudges::FOLD_NUDGE_GROWTH_TOKENS,
+            "zero must fall back to the default, not nudge every turn"
+        );
     }
 
     #[test]
