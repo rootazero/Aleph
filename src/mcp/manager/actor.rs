@@ -1241,6 +1241,36 @@ mod tests {
         assert_eq!(servers[0].id, id);
     }
 
+    /// `aggregate_from_healthy` feeds the system prompt (via
+    /// `aggregate_instructions`): it must visit servers in sorted id order,
+    /// not `HashMap` order, and skip unhealthy ones.
+    #[tokio::test]
+    async fn aggregate_from_healthy_visits_servers_in_sorted_id_order_and_skips_unhealthy() {
+        let dir = tempdir().unwrap();
+        let (mut actor, _h) = McpManagerActor::new(Some(dir.path().join("c.json"))).await.unwrap();
+        // 16 ids inserted in reverse: HashMap order matching sorted order by chance is ~1/16!.
+        let ids: Vec<String> = (0..16).rev().map(|i| format!("srv-{i:02}")).collect();
+        for id in &ids {
+            actor.clients.insert(id.clone(), Arc::new(McpClient::new()));
+        }
+        let unhealthy = "srv-07".to_string();
+        actor.health_states.insert(
+            unhealthy.clone(),
+            ServerHealth { status: HealthStatus::Unhealthy, ..ServerHealth::default() },
+        );
+        let mut sorted = ids.clone();
+        sorted.sort();
+        let expected: Vec<usize> = sorted
+            .iter()
+            .filter(|id| **id != unhealthy)
+            .map(|id| Arc::as_ptr(&actor.clients[id]) as usize)
+            .collect();
+        let got = actor
+            .aggregate_from_healthy(|c| async move { vec![Arc::as_ptr(&c) as usize] })
+            .await;
+        assert_eq!(got, expected);
+    }
+
     #[tokio::test]
     async fn test_get_status_nonexistent() {
         let dir = tempdir().unwrap();
