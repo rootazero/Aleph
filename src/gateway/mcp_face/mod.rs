@@ -7,3 +7,4 @@
 //! (CLAUDE.md 禁用清单).
 
 pub mod config;
+pub mod session;
