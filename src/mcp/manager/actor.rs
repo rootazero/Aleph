@@ -1247,7 +1247,9 @@ mod tests {
     #[tokio::test]
     async fn aggregate_from_healthy_visits_servers_in_sorted_id_order_and_skips_unhealthy() {
         let dir = tempdir().unwrap();
-        let (mut actor, _h) = McpManagerActor::new(Some(dir.path().join("c.json"))).await.unwrap();
+        let (mut actor, _h) = McpManagerActor::new(Some(dir.path().join("c.json")))
+            .await
+            .unwrap();
         // 16 ids inserted in reverse: HashMap order matching sorted order by chance is ~1/16!.
         let ids: Vec<String> = (0..16).rev().map(|i| format!("srv-{i:02}")).collect();
         for id in &ids {
@@ -1256,7 +1258,10 @@ mod tests {
         let unhealthy = "srv-07".to_string();
         actor.health_states.insert(
             unhealthy.clone(),
-            ServerHealth { status: HealthStatus::Unhealthy, ..ServerHealth::default() },
+            ServerHealth {
+                status: HealthStatus::Unhealthy,
+                ..ServerHealth::default()
+            },
         );
         let mut sorted = ids.clone();
         sorted.sort();
