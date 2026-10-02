@@ -120,24 +120,55 @@ pub struct ThinkingLevelMap {
 }
 ```
 
-**`ModelCompat`**（键名单在实施第一步核查 adapter 后确定，预计包含）：
+**`ModelCompat`**（第一轮 10 个键，均有 adapter 生产消费者；来源见 `openai_common/max_tokens.rs`、`anthropic/provider_policy.rs`、`openai_common/provider_policy.rs`）：
 
 ```rust
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ModelCompat {
-    /// "max_tokens" | "max_completion_tokens"
-    pub max_tokens_field: Option<String>,
-    pub supports_temperature: Option<bool>,
-    /// "openai" | "deepseek" | "qwen" | "string-thinking" | ...
-    pub thinking_format: Option<String>,
-    pub supports_developer_role: Option<bool>,
+    /// true → 用 max_completion_tokens 替代 max_tokens（o1/o3/o4/gpt-5 系列）
+    /// 消费者：openai_common/max_tokens.rs:12 uses_max_completion_tokens
+    pub uses_max_completion_tokens: Option<bool>,
+
+    /// true → 从请求中删除 temperature/top_p/top_k（claude-4.7+ 不接受采样参数）
+    /// 消费者：anthropic/proto_impl.rs:551
+    pub forbids_sampling_params: Option<bool>,
+
+    /// "omit" | "force:<f32>" — 覆盖 preset 级 TemperaturePolicy
+    /// 消费者：anthropic/adapter.rs:305, presets/mod.rs:436
+    pub temperature_policy: Option<String>,
+
+    /// true → 注入 Anthropic cache_control 断点
+    /// 消费者：anthropic/provider_policy.rs:184
+    pub supports_cache_control: Option<bool>,
+
+    /// true → 允许发 reasoning_effort 字段（端点级门控）
+    /// 消费者：openai_common/provider_policy.rs
     pub supports_reasoning_effort: Option<bool>,
-    pub supports_vision: Option<bool>,
-    pub cache_control_format: Option<String>,  // "anthropic"
-    pub supports_tools: Option<bool>,
-    pub supports_mid_convo_system_messages: Option<bool>,
+
+    /// true → 给 object schema 补空 properties（Moonshot/DeepSeek 等需要）
+    /// 消费者：openai_common/provider_policy.rs
+    pub requires_object_properties: Option<bool>,
+
+    /// true → 内联展开 tool schema $ref（Moonshot "infinite recursion" 报错）
+    /// 消费者：openai_common/provider_policy.rs
+    pub requires_derefed_refs: Option<bool>,
+
+    /// true → 发 prompt_cache_key/retention（OpenAI prompt caching）
+    /// 消费者：openai_common/provider_policy.rs
+    pub supports_prompt_cache: Option<bool>,
+
+    /// thinking 编码格式："openai" | "deepseek" | "qwen" | "string-thinking" | null
+    /// null 表示不支持 thinking；字段缺失表示用协议默认
+    /// 消费者：openai_chat/adapter.rs thinking 分支
+    pub thinking_format: Option<String>,
+
+    /// "strict" | null — 路由到对应 model_behavior profile
+    /// 消费者：model_behaviors/mod.rs:80
+    pub vendor_behavior_profile: Option<String>,
 }
 ```
+
+后续轮次可按需追加剩余 11 个 beta-header 类键（`supports_extended_thinking`、`needs_output_128k_beta` 等），每个追加时必须有 adapter 生产消费者。
 
 **`ProviderConfig` 改动**：
 
@@ -290,11 +321,11 @@ UI 显示"值来源"标签（用户设置 / 预设 / 默认），让用户知道
 
 ---
 
-## 九、未解决的问题（实施前需确认）
+## 九、已确认的先决条件（实施前核查结果）
 
-1. **compat 键名单**：实施第一步核查 adapter 后确定，预计 8–12 个。
-2. **`PriceTier` 改动波及面**：`Rates` 有多少调用点需要接 `Option<Vec<PriceTier>>`，需小实验确认，若波及超过预期则先只做 model_defs 层的其他字段，tier 单独一轮。
-3. **R8 工具面**：确认现有 provider 管理工具的描述是否需要补全 model_defs 相关说明。
+1. **compat 键名单（已确认，10 个第一轮键）**：核查 openai_common/max_tokens.rs、anthropic/provider_policy.rs、openai_common/provider_policy.rs 后，所有键均有生产消费者，见 §3.1 `ModelCompat` 定义。后续 11 个 beta-header 类键按需追加。
+2. **`PriceTier` 运行时化（已确认，低风险）**：仅改 `src/pricing.rs` 一个文件，约 50–80 行。保留 `model_prefix: &'static str`，`Rates` 维持 `Copy`，`PRICE_TABLE`/`TIER_TABLE` 改为 `LazyLock<Vec<...>>`，`rates_in` 返回 `Option<Rates>`（值拷贝），`lookup_tiers` 返回 `Option<Vec<PriceTier>>`。外部接口 `rate_card`/`estimate` 签名不变（`pricing.rs:1918/1962`）。
+3. **R8 工具面**：`providers.*` RPC（`handlers.rs:433–560`）在 wire 类型补全后，LLM 可用自然语言配置 model_defs；实施时确认工具 DESCRIPTION 是否需要补充 model_defs 说明。
 
 ---
 
