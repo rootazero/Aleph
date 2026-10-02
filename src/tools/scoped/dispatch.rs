@@ -34,6 +34,37 @@ fn ingress_failed_outcome() -> crate::tool_output::ingress::IngressOutcome {
     }
 }
 
+/// Render the ingress reductions summary carried by the `ToolResultPersist`
+/// hook payload: a compact JSON object (`{"compressed": bool, "reductions":
+/// [{field, method, tokens_before, tokens_after}, …]}`), `None` when ingress
+/// left the result untouched. Kept as a string so `HookContext` stays free of
+/// nested JSON values; the payload builder parses it best-effort.
+fn ingress_reductions_summary(
+    outcome: &crate::tool_output::ingress::IngressOutcome,
+) -> Option<String> {
+    if !outcome.compressed && outcome.reductions.is_empty() {
+        return None;
+    }
+    Some(
+        serde_json::json!({
+            "compressed": outcome.compressed,
+            "reductions": outcome
+                .reductions
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "field": r.field,
+                        "method": format!("{:?}", r.method),
+                        "tokens_before": r.tokens_before,
+                        "tokens_after": r.tokens_after,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        })
+        .to_string(),
+    )
+}
+
 /// XML-escape any literal `<system-reminder>` / `</system-reminder>` boundary
 /// tokens inside untrusted hook-context text.
 ///
@@ -1678,11 +1709,20 @@ impl ScopedToolService {
         // Extension hooks observe large tool results offloaded to disk.
         if let Some(ref path) = processed.persisted_path {
             if let Some(executor) = self.hook_executor.as_ref() {
-                let ctx = HookContext::new(self.hook_session_id.clone())
+                let mut ctx = HookContext::new(self.hook_session_id.clone())
                     .with_tool_name(name)
                     .with_env("TOOL_CALL_ID", call_id.clone())
                     .with_env("PERSIST_PATH", path.display().to_string())
                     .with_env("PERSIST_REF", processed.text.clone());
+                // Ingress telemetry rides along (audit 2026-10-01, C2): the
+                // per-field reductions were tracing-debug-only before, so an
+                // operator only ever saw them with debug logs on. The
+                // persisted path already emits this hook — attaching the
+                // summary costs nothing extra. Absent when ingress left the
+                // result untouched, keeping pre-existing payloads unchanged.
+                if let Some(summary) = ingress_reductions_summary(&outcome) {
+                    ctx = ctx.with_ingress_reductions(summary);
+                }
                 executor
                     .execute_observers(HookEvent::ToolResultPersist, &ctx)
                     .await;
@@ -2031,6 +2071,49 @@ mod tests {
     fn empty_contexts_pass_value_through_untouched() {
         let v = Value::String("unchanged".into());
         assert_eq!(wrap_value_with_hook_contexts(v.clone(), &[]), v);
+    }
+
+    #[test]
+    fn ingress_reductions_summary_absent_when_ingress_untouched() {
+        let outcome = crate::tool_output::ingress::IngressOutcome {
+            model_facing: "ok".into(),
+            reduced_from: None,
+            reductions: Vec::new(),
+            compressed: false,
+        };
+        assert!(ingress_reductions_summary(&outcome).is_none());
+    }
+
+    #[test]
+    fn ingress_reductions_summary_carries_compressed_flag_and_fields() {
+        use crate::tool_output::hygiene::{FieldReduction, ReductionMethod};
+        let outcome = crate::tool_output::ingress::IngressOutcome {
+            model_facing: "ok".into(),
+            reduced_from: None,
+            reductions: vec![
+                FieldReduction {
+                    field: "stdout".into(),
+                    method: ReductionMethod::Distilled,
+                    tokens_before: 5000,
+                    tokens_after: 60,
+                },
+                FieldReduction {
+                    field: "items.0.log".into(),
+                    method: ReductionMethod::Sanitized,
+                    tokens_before: 9000,
+                    tokens_after: 190,
+                },
+            ],
+            compressed: true,
+        };
+        let summary = ingress_reductions_summary(&outcome).expect("reductions present");
+        let parsed: serde_json::Value = serde_json::from_str(&summary).unwrap();
+        assert_eq!(parsed["compressed"], serde_json::json!(true));
+        assert_eq!(parsed["reductions"][0]["field"], "stdout");
+        assert_eq!(parsed["reductions"][0]["method"], "Distilled");
+        assert_eq!(parsed["reductions"][0]["tokens_before"], 5000);
+        assert_eq!(parsed["reductions"][1]["field"], "items.0.log");
+        assert_eq!(parsed["reductions"][1]["tokens_after"], 190);
     }
 
     // `apply_layer_two` is private to this module, so the sentinel test that

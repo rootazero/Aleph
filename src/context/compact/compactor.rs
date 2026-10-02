@@ -799,14 +799,15 @@ impl ContextCompactor {
             end,
             hash,
             summary,
-            quality,
         };
         // Write through to the cross-run carry-over slot ONLY for full-quality
         // entries. A degraded entry here would latch onto the next run via
         // `with_cache_carryover`: the harness rebuilds `messages` from an
         // append-only log, the fingerprint hash matches forever, and every
         // later turn takes `reapply_cached` and re-splices the degraded text
-        // without ever retrying the summarizer.
+        // without ever retrying the summarizer. The gate runs on the
+        // parameter BEFORE the entry is built — the tag is write-time logic,
+        // not data the entry carries (audit 2026-10-01).
         if quality == SummaryQuality::Full {
             if let Some(key) = self.carryover_key.as_deref() {
                 carryover_put(&COMPACTION_CARRYOVER, key, entry.clone());
@@ -1752,7 +1753,6 @@ mod tests {
             end: 2,
             hash: h,
             summary: "s".into(),
-            quality: SummaryQuality::Full,
         };
         for i in 0..(CARRYOVER_MAX_SESSIONS + 3) {
             carryover_put(&slot, &format!("k{i}"), entry(i as u64));
@@ -1779,7 +1779,6 @@ mod tests {
             end: 2,
             hash: h,
             summary: "s".into(),
-            quality: SummaryQuality::Full,
         };
         carryover_put(&slot, "hot-session", entry(1));
         // Fill the slot with cold one-shots, re-writing the hot key mid-churn.
@@ -1923,18 +1922,17 @@ mod tests {
             summary_text(&messages).starts_with("[Context Summary]"),
             "the degraded summary must still serve THIS turn"
         );
-        // Local cache: the fallback IS recorded, but tagged Degraded so the
-        // within-run compaction can keep reusing it (avoiding a per-Turn
-        // summarizer call during a persistent outage). The body matches the
-        // spliced-in summary verbatim — the cache is the cover that
-        // `reapply_cached` will splice on the next Think turn.
+        // Local cache: the fallback IS recorded (tagged Degraded at write
+        // time, so only the within-run compaction keeps reusing it — avoiding
+        // a per-Turn summarizer call during a persistent outage). The body
+        // matches the spliced-in summary verbatim — the cache is the cover
+        // that `reapply_cached` will splice on the next Think turn.
         let cached = compactor
             .cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .expect("fallback lands on the per-run cache so within-run reuse skips the LLM");
-        assert_eq!(cached.quality, SummaryQuality::Degraded);
         assert!(
             cached.summary.starts_with("[Context Summary]"),
             "the cached degraded entry must carry the same body the splice installed"
@@ -2007,11 +2005,6 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .expect("degraded fallback lands on the per-run cache for within-run reuse");
-        assert_eq!(
-            cached.quality,
-            SummaryQuality::Degraded,
-            "fallback entry must be tagged Degraded so the carry-over refuses it"
-        );
         assert!(
             cached.summary.contains("ORIGINAL_GOAL_MARKER") && cached.summary.contains("step two"),
             "cached degraded summary must carry the prior body verbatim; got:\n{}",
@@ -2097,11 +2090,13 @@ mod tests {
             "cache cover must not advance to the extended hash on failure"
         );
         assert_eq!(cached.end, 8);
-        assert_eq!(
-            cached.quality,
-            SummaryQuality::Full,
-            "the seeded Full entry's quality must survive the failed merge"
-        );
+        // …and the cross-run carry-over still holds the seeded entry: the
+        // write-time Full gate admitted it, and the failed merge did not
+        // overwrite it — the running body keeps crossing run boundaries.
+        let carried = carryover_get(&COMPACTION_CARRYOVER, key)
+            .expect("seeded Full entry must remain in the cross-run carry-over");
+        assert!(carried.summary.contains("RUNNING_BODY_MARKER"));
+        assert_eq!(carried.end, 8);
         assert!(
             cached.summary.contains("RUNNING_BODY_MARKER"),
             "extended cache must not retain a gutted summary"
@@ -2183,7 +2178,6 @@ mod tests {
                 "the degraded per-run cache must not contain transient content; got:\n{}",
                 c.summary
             );
-            assert_eq!(c.quality, SummaryQuality::Degraded);
         }
         // (4) The cross-run carry-over must NOT have been seeded either.
         assert!(
@@ -3362,14 +3356,18 @@ mod tests {
             "fixture must reach the fallback"
         );
 
-        // Effect assertions on the FIRST turn:
-        let cached = compactor
-            .cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .expect("degraded summary lives on the per-run cache for within-run reuse");
-        assert_eq!(cached.quality, SummaryQuality::Degraded);
+        // Effect assertions on the FIRST turn: the fallback lands on the
+        // per-run cache (so within-run reuse skips the LLM)…
+        assert!(
+            compactor
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some(),
+            "degraded summary lives on the per-run cache for within-run reuse"
+        );
+        // …but is refused by the write-time quality gate for the cross-run
+        // carry-over — that's the gate.
         assert!(
             carryover_get(&COMPACTION_CARRYOVER, key).is_none(),
             "degraded must NOT enter the cross-run carry-over — that's the gate"
@@ -3462,11 +3460,11 @@ mod tests {
             "run 2's summary must come from the fresh LLM call, not from run 1's degraded text"
         );
 
-        // Run 2's carry-over IS populated now (Full quality) — ready to seed
-        // a hypothetical run 3.
+        // Run 2's carry-over IS populated now (the write-time Full gate
+        // admitted it) — ready to seed a hypothetical run 3.
         let carried = carryover_get(&COMPACTION_CARRYOVER, key)
             .expect("run 2's Full entry seeds the carry-over");
-        assert_eq!(carried.quality, SummaryQuality::Full);
+        assert!(carried.summary.contains("FRESH_RUN2_BODY"));
 
         carryover_remove(&COMPACTION_CARRYOVER, key);
     }
@@ -3475,9 +3473,9 @@ mod tests {
     async fn full_summary_carried_across_runs() {
         // Full entries continue to cross run boundaries (the LLM succeeded,
         // the summary is real). Mirrors `carryover_seeds_fresh_compactor_`
-        // `across_runs` but explicitly asserts the quality tag is Full on
-        // both sides — so a future regression that downgrades the LLM
-        // success path to Degraded (forgetting the tag, say) is caught here.
+        // `across_runs`, with write-through `expect`s on both caches: a
+        // future regression that forgets the write-time `Full` gate (and so
+        // skips the write-through entirely) panics here.
         let key = "compact-full-carried-across-runs";
         carryover_remove(&COMPACTION_CARRYOVER, key);
 
@@ -3495,7 +3493,7 @@ mod tests {
 
         let cached_carry = carryover_get(&COMPACTION_CARRYOVER, key)
             .expect("Full entries continue to write through to the carry-over");
-        assert_eq!(cached_carry.quality, SummaryQuality::Full);
+        assert!(cached_carry.summary.contains("FULL_BODY"));
 
         let cached_local = c1
             .cache
@@ -3503,7 +3501,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .expect("Full entries land on the per-run cache too");
-        assert_eq!(cached_local.quality, SummaryQuality::Full);
+        assert!(cached_local.summary.contains("FULL_BODY"));
 
         // Run 2: fresh compactor (new run boundary). Must hit the carry-over
         // and skip the LLM — the cached Full entry services the second turn

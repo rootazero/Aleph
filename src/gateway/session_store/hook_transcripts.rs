@@ -39,7 +39,6 @@ impl TranscriptSource for StoreTranscripts {
 mod tests {
     use super::*;
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
-    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
     use crate::gateway::session_store::types::MessageRecord;
     use tempfile::TempDir;
 

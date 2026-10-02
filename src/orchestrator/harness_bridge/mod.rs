@@ -53,12 +53,16 @@ mod tests;
 // `active_strategy` is called from `gateway::execution_engine::run_loop::inner`
 // (src/gateway/execution_engine/run_loop/inner.rs:1270), so it must remain `pub`.
 pub use context_blocks::active_strategy;
+// `compute_runtime_state_blocks` is exercised by the integration test
+// `tests/runtime_state_e2e.rs` (producer-chain e2e: dead probes vanish from
+// the schema AND surface as runtime-state hints), which can only reach it via
+// a public path — same test-accessibility intent as its own doc comment.
+pub use context_blocks::compute_runtime_state_blocks;
 // The rest are orchestrator-internal: every other caller lives inside the
 // orchestrator crate and reaches them via the `context_blocks` module directly
 // (or via the `pub(crate)` re-export below).
 pub(crate) use context_blocks::{
-    active_execution_plan, active_standing_goal, active_timer_loop,
-    compute_runtime_state_blocks, live_deadline_status,
+    active_execution_plan, active_standing_goal, active_timer_loop, live_deadline_status,
 };
 // Producer-side bound for `StandingGoalLayer`, asserted by
 // `thinker::prompt_contract::conditionally_silent_dynamic_layers_are_bounded`.

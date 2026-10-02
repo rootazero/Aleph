@@ -300,9 +300,7 @@ impl AlephTool for ChannelMessageTool {
                     .poll_options
                     .as_ref()
                     .ok_or_else(|| {
-                        AlephError::tool(
-                            "poll_options is required for create_poll (>= 2 entries)",
-                        )
+                        AlephError::tool("poll_options is required for create_poll (>= 2 entries)")
                     })?
                     .clone();
                 if options.len() < 2 {
@@ -316,7 +314,7 @@ impl AlephTool for ChannelMessageTool {
                     .create_poll(
                         &channel_id,
                         &conversation_id,
-                        &question,
+                        question,
                         &options,
                         allow_multiple,
                     )
@@ -344,7 +342,7 @@ impl AlephTool for ChannelMessageTool {
                 let icon_data_url =
                     Self::require(&args.icon_data_url, "icon_data_url", "set_group_icon")?;
                 self.channel_registry
-                    .set_group_icon(&channel_id, &conversation_id, &icon_data_url)
+                    .set_group_icon(&channel_id, &conversation_id, icon_data_url)
                     .await
                     .map_err(|e| {
                         AlephError::tool(Self::with_hint(format!(

@@ -287,7 +287,7 @@ pub(super) async fn resolve_rail(
 ) -> std::result::Result<Rail, DesktopOutput> {
     let pid = resolve_target_pid(platform, screen, args)
         .await
-        .map_err(|m| hint_refusal(m))?;
+        .map_err(hint_refusal)?;
     choose_rail(
         screen.supports_targeted_input(),
         pid,
@@ -2598,11 +2598,9 @@ mod tests {
         // No region supplied → capture the whole display (Ok(None)), shared by
         // screenshot and screen_record alike.
         let a = args(serde_json::json!({"action": "screen_record"}));
-        assert!(
-            screen_region_from_args(&a, "screen_record")
-                .unwrap()
-                .is_none()
-        );
+        assert!(screen_region_from_args(&a, "screen_record")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -3360,7 +3358,7 @@ mod tests {
     mod element_tokens {
         use super::*;
         use crate::builtin_tools::desktop::element_ref::{self, ElementRecord};
-        use crate::builtin_tools::desktop::{DesktopTool, held_inputs};
+        use crate::builtin_tools::desktop::{held_inputs, DesktopTool};
         use aleph_desktop::traits::{
             AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
             PimCapability, PowerCapability, ScreenCapability, SystemCapability,

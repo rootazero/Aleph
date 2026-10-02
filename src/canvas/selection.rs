@@ -103,7 +103,7 @@ fn with_table<R>(f: impl FnOnce(&mut SelectionTable) -> R) -> R {
         );
         e.into_inner()
     });
-    f(&mut *guard)
+    f(&mut guard)
 }
 
 /// Record the latest selection pushed for `canvas_id` (last write wins).

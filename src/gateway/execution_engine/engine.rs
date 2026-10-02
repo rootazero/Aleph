@@ -196,8 +196,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     }
 
     /// Check inline commands against `consent` instead of the process-wide
-    /// registry (a test's own file).
-    #[cfg(test)]
+    /// registry (a test's own file). Only `#[cfg(unix)]` tests exercise the
+    /// consented-shell path, so the setter is gated to match its callers.
+    #[cfg(all(test, unix))]
     pub(super) fn with_inline_consent(
         mut self,
         consent: Arc<crate::extension::hooks::ShellHookConsent>,
