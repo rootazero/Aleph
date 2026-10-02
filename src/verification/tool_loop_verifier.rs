@@ -61,6 +61,16 @@ use crate::verification::turn_verifier::{
     ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
 };
 
+/// Upper bound on the number of wedged-session entries that can accumulate in
+/// [`ToolLoopVerifier::tier2_consecutive`]. Sessions normally clear their
+/// entry on close, but a session that crashes mid-verify (e.g. process kill
+/// before the drop hook runs) leaks one slot. Mirror the cap pattern used
+/// in `mutation_evidence_verifier::NUDGED_SESSIONS_CAP`: when the map fills
+/// we clear it wholesale, which means *every* still-wedged session gets a
+/// fresh Tier-2 veto budget — the worst case is one extra Veto per session,
+/// not a memory growth.
+const TIER2_SESSIONS_CAP: usize = 1024;
+
 pub struct ToolLoopVerifier {
     /// Per-session count of consecutive Tier-2 vetoes. Tier-2 fires on
     /// every verify call while the model is wedged, so without an internal
@@ -88,6 +98,14 @@ impl ToolLoopVerifier {
             .tier2_consecutive
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        // Cap mirrors `mutation_evidence_verifier::NUDGED_SESSIONS_CAP`:
+        // every slot the table fills past `safe` is a leak (a session that
+        // crashed before its drop-hook cleared the entry), and the
+        // recovery is the same — clear everything and let still-wedged
+        // sessions re-arm.
+        if map.len() >= TIER2_SESSIONS_CAP && !map.contains_key(session) {
+            map.clear();
+        }
         let count = map.entry(session.to_string()).or_insert(0);
         *count += 1;
         *count
