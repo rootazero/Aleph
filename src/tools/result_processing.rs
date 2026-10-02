@@ -43,6 +43,16 @@ pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 4_000;
 /// what was asked only turns one read into several.
 pub const MAX_RESULT_BUDGET_TOKENS: usize = 8_000;
 
+/// Default number of error-line previews that [`inline_error_digest`]
+/// inlines before the persist marker, sized for [`DEFAULT_RESULT_BUDGET_TOKENS`].
+/// Larger budgets never raise the cap; see [`scale_to_budget`].
+const INLINE_ERROR_DIGEST_DEFAULT_LINES: usize = 8;
+
+/// Minimum number of error-line previews regardless of budget, so a
+/// sub-default budget still names the failure rather than dropping the preview
+/// silently. Floor for [`scale_to_budget`].
+const INLINE_ERROR_DIGEST_FLOOR_LINES: usize = 2;
+
 /// Process-wide ceiling on every per-result budget, installed at boot from the
 /// model's usable window (`turn_budget::budget_for_window`). Absent = no
 /// ceiling, which is exactly today's behavior.
@@ -1070,7 +1080,13 @@ fn inline_error_digest(text: &str, budget_tokens: Option<usize>) -> Option<Strin
     if digest.error_count == 0 {
         return None;
     }
-    let cap = budget_tokens.map_or(8, |b| crate::tool_output::scale_to_budget(8, 2, b));
+    let cap = budget_tokens.map_or(INLINE_ERROR_DIGEST_DEFAULT_LINES, |b| {
+        crate::tool_output::scale_to_budget(
+            INLINE_ERROR_DIGEST_DEFAULT_LINES,
+            INLINE_ERROR_DIGEST_FLOOR_LINES,
+            b,
+        )
+    });
     Some(digest.render(cap))
 }
 
