@@ -393,7 +393,6 @@ fn test_parse_function_arguments() {
     // Test that JSON string arguments parse correctly
     let tc = OpenAiToolCall {
         id: "call_123".into(),
-        call_type: Some("function".into()),
         function: OpenAiFunctionCall {
             name: "search".into(),
             arguments: r#"{"query":"rust async","limit":10}"#.into(),
