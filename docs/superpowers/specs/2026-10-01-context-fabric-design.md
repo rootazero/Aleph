@@ -129,6 +129,7 @@ pub struct SessionDecompressArgs {
 
 **设计**：
 - 新配置 `[context_budget] compress_nudge_growth_tokens`（默认 50000，对标 bili `compress.nudgeGrowthTokens`）。
+  - **2026-10-02 用户翻案**：实现期曾偏离本设计把阈值落为常量（`FOLD_NUDGE_GROWTH_TOKENS`，nudges.rs doc 标注为「Spec O2 ruling」——标签松散，§6 的 O2 是 fold_id 生成格式，与此无关）。现按 R9「All configurability exposed as tools」回正为本节原设计的配置项，字段名定为 `fold_nudge_growth_tokens`（默认 50000，常量保留为默认值唯一来源）。同批修复跨 run 增长会计：新 run 基线从上次 fold 之后的状态续账（`GrowthNudgeTracker::seed_cross_run`，详见 FEATURE_LOCATOR §2.1「增长步进 fold nudge」）。
 - 每轮结束（think.rs 轮尾，瞬态尾区注入点已有先例）：若 prompt token 自上次 fold 或上次 nudge 起增长 ≥ 阈值，且 CompactionCircuitBreaker 未跳闸（budget/mod.rs:232 单一源），注入 system-reminder 建议 `session_compact` 并教它写 instructions。
 - fenced 常量放 nudges.rs（§2.19 纪律：分类单一源在产地；`no_fenced_const_escapes_classification` 用 include_str! 自扫，新常量自动进覆盖范围）。
 - 瞬态注入 = 不落盘、不进可缓存前缀（dynamic 尾区），遵守 §2.3 前缀缓存纪律。
