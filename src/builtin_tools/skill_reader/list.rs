@@ -179,6 +179,8 @@ impl ListSkillsTool {
 
         // Scan all skills directories
         for skills_dir in &self.skills_dirs {
+            #[cfg(test)]
+            crate::utils::paths::assert_not_real_claude_home(skills_dir, "skill_list");
             if !skills_dir.exists() {
                 debug!(
                     skills_dir = %skills_dir.display(),

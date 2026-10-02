@@ -186,6 +186,8 @@ impl ReadSkillTool {
         let mut hits = Vec::new();
         let mut seen_canonical = std::collections::HashSet::new();
         for skills_dir in &self.skills_dirs {
+            #[cfg(test)]
+            crate::utils::paths::assert_not_real_claude_home(skills_dir, "skill_read");
             // First: the obvious match — directory whose name equals the id.
             let skill_dir = skills_dir.join(skill_id);
             if skill_dir.is_dir() && skill_dir.join("SKILL.md").exists() {

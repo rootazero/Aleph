@@ -195,6 +195,92 @@ impl IsolatedAlephHome {
     }
 }
 
+/// The account's home directory from the password database, NOT `$HOME`.
+///
+/// `$HOME` is exactly what a hermetic test moves, so it cannot tell a
+/// redirected test from one that forgot to redirect: both see their own
+/// `$HOME`. The passwd entry is what the developer's real `~` is regardless of
+/// any test's env, and reading it takes no lock, so it is race-free against
+/// the `HomeEnvGuard` movers. Resolved once per process.
+///
+/// `None` on non-Unix targets (no passwd database) and when the lookup fails;
+/// the tripwire below is then inert — a missed check, never a false red.
+#[cfg(test)]
+fn account_home_dir() -> Option<&'static Path> {
+    static ACCOUNT_HOME: crate::sync_primitives::OnceLock<Option<PathBuf>> =
+        crate::sync_primitives::OnceLock::new();
+    ACCOUNT_HOME
+        .get_or_init(|| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::ffi::OsStrExt as _;
+                let mut buf: Vec<libc::c_char> = vec![0; 16 * 1024];
+                // SAFETY: an all-zero `passwd` is a valid out-parameter (it is
+                // plain data), and `getpwuid_r` writes only into `pwd` and
+                // `buf`, both live and sized as passed, for the whole call.
+                let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+                let mut result: *mut libc::passwd = std::ptr::null_mut();
+                // SAFETY: see above; `getuid` has no preconditions.
+                let rc = unsafe {
+                    libc::getpwuid_r(
+                        libc::getuid(),
+                        &mut pwd,
+                        buf.as_mut_ptr(),
+                        buf.len(),
+                        &mut result,
+                    )
+                };
+                if rc != 0 || result.is_null() || pwd.pw_dir.is_null() {
+                    return None;
+                }
+                // SAFETY: on success `pw_dir` points at a NUL-terminated
+                // string inside `buf`, which outlives this borrow.
+                let dir = unsafe { std::ffi::CStr::from_ptr(pwd.pw_dir) };
+                let dir = PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes()));
+                (!dir.as_os_str().is_empty()).then_some(dir)
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
+        })
+        .as_deref()
+}
+
+/// Lib-test tripwire: panic if `path` is under the developer's REAL
+/// `~/.claude` (P5.11 — no lib test may read it).
+///
+/// Called at the points where the Claude root is resolved into something that
+/// will be listed or read — before the `exists()` check, so the verdict does
+/// not depend on whether this machine has a `~/.claude` at all. "Real" is the
+/// passwd home ([`account_home_dir`]), so a test that redirected `$HOME` with
+/// `runtimes::post_install::HomeEnvGuards::acquire_and_set` resolves a
+/// tempdir and passes, and one that did not resolves the real root and fails
+/// here, naming the path. Compiled out of production (`#[cfg(test)]`); the
+/// non-test build has no call to it.
+///
+/// What it does NOT see: a read of the real root through a path that never
+/// passes one of the call sites (e.g. a raw `std::fs::read_dir("~/.claude")`
+/// in a test body), a `$HOME` that differs from the passwd home in spelling
+/// only (a symlinked home), and non-Unix targets. The source census
+/// `discovery::home_scan_census` covers the call-site side.
+#[cfg(test)]
+#[track_caller]
+pub(crate) fn assert_not_real_claude_home(path: &Path, site: &str) {
+    let Some(home) = account_home_dir() else {
+        return;
+    };
+    let real = home.join(".claude");
+    assert!(
+        !path.starts_with(&real),
+        "{site} resolved the developer's REAL Claude root ({}) inside a lib test. A lib test \
+         must never read ~/.claude: redirect $HOME with \
+         `runtimes::post_install::HomeEnvGuards::acquire_and_set(aleph_tmp, home_tmp)`, set \
+         `DiscoveryConfig::claude_home_override`, or turn `scan_claude_dirs` off (P5.11).",
+        path.display()
+    );
+}
+
 /// Get the user's home directory in a cross-platform way
 ///
 /// Tries in order:

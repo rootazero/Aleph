@@ -1399,6 +1399,23 @@ mod tests {
         assert!(def.is_tool_allowed("file_read"));
     }
 
+    /// Both homes on tempdirs, for a test that builds the DEFAULT manager
+    /// (`with_defaults`: Claude root on, plugin document under `$ALEPH_HOME`)
+    /// or reads `get_all_skills_dirs`. `IsolatedAlephHome` alone leaves
+    /// `$HOME` real, and with it `~/.claude` (P5.11). Hold it for the whole
+    /// body; field order is drop order (env restored, then the dir deleted).
+    fn hermetic_home() -> (
+        crate::runtimes::post_install::HomeEnvGuards,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let guards = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+            dir.path().join("aleph"),
+            dir.path().join("home"),
+        );
+        (guards, dir)
+    }
+
     /// Build an isolated manager whose only project plugin root is `dir`, with
     /// the durable plugin document redirected to a temp file. Plugins are
     /// discovered under `<dir>/plugins`; `isolated_manager_at` takes the
@@ -1637,6 +1654,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extension_manager_has_plugin_loader() {
+        let _home = hermetic_home();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let result = manager
             .call_plugin_tool("nonexistent", "handler", serde_json::json!({}))
@@ -1654,6 +1672,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extension_manager_has_plugin_registry() {
+        let _home = hermetic_home();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let registry = manager.get_plugin_registry().await;
         assert!(registry.list_plugins().is_empty());
@@ -1662,6 +1681,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extension_manager_execute_plugin_hook_nonexistent() {
+        let _home = hermetic_home();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let result = manager
             .execute_plugin_hook("nonexistent", "onEvent", serde_json::json!({"test": true}))
@@ -1679,6 +1699,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extension_manager_get_plugin_loader() {
+        let _home = hermetic_home();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let loader = manager.get_plugin_loader().await;
         assert!(!loader.is_wasm_runtime_active());
@@ -1687,6 +1708,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extension_manager_has_service_manager() {
+        let _home = hermetic_home();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let service_manager = manager.get_service_manager().await;
         assert!(service_manager.list_services().is_empty());
@@ -1694,6 +1716,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extension_manager_list_services_empty() {
+        let _home = hermetic_home();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let services = manager.list_services().await;
         assert!(services.is_empty());
@@ -1701,12 +1724,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_extension_manager_running_service_count() {
+        let _home = hermetic_home();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         assert_eq!(manager.running_service_count().await, 0);
     }
 
     #[tokio::test]
     async fn test_extension_manager_get_service_status_not_found() {
+        let _home = hermetic_home();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let status = manager
             .get_service_status("nonexistent-plugin", "nonexistent-service")
@@ -1716,6 +1741,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extension_manager_start_service_not_registered() {
+        let _home = hermetic_home();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let result = manager
             .start_service("nonexistent-plugin", "nonexistent-service")
@@ -1733,6 +1759,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extension_manager_stop_service_not_registered() {
+        let _home = hermetic_home();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let result = manager
             .stop_service("nonexistent-plugin", "nonexistent-service")
@@ -1879,7 +1906,7 @@ mod tests {
     #[tokio::test]
     async fn plugin_tool_index_is_filtered_by_the_owning_plugins_visibility() {
         use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = hermetic_home();
         let proj = tempfile::tempdir().unwrap();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         {
@@ -1940,7 +1967,7 @@ mod tests {
     #[tokio::test]
     async fn plugin_visible_decides_the_mcp_join_for_owned_servers() {
         use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = hermetic_home();
         let proj = tempfile::tempdir().unwrap();
         let manager = ExtensionManager::with_defaults().await.unwrap();
         {
@@ -2071,7 +2098,7 @@ mod tests {
     /// coming back — under `<dir>/plugins` it would stay green either way.
     #[tokio::test]
     async fn disabling_a_plugin_removes_its_skills_from_the_index_and_the_search_set() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = hermetic_home();
         let dir = tempfile::tempdir().unwrap();
         let plugins_parent = dir.path().join(".aleph/plugins");
         let skill = plugins_parent.join("p2-off/skills/off-skill");

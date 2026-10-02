@@ -166,6 +166,8 @@ fn is_user_install(key: &str, entry: &Value) -> bool {
 /// many plugins share.
 pub(crate) fn discover_claude_cache(claude_home: &Path) -> Result<Vec<DiscoveredPath>, PathBuf> {
     let file = claude_home.join(PLUGINS_DIR).join(INSTALLED_PLUGINS_FILE);
+    #[cfg(test)]
+    crate::utils::paths::assert_not_real_claude_home(&file, "discover_claude_cache");
     let text = match std::fs::read_to_string(&file) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
