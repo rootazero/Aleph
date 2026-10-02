@@ -50,7 +50,7 @@ pub struct SkillsConfig {
     pub entries: BTreeMap<String, SkillEntryConfig>,
     /// Budget bounding the injected `<available_skills>` prompt index. Lets a
     /// host with a large skill library trade detail for context (or lift the
-    /// cap entirely). Omitted → built-in default (64 skills / 12k chars).
+    /// cap entirely). Omitted → built-in default (256 skills / 12k chars).
     #[serde(default)]
     pub prompt_budget: SkillPromptBudget,
 }
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn prompt_budget_defaults_when_absent() {
         // A config TOML with no [prompt_budget] table deserializes to the
-        // built-in default budget (64 skills / 12k chars).
+        // built-in default budget (256 skills / 12k chars).
         let config: SkillsConfig = toml::from_str("").unwrap();
         assert_eq!(config.prompt_budget, SkillPromptBudget::default());
     }

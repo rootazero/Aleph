@@ -91,7 +91,7 @@ pub const DEFAULT_MAX_SKILLS_PROMPT_CHARS: usize = 12_000;
 /// Serializable so it can live under `[prompt_budget]` in `skills.toml`
 /// ([`crate::skill::config::SkillsConfig`]). The container-level
 /// `#[serde(default)]` fills any field omitted from the TOML table from
-/// [`Default`] (64 skills / 12k chars), so a partial table stays valid and a
+/// [`Default`] (256 skills / 12k chars), so a partial table stays valid and a
 /// default config deserializes to the built-in budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
