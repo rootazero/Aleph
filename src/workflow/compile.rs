@@ -365,11 +365,10 @@ pub fn parallel_groups_for(
     label_order
         .into_iter()
         .map(|label| {
-            // Unreachable in practice: the entry was inserted above. `unwrap`
-            // would be clearer than `unwrap_or_default()` (which silently
-            // hides a bug if the map ever gets mutated between the two
-            // loops), and the fallback is unreachable by construction.
-            groups.remove(&label).unwrap_or_default()
+            // Unreachable in practice: the entry was inserted above. If
+            // the map ever gets mutated between the two loops, that is a
+            // bug worth a panic rather than a silent empty group.
+            groups.remove(&label).expect("label entry missing")
         })
         .collect()
 }
@@ -392,7 +391,6 @@ fn compute_parallel_assignments(
 ) -> std::collections::HashMap<String, (String, usize, usize)> {
     use std::collections::HashMap;
     let mut label_to_size: HashMap<String, usize> = HashMap::new();
-    let mut label_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     // First pass: count members of every label so the size is stable.
     for step in &def.steps {
         if let Some(label) = step
@@ -420,9 +418,6 @@ fn compute_parallel_assignments(
         else {
             continue;
         };
-        if !label_seen.insert(label.to_string()) {
-            // already counted on a previous step; just bump the counter.
-        }
         let size = *label_to_size.get(label).unwrap_or(&1);
         let counter = counters.entry(label.to_string()).or_insert(0);
         let index = *counter;
