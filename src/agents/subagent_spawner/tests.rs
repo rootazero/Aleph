@@ -297,6 +297,7 @@ mod tests {
             summarizer_input_budget: 48_000,
             circuit_breaker_max: 3,
             max_splits: 3,
+            fold_nudge_growth_tokens: 50_000,
         };
         let child_id = ephemeral_for("child-agent", None);
         let (budget, compactor, preflight) = super::super::build_context_triple(
@@ -347,6 +348,7 @@ mod tests {
             summarizer_input_budget: 48_000,
             circuit_breaker_max: 3,
             max_splits: 3,
+            fold_nudge_growth_tokens: 50_000,
         };
         let child_id = ephemeral_for("child-agent", None);
 
@@ -1470,6 +1472,7 @@ mod tests {
             summarizer_input_budget: 48_000,
             circuit_breaker_max: 10,
             max_splits: 3,
+            fold_nudge_growth_tokens: 50_000,
         });
 
         let (_budget, compactor, _pipeline) = super::super::child_context_triple(

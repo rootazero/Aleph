@@ -4,6 +4,7 @@ use crate::sync_primitives::Ordering;
 use tokio_util::sync::CancellationToken;
 
 use super::AgentHarness;
+use crate::context::budget::pressure::estimate_tokens_aware;
 use crate::context::compact::rescue::{self, RescueCx, RescueHost};
 use crate::guardrails::SessionInputScreen;
 use crate::harness::callback::HarnessCallback;
@@ -13,8 +14,7 @@ use crate::providers::message::UnifiedMessage;
 use crate::session::events::{EventSeq, MessageContent, SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
 use crate::thinker::nudges::{
-    compact_growth_nudge, FOLD_NUDGE_GROWTH_TOKENS, MAX_OUTPUT_TOKENS_RESUME_NUDGE,
-    MAX_STEPS_HINT,
+    compact_growth_nudge, MAX_OUTPUT_TOKENS_RESUME_NUDGE, MAX_STEPS_HINT,
 };
 use crate::verification::{
     hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict, STOP_REASON_END_TURN,
@@ -140,22 +140,82 @@ fn last_fold_to_seq(events: &[SessionEventRecord]) -> EventSeq {
         .unwrap_or(0)
 }
 
+/// The most recent fold record's **own seq** and its `to_seq` marker, or
+/// `None` when the session has never folded. The record's own seq — not
+/// `to_seq` — is the cutoff for cross-run growth estimation: the fold batch
+/// (summary + markers) is appended to the log AFTER the surviving verbatim
+/// tail, so "logged after the fold record" is exactly the conversation that
+/// happened after the fold, while the tail (seq in `to_seq..record seq`)
+/// was already part of the post-fold prompt and belongs to the baseline.
+fn last_fold_event(events: &[SessionEventRecord]) -> Option<(EventSeq, EventSeq)> {
+    events.iter().rev().find_map(|r| match &r.event {
+        SessionEvent::FoldRecorded { to_seq, .. }
+        | SessionEvent::CompactionPerformed { to_seq, .. } => Some((r.seq, *to_seq)),
+        _ => None,
+    })
+}
+
+/// Estimated prompt tokens of the conversation logged after `after_seq` —
+/// the growth a resumed run inherited since its session's last fold. Counts
+/// the text of the events the prompt projection (`prompt::build_prompt`)
+/// renders: user/assistant text and thinking, system messages, tool results
+/// and errors, scored by the same density-aware estimator the pressure
+/// gauge uses. Rich blocks (images, `tool_use` JSON) and fixed scaffolding
+/// (wrappers, interruption notes) are NOT counted, so the estimate runs
+/// low; a low growth estimate seeds the cross-run baseline HIGH, which
+/// delays the resumed run's first nudge — the safe direction (a late
+/// reminder, never an early nag).
+fn estimate_prompt_tokens_after_seq(
+    events: &[SessionEventRecord],
+    after_seq: EventSeq,
+    ratio: f64,
+) -> u64 {
+    let mut text = String::new();
+    for record in events.iter().filter(|r| r.seq > after_seq) {
+        match &record.event {
+            SessionEvent::UserMessage { content, .. }
+            | SessionEvent::AssistantMessage { content, .. } => {
+                text.push_str(&content.text);
+                if let Some(thinking) = &content.thinking {
+                    text.push_str(thinking);
+                }
+            }
+            SessionEvent::SystemMessage { content, .. } => text.push_str(content),
+            SessionEvent::ToolResult { output, .. } => {
+                text.push_str(&output.value.to_string());
+            }
+            SessionEvent::ToolError { error, .. } => text.push_str(error),
+            _ => {}
+        }
+    }
+    estimate_tokens_aware(&text, ratio) as u64
+}
+
 // ---------------------------------------------------------------------------
 // Growth-step fold nudge (Context Fabric, spec 2026-10-01 §1d)
 // ---------------------------------------------------------------------------
 
 /// Run-scoped accountant for the growth-step fold nudge.
 ///
-/// Fires the nudge when the prompt has grown by at least
-/// [`FOLD_NUDGE_GROWTH_TOKENS`] since the baseline, where the baseline is:
-/// the prompt size at run start, the size observed right after the last fold
-/// (folds reset the clock — a compaction just freed the budget), or the size
-/// at the last fired nudge (one nudge per growth step — the model may
-/// legitimately decide the recent turns must stay verbatim, and nagging every
-/// turn after that is spam). Lives on `AgentHarness` because the harness is
-/// per-run: growth accounting across runs of one session is out of scope — a
-/// fresh run starts from a fresh baseline, which is cheap and wrong by at
-/// most one nudge interval.
+/// Fires the nudge when the prompt has grown by at least `threshold` (the
+/// `fold_nudge_growth_tokens` budget config, defaulting to
+/// [`crate::thinker::nudges::FOLD_NUDGE_GROWTH_TOKENS`]) since the baseline,
+/// where the baseline is:
+/// the prompt size at run start, the size observed right after the last
+/// fold (folds reset the clock — a compaction just freed the budget), or
+/// the size at the last fired nudge (one nudge per growth step — the model
+/// may legitimately decide the recent turns must stay verbatim, and nagging
+/// every turn after that is spam).
+///
+/// **Cross-run accounting.** The harness is per-run, so without help a
+/// fresh run would restart the ledger at the current prompt size and lose
+/// the growth earlier runs accumulated after the session's last fold — on
+/// every resumed session the nudge would arrive up to a full interval late.
+/// When the session already carries a fold record, think.rs instead seeds
+/// the baseline from the estimated post-fold prompt size (see
+/// [`GrowthNudgeTracker::seed_cross_run`]), continuing the ledger across
+/// runs. A session with no fold history behaves exactly as before: the
+/// first observation of the run is the baseline.
 ///
 /// Suppressed while `breaker_engaged` — the compaction circuit breaker is
 /// counting consecutive ineffective compactions, so folding has just proven
@@ -168,7 +228,8 @@ fn last_fold_to_seq(events: &[SessionEventRecord]) -> EventSeq {
 /// the baseline is rebased to the current (post-fold, smaller) prompt size.
 pub(crate) struct GrowthNudgeTracker {
     /// Prompt size at the last baseline-setting event (run start, last fold,
-    /// or last fired nudge). `None` until the first observation.
+    /// last fired nudge, or the cross-run seed). `None` until the first
+    /// observation (or a seed) sets it.
     baseline: Option<u64>,
     /// Fold marker seen at the last observation.
     last_fold_marker: EventSeq,
@@ -182,15 +243,44 @@ impl GrowthNudgeTracker {
         }
     }
 
+    /// True until any baseline exists — the gate think.rs uses to attempt a
+    /// cross-run seed exactly once (the seed needs a log walk, so the check
+    /// must not be folded into the seeding call itself).
+    pub(crate) fn is_unseeded(&self) -> bool {
+        self.baseline.is_none()
+    }
+
+    /// Seed the ledger for a run resuming a session that folded before this
+    /// run started: `post_fold_tokens` is the estimated prompt size right
+    /// after the last fold, `fold_marker` that fold's `to_seq`. No-op when
+    /// the baseline is already set — this is strictly a resume mechanism; a
+    /// fold landing in-run rebases through `consider` as usual.
+    ///
+    /// The estimate is approximate by construction (think.rs derives it from
+    /// the events logged after the fold record), and the estimator
+    /// deliberately undercounts — so the seed errs HIGH and the resumed
+    /// run's first nudge arrives late rather than early. Late is the safe
+    /// direction: the nudge is an advisory, and an early advisory on a fresh
+    /// run reads as nagging.
+    pub(crate) fn seed_cross_run(&mut self, post_fold_tokens: u64, fold_marker: EventSeq) {
+        if self.baseline.is_none() {
+            self.baseline = Some(post_fold_tokens);
+            self.last_fold_marker = fold_marker;
+        }
+    }
+
     /// Consider firing the growth nudge for this turn. `used_tokens` is the
     /// current projected prompt size, `last_fold_to_seq` the session's latest
     /// fold boundary (0 = never folded), `breaker_engaged` whether the
-    /// compaction circuit breaker counts ineffective compactions.
+    /// compaction circuit breaker counts ineffective compactions, `threshold`
+    /// the growth step that earns a nudge (`ContextBudgetConfig::
+    /// fold_nudge_growth_tokens`).
     pub(crate) fn consider(
         &mut self,
         used_tokens: u64,
         last_fold_to_seq: EventSeq,
         breaker_engaged: bool,
+        threshold: u64,
     ) -> Option<String> {
         // A fold landed since the last observation: rebase onto the post-fold
         // size before measuring growth.
@@ -207,12 +297,12 @@ impl GrowthNudgeTracker {
             }
         };
         let grown = used_tokens.saturating_sub(baseline);
-        if grown < FOLD_NUDGE_GROWTH_TOKENS || breaker_engaged {
+        if grown < threshold || breaker_engaged {
             return None;
         }
         // Fired: rebase so the next nudge needs a full new growth step.
         self.baseline = Some(used_tokens);
-        Some(compact_growth_nudge(grown, FOLD_NUDGE_GROWTH_TOKENS))
+        Some(compact_growth_nudge(grown, threshold))
     }
 }
 
@@ -609,16 +699,20 @@ impl AgentHarness {
         }
 
         // 2d-G2. Growth-step fold nudge (Context Fabric §1d). When the prompt
-        // has grown by FOLD_NUDGE_GROWTH_TOKENS since the last fold (or run
-        // start), ask the model to fold the conversation itself via
-        // `session_compact`, before pressure forces an emergency compaction it
-        // cannot steer. Injected into the transient tail only — never emitted
-        // to the session log, and outside every cache breakpoint (the nudge is
-        // classified synthetic, so the cache layer never places a breakpoint
-        // on it). Suppressed while the circuit breaker counts ineffective
-        // compactions: urging a fold that just proved useless is pure nagging.
-        // `peek_pressure` is a read-only snapshot, so this never perturbs the
-        // budget state machine (before_turn owns mutation).
+        // has grown by the configured `fold_nudge_growth_tokens` since the
+        // last fold (or run start), ask the model to fold the conversation
+        // itself via `session_compact`, before pressure forces an emergency
+        // compaction it cannot steer. A run resuming an already-folded
+        // session first seeds the baseline from the estimated post-fold
+        // size, so growth earned by earlier runs counts toward this run's
+        // first nudge. Injected into the transient tail only — never emitted
+        // to the session log, and outside every cache breakpoint (the nudge
+        // is classified synthetic, so the cache layer never places a
+        // breakpoint on it). Suppressed while the circuit breaker counts
+        // ineffective compactions: urging a fold that just proved useless is
+        // pure nagging. `peek_pressure` is a read-only snapshot, so this
+        // never perturbs the budget state machine (before_turn owns
+        // mutation).
         if let Some(budget) = self.deps.context_budget.as_ref() {
             let nudge = {
                 let guard = budget.lock().await;
@@ -626,11 +720,28 @@ impl AgentHarness {
                     .peek_pressure(&messages, system_prompt, budget_tool_tokens)
                     .used_tokens as u64;
                 let breaker_engaged = guard.ineffective_compaction_streak() > 0;
+                let threshold = guard.fold_nudge_growth_tokens();
+                let ratio = guard.token_estimate_ratio();
                 drop(guard);
-                self.fold_nudge_tracker
+                let mut tracker = self
+                    .fold_nudge_tracker
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .consider(used_tokens, last_fold_to_seq(&events), breaker_engaged)
+                    .unwrap_or_else(|e| e.into_inner());
+                // Cross-run resume: with a fold already on record, continue
+                // the ledger from the estimated post-fold size instead of
+                // restarting at the current prompt size.
+                if tracker.is_unseeded() {
+                    if let Some((fold_seq, to_seq)) = last_fold_event(&events) {
+                        let growth = estimate_prompt_tokens_after_seq(&events, fold_seq, ratio);
+                        tracker.seed_cross_run(used_tokens.saturating_sub(growth), to_seq);
+                    }
+                }
+                tracker.consider(
+                    used_tokens,
+                    last_fold_to_seq(&events),
+                    breaker_engaged,
+                    threshold,
+                )
             };
             if let Some(nudge) = nudge {
                 messages.push(UnifiedMessage::user(nudge));
@@ -1598,7 +1709,9 @@ impl RescueHost for AgentHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::events::{now_ms, MessageContent, SessionEvent, SessionEventRecord};
+    use crate::session::events::{
+        now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput,
+    };
 
     fn mk(seq: u64, event: SessionEvent) -> SessionEventRecord {
         SessionEventRecord {
@@ -1654,6 +1767,91 @@ mod tests {
             mk(1, assistant("here is your answer", false)),
         ];
         assert!(last_assistant_has_text(&events));
+    }
+
+    fn fold_batch(to_seq: EventSeq) -> [SessionEvent; 2] {
+        [
+            SessionEvent::CompactionPerformed {
+                from_seq: 0,
+                to_seq,
+                summary_ref: "t-summary".to_string(),
+                at: now_ms(),
+            },
+            SessionEvent::FoldRecorded {
+                fold_id: "f-1".to_string(),
+                from_seq: 0,
+                to_seq,
+                summary_ref: "t-summary".to_string(),
+                strategy: "manual".to_string(),
+                trigger: "manual-command".to_string(),
+                folded_tokens: 1_000,
+                summary_tokens: 100,
+                at: now_ms(),
+            },
+        ]
+    }
+
+    /// The cross-run seed cutoff is the fold record's OWN seq, not its
+    /// `to_seq`: the fold batch is appended after the surviving verbatim
+    /// tail, so the tail (seq between `to_seq` and the record) belongs to
+    /// the baseline and only strictly-later events count as growth.
+    #[test]
+    fn last_fold_event_and_growth_estimate_cut_at_the_record() {
+        let [compaction, fold] = fold_batch(1);
+        let events = vec![
+            mk(1, user("folded away")),
+            mk(2, user("verbatim tail — baseline, not growth")),
+            mk(3, compaction),
+            mk(4, fold),
+            mk(5, user("post-fold question")),
+            mk(6, assistant("post-fold answer", false)),
+            mk(
+                7,
+                SessionEvent::ToolResult {
+                    turn_id: uuid::Uuid::new_v4(),
+                    call_id: "c1".to_string(),
+                    output: ToolOutput {
+                        value: serde_json::json!("tool says hi"),
+                        metadata: Default::default(),
+                    },
+                    at: now_ms(),
+                },
+            ),
+        ];
+
+        assert_eq!(last_fold_event(&events), Some((4, 1)));
+        assert_eq!(last_fold_to_seq(&events), 1);
+
+        let ratio = 3.5;
+        let est = estimate_prompt_tokens_after_seq(&events, 4, ratio);
+        let expected = estimate_tokens_aware(
+            &format!(
+                "post-fold questionpost-fold answer{}",
+                serde_json::json!("tool says hi")
+            ),
+            ratio,
+        ) as u64;
+        assert_eq!(est, expected);
+        assert!(est > 0, "post-fold conversation must count as growth");
+        // The tail and the folded span are NOT growth: estimating from the
+        // fold's `to_seq` would (wrongly) add the tail.
+        let with_tail = estimate_prompt_tokens_after_seq(&events, 1, ratio);
+        assert!(with_tail > est, "tail must stay on the baseline side");
+    }
+
+    /// Legacy compaction (a bare `CompactionPerformed`, no `FoldRecorded`)
+    /// is still a fold boundary; a never-folded log has none.
+    #[test]
+    fn last_fold_event_handles_legacy_and_never_folded() {
+        let [compaction, _fold] = fold_batch(1);
+        let legacy = vec![mk(1, user("old")), mk(2, compaction)];
+        assert_eq!(last_fold_event(&legacy), Some((2, 1)));
+
+        let fresh = vec![mk(1, user("hi"))];
+        assert_eq!(last_fold_event(&fresh), None);
+        assert_eq!(estimate_prompt_tokens_after_seq(&fresh, 0, 3.5), {
+            estimate_tokens_aware("hi", 3.5) as u64
+        });
     }
 
     #[test]

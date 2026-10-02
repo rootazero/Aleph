@@ -340,15 +340,14 @@ pub const SYSTEM_REMINDER_OPEN: &str = "<system-reminder>";
 /// [`compact_growth_nudge`] (Context Fabric, spec 2026-10-01 §1d; bili
 /// `compress.nudgeGrowthTokens` parity).
 ///
-/// **Spec O2 ruling — constant, not a config knob.** The spec left
-/// "configurable vs constant" to the implementer. Constant-first because the
-/// 50k value is an unvalidated heuristic borrowed from bili's default: a
-/// `[context_budget]` TOML key would promise a tuning surface nobody has
-/// evidence to tune, and the growth accounting is run-scoped harness
-/// bookkeeping that a per-model config override would scatter across two
-/// files for zero behavioural gain. If production use shows the value needs
-/// tuning, promoting it to `ContextBudgetConfig` is a one-struct-field
-/// change; until then the constant keeps the decision in one place.
+/// **Spec O2 ruling — constant, not a config knob** — *overruled
+/// 2026-10-02.* O2 pinned this as a constant on 2026-10-01 (the 50k value
+/// was an unvalidated heuristic borrowed from bili's default, and a TOML
+/// key seemed to promise a tuning surface nobody had evidence to tune). The
+/// user overruled: R9 ("all configurability exposed as tools") wins —
+/// `[context_budget].fold_nudge_growth_tokens` now tunes the threshold, and
+/// this constant remains only as the single source of the DEFAULT
+/// (`deps_builder::context_budget` applies it when the TOML key is unset).
 pub const FOLD_NUDGE_GROWTH_TOKENS: u64 = 50_000;
 
 /// Growth-step nudge asking the model to fold the conversation itself

@@ -330,6 +330,7 @@ fn tiny_budget_config(budget: u64, warn: f64, critical: f64) -> ContextBudgetCon
         summarizer_input_budget: 48_000,
         circuit_breaker_max: 10,
         max_splits: 3,
+        fold_nudge_growth_tokens: 50_000,
     }
 }
 

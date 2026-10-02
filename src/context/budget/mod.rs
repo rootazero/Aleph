@@ -232,6 +232,14 @@ pub struct ContextBudgetConfig {
     /// Max session-splits allowed in one run before a circuit-breaker trip
     /// falls back to `CompactToFit`. Default 3.
     pub max_splits: usize,
+    /// Prompt-token growth since the last fold (or run start) that earns the
+    /// growth-step fold nudge (Context Fabric §1d; `think.rs` 2d-G2).
+    /// Default [`crate::thinker::nudges::FOLD_NUDGE_GROWTH_TOKENS`] (50k) —
+    /// spec O2 pinned it as a constant on 2026-10-01, but the user overruled
+    /// that on 2026-10-02: R9 ("all configurability exposed as tools") beats
+    /// the O2 magic-number concern, so the constant only seeds the default
+    /// and the operator's `[context_budget]` value wins.
+    pub fold_nudge_growth_tokens: u64,
 }
 
 impl ContextBudgetConfig {
@@ -303,6 +311,9 @@ pub struct ContextBudget {
     split_count: usize,
     /// Maximum session splits allowed before the circuit-breaker trip falls back to `CompactToFit`.
     max_splits: usize,
+    /// Growth step that earns the fold nudge, copied from
+    /// [`ContextBudgetConfig::fold_nudge_growth_tokens`].
+    fold_nudge_growth_tokens: u64,
     /// Self-learning multiplier applied to the heuristic token estimate,
     /// calibrated against the provider's reported prompt size after each turn.
     /// `None` until the first observation — the estimate then runs uncalibrated
@@ -357,6 +368,7 @@ impl ContextBudget {
             last_pressure: None,
             split_count: 0,
             max_splits: config.max_splits,
+            fold_nudge_growth_tokens: config.fold_nudge_growth_tokens,
             calibration: None,
             reasoning_replay: ReasoningReplay::default(),
             server_clears_tool_results: false,
@@ -417,6 +429,13 @@ impl ContextBudget {
     #[must_use]
     pub const fn token_estimate_ratio(&self) -> f64 {
         self.token_estimate_ratio
+    }
+
+    /// Prompt-token growth step that earns the fold nudge (see
+    /// [`ContextBudgetConfig::fold_nudge_growth_tokens`]).
+    #[must_use]
+    pub const fn fold_nudge_growth_tokens(&self) -> u64 {
+        self.fold_nudge_growth_tokens
     }
 
     /// Fraction of budget at which context is considered critically full.
@@ -709,6 +728,7 @@ mod tests {
             summarizer_input_budget: 48_000,
             circuit_breaker_max: 3,
             max_splits: 3,
+            fold_nudge_growth_tokens: 50_000,
         }
     }
 
@@ -994,6 +1014,7 @@ mod tests {
             token_estimate_ratio: 1.0,
             circuit_breaker_max: 2,
             max_splits: 3,
+            fold_nudge_growth_tokens: 50_000,
             ..default_config()
         };
         let mut budget = ContextBudget::new(&config);

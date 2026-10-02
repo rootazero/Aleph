@@ -460,6 +460,13 @@ pub fn build_context_budget_config(
         ),
         circuit_breaker_max: 3,
         max_splits: 3,
+        // Fold-nudge growth step: operator-tunable (R9), with the spec O2
+        // constant as the single source for the default. Zero is honoured
+        // verbatim — it turns the nudge into an every-turn advisory, which
+        // is noisy but is exactly what the operator asked for.
+        fold_nudge_growth_tokens: cb
+            .fold_nudge_growth_tokens
+            .unwrap_or(crate::thinker::nudges::FOLD_NUDGE_GROWTH_TOKENS),
     })
 }
 
@@ -707,6 +714,30 @@ mod tests {
             ..ContextBudgetToml::default()
         }));
         assert!(build_context_budget_config(&cfg, "primary", &[]).is_none());
+    }
+
+    /// `[context_budget].fold_nudge_growth_tokens` tunes the fold-nudge
+    /// growth step (R9; spec O2 overruled 2026-10-02). Unset inherits the
+    /// nudges-module constant as the single source of the default.
+    #[test]
+    fn fold_nudge_threshold_configurable_with_constant_default() {
+        let default_cfg = build_context_budget_config(&Config::default(), "primary", &[])
+            .expect("a missing section is on");
+        assert_eq!(
+            default_cfg.fold_nudge_growth_tokens,
+            crate::thinker::nudges::FOLD_NUDGE_GROWTH_TOKENS,
+        );
+
+        let custom = build_context_budget_config(
+            &cfg_with_context_budget(Some(ContextBudgetToml {
+                fold_nudge_growth_tokens: Some(5_000),
+                ..ContextBudgetToml::default()
+            })),
+            "primary",
+            &[],
+        )
+        .expect("enabled → Some");
+        assert_eq!(custom.fold_nudge_growth_tokens, 5_000);
     }
 
     #[test]
@@ -1312,6 +1343,10 @@ mod tests {
         assert_eq!(a.fresh_tail_count, b.fresh_tail_count, "fresh_tail");
         assert_eq!(a.circuit_breaker_max, b.circuit_breaker_max, "breaker");
         assert_eq!(a.max_splits, b.max_splits, "max_splits");
+        assert_eq!(
+            a.fold_nudge_growth_tokens, b.fold_nudge_growth_tokens,
+            "fold_nudge_growth_tokens"
+        );
     }
 
     /// The refiner comes and goes with the config: on when the section is
