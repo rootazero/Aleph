@@ -177,6 +177,14 @@ pub struct ContextBudgetToml {
     /// which is pressure-driven and never touches the stored log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manual_compact_keep_tokens: Option<usize>,
+    /// Prompt-token growth since the last fold (or run start) at which the
+    /// harness asks the model to fold the conversation itself via
+    /// `session_compact` (growth-step fold nudge, Context Fabric §1d).
+    /// Unset defaults to 50 000 (`thinker::nudges::FOLD_NUDGE_GROWTH_TOKENS`).
+    /// The nudge is advisory and transient — it never lands in the session
+    /// log — so a small value is merely noisy, never destructive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold_nudge_growth_tokens: Option<u64>,
 }
 
 /// serde default for `ContextBudgetToml::enabled` — context management is on
@@ -195,6 +203,7 @@ impl Default for ContextBudgetToml {
             summary_model: None,
             model_thresholds: Vec::new(),
             manual_compact_keep_tokens: None,
+            fold_nudge_growth_tokens: None,
         }
     }
 }
@@ -414,6 +423,7 @@ critical_threshold = 0.85
                 summary_model: None,
                 model_thresholds: Vec::new(),
                 manual_compact_keep_tokens: None,
+                fold_nudge_growth_tokens: None,
             })
         );
     }
