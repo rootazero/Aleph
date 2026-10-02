@@ -240,7 +240,7 @@ mod tests {
             UnifiedMessage::user("recent 2"),
             UnifiedMessage::user("recent 3"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 3).await;
         assert!(freed > 100, "expected significant savings, got {freed}");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -279,7 +279,7 @@ mod tests {
             produced("call-1", "bash", body),
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert!(freed > 0, "a large multi-line log must be reduced");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -305,7 +305,7 @@ mod tests {
             produced("call-1", "Read", "z".repeat(3000)),
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert!(freed > 0, "a large opaque result must be pruned");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -339,7 +339,7 @@ mod tests {
             },
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert!(freed > 0, "the large text must still be pruned");
         assert!(
@@ -364,7 +364,7 @@ mod tests {
     #[tokio::test]
     async fn skips_small_tool_result() {
         let mut messages = vec![small_tool_result(), UnifiedMessage::user("recent")];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert_eq!(freed, 0, "small results must not be pruned");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -377,7 +377,7 @@ mod tests {
             UnifiedMessage::user("oldest"),
             big_tool_result(), // sits in protected tail when fresh_tail=2
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 2).await;
         assert_eq!(freed, 0, "fresh tail must be inviolable");
         let (_name, text) = messages[1].tool_result_info().expect("still a ToolResult");
@@ -391,7 +391,7 @@ mod tests {
     #[tokio::test]
     async fn empty_messages_no_op() {
         let mut messages: Vec<UnifiedMessage> = vec![];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 3).await;
         assert_eq!(freed, 0);
     }
@@ -407,7 +407,7 @@ mod tests {
             produced("call-1", "bash", marker.to_string()),
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert_eq!(freed, 0, "persisted markers must not be re-pruned");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -429,7 +429,7 @@ mod tests {
             produced("call-1", "bash", composed.clone()),
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert_eq!(freed, 0, "a result carrying a marker must not be re-pruned");
         let (_n, after) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -443,7 +443,7 @@ mod tests {
             UnifiedMessage::assistant("b".repeat(2000)),
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert_eq!(freed, 0, "non-ToolResult messages must not be pruned");
     }

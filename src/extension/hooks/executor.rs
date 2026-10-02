@@ -1902,10 +1902,15 @@ mod tests {
     /// `tracing::warn!` line is the ONLY externally observable effect a
     /// fire-site test can assert on (P4.1 review, Q1).
     #[derive(Clone, Default)]
+    /// Both types back `exit_2_observer_hook_warns_but_does_not_block`, an
+    /// `#[cfg(unix)]` test (exit-code semantics); gated to match.
+    #[cfg(unix)]
     struct CapturedMessages(Arc<std::sync::Mutex<Vec<String>>>);
 
+    #[cfg(unix)]
     struct MessageVisitor(String);
 
+    #[cfg(unix)]
     impl tracing::field::Visit for MessageVisitor {
         fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
             if field.name() == "message" {
@@ -1914,6 +1919,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedMessages {
         fn on_event(
             &self,

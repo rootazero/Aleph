@@ -124,7 +124,7 @@ pub fn default_patterns_bytes() -> &'static [(&'static str, regex::bytes::Regex)
                 })
                 .collect()
         });
-    &DEFAULT_BYTE_PATTERNS.as_slice()
+    DEFAULT_BYTE_PATTERNS.as_slice()
 }
 
 /// Known secret format patterns.

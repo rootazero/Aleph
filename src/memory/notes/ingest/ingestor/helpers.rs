@@ -26,11 +26,8 @@ use crate::memory::notes::KnowledgeNote;
 /// gate is a deterministic threshold, not a re-judgement.
 //
 // `CandidateNote` owns every LLM-authored field it receives, so each arm
-// clones out of the borrowed `PageOp`. Twelve per-line suppressions were
-// noise — every clone here is intentional and the same shape applies to
-// both arms — so consolidate into one block-level allow with the contract
-// stated up front.
-#[allow(clippy::excessive_clones)]
+// clones out of the borrowed `PageOp` — every clone here is intentional and
+// the same shape applies to both arms.
 pub(crate) fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<CandidateNote> {
     match op {
         PageOp::Create {

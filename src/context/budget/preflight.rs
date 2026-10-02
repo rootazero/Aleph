@@ -329,7 +329,7 @@ pub fn default_pipeline(
     } else {
         vec![
             Box::new(FileOpSupersedeStage::default().with_min_pressure_ratio(preventive_floor)),
-            Box::new(ToolResultPruningStage::default()),
+            Box::new(ToolResultPruningStage),
             Box::new(HistoricalImageStrippingStage),
         ]
     };

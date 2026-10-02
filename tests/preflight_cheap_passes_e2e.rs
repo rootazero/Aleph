@@ -26,7 +26,7 @@ fn fresh_pressure() -> ContextPressure {
 
 fn make_pipeline() -> PreflightPipeline {
     let stages: Vec<Box<dyn PreflightStage>> = vec![
-        Box::new(ToolResultPruningStage::default()),
+        Box::new(ToolResultPruningStage),
         Box::new(HistoricalImageStrippingStage),
     ];
     PreflightPipeline::new(stages)
