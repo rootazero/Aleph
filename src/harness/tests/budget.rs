@@ -765,7 +765,27 @@ const BUDGETED: [&str; 12] = [
 ///     resets-after-fold). Nothing was deleted to absorb it: the harness
 ///     had no existing growth-accounting surface to fold this into (the
 ///     pressure ladder measures level, not delta).
-const CEILING: usize = 5434;
+///
+/// **fix/nudge-crossrun (2026-10-02): 5434 → 5545 (+111).** Cross-run
+/// growth accounting for the fold nudge (spec O2 follow-up): `think.rs`
+/// gains `last_fold_event` (event-log scan for the most recent
+/// FoldRecorded), `estimate_prompt_tokens_after_seq` (text-class content
+/// projection after a fold coordinate), and `seed_cross_run` (tracker
+/// baseline = persisted `used_tokens` − estimate, so a session resumed
+/// after a fold does not re-nudge from zero), plus the 2d-G2 point now
+/// reading the operator-tunable `fold_nudge_growth_tokens` (R9) instead
+/// of the bare constant.
+///
+/// Three questions: (1) **scaffolding, not cognition** — seeding is
+/// bookkeeping over the persisted event log and a token estimate; the
+/// estimate deliberately under-counts (text-class only), which biases the
+/// first nudge *late*, the safe direction. (2) **yes** — how much the
+/// window grew *since the last fold across runs* is a fact of the
+/// persisted ledger versus the live window; no model capability lets it
+/// see state that was compacted away before it booted. (3) **consumers
+/// today** — the 2d-G2 injection point (sole producer/consumer) and the
+/// `harness::tests::think` cross-run seeding tests.
+const CEILING: usize = 5545;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
