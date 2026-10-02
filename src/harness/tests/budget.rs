@@ -741,7 +741,31 @@ const BUDGETED: [&str; 12] = [
 ///     same field would have fit on one line under the older formatter.
 ///     Bumping CEILING by the exact measured delta, not rounding, so the
 ///     guard still catches a real regression.
-const CEILING: usize = 5241;
+/// +193 (5241 → 5434, 2026-10-01, measured, Context Fabric T4): the
+///     growth-step fold nudge. `agent/think.rs` (+185) gains the
+///     `last_fold_to_seq` event-scan helper, the `GrowthNudgeTracker`
+///     (per-run baseline accounting: run start / last fold / last nudge),
+///     and the 2d-G2 injection point that pushes a fenced
+///     `compact_growth_nudge` into the per-turn transient tail when the
+///     window has grown 50k tokens since the last fold AND the compaction
+///     circuit breaker is not tripped. `agent.rs` (+8) carries the
+///     `Mutex<GrowthNudgeTracker>` field on `AgentHarness` and the
+///     `pub(crate) mod think` visibility the tests need.
+///
+///     Three questions: (1) **scaffolding, not cognition** — the tracker
+///     counts persisted tokens against a constant and judges nothing about
+///     content; the cognition (WHEN folding is worth it) stays in the
+///     nudge's prompt text and the model. (2) **yes** — how much the window
+///     grew since the last fold is a runtime fact of the loop, not a
+///     capability a stronger model absorbs; without the tracker the model
+///     sees only the current pressure snapshot and cannot do growth
+///     accounting across turns. (3) **consumers today** — the injection
+///     point itself (the only producer) and four tests in
+///     `src/harness/tests/think.rs` (fires / breaker-suppressed / transient /
+///     resets-after-fold). Nothing was deleted to absorb it: the harness
+///     had no existing growth-accounting surface to fold this into (the
+///     pressure ladder measures level, not delta).
+const CEILING: usize = 5434;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

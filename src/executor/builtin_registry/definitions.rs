@@ -3071,7 +3071,23 @@ mod tests {
     /// nothing more; (3) no other tool names the QA surface — the
     /// `error_events` row is a runtime answer
     /// (`browser_session{action:"capabilities"}`), not catalog bytes.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 116_230;
+    /// 2026-10-01 (C4 session_decompress tool + session_compact description
+    /// growth): 116_230 -> 117_174 B, measured by this test's own failure
+    /// line on the Context Fabric branch (97_578 catalog + 16_613
+    /// registry-only + 1_039 injected + 1_944 bridge); the delta (+944 B) is
+    /// `session_decompress`'s whole DESCRIPTION (T2, decompress.rs) plus the
+    /// `session_compact` DESCRIPTION addition teaching proactive folding
+    /// (T4). Three questions: (1) the verbs' existence and their
+    /// division-of-labour contract (decompress = verbatim restore, compact =
+    /// fold, ctx_search = search) are not inferable — after a fold NOTHING in
+    /// the window names the way back, and the nudge only teaches folding,
+    /// not restoration; (2) every per-field detail (from_seq/to_seq paging,
+    /// hard-retire honesty, quality tags) lives in the JsonSchema doc
+    /// comments — the descriptions name the verbs and the contract, nothing
+    /// more; (3) no other tool names the restore surface — `list_folds` is a
+    /// runtime answer (session_decompress{action:"list"}), not catalog
+    /// bytes.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 117_174;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
