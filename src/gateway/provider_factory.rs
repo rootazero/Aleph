@@ -97,6 +97,7 @@ pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         metadata_user_id: None,
         effort: None,
         server_context_editing: Default::default(),
+        model_defs: vec![],
     };
 
     let provider = create_provider("claude", config)
@@ -170,6 +171,7 @@ pub fn create_openai_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         metadata_user_id: None,
         effort: None,
         server_context_editing: Default::default(),
+        model_defs: vec![],
     };
 
     let provider = create_provider("openai", config)

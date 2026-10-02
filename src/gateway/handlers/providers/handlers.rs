@@ -553,6 +553,7 @@ pub async fn handle_test(
         metadata_user_id: None,
         effort: None,
         server_context_editing: Default::default(),
+        model_defs: vec![],
     };
 
     // Probe connectivity (shared with the bulk `providers.healthcheck` probe),

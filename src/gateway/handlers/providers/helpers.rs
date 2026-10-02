@@ -162,6 +162,7 @@ pub(super) fn build_provider_config_for_persistence(
             metadata_user_id: None,
             effort: None,
             server_context_editing: Default::default(),
+            model_defs: vec![],
         },
     };
 

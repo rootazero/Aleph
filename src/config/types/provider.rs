@@ -98,6 +98,166 @@ impl JsonSchema for ServerContextEditing {
 }
 
 // =============================================================================
+// ModelDef — per-model parameter overrides
+// =============================================================================
+
+/// Per-input-modality capability flags for a model.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ModelInput {
+    /// Accepts text messages.
+    pub text: bool,
+    /// Accepts image attachments.
+    pub image: bool,
+}
+
+/// Tiered pricing: applies when input token count exceeds `input_tokens_above`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct CostTier {
+    /// Lower bound (inclusive) in input tokens for this tier.
+    pub input_tokens_above: u64,
+    /// Input cost in USD per million tokens (this tier).
+    #[serde(default)]
+    pub input: Option<f64>,
+    /// Output cost in USD per million tokens (this tier).
+    #[serde(default)]
+    pub output: Option<f64>,
+    /// Cache-read cost in USD per million tokens.
+    #[serde(default)]
+    pub cache_read: Option<f64>,
+    /// Cache-write cost in USD per million tokens.
+    #[serde(default)]
+    pub cache_write: Option<f64>,
+}
+
+/// Cost information for a model, in USD per million tokens.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ModelCost {
+    /// Base input cost ($/M tokens).
+    pub input: Option<f64>,
+    /// Base output cost ($/M tokens).
+    pub output: Option<f64>,
+    /// Cache-read cost ($/M tokens, e.g. Anthropic prompt cache).
+    pub cache_read: Option<f64>,
+    /// Cache-write cost ($/M tokens).
+    pub cache_write: Option<f64>,
+    /// Reasoning-token cost ($/M tokens, for models that bill reasoning separately).
+    pub reasoning: Option<f64>,
+    /// Tiered rates — applied when input volume exceeds each tier's threshold.
+    #[serde(default)]
+    pub tiers: Vec<CostTier>,
+}
+
+/// Thinking-level → budget token mapping for extended-thinking models.
+/// Any level not listed falls back to the provider default.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ThinkingLevelMap {
+    pub off: Option<String>,
+    pub minimal: Option<String>,
+    pub low: Option<String>,
+    pub medium: Option<String>,
+    pub high: Option<String>,
+    pub xhigh: Option<String>,
+    pub max: Option<String>,
+}
+
+/// Compat flags for a model — each key maps to a real adapter consumer.
+///
+/// All fields are `Option<T>`: `None` means "use the adapter's built-in
+/// heuristic" (typically prefix matching). An explicit value wins.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ModelCompat {
+    /// Use `max_completion_tokens` instead of `max_tokens` (o1/o3/o4/gpt-5).
+    /// Consumer: `openai_common/max_tokens.rs:12`
+    pub uses_max_completion_tokens: Option<bool>,
+
+    /// Strip temperature/top_p/top_k from the request (claude-4.7+).
+    /// Consumer: `anthropic/proto_impl.rs:551`
+    pub forbids_sampling_params: Option<bool>,
+
+    /// Override temperature handling: `"omit"` | `"force:<f32>"`.
+    /// Consumer: `anthropic/adapter.rs:305`, `presets/mod.rs:436`
+    pub temperature_policy: Option<String>,
+
+    /// Inject Anthropic `cache_control` breakpoints.
+    /// Consumer: `anthropic/provider_policy.rs:184`
+    pub supports_cache_control: Option<bool>,
+
+    /// Allow `reasoning_effort` field in requests.
+    /// Consumer: `openai_common/provider_policy.rs`
+    pub supports_reasoning_effort: Option<bool>,
+
+    /// Add empty `properties: {}` to object schemas (Moonshot/DeepSeek).
+    /// Consumer: `openai_common/provider_policy.rs`
+    pub requires_object_properties: Option<bool>,
+
+    /// Inline all `$ref` schema references (Moonshot).
+    /// Consumer: `openai_common/provider_policy.rs`
+    pub requires_derefed_refs: Option<bool>,
+
+    /// Send `prompt_cache_key` / `retention` fields.
+    /// Consumer: `openai_common/provider_policy.rs`
+    pub supports_prompt_cache: Option<bool>,
+
+    /// Thinking block encoding: `"openai"` | `"deepseek"` | `"qwen"` |
+    /// `"string-thinking"` | `null` (no thinking support).
+    /// Consumer: `openai_chat/adapter.rs` thinking branch
+    pub thinking_format: Option<String>,
+
+    /// Vendor behaviour profile: `"strict"` | `null`.
+    /// Consumer: `model_behaviors/mod.rs:80`
+    pub vendor_behavior_profile: Option<String>,
+}
+
+/// Per-model parameter overrides. Matched by `id` inside a provider's
+/// `model_defs` list. Wins over the built-in capability catalog and the
+/// provider-level defaults for every field it specifies.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ModelDef {
+    /// Canonical model id — must match the string in `models`.
+    pub id: String,
+
+    /// Human-readable display name (optional).
+    #[serde(default)]
+    pub name: Option<String>,
+
+    /// Override the endpoint base URL for this model only.
+    #[serde(default)]
+    pub base_url: Option<String>,
+
+    /// Operator-declared context window in tokens.
+    #[serde(default)]
+    pub context_window: Option<u32>,
+
+    /// Maximum output tokens for this model.
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
+
+    /// Input modality flags.
+    #[serde(default)]
+    pub input: Option<ModelInput>,
+
+    /// Whether this model performs chain-of-thought / reasoning.
+    #[serde(default)]
+    pub reasoning: Option<bool>,
+
+    /// Thinking-level → budget token map.
+    #[serde(default)]
+    pub thinking_level_map: Option<ThinkingLevelMap>,
+
+    /// Pricing information for this model.
+    #[serde(default)]
+    pub cost: Option<ModelCost>,
+
+    /// Adapter compatibility flags.
+    #[serde(default)]
+    pub compat: Option<ModelCompat>,
+}
+
+// =============================================================================
 // ResponseFormat
 // =============================================================================
 
@@ -317,6 +477,22 @@ pub struct ProviderConfig {
     /// Server-side context editing (Anthropic). See [`ServerContextEditing`].
     #[serde(default)]
     pub server_context_editing: ServerContextEditing,
+
+    /// Per-model parameter overrides. Each entry matches one model by `id`
+    /// and wins over the provider-level defaults and the built-in capability
+    /// catalog. Entries are keyed by the model's canonical id string.
+    ///
+    /// Example in config.toml:
+    /// ```toml
+    /// [[providers.claude.model_defs]]
+    /// id = "claude-opus-4-5"
+    /// context_window = 200000
+    /// [providers.claude.model_defs.cost]
+    /// input = 15.0
+    /// output = 75.0
+    /// ```
+    #[serde(default)]
+    pub model_defs: Vec<ModelDef>,
 }
 
 pub fn default_provider_color() -> String {
@@ -401,6 +577,7 @@ impl ProviderConfig {
             metadata_user_id: None,
             effort: None,
             server_context_editing: ServerContextEditing::default(),
+            model_defs: vec![],
         }
     }
 }
