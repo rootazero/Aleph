@@ -10,9 +10,12 @@ use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState, TurnStep};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::message::UnifiedMessage;
-use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord, TurnId};
+use crate::session::events::{EventSeq, MessageContent, SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
-use crate::thinker::nudges::{MAX_OUTPUT_TOKENS_RESUME_NUDGE, MAX_STEPS_HINT};
+use crate::thinker::nudges::{
+    compact_growth_nudge, FOLD_NUDGE_GROWTH_TOKENS, MAX_OUTPUT_TOKENS_RESUME_NUDGE,
+    MAX_STEPS_HINT,
+};
 use crate::verification::{
     hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict, STOP_REASON_END_TURN,
     TOOL_HISTORY_WINDOW,
@@ -117,6 +120,100 @@ fn last_assistant_has_text(events: &[SessionEventRecord]) -> bool {
             _ => None,
         })
         .unwrap_or(false)
+}
+
+/// `to_seq` of the most recent fold — a `FoldRecorded`, or a legacy
+/// `CompactionPerformed` the fold registry (`context::compact::folds`) would
+/// recover — or 0 when the session has never folded. Used by
+/// [`GrowthNudgeTracker`] to detect folds that landed between turns without
+/// cloning the full log for `list_folds`: the newest fold's `to_seq` is a
+/// stable marker, and any fold event changes it.
+fn last_fold_to_seq(events: &[SessionEventRecord]) -> EventSeq {
+    events
+        .iter()
+        .rev()
+        .find_map(|r| match &r.event {
+            SessionEvent::FoldRecorded { to_seq, .. }
+            | SessionEvent::CompactionPerformed { to_seq, .. } => Some(*to_seq),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------------
+// Growth-step fold nudge (Context Fabric, spec 2026-10-01 §1d)
+// ---------------------------------------------------------------------------
+
+/// Run-scoped accountant for the growth-step fold nudge.
+///
+/// Fires the nudge when the prompt has grown by at least
+/// [`FOLD_NUDGE_GROWTH_TOKENS`] since the baseline, where the baseline is:
+/// the prompt size at run start, the size observed right after the last fold
+/// (folds reset the clock — a compaction just freed the budget), or the size
+/// at the last fired nudge (one nudge per growth step — the model may
+/// legitimately decide the recent turns must stay verbatim, and nagging every
+/// turn after that is spam). Lives on `AgentHarness` because the harness is
+/// per-run: growth accounting across runs of one session is out of scope — a
+/// fresh run starts from a fresh baseline, which is cheap and wrong by at
+/// most one nudge interval.
+///
+/// Suppressed while `breaker_engaged` — the compaction circuit breaker is
+/// counting consecutive ineffective compactions, so folding has just proven
+/// useless and urging it anyway would contradict the breaker. Suppression
+/// does NOT rebase: growth accumulates silently and a single nudge fires when
+/// the breaker clears, rather than the threshold restarting from that moment.
+///
+/// `last_fold_to_seq` acts as the fold marker: when it changes, a fold landed
+/// since the previous observation (manual, emergency, or trigger-style) and
+/// the baseline is rebased to the current (post-fold, smaller) prompt size.
+pub(crate) struct GrowthNudgeTracker {
+    /// Prompt size at the last baseline-setting event (run start, last fold,
+    /// or last fired nudge). `None` until the first observation.
+    baseline: Option<u64>,
+    /// Fold marker seen at the last observation.
+    last_fold_marker: EventSeq,
+}
+
+impl GrowthNudgeTracker {
+    pub(crate) fn new() -> Self {
+        Self {
+            baseline: None,
+            last_fold_marker: 0,
+        }
+    }
+
+    /// Consider firing the growth nudge for this turn. `used_tokens` is the
+    /// current projected prompt size, `last_fold_to_seq` the session's latest
+    /// fold boundary (0 = never folded), `breaker_engaged` whether the
+    /// compaction circuit breaker counts ineffective compactions.
+    pub(crate) fn consider(
+        &mut self,
+        used_tokens: u64,
+        last_fold_to_seq: EventSeq,
+        breaker_engaged: bool,
+    ) -> Option<String> {
+        // A fold landed since the last observation: rebase onto the post-fold
+        // size before measuring growth.
+        if last_fold_to_seq != self.last_fold_marker {
+            self.last_fold_marker = last_fold_to_seq;
+            self.baseline = Some(used_tokens);
+        }
+        let baseline = match self.baseline {
+            Some(b) => b,
+            None => {
+                // First observation sets the baseline, never fires.
+                self.baseline = Some(used_tokens);
+                return None;
+            }
+        };
+        let grown = used_tokens.saturating_sub(baseline);
+        if grown < FOLD_NUDGE_GROWTH_TOKENS || breaker_engaged {
+            return None;
+        }
+        // Fired: rebase so the next nudge needs a full new growth step.
+        self.baseline = Some(used_tokens);
+        Some(compact_growth_nudge(grown, FOLD_NUDGE_GROWTH_TOKENS))
+    }
 }
 
 /// Whether the harness may forward live token deltas this turn.
@@ -509,6 +606,37 @@ impl AgentHarness {
             messages.push(UnifiedMessage::user(MAX_STEPS_HINT));
             transient_tail += 1;
             tracing::debug!(iterations, ?hint_cap, "max-steps hint injected (G1)");
+        }
+
+        // 2d-G2. Growth-step fold nudge (Context Fabric §1d). When the prompt
+        // has grown by FOLD_NUDGE_GROWTH_TOKENS since the last fold (or run
+        // start), ask the model to fold the conversation itself via
+        // `session_compact`, before pressure forces an emergency compaction it
+        // cannot steer. Injected into the transient tail only — never emitted
+        // to the session log, and outside every cache breakpoint (the nudge is
+        // classified synthetic, so the cache layer never places a breakpoint
+        // on it). Suppressed while the circuit breaker counts ineffective
+        // compactions: urging a fold that just proved useless is pure nagging.
+        // `peek_pressure` is a read-only snapshot, so this never perturbs the
+        // budget state machine (before_turn owns mutation).
+        if let Some(budget) = self.deps.context_budget.as_ref() {
+            let nudge = {
+                let guard = budget.lock().await;
+                let used_tokens = guard
+                    .peek_pressure(&messages, system_prompt, budget_tool_tokens)
+                    .used_tokens as u64;
+                let breaker_engaged = guard.ineffective_compaction_streak() > 0;
+                drop(guard);
+                self.fold_nudge_tracker
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .consider(used_tokens, last_fold_to_seq(&events), breaker_engaged)
+            };
+            if let Some(nudge) = nudge {
+                messages.push(UnifiedMessage::user(nudge));
+                transient_tail += 1;
+                tracing::debug!("fold-growth nudge injected (G2)");
+            }
         }
 
         // 2d. Derive the optional tool-schema reference for the request payload

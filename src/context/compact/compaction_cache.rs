@@ -11,6 +11,20 @@
 //! read is hash-validated against the rebuilt history before reuse (a stale
 //! entry misses and is purged).
 //!
+//! ## Quality tag (Task 5 / spec §2a)
+//!
+//! Every [`CompactionCache`] entry carries a [`SummaryQuality`] tag. The
+//! carry-over slot only accepts [`SummaryQuality::Full`] entries — degraded
+//! ones (produced by the truncation fallback when the LLM call failed, timed
+//! out, or returned no `<summary>` block) stay on this run's per-instance
+//! cache so the same run can keep reusing the fallback summary instead of
+//! re-firing the side-channel LLM on every Think turn during a persistent
+//! outage. They never poison the next run, because re-seeding a degraded
+//! entry across runs is exactly the failure mode this gate exists to stop:
+//! the harness rebuilds `messages` from an append-only log, `hash_window`
+//! matches forever, and every later turn takes `reapply_cached` and
+//! re-splices the degraded text without ever retrying the summarizer.
+//!
 //! Also homes [`SummaryReuse`], the wiring for the zero-API-cost
 //! session-summary reuse path: the memory backend holding the d0/d1/d2
 //! summaries plus the agent id they were written under. Same lifetime
@@ -33,16 +47,38 @@ pub(super) const CACHE_EXTEND_MIN_TOKENS: usize = 4096;
 /// front. A linear-scan `Vec` is fine at this size.
 pub(super) const CARRYOVER_MAX_SESSIONS: usize = 16;
 
+/// Quality tag attached to a cached summary. Used to gate cross-run
+/// carryover: only [`SummaryQuality::Full`] entries are seeded into the next
+/// run's compactor via `with_cache_carryover`. Degraded entries stay on this
+/// run's per-instance cache so the same run can keep reusing the fallback
+/// summary instead of re-firing the side-channel LLM on every Think turn
+/// during a persistent outage, but never poison the next run.
+///
+/// Spec §2a (Task 5 of the 2026-10-01 context-fabric plan). The tag travels
+/// with the entry so the carry-over slot can refuse degraded payloads
+/// without having to re-derive the path that produced them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SummaryQuality {
+    /// LLM summarizer returned a non-empty `<summary>` block — full quality.
+    Full,
+    /// LLM call failed, timed out, or returned no `<summary>` block, and the
+    /// window was condensed via deterministic truncation — degraded quality.
+    Degraded,
+}
+
 /// Cached result of the last successful compaction, expressed in coordinates
 /// of the *rebuilt* (uncompacted) message list: `[start, end)` is the covered
 /// range, `hash` fingerprints the covered messages, and `summary` is the full
-/// `[Context Summary]…` text that replaces them.
+/// `[Context Summary]…` text that replaces them. `quality` records whether
+/// the summary came from the LLM path (`Full`) or the truncation fallback
+/// (`Degraded`); the cross-run carry-over slot only accepts the former.
 #[derive(Clone)]
 pub(super) struct CompactionCache {
     pub(super) start: usize,
     pub(super) end: usize,
     pub(super) hash: u64,
     pub(super) summary: String,
+    pub(super) quality: SummaryQuality,
 }
 
 /// Wiring for the zero-API-cost session-summary reuse path: the memory backend

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use super::cheap_poison;
 use super::compaction_cache::{
-    carryover_get, carryover_put, carryover_remove, CompactionCache, SummaryReuse,
+    carryover_get, carryover_put, carryover_remove, CompactionCache, SummaryQuality, SummaryReuse,
     CACHE_EXTEND_MIN_MESSAGES, CACHE_EXTEND_MIN_TOKENS, COMPACTION_CARRYOVER,
 };
 use super::compaction_window::{
@@ -53,16 +53,24 @@ pub enum CompactStrategy {
 /// splices a degraded summary AND caches it. Doing that for a turn the user
 /// stopped is how a cancellation leaves a permanent mark on the session's
 /// compaction state.
+///
+/// `Summary` always carries `Full` quality: it is constructed only by
+/// `accept_summary` on the success path (LLM returned a non-empty
+/// `<summary>` block). Callers tag the text `Degraded` themselves when
+/// they fall back to deterministic truncation and choose to record it on
+/// the per-run cache. `summarize_slice` collapses both into the text it
+/// returns to its caller (session-split child seed, manual `/compact`),
+/// because that path never touches the carryover slot.
 enum SummarizerOutcome {
     Summary(String),
     Failed,
     Cancelled,
 }
 
-impl From<Option<String>> for SummarizerOutcome {
-    fn from(v: Option<String>) -> Self {
+impl From<Option<(String, SummaryQuality)>> for SummarizerOutcome {
+    fn from(v: Option<(String, SummaryQuality)>) -> Self {
         match v {
-            Some(s) => Self::Summary(s),
+            Some((text, _quality)) => Self::Summary(text),
             None => Self::Failed,
         }
     }
@@ -597,7 +605,13 @@ impl ContextCompactor {
                 // Remove the compressed window and insert [user turns…, summary]
                 // at window_start.
                 splice_preserved(messages, window_start..window_end, preserved, summary_msg);
-                self.store_cache(window_start, window_end, window_hash, summary_text);
+                self.store_cache(
+                    window_start,
+                    window_end,
+                    window_hash,
+                    summary_text,
+                    SummaryQuality::Full,
+                );
 
                 Ok(CompactResult {
                     tokens_before,
@@ -628,29 +642,25 @@ impl ContextCompactor {
                     let summary_msg = UnifiedMessage::user(summary_text.clone());
 
                     splice_preserved(messages, window_start..window_end, preserved, summary_msg);
-                    // Spliced for THIS turn, deliberately not cached.
-                    //
-                    // `cache`'s own doc calls itself "the fingerprint cache of
-                    // the last SUCCESSFUL compaction", and `store_cache` writes
-                    // through to `COMPACTION_CARRYOVER`, a process-wide slot
-                    // that `with_cache_carryover` seeds into every later run on
-                    // this session key. Caching a truncation therefore turned
-                    // one transient 502 (or one 15 s timeout) into a permanent
-                    // verdict: the harness rebuilds `messages` from an
-                    // append-only log, so `hash_window` matches forever, and
-                    // every later turn takes `reapply_cached` and re-splices
-                    // the degraded text without ever retrying the summarizer —
-                    // silently, since `CacheReuse` is excluded from the
-                    // degradation warning. The original turns are still in the
-                    // session log, so what was discarded was recoverable.
-                    //
-                    // This is the same permanence `SummarizerOutcome::Cancelled`
-                    // was split out to avoid; that split fixed the stopped-turn
-                    // arm and left the failed-turn arm, which latches on its
-                    // own. Not caching costs one summarizer attempt per
-                    // high-pressure turn while the summarizer is down — a call
-                    // that failed, against context that cannot be recovered any
-                    // other way — and self-heals the moment it comes back.
+                    // Spliced for THIS turn and cached locally so within-run reuse
+                    // skips the LLM on subsequent Think turns during a persistent
+                    // outage — but tagged Degraded so `store_cache` refuses to
+                    // write through to `COMPACTION_CARRYOVER`. Re-seeding the
+                    // carry-over with a truncation would turn one transient
+                    // failure into a permanent verdict: the harness rebuilds
+                    // `messages` from an append-only log, `hash_window` matches
+                    // forever, and every later turn takes `reapply_cached` and
+                    // re-splices the degraded text without ever retrying the
+                    // summarizer — silently, since `CacheReuse` is excluded from
+                    // the degradation warning. The original turns are still in
+                    // the session log, so what was discarded was recoverable.
+                    self.store_cache(
+                        window_start,
+                        window_end,
+                        window_hash,
+                        summary_text,
+                        SummaryQuality::Degraded,
+                    );
 
                     Ok(CompactResult {
                         tokens_before,
@@ -740,7 +750,13 @@ impl ContextCompactor {
                     // long-history case), and mismatched coordinates would
                     // make next turn's validation hash a different range and
                     // miss on every rebuild.
-                    self.store_cache(window_start, window_end, window_hash, text.to_string());
+                    self.store_cache(
+                        window_start,
+                        window_end,
+                        window_hash,
+                        text.to_string(),
+                        SummaryQuality::Full,
+                    );
                 }
                 // Re-attach around the summary `try_reuse` just inserted — after
                 // `store_cache` has read it, since that read addresses the
@@ -765,17 +781,36 @@ impl ContextCompactor {
 
     /// Store a fresh cache entry covering `[start, end)` of the rebuilt
     /// message list. `summary` is the full `[Context Summary]…` text.
-    fn store_cache(&self, start: usize, end: usize, hash: u64, summary: String) {
+    /// `quality` gates the cross-run carry-over: only `Full` entries are
+    /// written through to `COMPACTION_CARRYOVER`; `Degraded` entries stay on
+    /// this run's per-instance cache so within-run reuse skips the LLM
+    /// during a persistent outage, but they never re-seed the next run on
+    /// this session key (spec §2a, Task 5).
+    fn store_cache(
+        &self,
+        start: usize,
+        end: usize,
+        hash: u64,
+        summary: String,
+        quality: SummaryQuality,
+    ) {
         let entry = CompactionCache {
             start,
             end,
             hash,
             summary,
+            quality,
         };
-        // Write through to the cross-run carry-over slot so the next run on
-        // this session seeds from it instead of recompacting from scratch.
-        if let Some(key) = self.carryover_key.as_deref() {
-            carryover_put(&COMPACTION_CARRYOVER, key, entry.clone());
+        // Write through to the cross-run carry-over slot ONLY for full-quality
+        // entries. A degraded entry here would latch onto the next run via
+        // `with_cache_carryover`: the harness rebuilds `messages` from an
+        // append-only log, the fingerprint hash matches forever, and every
+        // later turn takes `reapply_cached` and re-splices the degraded text
+        // without ever retrying the summarizer.
+        if quality == SummaryQuality::Full {
+            if let Some(key) = self.carryover_key.as_deref() {
+                carryover_put(&COMPACTION_CARRYOVER, key, entry.clone());
+            }
         }
         *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry);
     }
@@ -940,15 +975,24 @@ impl ContextCompactor {
             UnifiedMessage::user(summary_text.clone()),
         );
         // Advance the cover only on a real merge — same reason the window path
-        // does not cache its truncation. The sibling arm above ("merge failed
+        // tags its truncation Degraded. The sibling arm above ("merge failed
         // and truncation is disabled") already states the rule: *the cache
         // stays on its old, still-valid cover, so the next turn retries the
-        // merge*. The truncation arm is that same failure wearing a fallback,
-        // so caching under `extended_hash` would replay the gutted gap on every
-        // later rebuild and — via `store_cache`'s write-through to the
-        // process-global carry-over — on every later run too.
+        // merge*. The truncation arm is that same failure wearing a fallback;
+        // caching it under `extended_hash` would either overwrite the wider
+        // Full cover (replay the loss on every later rebuild) or pollute the
+        // carry-over (replay it on every later run). Leaving the cache alone
+        // means the prior `summary` body keeps serving — which is exactly
+        // what `cache_extend_merge_failure_keeps_the_running_summary_body`
+        // asserts.
         if matches!(strategy, CompactStrategy::LlmSummary) {
-            self.store_cache(c.start, cut_end, extended_hash, summary_text);
+            self.store_cache(
+                c.start,
+                cut_end,
+                extended_hash,
+                summary_text,
+                SummaryQuality::Full,
+            );
         }
 
         Ok(CompactResult {
@@ -1175,11 +1219,19 @@ fn carried_artifacts(window: &[UnifiedMessage]) -> Vec<UnifiedMessage> {
 /// Deliberately NOT surfaced to the model (A2): the model does not choose the
 /// summarizer and cannot act on this. It is an operator fact, so it belongs on
 /// the operator's channel.
+///
+/// Returns `Some((text, SummaryQuality::Full))` only on the success path —
+/// the LLM returned a non-empty `<summary>` block. Any failure (the call
+/// errored, timed out, or stripped down to an empty string) returns `None`
+/// and the caller falls through to the truncation fallback, which it then
+/// tags `Degraded` before storing. `accept_summary` is the single chokepoint
+/// for the quality decision; the three caller sites cannot disagree on what
+/// "success" means.
 fn accept_summary(
     stage: &'static str,
     timeout: std::time::Duration,
     llm_result: Result<anyhow::Result<String>, tokio::time::error::Elapsed>,
-) -> Option<String> {
+) -> Option<(String, SummaryQuality)> {
     match llm_result {
         Ok(Ok(raw)) => {
             let stripped = strip_analysis_block(&raw);
@@ -1192,7 +1244,7 @@ fn accept_summary(
                 );
                 return None;
             }
-            Some(stripped)
+            Some((stripped, SummaryQuality::Full))
         }
         Ok(Err(e)) => {
             tracing::warn!(
@@ -1280,8 +1332,8 @@ pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::summary_utils::TRANSCRIPT_MSG_MAX_CHARS;
     use super::super::compaction_cache::CARRYOVER_MAX_SESSIONS;
+    use super::super::summary_utils::TRANSCRIPT_MSG_MAX_CHARS;
     use super::*;
     use crate::providers::message::ContentBlock;
     use crate::providers::mock::MockProvider;
@@ -1700,6 +1752,7 @@ mod tests {
             end: 2,
             hash: h,
             summary: "s".into(),
+            quality: SummaryQuality::Full,
         };
         for i in 0..(CARRYOVER_MAX_SESSIONS + 3) {
             carryover_put(&slot, &format!("k{i}"), entry(i as u64));
@@ -1726,6 +1779,7 @@ mod tests {
             end: 2,
             hash: h,
             summary: "s".into(),
+            quality: SummaryQuality::Full,
         };
         carryover_put(&slot, "hot-session", entry(1));
         // Fill the slot with cold one-shots, re-writing the hot key mid-churn.
@@ -1839,9 +1893,10 @@ mod tests {
     /// asserts the failed-turn arm no longer latches either.
     ///
     /// Asserted on both slots, because they fail differently: the local one
-    /// keeps a broken run broken, the carry-over keeps every FUTURE run broken.
+    /// keeps the degraded state alive across Think turns (within-run reuse);
+    /// the carry-over must NOT keep every FUTURE run broken.
     #[tokio::test]
-    async fn a_truncation_fallback_is_not_written_to_the_cache_or_the_carryover() {
+    async fn a_truncation_fallback_writes_a_degraded_local_cache_but_not_the_carryover() {
         let key = "compaction-degradation-does-not-latch";
         carryover_remove(&COMPACTION_CARRYOVER, key);
 
@@ -1868,18 +1923,30 @@ mod tests {
             summary_text(&messages).starts_with("[Context Summary]"),
             "the degraded summary must still serve THIS turn"
         );
+        // Local cache: the fallback IS recorded, but tagged Degraded so the
+        // within-run compaction can keep reusing it (avoiding a per-Turn
+        // summarizer call during a persistent outage). The body matches the
+        // spliced-in summary verbatim — the cache is the cover that
+        // `reapply_cached` will splice on the next Think turn.
+        let cached = compactor
+            .cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .expect("fallback lands on the per-run cache so within-run reuse skips the LLM");
+        assert_eq!(cached.quality, SummaryQuality::Degraded);
         assert!(
-            compactor
-                .cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .is_none(),
-            "a failed summarization must not become this run's cached cover"
+            cached.summary.starts_with("[Context Summary]"),
+            "the cached degraded entry must carry the same body the splice installed"
         );
+        // Cross-run carry-over: the entry MUST be refused by the quality
+        // gate, so the next run on this session key starts clean and retries
+        // the summarizer. The original turns are still in the session log,
+        // so what the degraded entry discarded is recoverable.
         assert!(
             carryover_get(&COMPACTION_CARRYOVER, key).is_none(),
-            "a failed summarization must not be seeded into every later run on \
-             this session key — the original turns are still in the session log"
+            "a degraded fallback must not be seeded into every later run on \
+             this session key — that is exactly the failure mode the quality gate stops"
         );
 
         carryover_remove(&COMPACTION_CARRYOVER, key);
@@ -1887,15 +1954,30 @@ mod tests {
 
     #[tokio::test]
     async fn truncation_fallback_carries_a_prior_summary_body_forward() {
-        // CTX-02 regression: when the LLM call fails over a window that
-        // carries a prior running summary (e.g. a persisted child-session
-        // seed), deterministic truncation used to keep only the FIRST LINE of
-        // each message — collapsing the summary to its bare marker line and
-        // gutting the running state. The prior body must ride forward
-        // verbatim; only the raw turns after it are truncated.
+        // CTX-02 regression (rewritten for spec §2a / Task 5): when the LLM
+        // call fails over a window that carries a prior running summary
+        // (e.g. a persisted child-session seed), deterministic truncation used
+        // to keep only the FIRST LINE of each message — collapsing the summary
+        // to its bare marker line and gutting the running state. The prior
+        // body must ride forward verbatim; only the raw turns after it are
+        // truncated.
+        //
+        // New semantics the rewrite asserts: the degraded fallback is cached
+        // LOCALLY (so within-run compaction keeps the running state alive),
+        // tagged Degraded so the cross-run carry-over refuses to absorb it.
+        let key = "compact-fallback-prior-body";
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+
         let provider =
             Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
-        let compactor = ContextCompactor::new(provider, CompactorConfig::default());
+        let compactor = ContextCompactor::new(
+            provider,
+            CompactorConfig {
+                fallback_to_truncation: true,
+                ..Default::default()
+            },
+        )
+        .with_cache_carryover(key);
 
         let mut messages = vec![UnifiedMessage::user(
             "[Context Summary]\n## Primary Request\nORIGINAL_GOAL_MARKER\n## Pending\nstep two",
@@ -1915,33 +1997,59 @@ mod tests {
             summary.contains("ORIGINAL_GOAL_MARKER") && summary.contains("step two"),
             "prior summary body must survive the truncation fallback verbatim; got:\n{summary}"
         );
-        // This used to read the stored cache entry and assert the body was not
-        // gutted there either. The fallback no longer stores one at all (see
-        // `a_truncation_fallback_is_not_written_to_the_cache_or_the_carryover`),
-        // which subsumes that check: there is no cover for a later rebuild to
-        // reapply, so the next turn re-derives from the session log and retries
-        // the summarizer. The spliced-summary assertion above is what carries
-        // this test's own property.
-        assert!(
-            compactor
-                .cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .is_none(),
-            "a failed summarization must not become a cached cover"
+        // Within-run cache: the degraded entry IS recorded so the same run
+        // can keep reusing the fallback without re-firing the LLM. The
+        // running-state body must survive intact into the cached entry, not
+        // be gutted by a separate first-line pass.
+        let cached = compactor
+            .cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .expect("degraded fallback lands on the per-run cache for within-run reuse");
+        assert_eq!(
+            cached.quality,
+            SummaryQuality::Degraded,
+            "fallback entry must be tagged Degraded so the carry-over refuses it"
         );
+        assert!(
+            cached.summary.contains("ORIGINAL_GOAL_MARKER") && cached.summary.contains("step two"),
+            "cached degraded summary must carry the prior body verbatim; got:\n{}",
+            cached.summary
+        );
+        // Cross-run carry-over: the entry must NOT have been seeded into the
+        // process-global slot, regardless of the carry-over key wired on this
+        // compactor. The next run on this session key starts from a clean
+        // slate and re-fires the LLM.
+        assert!(
+            carryover_get(&COMPACTION_CARRYOVER, key).is_none(),
+            "degraded fallback must not pollute the cross-run carry-over"
+        );
+
+        carryover_remove(&COMPACTION_CARRYOVER, key);
     }
 
     #[tokio::test]
     async fn cache_extend_merge_failure_keeps_the_running_summary_body() {
-        // CTX-02 regression (reapply path): when the extension merge fails,
-        // the truncation fallback used to first-line the merge window — which
-        // INCLUDES the reapplied summary message — collapsing the running
-        // summary to "[Context Summary]" and caching the gutted result under
-        // the extended hash, so every future rebuild reapplied the loss.
+        // CTX-02 regression (reapply path, rewritten for spec §2a / Task 5):
+        // when the extension merge fails, the truncation fallback used to
+        // first-line the merge window — which INCLUDES the reapplied summary
+        // message — collapsing the running summary to "[Context Summary]" and
+        // caching the gutted result under the extended hash, so every future
+        // rebuild reapplied the loss.
+        //
+        // New semantics the rewrite asserts: the existing Full entry stays
+        // intact (the failed merge does NOT produce a Degraded replacement),
+        // and the quality remains Full so the running body keeps crossing run
+        // boundaries — a degraded underwrite would be the same permanent-
+        // verdict class of bug we just closed for the window path.
+        let key = "compact-merge-fail-keeps-full";
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+
         let provider =
             Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
-        let compactor = ContextCompactor::new(provider, CompactorConfig::default());
+        let compactor =
+            ContextCompactor::new(provider, CompactorConfig::default()).with_cache_carryover(key);
 
         // Hand-craft a valid cache entry over the first 8 messages, carrying a
         // distinctive multi-line running summary body. The 16-message gap up
@@ -1955,9 +2063,13 @@ mod tests {
             hash,
             "[Context Summary]\n## Primary Request\nRUNNING_BODY_MARKER\n## Pending\nstep two"
                 .to_string(),
+            SummaryQuality::Full,
         );
 
-        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
+        let result = compactor
+            .compact(&mut messages, 6, 0, Some(key))
+            .await
+            .unwrap();
         assert_eq!(
             result.strategy_used,
             CompactStrategy::DeterministicTruncation
@@ -1969,17 +2081,33 @@ mod tests {
             summary.contains("RUNNING_BODY_MARKER") && summary.contains("step two"),
             "merge-failure fallback must not gut the running summary; got:\n{summary}"
         );
-        // …and in the refreshed cache entry (reapplied on every rebuild).
+        // …and in the cache, where the seeded Full entry is preserved
+        // UNTOUCHED by the failed merge: the merge-failure arm does NOT
+        // overwrite the cache (would re-seed the wider hash with the
+        // degraded text on every future rebuild). The quality tag is still
+        // Full so the running body keeps crossing run boundaries.
         let cached = compactor
             .cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
-            .expect("extension fallback refreshes the cache");
+            .expect("seeded Full entry must remain after a failed merge");
+        assert_eq!(
+            cached.start, 0,
+            "cache cover must not advance to the extended hash on failure"
+        );
+        assert_eq!(cached.end, 8);
+        assert_eq!(
+            cached.quality,
+            SummaryQuality::Full,
+            "the seeded Full entry's quality must survive the failed merge"
+        );
         assert!(
             cached.summary.contains("RUNNING_BODY_MARKER"),
             "extended cache must not retain a gutted summary"
         );
+
+        carryover_remove(&COMPACTION_CARRYOVER, key);
     }
 
     #[tokio::test]
@@ -2037,21 +2165,30 @@ mod tests {
             !summary_text(&messages).contains(sentinel),
             "summary must not swallow the transient recall tail"
         );
-        // (3) …and nothing survives the turn as a cover for `reapply_cached`.
-        // This used to assert that the entry `store_cache` retained did not
-        // contain the sentinel; the fallback path now writes no entry at all
-        // (see `a_truncation_fallback_is_not_written_to_the_cache_or_the_carryover`),
-        // which is the stronger form of the same statement — transient content
-        // cannot outlive this turn through a cover that does not exist.
-        // Assertions (1) and (2) are what still prove the window boundary,
-        // which is this test's actual subject.
+        // (3) …and any cached entry (the per-run cache now holds a Degraded entry
+        // for within-run reuse, per spec §2a) MUST NOT contain the sentinel.
+        // Transient recall content must never outlive this turn through any
+        // cover — even a within-run-only one. The sentinel lives in the fresh
+        // tail (after `cut_end`), which `deterministic_truncation` never
+        // reads; this assertion is the catch-net for a window-boundary
+        // regression, which is this test's actual subject.
+        let cached = compactor
+            .cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(c) = cached {
+            assert!(
+                !c.summary.contains(sentinel),
+                "the degraded per-run cache must not contain transient content; got:\n{}",
+                c.summary
+            );
+            assert_eq!(c.quality, SummaryQuality::Degraded);
+        }
+        // (4) The cross-run carry-over must NOT have been seeded either.
         assert!(
-            compactor
-                .cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .is_none(),
-            "the truncation fallback must leave no cover for a future turn"
+            carryover_get(&COMPACTION_CARRYOVER, "test-session").is_none(),
+            "transient content must not be carried across runs"
         );
     }
 
@@ -3180,5 +3317,212 @@ mod tests {
         let transcript = serialize_transcript(&msgs);
         assert!(!transcript.contains("secret plan"), "{transcript}");
         assert!(transcript.contains("line1\nline2"), "{transcript}");
+    }
+
+    // -------- Task 5 / spec §2a: cross-run carry-over quality tag --------
+
+    #[tokio::test]
+    async fn degraded_summary_reused_within_run() {
+        // The harness rebuilds `messages` from the session log every Think
+        // turn. After a degraded compaction lands the fallback summary on the
+        // log, a subsequent Think turn re-derives the same window and presents
+        // the same hash to the compactor. The degraded entry is on this run's
+        // per-instance cache, so the second compact must hit it and skip the
+        // LLM — paying one failed summarizer call instead of two.
+        let key = "compact-degraded-reused-within-run";
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+
+        // Provider fails on every call. The fallback path then re-uses the
+        // cached degraded entry rather than refiring LLM. We verify the LLM
+        // was avoided by inspecting the strategy_used on the second call:
+        // CacheReuse means `reapply_cached` ran (no LLM), distinct from
+        // DeterministicTruncation which means the LLM was attempted again.
+        let provider =
+            Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
+        let compactor = ContextCompactor::new(
+            provider.clone(),
+            CompactorConfig {
+                fallback_to_truncation: true,
+                ..Default::default()
+            },
+        )
+        .with_cache_carryover(key);
+
+        let base = make_messages(12);
+
+        // First compact: provider fails, fallback runs, degraded stored.
+        let mut turn1 = base.clone();
+        let result1 = compactor
+            .compact(&mut turn1, 6, 0, Some(key))
+            .await
+            .unwrap();
+        assert_eq!(
+            result1.strategy_used,
+            CompactStrategy::DeterministicTruncation,
+            "fixture must reach the fallback"
+        );
+
+        // Effect assertions on the FIRST turn:
+        let cached = compactor
+            .cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .expect("degraded summary lives on the per-run cache for within-run reuse");
+        assert_eq!(cached.quality, SummaryQuality::Degraded);
+        assert!(
+            carryover_get(&COMPACTION_CARRYOVER, key).is_none(),
+            "degraded must NOT enter the cross-run carry-over — that's the gate"
+        );
+
+        // Second Think turn: rebuild messages from the session log. The window
+        // fingerprint is identical to turn1's (the harness derived it the same
+        // way), so the compactor must hit the per-run cache and avoid the
+        // LLM entirely. The strategy is the effect: CacheReuse proves
+        // `reapply_cached` ran, which only happens when the fingerprint hits
+        // — a fresh fallback attempt would have been DeterministicTruncation.
+        let mut turn2 = base.clone();
+        let result2 = compactor
+            .compact(&mut turn2, 6, 0, Some(key))
+            .await
+            .unwrap();
+        assert_eq!(
+            result2.strategy_used,
+            CompactStrategy::CacheReuse,
+            "within-run reuse must skip the LLM (degraded) and reap the cached cover"
+        );
+        assert!(
+            summary_text(&turn2).contains("[Context Summary]"),
+            "the spliced summary must come from the cached degraded entry, not a fresh LLM"
+        );
+
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+    }
+
+    #[tokio::test]
+    async fn degraded_summary_not_carried_across_runs() {
+        // After a degraded compaction on run 1, a fresh run 2 (new compactor
+        // instance, same session key) must NOT see the degraded entry — the
+        // carry-over slot filtered it. Run 2's first compact therefore hits
+        // the LLM (which now succeeds via a different provider), proving the
+        // cross-run contamination is gone.
+        let key = "compact-degraded-not-carried-across-runs";
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+
+        // Run 1: failing provider → degraded fallback.
+        let failing_provider =
+            Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
+        let compactor_run1 = ContextCompactor::new(
+            failing_provider.clone(),
+            CompactorConfig {
+                fallback_to_truncation: true,
+                ..Default::default()
+            },
+        )
+        .with_cache_carryover(key);
+
+        let mut messages1 = make_messages(12);
+        compactor_run1
+            .compact(&mut messages1, 6, 0, Some(key))
+            .await
+            .unwrap();
+
+        assert!(
+            carryover_get(&COMPACTION_CARRYOVER, key).is_none(),
+            "run 1 must NOT have written the degraded entry to the carry-over"
+        );
+
+        // Run 2: fresh compactor, fresh provider (success). The effect we
+        // assert is that run 2's first compact reaches the LLM and gets a
+        // Full-quality summary — NOT a stale degraded one from run 1.
+        let fresh_provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nFRESH_RUN2_BODY\n</summary>",
+        ));
+        let compactor_run2 =
+            ContextCompactor::new(fresh_provider.clone(), CompactorConfig::default())
+                .with_cache_carryover(key);
+
+        let mut messages2 = make_messages(12);
+        let result2 = compactor_run2
+            .compact(&mut messages2, 6, 0, Some(key))
+            .await
+            .unwrap();
+        assert_eq!(
+            result2.strategy_used,
+            CompactStrategy::LlmSummary,
+            "run 2 must run the LLM (no degraded carry-over to reuse)"
+        );
+        assert_eq!(
+            fresh_provider.call_count(),
+            1,
+            "run 2 must fire the LLM exactly once"
+        );
+        assert!(
+            summary_text(&messages2).contains("FRESH_RUN2_BODY"),
+            "run 2's summary must come from the fresh LLM call, not from run 1's degraded text"
+        );
+
+        // Run 2's carry-over IS populated now (Full quality) — ready to seed
+        // a hypothetical run 3.
+        let carried = carryover_get(&COMPACTION_CARRYOVER, key)
+            .expect("run 2's Full entry seeds the carry-over");
+        assert_eq!(carried.quality, SummaryQuality::Full);
+
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+    }
+
+    #[tokio::test]
+    async fn full_summary_carried_across_runs() {
+        // Full entries continue to cross run boundaries (the LLM succeeded,
+        // the summary is real). Mirrors `carryover_seeds_fresh_compactor_`
+        // `across_runs` but explicitly asserts the quality tag is Full on
+        // both sides — so a future regression that downgrades the LLM
+        // success path to Degraded (forgetting the tag, say) is caught here.
+        let key = "compact-full-carried-across-runs";
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nFULL_BODY\n</summary>",
+        ));
+        let base = make_messages(12);
+
+        // Run 1: success → self.cache and carryover both hold Full.
+        let c1 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
+            .with_cache_carryover(key);
+        let mut turn1 = base.clone();
+        c1.compact(&mut turn1, 6, 0, Some(key)).await.unwrap();
+        assert_eq!(provider.call_count(), 1);
+
+        let cached_carry = carryover_get(&COMPACTION_CARRYOVER, key)
+            .expect("Full entries continue to write through to the carry-over");
+        assert_eq!(cached_carry.quality, SummaryQuality::Full);
+
+        let cached_local = c1
+            .cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .expect("Full entries land on the per-run cache too");
+        assert_eq!(cached_local.quality, SummaryQuality::Full);
+
+        // Run 2: fresh compactor (new run boundary). Must hit the carry-over
+        // and skip the LLM — the cached Full entry services the second turn
+        // with zero API cost.
+        let c2 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
+            .with_cache_carryover(key);
+        let mut turn2 = base.clone();
+        let r2 = c2.compact(&mut turn2, 6, 0, Some(key)).await.unwrap();
+        assert_eq!(
+            r2.strategy_used,
+            CompactStrategy::CacheReuse,
+            "run 2 reuses the carried Full entry"
+        );
+        assert_eq!(
+            provider.call_count(),
+            1,
+            "run 2 must not pay a second summarizer call"
+        );
+
+        carryover_remove(&COMPACTION_CARRYOVER, key);
     }
 }

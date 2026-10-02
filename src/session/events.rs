@@ -581,6 +581,30 @@ pub enum SessionEvent {
         at: Timestamp,
     },
 
+    /// The fold-registry record for one compaction (Context Fabric, spec
+    /// 2026-10-01 §3.1a): the retired span made addressable. Emitted in the
+    /// SAME `emit_batch` as the `CompactionPerformed` it annotates — both land
+    /// or neither does — and carries what the checkpoint lacks: an
+    /// addressable `fold_id`, the strategy/trigger vocabulary, and the token
+    /// accounting the fold ledger reads. `CompactionPerformed` stays the
+    /// checkpoint; this annotates it. Marker-class: no turn, not
+    /// prompt-bearing, never projected to `messages`.
+    FoldRecorded {
+        fold_id: String,
+        from_seq: EventSeq,
+        to_seq: EventSeq,
+        summary_ref: String,
+        /// `FoldStrategy::as_str` vocabulary (`manual`, …) kept as a bare
+        /// string so a log written by a newer build with more strategies
+        /// still decodes here.
+        strategy: String,
+        /// `FoldTrigger::as_str` vocabulary, same open-vocabulary rationale.
+        trigger: String,
+        folded_tokens: u64,
+        summary_tokens: u64,
+        at: Timestamp,
+    },
+
     /// Recorded as the first event of a child session created by
     /// compaction-driven session-split. `parent_session_id` is the parent
     /// session key string (`SessionKey::to_key_string()`).
@@ -679,6 +703,7 @@ pub const fn durability_of(event: &SessionEvent) -> Durability {
         | SessionEvent::SubagentSpawned { .. }
         | SessionEvent::SubagentReturned { .. }
         | SessionEvent::CompactionPerformed { .. }
+        | SessionEvent::FoldRecorded { .. }
         | SessionEvent::SessionForked { .. }
         | SessionEvent::Error { .. } => Durability::Normal,
     }
@@ -897,6 +922,20 @@ pub(crate) mod fixtures {
                     from_seq: 0,
                     to_seq: 1,
                     summary_ref: "s".into(),
+                    at: 0,
+                },
+            ),
+            (
+                "FoldRecorded",
+                SessionEvent::FoldRecorded {
+                    fold_id: "fold_00000000_0".into(),
+                    from_seq: 0,
+                    to_seq: 1,
+                    summary_ref: "s".into(),
+                    strategy: "manual".into(),
+                    trigger: "manual-command".into(),
+                    folded_tokens: 0,
+                    summary_tokens: 0,
                     at: 0,
                 },
             ),

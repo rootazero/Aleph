@@ -465,6 +465,15 @@ impl ContextBudget {
         .calibrated(self.calibration.unwrap_or(1.0))
     }
 
+    /// Count of consecutive compactions that did not measurably reduce
+    /// context pressure (circuit-breaker streak). Read-only: unlike
+    /// `before_turn`, this never records an attempt or trips the breaker.
+    /// Used by the growth-step fold nudge (Context Fabric §1d) to stop
+    /// advising the model to fold when folding has proven useless.
+    pub fn ineffective_compaction_streak(&self) -> usize {
+        self.circuit_breaker.consecutive_count
+    }
+
     /// Evaluate context pressure before a turn and return a directive.
     ///
     /// `tool_schema_tokens` is the token cost of the tool schema sent to the

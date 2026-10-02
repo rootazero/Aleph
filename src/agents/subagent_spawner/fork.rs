@@ -241,6 +241,7 @@ pub(crate) fn is_prompt_bearing(event: &SessionEvent) -> bool {
         | SessionEvent::SubagentSpawned { .. }
         | SessionEvent::SubagentReturned { .. }
         | SessionEvent::CompactionPerformed { .. }
+        | SessionEvent::FoldRecorded { .. }
         | SessionEvent::SessionForked { .. }
         | SessionEvent::Error { .. } => false,
     }
