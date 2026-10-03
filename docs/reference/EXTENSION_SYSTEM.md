@@ -166,6 +166,81 @@ actions (its `prompt` / `http` / `agent` actions are dropped with a warning,
 
 ---
 
+## Effects and `EffectScope` (temporal composability)
+
+**Location**: `src/extension/effects/{mod.rs, scope.rs, disposer.rs}` (2026-09-20)
+
+```rust
+/// One reversible side effect a plugin made on the running process.
+/// Dispose is async (MCP server removal, service stop) and reports failure
+/// instead of panicking; the scope records the Err and keeps going.
+pub type DisposeOutcome = Result<(), String>;
+pub type Disposer = Box<dyn FnOnce() -> BoxFuture<'static, DisposeOutcome> + Send>;
+pub fn sync_disposer(f: impl FnOnce() -> DisposeOutcome + Send + 'static) -> Disposer;
+pub fn async_disposer<F, Fut>(f: F) -> Disposer
+where F: FnOnce() -> Fut + Send + 'static, Fut: Future<Output = DisposeOutcome> + Send + 'static;
+
+pub type PluginId = String;            // bare String, no newtype
+pub const STEP_LABELS: [&str; 6];      // the six step labels, in registration order
+pub struct EffectScope { /* plugin_id, disposers: Vec<(&'static str, Disposer)>, skipped */ }
+impl EffectScope {
+    pub fn new(plugin_id: PluginId) -> Self;
+    pub fn effect(&mut self, step: &'static str, d: Disposer);
+    /// A step the plugin declares but this process cannot provide (e.g. no MCP
+    /// handle): recorded, not an error; `Pending { waiting_on }` derives from it.
+    pub fn skip(&mut self, step: &'static str, why: impl Into<String>);
+    /// Reverse registration order. A failing/panicking disposer is recorded
+    /// and does NOT stop the rest. Consumes self: a scope cannot be half-disposed.
+    pub async fn dispose(self) -> DisposeReport;
+}
+pub struct DisposeReport { pub plugin_id: PluginId, pub steps: Vec<(&'static str, DisposeOutcome)> }  // all_ok() / failures()
+```
+
+**The one rule — has an inverse → effect; recomputable from the registry → view.** Every registrar
+function that puts something into the running process (`registrar/`, `service_manager.rs`,
+`src/extension/loader.rs`, `memory/extensions/`) returns `#[must_use] Disposer`; the caller
+(`lifecycle.rs::mount`) pushes it into the plugin's `EffectScope` under one of six fixed step labels,
+in this order: `registry_row`, `wasm_module`, `mcp_server`, `service`, `memory_extension`,
+`slash_command`. `unmount` disposes in reverse, so the registry row is the last thing to go and every
+view recomputed afterwards already sees the plugin gone. Anything with no inverse that can be
+recomputed from `PluginRegistry` (tool-index snapshot, `PLUGIN_SKILL_DIRS`, `PLUGIN_SUBAGENTS`,
+`HookExecutor`) is a **view**, derived by `projection.rs` from `after_transition()` only.
+
+This is the ownership rule from DeepSeek Harness / Cordis (`scan-dsh-cordis.md` §1), expressed as
+signatures. It is **not** a fiber runtime: no DI container, no Proxy context, no cascade restart, no
+HMR (the three earlier rounds' rulings stand — HARNESS_PHILOSOPHY.md §8 第五课, narrowed 2026-09-20).
+Guard: `effects::census::every_crate_visible_registration_returns_a_disposer` (source-level census, G1;
+mutation: an extra `pub fn register_extra` in `registrar/api.rs` goes red by name) and the six-effect
+round-trip (G2, `tests/plugin_lifecycle_roundtrip.rs` + the two fixtures in P1.13).
+
+---
+
+## `ScopeKey` and visibility (spatial composability)
+
+**Location**: `src/extension/visibility.rs` (renamed from `scope.rs`, which served only hooks)
+
+```rust
+pub enum ScopeKey { Global, Project(PathBuf /* canonicalized root */) }
+pub struct VisibilityCtx { pub project_root: Option<PathBuf> }
+/// Global → always visible. Project(p) → visible iff ctx.project_root == Some(p).
+/// A session with no project sees Global only (fail-closed).
+pub fn visible_to(key: &ScopeKey, ctx: &VisibilityCtx) -> bool;
+```
+
+Every registry row carries a `scope_key` derived at discovery: `Project(root)` only for
+`<project>/.claude/` and `<project>/.aleph/plugins{,.local}`; every other origin — `Bundled`, `Config`,
+`Global`, marketplace installs, and the new `ClaudeCache` — is `Global`. Project level is the only
+level (no session / agent sub-scopes — user ruling U4). The five faces that present plugin capability
+to a request (tool index, skills index, agent resolution, slash list, MCP tool bridge) all call
+`visible_to` at request-build time; hooks' `project_scope_allows` calls the same predicate.
+`VisibilityCtx.project_root` has exactly one derivation — the one hooks already used upstream of
+`executor.rs:918` — extracted, not duplicated.
+
+**Behaviour change (2026-09-20)**: a session with no project root sees `Global` plugins only. Before,
+discovery was the union of every project and every session saw everything.
+
+---
+
 ## Plugin Discovery
 
 **Location**: `src/extension/discovery/`
@@ -354,7 +429,8 @@ impl AlephToolDyn for SkillTool {
 | `plugins.uninstall` | Remove plugin |
 | `plugins.enable` | Enable plugin |
 | `plugins.disable` | Disable plugin |
-| `plugins.reload` | Reload plugin |
+| `plugin.reload` | Reload one plugin (unmount + mount) |
+| `plugins.callTool` | Call a tool on a loaded runtime plugin (CLI) |
 
 ---
 
