@@ -462,6 +462,26 @@ pub fn temperature_for_base_url(base_url: Option<&str>, raw: Option<f32>) -> Opt
     apply_temperature_policy(policy, raw)
 }
 
+/// Parse a [`ModelCompat::temperature_policy`] string into a [`TemperaturePolicy`].
+///
+/// Accepts `"omit"` (case-insensitive) and `"force:<f32>"`. Returns `None`
+/// for any unrecognised value — callers fall back to the preset / base-url
+/// behaviour rather than silently dropping the caller's temperature.
+///
+/// [`ModelCompat::temperature_policy`]: crate::config::types::provider::ModelCompat::temperature_policy
+#[must_use]
+pub fn parse_temperature_policy(raw: &str) -> Option<TemperaturePolicy> {
+    let raw = raw.trim();
+    if raw.eq_ignore_ascii_case("omit") {
+        return Some(TemperaturePolicy::Omit);
+    }
+    if let Some(value) = raw.strip_prefix("force:") {
+        let value = value.trim();
+        return value.parse::<f32>().ok().map(TemperaturePolicy::Force);
+    }
+    None
+}
+
 /// Resolve provider name from model name using known prefix patterns.
 ///
 /// Delegates to [`crate::providers::model_catalog::infer_vendor`], the single

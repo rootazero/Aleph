@@ -5,6 +5,8 @@
 
 use std::collections::HashSet;
 
+use crate::config::types::provider::ModelCompat;
+
 // =============================================================================
 // EndpointClass
 // =============================================================================
@@ -166,6 +168,33 @@ impl PayloadPolicy {
             crate::providers::protocols::openai_common::openai_strict_schema::ensure_property_types(
                 schema,
             );
+        }
+    }
+
+    /// Apply operator-declared per-model compat overrides on top of the
+    /// endpoint-derived policy.
+    ///
+    /// Each `Some` field overrides the corresponding capability flag; `None`
+    /// (or no `compat` at all) leaves the endpoint heuristic untouched. This is
+    /// the [`ModelCompat`] wiring point for the OpenAI-compatible protocols:
+    /// [`PayloadPolicy::apply`] / [`PayloadPolicy::apply_to_schema`] already
+    /// consult these flags, so overriding them here flows through to
+    /// request/schema building without further plumbing.
+    pub fn apply_model_compat(&mut self, compat: Option<&ModelCompat>) {
+        let Some(compat) = compat else { return };
+        if let Some(v) = compat.supports_reasoning_effort {
+            self.capabilities.supports_reasoning_effort = v;
+            self.strip_reasoning = !v;
+        }
+        if let Some(v) = compat.supports_prompt_cache {
+            self.capabilities.supports_prompt_cache = v;
+            self.strip_prompt_cache = !v;
+        }
+        if let Some(v) = compat.requires_object_properties {
+            self.capabilities.requires_object_properties = v;
+        }
+        if let Some(v) = compat.requires_derefed_refs {
+            self.capabilities.requires_derefed_refs = v;
         }
     }
 }
@@ -451,6 +480,17 @@ pub fn build_payload_policy(
     api_type: &str,
     variant_store: Option<bool>,
 ) -> PayloadPolicy {
+    build_payload_policy_for_model(base_url, api_type, variant_store, None)
+}
+
+/// Build a payload policy and apply a model-specific compatibility override.
+#[must_use]
+pub fn build_payload_policy_for_model(
+    base_url: Option<&str>,
+    api_type: &str,
+    variant_store: Option<bool>,
+    compat: Option<&ModelCompat>,
+) -> PayloadPolicy {
     let class = detect_endpoint_class(base_url);
     let capabilities = resolve_capabilities(class);
 
@@ -478,7 +518,7 @@ pub fn build_payload_policy(
         None
     };
 
-    PayloadPolicy {
+    let mut policy = PayloadPolicy {
         endpoint_class: class,
         capabilities,
         explicit_store,
@@ -486,7 +526,9 @@ pub fn build_payload_policy(
         strip_reasoning,
         strip_prompt_cache,
         compaction_threshold,
-    }
+    };
+    policy.apply_model_compat(compat);
+    policy
 }
 
 // =============================================================================

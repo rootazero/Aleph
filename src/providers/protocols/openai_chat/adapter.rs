@@ -20,7 +20,7 @@ use crate::providers::protocols::openai_common::max_tokens::uses_max_completion_
 use crate::providers::protocols::openai_common::openai_strict_schema::{
     ensure_openai_tool_envelope, lenient_multi_type_rewrite, normalize_strict_schema, StrictResult,
 };
-use crate::providers::protocols::openai_common::provider_policy::build_payload_policy;
+use crate::providers::protocols::openai_common::provider_policy::build_payload_policy_for_model;
 use crate::providers::protocols::openai_common::response_format::to_chat_response_format;
 use crate::providers::protocols::openai_common::usage_limit::is_usage_limit_body;
 
@@ -112,7 +112,12 @@ impl ProtocolAdapter for OpenAiProtocol {
             }
         }
 
-        let policy = build_payload_policy(config.base_url.as_deref(), "openai-chat", None);
+        let policy = build_payload_policy_for_model(
+            config.base_url.as_deref(),
+            "openai-chat",
+            None,
+            crate::providers::model_compat::model_compat_for(&config.model_defs, &model_name),
+        );
 
         // prompt_cache_key: content-addressed routing affinity (static prefix
         // hash, session-id fallback) when the endpoint honors it. `policy.apply`

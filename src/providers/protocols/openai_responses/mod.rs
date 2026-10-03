@@ -9,7 +9,7 @@ use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
 use crate::providers::delta::ProviderDelta;
-use crate::providers::protocols::openai_common::provider_policy::build_payload_policy;
+use crate::providers::protocols::openai_common::provider_policy::build_payload_policy_for_model;
 use crate::providers::protocols::openai_common::response_format::merge_text_format;
 use crate::providers::responses::shared;
 use crate::providers::responses::types::{
@@ -157,10 +157,11 @@ impl OpenAiResponsesProtocol {
         config: &ProviderConfig,
     ) -> ResponsesRequest {
         let input = shared::convert_messages(payload.messages);
-        let policy = build_payload_policy(
+        let policy = build_payload_policy_for_model(
             config.base_url.as_deref(),
             "openai-responses",
             variant.store,
+            crate::providers::model_compat::model_compat_for(&config.model_defs, model),
         );
         let tools = shared::build_tools(payload.tools, policy.capabilities.supports_strict_schema);
         let tool_choice = shared::map_tool_choice(payload.tool_choice.as_ref())
