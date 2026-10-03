@@ -1,3 +1,5 @@
+> **ARCHIVED 2026-09-20** — historical. The ClawHub integration this describes was never built as described (`src/clawhub/` never existed; the SKILL.md `metadata.openclaw.*` DTOs it specified were parsed, never read, and CUT 2026-09-20). Kept for provenance only. Do not implement from it.
+
 # ClawHub Integration Design
 
 > Aleph integrates with ClawHub (clawhub.ai), the OpenClaw project's official skill registry, enabling users to search, browse, install, and update skills directly from ClawHub — both through natural language conversation (builtin tools) and the Panel UI.

@@ -1,3 +1,5 @@
+> **ARCHIVED** — moved from `docs/reference/archive/` on 2026-09-20 so the repo has one archive (`docs/archive/`, CLAUDE.md Tier 3). Content unchanged: a preserved design, kept for future revival (commit `af2fe5a5e`).
+
 # 自建语音引擎 Sidecar（aleph-voice）设计存档
 
 > **状态：已删除（2026-06-13），本文为重启路线的设计存档。**

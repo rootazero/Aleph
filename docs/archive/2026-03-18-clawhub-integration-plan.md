@@ -1,3 +1,5 @@
+> **ARCHIVED 2026-09-20** — historical. The ClawHub integration this describes was never built as described (`src/clawhub/` never existed; the SKILL.md `metadata.openclaw.*` DTOs it specified were parsed, never read, and CUT 2026-09-20). Kept for provenance only. Do not implement from it.
+
 # ClawHub Integration Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
