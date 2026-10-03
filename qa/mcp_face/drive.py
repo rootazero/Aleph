@@ -42,6 +42,11 @@ class Mcp:
 
     def __init__(self, base, bearer=None):
         self.base, self.bearer, self.session, self.n = base, bearer, None, 0
+        # Set by every `request()` so callers can read the most recent
+        # response's headers / status / body — `initialize()` only returns
+        # the session id, but the auth stage needs the response headers
+        # (e.g. WWW-Authenticate on a 401) to make its assertions.
+        self.last_headers = {}
 
     def _headers(self, extra=None):
         h = {"content-type": "application/json", "accept": "application/json, text/event-stream"}
@@ -58,14 +63,16 @@ class Mcp:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 raw = r.read()
-                return r.status, {k.lower(): v for k, v in r.headers.items()}, (json.loads(raw) if raw else None)
+                self.last_headers = {k.lower(): v for k, v in r.headers.items()}
+                return r.status, self.last_headers, (json.loads(raw) if raw else None)
         except urllib.error.HTTPError as e:
             raw = e.read()
             try:
                 parsed = json.loads(raw) if raw else None
             except ValueError:
                 parsed = raw.decode(errors="replace")
-            return e.code, {k.lower(): v for k, v in e.headers.items()}, parsed
+            self.last_headers = {k.lower(): v for k, v in e.headers.items()}
+            return e.code, self.last_headers, parsed
 
     def call(self, method, params=None, id=None):
         self.n += 1
@@ -239,10 +246,14 @@ def stage_auth():
         print(f"SKIP  auth: cannot reach {remote} ({e.__class__.__name__}); "
               "every remote assertion is UNRUN, not PASS")
         return
-    st, hd, _ = Mcp(remote).initialize()
+    c_no_bearer = Mcp(remote)
+    st, _, _ = c_no_bearer.initialize()
     L.check("remote without a bearer is 401", st == 401, f"status={st}")
-    L.check("…with WWW-Authenticate: Bearer", hd.get("www-authenticate", "").startswith("Bearer"), str(hd.get("www-authenticate")))
-    st, _, _ = Mcp(remote, bearer="aleph-not-a-token").initialize()
+    L.check("…with WWW-Authenticate: Bearer",
+            c_no_bearer.last_headers.get("www-authenticate", "").startswith("Bearer"),
+            str(c_no_bearer.last_headers.get("www-authenticate")))
+    c_bad = Mcp(remote, bearer="aleph-not-a-token")
+    st, _, _ = c_bad.initialize()
     L.check("remote with a wrong bearer is 401", st == 401, f"status={st}")
 
     cur = rpc("gateway.token.current", {})
