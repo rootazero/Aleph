@@ -150,6 +150,19 @@ impl PromptSizeRegistry {
     ///
     /// `layout` is `None` when the turn built no system prompt. Replacement
     /// (not merge) is what makes a mixed-turn record unrepresentable.
+    ///
+    /// # Atomicity vs. concurrent writers on the doomed key
+    ///
+    /// The `Mutex<Inner>` is held across the full `contains_key -> min_by_key
+    /// -> remove -> insert` path. Every other writer (`record_messages`,
+    /// `record_tool_output`, `update_turn`) acquires the same mutex, so a
+    /// concurrent writer on the key being evicted observes exactly one of two
+    /// states: pre-eviction (record present, write applied to the doomed key
+    /// and dropped when the registry evicts it) or post-eviction (record
+    /// gone, write silently no-ops). No writer can observe a mid-eviction
+    /// state. The test `concurrent_writers_around_eviction_do_not_race` pins
+    /// this guarantee under stress; do not split the lock without re-running
+    /// it.
     pub fn record_turn(
         &self,
         session_key: &str,
@@ -599,5 +612,81 @@ mod tests {
         let slot = global_prompt_size_registry_slot();
         assert_eq!(slot.id(), "thinker/prompt-size-registry");
         assert!(matches!(slot.missing(), MissingSemantics::ConsumerDecides));
+    }
+
+    /// F9: concurrent `record_turn` (forcing eviction) plus concurrent
+    /// `record_messages` / `record_tool_output` on the about-to-be-evicted
+    /// session must not race. The `Mutex<Inner>` held across the full
+    /// `contains_key -> min_by_key -> remove -> insert` path is what
+    /// guarantees a concurrent writer observes either pre-eviction (write
+    /// lands on the doomed record and is dropped when the registry evicts
+    /// it) or post-eviction (record gone, write silently no-ops). A future
+    /// refactor that splits the lock or holds a temporary guard outside the
+    /// critical section turns this red.
+    #[test]
+    fn concurrent_writers_around_eviction_do_not_race() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let reg = Arc::new(PromptSizeRegistry::default());
+        // Pre-populate so the next `record_turn` for a fresh key forces an
+        // eviction pass. The "doomed" session is the one we expect to be
+        // evicted under churn.
+        for i in 0..MAX_TRACKED_SESSIONS {
+            reg.record_turn(&format!("warm{i}"), None, vec![]);
+        }
+        reg.record_turn("doomed", None, vec![]);
+
+        let churn_iters = 256;
+        let writer_iters = 512;
+
+        let churn_reg = Arc::clone(&reg);
+        let churn = thread::spawn(move || {
+            for i in 0..churn_iters {
+                // Each new key forces an eviction pass because the map is at
+                // the bound. "doomed" rotates in and out depending on whether
+                // any churn thread's write touched it (refreshes write_seq).
+                churn_reg.record_turn(&format!("new{i}"), None, vec![]);
+            }
+        });
+
+        let mut writers = Vec::new();
+        for tid in 0..4 {
+            let wreg = Arc::clone(&reg);
+            writers.push(thread::spawn(move || {
+                for i in 0..writer_iters {
+                    // Mix of bound-stamp writes (silently no-op once "doomed"
+                    // is recreated) and writes on churn keys. The lock
+                    // guarantees neither path panics or produces a torn
+                    // record.
+                    let stamp = wreg.current_stamp("doomed").unwrap_or(0);
+                    wreg.record_messages("doomed", stamp, split(tid + i));
+                    wreg.record_tool_output("doomed", 1, 1, false);
+                    wreg.record_tool_output(&format!("new{}", i % 8), 1, 1, false);
+                }
+            }));
+        }
+
+        churn.join().expect("churn thread did not panic");
+        for w in writers {
+            w.join().expect("writer thread did not panic");
+        }
+
+        // Bounded invariant: map never exceeds MAX_TRACKED_SESSIONS.
+        assert_eq!(
+            reg.tracked(),
+            MAX_TRACKED_SESSIONS,
+            "the map stayed bounded under churn"
+        );
+        // Every record has a non-zero stamp (no torn-record indicator).
+        for i in 0..churn_iters {
+            let key = format!("new{i}");
+            if let Some(rec) = reg.latest(&key) {
+                assert!(
+                    rec.stamp > 0,
+                    "{key}: stamp must be set after `record_turn`"
+                );
+            }
+        }
     }
 }

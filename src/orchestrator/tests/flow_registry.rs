@@ -52,12 +52,4 @@ fn replace_swaps_atomically() {
     assert_eq!(reg.resolve("b").unwrap().agent, "explore");
 }
 
-#[test]
-fn list_ids_is_sorted() {
-    let mut map = FlowSet::new();
-    map.insert("zeta".into(), Arc::new(mk_spec("zeta", "main")));
-    map.insert("alpha".into(), Arc::new(mk_spec("alpha", "main")));
-    map.insert("mid".into(), Arc::new(mk_spec("mid", "main")));
-    let reg = FlowRegistry::new(map);
-    assert_eq!(reg.list_ids(), vec!["alpha", "mid", "zeta"]);
-}
+

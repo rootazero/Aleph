@@ -5,7 +5,6 @@ use super::*;
 use crate::discovery::DiscoveryConfig;
 use crate::extension::{ExtensionConfig, PluginKind, PluginOrigin, PluginRecord};
 use crate::gateway::agent_instance::AgentInstance;
-use std::time::Duration;
 use tempfile::TempDir;
 
 const PLUGIN: &str = "plug";
@@ -134,6 +133,8 @@ impl Fixture {
     /// `/plug:greet <args>` through `render_command` — the registry, the
     /// record, the settings and the consented shell production uses — with
     /// `<tmp>/work` as the run's directory: its `<command>` block.
+    /// Only the `#[cfg(unix)]` shell-consent tests below call this.
+    #[cfg(unix)]
     async fn block(&self, args: &str) -> String {
         let mode = serde_json::json!({
             "type": "skill", "skill_id": "plug:greet", "owning_plugin": PLUGIN, "args": args
@@ -244,6 +245,7 @@ fn no_args() -> InlineArgs<'static> {
     }
 }
 
+#[cfg(unix)]
 fn canonical(path: &std::path::Path) -> String {
     path.canonicalize().unwrap().display().to_string()
 }

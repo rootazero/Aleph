@@ -1,0 +1,145 @@
+{
+  "module": "src/resilience",
+  "reviewer": "kimi-for-coding",
+  "summary": "src/resilience is overall well-hardened (parameterized SQL, savepoint-wrapped migrations, spawn_blocking connection discipline, atomic seq allocation, poisoned-mutex refusal), but it carries a large dead pub API surface: 12 StateDatabase methods and one constructor have zero consumers repo-wide, the paired_users migration creates a permanently empty table, and two dimension-check helpers disagree on what 'no stored dimension' means (one drops all memories, the other keeps them).",
+  "totals": {
+    "critical": 0,
+    "high": 1,
+    "medium": 4,
+    "low": 7
+  },
+  "findings": [
+    {
+      "id": "RES-001",
+      "severity": "High",
+      "category": "dead-code",
+      "file": "src/resilience/database/traces.rs",
+      "line": 157,
+      "title": "Eight pub CRUD methods on StateDatabase have zero consumers repo-wide",
+      "description": "Repo-wide grep (src/, tests/, excluding src/resilience itself) finds no caller for: bulk_insert_traces (traces.rs:157), get_last_trace (traces.rs:228), get_traces_from_step (traces.rs:254), delete_traces_for_task (traces.rs:284), get_trace_count (traces.rs:308), get_trace_by_id (traces.rs:436), get_tasks_by_session (tasks.rs:243), get_recoverable_tasks (tasks.rs:281). get_recoverable_tasks is doubly dead: its doc says it is 'for startup reconciliation', but the boot path uses reconcile_orphaned_tasks (tasks.rs:332, UPDATE...RETURNING), which is the only production reader of 'running' rows. The repo's own bar (R10: list_trace_tasks removed 2026-08-29 for zero callers; migrate_add_experience_replays removed 2026-08-16 for zero readers) says these should be cut or justified, not kept as speculative API. Each is doc-commented as if a caller exists ('for recovery checkpoint', 'for resuming from checkpoint', 'cleanup'), which actively misleads.",
+      "fix_proposal": "Delete the eight methods (or wire the one genuinely needed path). If a method is retained as a deliberate seam, mark it #[allow(dead_code)] with the TODO referencing the planned consumer, the way AgentTask::should_auto_resume already does.",
+      "confidence": "high"
+    },
+    {
+      "id": "RES-002",
+      "severity": "Medium",
+      "category": "dead-code",
+      "file": "src/resilience/database/state_database/mod.rs",
+      "line": 333,
+      "title": "new_with_dim constructor and its dimension-migration machinery are dead",
+      "description": "new_with_dim (state_database/mod.rs:333) has zero callers repo-wide, and no workspace crate outside src/ references resilience:: at all (verified: interfaces/, desktop/, shared/ have no alephcore::resilience imports). Its exclusive callees validate_embedding_dim (mod.rs:103) and check_dimension_change (mod.rs:379) exist only for it. That means the entire explicit-dimension path — including the carefully documented cross-restart dim-change safety argument in the drop_memories_for_dim_change call — has never run in production. Dead code with the most subtle semantics in the file is the worst kind to keep untested. Note: deleting it changes the lib's pub API; within this workspace that is safe (no external consumers), but flag it as breaking for any out-of-tree SDK user.",
+      "fix_proposal": "Either delete new_with_dim + validate_embedding_dim + check_dimension_change and let new() be the only constructor, or wire config-driven dimension selection to it. Mark the change 'breaking' in the commit if the lib is consumed externally.",
+      "confidence": "high"
+    },
+    {
+      "id": "RES-003",
+      "severity": "Medium",
+      "category": "dead-code",
+      "file": "src/resilience/database/migration.rs",
+      "line": 402,
+      "title": "paired_users migration creates a table with zero readers and zero writers",
+      "description": "migrate_add_paired_users creates the paired_users table, but repo-wide grep finds no INSERT/SELECT/UPDATE against paired_users anywhere — no CRUD module, no gateway interface. It is an empty table whose docstring promises 'pairing state survives restarts' that nothing honors. This is exactly the failure mode the codebase already removed twice: memory_audit_log was dropped with the comment 'an empty table that looks like an audit trail is worse than no table' (schema.rs), and migrate_add_experience_replays was removed 2026-08-16 for 'zero readers or writers'. Every boot runs a pointless savepoint + sqlite_master probe for it.",
+      "fix_proposal": "Remove the migrate_add_paired_users call from run_optional_migrations (state_database/mod.rs:136) and the function itself; existing databases keep the orphaned empty table (harmless), matching the experience_replays precedent. If pairing persistence is planned, add the consumer first, then the migration.",
+      "confidence": "high"
+    },
+    {
+      "id": "RES-004",
+      "severity": "Medium",
+      "category": "error-handling",
+      "file": "src/resilience/database/memory_events.rs",
+      "line": 227,
+      "title": "list_memory_fact_ids silently clamps corrupt negative seq to 0, contradicting its own comment",
+      "description": "The query_map closure binds MAX(seq) with `u64::try_from(seq).unwrap_or(0)` while the comment directly above says 'Negative seq would mean a corrupt page; surface it rather than silently clamping to 0'. The code does the opposite of the comment: a corrupt negative MAX(seq) becomes 0 and is indistinguishable from a healthy fact at seq 0 — the reconciler (the sole caller, memory/events/handler.rs:656) then folds the stream believing it has seen everything. Every sibling conversion in this module routes through the strict helper (i64_to_u64_count in get_memory_event_latest_seq, the try_from error arm in MemoryEventRow::from_row), so this site is also the inconsistent one.",
+      "fix_proposal": "Replace the unwrap_or(0) with an error arm matching MemoryEventRow::from_row (rusqlite::Error::FromSqlConversionFailure with a 'memory_events seq must be non-negative' message), so a corrupt page fails the reconcile loudly instead of masquerading as seq 0.",
+      "confidence": "high"
+    },
+    {
+      "id": "RES-005",
+      "severity": "Medium",
+      "category": "race",
+      "file": "src/resilience/database/state_database/mod.rs",
+      "line": 513,
+      "title": "check_needs_migration and check_dimension_change disagree on 'no stored dimension' — one drops all memories, the other keeps them",
+      "description": "For a database whose schema_info table exists but has no 'embedding_dimension' row, check_needs_migration (used by new()) returns Ok(true) at mod.rs:513 and new() DROPS memories + memories_vec + memories_fts. check_dimension_change (used by new_with_dim()) returns Ok(false) at mod.rs:421 for the identical state and keeps everything. The two constructors therefore make opposite data-destruction decisions from the same on-disk state; the divergence lives in two near-copied implementations of the same 'compare stored vs target dimension' logic (check_needs_migration even hardcodes DEFAULT_EMBEDDING_DIM as its target). Same asymmetry for the pre-schema_info legacy DB: new() drops when memories exists, new_with_dim() keeps old-dimension blobs that a later restart would fail on (the dim-change safety argument in new_with_dim's comment exists precisely because its own probe can't detect this case).",
+      "fix_proposal": "Unify on one dimension-probe function returning the stored dim as Option<u32>, and make both constructors derive 'changed' from it with one shared policy for the None case (recommend: None + non-empty memories = changed, None + empty = unchanged). Deleting new_with_dim (RES-002) also collapses this to a single code path.",
+      "confidence": "medium"
+    },
+    {
+      "id": "RES-006",
+      "severity": "Low",
+      "category": "other",
+      "file": "src/resilience/database/state_database/mod.rs",
+      "line": 239,
+      "title": "with_conn doc claims sticker/channel/group-chat sync methods still use direct lock() — they don't",
+      "description": "The with_conn doc says 'sync methods (sticker_descriptions, channel_offsets, group_chat) cannot await and remain on the direct lock() path' and cites '27 async-fnned lock sites migrated in a follow-up commit'. All three named modules now route through with_conn (store/load_sticker_description at mod.rs:530/552, channel_offsets.rs get/set, group_chat.rs insert/update/get). Only test code locks db.conn directly. A developer trusting this doc would conclude the migration is unfinished or add a duplicate direct-lock path.",
+      "fix_proposal": "Update the doc to name the two real remaining patterns: production code uses with_conn exclusively; direct self.conn.lock() survives only in #[cfg(test)] code.",
+      "confidence": "high"
+    },
+    {
+      "id": "RES-007",
+      "severity": "Low",
+      "category": "error-handling",
+      "file": "src/resilience/database/tasks.rs",
+      "line": 207,
+      "title": "update_task_status error message/doc claim 'already in status' case that the WHERE clause cannot produce",
+      "description": "The not-found error says 'task_id ... not found (or already in status ...)' and the doc comment repeats it, but the UPDATE's WHERE is only `id = ?3` — re-applying the current status still matches 1 row (updated_at is rewritten) and returns Ok. A debugger who sees this message will hunt for a status-filter that does not exist. The 0-row case is exactly 'no such task_id'.",
+      "fix_proposal": "Drop the '(or already in status ...)' clause from both the error string and the doc sentence.",
+      "confidence": "high"
+    },
+    {
+      "id": "RES-008",
+      "severity": "Low",
+      "category": "duplicate",
+      "file": "src/resilience/database/state_database/schema.rs",
+      "line": 305,
+      "title": "idx_gc_turns_session is a left-prefix of idx_gc_turns_seq — redundant index",
+      "description": "schema.rs creates idx_gc_turns_session ON group_chat_turns(session_id) and idx_gc_turns_seq ON group_chat_turns(session_id, round, sequence). SQLite uses a left-prefix index for plain session_id lookups, so the first index adds a second B-tree to maintain on every turn insert and every group-chat write for zero query benefit.",
+      "fix_proposal": "For fresh schemas, drop the idx_gc_turns_session statement (keep idx_gc_turns_seq). Existing databases keep both; an optional follow-up migration could DROP INDEX the redundant one.",
+      "confidence": "high"
+    },
+    {
+      "id": "RES-009",
+      "severity": "Low",
+      "category": "other",
+      "file": "src/resilience/database/traces.rs",
+      "line": 472,
+      "title": "ProviderUsage rollups full-scan task_traces: no index on event_kind/timestamp",
+      "description": "aggregate_usage_by_agents and aggregate_moa_advisor_usage filter WHERE event_kind = 'provider_usage' (plus an optional timestamp window), but task_traces only carries idx_task_traces_task(task_id, step_index). Every team-usage query and snapshot therefore scans the entire trace table, which grows unboundedly (one row per tool call per run, nothing prunes it). Correctness is fine; cost grows linearly forever.",
+      "fix_proposal": "Add CREATE INDEX IF NOT EXISTS idx_task_traces_kind_ts ON task_traces(event_kind, timestamp) to schema_sql plus an idempotent CREATE in a migration for existing databases.",
+      "confidence": "medium"
+    },
+    {
+      "id": "RES-010",
+      "severity": "Low",
+      "category": "dead-code",
+      "file": "src/resilience/types.rs",
+      "line": 301,
+      "title": "should_auto_resume / needs_resume_confirmation / is_recoverable resume triad has no production callers",
+      "description": "should_auto_resume (types.rs:301) and needs_resume_confirmation (types.rs:311) carry #[allow(dead_code)] and an honest TODO admitting zero production callers since the boot path uses reconcile_orphaned_tasks. is_recoverable (types.rs:74) is pub with its only production callers being those two dead methods (plus unit tests). The resume decision the triad encodes is genuinely made elsewhere — resume_coordinator.rs selects by interrupted_by_restart_at_ms instead — so this is dead design, not a pending feature. The TODO has been open since 2026-08-28 with a cited audit report; keeping three pub items plus tests warm for an undecided decision costs more than re-deriving them from the audit doc if wired later.",
+      "fix_proposal": "Per the TODO's own decision tree: either delete the triad (the reconcile + adjudication stamp is the live design) or land the wiring. While it stays, downgrade is_recoverable to a private helper of the two methods.",
+      "confidence": "high"
+    },
+    {
+      "id": "RES-011",
+      "severity": "Low",
+      "category": "duplicate",
+      "file": "src/resilience/database/state_database/mod.rs",
+      "line": 226,
+      "title": "new() and new_with_dim() duplicate ~30 lines of bootstrap; in_memory() a third variant",
+      "description": "The two constructors repeat ensure_parent_dir + register_sqlite_vec_extension + open_db + drop_memories_for_dim_change + create_schema + drop_obsolete_tables + run_optional_migrations + record_embedding_dim verbatim, differing only in how the 'changed' flag is computed and whether migrate_to_vec0 runs. in_memory() re-implements the same sequence a third time (including hand-inlining the schema_info INSERT that record_embedding_dim already encapsulates, and its own drop_obsolete_tables call). The dimension-probe duplication is already called out in RES-005; the mechanical bootstrap duplication means a future change (e.g. a new mandatory migration step) must land in 2-3 places — the exact bug the in_memory() comment warns about for run_optional_migrations.",
+      "fix_proposal": "Extract a private fn open_and_migrate(path, target_dim, changed_strategy) -> Result<Connection> used by both constructors, and have in_memory() reuse record_embedding_dim(&conn, DEFAULT_EMBEDDING_DIM) instead of its inline INSERT.",
+      "confidence": "medium"
+    },
+    {
+      "id": "RES-012",
+      "severity": "Low",
+      "category": "api-surface",
+      "file": "src/resilience/database/mod.rs",
+      "line": 13,
+      "title": "pub mod migration exposes 10 fns that only state_database calls; whole resilience surface could be pub(crate)",
+      "description": "migration is `pub mod` with 10 `pub fn`s, all called exclusively from state_database/mod.rs::run_optional_migrations. No workspace crate outside src/ imports resilience:: (verified by repo-wide grep), so every pub item in this tree is effectively crate-internal; the migration fns are the clearest case since they are an implementation detail of database open. This is not pressing — pub costs nothing at runtime — but it advertises API that has no consumers and no stability commitment.",
+      "fix_proposal": "Make `mod migration` private (fns pub(crate) at most). Defer any wider pub-to-pub(crate) pass on the resilience surface until the crate's external-consumer story is settled, to avoid churn.",
+      "confidence": "medium"
+    }
+  ]
+}

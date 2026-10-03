@@ -799,7 +799,7 @@ mod tests {
 
         let pipeline = PreflightPipeline::new(vec![
             Box::new(FileOpSupersedeStage::default()) as Box<dyn PreflightStage>,
-            Box::new(ToolResultPruningStage::default()),
+            Box::new(ToolResultPruningStage),
             Box::new(HistoricalImageStrippingStage),
         ])
         // `PreflightPipeline::new` now ships with cache-stability defaults

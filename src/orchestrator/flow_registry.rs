@@ -32,12 +32,6 @@ impl FlowRegistry {
         self.flows.store(Arc::new(new_set));
     }
 
-    pub fn list_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.flows.load().keys().cloned().collect();
-        ids.sort();
-        ids
-    }
-
     pub fn len(&self) -> usize {
         self.flows.load().len()
     }

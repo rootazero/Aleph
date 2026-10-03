@@ -32,38 +32,47 @@ pub enum TermEvent {
 /// contains terminal control sequences can otherwise drive the cursor, clear
 /// the screen, or inject OSC 52 clipboard requests. We keep only printable
 /// text, horizontal tab, and newline; everything else is dropped.
+///
+/// Implementation note: the previous version iterated bytes, which silently
+/// corrupted any UTF-8 multi-byte character whose lead byte landed before an
+/// OSC sequence and whose continuation bytes landed inside it — the lead
+/// byte was kept (printed), the continuations were dropped as part of the
+/// OSC body, and `String::from_utf8` then failed (returning empty). Iterating
+/// `chars()` instead keeps the multi-byte unit atomic: the OSC handler
+/// consumes whole characters, so a UTF-8 char either escapes cleanly or is
+/// dropped entirely — it can never be split across the boundary.
 fn sanitize_pasted_text(text: &str) -> String {
-    let mut out = Vec::with_capacity(text.len());
-    let mut bytes = text.bytes().peekable();
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
 
-    while let Some(b) = bytes.next() {
-        match b {
+    while let Some(c) = chars.next() {
+        match c {
             // ESC: consume a full ANSI/OSC sequence.
-            0x1b => {
-                match bytes.peek() {
-                    Some(&b'[') => {
-                        bytes.next(); // '['
-                        while let Some(&n) = bytes.peek() {
-                            if (0x20..=0x3F).contains(&n) {
-                                bytes.next();
+            '\u{1b}' => {
+                match chars.peek().copied() {
+                    Some('[') => {
+                        chars.next(); // '['
+                        while let Some(&n) = chars.peek() {
+                            if ('\u{20}'..='\u{3F}').contains(&n) {
+                                chars.next();
                             } else {
                                 break;
                             }
                         }
-                        if let Some(&n) = bytes.peek() {
-                            if (0x40..=0x7E).contains(&n) {
-                                bytes.next();
+                        if let Some(&n) = chars.peek() {
+                            if ('\u{40}'..='\u{7E}').contains(&n) {
+                                chars.next();
                             }
                         }
                     }
-                    Some(&b']') => {
-                        bytes.next(); // ']'
+                    Some(']') => {
+                        chars.next(); // ']'
                         loop {
-                            match bytes.next() {
-                                Some(0x07) | None => break,
-                                Some(0x1b) => {
-                                    if bytes.peek() == Some(&b'\\') {
-                                        bytes.next();
+                            match chars.next() {
+                                Some('\u{07}') | None => break,
+                                Some('\u{1b}') => {
+                                    if chars.peek() == Some(&'\\') {
+                                        chars.next();
                                     }
                                     break;
                                 }
@@ -72,24 +81,24 @@ fn sanitize_pasted_text(text: &str) -> String {
                         }
                     }
                     _ => {
-                        if let Some(&n) = bytes.peek() {
-                            if (0x40..=0x5F).contains(&n) {
-                                bytes.next();
+                        if let Some(&n) = chars.peek() {
+                            if ('\u{40}'..='\u{5F}').contains(&n) {
+                                chars.next();
                             }
                         }
                     }
                 }
             }
-            // Drop NUL and CR.
-            0x00 | 0x0d => {}
-            // Drop DEL and other C0 controls except newline and tab.
-            b if (b < 0x20 && b != b'\n' && b != b'\t') || b == 0x7f => {}
-            // Keep everything else (ASCII printable and UTF-8 continuation bytes).
-            b => out.push(b),
+            // Drop NUL, CR, DEL.
+            '\0' | '\r' | '\u{7f}' => {}
+            // Drop C0 controls except newline and tab.
+            c if (c as u32) < 0x20 && c != '\n' && c != '\t' => {}
+            // Keep everything else (printable ASCII + all multi-byte UTF-8).
+            c => out.push(c),
         }
     }
 
-    String::from_utf8(out).unwrap_or_default()
+    out
 }
 
 /// Map a raw crossterm event to a [`TermEvent`], or `None` to discard it.

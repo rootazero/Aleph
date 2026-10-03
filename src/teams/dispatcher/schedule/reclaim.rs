@@ -559,10 +559,6 @@ impl TeamDispatcher {
         /// shows up (the rule from `zombie_ttl_secs`'s introduction).
         const NO_ANSWER_GRACE_SECS: u64 = 86_400;
 
-        if NO_ANSWER_GRACE_SECS == 0 {
-            return; // 0 = feature disabled
-        }
-
         let paused = match self
             .coord_store
             .list_tasks(CoordTaskFilter {

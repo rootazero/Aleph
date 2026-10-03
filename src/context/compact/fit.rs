@@ -342,6 +342,7 @@ mod tests {
             summarizer_input_budget: 48_000,
             circuit_breaker_max: 2,
             max_splits: 3,
+            fold_nudge_growth_tokens: 50_000,
         };
         let mut budget = ContextBudget::new(&config);
         // Push the EWMA calibration factor to exactly 2.0: the provider
@@ -386,6 +387,7 @@ mod tests {
             summarizer_input_budget: 48_000,
             circuit_breaker_max: 2,
             max_splits: 3,
+            fold_nudge_growth_tokens: 50_000,
         };
         let budget = ContextBudget::new(&config);
         let mut msgs = vec![

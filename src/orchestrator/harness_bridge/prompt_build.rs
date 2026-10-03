@@ -33,25 +33,13 @@ impl AgentHarnessRunner {
         provider: &dyn AiProvider,
     ) -> Option<u32> {
         let cfg = self.context_budget_config.as_ref()?;
-        // Best-effort: a read failure must never block a turn — fall back to the
-        // full configured budget (None) just like a missing context budget.
-        let events = self
-            .session_service
-            .get_events(session_id, None, None)
-            .await
-            .ok()?;
-        let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
-        // The run's own provider — what this turn's wire will carry.
-        let replay = provider.reasoning_replay(None);
-        let history_tokens: usize = replay
-            .projected(&messages)
-            .map(|m| {
-                crate::context::budget::pressure::estimate_message_tokens_aware(
-                    &m,
-                    cfg.token_estimate_ratio,
-                )
-            })
-            .sum();
+        let history_tokens = Self::project_history_tokens(
+            self.session_service.as_ref(),
+            session_id,
+            provider,
+            cfg,
+        )
+        .await?;
         let ceiling = (cfg.token_budget as f64 * cfg.warning_threshold).max(0.0) as usize;
         let available = ceiling.saturating_sub(history_tokens);
         Some(available.min(u32::MAX as usize) as u32)
@@ -93,23 +81,13 @@ impl AgentHarnessRunner {
         if remind_at == 0 {
             return None;
         }
-        let events = self
-            .session_service
-            .get_events(session_id, None, None)
-            .await
-            .ok()?;
-        let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
-        // The run's own provider — what this turn's wire will carry.
-        let replay = provider.reasoning_replay(None);
-        let history_tokens: usize = replay
-            .projected(&messages)
-            .map(|m| {
-                crate::context::budget::pressure::estimate_message_tokens_aware(
-                    &m,
-                    cfg.token_estimate_ratio,
-                )
-            })
-            .sum();
+        let history_tokens = Self::project_history_tokens(
+            self.session_service.as_ref(),
+            session_id,
+            provider,
+            cfg,
+        )
+        .await?;
         if history_tokens < remind_at {
             return None;
         }
@@ -117,6 +95,37 @@ impl AgentHarnessRunner {
             "<system-reminder>\nReference data, not user input.\n{}\n</system-reminder>",
             super::context_blocks::render_context_pressure(history_tokens as u64, cfg.token_budget)
         ))
+    }
+
+    /// Fetch the session's events, project them through the run's replay, and
+    /// sum the estimated token cost. Shared by every context-budget signal that
+    /// compares budget vs projected history (memory headroom, pressure reminder).
+    /// Fail-soft: any read or projection failure yields `None` and the caller
+    /// proceeds without the signal.
+    async fn project_history_tokens(
+        session_service: &dyn SessionService,
+        session_id: &SessionId,
+        provider: &dyn AiProvider,
+        cfg: &crate::context::budget::ContextBudgetConfig,
+    ) -> Option<usize> {
+        let events = session_service
+            .get_events(session_id, None, None)
+            .await
+            .ok()?;
+        let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
+        // The run's own provider — what this turn's wire will carry.
+        let replay = provider.reasoning_replay(None);
+        Some(
+            replay
+                .projected(&messages)
+                .map(|m| {
+                    crate::context::budget::pressure::estimate_message_tokens_aware(
+                        &m,
+                        cfg.token_estimate_ratio,
+                    )
+                })
+                .sum(),
+        )
     }
 
     /// Load `[prompt.extra_files]` content off disk, size-capped.
@@ -562,7 +571,7 @@ impl AgentHarnessRunner {
         // `stability()` before trusting one.**
         let available_agents = {
             use crate::agents::AgentMode;
-            let mut by_id: std::collections::BTreeMap<String, crate::agents::AgentDef> =
+            let mut by_id: std::collections::HashMap<String, crate::agents::AgentDef> =
                 crate::agents::builtin_agents()
                     .into_iter()
                     .filter(|a| a.mode == AgentMode::SubAgent)
@@ -668,9 +677,9 @@ impl AgentHarnessRunner {
         if let Some(def) = agent_def {
             builder = builder.with_agent(def);
         }
-        let curated_chars = curated_text.as_ref().map_or(0, String::len);
+        let curated_bytes = curated_text.as_ref().map_or(0, String::len);
         builder = builder.with_curated_envelope(curated_text);
-        let memory_chars = memory_text.as_ref().map_or(0, String::len);
+        let memory_bytes = memory_text.as_ref().map_or(0, String::len);
         // `MemoryProtocolLayer` tells the model the auto-recalled
         // `<memory-context>` message is already in the conversation. That is a
         // statement of runtime fact, so it is read off the one producer that
@@ -712,7 +721,7 @@ impl AgentHarnessRunner {
         } else {
             Some(strands.join("\n\n"))
         };
-        let identity_chars = identity_files.as_ref().map_or(0, |f| {
+        let identity_bytes = identity_files.as_ref().map_or(0, |f| {
             f.files
                 .iter()
                 .filter_map(|file| file.content.as_ref().map(String::len))
@@ -822,11 +831,11 @@ impl AgentHarnessRunner {
             target: "alephcore::orchestrator::prompt",
             agent_id,
             session = %session_key_str,
-            curated_chars,
-            memory_chars,
-            identity_chars,
+            curated_bytes,
+            memory_bytes,
+            identity_bytes,
             role_present,
-            prompt_chars = prompt.len(),
+            prompt_bytes = prompt.len(),
             cache_stable_chars = stable_chars,
             cache_dynamic_chars = dynamic_chars,
             prompt_mode = self.default_prompt_mode.label(),

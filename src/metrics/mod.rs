@@ -89,7 +89,7 @@ pub(crate) const fn metrics_runtime_slot() -> &'static dyn SlotStatus {
 /// `Config::load` so `StageTimer` honours user-configured thresholds instead of
 /// the compiled defaults. Idempotent: a later call (e.g. a config reload) is
 /// ignored, matching the write-once semantics of `defaults_override`.
-pub fn init_metrics_runtime(policy: &crate::config::MetricsPolicy) {
+pub(crate) fn init_metrics_runtime(policy: &crate::config::MetricsPolicy) {
     // Accept NaN/+Inf/-Inf → fall back to the default (the previous form
     // already did). Accept negative → fall back too (a negative multiplier
     // would never trip a "slow" warning and so silently disable the
@@ -129,7 +129,7 @@ fn metrics_runtime() -> MetricsRuntime {
 
 impl MetricsRuntime {
     #[must_use]
-    pub fn warning_threshold_ms(&self, target_ms: u64) -> u64 {
+    fn warning_threshold_ms(&self, target_ms: u64) -> u64 {
         (target_ms as f64 * self.warning_multiplier) as u64
     }
 }

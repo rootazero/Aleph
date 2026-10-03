@@ -45,11 +45,21 @@ use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, Verifi
 /// adversarial) hook must not wedge the loop into churning until `max_loops`.
 const MAX_CONSECUTIVE_STOP_VETOES: u32 = 5;
 
+/// Ratio between the consecutive-veto cap and the cumulative cap: an
+/// adversarial hook that wedges `MAX_CONSECUTIVE_STOP_VETOES` of every
+/// cycle gets [`MAX_CONSECUTIVE_STOP_VETOES`] cycles' worth of vetoes
+/// before the gate emits `Continue`, and the cumulative cap is
+/// `consecutive * TOTAL_VETO_RATIO` — so a hook can repeatedly wedge the
+/// full consecutive budget [`TOTAL_VETO_RATIO`] times before the gate
+/// escalates to `Halt`.
+const TOTAL_VETO_RATIO: u32 = 3;
+
 /// Cumulative cap on total vetoes per session. Consecutive-veto resets
-/// reset the consecutive counter but accumulate here, so an adversarial hook
-/// that wedges `MAX_CONSECUTIVE_STOP_VETOES` of every cycle can do so at
-/// most three times before the gate emits `Halt` instead of `Continue`.
-const MAX_TOTAL_STOP_VETOES: u32 = MAX_CONSECUTIVE_STOP_VETOES * 3;
+/// reset the consecutive counter but accumulate here, so an adversarial
+/// hook that wedges `MAX_CONSECUTIVE_STOP_VETOES` of every cycle can do so
+/// at most [`TOTAL_VETO_RATIO`] times before the gate emits `Halt` instead
+/// of `Continue`.
+const MAX_TOTAL_STOP_VETOES: u32 = MAX_CONSECUTIVE_STOP_VETOES * TOTAL_VETO_RATIO;
 
 /// Byte budget for the `LAST_ASSISTANT_MESSAGE` env var handed to hooks.
 /// Char-boundary safe truncation; hooks needing the full text can read the

@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::error::{AlephError, Result};
-use crate::security::ssrf::{validate_url_async, SsrfPolicy};
+use crate::security::ssrf::{validate_url_with_pinned, SsrfPolicy};
 
 /// How long the pre-flight probe waits before giving up and deferring to the
 /// real connection. Short by design — the probe is an optimization, not a gate.
@@ -32,7 +32,7 @@ const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
 /// endpoint, and `Err` only when the server unambiguously returns an HTML page.
 /// The SSRF policy is enforced before any network access.
 pub async fn preflight_remote_url(url: &str, headers: &HashMap<String, String>) -> Result<()> {
-    let (validated_url, pinned) = validate_url_async(url, &SsrfPolicy::default())
+    let (validated_url, pinned) = validate_url_with_pinned(url, &SsrfPolicy::default())
         .await
         .map_err(|e| AlephError::IoError(format!("SSRF blocked for '{url}': {e}")))?;
 

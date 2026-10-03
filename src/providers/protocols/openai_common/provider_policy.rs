@@ -3,8 +3,6 @@
 //! Detects endpoint provider class from base URL, then applies per-provider
 //! field filtering/injection for `OpenAI` Chat and Responses APIs.
 
-use std::collections::HashSet;
-
 // =============================================================================
 // EndpointClass
 // =============================================================================
@@ -225,12 +223,12 @@ fn extract_hostname(url: &str) -> Option<String> {
 }
 
 fn is_local_host(host: &str) -> bool {
-    let local_hosts: HashSet<&str> = ["localhost", "127.0.0.1", "::1", "[::1]"]
-        .iter()
-        .cloned()
-        .collect();
-
-    local_hosts.contains(host) || host.ends_with(".localhost") || host.ends_with(".local")
+    const LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "::1", "[::1]"];
+    if LOOPBACK.iter().any(|l| l.eq_ignore_ascii_case(host)) {
+        return true;
+    }
+    let lower = host.to_ascii_lowercase();
+    lower.ends_with(".localhost") || lower.ends_with(".local")
 }
 
 // =============================================================================

@@ -72,16 +72,6 @@ pub(crate) fn validate_scheme(url: &Url) -> Result<(), SsrfError> {
 /// validation and fetch. Returns `None` for IP-literal URLs and when
 /// `policy.enabled == false`.
 ///
-/// Callers that perform outbound HTTP after validation should either pass the
-/// pinned address to their HTTP client, or use [`safe_fetch`] which handles
-/// pinning internally.
-pub async fn validate_url_async(
-    url_str: &str,
-    policy: &SsrfPolicy,
-) -> Result<(Url, Option<std::net::SocketAddr>), SsrfError> {
-    validate_url_with_pinned(url_str, policy).await
-}
-
 /// Validates a URL and (when a hostname lookup was performed) returns the
 /// `SocketAddr` that must be pinned on the outbound client to close the DNS
 /// rebinding window between validation and `reqwest`'s own resolver. Returns
@@ -144,18 +134,14 @@ async fn validate_url_with_pinned_inner(
         }
     }
 
-    if matches!(
-        url.host(),
-        Some(url::Host::Ipv4(_)) | Some(url::Host::Ipv6(_))
-    ) {
-        if let Some(ip) = match url.host() {
-            Some(url::Host::Ipv4(v4)) => Some(IpAddr::V4(v4)),
-            Some(url::Host::Ipv6(v6)) => Some(IpAddr::V6(v6)),
-            _ => None,
-        } {
-            if is_ip_blocked_by_policy(ip, policy) {
-                return Err(SsrfError::BlockedAddress(ip.to_string()));
-            }
+    let host_ip = match url.host() {
+        Some(url::Host::Ipv4(v4)) => Some(IpAddr::V4(v4)),
+        Some(url::Host::Ipv6(v6)) => Some(IpAddr::V6(v6)),
+        _ => None,
+    };
+    if let Some(ip) = host_ip {
+        if is_ip_blocked_by_policy(ip, policy) {
+            return Err(SsrfError::BlockedAddress(ip.to_string()));
         }
         return Ok((url, None));
     }
@@ -165,7 +151,9 @@ async fn validate_url_with_pinned_inner(
     // `for_allowlisted_host()` policy so DNS rebinding cannot reach
     // 127.0.0.1 / 169.254.169.254 even when the name is on the allowlist.
     // This matches `safe_fetch::validate_url_full` semantics.
-    let port = url.port_or_known_default().unwrap_or(80);
+    let port = url
+        .port_or_known_default()
+        .expect("validate_scheme already restricted to http/https with known defaults");
     let dns_policy = if allowlisted {
         &SsrfPolicy::for_allowlisted_host()
     } else {
@@ -187,21 +175,21 @@ mod tests {
     #[tokio::test]
     async fn async_allows_public_url() {
         let policy = default_policy();
-        let result = validate_url_async("http://8.8.8.8/", &policy).await;
+        let result = validate_url_with_pinned("http://8.8.8.8/", &policy).await;
         assert!(result.is_ok(), "public IP should be allowed");
     }
 
     #[tokio::test]
     async fn async_blocks_localhost() {
         let policy = default_policy();
-        let result = validate_url_async("http://localhost/admin", &policy).await;
+        let result = validate_url_with_pinned("http://localhost/admin", &policy).await;
         assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
     }
 
     #[tokio::test]
     async fn async_blocks_loopback_ip() {
         let policy = default_policy();
-        let result = validate_url_async("http://127.0.0.1/admin", &policy).await;
+        let result = validate_url_with_pinned("http://127.0.0.1/admin", &policy).await;
         assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
     }
 

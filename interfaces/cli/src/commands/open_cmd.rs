@@ -85,10 +85,70 @@ fn open_url(url: &str) -> std::io::Result<()> {
 
 #[cfg(target_os = "windows")]
 fn open_url(url: &str) -> std::io::Result<()> {
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
+    // Bypass `cmd /C start "" <url>` (CWE-78). Rust quotes the URL argument
+    // using `CommandLineToArgvW` conventions, but cmd parses the resulting
+    // command line with its own (different) rules — so a URL that
+    // round-trips through Rust's quoting (notably `"` and `^`) can be
+    // smuggled out of the quoted argument and re-interpreted as a separate
+    // command. The previous shape also had no validation that the URL was
+    // even a URL.
+    //
+    // `rundll32.exe url.dll,FileProtocolHandler <url>` invokes the shell's
+    // registered URL handler directly: the URL is one token, cmd never
+    // parses the command line, and ShellExecute handles the URL. A
+    // pre-validation step rejects anything that doesn't look like an
+    // http(s) URL with a safe character set, on top of the layer
+    // `panel_url` already enforces.
+    if !is_safe_panel_url(url) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "refusing to open URL with unsafe characters",
+        ));
+    }
+    std::process::Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", url])
         .status()?;
     Ok(())
+}
+
+/// Restrict the URL to http(s) scheme + a conservative character set so the
+/// `rundll32` command line above can't be subverted by a URL whose contents
+/// carry cmd-special characters. Anything that wouldn't appear in a normal
+/// http(s) URL (notably `"`, `^`, `` ` ``, newline, NUL) is rejected.
+fn is_safe_panel_url(url: &str) -> bool {
+    let rest = match url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    {
+        Some(r) if !r.is_empty() => r,
+        _ => return false,
+    };
+    rest.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '.' | '-'
+                    | ':'
+                    | '/'
+                    | '?'
+                    | '#'
+                    | '='
+                    | '%'
+                    | '+'
+                    | ','
+                    | '~'
+                    | '@'
+                    | '!'
+                    | '&'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '*'
+                    | '\''
+                    | ';'
+            )
+    })
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

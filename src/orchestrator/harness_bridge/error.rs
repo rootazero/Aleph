@@ -129,18 +129,14 @@ fn is_transient_harness_message(msg: &str) -> bool {
     }
 
     has_any_marker(msg, NETWORK_MARKERS)
-        || has_any_status(msg, TRANSIENT_STATUSES)
+        || TRANSIENT_STATUSES
+            .iter()
+            .any(|c| crate::providers::llm_retry::has_status_code(msg, *c))
         || has_any_marker(msg, RATE_LIMIT_MARKERS)
 }
 
 fn has_any_marker(msg: &str, markers: &[&str]) -> bool {
     markers.iter().any(|m| msg.contains(m))
-}
-
-fn has_any_status(msg: &str, codes: &[u16]) -> bool {
-    codes
-        .iter()
-        .any(|c| crate::providers::llm_retry::has_status_code(msg, *c))
 }
 
 #[cfg(test)]

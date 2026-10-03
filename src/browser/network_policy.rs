@@ -213,7 +213,7 @@ impl BrowserSsrfGuard {
         // validates every returned IP against the blocklist, so a hostname
         // that currently maps to loopback / private / link-local / metadata
         // is rejected before being handed to Playwright/Chrome.
-        ssrf::validate_url_async(url_str, &core_policy)
+        ssrf::validate_url_with_pinned(url_str, &core_policy)
             .await
             .map(|(_, _pinned)| ())
             .map_err(PolicyViolation::from)?;

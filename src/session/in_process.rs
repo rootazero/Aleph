@@ -21,6 +21,9 @@ const COMMAND_BUFFER: usize = 64;
 const BROADCAST_BUFFER: usize = 256;
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
+// `derive(Clone)` applies cleanly: every field is `Arc<_>`, `Option<Arc<_>>`,
+// or `Copy` (`Duration`); the macro generates the same `Arc::clone` calls.
+#[derive(Clone)]
 pub struct InProcessActorSessionService {
     store: Arc<dyn SessionEventStore>,
     // All three maps are wrapped in `Arc` so the service can be cheaply
@@ -41,21 +44,6 @@ pub struct InProcessActorSessionService {
     wake_locks: Arc<Mutex<HashMap<SessionId, Arc<Mutex<()>>>>>,
     idle_timeout: Duration,
     observer: Option<Arc<dyn crate::session::observer::SessionEventObserver>>,
-}
-
-// Manual `Clone` would be the same; derive sees through `Arc<_>` fields
-// and `Copy` `Duration` / `Option<Arc<_>>`.
-impl Clone for InProcessActorSessionService {
-    fn clone(&self) -> Self {
-        Self {
-            store: Arc::clone(&self.store),
-            senders: Arc::clone(&self.senders),
-            broadcasters: Arc::clone(&self.broadcasters),
-            wake_locks: Arc::clone(&self.wake_locks),
-            idle_timeout: self.idle_timeout,
-            observer: self.observer.as_ref().map(Arc::clone),
-        }
-    }
 }
 
 impl InProcessActorSessionService {
@@ -118,7 +106,7 @@ impl InProcessActorSessionService {
                 // Normal path: double-check + stale sender cleanup.
                 if let Some(sender) = senders.get(id) {
                     if !sender.is_closed() {
-                        // rust-doctor-disable-next-line excessive-clone
+                        // mpsc::Sender is Arc-backed; clone is a refcount bump.
                         return Ok(sender.clone());
                     }
                     senders.remove(id);
@@ -182,29 +170,7 @@ impl InProcessActorSessionService {
                         event: evt,
                         created_at_ms: at,
                     };
-                    if let Some(obs) = &self.observer {
-                        let id_ref = id;
-                        let rec_ref = &record;
-                        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            obs.on_appended(id_ref, rec_ref);
-                        }))
-                        .is_err()
-                        {
-                            tracing::error!(
-                                session_id = ?id,
-                                seq,
-                                "SessionEventObserver panicked during \
-                                 SessionWoken emission"
-                            );
-                        }
-                    }
-                    if let Err(_record) = bcast_tx.send(record) {
-                        tracing::debug!(
-                            session_id = ?id,
-                            seq,
-                            "broadcast had no receivers during SessionWoken emission"
-                        );
-                    }
+                    crate::session::actor::notify_appended(id, &record, self.observer.as_ref(), &bcast_tx);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -217,14 +183,15 @@ impl InProcessActorSessionService {
         }
 
         let actor = SessionActor::new(
-            // rust-doctor-disable-next-line excessive-clone
+            // SessionKey is an enum (not Copy), so a clone is the same refcount
+            // bump as before — kept the comment because rust-doctor was flagging
+            // the explicit `.clone()` at the call site.
             id.clone(),
-            // rust-doctor-disable-next-line excessive-clone
-            self.store.clone(),
+            Arc::clone(&self.store),
             rx,
-            // rust-doctor-disable-next-line excessive-clone
+            // broadcast::Sender is Arc-backed; clone is a refcount bump.
             bcast_tx.clone(),
-            // rust-doctor-disable-next-line excessive-clone
+            // Option<Arc<_>>'s `clone` is a refcount bump too.
             self.observer.clone(),
             self.idle_timeout,
         );
@@ -249,9 +216,9 @@ impl InProcessActorSessionService {
         {
             let mut senders = self.senders.write().await;
             let mut broadcasters = self.broadcasters.write().await;
-            // rust-doctor-disable-next-line excessive-clone
+            // SessionKey is an enum (not Copy) so the keys need a real clone.
+            // The values are Arc-backed (mpsc/broadcast Sender) and cheap.
             senders.insert(id.clone(), tx.clone());
-            // rust-doctor-disable-next-line excessive-clone
             broadcasters.insert(id.clone(), bcast_tx);
         }
 
@@ -459,7 +426,10 @@ impl SessionService for InProcessActorSessionService {
         //    sequence (shutdown → capture → spawn) atomic with respect
         //    to any concurrent wake/emit on the same session.
         self.spawn_actor(id, prior_head).await?;
-        drop(_guard);
+        // `_guard` drops at end of scope. `spawn_actor` already appended
+        // SessionWoken while holding the per-key wake lock, so the documented
+        // atomicity window (shutdown → capture → spawn) has closed; the
+        // remaining `new_head` arithmetic is local-only.
 
         // The new head the caller sees is `prior_head + 1` (SessionWoken
         // appended). If SessionWoken's append failed (store error), the
@@ -469,7 +439,7 @@ impl SessionService for InProcessActorSessionService {
         let new_head = prior_head.map(|p| p + 1).unwrap_or(1);
 
         Ok(SessionHandle {
-            // rust-doctor-disable-next-line excessive-clone
+            // SessionKey is an enum (not Copy) so the field needs a clone.
             id: id.clone(),
             head_seq: new_head,
         })

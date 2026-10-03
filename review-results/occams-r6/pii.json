@@ -1,0 +1,52 @@
+{
+  "module": "src/pii",
+  "reviewer": "claude-sonnet-4-6 (pi sub-agent, occams-r6)",
+  "summary": "Module is in good shape after the 2026-08 review round; most prior findings are fixed and pinned by tests. New issues are modest: a per-message deep clone of PrivacyConfig on the platform filter path, one now-redundant severity sort with a stale justification, a wider-than-needed module visibility, and drift among three copies of the decimal-context helper.",
+  "totals": {"critical": 0, "high": 0, "medium": 1, "low": 3},
+  "findings": [
+    {
+      "id": "PII-001",
+      "severity": "Medium",
+      "category": "allocation",
+      "file": "src/pii/engine.rs",
+      "line": 310,
+      "title": "filter_with_platform deep-clones the entire PrivacyConfig per call even when no override applies",
+      "description": "effective_config() returns an owned PrivacyConfig, and all three of its non-override paths (`platform == None`, no policy for the platform, policy with no fields set) end in `self.config.clone()`. filter_with_config() only needs `&PrivacyConfig`, so the clone is pure waste whenever the platform argument names no effective override — which includes the common `None` case. The clone is deep: it copies `custom_rules: Vec<CustomPiiRule>` (4 Strings per rule), `exclude_providers: Vec<String>`, and `platform_policies: HashMap<...>`. This runs per text block per outbound message on the hot provider path (src/providers/http_provider.rs:388) and per guardrail evaluation (src/security/runtime_guard.rs:305).",
+      "fix_proposal": "Return `std::borrow::Cow<'_, PrivacyConfig>` from effective_config (Cow::Borrowed(&self.config) on all three fast paths, Cow::Owned only when an override actually mutates), and pass `&config` to filter_with_config as today. No signature change to the public filter_with_platform.",
+      "confidence": "high"
+    },
+    {
+      "id": "PII-002",
+      "severity": "Low",
+      "category": "dead-code",
+      "file": "src/pii/rules/mod.rs",
+      "line": 84,
+      "title": "build_rules severity sort is no longer load-bearing; its doc comment is stale",
+      "description": "The sort at the end of build_rules exists so 'higher-severity matches win in overlap deduplication', but the engine no longer relies on rule order: filter_with_config collects matches from all rules and re-sorts all_matches itself by (Block-ness, severity) before dedup_overlapping (engine.rs:361-367), and the browser secret_guard re-sorts by start offset (src/browser/secret_guard.rs). The only residual effect of rule order is stable-sort tie-breaking among matches with identical block-ness AND severity — which the sort by severity does not even influence. The sort is wasted work on every boot/reload, and the module doc comment ('Rules are sorted by severity descending ... so that higher-severity matches win') describes an invariant that no longer holds, which will mislead the next reader trying to reason about overlap priority.",
+      "fix_proposal": "Delete the `rules.sort_by_key(...)` line and rewrite the doc comment to state that match-level priority is decided in engine.rs's sort (Block first, then severity), not by rule order. Verify no test asserts rule ordering.",
+      "confidence": "medium"
+    },
+    {
+      "id": "PII-003",
+      "severity": "Low",
+      "category": "api-surface",
+      "file": "src/pii/mod.rs",
+      "line": 10,
+      "title": "pub mod allowlist exposes PiiAllowlist to crate-external users with zero consumers",
+      "description": "`pub mod allowlist` is the only way to name PiiAllowlist, and its sole consumer is src/pii/engine.rs (PiiAllowlist::default()). No file outside src/pii references pii::allowlist (verified by repo-wide grep; the only cross-crate user of the pii module is tests/security_integration.rs, which uses the root re-export `alephcore::pii::PiiEngine`). Same-crate consumers of `crate::pii::engine` and `crate::pii::rules` paths (capability/mod.rs, browser/secret_guard.rs, security/runtime_guard.rs, config/types/privacy.rs) would equally be served by `pub(crate) mod`. Per AGENTS.md ('Default private, pub(crate) for internal sharing') the submodule visibility is one notch wider than needed. Note the mod.rs re-exports themselves must stay pub — a prior review removed them as 'dead' and broke tests/security_integration.rs, which the file's doc comment now records.",
+      "fix_proposal": "Change `pub mod allowlist;` to `pub(crate) mod allowlist;` (engine.rs is the only user). Optionally also narrow `pub mod engine;` / `pub mod rules;` to `pub(crate)` since all external users go through the root re-exports — but do that as a separate commit and re-run the integration test, given the history recorded in mod.rs.",
+      "confidence": "medium"
+    },
+    {
+      "id": "PII-004",
+      "severity": "Low",
+      "category": "duplicate",
+      "file": "src/pii/rules/id_card.rs",
+      "line": 153,
+      "title": "Three drifted copies of is_decimal_context; id_card's comment claims agreement that does not exist",
+      "description": "is_decimal_context exists in three rule files with subtly different semantics: phone.rs:62 (trailing check requires a digit after '.'), bank_card.rs:61 (same as phone), id_card.rs:153 (also accepts 'e'/'E' exponent continuation). id_card.rs's doc comment says it 'Mirrors the same helper in BankCardRule so the two digit-heavy rules agree on what decimal context means' — they do not: the id_card version handles exponents, the bank_card version does not. There is no false-positive gap (a span followed by '.e' with no intervening digit is not a valid float literal, so bank_card's narrower check is safe), but the comment asserts an invariant the code violates, and a future edit to one copy to 'fix' PII leakage will silently diverge the others. Either the helpers are one concept (share a private helper in rules/mod.rs with a parameter for exponent handling) or they are per-rule FP guards and the cross-referencing comments should stop claiming they are identical.",
+      "fix_proposal": "Cheapest correct fix: adjust the id_card.rs comment to state precisely how it differs from BankCardRule's helper (adds e/E exponent continuation) and why (18-digit spans embed in scientific-notation literals), so the drift is documented rather than denied.",
+      "confidence": "low"
+    }
+  ]
+}

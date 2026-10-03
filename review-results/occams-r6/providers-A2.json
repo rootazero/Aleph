@@ -1,0 +1,19 @@
+{
+  "module": "src/providers/anthropic/* (batch A2 corrected: only mod.rs + types.rs exist)",
+  "reviewer": "minimax-m3",
+  "summary": "Five pub response-side types in types.rs (MessagesResponse, AnthropicContentBlock, AnthropicUsage, ErrorResponse, ErrorDetails) have zero consumers — ripgrep across src/ and tests/ finds no reference outside types.rs itself. The actual protocol layer at src/providers/protocols/anthropic/{adapter,sse,proto_impl}.rs parses Anthropic responses as raw serde_json::Value (sse.rs:19, adapter.rs:176), bypassing these typed wrappers. They are re-exported via mod.rs's `pub use types::*;` and inflate the public API surface with no payoff. The remaining request-side types (MessagesRequest, SystemBlock, ThinkingBlock, ContentBlock, Message, MessageContent, ImageSource, AnthropicTool, Metadata, OutputConfig) are all consumed by proto_impl.rs / adapter.rs / adapter_tests/.",
+  "totals": {"critical": 0, "high": 0, "medium": 1, "low": 0},
+  "findings": [
+    {
+      "id": "P-A2-001",
+      "severity": "Medium",
+      "category": "dead-code",
+      "file": "src/providers/anthropic/types.rs",
+      "line": 175,
+      "title": "Five pub response-side types are unreachable from any non-test code",
+      "description": "MessagesResponse:175, AnthropicContentBlock:197, AnthropicUsage:216, ErrorResponse:229, ErrorDetails:234 are all `pub` and re-exported via `pub use types::*;` in mod.rs:5, yet ripgrep across the entire src/ and tests/ tree shows zero references outside types.rs itself. The actual integration path at src/providers/protocols/anthropic/{adapter,sse,proto_impl}.rs never deserializes Anthropic responses into these types — sse.rs:19 and adapter.rs:176 both use `serde_json::from_str::<serde_json::Value>(...)`, and proto_impl.rs converts via internal `crate::providers::message::*` types. These are test-only code masquerading as public API surface. The 7 tests that reference them (lines 260-410) are characterization tests for a wire format the codebase does not actually consume, which gives false confidence that the response shape is locked in. Categorizing as Medium (not High) because (a) the tests do document the wire shape and would be lost on deletion, and (b) deleting a five-type cluster + seven tests is a real — if mechanical — refactor slice that the team should consciously decide on, not a quick drive-by.",
+      "fix_proposal": "Two valid simplifications, pick one:\n\n  Option A (aggressive, removes ~75 lines): Delete the five types and their 7 tests (types.rs:175-238 plus tests at 260-272, 274-287, 289-305, 307-322, 324-335, 337-348, 390-400). Public API surface shrinks to only what the protocol layer actually consumes.\n\n  Option B (conservative, keeps wire-format coverage): Move the five types + 7 tests into a `#[doc(hidden)] #[allow(dead_code)] pub mod wire_format` submodule of types.rs (or a sibling `wire_format.rs`) and drop `pub use types::*;` in favor of explicit re-exports of only the types the protocol layer actually needs (MessagesRequest, SystemBlock, ThinkingBlock, ContentBlock, Message, MessageContent, ImageSource, AnthropicTool, Metadata, OutputConfig). The wire-format module signals 'characterization only — do not depend on'.\n\n  Option B is the safer slice — it preserves the wire-shape tests, narrows the public surface, and leaves an explicit door open if response handling is ever migrated back to typed deserialization.",
+      "confidence": "high"
+    }
+  ]
+}

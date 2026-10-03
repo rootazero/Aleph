@@ -48,10 +48,14 @@ impl SemanticLlmMatcher {
         );
 
         for (i, agent) in agents.iter().enumerate() {
-            let _ = write!(&mut prompt, "\n{}. {} ({})\n", i, agent.card.name, agent.card.id);
+            let _ = writeln!(
+                &mut prompt,
+                "\n{}. {} ({})",
+                i, agent.card.name, agent.card.id
+            );
 
             if let Some(ref desc) = agent.card.description {
-                let _ = write!(&mut prompt, "   Description: {desc}\n");
+                let _ = writeln!(&mut prompt, "   Description: {desc}");
             }
             if !agent.card.skills.is_empty() {
                 prompt.push_str("   Skills:\n");

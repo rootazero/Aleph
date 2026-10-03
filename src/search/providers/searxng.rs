@@ -117,8 +117,10 @@ impl SearxngProvider {
         }
 
         let trimmed = base_url.trim_end_matches('/').to_string();
-        let scheme_lower = trimmed.to_lowercase();
-        if !scheme_lower.starts_with("http://") && !scheme_lower.starts_with("https://") {
+        if !(trimmed.len() >= 7
+            && (trimmed[..7].eq_ignore_ascii_case("http://")
+                || (trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("https://"))))
+        {
             return Err(AlephError::invalid_config(
                 "SearXNG base URL must use http:// or https:// scheme",
             ));
@@ -133,14 +135,14 @@ impl SearxngProvider {
         // the request-time guard (`security/ssrf`) honours for exactly this
         // class of internal service. Without the switch the refusal names it,
         // so a LAN deployment is a config edit away, not a code change.
-        if let Ok(parsed) = url::Url::parse(&trimmed) {
+        let parsed = url::Url::parse(&trimmed).ok();
+        if let Some(parsed) = parsed.as_ref() {
             if let Some(host) = parsed.host_str() {
                 reject_ssrf_target_host("SearXNG", host, allow_private_network)?;
             }
         }
-
-        let url_password = url::Url::parse(&trimmed)
-            .ok()
+        let url_password = parsed
+            .as_ref()
             .and_then(|u| u.password().map(str::to_string))
             .filter(|p| !p.is_empty());
 

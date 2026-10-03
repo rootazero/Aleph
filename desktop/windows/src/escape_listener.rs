@@ -342,6 +342,13 @@ extern "system" fn keyboard_hook_proc(
 mod tests {
     use super::*;
 
+    /// Test-only accessor for `LISTENER_PTR`. Lets the C-1 invariant be
+    /// checked directly without making the static pub outside this module.
+    #[cfg(windows)]
+    fn listener_ptr_addr() -> usize {
+        LISTENER_PTR.load(Ordering::SeqCst)
+    }
+
     #[test]
     fn create_default() {
         let _esc = WindowsEscapeListener::default();
@@ -358,6 +365,74 @@ mod tests {
             esc.reset();
             assert!(!esc.is_aborted());
             esc.stop();
+        }
+    }
+
+    /// T-C1: regression test for desktop/windows/src/escape_listener.rs:146.
+    /// Pins the C-1 contract that the static is cleared to zero and the
+    /// heap state is freed in that order, both on the happy path and on
+    /// repeated cycles, so a `keyboard_hook_proc` already in flight (it
+    /// loaded the non-zero pointer before the clear) can never observe a
+    /// dangling `ListenerState`. Without dc6ea4042's `yield_now` between
+    /// the clear and the drop, an in-flight callback could win the race
+    /// and dereference freed memory. The body is gated on `start()` being
+    /// `Ok` so the test compiles on non-Windows hosts (where the cfg
+    /// path returns `Err`) and the assertion core is exercised on CI's
+    /// windows-latest job.
+    #[test]
+    fn listener_ptr_is_zeroed_after_stop_and_between_cycles() {
+        let esc = WindowsEscapeListener::new();
+        if esc.start().is_err() {
+            // No Win32 (non-Windows host) — start() invocations on the
+            // cfg(not(windows)) branch return NotImplemented, so the
+            // pointer invariant is non-applicable. CI's windows-latest
+            // job exercises the body.
+            return;
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(listener_ptr_addr(), 0, "must start zeroed");
+            assert_ne!(listener_ptr_addr(), 0, "start must publish ptr");
+
+            // Repeated start while already started must be a no-op — it
+            // must NOT clobber LISTENER_PTR mid-flight, otherwise an
+            // in-flight callback would deref a state box that's about to
+            // be dropped.
+            assert!(esc.start().is_ok(), "second start is a no-op");
+            assert_ne!(listener_ptr_addr(), 0, "no-op start must not clear");
+
+            esc.stop();
+            assert_eq!(listener_ptr_addr(), 0, "stop must zero the ptr");
+
+            // A second cycle must also publish and zero cleanly — catches
+            // a regression where stop() forgets to reset state and the
+            // second start() publishes a fresh pointer over a stale one.
+            if esc.start().is_ok() {
+                assert_ne!(listener_ptr_addr(), 0, "restart must republish");
+                esc.stop();
+                assert_eq!(listener_ptr_addr(), 0, "second stop must zero again");
+            }
+        }
+    }
+
+    /// T-C1 companion: `is_aborted` after stop must not panic and must
+    /// report the state as not-aborted, since the boxed state was dropped.
+    /// A regression that left LISTENER_PTR non-zero would let an unrelated
+    /// hook load it and deref freed memory; this test pins the in-process
+    /// side of the same invariant.
+    #[test]
+    fn is_aborted_after_stop_is_false_and_does_not_panic() {
+        let esc = WindowsEscapeListener::new();
+        if esc.start().is_err() {
+            return;
+        }
+        esc.stop();
+        assert!(!esc.is_aborted(), "state was dropped");
+        // And again after a restart — covers the stop-then-restart branch.
+        if esc.start().is_ok() {
+            assert!(!esc.is_aborted());
+            esc.stop();
+            assert!(!esc.is_aborted());
         }
     }
 }

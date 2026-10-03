@@ -2,8 +2,48 @@
 
 use crate::sync_primitives::Arc;
 
-use crate::config::Config;
+use crate::config::{Config, ProviderConfig};
 use crate::providers::{create_provider, AiProvider};
+
+/// Clone `base`, replace `models` with `[version]`, and try to build a provider
+/// against `primary_provider_key`. Logs a single `info!` on success and a
+/// `warn!` on failure so each call site keeps its own wording — the shared
+/// shape is the clone-swap-create tail that otherwise gets duplicated in
+/// every cheap-tier builder. `source_tag`, when provided, is included in the
+/// success log so callers can distinguish explicit-overrides from
+/// preset-derived model picks.
+fn build_provider_with_swapped_model(
+    base: &ProviderConfig,
+    primary_provider_key: &str,
+    new_model: String,
+    source_tag: Option<&str>,
+    info_msg: &'static str,
+    warn_msg: &'static str,
+) -> Option<Arc<dyn AiProvider>> {
+    // rust-doctor-disable-next-line excessive-clone
+    let mut cfg = base.clone();
+    cfg.models = vec![new_model.clone()];
+    match create_provider(primary_provider_key, cfg) {
+        Ok(provider) => {
+            tracing::info!(
+                provider = %primary_provider_key,
+                new_model = %new_model,
+                source = source_tag.unwrap_or("-"),
+                "{info_msg}",
+            );
+            Some(provider)
+        }
+        Err(e) => {
+            tracing::warn!(
+                provider = %primary_provider_key,
+                new_model = %new_model,
+                error = %e,
+                "{warn_msg}",
+            );
+            None
+        }
+    }
+}
 
 /// Build the cheap-tier summarization provider for [`ContextCompactor`].
 ///
@@ -94,28 +134,15 @@ pub fn build_cheap_summary_provider(
     }
 
     // rust-doctor-disable-next-line excessive-clone
-    let mut cheap_cfg = base.clone();
-    cheap_cfg.models = vec![summary_model.clone()];
-    match create_provider(primary_provider_key, cheap_cfg) {
-        Ok(provider) => {
-            tracing::info!(
-                provider = %primary_provider_key,
-                summary_model = %summary_model,
-                source,
-                "context budget: routing history summarization to cheap-tier model"
-            );
-            Some(provider)
-        }
-        Err(e) => {
-            tracing::warn!(
-                provider = %primary_provider_key,
-                summary_model = %summary_model,
-                error = %e,
-                "context budget: cheap summary provider build failed — summarization will use the main LLM"
-            );
-            None
-        }
-    }
+    // See common-clone construction tail in `build_provider_with_swapped_model`.
+    build_provider_with_swapped_model(
+        base,
+        primary_provider_key,
+        summary_model.clone(),
+        Some(source),
+        "context budget: routing history summarization to cheap-tier model",
+        "context budget: cheap summary provider build failed — summarization will use the main LLM",
+    )
 }
 
 /// Build the cheap-tier provider for the **dream pipeline**'s LLM stages
@@ -180,28 +207,15 @@ pub fn build_dream_provider(
         "preset aux_model"
     };
     // rust-doctor-disable-next-line excessive-clone
-    let mut dream_cfg = base.clone();
-    dream_cfg.models = vec![dream_model.clone()];
-    match create_provider(primary_provider_key, dream_cfg) {
-        Ok(provider) => {
-            tracing::info!(
-                provider = %primary_provider_key,
-                dream_model = %dream_model,
-                source,
-                "dreaming: routing dream-pipeline stages to cheap-tier model"
-            );
-            Some(provider)
-        }
-        Err(e) => {
-            tracing::warn!(
-                provider = %primary_provider_key,
-                dream_model = %dream_model,
-                error = %e,
-                "dreaming: cheap provider build failed — dream stages will use the main LLM"
-            );
-            None
-        }
-    }
+    // See common-clone construction tail in `build_provider_with_swapped_model`.
+    build_provider_with_swapped_model(
+        base,
+        primary_provider_key,
+        dream_model.clone(),
+        Some(source),
+        "dreaming: routing dream-pipeline stages to cheap-tier model",
+        "dreaming: cheap provider build failed — dream stages will use the main LLM",
+    )
 }
 
 /// Build the optional dedicated provider for the strategic-planner node
@@ -259,27 +273,15 @@ pub fn build_strategy_planner_provider(
     }
 
     // rust-doctor-disable-next-line excessive-clone
-    let mut planner_cfg = base.clone();
-    planner_cfg.models = vec![planner_model.clone()];
-    match create_provider(primary_provider_key, planner_cfg) {
-        Ok(provider) => {
-            tracing::info!(
-                provider = %primary_provider_key,
-                planner_model = %planner_model,
-                "strategy: routing strategic-planner node to a dedicated model"
-            );
-            Some(provider)
-        }
-        Err(e) => {
-            tracing::warn!(
-                provider = %primary_provider_key,
-                planner_model = %planner_model,
-                error = %e,
-                "strategy: planner provider build failed — planner will use the main LLM"
-            );
-            None
-        }
-    }
+    // See common-clone construction tail in `build_provider_with_swapped_model`.
+    build_provider_with_swapped_model(
+        base,
+        primary_provider_key,
+        planner_model.clone(),
+        None,
+        "strategy: routing strategic-planner node to a dedicated model",
+        "strategy: planner provider build failed — planner will use the main LLM",
+    )
 }
 
 #[cfg(test)]

@@ -83,9 +83,23 @@ fn register_for_exit(pid: Option<u32>, dir: PathBuf) {
         };
         for (pid, dir) in doomed.drain(..) {
             if let Some(pid) = pid {
-                // SAFETY: `kill` on a pid this process spawned. A stale pid
-                // gets ESRCH, which is ignored — this is best-effort cleanup.
-                unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+                // SAFETY: `kill(pid, 0)` is the standard "is this pid alive?"
+                // probe and never delivers a signal. Without it, a recycled
+                // PID between spawn and atexit (different process now reusing
+                // the number) would receive our SIGKILL. The kernel still
+                // distinguishes "alive but not ours" (EPERM) from "gone"
+                // (ESRCH) from "ours" (0); we only SIGKILL on 0. The
+                // recycled-PID-with-different-content edge case (alive, ours,
+                // same number, different process) is not addressed here — it
+                // would require recording `/proc/<pid>/stat` start_time at
+                // spawn and comparing at reap, which the current API does
+                // not carry. Tracked as a follow-up.
+                let probe = unsafe { libc::kill(pid as libc::pid_t, 0) };
+                if probe == 0 {
+                    // SAFETY: `kill` on a pid this process spawned and the
+                    // 0-probe just confirmed still resolves to us.
+                    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+                }
             }
             let _ = std::fs::remove_dir_all(&dir);
         }

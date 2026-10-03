@@ -53,6 +53,7 @@ pub mod config_guide;
 pub mod crawl4ai;
 pub mod cron_manage;
 pub mod ctx_search;
+pub mod decompress;
 pub mod desktop;
 pub mod doctor;
 pub mod error;
@@ -195,6 +196,7 @@ pub use config_guide::{
 };
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
 pub use ctx_search::{CtxSearchArgs, CtxSearchOutput, CtxSearchTool};
+pub use decompress::{SessionDecompressArgs, SessionDecompressResult, SessionDecompressTool};
 pub use desktop::{
     DesktopArgs, DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
     DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs, DesktopAxSnapshot,

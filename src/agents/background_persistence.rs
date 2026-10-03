@@ -526,8 +526,7 @@ fn summarize_orphans(runs: &[RecoveredRun]) -> String {
         render(&mut block, &unsuccessful);
         blocks.push(block);
     }
-    let out = blocks.join("\n");
-    out
+    blocks.join("\n")
 }
 
 // ============================================================================

@@ -79,9 +79,10 @@ pub(crate) fn build_rules(custom_configs: &[CustomPiiRule]) -> Vec<Box<dyn PiiRu
         }
     }
 
-    // Sort by severity descending: Critical rules are processed first so they
-    // win when overlapping matches are deduplicated.
-    rules.sort_by_key(|r| std::cmp::Reverse(r.severity()));
+    // Match-level priority (Block > severity) is decided inside
+    // `filter_with_config` — engine.rs sorts `all_matches` by
+    // `(Reverse(blocked), Reverse(severity))` before overlap dedup, so the
+    // rule insertion order here is irrelevant to the outcome.
 
     rules
 }

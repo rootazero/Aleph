@@ -1,0 +1,74 @@
+{
+  "module": "src/orchestrator (batch A: top + deps_builder)",
+  "reviewer": "kimi-for-coding",
+  "summary": "Batch A is unusually well-documented: nearly every non-obvious choice (deprecated wire-compat aliases, spawn-boundary field clones, fail-soft loaders, no-op checks) carries an incident-history comment, so most candidate smells are deliberate. No critical/high issues; six low findings: two dead pub items, one lock-leak edge case, one warn-level log on a normal hot path, and two duplicated construction patterns in deps_builder.",
+  "totals": {"critical": 0, "high": 0, "medium": 0, "low": 6},
+  "findings": [
+    {
+      "id": "O-A-001",
+      "severity": "Low",
+      "category": "dead-code",
+      "file": "src/orchestrator/flow_registry.rs",
+      "line": 35,
+      "title": "FlowRegistry::list_ids has no production consumers",
+      "description": "`list_ids` allocates a sorted Vec<String> of all flow ids, but the only caller in the entire worktree is its own unit test (src/orchestrator/tests/flow_registry.rs:56). No gateway handler, reload path, or diagnostic uses it — flow_admin counts via `len()` and flow substitution via `resolve()`.",
+      "fix_proposal": "Delete the method together with the `list_ids_is_sorted` test, or gate both with #[cfg(test)] if the sorted-list invariant is worth keeping as a spec assertion.",
+      "confidence": "high"
+    },
+    {
+      "id": "O-A-002",
+      "severity": "Low",
+      "category": "dead-code",
+      "file": "src/orchestrator/errors.rs",
+      "line": 54,
+      "title": "FlowError::is_retryable is never called (breaking if removed)",
+      "description": "The `pub const fn is_retryable` classifier has zero callers in src/, interfaces/, and bindings/ — every `.is_retryable()` call site belongs to other error types (ToolError, SignalError, AcpCode). Only its own unit tests (errors.rs:64-81) exercise it. It is dead weight on the public API surface and can silently rot relative to actual retry policy (which today lives in the failover/harness layers, not in FlowError).",
+      "fix_proposal": "Remove the method and its tests, or move the classification next to the retry policy that actually consumes it. Marked breaking: removal changes the pub API of a lib-crate error enum.",
+      "confidence": "high"
+    },
+    {
+      "id": "O-A-003",
+      "severity": "Low",
+      "category": "lock",
+      "file": "src/orchestrator/dispatch.rs",
+      "line": 700,
+      "title": "SessionLockGuard::drop try_lock failure permanently blackholes the session key",
+      "description": "On drop, the guard removes the session key from `active_sessions` via `try_lock`, and the comment claims a lost race just means \"retained until the next successful dispatch\". But that is wrong in one direction: if `try_lock` fails during unwind (another thread holds the mutex for its own insert), the key stays in the set forever — every future `dispatch` for that session key returns `FlowError::SessionConflict`, and no code path ever removes it. The window is nanoseconds-wide (HashSet ops only) so it needs a panic-during-lock-holding interleaving, but the failure mode is a silent, permanent session-key lockout requiring process restart.",
+      "fix_proposal": "Either retry the removal a bounded number of times in a loop before warning, or have the insert path opportunistically sweep: when insert returns conflict, verify the conflicting entry is still associated with a live task (e.g. check a generation counter / Weak handle) and reclaim stale entries.",
+      "confidence": "low"
+    },
+    {
+      "id": "O-A-004",
+      "severity": "Low",
+      "category": "other",
+      "file": "src/orchestrator/dispatch.rs",
+      "line": 1055,
+      "title": "Warn-level log fires on every child-session dispatch, not on actual drops",
+      "description": "Whenever `session_res.parent_session_key` is Some (i.e. every `SessionStrategy::Child` dispatch — every subagent/team run in production) the code emits `tracing::warn!(\"dispatch: child session resolved; gateway MUST thread parent_session_key ...\")`. The comment justifies warn over debug because a silent drop once cost debugging time, but this log cannot detect a drop — it fires unconditionally on the success path too. In a busy deployment this is constant warn noise that trains operators to ignore warn-level entries.",
+      "fix_proposal": "Downgrade to `tracing::debug!` once the gateway threading (execution_engine inner.rs / run_loop) is verified by an assertion or test, and put the drop-detection warn at the point that actually observes the missing key (the harness/subagent completion path) instead of at dispatch time.",
+      "confidence": "high"
+    },
+    {
+      "id": "O-A-005",
+      "severity": "Low",
+      "category": "duplicate",
+      "file": "src/orchestrator/deps_builder/context_budget.rs",
+      "line": 400,
+      "title": "Threshold-fold chain duplicated between build fn and per-run refiner",
+      "description": "`build_context_budget_config` (context_budget.rs:400-411) and `ContextBudgetRefiner::refine_for_serving_model` (context_budget.rs:588-601) both encode the identical precedence chain `model_override.and_then(o.critical_threshold).or(global).unwrap_or(default)` (and the same for warning), followed by the same `critical > warning` validation gate — roughly 20 lines duplicated with subtly different None-vs-base fallbacks. The two sites can drift (e.g. one learns a new source, the other doesn't), and the drift would silently change per-run budgets relative to boot-time budgets.",
+      "fix_proposal": "Extract one private fn, e.g. `fn fold_thresholds(model_override: Option<&ModelOverrides>, global_w: Option<f64>, global_c: Option<f64>) -> Option<(f64, f64)>`, applying override -> global -> default plus the validation gate; have both sites call it and map the None result to their respective fallback (disable vs degrade-to-base).",
+      "confidence": "high"
+    },
+    {
+      "id": "O-A-006",
+      "severity": "Low",
+      "category": "duplicate",
+      "file": "src/orchestrator/deps_builder/summary.rs",
+      "line": 78,
+      "title": "Clone-swap-create provider construction triplicated across summary builders",
+      "description": "`build_cheap_summary_provider`, `build_dream_provider`, and `build_strategy_planner_provider` each repeat the same ~15-line tail: trim/check the model, resolve preset aux-provider key, the `models.first() == model` no-op check, clone the primary config, swap `models = vec![model]`, call `create_provider`, and emit an info/warn log. The differing parts (gating condition, aux lookup, error handling) are already isolated at the top of each fn; only the construction mechanics are copy-pasted three times.",
+      "fix_proposal": "Extract `fn clone_primary_with_model(config: &AppConfig, key: &str, model: &str) -> anyhow::Result<Arc<dyn AiProvider>>>` performing trim/no-op-check/config-clone/model-swap/create_provider; each builder keeps only its gating and logging policy.",
+      "confidence": "high"
+    }
+  ]
+}

@@ -72,6 +72,42 @@ fn record_keeps_distinct_periods_separate() {
     assert_eq!(ledger.spent_for(&alice, 2_000).unwrap().usd, 9.0);
 }
 
+/// Mirror of `tests::record_replaces_non_finite_usd_with_unpriced_and_keeps_ceiling_alive`
+/// for the SQLite ledger. Both backends must agree on the partial-calls
+/// treatment of a non-finite `Delta::Partial`: the `partial_calls` counter
+/// is reserved for calls whose price was a lower bound, so a partial whose
+/// price cannot be represented bumps `unpriced_calls` only and leaves
+/// `partial_calls` alone. (Pre-fix the SQLite path also bumped
+/// `partial_calls`, silently doubling the "uncounted" signal.) Without
+/// this test the divergence would only show up in cross-backend
+/// reconciliations.
+#[test]
+fn record_replaces_non_finite_usd_with_unpriced_and_keeps_partial_calls_zero() {
+    let ledger = ledger();
+    let alice = Principal::User("u-alice".to_string());
+
+    ledger.record(&alice, 1_000, Delta::Usd(f64::NAN)).unwrap();
+    ledger
+        .record(&alice, 1_000, Delta::Partial(f64::INFINITY))
+        .unwrap();
+    ledger
+        .record(&alice, 1_000, Delta::Partial(f64::NEG_INFINITY))
+        .unwrap();
+
+    let spent = ledger.spent_for(&alice, 1_000).unwrap();
+    assert!(
+        spent.usd.is_finite(),
+        "usd column must never carry NaN/inf (got {})",
+        spent.usd
+    );
+    assert_eq!(spent.usd, 0.0);
+    assert_eq!(spent.unpriced_calls, 3);
+    assert_eq!(
+        spent.partial_calls, 0,
+        "sqlite and InMemory backends must agree: a non-finite Delta::Partial is unpriced, not partial"
+    );
+}
+
 #[test]
 fn unpriced_delta_increments_the_counter_and_leaves_usd_at_exactly_zero() {
     let ledger = ledger();

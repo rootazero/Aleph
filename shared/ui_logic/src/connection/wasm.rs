@@ -15,6 +15,38 @@ pub struct WasmConnector {
     ws: Option<WebSocket>,
     receiver: Option<mpsc::UnboundedReceiver<Result<Value, ConnectionError>>>,
     is_connected: bool,
+    // Owned handles for the four event-listener closures. Each connect()
+    // installs a fresh set of closures that capture the per-connection
+    // mpsc / oneshot state (tx / fail_slot / open_tx). The closures are
+    // passed to the WebSocket via `as_ref().unchecked_ref()`, which only
+    // borrows them — so the Rust handle must live as long as the socket
+    // references the JS function, otherwise wasm-bindgen drops the inner
+    // closure and a later event segfaults.
+    //
+    // The previous code used `.forget()` on every closure, which leaked
+    // the captured state for the lifetime of the process: every reconnect
+    // added another mpsc sender + oneshot slot the JS GC could never
+    // reach. Now the closures live on this struct and drop with it.
+    // `disconnect()` and `Drop` clear the WebSocket's handler refs first
+    // so the JS engine is free to release the closures when their last
+    // borrow (this struct) goes away.
+    open_closure: Option<Closure<dyn FnMut(JsValue)>>,
+    msg_closure: Option<Closure<dyn FnMut(MessageEvent)>>,
+    err_closure: Option<Closure<dyn FnMut(ErrorEvent)>>,
+    close_closure: Option<Closure<dyn FnMut(CloseEvent)>>,
+}
+
+impl Drop for WasmConnector {
+    fn drop(&mut self) {
+        // Clear the socket's JS handlers before the closures drop so the
+        // engine can finalize the listener functions in the same tick.
+        if let Some(ws) = &self.ws {
+            ws.set_onopen(None);
+            ws.set_onmessage(None);
+            ws.set_onerror(None);
+            ws.set_onclose(None);
+        }
+    }
 }
 
 impl WasmConnector {
@@ -54,7 +86,6 @@ impl AlephConnector for WasmConnector {
             }
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
-        onopen_callback.forget();
 
         // OnMessage
         let msg_tx = tx.clone();
@@ -73,7 +104,6 @@ impl AlephConnector for WasmConnector {
             }
         }) as Box<dyn FnMut(MessageEvent)>);
         ws.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
-        onmessage_callback.forget();
 
         // OnError — surface the error to the receive stream so the message
         // loop can observe it. onerror and onclose are independent events per
@@ -91,7 +121,6 @@ impl AlephConnector for WasmConnector {
             )));
         }) as Box<dyn FnMut(ErrorEvent)>);
         ws.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
-        onerror_callback.forget();
 
         // OnClose — surface the close to the receive stream so the message
         // loop's `Err` branch fires, drains pending RPCs, flips is_connected,
@@ -120,7 +149,15 @@ impl AlephConnector for WasmConnector {
             ))));
         }) as Box<dyn FnMut(CloseEvent)>);
         ws.set_onclose(Some(onclose_callback.as_ref().unchecked_ref()));
-        onclose_callback.forget();
+
+        // Hand the closures to the struct so they live as long as the
+        // connection does (and drop with it). Storing them here — instead
+        // of `.forget()` — is what stops every reconnect from leaking the
+        // captured mpsc / oneshot state forever.
+        self.open_closure = Some(onopen_callback);
+        self.msg_closure = Some(onmessage_callback);
+        self.err_closure = Some(onerror_callback);
+        self.close_closure = Some(onclose_callback);
 
         self.ws = Some(ws);
         self.receiver = Some(rx);
@@ -151,9 +188,23 @@ impl AlephConnector for WasmConnector {
     }
 
     async fn disconnect(&mut self) -> Result<(), ConnectionError> {
+        // Clear JS handlers BEFORE dropping the socket so the engine can
+        // finalize the listener closures in step with the Rust drop — and
+        // so the closures' captured state (mpsc senders / oneshot slot)
+        // doesn't outlive the connection it served.
+        if let Some(ws) = &self.ws {
+            ws.set_onopen(None);
+            ws.set_onmessage(None);
+            ws.set_onerror(None);
+            ws.set_onclose(None);
+        }
         if let Some(ws) = self.ws.take() {
             let _ = ws.close();
         }
+        self.open_closure = None;
+        self.msg_closure = None;
+        self.err_closure = None;
+        self.close_closure = None;
         self.is_connected = false;
         Ok(())
     }

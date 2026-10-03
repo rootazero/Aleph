@@ -249,14 +249,29 @@ impl ToolCatalog {
     /// Set the active flag on a registered tool by canonical name. Returns
     /// `true` if a tool was found and its value actually changed. Inactive
     /// tools are excluded from every list / `find_best_match` query path
-    /// (the `.filter(|t| t.is_active)` chain in `query.rs`), so an operator
-    /// can hot-pause a tool — including its descendants' routing — without
-    /// un-registering it. The health cache is invalidated so any prompt
-    /// cache that referenced the tool rebuilds without it.
+    /// (the `.filter(|t| t.is_active)` chain in `query.rs`), enabling a
+    /// future operator-pause workflow that hot-pauses a tool — including
+    /// its descendants' routing — without un-registering it. The health
+    /// cache is invalidated so any prompt cache that referenced the tool
+    /// rebuilds without it.
     ///
     /// Matching is case-insensitive (mirrors `check_conflict`,
     /// `is_namespace`, `resolve_command`) so `set_active("Skill_Read", false)`
     /// and `set_active("skill_read", false)` both find the same tool.
+    ///
+    /// # No production caller ships today
+    ///
+    /// This method is **only mutated in tests** (round-8 commit `a350419d5`
+    /// downgraded `is_active` from `pub` to `pub(crate)` and the only
+    /// callers in `src/` are `#[cfg(test)]` paths). The doc above describes
+    /// the *intended* operator workflow, not one an operator can perform
+    /// from any surface — there is no slash command, UI handler, IPC, or
+    /// admin endpoint that calls this. (occams-r9 tool_metadata C-NEW-2.)
+    ///
+    /// TODO(occams-r10+): wire `set_active` into either
+    /// `builtin:tool_pause <name>` / `builtin:tool_resume <name>` slash
+    /// commands or an admin gateway handler, with the operator-permission
+    /// gate that the surrounding wire already enforces.
     pub async fn set_active(&self, name: &str, active: bool) -> bool {
         let changed = self.state.set_active(name, active).await;
         if changed {

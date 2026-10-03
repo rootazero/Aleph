@@ -165,7 +165,6 @@ impl OpenAiProtocol {
                             } => Some(OpenAiToolCall {
                                 // rust-doctor-disable-next-line excessive-clone
                                 id: id.clone(),
-                                call_type: Some("function".to_string()),
                                 function: OpenAiFunctionCall {
                                     name: sanitize_tool_name(name),
                                     arguments: serde_json::to_string(arguments).unwrap_or_default(),

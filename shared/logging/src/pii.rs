@@ -63,11 +63,23 @@ fn get_patterns() -> &'static PiiPatterns {
         // `api key=...` with a literal space, so vendor terminology like
         // `Authorization: api key <value>` is caught.
         //
-        // The value arm matches double- or single-quoted strings (including any
-        // spaces inside the quotes) so a value like `password = "my secret phrase"`
-        // is fully redacted, not just the first word.
+        // The value arm has three alternatives:
+        //   1. Double- or single-quoted strings (any content, including spaces
+        //      inside the quotes). So `password = "my secret phrase"` is fully
+        //      redacted, not just the first word.
+        //   2. Multiple space-separated unquoted tokens. Required to catch
+        //      `Authorization: <scheme> <credential>` headers where the
+        //      credential follows the scheme word (the previous single-token
+        //      arm left the credential unredacted).
+        //   3. A single unquoted token (the legacy behaviour).
+        //
+        // The key arm also accepts optional surrounding `"` so JSON-shaped
+        // payloads like `{"token":"xyz"}` are matched: previously the closing
+        // `"` of the JSON key was consumed by the regex's separator group
+        // only when it was `:`, but the optional-key-quote lets us attach to
+        // the actual JSON key span and redacted its value cleanly.
         generic_secret: Regex::new(
-            r#"(?i)(password|passwd|pwd|secret|token|api[_\-\s]?key|access[_\-\s]?token|authorization)(\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s",}]+)"#,
+            r#"(?i)("?(?:password|passwd|pwd|secret|token|api[_\-\s]?key|access[_\-\s]?token|authorization)"?)(\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s",}]+(?:\s+[^\s",}]+)*)"#,
         )
         .expect("static PII regex is valid"),
         china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").expect("static PII regex is valid"),
@@ -247,5 +259,54 @@ mod tests {
         let scrubbed = scrub_pii("Authorization: Bearer abc123def");
         assert!(scrubbed.contains("[REDACTED]"), "got: {scrubbed}");
         assert!(!scrubbed.contains("abc123def"), "got: {scrubbed}");
+    }
+
+    #[test]
+    fn test_generic_secret_redacts_json_shaped_value() {
+        // Quoted JSON keys (`{"token":"xyz"}`) previously fell past the
+        // generic_secret regex entirely because the regex required the
+        // key word to be immediately followed by `[:=]` (no surrounding
+        // quotes). Regression: the credential value MUST now be redacted.
+        let scrubbed = scrub_pii(r#"{"token":"xyz"}"#);
+        assert!(
+            scrubbed.contains(r#""token":"[REDACTED]""#),
+            "got: {scrubbed}"
+        );
+        assert!(!scrubbed.contains(r#""xyz""#), "got: {scrubbed}");
+
+        let scrubbed = scrub_pii(r#"{"password":"hunter2supersecret"}"#);
+        assert!(
+            scrubbed.contains(r#""password":"[REDACTED]""#),
+            "got: {scrubbed}"
+        );
+        assert!(
+            !scrubbed.contains("hunter2supersecret"),
+            "got: {scrubbed}"
+        );
+    }
+
+    #[test]
+    fn test_generic_secret_redacts_authorization_multi_word_value() {
+        // `Authorization: <scheme> <credential>` previously redacted only
+        // the scheme word (`Bearer`, `Basic`, etc.) because the unquoted
+        // value arm `[^\s",}]+` stopped at the first whitespace, leaving
+        // the actual credential unredacted. Regression: the whole value
+        // span (scheme + credential) MUST now be redacted.
+        let scrubbed = scrub_pii("Authorization: ApiKey xyz123abc456");
+        assert!(
+            scrubbed.starts_with("Authorization: [REDACTED]"),
+            "got: {scrubbed}"
+        );
+        assert!(!scrubbed.contains("xyz123abc456"), "got: {scrubbed}");
+
+        let scrubbed = scrub_pii("Authorization: Token some secret credential value");
+        assert!(
+            scrubbed.starts_with("Authorization: [REDACTED]"),
+            "got: {scrubbed}"
+        );
+        assert!(
+            !scrubbed.contains("some secret credential value"),
+            "got: {scrubbed}"
+        );
     }
 }

@@ -617,12 +617,6 @@ fn build_cron_prompt(snapshot: &JobSnapshot) -> String {
     parts.join("\n")
 }
 
-/// Extract the final response text from collected events.
-///
-/// Sanitizes the output (strips `<completion-check>`, `<task-complete/>`, thinking
-/// tags, etc.) and falls back to concatenated `ResponseChunk` deltas when the
-/// `RunSummary.final_response` is empty after sanitization (e.g. when the last
-/// LLM turn was purely a completion-protocol confirmation).
 /// Extract the harness's terminate label + granular detail from the
 /// collected events.
 ///

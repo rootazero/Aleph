@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AlephError, Result};
 use crate::gateway::media::{is_data_url, is_local_media_path, is_remote_fetch_url, MediaItem};
 use crate::media::cache::MediaCache;
-use crate::security::ssrf::{validate_url_async, SsrfPolicy};
+use crate::security::ssrf::{validate_url_with_pinned, SsrfPolicy};
 use crate::tools::AlephTool;
 
 /// Input arguments for `media_send` tool.
@@ -187,7 +187,7 @@ async fn preflight(url: &str, ssrf_policy: &SsrfPolicy) -> Result<()> {
         // check on the other two rejected every one of them (`Url::parse`
         // fails on a bare path; `data:` has no host), which would have made a
         // captured clip impossible to send.
-        if let Err(e) = validate_url_async(url, ssrf_policy).await {
+        if let Err(e) = validate_url_with_pinned(url, ssrf_policy).await {
             return Err(AlephError::tool(format!(
                 "SSRF blocked for URL '{url}': {e}"
             )));
