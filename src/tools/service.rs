@@ -73,6 +73,32 @@ pub enum ToolError {
     #[error("duplicate tool name: {name}")]
     Duplicate { name: String },
 
+    /// A [`ToolCapabilityDescriptor`] failed validation before the registry
+    /// could store it. `reason` is the descriptor-layer diagnostic; the write
+    /// is refused fail-closed so an invalid capability never becomes callable.
+    ///
+    /// [`ToolCapabilityDescriptor`]: crate::tools::descriptor::ToolCapabilityDescriptor
+    #[error("invalid tool descriptor for {name}: {reason}")]
+    InvalidDescriptor { name: String, reason: String },
+
+    /// The descriptor does not describe the handler it was paired with — the
+    /// `name` / `source` / schema / safety-flag projection disagreed with the
+    /// handler's own [`definition`](crate::tools::handlers::ToolHandler::definition).
+    /// Refused so a handler can never be resolvable under a contract it does
+    /// not honour.
+    #[error("descriptor mismatch for tool {name}: {reason}")]
+    DescriptorMismatch { name: String, reason: String },
+
+    /// The registry was closed and no longer accepts new registrations or
+    /// replacements. Existing handles stay disposable.
+    #[error("registry closed: cannot register tool {name}")]
+    RegistryClosed { name: String },
+
+    /// A registration handle or change referred to a revision the registry no
+    /// longer holds (the entry was replaced or unregistered in between).
+    #[error("unknown registration revision {revision} for tool {name}")]
+    UnknownRevision { name: String, revision: u64 },
+
     #[error("{0}")]
     Other(String),
 }
