@@ -1,6 +1,6 @@
 use super::*;
-use crate::config::types::provider::ResponseFormat;
 use crate::config::ProviderConfig;
+use crate::config::types::provider::ResponseFormat;
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason};
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
@@ -11,7 +11,7 @@ use reqwest::Client;
 use std::collections::VecDeque;
 
 use crate::providers::protocols::openai_chat::sse::{
-    defer_done_until_usage, parse_chat_sse_event, DeferOutcome,
+    DeferOutcome, defer_done_until_usage, parse_chat_sse_event,
 };
 
 #[test]
@@ -417,8 +417,8 @@ fn test_parse_malformed_function_arguments() {
 
 #[test]
 fn test_build_request_includes_tools() {
-    use crate::tool_metadata::ToolDefinition;
     use crate::ToolCategory;
+    use crate::tool_metadata::ToolDefinition;
 
     let protocol = OpenAiProtocol::new(Client::new());
     let tools = vec![ToolDefinition::new(
@@ -454,8 +454,8 @@ fn test_build_request_includes_tools() {
 
 #[test]
 fn test_build_request_derefs_refs_for_moonshot() {
-    use crate::tool_metadata::ToolDefinition;
     use crate::ToolCategory;
+    use crate::tool_metadata::ToolDefinition;
 
     let protocol = OpenAiProtocol::new(Client::new());
     // Schema mirrors what schemars emits for an internally-tagged enum arg
@@ -706,8 +706,8 @@ fn test_build_request_strips_prompt_cache_key_on_custom_endpoint() {
 
 #[test]
 fn test_build_request_with_multiple_tools() {
-    use crate::tool_metadata::ToolDefinition;
     use crate::ToolCategory;
+    use crate::tool_metadata::ToolDefinition;
 
     let protocol = OpenAiProtocol::new(Client::new());
     let tools = vec![
@@ -1357,6 +1357,201 @@ fn chat_uses_max_tokens_for_gpt4o() {
 fn chat_omits_max_tokens_when_both_none() {
     let body = build_chat_body_for_max_tokens("gpt-4o", None);
     assert!(body.get("max_tokens").is_none());
+    assert!(body.get("max_completion_tokens").is_none());
+}
+
+// ─── ModelCompat::uses_max_completion_tokens integration ────────────
+//
+// End-to-end coverage for the operator override: these build a full
+// `ProviderConfig` with a populated `model_defs` entry, run the same
+// `ProtocolAdapter::build_request` path the production request goes through,
+// and assert on the wire body. The unit tests in
+// `openai_common/max_tokens.rs::uses_max_completion_tokens_for` prove the
+// helper itself; these prove the helper is *reached* from the adapter and
+// actually rewrites the field name on the JSON body.
+
+fn build_chat_body_with_compat(
+    model: &str,
+    compat: crate::config::types::provider::ModelCompat,
+) -> serde_json::Value {
+    let protocol = OpenAiProtocol::new(Client::new());
+    let mut config = ProviderConfig::test_config(model);
+    config.max_tokens = Some(4096);
+    config.model_defs = vec![crate::config::types::provider::ModelDef {
+        id: model.to_string(),
+        name: None,
+        base_url: None,
+        context_window: None,
+        max_output_tokens: None,
+        input: None,
+        reasoning: None,
+        thinking_level_map: None,
+        cost: None,
+        compat: Some(compat),
+    }];
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let req = protocol
+        .build_request(&payload, &config)
+        .expect("build_request should succeed");
+    extract_chat_body(req)
+}
+
+/// `Some(true)` on a legacy-prefix model forces `max_completion_tokens`
+/// regardless of what the heuristic would say. Demonstrates the override
+/// actually reaches the JSON body, not just the helper unit tests.
+#[test]
+fn chat_compat_some_true_overrides_legacy_heuristic() {
+    let body = build_chat_body_with_compat(
+        "gpt-4o",
+        crate::config::types::provider::ModelCompat {
+            uses_max_completion_tokens: Some(true),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        body.get("max_completion_tokens"),
+        Some(&serde_json::json!(4096)),
+        "operator override must rewrite legacy model's field name"
+    );
+    assert!(
+        body.get("max_tokens").is_none(),
+        "operator override must NOT also emit max_tokens"
+    );
+}
+
+/// `Some(false)` on a reasoning-prefix model forces `max_tokens`. Mirrors the
+/// reverse direction: a vendor proxy that returns 400 on the new field name
+/// can be pinned to the legacy one without dropping the model.
+#[test]
+fn chat_compat_some_false_overrides_reasoning_heuristic() {
+    let body = build_chat_body_with_compat(
+        "o3-mini",
+        crate::config::types::provider::ModelCompat {
+            uses_max_completion_tokens: Some(false),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        body.get("max_tokens"),
+        Some(&serde_json::json!(4096)),
+        "operator override must rewrite reasoning model's field name"
+    );
+    assert!(
+        body.get("max_completion_tokens").is_none(),
+        "operator override must NOT also emit max_completion_tokens"
+    );
+}
+
+/// `None` from the compat block lets the built-in prefix heuristic decide.
+/// This guards against a future refactor accidentally short-circuiting the
+/// fallback — without this test we wouldn't notice the regression because
+/// `Some(false)` / `Some(true)` look indistinguishable from the wire.
+#[test]
+fn chat_compat_none_falls_back_to_heuristic() {
+    let compat = crate::config::types::provider::ModelCompat {
+        uses_max_completion_tokens: None,
+        ..Default::default()
+    };
+    let legacy = build_chat_body_with_compat("gpt-4o", compat.clone());
+    assert_eq!(legacy.get("max_tokens"), Some(&serde_json::json!(4096)));
+    assert!(legacy.get("max_completion_tokens").is_none());
+
+    let reasoning = build_chat_body_with_compat("o3-mini", compat);
+    assert_eq!(
+        reasoning.get("max_completion_tokens"),
+        Some(&serde_json::json!(4096))
+    );
+    assert!(reasoning.get("max_tokens").is_none());
+}
+
+/// `model_defs[].id` is the join key — a `ModelDef` whose `id` does not
+/// match the normalized `model_name` in the request must be invisible, so
+/// the heuristic takes over.
+#[test]
+fn chat_compat_wrong_model_def_id_falls_back_to_heuristic() {
+    let protocol = OpenAiProtocol::new(Client::new());
+    let mut config = ProviderConfig::test_config("o3-mini");
+    config.max_tokens = Some(4096);
+    // Note the `id` here is for a different model — `o3-mini` is what the
+    // request will use, so the lookup must miss.
+    config.model_defs = vec![crate::config::types::provider::ModelDef {
+        id: "gpt-4o".to_string(),
+        name: None,
+        base_url: None,
+        context_window: None,
+        max_output_tokens: None,
+        input: None,
+        reasoning: None,
+        thinking_level_map: None,
+        cost: None,
+        compat: Some(crate::config::types::provider::ModelCompat {
+            // If this override ever reached the wire, the test would fail
+            // because the heuristic would otherwise emit
+            // `max_completion_tokens` for `o3-mini`.
+            uses_max_completion_tokens: Some(false),
+            ..Default::default()
+        }),
+    }];
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert_eq!(
+        body.get("max_completion_tokens"),
+        Some(&serde_json::json!(4096)),
+        "non-matching model_def id must not poison the lookup"
+    );
+    assert!(body.get("max_tokens").is_none());
+}
+
+/// After `normalize_openai_model_id`, model ids must match the canonical
+/// post-normalize form. A `model_defs` entry keyed on the pre-normalize
+/// form (`gpt4o` typo) must NOT match the request's `gpt-4o` model_name —
+/// proving the lookup is normalized-side-aware.
+#[test]
+fn chat_compat_lookup_uses_normalized_model_id() {
+    let protocol = OpenAiProtocol::new(Client::new());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.max_tokens = Some(4096);
+    // Wrong key: `gpt4o` (the pre-normalize typo form). The request will be
+    // built with model_name = `gpt-4o` (post-normalize), so this entry
+    // should be invisible to the lookup.
+    config.model_defs = vec![crate::config::types::provider::ModelDef {
+        id: "gpt4o".to_string(),
+        name: None,
+        base_url: None,
+        context_window: None,
+        max_output_tokens: None,
+        input: None,
+        reasoning: None,
+        thinking_level_map: None,
+        cost: None,
+        compat: Some(crate::config::types::provider::ModelCompat {
+            uses_max_completion_tokens: Some(true),
+            ..Default::default()
+        }),
+    }];
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    // The request name `gpt-4o` is what the body carries; the typo-keyed
+    // ModelDef must not match it, so the heuristic wins.
+    assert_eq!(
+        body.get("max_tokens"),
+        Some(&serde_json::json!(4096)),
+        "non-normalized model_def id must not match the normalized request model_name"
+    );
     assert!(body.get("max_completion_tokens").is_none());
 }
 

@@ -6,19 +6,19 @@ use crate::providers::adapter::{ProtocolAdapter, RequestPayload, ToolChoice};
 use crate::providers::delta::ProviderDelta;
 use crate::providers::openai::{OpenAiFunction, OpenAiTool};
 use async_trait::async_trait;
-use futures::stream::BoxStream;
 use futures::StreamExt as _;
 use futures::TryStreamExt;
+use futures::stream::BoxStream;
 use serde_json::json;
 use std::collections::VecDeque;
 use tracing::debug;
 
 use super::sse::parse_chat_sse_event;
-use super::{sanitize_tool_name, OpenAiProtocol};
+use super::{OpenAiProtocol, sanitize_tool_name};
 
-use crate::providers::protocols::openai_common::max_tokens::uses_max_completion_tokens;
+use crate::providers::protocols::openai_common::max_tokens::uses_max_completion_tokens_for;
 use crate::providers::protocols::openai_common::openai_strict_schema::{
-    ensure_openai_tool_envelope, lenient_multi_type_rewrite, normalize_strict_schema, StrictResult,
+    StrictResult, ensure_openai_tool_envelope, lenient_multi_type_rewrite, normalize_strict_schema,
 };
 use crate::providers::protocols::openai_common::provider_policy::build_payload_policy_for_model;
 use crate::providers::protocols::openai_common::response_format::to_chat_response_format;
@@ -51,6 +51,17 @@ impl ProtocolAdapter for OpenAiProtocol {
             )
             .into_owned();
 
+        // Per-model `ModelDef::compat` lookup. Exact-id join keyed on the
+        // normalized `model_name` (the same string the request body carries)
+        // so `model_defs[].id` in the operator config must match the
+        // post-`normalize_openai_model_id` form. `None` here means "no
+        // operator override"; downstream consumers fall back to their
+        // built-in heuristics. We hoist this once and reuse it for both the
+        // max-tokens field selector and the PayloadPolicy build, keeping the
+        // override lookup single-sourced.
+        let compat =
+            crate::providers::model_compat::model_compat_for(&config.model_defs, &model_name);
+
         // Build request body — always streaming (stream-first architecture).
         // `stream_options.include_usage` makes OpenAI emit a trailing chunk
         // carrying token counts; without it the Chat Completions stream omits
@@ -64,7 +75,10 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         // Add optional parameters (per-request overrides provider config)
         if let Some(max_tokens) = payload.max_tokens.or(config.max_tokens) {
-            let field = if uses_max_completion_tokens(&model_name) {
+            // Operator-declared `ModelCompat::uses_max_completion_tokens`
+            // wins over the built-in prefix heuristic when present; `None`
+            // falls back to `uses_max_completion_tokens(&model_name)`.
+            let field = if uses_max_completion_tokens_for(&model_name, compat) {
                 "max_completion_tokens"
             } else {
                 "max_tokens"
@@ -112,12 +126,11 @@ impl ProtocolAdapter for OpenAiProtocol {
             }
         }
 
-        let policy = build_payload_policy_for_model(
-            config.base_url.as_deref(),
-            "openai-chat",
-            None,
-            crate::providers::model_compat::model_compat_for(&config.model_defs, &model_name),
-        );
+        // Reuse the hoisted `compat` instead of re-running `model_compat_for`
+        // — single-sourced with the max-tokens selector above so both sites
+        // observe the same operator override for this request.
+        let policy =
+            build_payload_policy_for_model(config.base_url.as_deref(), "openai-chat", None, compat);
 
         // prompt_cache_key: content-addressed routing affinity (static prefix
         // hash, session-id fallback) when the endpoint honors it. `policy.apply`
