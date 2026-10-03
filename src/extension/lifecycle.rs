@@ -1050,6 +1050,11 @@ impl Views {
             plugin_subagents = projection.subagents.len(),
             "published plugin projections"
         );
+
+        // The MCP face serves the same tool set; tell its clients the list moved.
+        if let Some(face) = crate::gateway::mcp_face::try_mcp_face() {
+            face.notify_tools_list_changed();
+        }
     }
 }
 
@@ -2673,5 +2678,37 @@ priority = 60
             before,
             "the abandoned mount's watcher wrote its verdict anyway"
         );
+    }
+
+    /// R6.1: the one line P6 owns inside `after_transition`. The slot is
+    /// install-once and process-global, so this test is the lib binary's one
+    /// installer and asserts it really was (a foreign installer would make
+    /// the assertion below meaningless, not merely fail it).
+    #[tokio::test]
+    async fn after_transition_broadcasts_tools_list_changed_to_the_installed_face() {
+        use crate::gateway::mcp_face::{install_mcp_face, test_support, try_mcp_face};
+
+        let face = Arc::new(test_support::face(&["echo"], true));
+        let session = test_support::session(&face);
+        let mut rx = face
+            .sessions()
+            .attach_stream(&session.id)
+            .expect("known session");
+        install_mcp_face(face.clone());
+        let installed = try_mcp_face().expect("installed");
+        assert!(
+            Arc::ptr_eq(installed, &face),
+            "another test installed a face first; this test cannot observe its own wire"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.views().after_transition().await;
+
+        let note = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("a frame within 2s")
+            .expect("stream open");
+        assert_eq!(note.method, "notifications/tools/list_changed");
     }
 }

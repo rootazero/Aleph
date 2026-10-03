@@ -17,7 +17,7 @@ use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
 ///
 /// Each instance holds the metadata from a `UnifiedTool` (name, description,
 /// schema) and delegates execution to `ToolRegistry::execute_tool()`.
-struct RegistryToolAdapter<R: ToolRegistry + 'static> {
+struct RegistryToolAdapter<R: ToolRegistry + ?Sized + 'static> {
     name: String,
     description: String,
     schema: Value,
@@ -378,7 +378,7 @@ fn session_send_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyCl
 }
 
 #[async_trait]
-impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
+impl<R: ToolRegistry + ?Sized + 'static> LoopTool for RegistryToolAdapter<R> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -543,7 +543,7 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
 ///
 /// Where a shell call lands is NOT decided here — see the note above
 /// [`RegistryToolAdapter`] on the removed `working_dir` injection.
-pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
+pub fn build_tool_adapters_from_tools<R: ToolRegistry + ?Sized + 'static>(
     tool_registry: Arc<R>,
     unified_tools: &[UnifiedTool],
 ) -> Vec<Box<dyn LoopTool>> {
@@ -585,7 +585,7 @@ pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
     adapters
 }
 
-pub fn build_registry_from_tools<R: ToolRegistry + 'static>(
+pub fn build_registry_from_tools<R: ToolRegistry + ?Sized + 'static>(
     tool_registry: Arc<R>,
     unified_tools: &[UnifiedTool],
 ) -> LoopToolRegistry {

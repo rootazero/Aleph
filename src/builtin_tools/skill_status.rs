@@ -114,7 +114,14 @@ mod tests {
     async fn skill_status_uses_shared_initialized_system() {
         // A SkillStatusTool built from the shared singleton must not panic and
         // must return consistent total/filtered counts.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        // `default_skill_dirs` resolves `$HOME/.claude/skills` and `init` merges
+        // it into the SHARED system for the rest of the process, so `$HOME`
+        // must be a tempdir too, not only `$ALEPH_HOME` (P5.11).
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+            tmp.path().join("aleph"),
+            tmp.path().join("home"),
+        );
         let system = crate::skill::shared_skill_system().clone();
         system.init(crate::skill::default_skill_dirs()).await;
         let tool = SkillStatusTool::new(system);

@@ -68,6 +68,7 @@
 - **非 serde 的序列化栈** —— 全栈 serde
 - **第二个 VT / 终端模拟器实现**（含移植 herdr 的 `pane/terminal` + `terminal/state`）—— 服务端 VT 的唯一真源是 `src/gateway/pty/screen/`；跑别人 agent 需要的能力（alt-screen / graphics / OSC 进度 / kitty keyboard）一律**扩容它**，不引第二份（2026-09-01 用户裁定；判据 §1「同一事实的两份表述」）
 - **第二个 CDP 客户端实现**（`chromiumoxide` / `headless_chrome` / 在 `src/browser/` 里再手写一份）—— 唯一真源是 **`crates/aleph-cdp`**（零 Aleph 依赖的传输层：一条连接、多 session、逐命令超时、断连时把全部 pending 一次性失败）。两个引擎、每一个 `browser_*` 动词、`page_state` 的两个 fetcher 全走它；缺方法就**给它加一个 `methods::` 包装**，不引第二份（2026-09-06；判据 §1）
+- **第二个 MCP server 实现**（在 `src/gateway/` 之外再挂一个 `/mcp`、或在 `src/mcp/` 里造一套 server 侧类型）—— 唯一真源是 **`src/gateway/mcp_face/`**（一张接口脸：Streamable HTTP `/mcp`、`tools/*` + `list_changed`，把 `tools/call` 翻成同一条 scoped dispatch），**wire 类型来自 `src/mcp/{jsonrpc,protocol,types}.rs`，不复制**；stdio 传输刻意不做（宿主 spawn 第二个 `aleph-server` 会撞单例 flock）（2026-09-20；判据 §1）→ [GATEWAY.md](docs/reference/GATEWAY.md) MCP 面
 
 ---
 ## ⚠️ 工程判据 — 形状名索引 (Hard-Won Criteria)
@@ -116,12 +117,14 @@
 | `src/gateway/session_store/` `session_manager/` | FL §6.9 | E.0 | `qa/session_order/run.sh` |
 | `src/gateway/pty/` `interfaces/webchat/.../views/terminal/` | FL §6.11 · 判据清单 §0（分派表的静默 no-op · 有损可观测量） | E.0 | — |
 | `src/gateway/runtime/` `crates/agent-detect/` `src/builtin_tools/terminal.rs` | [TERMINAL_RUNTIME.md](docs/reference/TERMINAL_RUNTIME.md) · FL §6.12 | E.4 | `qa/terminal/run.sh {identify,wait,quiet,cwd,real,tui}`（`panel` 要浏览器） |
+| `src/gateway/mcp_face/` | [GATEWAY.md](docs/reference/GATEWAY.md) MCP 面 · FL §5.27 | E.4 E.9 | `qa/mcp_face/run.sh {handshake,tools,auth,list_changed,deny}`（每阶段证明什么见 [`qa/README.md`](qa/README.md)） |
 | `src/memory/` `src/note/` | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) + memory/ 三分册 · FL §2.5 §2.9 §2.16 | E.5 | `qa/memory_curated/run.sh` |
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · FL §3.6 §4.9 | E.9 | — |
 | `src/spend/` `src/providers/metering.rs` | FL §5.22（round-7 的 per-principal 美元上限：`[policies.spend]` → `SpendLedger` → 两条执行臂）· FL §5.25（`install_ledger` / `install_policy` 两个进程级句柄——`MeteringProvider` 的生产构造点散在多个模块（普查 `rg "MeteringProvider::new\("`，剥掉测试模块），所以裁决是进程级而非构造参数穿线） | E.0 E.9 | `qa/spend_budget/run.sh`（**需要真 python3**，Windows 主机上是 UNRUN 而不是 PASS——见 [`qa/README.md`](qa/README.md) 该条目） |
 | `src/search/` `src/builtin_tools/search.rs` | FL §3.18 | E.3 E.9 | `qa/web_search/run.sh {reach,order,degrade,empty,fanout,demote}`（SearXNG 是唯一能指向 mock 的后端，其余八个由 `providers/capability_census.rs` 在源码级覆盖）|
 | `src/browser/` `crates/aleph-cdp/` `src/builtin_tools/browser_tools/` | FL §3.12 | E.9 | `qa/browser_managed/run.sh` · `qa/browser_dual/run.sh`（两个真引擎）——**两套的阶段清单、`ALEPH_QA_DRIVER` 轴、以及每个阶段在证明什么，全见 [`qa/README.md`](qa/README.md)；数目和阶段名都不写在这里** —— ⚠️ 理由要说准：`qa/README.md` **同样**没有任何测试或脚本会让它变红，**搬过去买到的不是「可证伪」，是「一份而不是两份」**（判据 §1），而活下来的那一份就躺在脚本旁边。这张表曾因为自己抄了一个数而漂过一次 |
-| `src/mcp/` · `src/hub/` | FL §5.20 §5.24 · [ALEPH_HUB.md](docs/reference/ALEPH_HUB.md) FL §5.21 | E.9 | `qa/plugins/run.sh` |
+| `src/extension/` | [EXTENSION_SYSTEM.md](docs/reference/EXTENSION_SYSTEM.md) · [PLUGIN_SYSTEM.md](docs/reference/PLUGIN_SYSTEM.md) · FL §3.10 §5.27 | E.0 E.3 E.9 | `qa/plugins/run.sh {scope,visibility,command,exit2,cc-cache}`（前六个阶段与每阶段证明什么见 [`qa/README.md`](qa/README.md)） |
+| `src/mcp/` · `src/hub/` | FL §5.20 §5.24 · [ALEPH_HUB.md](docs/reference/ALEPH_HUB.md) FL §5.21 | E.9 | `qa/plugins/run.sh`（Hub 走 `browse` / `marketplaces`；阶段清单见 [`qa/README.md`](qa/README.md)） |
 | `src/loop_graph/` `src/workflow/` · `src/identity/` | [GRAPH_LAYER.md](docs/reference/GRAPH_LAYER.md) FL §4.12 · [AGENT_IDENTITY.md](docs/reference/AGENT_IDENTITY.md) FL §5.17 | E.3 E.0 | — |
 | `src/config/` `src/diagnostics/` · `src/sandbox/` | FL §5.8 §5.9 §5.10 §5.24 · [SANDBOX.md](docs/reference/SANDBOX.md) FL §3.8 §3.15 | E.8 E.3 | — |
 | `src/orchestrator/` | [AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) · FL §3.16 · run 的 flow 通道契约（`FlowRequest.event_tx` · `flow_event_channel` · `FlowStreamEvent::Trace`）→ FL §6.13 | E.0 E.4 | — |

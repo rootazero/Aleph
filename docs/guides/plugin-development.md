@@ -196,11 +196,10 @@ priority = "high"                   # "low", "normal", "high"
 filter = "Bash"                     # Regex filter (for tool-based events)
 
 # --- Commands ---
-[[commands]]
-name = "deploy"
-description = "Deploy to production"
-handler = "handleDeploy"
-prompt_file = "commands/deploy.md"  # Markdown with $ARGUMENTS placeholder
+# A /command is a Markdown file, not a manifest entry: ship commands/deploy.md
+# (its body is the prompt, with a $ARGUMENTS placeholder) and /deploy exists.
+# A [[commands]] table registers nothing and is warned about on every load;
+# its old `handler` field is gone (it sent the handler's NAME to the model).
 
 # --- Services ---
 [[services]]

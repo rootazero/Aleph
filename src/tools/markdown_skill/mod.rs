@@ -5,7 +5,7 @@
 //!
 //! Phase 1 of skill data model unification deprecates `AlephSkillSpec` in
 //! favor of `crate::domain::skill::SkillManifest`; the module itself remains
-//! the only legitimate consumer until Phase 2 (≥2026-06-03) absorbs the
+//! the only legitimate consumer until Phase 2 (overdue since 2026-06-03, unscheduled) absorbs the
 //! types. See docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md.
 #![allow(deprecated)]
 

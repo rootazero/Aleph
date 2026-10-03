@@ -37,7 +37,7 @@ mod slash_command_body;
 mod slash_skill_pregrant;
 pub(crate) mod slash_skill_scope;
 mod steering;
-mod tool_refresh;
+pub(crate) mod tool_refresh;
 pub(crate) mod tool_service_builder;
 pub(crate) mod topic;
 mod trace_sink_adapter;
@@ -68,6 +68,7 @@ pub use tool_service_builder::set_config_approval_requester;
 pub use tool_service_builder::set_confirmation_requester;
 pub use tool_service_builder::set_mcp_tool_registry;
 pub(crate) use trace_sink_adapter::GatewayTraceSink;
+pub(crate) use turn_permissions::{resolve_exec_tier, TurnToolPolicy};
 pub(crate) use unattended_redacting_sink::UnattendedRedactingSink;
 
 use crate::gateway::i18n::{Locale, Msg, ReceiptKind};

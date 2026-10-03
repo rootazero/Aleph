@@ -207,6 +207,20 @@ impl SharedTokenManager {
         GLOBAL_SHARED_TOKEN_MANAGER.get().cloned()
     }
 
+    /// Validate a token against the process-global manager's stored hash.
+    ///
+    /// `false` when no global manager is installed (hosts without a shared
+    /// token) or when validation errors — fail closed. This is the ONE
+    /// derivation of "is this the shared gateway token": the WS `connect` arm
+    /// calls it directly at both dispatch stations and the MCP face wraps it in
+    /// [`crate::gateway::mcp_face::auth::production_shared_token_validator`], so
+    /// the three call sites cannot drift apart.
+    pub fn global_validate(token: &str) -> bool {
+        Self::global()
+            .map(|m| m.validate(token).unwrap_or(false))
+            .unwrap_or(false)
+    }
+
     pub fn global_crypto() -> Option<SecretsCrypto> {
         GLOBAL_SHARED_TOKEN_MANAGER
             .get()

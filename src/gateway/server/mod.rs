@@ -8,7 +8,7 @@ mod byte_range;
 mod canvas_asset_route;
 pub mod connection;
 mod flood_guard;
-mod handler;
+pub(crate) mod handler;
 mod metrics_endpoint;
 mod per_client_buffer;
 mod probe;
@@ -460,6 +460,12 @@ pub struct GatewayServer {
     /// `None` (canvas root unavailable / probe constructors) leaves the
     /// Panel on the `canvas.asset.get` base64 fallback.
     canvas_store: Option<Arc<crate::canvas::CanvasStore>>,
+    /// The MCP server face, installed by [`GatewayServer::set_mcp_face`]
+    /// (boot, when `[mcp_server] enabled` and a tool registry exists).
+    /// `Some` mounts `/mcp` in `build_router`; `None` leaves the path to the
+    /// SPA fallback. The same `Arc` is process-global via
+    /// `mcp_face::install_mcp_face` so lifecycle can broadcast through it.
+    mcp_face: Option<Arc<crate::gateway::mcp_face::McpFace>>,
     /// See [`GatewaySharedState::node_registry`]. `build_router` clones this Arc
     /// into the shared state so both point at the same registry.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
@@ -528,6 +534,7 @@ impl GatewayServer {
             device_token_mgr: None,
             security_store: None,
             canvas_store: None,
+            mcp_face: None,
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
@@ -589,6 +596,7 @@ impl GatewayServer {
             device_token_mgr: None,
             security_store: None,
             canvas_store: None,
+            mcp_face: None,
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
@@ -713,6 +721,31 @@ impl GatewayServer {
     /// locks and the event bus.
     pub fn set_canvas_store(&mut self, store: Arc<crate::canvas::CanvasStore>) {
         self.canvas_store = Some(store);
+    }
+
+    /// Install the MCP server face (mounts `/mcp` in `build_router`). Pass the
+    /// same `Arc` that `mcp_face::install_mcp_face` holds.
+    pub fn set_mcp_face(&mut self, face: Arc<crate::gateway::mcp_face::McpFace>) {
+        self.mcp_face = Some(face);
+    }
+
+    /// "Is an operator surface connected?" for the MCP face's attendance
+    /// decision: any connection past its `connect` handshake whose resolved
+    /// role is operator. Reads the live table on every call — a Panel that
+    /// closes between two MCP calls flips the next call to unattended.
+    pub fn operator_presence_probe(&self) -> crate::gateway::mcp_face::OperatorPresence {
+        let connections = self.connections.clone();
+        Arc::new(move || {
+            let connections = connections.clone();
+            Box::pin(async move {
+                connections.read().await.values().any(|c| {
+                    !c.first_message
+                        && crate::tools::turn_context::role_is_operator(Some(
+                            c.caller_role.as_str(),
+                        ))
+                })
+            })
+        })
     }
 
     /// Install the `SecurityAuditLog` so the WS auth path records a forensic
@@ -915,7 +948,7 @@ impl GatewayServer {
             .route("/ready", get(probe::handle_ready))
             .route("/metrics", get(metrics_endpoint::handle_metrics))
             .fallback_service(control_plane)
-            .with_state(shared)
+            .with_state(shared.clone())
             .merge(openai);
 
         if let Some(artifacts) = artifacts {
@@ -924,6 +957,34 @@ impl GatewayServer {
 
         if let Some(canvas_assets) = canvas_assets {
             router = router.merge(canvas_assets);
+        }
+
+        // MCP server face (`/mcp`, spec §3.7). A real route so the SPA
+        // fallback never answers it; its own copy of the transport / origin
+        // guards, like the artifact and canvas routes. Needs the two auth
+        // handles the `connect` rules read — without them the route is not
+        // mounted rather than mounted open.
+        match (&self.mcp_face, &self.device_token_mgr, &self.security_store) {
+            (Some(face), Some(device_tokens), Some(store)) => {
+                let mcp = crate::gateway::mcp_face::http::mcp_routes(Arc::new(
+                    crate::gateway::mcp_face::http::McpRouteState::new(
+                        face.clone(),
+                        shared.origin_policy.clone(),
+                        shared.trusted_proxy_enabled,
+                        shared.trusted_proxy_ips.clone(),
+                        shared.allow_insecure_remote,
+                        shared.tls_enabled,
+                        device_tokens.clone(),
+                        store.clone(),
+                        crate::gateway::mcp_face::auth::production_shared_token_validator(),
+                    ),
+                ));
+                router = router.merge(mcp);
+            }
+            (Some(_), _, _) => {
+                warn!("mcp face installed but the device-token manager or security store is missing; /mcp not mounted");
+            }
+            _ => {}
         }
 
         // Merge A2A routes if the subsystem is enabled
@@ -1661,6 +1722,109 @@ mod tests {
         // 404 from the dispatcher — NOT 405 from the SPA fallback. A 405 here
         // would mean the wildcard route is missing and the request fell through.
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// `/mcp` is a real route only when boot installed a face AND the two
+    /// auth handles it needs. Without them the path falls through to the SPA
+    /// fallback and never carries a session header.
+    #[tokio::test]
+    async fn mcp_route_is_mounted_only_when_a_face_and_auth_handles_are_set() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let init = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-03-26", "capabilities": {},
+            "clientInfo": {"name": "t", "version": "0"}}});
+        let post = || {
+            let mut req = Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&init).unwrap()))
+                .unwrap();
+            req.extensions_mut()
+                .insert(axum::extract::ConnectInfo(SocketAddr::from((
+                    [127, 0, 0, 1],
+                    40000,
+                ))));
+            req
+        };
+
+        // Unmounted: nothing answers with a session.
+        let bare = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+        let resp = bare.build_router().oneshot(post()).await.unwrap();
+        assert!(resp.headers().get("mcp-session-id").is_none());
+
+        // Mounted.
+        let mut server = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+        let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        server.set_security_store(store.clone());
+        server.set_device_token_manager(Arc::new(
+            crate::gateway::security::DeviceTokenManager::new(store),
+        ));
+        let cfg = crate::gateway::mcp_face::McpFaceConfig {
+            enabled: true,
+            expose: vec![],
+        };
+        let face = Arc::new(crate::gateway::mcp_face::McpFace::new(
+            &cfg,
+            Arc::new(
+                crate::executor::BuiltinToolRegistry::with_config(Default::default())
+                    .await
+                    .unwrap(),
+            ) as Arc<dyn crate::executor::ToolRegistry>,
+            Vec::new(),
+            None,
+            None,
+            server.operator_presence_probe(),
+        ));
+        server.set_mcp_face(face);
+        let resp = server.build_router().oneshot(post()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(resp.headers().get("mcp-session-id").is_some());
+    }
+
+    /// The presence probe answers "operator" only for a handshaken connection
+    /// whose resolved role is operator — the bit the MCP face turns into
+    /// `unattended`.
+    #[tokio::test]
+    async fn operator_presence_probe_reads_the_connection_table() {
+        let server = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+        let probe = server.operator_presence_probe();
+        assert!(!probe().await, "empty table: nobody is present");
+
+        let mut walled = ConnectionState::new("203.0.113.7".parse().unwrap(), false);
+        walled.first_message = false;
+        walled.caller_role = "guest".to_string();
+        server
+            .connections
+            .write()
+            .await
+            .insert("c-guest".to_string(), walled);
+        assert!(!probe().await, "a walled connection is not an operator");
+
+        let mut pre_handshake = ConnectionState::new("127.0.0.1".parse().unwrap(), true);
+        pre_handshake.first_message = true;
+        server
+            .connections
+            .write()
+            .await
+            .insert("c-early".to_string(), pre_handshake);
+        assert!(
+            !probe().await,
+            "a connection that has not completed connect does not count"
+        );
+
+        let mut op = ConnectionState::new("127.0.0.1".parse().unwrap(), true);
+        op.first_message = false;
+        op.caller_role = "operator".to_string();
+        server
+            .connections
+            .write()
+            .await
+            .insert("c-op".to_string(), op);
+        assert!(probe().await);
     }
 
     #[tokio::test]

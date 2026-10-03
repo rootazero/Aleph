@@ -642,6 +642,11 @@ impl SkillSystem {
         // Build a fresh registry so we can swap atomically — never expose an empty registry.
         let mut new_registry = SkillRegistry::new();
         for dir in &dirs {
+            // A real Claude root registered by ANY earlier test is rescanned
+            // by every later one (the set only grows), so the tripwire sits on
+            // the read as well as on the registrations.
+            #[cfg(test)]
+            crate::utils::paths::assert_not_real_claude_home(dir, "SkillSystem::rescan_dirs");
             if dir.exists() {
                 let source = guess_source(dir);
                 let manifests = scan_directory(dir, source);
@@ -815,6 +820,8 @@ pub fn default_skill_dirs() -> Vec<PathBuf> {
             dirs.push(agents_skills);
         }
         let claude_skills = home.join(".claude").join("skills");
+        #[cfg(test)]
+        crate::utils::paths::assert_not_real_claude_home(&claude_skills, "default_skill_dirs");
         if claude_skills.exists() {
             dirs.push(claude_skills);
         }

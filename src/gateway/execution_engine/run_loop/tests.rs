@@ -2456,7 +2456,13 @@ fn mcp_handler_admitted_gates_plugin_owned_servers_only() {
 #[tokio::test]
 async fn mcp_handler_admitted_asks_the_manager_for_the_owners_visibility() {
     use crate::extension::visibility::{canonical_root, VisibilityCtx};
-    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    // with_defaults() turns the Claude root on and resolves it off `$HOME`,
+    // so `$HOME` must move with `$ALEPH_HOME` (P5.11).
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+        tmp.path().join("aleph"),
+        tmp.path().join("home"),
+    );
     let proj = tempdir().unwrap();
     let manager = manager_with_project_plugin(proj.path()).await;
 
@@ -2502,7 +2508,13 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
     use crate::mcp::tool_bridge::test_support::{capable_server, fake_manager};
     use crate::mcp::tool_bridge::{spawn_tool_bridge, RESOURCE_LIST_TOOL, RESOURCE_TOOL};
     const OWNED: &str = "plugin:proj/srv";
-    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    // with_defaults() turns the Claude root on and resolves it off `$HOME`,
+    // so `$HOME` must move with `$ALEPH_HOME` (P5.11).
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+        tmp.path().join("aleph"),
+        tmp.path().join("home"),
+    );
     let proj = tempdir().unwrap();
     let manager = manager_with_project_plugin(proj.path()).await;
 

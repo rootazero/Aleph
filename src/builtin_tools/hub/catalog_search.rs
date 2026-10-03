@@ -209,8 +209,21 @@ mod tests {
     /// missing — a read that becomes a write in the developer's real `~/.aleph`.
     /// Every test here must hold one of these for its whole body (the guard is a
     /// non-reentrant mutex, so it cannot live inside `tool_with`).
-    fn isolated_home() -> crate::utils::paths::IsolatedAlephHome {
-        crate::utils::paths::IsolatedAlephHome::new()
+    ///
+    /// The same path also runs `ensure_shared_skill_system_initialized`, whose
+    /// `default_skill_dirs` resolves `$HOME/.claude/skills`, so `$HOME` moves to
+    /// a tempdir as well (P5.11). Field order is drop order: the env is
+    /// restored before the directory it pointed at is deleted.
+    fn isolated_home() -> (
+        crate::runtimes::post_install::HomeEnvGuards,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let guards = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+            dir.path().join("aleph"),
+            dir.path().join("home"),
+        );
+        (guards, dir)
     }
 
     async fn tool_with(entries: Vec<ExtensionEntry>) -> HubCatalogSearchTool {

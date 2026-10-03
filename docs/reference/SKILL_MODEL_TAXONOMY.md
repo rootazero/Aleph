@@ -89,7 +89,7 @@ Each layer answers a genuinely different question:
 
 Layers 0, 1, 2 are permanent. Layer 3 is a deprecated alias for Layer 2's parsing concern; Phase 2 dissolves it.
 
-## Phase 1 bridge (active 2026-05-20 → Phase 2)
+## Phase 1 bridge (active since 2026-05-20; Phase 2 unscheduled)
 
 ```rust
 impl From<&AlephSkillSpec> for crate::domain::skill::SkillManifest {
@@ -104,14 +104,20 @@ impl From<&AlephSkillSpec> for crate::domain::skill::SkillManifest {
 
 This bridge is the Phase 1 contract. It exists so that Phase 2 can incrementally migrate consumers without needing to introduce the conversion as part of the destructive change.
 
-## Phase 2 timing rule (≥ 2026-06-03)
+## Phase 2 status（截至 2026-09-20：逾期，未排期，DECIDE）
 
-Phase 2 — the destructive absorption that deletes `AlephSkillSpec` — must not begin until:
+Phase 2 — the destructive absorption that deletes `AlephSkillSpec` — was gated on two conditions
+(two weeks after Phase 1; no regression against `project_skill_system_wiring_shipped`). Both were met by
+**2026-06-03**. It did not happen. As of **2026-09-20** the module is 3.5 months past that date, still
+`#[deprecated(since = "26.5.20")]`, still the only parser of `metadata.aleph.input_hints` and still
+**live** (`run_loop/inner.rs join_markdown_skills`, boot `start/mod.rs`).
 
-1. At least **two weeks** have passed since Phase 1 ships, AND
-2. No regression has been reported against `project_skill_system_wiring_shipped` in those two weeks.
-
-The earliest practical Phase 2 start date is **2026-06-03**. See `docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md` §4.2 for the full Phase 2 task list.
+**Status: overdue, not scheduled.** The 2026-09-20 plugin-scope round only CUT the unread
+upstream-dialect DTO out of it (see Layer 3 above); absorbing `input_hints` / `security` / `docker` /
+`requires.bins` onto `SkillManifest` and deleting the module is a separate round that needs a user
+ruling (spec `2026-09-20-plugin-scope-and-cc-compat-design.md` §8 DECIDE 1). Until that ruling this
+section states a date that passed, not a date that is coming. Task list for whenever it is scheduled:
+`docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md` §4.2.
 
 ## Common confusions and what to do about them
 
@@ -128,4 +134,4 @@ The earliest practical Phase 2 start date is **2026-06-03**. See `docs/superpowe
 - `docs/superpowers/specs/2026-05-19-skill-system-wiring-design.md` — the v2 wiring this builds on
 - `docs/reference/AGENT_SYSTEM.md` — how `SkillManifest` flows into the agent loop
 - `.claude/memory/project_skill_system_wiring_shipped.md` — what shipped in the 2026-05-20 wiring merge
-- `.claude/memory/project_skill_model_phase2_pending.md` *(written by Phase 1)* — Phase 2 trigger date and checklist
+- `.claude/memory/project_skill_model_phase2_pending.md` *(written by Phase 1)* — Phase 2 trigger date and checklist — the trigger date passed; see "Phase 2 status" above

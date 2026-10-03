@@ -8,7 +8,7 @@
 use crate::gateway::agent_instance::AgentInstance;
 
 /// Convert a plugin tool registration to a unified tool.
-pub(super) fn plugin_tool_to_unified_tool(
+pub(crate) fn plugin_tool_to_unified_tool(
     tool: crate::extension::ToolRegistration,
 ) -> crate::tool_metadata::UnifiedTool {
     let mut unified = crate::tool_metadata::UnifiedTool::new(

@@ -4,6 +4,8 @@
 //! plugins across multiple directories.
 
 mod claude_cache;
+#[cfg(test)]
+mod home_scan_census;
 mod paths;
 mod scanner;
 mod types;
