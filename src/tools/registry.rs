@@ -72,6 +72,32 @@ struct RegistryState {
 struct RegistryShared {
     inner: ArcSwap<RegistryState>,
     change_tx: broadcast::Sender<RegistryChange>,
+    /// Serializes state publication with its change-event broadcast.
+    ///
+    /// The `ArcSwap` swap and the corresponding `change_tx.send` are two
+    /// separate steps: without this lock, two concurrent mutations could
+    /// interleave as `swap(rev=2); swap(rev=1); send(rev=1); send(rev=2)`,
+    /// publishing change events out of revision order. Holding this lock
+    /// across both steps guarantees subscribers observe events in the exact
+    /// order revisions were assigned.
+    ///
+    /// A plain `std::sync::Mutex` is sufficient — `broadcast::Sender::send`
+    /// is synchronous and never blocks, so no async mutex is needed. Poisoned
+    /// locks are recovered via `PoisonError::into_inner`: the guarded data is
+    /// only the unit token, and the real state lives behind `ArcSwap`, so
+    /// resuming after a panic in a mutator is safe.
+    mutation_lock: std::sync::Mutex<()>,
+}
+
+impl RegistryShared {
+    /// Acquire the mutation lock, recovering from a poisoned lock rather than
+    /// unwrapping (production code must not panic on a downstream mutation
+    /// panic).
+    fn lock_mutations(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.mutation_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// An idempotent, generation-guarded registration disposer.
@@ -118,6 +144,10 @@ impl RegistrationHandle {
         let Some(shared) = self.shared.upgrade() else {
             return false;
         };
+        // Hold the mutation lock across state swap + event send so this
+        // dispose's Unregistered event cannot be published out of order
+        // relative to a concurrent mutation's event.
+        let _guard = shared.lock_mutations();
         let mut disposed = false;
         let mut new_revision = 0u64;
         let mut source: Option<ToolSource> = None;
@@ -162,6 +192,7 @@ impl ToolHandlerRegistry {
             shared: Arc::new(RegistryShared {
                 inner: ArcSwap::from_pointee(RegistryState::default()),
                 change_tx: tx,
+                mutation_lock: std::sync::Mutex::new(()),
             }),
         }
     }
@@ -176,6 +207,9 @@ impl ToolHandlerRegistry {
         descriptor: ToolCapabilityDescriptor,
         handler: Arc<dyn ToolHandler>,
     ) -> Result<RegistrationHandle, ToolError> {
+        // Serialize the whole mutation so the revision assigned below and the
+        // change event carrying it are published atomically in order.
+        let _guard = self.shared.lock_mutations();
         let definition = handler.definition();
         let name = descriptor.name.clone();
         let mut outcome: Result<u64, ToolError> = Ok(0);
@@ -241,6 +275,7 @@ impl ToolHandlerRegistry {
         descriptor: ToolCapabilityDescriptor,
         handler: Arc<dyn ToolHandler>,
     ) -> Result<RegistrationHandle, ToolError> {
+        let _guard = self.shared.lock_mutations();
         let definition = handler.definition();
         let name = descriptor.name.clone();
         let mut outcome: Result<u64, ToolError> = Ok(0);
@@ -326,6 +361,7 @@ impl ToolHandlerRegistry {
     /// derived name set.
     #[must_use]
     pub fn unregister(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
+        let _guard = self.shared.lock_mutations();
         let mut removed: Option<Arc<dyn ToolHandler>> = None;
         let mut new_revision = 0u64;
         let mut source: Option<ToolSource> = None;
@@ -388,6 +424,10 @@ impl ToolHandlerRegistry {
     /// Close the registry: stop accepting registrations and replacements.
     /// Existing resolution and disposal continue to work. Idempotent.
     pub fn close(&self) {
+        // Serialize with other mutations so a concurrent register/replace
+        // either fully precedes or fully follows the close, rather than
+        // racing its state swap against the closed flag.
+        let _guard = self.shared.lock_mutations();
         self.shared.inner.rcu(|current| {
             if current.closed {
                 return Arc::clone(current);
@@ -761,5 +801,59 @@ mod tests {
         // Fail-closed: no state mutation and no revision advance.
         assert_eq!(reg.snapshot().len(), 0);
         assert_eq!(reg.revision(), before);
+    }
+
+    /// Regression: the `ArcSwap` state swap and the `change_tx.send` were two
+    /// separate steps, so concurrent mutations could publish their change
+    /// events out of revision order (thread A assigns revision 2 and sends it,
+    /// then thread B — which assigned revision 1 — sends). The mutation lock
+    /// covers both steps, so a subscriber must observe events in strictly
+    /// increasing revision order.
+    #[test]
+    fn concurrent_mutations_publish_events_in_revision_order() {
+        use std::sync::Arc;
+        use std::thread;
+        const THREADS: usize = 16;
+        let reg = Arc::new(ToolHandlerRegistry::new());
+        let mut rx = reg.subscribe();
+
+        let mut handles = Vec::with_capacity(THREADS);
+        for i in 0..THREADS {
+            let r = Arc::clone(&reg);
+            let name = format!("ord{i}");
+            handles.push(thread::spawn(move || r.register(desc(&name), fake(&name))));
+        }
+        for h in handles {
+            h.join()
+                .expect("join")
+                .expect("distinct-name register must succeed");
+        }
+
+        let mut seen_revisions = Vec::with_capacity(THREADS);
+        while let Ok(evt) = rx.try_recv() {
+            match evt {
+                RegistryChange::Registered { revision, .. } => seen_revisions.push(revision),
+                other => panic!("unexpected event kind: {other:?}"),
+            }
+        }
+
+        assert_eq!(
+            seen_revisions.len(),
+            THREADS,
+            "every successful mutation must emit exactly one change event"
+        );
+        let mut sorted = seen_revisions.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            (1..=THREADS as u64).collect::<Vec<_>>(),
+            "every revision 1..=N must be published exactly once"
+        );
+        for pair in seen_revisions.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "published change events must be in revision order, got {seen_revisions:?}"
+            );
+        }
     }
 }
