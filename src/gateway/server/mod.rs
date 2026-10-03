@@ -8,7 +8,7 @@ mod byte_range;
 mod canvas_asset_route;
 pub mod connection;
 mod flood_guard;
-mod handler;
+pub(crate) mod handler;
 mod metrics_endpoint;
 mod per_client_buffer;
 mod probe;
