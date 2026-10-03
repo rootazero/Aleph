@@ -1163,6 +1163,12 @@ Alongside WebSocket, Gateway serves:
   only aggregate counts (no payloads/secrets), unauthenticated like the probes.
   Implemented in `src/gateway/server/metrics_endpoint.rs` +
   `src/gateway/middleware/latency.rs`.
+- MCP server face (`POST/GET/DELETE /mcp`, Streamable HTTP) — Aleph as an MCP
+  *server* for dsh / pi-mcp-adapter / Claude Code: `tools/list` + `tools/call`
+  over the same scoped dispatch a chat turn uses, whitelist from
+  `[mcp_server].expose`, loopback free / remote bearer (device or gateway
+  token), `notifications/tools/list_changed` on plugin transitions. Implemented
+  in `src/gateway/mcp_face/`; real-machine `qa/mcp_face/run.sh`.
 
 Abuse protection at WS upgrade: besides the global `max_connections` cap, a
 per-IP concurrent-connection cap (`gateway.max_connections_per_ip`, default 64,
