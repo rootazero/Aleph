@@ -1359,6 +1359,41 @@ return a handler from `Channel::webhook_handler()`. `build_router()` registers
 
 ---
 
+### MCP 面（`src/gateway/mcp_face/`，2026-09-20）
+
+Aleph 对外**是一个 MCP server**：dsh 一行 `cordis.yml`、pi 一行 `pi-mcp-adapter` 配置、Claude Code 一行
+`.mcp.json`（`type: http`）都能挂上，零专属代码。**客户端侧的接法只写一份**：`packages/pi-aleph/README.md`——
+一个 JS-free 的 pi 包（`package.json#pi = { skills, mcp }` + `mcp.json` + `skills/aleph/SKILL.md`），README 同时给出
+pi（经 pi-mcp-adapter）、Claude Code `.mcp.json`（`type: http`）与 dsh `cordis.yml` 的三行配置；本节不抄那三行。设计母本：spec
+`docs/superpowers/specs/2026-09-20-plugin-scope-and-cc-compat-design.md` §3.7。它是一张**接口脸**（R4：
+纯 I/O），把 `tools/call` 翻成 Aleph 自己的工具调用路径；**wire 类型复用 `src/mcp/{jsonrpc,protocol,types}.rs`，
+信封复用网关自己的 `protocol::JsonRpc{Request,Response}`（客户端侧的 `mcp/jsonrpc.rs` 的 id 是 `u64`，回不了字符串 id），不复制**（CLAUDE.md 禁用清单 2026-09-20 那一行）。
+
+| 项 | 决定 |
+|---|---|
+| 传输 | **只做 Streamable HTTP**，挂网关已有 HTTP 监听的 `/mcp`：`POST /mcp`（JSON-RPC，一请求一响应；通知 → `202`）+ `GET /mcp`（SSE 通知流）+ `DELETE /mcp`（结束 session）+ `Mcp-Session-Id` 头。**stdio 刻意不做**——宿主 spawn 第二个 `aleph-server` 会撞单例 flock（PROCESS_MANAGEMENT.md）；legacy SSE 传输 dsh 不支持 |
+| 协议版本 | 协商：客户端提出的版本在支持集内则接受，否则回**最新**（`2025-11-25`）由客户端决定。支持集 `SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"]`（最老的一个就是客户端栈自己的 `MCP_LEGACY_PROTOCOL_VERSION`；pi-mcp-adapter 默认 `2025-03-26`）。`src/mcp/modern/` 的 `2026-07-28` 是**无握手、无 session** 的方言（`server/discover` + 每请求 `_meta`），这一面**不说它**——`server/discover` 答 `-32601`，adapter 的 `auto` 探测会退回 `initialize` |
+| 能力 | 只宣告 `tools: { listChanged: true }` + 短 `instructions`；prompts / resources / sampling / elicitation / roots / tasks **不做**（YAGNI） |
+| 认证与护栏 | **复用 `connect` 那一份**（上文「Connect handshake」），逐请求判：loopback 免凭据；远程须 `Authorization: Bearer <token>`（device token / 共享 token），dsh 与 adapter 都是静态 `headers`——无凭据或坏凭据 → **401**（`WWW-Authenticate: Bearer realm="aleph"`）。`/ws` 的三道护栏原样复用：明文远程且未放行 → **426**；Origin 不允许 → **403**；`local` 位来自 `trusted_proxy::resolve_client`，**不是** `ip.is_loopback()`。远程 `POST /mcp` 另有一个私有限流桶：`MCP_REMOTE_POSTS_PER_MINUTE = 120`，超出 → **429** + `Retry-After`，loopback 免（形状同 artifact 路由的桶） |
+| 暴露 | `[mcp_server] enabled = true / expose = ["…"]`（`McpServerConfig`）。`expose` 是白名单，**默认集合＝按谓词从工具目录挑出的无副作用工具，再按名字减去 `DEFAULT_EXPOSE_EXCLUDES`**（`tool_usage` / `config_audit` / `node_list` / `user_profile`，每条带理由）——结果是 **36 个名字**，由 P6.1 的逐名测试钉住（数字带谓词：`3ddc1f2e7` 的工具目录；目录变了先红的是那条测试，不是这句）；`bash` / 文件写 / 浏览器须显式加入。启动时校验 `expose ⊆ 工具目录`（守卫 G5：写一个不存在的工具名 → 红 + boot warn）。**`expose` 改动即时生效**（`mcp_server.expose` 在 `LIVE_SUBSECTIONS` 里，面上一份 `ArcSwap<BTreeSet<String>>`），重跑 G5 校验后向每条活着的 session 广播 `list_changed`；**`enabled` 仍是 `Restart`**——开关这张脸要重启 |
+| 会话 / principal | 每个 MCP session ↔ 一个 Aleph 会话；principal `McpClient { client_name }`（来自 `initialize.clientInfo.name`）。调用走**同一条** scoped dispatch（审批门 + spend ledger + hooks）——不是第二条执行路径 |
+| 审批 | 「有没有 operator 能答」是**连接表**上的事实：`McpFace` 每次调用问 `OperatorPresence` 探针（`GatewayServer::operator_presence_probe()`），派发时 `unattended = !present`——无 operator 界面时 confirm 门**立刻** fail-closed，结果 `isError: true`，文本末尾附 `MCP_APPROVAL_HINT`（告诉对端模型卡本会去哪、怎么开）。⚠️ 这一步**不是** `OperatorApprovalRequester` 的「零订阅者即拒绝」——boot 给事件总线挂了内部消费者，那条臂在真服务器上**永远不触发**（FL 附录 D.0.199）。**有 operator 在线时**：卡按现有审批流升起，**没有死线**（2026-08-28 裁定），MCP 客户端那边等的是它自己的超时（dsh 60 s / adapter 30 s）；客户端放弃后卡**仍挂在 Panel 上**——用户裁定接受这个形状（U-d），「handler future 掉落时收回卡」记为 follow-up，未建 |
+| 错误形状 | 工具执行错误 → `isError: true` 的结果（**不是**协议错误）；不在 `expose` → tool not found；body 不是 JSON-RPC → 400 + JSON-RPC error body；非 `initialize` 请求缺 session 头 → 400；未知 / 过期 session → 404 |
+| 通知 | 插件 mount/unmount/reload（`lifecycle.rs::after_transition` 里的 `if let Some(face) = try_mcp_face() { face.notify_tools_list_changed() }`，G3 钉住这个调用点）与 `expose` 变更 → 向每条活着的 MCP session 广播 `notifications/tools/list_changed`。进程级句柄 `try_mcp_face() -> Option<&'static Arc<McpFace>>`（同 spend 的 `install_ledger` 形状，FL §5.25）让 lifecycle 不必穿 7 个构造点 |
+| 名字 | Aleph 工具名已是 `[a-z0-9_]`，满足 dsh 的 64 字符规则（dsh 侧展示为 `mcp__<server>__<tool>`）；P6 逐名验证无超长名 |
+
+**有 operator 在线时的审批卡是「挂着的」，这是接受下来的形状（用户裁定 2026-09-20，U-d）。** 一个需要确认的
+`tools/call` 在 Panel 上升起一张没有死线的卡（2026-08-28 裁定：审批不超时）；MCP 客户端那边等的是**它自己的**超时
+（dsh 60 s、pi-mcp-adapter 30 s），到点后客户端把这次调用当失败，而卡**仍挂在 Panel 上**——operator 点批准时，那个
+`tools/call` 的 handler future 早已被丢弃，批准落在一个没有人在等的动作上。两种后果都比它们的替代品便宜：立刻拒绝
+会把每一个 attended 调用变成 unattended（那正是 `deny` 阶段要证的另一臂），给卡加死线会推翻 08-28 的裁定。
+「handler future 掉落时收回卡」记为 follow-up，未建；在那之前，Panel 上一张来自 `McpClient` 的旧卡读作
+「对端已经放弃了」，不是「还在等」。
+
+真机：`qa/mcp_face/run.sh {handshake,tools,auth,list_changed,deny}`——每阶段证明什么见
+[`qa/README.md`](../../qa/README.md)。
+
+---
 ## See Also
 
 - [Architecture](ARCHITECTURE.md) - System overview
