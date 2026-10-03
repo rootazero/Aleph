@@ -198,6 +198,51 @@ pub fn caller_may_choose_directory_as(role: Option<&str>, is_loopback: bool) -> 
     is_config_tier || is_loopback
 }
 
+/// Scope all four caller-identity task-locals and a P1 personal-scope
+/// attribution around `fut`, exactly as the WS dispatch loop does at both
+/// dispatch stations.
+///
+/// This is the single source of truth for "wrap a future with caller context".
+/// `dispatch_with_caller_context` (WS path) delegates to this function; the
+/// MCP-face route (when it lands in a later phase) must route through it too
+/// rather than re-wrapping the four locals inline, so the two surfaces cannot
+/// drift apart.
+///
+/// Layer order (outermost → innermost):
+/// 1. `scope::with_scope` — seeds a personal-scope attribution from
+///    `caller_user` so `scope::ambient_owner()` is populated for the duration.
+/// 2. `CALLER_USER`
+/// 3. `CALLER_ROLE`
+/// 4. `CALLER_IS_LOOPBACK`
+/// 5. `CALLER_CONN_ID` (innermost, wraps `fut` directly)
+pub(crate) async fn with_caller_identity<F, T>(
+    caller_role: Option<String>,
+    caller_user: Option<String>,
+    caller_is_loopback: bool,
+    caller_conn_id: Option<String>,
+    fut: F,
+) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    crate::scope::with_scope(
+        caller_user
+            .clone()
+            .map(|u| crate::scope::ScopeAttribution::personal(&u)),
+        CALLER_USER.scope(
+            caller_user,
+            CALLER_ROLE.scope(
+                caller_role,
+                CALLER_IS_LOOPBACK.scope(
+                    caller_is_loopback,
+                    CALLER_CONN_ID.scope(caller_conn_id, fut),
+                ),
+            ),
+        ),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +357,33 @@ mod tests {
             !caller_may_choose_directory_as(Some("guest"), false),
             "a chat-tier connection is still refused"
         );
+    }
+
+    #[tokio::test]
+    async fn with_caller_identity_scopes_all_four_locals_and_p1_attribution() {
+        let (role, user, loopback, conn, owner) = with_caller_identity(
+            Some("member".to_string()),
+            Some("u-alice".to_string()),
+            false,
+            Some("conn-7".to_string()),
+            async {
+                (
+                    current_caller_role(),
+                    current_caller_user(),
+                    current_caller_is_loopback(),
+                    current_caller_conn_id(),
+                    crate::scope::ambient_owner(),
+                )
+            },
+        )
+        .await;
+        assert_eq!(role.as_deref(), Some("member"));
+        assert_eq!(user.as_deref(), Some("u-alice"));
+        assert!(!loopback);
+        assert_eq!(conn.as_deref(), Some("conn-7"));
+        assert_eq!(owner.as_deref(), Some("u-alice"));
+        // Locals must not leak past the scope boundary.
+        assert_eq!(current_caller_role(), None);
+        assert_eq!(current_caller_user(), None);
     }
 }

@@ -6,5 +6,6 @@
 //! own `crate::gateway::protocol`. Nothing here is a second MCP implementation
 //! (CLAUDE.md 禁用清单).
 
+pub mod auth;
 pub mod config;
 pub mod session;

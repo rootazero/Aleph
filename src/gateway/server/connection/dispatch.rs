@@ -34,21 +34,12 @@ pub async fn dispatch_with_caller_context(
     caller_is_loopback: bool,
     caller_conn_id: Option<String>,
 ) -> String {
-    crate::scope::with_scope(
-        caller_user
-            .clone()
-            .map(|u| crate::scope::ScopeAttribution::personal(&u)),
-        crate::gateway::caller_identity::CALLER_USER.scope(
-            caller_user,
-            crate::gateway::caller_identity::CALLER_ROLE.scope(
-                caller_role,
-                crate::gateway::caller_identity::CALLER_IS_LOOPBACK.scope(
-                    caller_is_loopback,
-                    crate::gateway::caller_identity::CALLER_CONN_ID
-                        .scope(caller_conn_id, process_request(text, mc)),
-                ),
-            ),
-        ),
+    crate::gateway::caller_identity::with_caller_identity(
+        caller_role,
+        caller_user,
+        caller_is_loopback,
+        caller_conn_id,
+        process_request(text, mc),
     )
     .await
 }
