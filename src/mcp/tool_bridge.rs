@@ -26,6 +26,7 @@ use crate::builtin_tools::mcp_resource::{
 };
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle, McpTransportType};
 use crate::tool_metadata::ToolCatalog;
+use crate::tools::descriptor::ToolCapabilityDescriptor;
 use crate::tools::handlers::builtin::BuiltinHandler;
 use crate::tools::handlers::registration::{register_mcp_tools, unregister_mcp_tools};
 use crate::tools::handlers::{McpServerFilter, ToolHandler};
@@ -345,8 +346,18 @@ fn set_capability(
         // rust-doctor-disable-next-line excessive-clone
         let handle = handle.clone();
         let handler: Arc<dyn ToolHandler> = Arc::new(CapabilityHandler::new(name, handle, build));
-        match registry.register(name.to_string(), handler) {
-            Ok(()) => {
+        // Project the descriptor from the handler's own definition so the
+        // registry pairing check is satisfied by construction.
+        let descriptor = ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
+        match registry.register(descriptor, handler) {
+            Ok(handle) => {
+                // Converted to this function's existing teardown: the `want ==
+                // false` arm below removes the entry with `registry.unregister`,
+                // so the returned generation-guarded handle is not retained here
+                // (it holds only a `Weak`; the registry owns the entry). Task 3's
+                // `ToolRegistrationScope` will take ownership of capability
+                // builtin handles.
+                debug_assert_eq!(handle.name(), name);
                 tracing::info!(
                     tool = name,
                     "MCP tool bridge: capability builtin registered"

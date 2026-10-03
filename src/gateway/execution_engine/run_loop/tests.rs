@@ -2388,7 +2388,21 @@ fn layer_4_discriminates_the_answer_and_only_the_answer() {
 
 /// A handler whose only observable is the server id its definition names —
 /// the one field `mcp_handler_admitted` reads.
-struct McpHandlerOf(&'static str);
+struct McpHandlerOf {
+    name: String,
+    server: &'static str,
+}
+
+impl McpHandlerOf {
+    /// Admission-only form: the tool name is irrelevant to the plugin-ownership
+    /// gate, which keys on the source's `server_id`.
+    fn new(server: &'static str) -> Self {
+        Self {
+            name: "t".to_string(),
+            server,
+        }
+    }
+}
 
 /// A registry holding a project-keyed plugin `proj` (rooted at `proj`), as
 /// the extension manager publishes it after a load.
@@ -2423,11 +2437,11 @@ impl crate::tools::handlers::ToolHandler for McpHandlerOf {
     }
     fn definition(&self) -> crate::tools::service::ToolDefinition {
         crate::tools::service::ToolDefinition {
-            name: "t".into(),
+            name: self.name.clone(),
             description: String::new(),
             input_schema: serde_json::json!({}),
             source: crate::tools::service::ToolSource::Mcp {
-                server_id: self.0.into(),
+                server_id: self.server.into(),
             },
             metadata: Default::default(),
         }
@@ -2441,11 +2455,11 @@ fn mcp_handler_admitted_gates_plugin_owned_servers_only() {
     let nowhere = crate::extension::visibility::VisibilityCtx { project_root: None };
     let visible = visible_mcp_servers(nowhere, None);
     assert!(
-        mcp_handler_admitted(&McpHandlerOf("github"), &visible),
+        mcp_handler_admitted(&McpHandlerOf::new("github"), &visible),
         "non-plugin server passes"
     );
     assert!(
-        !mcp_handler_admitted(&McpHandlerOf("plugin:proj/srv"), &visible),
+        !mcp_handler_admitted(&McpHandlerOf::new("plugin:proj/srv"), &visible),
         "owned + no manager ⇒ refused"
     );
 }
@@ -2476,7 +2490,7 @@ async fn mcp_handler_admitted_asks_the_manager_for_the_owners_visibility() {
         VisibilityCtx { project_root: None },
         Some(Arc::clone(&manager)),
     );
-    let owned = McpHandlerOf("plugin:proj/srv");
+    let owned = McpHandlerOf::new("plugin:proj/srv");
     assert!(
         mcp_handler_admitted(&owned, &here),
         "owner visible from its project ⇒ admitted"
@@ -2486,7 +2500,7 @@ async fn mcp_handler_admitted_asks_the_manager_for_the_owners_visibility() {
         "owner invisible outside its project ⇒ refused"
     );
     assert!(
-        mcp_handler_admitted(&McpHandlerOf("github"), &elsewhere),
+        mcp_handler_admitted(&McpHandlerOf::new("github"), &elsewhere),
         "a server no plugin declared is not gated"
     );
 }
@@ -2536,9 +2550,19 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
         "premise: the bridge switched the resource builtins on"
     );
     for (name, server) in [("plugin_proj_srv__t", OWNED), ("github__t", "github")] {
-        bridged
-            .register(name.into(), Arc::new(McpHandlerOf(server)))
-            .unwrap();
+        // The registry now keys entries by `descriptor.name` and rejects a
+        // descriptor that disagrees with the handler's own definition, so the
+        // handler must declare the same name it registers under. Build the
+        // descriptor from that definition; revision 0 is normalized by the
+        // registry. The returned handle is test-local (the entry lives for the
+        // test), so it is intentionally dropped.
+        let handler: Arc<dyn crate::tools::handlers::ToolHandler> =
+            Arc::new(McpHandlerOf { name: name.to_string(), server });
+        let descriptor = crate::tools::descriptor::ToolCapabilityDescriptor::from_definition(
+            &handler.definition(),
+            0,
+        );
+        bridged.register(descriptor, handler).unwrap();
     }
 
     let here = VisibilityCtx {

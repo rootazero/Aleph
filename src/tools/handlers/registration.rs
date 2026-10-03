@@ -10,6 +10,7 @@ use crate::sync_primitives::Arc;
 use crate::mcp::{McpClient, McpTool};
 use crate::tool_metadata::ToolCatalog;
 use crate::tool_metadata::{ToolSource as CatalogToolSource, UnifiedTool};
+use crate::tools::descriptor::ToolCapabilityDescriptor;
 use crate::tools::handlers::mcp::McpHandler;
 use crate::tools::handlers::ToolHandler;
 use crate::tools::probes::mcp::McpServerProbe;
@@ -107,8 +108,25 @@ pub async fn register_mcp_tools(
         // `server__server:tool` double-prefix the LLM providers reject.
         let qualified = mcp_handler.qualified_name();
         let handler: Arc<dyn ToolHandler> = Arc::new(mcp_handler);
-        match registry.register(qualified.clone(), handler) {
-            Ok(()) => {
+        // The descriptor is projected from the handler's own `ToolDefinition`,
+        // so the registry's `matches_definition` pairing check passes by
+        // construction. Revision 0 is normalized to the registry-assigned
+        // value inside `register`.
+        let descriptor = ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
+        match registry.register(descriptor, handler) {
+            Ok(handle) => {
+                // `handle` is the generation-guarded disposer for this entry.
+                // MCP teardown is name-based (`unregister_mcp_tools` →
+                // `ToolHandlerRegistry::unregister`, the path the registry
+                // documents for an externally derived name set), and with
+                // `unregister_mcp_tools` still the live normal lifecycle this
+                // task converts the handle to that existing teardown rather than
+                // inventing a second one. The handle holds only a `Weak` to the
+                // registry, so it never owns the entry: the entry lives until the
+                // name-based teardown runs, and dropping the handle frees only
+                // the handle. Per-server handle ownership arrives with
+                // `ToolRegistrationScope` (Task 3).
+                debug_assert_eq!(handle.name(), qualified.as_str());
                 if let Some(disp) = tool_catalog {
                     disp.register_health_probe(
                         qualified.clone(),
