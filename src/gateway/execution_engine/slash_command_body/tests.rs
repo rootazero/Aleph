@@ -5,6 +5,7 @@ use super::*;
 use crate::discovery::DiscoveryConfig;
 use crate::extension::{ExtensionConfig, PluginKind, PluginOrigin, PluginRecord};
 use crate::gateway::agent_instance::AgentInstance;
+use std::time::Duration;
 use tempfile::TempDir;
 
 const PLUGIN: &str = "plug";
