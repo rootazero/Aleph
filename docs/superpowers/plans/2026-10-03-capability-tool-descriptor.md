@@ -241,7 +241,7 @@ git commit -m "feat: scope tool registrations"
 - Modify: `src/tool_metadata/types/definition.rs:1-60`（保持现有 `ToolDefinition` wire shape；source/category 映射不增加重复事实字段）
 - Modify: `src/tool_metadata/registry/mod.rs:70-190`（保留 UI/routing/conflict/visibility，避免其成为 callable metadata 真源）
 - Modify: `src/gateway/execution_engine/run_loop/inner.rs:1786-1810`（用原子 registry-entry snapshot join MCP handler 与 descriptor，避免热替换时跨 snapshot 拼接不同代）
-- Test: `src/tools/service.rs` projection tests、`src/tools/adapters/mcp_adapter.rs` tests、`src/tools/handlers/registration.rs` tests
+- Test: `src/tools/service.rs` projection tests、`src/tools/adapters/mcp_adapter.rs` tests、`src/tools/handlers/registration.rs` tests、`src/gateway/execution_engine/run_loop/tests.rs` atomic descriptor-to-loop join tests
 
 **Interfaces:**
 - `ToolDefinition::from_descriptor(descriptor: &ToolCapabilityDescriptor) -> Self`。
