@@ -84,9 +84,9 @@ pub async fn register_mcp_tools(
     scope: &mut ToolRegistrationScope,
 ) -> Vec<String> {
     let mut registered = Vec::with_capacity(tools.len());
-    // Qualified names whose health probe this call attached, so the scope can
-    // remove exactly those on teardown.
-    let mut probe_names: Vec<String> = Vec::new();
+    // Catalog identities and registry generations created by this call. The
+    // disposer compares generations before removing each projection.
+    let mut catalog_entries: Vec<(String, u64, String)> = Vec::new();
     for tool in tools {
         // Quarantine structurally-unusable parameter schemas. A function-call
         // tool's parameters MUST be an object schema; an MCP server that
@@ -133,13 +133,13 @@ pub async fn register_mcp_tools(
                 // once another registration replaces this name the handle is a
                 // no-op, so a stale scope can never remove a replacement.
                 debug_assert_eq!(handle.name(), qualified.as_str());
+                let revision = handle.revision();
                 scope.track(handle);
                 if let Some(disp) = tool_catalog {
                     disp.register_health_probe(
                         qualified.clone(),
                         Arc::new(McpServerProbe::new(Arc::clone(&client), server_id)),
                     );
-                    probe_names.push(qualified.clone());
                     // R8 same-source catalog registration: makes the MCP tool
                     // visible to commands.list / tools.catalog and resolvable as
                     // a slash command. Uses the CATALOG-side ToolSource::Mcp
@@ -163,7 +163,8 @@ pub async fn register_mcp_tools(
                         },
                     )
                     .populate_safety_profile(tool.read_only, tool.requires_confirmation);
-                    disp.register_with_conflict_resolution(builder).await;
+                    let catalog_id = disp.register_with_conflict_resolution(builder).await;
+                    catalog_entries.push((qualified.clone(), revision, catalog_id));
                 }
                 registered.push(qualified);
             }
@@ -183,17 +184,25 @@ pub async fn register_mcp_tools(
     if let Some(disp) = tool_catalog {
         if !registered.is_empty() {
             let catalog = Arc::clone(disp);
-            let owner = server_id.to_string();
+            let registry = registry.clone();
+            let catalog_entries = catalog_entries.clone();
             scope.track_disposer(
-                format!("catalog:{owner}"),
+                format!("catalog:{server_id}"),
                 async_disposer(move || {
                     let catalog = Arc::clone(&catalog);
-                    let probe_names = probe_names.clone();
+                    let registry = registry.clone();
+                    let catalog_entries = catalog_entries.clone();
                     async move {
-                        for name in &probe_names {
-                            let _ = catalog.health().unregister_probe(name);
+                        for (name, revision, catalog_id) in catalog_entries {
+                            let still_current = registry
+                                .descriptor(&name)
+                                .is_some_and(|descriptor| descriptor.revision == revision);
+                            if !still_current {
+                                continue;
+                            }
+                            let _ = catalog.health().unregister_probe(&name);
+                            let _ = catalog.remove_by_id(&catalog_id).await;
                         }
-                        let _ = catalog.remove_by_mcp_server(&owner).await;
                         Ok(())
                     }
                 }),
@@ -588,11 +597,12 @@ mod tests {
     #[tokio::test]
     async fn stale_scope_dispose_does_not_remove_replacement() {
         let reg = ToolHandlerRegistry::new();
+        let catalog = Arc::new(ToolCatalog::new());
         let client = Arc::new(McpClient::new());
         let mut stale = ToolRegistrationScope::new("mcp:srv@old");
         register_mcp_tools(
             &reg,
-            None,
+            Some(&catalog),
             Arc::clone(&client),
             "srv",
             &[tool("t", "d")],
@@ -614,11 +624,29 @@ mod tests {
             ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0);
         reg.replace(descriptor, Arc::clone(&replacement))
             .expect("replace succeeds");
+        catalog
+            .register_with_conflict_resolution(UnifiedTool::new(
+                "mcp:srv:replacement".to_string(),
+                "replacement".to_string(),
+                "replacement projection".to_string(),
+                CatalogToolSource::Mcp {
+                    server: "srv".to_string(),
+                },
+            ))
+            .await;
 
         // Disposing the superseded scope must be a no-op for the replacement.
         assert!(stale.dispose().await.all_ok());
         let live = reg.resolve("srv__t");
         assert!(live.is_some(), "replacement must survive a stale dispose");
+        assert!(
+            catalog
+                .list_by_mcp_server("srv")
+                .await
+                .iter()
+                .any(|entry| entry.name == "replacement"),
+            "stale scope must not remove the replacement's catalog projection"
+        );
         assert!(
             Arc::ptr_eq(&live.unwrap(), &replacement),
             "resolve still returns the replacement handler"

@@ -180,6 +180,7 @@ impl RegistrationHandle {
     }
 }
 
+#[derive(Clone)]
 pub struct ToolHandlerRegistry {
     shared: Arc<RegistryShared>,
 }

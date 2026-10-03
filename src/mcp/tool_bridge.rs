@@ -169,6 +169,7 @@ pub fn spawn_tool_bridge(
                 }
                 Err(RecvError::Closed) => {
                     tracing::info!("MCP manager event channel closed; tool bridge exiting");
+                    dispose_bridge_scopes(&mut server_scopes, &mut capabilities).await;
                     break;
                 }
             }
@@ -462,6 +463,21 @@ async fn reconcile_capability_tools(
             *login_live = false;
         }
     }
+}
+
+async fn dispose_bridge_scopes(
+    server_scopes: &mut HashMap<String, ToolRegistrationScope>,
+    capabilities: &mut CapabilityScopes,
+) {
+    let server_ids: Vec<String> = server_scopes.keys().cloned().collect();
+    for server_id in server_ids {
+        if let Some(scope) = server_scopes.remove(&server_id) {
+            dispose_server_scope(scope, &server_id).await;
+        }
+    }
+    dispose_capability_scope(&mut capabilities.resource, "resource").await;
+    dispose_capability_scope(&mut capabilities.prompt, "prompt").await;
+    dispose_capability_scope(&mut capabilities.login, "login").await;
 }
 
 /// Dispose a capability cluster's scope and replace it with a fresh empty one
@@ -803,6 +819,45 @@ mod tests {
             let absent = in_b[name].invoke(narrowed).await.unwrap().value;
             assert_eq!(hidden, absent, "{name} narrowed to the invisible server");
         }
+    }
+
+    #[tokio::test]
+    async fn bridge_scope_shutdown_removes_server_and_capability_tools() {
+        use test_support::capable_server;
+        let registry = ToolHandlerRegistry::new();
+        let manager = fake_manager(vec![capable_server("remote")]);
+        let mut capabilities = CapabilityScopes::new();
+        let (mut resource_live, mut prompt_live, mut login_live) = (false, false, false);
+        reconcile_capability_tools(
+            &manager.handle,
+            &registry,
+            &mut capabilities,
+            &mut resource_live,
+            &mut prompt_live,
+            &mut login_live,
+        )
+        .await;
+        assert!(resource_live && prompt_live && login_live);
+
+        let mut server_scopes = HashMap::new();
+        let client = Arc::new(crate::mcp::McpClient::new());
+        let mut server_scope = ToolRegistrationScope::new("mcp:server:local");
+        register_mcp_tools(
+            &registry,
+            None,
+            client,
+            "local",
+            &[mcp_tool("owned")],
+            None,
+            &mut server_scope,
+        )
+        .await;
+        server_scopes.insert("local".to_string(), server_scope);
+
+        assert_eq!(registry.snapshot().len(), 7);
+        dispose_bridge_scopes(&mut server_scopes, &mut capabilities).await;
+        assert!(registry.snapshot().is_empty());
+        assert!(server_scopes.is_empty());
     }
 
     async fn eventually_absent(registry: &ToolHandlerRegistry, name: &str) -> bool {

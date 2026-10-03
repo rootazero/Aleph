@@ -26,33 +26,23 @@ pub const MAX_NAME_LEN: usize = 64;
 
 /// The capability kind. Only `Tool` is modelled this iteration; Skill /
 /// Plugin / MCP / ACP registries are deliberately out of scope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolKind {
+    #[default]
     Tool,
-}
-
-impl Default for ToolKind {
-    fn default() -> Self {
-        Self::Tool
-    }
 }
 
 /// Whether a call whose result was lost (persisted but unanswered) may be
 /// replayed automatically during recovery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReplayPolicy {
     /// Do not auto-replay: recovery must surface an unknown-result /
     /// verification prompt through the existing recovery path.
+    #[default]
     Unsafe,
     /// Auto-replay allowed only when both the call-time descriptor and the
     /// currently-resolved descriptor explicitly permit `Safe`.
     Safe,
-}
-
-impl Default for ReplayPolicy {
-    fn default() -> Self {
-        Self::Unsafe
-    }
 }
 
 /// Where a tool capability originates. Kept here (rather than in `service`) as
