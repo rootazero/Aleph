@@ -661,6 +661,31 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
                                  # loads — the CLI and the server are two authors
 ./qa/plugins/run.sh trust        # owner trust: default posture, enforce, vouch, restart,
                                  # withdraw. Three restarts, because the policy is a LOAD gate
+./qa/plugins/run.sh browse       # marketplace contents are listable, and a name found that
+                                 # way actually installs; the CLI's `plugin marketplace browse`
+                                 # prints the same rows with their marketplace column. Only a
+                                 # real boot proves the bundled extractor, the resolver and
+                                 # the RPC agree (a unit test can build the layout — the bug
+                                 # this round pinned was a sentinel resolved as a relative
+                                 # path by the lookup side only)
+./qa/plugins/run.sh marketplaces # the *registration* surface — different from `browse`,
+                                 # which lists a marketplace's contents: list / add / remove,
+                                 # and the removable bit the Panel draws its button from.
+                                 # Needs it because the built-in `aleph-official` is injected
+                                 # into every `list()` and refused by every `remove()`, and
+                                 # on a fresh install it is the only row on screen — whether
+                                 # the Panel draws a Remove button the server would refuse is
+                                 # a question only the real manager can answer; the CLI's
+                                 # typed row names the server-side refusal in place
+./qa/plugins/run.sh panel        # BOOTS AND WAITS: the same market-panel surfaces through
+                                 # the browser, plus the source classifier (a Windows path
+                                 # like `C:\dir\mk` must come back tagged 'local', named
+                                 # 'mk', with a refusal about a missing path — not
+                                 # classified GITHUB and named 'c:\dir\mk'). Needs `just
+                                 # wasm` first (debug `rust_embed` serves dist/ from disk);
+                                 # a stale dist renders the previous round and every
+                                 # assertion below passes or fails for the wrong reason
+
 ./qa/mcp_face/run.sh handshake   # MCP server face: three versions negotiate to themselves,
                                  # unsupported → 2025-11-25, sessions minted / 400 / 404
 ./qa/mcp_face/run.sh tools       # tools/list ⊆ [mcp_server].expose on the REAL registry;
