@@ -127,17 +127,19 @@ async fn a_bare_command_is_counted_and_spawned_from_path() {
 async fn an_absolute_command_outside_the_root_is_counted_and_spawned() {
     let _home = crate::utils::paths::IsolatedAlephHome::new();
     let tmp = tempfile::tempdir().unwrap();
-    write_cc_plugin(
-        tmp.path(),
-        "p415-abs",
-        "",
-        Some(r#"{"mcpServers":{"srv":{"command":"/nonexistent-p415/qa-abs-bin","args":["x"]}}}"#),
-    );
+    // "Absolute" is platform-relative (`Path::is_absolute`): a rooted `/x`
+    // is not absolute on Windows and would be root-prefixed, then refused.
+    #[cfg(unix)]
+    let abs = "/nonexistent-p415/qa-abs-bin";
+    #[cfg(windows)]
+    let abs = r"C:\nonexistent-p415\qa-abs-bin.exe";
+    let body = serde_json::json!({"mcpServers":{"srv":{"command":abs,"args":["x"]}}});
+    write_cc_plugin(tmp.path(), "p415-abs", "", Some(&body.to_string()));
     let manager = attached_manager(tmp.path()).await;
     manager.load_all().await.unwrap();
 
     let row = settled_row(&manager, "p415-abs").await;
-    assert_counted_and_spawned(&row, 1, &[("srv", "(/nonexistent-p415/qa-abs-bin)")]);
+    assert_counted_and_spawned(&row, 1, &[("srv", &format!("({abs})") as &str)]);
 }
 
 /// A relative command and a `${…_PLUGIN_ROOT}` command are resolved against

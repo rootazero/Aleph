@@ -142,6 +142,7 @@ graphify-out/
 /.opencode/
 # Pi agent local state (per-machine, runtime task persistence)
 /.pi/
+/.pi-scratch/
 
 # ==============================================================================
 # Project scratch & misc

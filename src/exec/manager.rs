@@ -919,7 +919,7 @@ impl ExecApprovalManager {
             .filter(|entry| entry.is_live())
             .map(|entry| PendingApproval {
                 record: entry.record.clone(),
-                remaining_ms: remaining_ms(&entry, Instant::now()),
+                remaining_ms: remaining_ms(entry, Instant::now()),
             })
     }
 

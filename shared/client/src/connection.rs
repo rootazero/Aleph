@@ -585,7 +585,17 @@ impl AlephClient {
             }
             Inbound::Event(event) => {
                 debug!("Parsed event: {:?}", event);
-                let _ = event_tx.send(*event).await;
+                // Lossy on backpressure, mirroring the topic channel below:
+                // the read loop is the ONLY router of RPC responses on this
+                // socket, so it must never `.await` on a downstream consumer
+                // that stopped draining — that would wedge every pending
+                // request behind a single stalled handler. If the consumer
+                // is behind, the event is sacrificed (with a warn) so the
+                // connection stays alive; the trade-off is logged loudly
+                // enough for a misbehaving consumer to surface in metrics.
+                if let Err(e) = event_tx.try_send(*event) {
+                    warn!(error = %e, "dropping stream event: consumer fell behind, connection stays live");
+                }
             }
             Inbound::Topic(event) => {
                 // Lossy by design (`try_send`, never `.await`): the topic

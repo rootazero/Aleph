@@ -101,12 +101,12 @@ pub(super) fn render_artifacts(heading: &str, artifacts: &[ExportArtifact]) -> S
                 if is_image(&art.mime_type) {
                     // `<img>` cannot execute its payload, so the real MIME is
                     // safe to keep — the browser needs it to decode.
-                    let _ = write!(
+                    let _ = writeln!(
                         out,
                         "<figure class=\"art art--image\">\
                          <img src=\"data:{mime};base64,{data}\" alt=\"{name}\">\
                          <figcaption>{label} <span class=\"size\">{size}</span></figcaption>\
-                         </figure>\n",
+                         </figure>",
                         mime = escape_attr(&art.mime_type),
                         data = escape_attr(&encoded),
                         name = name,
@@ -119,14 +119,14 @@ pub(super) fn render_artifacts(heading: &str, artifacts: &[ExportArtifact]) -> S
                     // `application/octet-stream`: it removes the whole class of
                     // `data:text/html` navigation tricks in one move, and the
                     // saved file still carries its real extension.
-                    let _ = write!(
+                    let _ = writeln!(
                         out,
                         "<a class=\"art art--file\" download=\"{name}\" \
                          href=\"data:application/octet-stream;base64,{data}\">\
                          <span class=\"icon\" aria-hidden=\"true\">↓</span>\
                          <span class=\"label\">{label}</span>\
                          <span class=\"size\">{size}</span>\
-                         </a>\n",
+                         </a>",
                         name = name,
                         data = escape_attr(&encoded),
                         label = escape_text(&art.filename),
@@ -137,13 +137,13 @@ pub(super) fn render_artifacts(heading: &str, artifacts: &[ExportArtifact]) -> S
             None => {
                 // Listed, not embedded. A silently dropped attachment is worse
                 // than a visible placeholder.
-                let _ = write!(
+                let _ = writeln!(
                     out,
                     "<div class=\"art art--omitted\">\
                      <span class=\"label\">{label}</span>\
                      <span class=\"size\">{size}</span>\
                      <span class=\"note\">not embedded</span>\
-                     </div>\n",
+                     </div>",
                     label = escape_text(&art.filename),
                     size = size,
                 );

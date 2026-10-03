@@ -42,7 +42,7 @@ use crate::verification::{ToolCallSummary, TOOL_HISTORY_WINDOW};
 mod act;
 mod guardrails;
 pub(crate) mod prompt;
-mod think;
+pub(crate) mod think;
 
 /// Dedicated short budget for the timeout-salvage grace turn. A per-turn /
 /// stall timeout means a step is likely slow or hung, so the salvage call must
@@ -144,6 +144,11 @@ pub struct AgentHarness {
     /// store per turn, no decision. The loop runs one turn at a time, so
     /// `Relaxed` ordering is sufficient.
     pub(crate) last_prompt_seq: AtomicU64,
+
+    /// Run-scoped accountant for the growth-step fold nudge (Context Fabric
+    /// §1d). Per-run because the harness is per-run; see
+    /// [`think::GrowthNudgeTracker`] for the baseline semantics.
+    pub(crate) fold_nudge_tracker: Mutex<think::GrowthNudgeTracker>,
 }
 
 impl AgentHarness {
@@ -167,6 +172,7 @@ impl AgentHarness {
             recent_failures: Mutex::new(std::collections::HashSet::new()),
             reactive_compact_attempts: AtomicU32::new(0),
             last_prompt_seq: AtomicU64::new(0),
+            fold_nudge_tracker: Mutex::new(think::GrowthNudgeTracker::new()),
         }
     }
 

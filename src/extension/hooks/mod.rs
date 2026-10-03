@@ -112,6 +112,13 @@ pub struct HookContext {
     pub tool_output: Option<String>,
     /// Whether the tool execution resulted in an error
     pub tool_error: Option<bool>,
+    /// Ingress-reduction summary for `ToolResultPersist`: a compact JSON
+    /// object (`{"compressed": bool, "reductions": […]}`) describing the
+    /// per-field ingress clean applied to the persisted result. `None` when
+    /// ingress left the result untouched — the payload then omits the key
+    /// entirely, so hooks written before this field existed see
+    /// byte-identical payloads (audit 2026-10-01, C2).
+    pub ingress_reductions: Option<String>,
     /// This turn's execution tier in Claude Code's `permission_mode`
     /// spelling (`ExecTier::cc_permission_mode`). Unlike `cwd` and
     /// `transcript_path` (derived by the executor, `session_facts`), only a
@@ -178,6 +185,13 @@ impl HookContext {
     #[must_use]
     pub const fn with_tool_error(mut self, is_error: bool) -> Self {
         self.tool_error = Some(is_error);
+        self
+    }
+
+    /// Set the ingress-reduction summary (`ToolResultPersist` only).
+    #[must_use]
+    pub fn with_ingress_reductions(mut self, summary: impl Into<String>) -> Self {
+        self.ingress_reductions = Some(summary.into());
         self
     }
 
@@ -756,6 +770,7 @@ mod tests {
             env: HashMap::new(),
             tool_output: None,
             tool_error: None,
+            ingress_reductions: None,
             permission_mode: None,
             session_source: None,
         };

@@ -59,7 +59,7 @@ impl DocLocks {
             );
             e.into_inner()
         });
-        f(&mut *slots)
+        f(&mut slots)
     }
 
     /// Resolve the lock for `id`, creating it if no live holder exists.

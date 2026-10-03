@@ -772,6 +772,15 @@ async fn main_loop<'c>(
             Action::FocusInput => {
                 state.focus = Focus::Input;
             }
+            Action::FocusInputWithChar(ch) => {
+                state.focus = Focus::Input;
+                // The chat panel handler returned this when a printable key
+                // both switched focus AND typed a character; the focus switch
+                // would otherwise silently swallow the keystroke. Inserting
+                // here (after the focus flip) means the character lands at
+                // the cursor in the input textarea instead of vanishing.
+                textarea.insert_char(ch);
+            }
             Action::FocusChat => {
                 state.focus = Focus::Chat;
             }

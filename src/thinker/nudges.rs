@@ -336,6 +336,53 @@ pub fn user_turn_text<'a>(
 /// Opening fence of every harness-authored message in this module.
 pub const SYSTEM_REMINDER_OPEN: &str = "<system-reminder>";
 
+/// Prompt-token growth since the last fold (or run start) that earns a
+/// [`compact_growth_nudge`] (Context Fabric, spec 2026-10-01 §1d; bili
+/// `compress.nudgeGrowthTokens` parity).
+///
+/// **Spec O2 ruling — constant, not a config knob** — *overruled
+/// 2026-10-02.* O2 pinned this as a constant on 2026-10-01 (the 50k value
+/// was an unvalidated heuristic borrowed from bili's default, and a TOML
+/// key seemed to promise a tuning surface nobody had evidence to tune). The
+/// user overruled: R9 ("all configurability exposed as tools") wins —
+/// `[context_budget].fold_nudge_growth_tokens` now tunes the threshold, and
+/// this constant remains only as the single source of the DEFAULT
+/// (`deps_builder::context_budget` applies it when the TOML key is unset).
+pub const FOLD_NUDGE_GROWTH_TOKENS: u64 = 50_000;
+
+/// Growth-step nudge asking the model to fold the conversation itself
+/// (Context Fabric §1d). Fired by think.rs when the prompt has grown by at
+/// least `threshold` tokens since the last fold or the last fired nudge, and
+/// the compaction circuit breaker is not counting ineffective compactions.
+///
+/// The copy teaches the call, not just the timing: `instructions` is where
+/// the summary's quality is decided, so the nudge names the three things a
+/// good fold preserves — the user's goals, the open questions, and the file
+/// ledger. It also says *searchable, not gone*, because a model that believes
+/// compaction loses information hoards context instead.
+///
+/// Fenced and classified synthetic by [`is_synthetic_reminder`]'s default arm
+/// (the lead-in is not the interjection one), so the cache layer never places
+/// a breakpoint on it and the compaction focus anchor never mistakes it for
+/// the user's request. Transient by construction: think.rs appends it to the
+/// transient tail only — it is never emitted to the session log.
+#[must_use]
+pub fn compact_growth_nudge(grown_tokens: u64, threshold: u64) -> String {
+    format!(
+        "{SYSTEM_REMINDER_OPEN}\n\
+         This conversation has grown by ~{grown_tokens} tokens since its last \
+         fold (nudge threshold: {threshold}). Consider calling `session_compact` \
+         yourself now, rather than waiting for context pressure to force an \
+         emergency compaction you do not control. In the `instructions` \
+         argument, tell the summarizer what to preserve: the user's goals, any \
+         unresolved questions and pending tasks, and the ledger of files read \
+         or modified. Summarized turns stay searchable and remain in the \
+         user's transcript — folding loses no information. Skip this if the \
+         recent turns are all still needed verbatim.\n\
+         </system-reminder>",
+    )
+}
+
 /// Lead-in [`user_interjection_note`] puts above the user's own words. Single
 /// source: the formatter interpolates it, so the predicate below and the copy
 /// can never disagree.
@@ -812,6 +859,11 @@ mod tests {
         (
             "promoted_side_answer",
             || promoted_side_answer("what is X?", "X is the config loader."),
+            true,
+        ),
+        (
+            "compact_growth_nudge",
+            || compact_growth_nudge(FOLD_NUDGE_GROWTH_TOKENS, FOLD_NUDGE_GROWTH_TOKENS),
             true,
         ),
     ];

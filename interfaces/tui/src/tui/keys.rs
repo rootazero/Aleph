@@ -532,8 +532,13 @@ const fn handle_chat_key(state: &mut AppState, key: KeyEvent) -> Action {
         KeyCode::Char(c) => {
             // Don't steal j/k which we handle above
             if c != 'j' && c != 'k' {
+                // Returning a bare `FocusInput` here silently dropped the
+                // keystroke that triggered the focus switch — the cursor
+                // jumped to the textarea but no character appeared. Carry
+                // the character in the action so the dispatch loop inserts
+                // it after the focus flip.
                 state.focus = Focus::Input;
-                Action::FocusInput
+                Action::FocusInputWithChar(c)
             } else {
                 Action::None
             }

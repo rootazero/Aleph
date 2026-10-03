@@ -17,6 +17,12 @@ pub struct MediaPipeline {
     policy: MediaPolicy,
 }
 
+impl Default for MediaPipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MediaPipeline {
     /// Create pipeline with default policy.
     #[must_use]

@@ -150,6 +150,15 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        // Verbatim fold restoration (Context Fabric 2026-10-01). Reads the
+        // process-global session event store like recall_events — no service
+        // dependency, so it is always on; the session key is injected by the
+        // dispatch arm, and a missing key errors honestly at call time.
+        name: "session_decompress",
+        description: <crate::builtin_tools::SessionDecompressTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "pdf_generate",
         description: <crate::builtin_tools::pdf_generate::PdfGenerateTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
@@ -1148,6 +1157,10 @@ pub fn create_tool_boxed(
         "session_new" => None,
         // Session compact tool requires SessionManager (from gateway_context) at runtime
         "session_compact" => None,
+        // Session decompress is built fresh per call in execute_tool(): its
+        // __session_key argument is injected there from the turn context, so
+        // a statically created box could never answer a call.
+        "session_decompress" => None,
         // Session set-topic tool requires SessionManager (from gateway_context) at runtime
         "session_rename" => None,
         // Session set-mode tool requires SessionManager (from gateway_context) at runtime
@@ -3058,7 +3071,23 @@ mod tests {
     /// nothing more; (3) no other tool names the QA surface — the
     /// `error_events` row is a runtime answer
     /// (`browser_session{action:"capabilities"}`), not catalog bytes.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 116_230;
+    /// 2026-10-01 (C4 session_decompress tool + session_compact description
+    /// growth): 116_230 -> 117_174 B, measured by this test's own failure
+    /// line on the Context Fabric branch (97_578 catalog + 16_613
+    /// registry-only + 1_039 injected + 1_944 bridge); the delta (+944 B) is
+    /// `session_decompress`'s whole DESCRIPTION (T2, decompress.rs) plus the
+    /// `session_compact` DESCRIPTION addition teaching proactive folding
+    /// (T4). Three questions: (1) the verbs' existence and their
+    /// division-of-labour contract (decompress = verbatim restore, compact =
+    /// fold, ctx_search = search) are not inferable — after a fold NOTHING in
+    /// the window names the way back, and the nudge only teaches folding,
+    /// not restoration; (2) every per-field detail (from_seq/to_seq paging,
+    /// hard-retire honesty, quality tags) lives in the JsonSchema doc
+    /// comments — the descriptions name the verbs and the contract, nothing
+    /// more; (3) no other tool names the restore surface — `list_folds` is a
+    /// runtime answer (session_decompress{action:"list"}), not catalog
+    /// bytes.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 117_174;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3519,7 +3548,15 @@ mod tests {
     /// (hooks_manage) and main's -31 (ctx_search) + -745 (web_fetch) all
     /// landed; 105_191 - 68 - 31 - 745 = 104_347, verified against the
     /// guard's own ledger below.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_185;
+    ///
+    /// 2026-10-01 (Context Fabric T2): +996 for the new `session_decompress`
+    /// schema. A new always-on tool, not drift in an existing one — every
+    /// other row in the refreshed table is unchanged, so the delta is wholly
+    /// attributed. The DESCRIPTION carries the routing contract (vs
+    /// recall_events / ctx_search / session_search), which is where this
+    /// design keeps its intelligence; trimming it would buy bytes with
+    /// misrouted calls.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 106_181;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3594,6 +3631,7 @@ mod tests {
         ("search", 2411),
         ("self_config", 3553),
         ("self_manage", 328),
+        ("session_decompress", 996),
         ("session_list", 931),
         ("session_send", 827),
         ("skill_list", 47),

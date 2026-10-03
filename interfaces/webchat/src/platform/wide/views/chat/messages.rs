@@ -1143,14 +1143,35 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
         // grabs what's currently on screen even mid-stream.
         let copy_text =
             message.with_untracked(|m| m.as_ref().map(|m| m.content.clone()).unwrap_or_default());
-        // Modern API — navigator.clipboard.writeText(text)
+        // Modern API — navigator.clipboard.writeText(text). Await the
+        // promise so the success indicator only fires when the clipboard
+        // write actually succeeded: in an insecure context, with the page
+        // backgrounded, or under a permissions policy the call rejects,
+        // and flipping `copied` regardless used to lie to the user.
         let clipboard = win.navigator().clipboard();
-        let _promise = clipboard.write_text(&copy_text);
-        copied.set(true);
-        set_timeout(
-            move || copied.set(false),
-            std::time::Duration::from_millis(1500),
-        );
+        let copied = copied;
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&copy_text)).await;
+            match result {
+                Ok(_) => {
+                    copied.set(true);
+                    set_timeout(
+                        move || copied.set(false),
+                        std::time::Duration::from_millis(1500),
+                    );
+                }
+                Err(_) => {
+                    // Stay silent on failure: the button stays in its
+                    // default state, the user sees nothing happen, and
+                    // can retry / use the OS-level shortcut. Logging the
+                    // rejection to the console is enough for debugging —
+                    // surfacing an error toast here would compete with
+                    // the chat copy action and is out of scope for the
+                    // immediate fix.
+                    web_sys::console::warn_1(&"clipboard.writeText rejected".into());
+                }
+            }
+        });
     };
     let on_retry = move |_: web_sys::MouseEvent| {
         chat.request_retry();

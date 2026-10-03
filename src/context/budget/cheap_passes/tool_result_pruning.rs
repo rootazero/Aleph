@@ -50,25 +50,38 @@ fn first_line_placeholder(tool_name: &str, original_tokens: usize, text: &str) -
     }
 }
 
+/// Token floor below which an old tool result is not worth pruning.
+///
+/// A result smaller than this is kept verbatim: the informative one-line
+/// placeholder itself costs tokens, so below the floor there is nothing
+/// real to save. This is the "is it worth the scissors" gate
+/// (`original_tokens < PRUNE_THRESHOLD_TOKENS`) — NOT the size a reduction
+/// aims at; that is [`STRUCTURED_TARGET_BUDGET_TOKENS`]. The two semantics
+/// used to be locked together as the `min_tokens_to_prune` knob, which had
+/// no producer anywhere in the tree (audit 2026-10-01, C1/D1).
+const PRUNE_THRESHOLD_TOKENS: usize = 200;
+
+/// Target budget, in estimated tokens, for the `structured` reduction of a
+/// stale result — the size `structured::reduce_within` compresses toward.
+///
+/// At 200 tokens the budgeted path of spec §2b is in effect: `Profile::FLOOR`
+/// keeps its own per-line/row floors, and for Log|Search content `crush` is
+/// the reducer that runs under this budget. That crush-on-logs behavior is
+/// the intended design, not an accidental trigger (audit 2026-10-01, D1).
+const STRUCTURED_TARGET_BUDGET_TOKENS: usize = 200;
+
 /// Cheap-pass stage that shortens stale `ToolResult` messages.
 ///
-/// Keeps the newest `fresh_tail_count` messages untouched. For older
-/// `ToolResult` blocks above `min_tokens_to_prune`, replaces the content with
+/// Keeps the newest `fresh_tail_count` messages untouched (positional —
+/// see the note in `prepare`). For older `ToolResult` blocks at or above
+/// [`PRUNE_THRESHOLD_TOKENS`], replaces the content with
 /// `"[pruned tool_result: <tool_name>, ~<N> tokens — <hint>]"`. Skips when the
 /// placeholder wouldn't actually save tokens.
-pub struct ToolResultPruningStage {
-    /// Minimum token size before pruning kicks in. Tool results smaller
-    /// than this are kept verbatim (the placeholder itself costs tokens).
-    pub min_tokens_to_prune: usize,
-}
-
-impl Default for ToolResultPruningStage {
-    fn default() -> Self {
-        Self {
-            min_tokens_to_prune: 200,
-        }
-    }
-}
+///
+/// The stage has no tunable fields: its two constants serve distinct
+/// semantics and neither has ever had a producer (audit 2026-10-01, C1).
+#[derive(Default)]
+pub struct ToolResultPruningStage;
 
 #[async_trait]
 impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStage {
@@ -82,6 +95,14 @@ impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStag
         _pressure: &ContextPressure,
         fresh_tail_count: usize,
     ) -> usize {
+        // Positional semantics, deliberately (hermes-ported convention):
+        // `fresh_tail_count` counts MESSAGES, not tool calls. A run of
+        // non-tool messages inside the tail still shields the older tool
+        // results before it, and a tool result buried under a long user turn
+        // or a system injection inside the tail CAN fall into the pruning
+        // window below. "Stale" here means context position, not tool-call
+        // recency — a tool-newest metric would need a separate index pass
+        // (audit 2026-10-01, D2).
         if messages.len() <= fresh_tail_count {
             return 0;
         }
@@ -111,7 +132,7 @@ impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStag
                 continue;
             }
             let original_tokens = estimate_tokens_smart(&original_text);
-            if original_tokens < self.min_tokens_to_prune {
+            if original_tokens < PRUNE_THRESHOLD_TOKENS {
                 continue;
             }
             // Share the ingress cleaner's preprocessing. Hygiene strips ANSI
@@ -122,13 +143,14 @@ impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStag
             // budget) reached the stale pass with its escapes intact. `bash`
             // output arrives sanitized; MCP text results do not.
             let cleaned = sanitize_command_output(&original_text);
-            // Stale results are sized aggressively, and `min_tokens_to_prune` is
-            // the honest target: it is by definition the size below which a
-            // result is no longer worth pruning. The alternative this competes
-            // with is a one-line placeholder, so an over-tight reduction is
-            // still far more signal than the fallback.
+            // Stale results are sized aggressively against
+            // STRUCTURED_TARGET_BUDGET_TOKENS — the reduction's target, not
+            // the pruning floor (the two are independent knobs that happen
+            // to share the value 200). The alternative this competes with is
+            // a one-line placeholder, so an over-tight reduction is still
+            // far more signal than the fallback.
             let replacement =
-                match structured::reduce_within(&cleaned, Some(self.min_tokens_to_prune)) {
+                match structured::reduce_within(&cleaned, Some(STRUCTURED_TARGET_BUDGET_TOKENS)) {
                     Some(reduction) => {
                         let rendered = reduction.render();
                         if estimate_tokens_smart(&rendered) < original_tokens {
@@ -144,7 +166,15 @@ impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStag
                 continue;
             }
             // Rebuild the content as [reduced text, …original image blocks in
-            // order]. Image lifecycle policy belongs solely to
+            // order]. The rebuilt block is `Text` even when the original was
+            // `Json`: the two are wire-equivalent under `as_model_text`
+            // flattening (providers/anthropic/proto_impl.rs:298-301 — both
+            // branches serialize identically, and every current construction
+            // point stamps `cache_control: None`). Re-verify this equivalence
+            // if cache_control stamping ever lands on tool-result blocks
+            // (audit 2026-10-01, D3).
+            //
+            // Image lifecycle policy belongs solely to
             // `HistoricalImageStrippingStage` (which runs later and keeps the
             // newest image) — silently dropping images here would also free
             // the sensor's per-image token charge without counting it. Since
@@ -210,7 +240,7 @@ mod tests {
             UnifiedMessage::user("recent 2"),
             UnifiedMessage::user("recent 3"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 3).await;
         assert!(freed > 100, "expected significant savings, got {freed}");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -249,7 +279,7 @@ mod tests {
             produced("call-1", "bash", body),
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert!(freed > 0, "a large multi-line log must be reduced");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -275,7 +305,7 @@ mod tests {
             produced("call-1", "Read", "z".repeat(3000)),
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert!(freed > 0, "a large opaque result must be pruned");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -309,7 +339,7 @@ mod tests {
             },
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert!(freed > 0, "the large text must still be pruned");
         assert!(
@@ -334,7 +364,7 @@ mod tests {
     #[tokio::test]
     async fn skips_small_tool_result() {
         let mut messages = vec![small_tool_result(), UnifiedMessage::user("recent")];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert_eq!(freed, 0, "small results must not be pruned");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -347,7 +377,7 @@ mod tests {
             UnifiedMessage::user("oldest"),
             big_tool_result(), // sits in protected tail when fresh_tail=2
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 2).await;
         assert_eq!(freed, 0, "fresh tail must be inviolable");
         let (_name, text) = messages[1].tool_result_info().expect("still a ToolResult");
@@ -361,7 +391,7 @@ mod tests {
     #[tokio::test]
     async fn empty_messages_no_op() {
         let mut messages: Vec<UnifiedMessage> = vec![];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 3).await;
         assert_eq!(freed, 0);
     }
@@ -377,7 +407,7 @@ mod tests {
             produced("call-1", "bash", marker.to_string()),
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert_eq!(freed, 0, "persisted markers must not be re-pruned");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -399,7 +429,7 @@ mod tests {
             produced("call-1", "bash", composed.clone()),
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert_eq!(freed, 0, "a result carrying a marker must not be re-pruned");
         let (_n, after) = messages[0].tool_result_info().expect("still a ToolResult");
@@ -413,7 +443,7 @@ mod tests {
             UnifiedMessage::assistant("b".repeat(2000)),
             UnifiedMessage::user("recent"),
         ];
-        let stage = ToolResultPruningStage::default();
+        let stage = ToolResultPruningStage;
         let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
         assert_eq!(freed, 0, "non-ToolResult messages must not be pruned");
     }
