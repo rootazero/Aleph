@@ -240,13 +240,17 @@ git commit -m "feat: scope tool registrations"
 - Modify: `src/tools/handlers/registration.rs:120-160`（UnifiedTool 从 descriptor 派生公共字段）
 - Modify: `src/tool_metadata/types/definition.rs:1-60`（保持现有 `ToolDefinition` wire shape；source/category 映射不增加重复事实字段）
 - Modify: `src/tool_metadata/registry/mod.rs:70-190`（保留 UI/routing/conflict/visibility，避免其成为 callable metadata 真源）
+- Modify: `src/gateway/execution_engine/run_loop/inner.rs:1786-1810`（用原子 registry-entry snapshot join MCP handler 与 descriptor，避免热替换时跨 snapshot 拼接不同代）
 - Test: `src/tools/service.rs` projection tests、`src/tools/adapters/mcp_adapter.rs` tests、`src/tools/handlers/registration.rs` tests
 
 **Interfaces:**
 - `ToolDefinition::from_descriptor(descriptor: &ToolCapabilityDescriptor) -> Self`。
+- `ToolHandlerRegistry::entries_snapshot() -> Arc<HashMap<String, RegistryEntry>>` 返回同一原子状态中的 handler+descriptor 对。
+- `ToolCapabilityDescriptor::to_metadata_definition(&self) -> crate::tool_metadata::ToolDefinition`。
 - `ToolCapabilityDescriptor::to_metadata_definition(&self) -> crate::tool_metadata::ToolDefinition`。
 - `ToolCapabilityDescriptor::to_unified_tool(&self, id: String) -> UnifiedTool`，只设置 descriptor 拥有的公共字段；UI/routing/conflict 字段仍由 `ToolCatalog` 自己管理。
 - `LoopToolRegistry::tool_definitions()` 不重新计算 replay/source/approval 元数据；只读取 registry descriptor projection 或保留执行专用运行时字段。
+- MCP run-loop join 必须消费 `entries_snapshot()`；不得把 `snapshot()` 与 `descriptor_snapshot()` 分开读取后按 name 配对。
 
 - [ ] **Step 1: Write the failing tests**
 
