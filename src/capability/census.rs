@@ -821,16 +821,19 @@ mod tests {
         // guard edited green is worse than one that is honestly red).
         assert_eq!(
             raw + slots,
-            52,
+            53,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             52. Never assert either side alone: raw shrinks and slots grows as \
+             53. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \
              investigate before editing this number. \
-             Last moved 2026-10: 51 -> 52 to acknowledge the named raw exemption \
-             (`route_handle::GLOBAL`, see this test's filter above) as part of \
-             the SUM. Before that, 2026-09-24: 50 -> 51 when \
+             Last moved 2026-10-03: 52 -> 53 when the `gateway/mcp-face` slot \
+             was rostered (P6.4), so the MCP server face's install-or-decline \
+             is observable to `core/capability-wiring` like every other \
+             subsystem. Before that, 2026-10: 51 -> 52 to acknowledge the named \
+             raw exemption (`route_handle::GLOBAL`, see this test's filter \
+             above) as part of the SUM. Before that, 2026-09-24: 50 -> 51 when \
              `teams/background-stores` was added, so `users.update`'s \
              deactivation freeze had a fifth leg (the principal's \
              dispatcher-managed team tasks) to reach. Before that, 2026-09-23: \

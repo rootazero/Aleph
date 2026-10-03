@@ -277,7 +277,7 @@ pub(super) fn apply_pregrant(
 /// channel must not run at `Full` with nobody at the keyboard, and a member must
 /// not exceed the install's posture, whichever rung asked for it. Panel / CLI /
 /// cron turns carry no `caller_role` and are subject to neither.
-pub(super) fn resolve_exec_tier(
+pub(crate) fn resolve_exec_tier(
     global: ExecTier,
     requested: Option<ExecTier>,
     stored: Option<ExecTier>,
