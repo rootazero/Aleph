@@ -231,6 +231,67 @@ pub struct ProviderInfo {
     pub is_default: bool,
     #[serde(default)]
     pub verified: bool,
+    // ----- Fields added for per-model parameter plumbing (feat/per-model-params-core) -----
+    // All are readback: the server pushes the current stored values so the
+    // Panel can pre-fill accurately. They mirror `ProviderConfig` 1:1.
+    /// Per-model override entries. Empty when the operator has not set any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_defs: Vec<ModelDefJson>,
+    /// Gemini thinking level (e.g. `LOW` / `HIGH`); absent = use default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    /// Extended thinking budget hint (Anthropic) or `reasoning_effort` (OpenAI).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// `"off"` | `"short"` | `"long"` — None = provider default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_retention: Option<String>,
+    /// Anthropic / OpenAI service tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    /// Comma-separated stop sequences (Claude / Gemini / Ollama).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<String>,
+    /// Gemini media resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_resolution: Option<String>,
+    /// `"prepend"` | `"standard"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_mode: Option<String>,
+    /// Behaviour profile override (see `model_behaviors/`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_behavior: Option<String>,
+    /// Anthropic `metadata.user_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_user_id: Option<String>,
+    /// JSON-stringified `ResponseFormat` (the core enum is tagged; the wire
+    /// keeps the editor simple).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<String>,
+    /// Streaming idle timeout override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_idle_timeout_secs: Option<u64>,
+    /// OpenAI `frequency_penalty`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+    /// OpenAI `presence_penalty`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
+    /// Ollama `repeat_penalty`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f32>,
+    /// Deterministic sampling seed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    /// OpenAI `logprobs` toggle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<bool>,
+    /// OpenAI `top_logprobs` count (0..=20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_logprobs: Option<u8>,
+    /// `parallel_tool_calls` capability gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
 }
 
 impl ProviderInfo {
@@ -282,6 +343,59 @@ pub struct ProviderConfigJson {
     pub top_p: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_k: Option<u32>,
+    // ----- Fields added for per-model parameter plumbing (feat/per-model-params-core) -----
+    /// Per-model overrides. `None` means "do not touch prior"; `Some(vec![])`
+    /// means "explicitly clear"; `Some(non_empty)` means "set these".
+    ///
+    /// The `Option<Vec<_>>` shape is the cheapest way to express all three
+    /// states on a single field — without it the persistence path cannot tell
+    /// "client omitted the field" (preserve) from "client sent an empty list"
+    /// (clear).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_defs: Option<Vec<ModelDefJson>>,
+    /// Provider-level thinking level — see `ProviderInfo::thinking_level`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    /// Provider-level extended-thinking budget hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// One of `"off"` | `"short"` | `"long"`; None = use provider default.
+    /// Unknown values are rejected by the handler as `INVALID_PARAMS` so a
+    /// typo does not silently downgrade retention (the cache-bill bug
+    /// `docs/reference/FEATURE_LOCATOR.md` calls out).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_retention: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_resolution: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_behavior: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_user_id: Option<String>,
+    /// JSON-stringified `ResponseFormat`; the editor stays text for now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_idle_timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_logprobs: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
 }
 
 impl ProviderConfigJson {
@@ -301,8 +415,158 @@ impl ProviderConfigJson {
             temperature: None,
             top_p: None,
             top_k: None,
+            model_defs: None,
+            thinking_level: None,
+            effort: None,
+            cache_retention: None,
+            service_tier: None,
+            stop_sequences: None,
+            media_resolution: None,
+            system_prompt_mode: None,
+            model_behavior: None,
+            metadata_user_id: None,
+            response_format: None,
+            stream_idle_timeout_secs: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            repeat_penalty: None,
+            seed: None,
+            logprobs: None,
+            top_logprobs: None,
+            parallel_tool_calls: None,
         }
     }
+}
+
+// ----------------------------------------------------------------------------
+// Per-model overrides — wire projection of `alephcore::ProviderConfig::ModelDef`.
+//
+// Kept in the protocol crate because four clients share the shape and one of
+// them (aleph-cli) cannot depend on alephcore. Each entry matches one model by
+// `id` inside `ProviderConfig::model_defs` and wins over the capability catalog
+// for the fields it sets. Unknown fields on the wire are tolerated by serde,
+// which is what makes the legacy 11-field payload still parse against this
+// expanded definition.
+// ----------------------------------------------------------------------------
+
+/// Input-modality capability flags for one model.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelInputJson {
+    pub text: bool,
+    pub image: bool,
+}
+
+/// Tiered pricing row — applies when input tokens exceed `input_tokens_above`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CostTierJson {
+    #[serde(default)]
+    pub input_tokens_above: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<f64>,
+}
+
+/// Cost information for a model, in USD per million tokens. Mirrors the core
+/// `ModelCost` so a panel-side edit writes straight through.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelCostJson {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tiers: Vec<CostTierJson>,
+}
+
+/// Thinking-level → budget-token mapping. Wire form of core `ThinkingLevelMap`.
+/// An empty string means "this level is not supported"; absent means "use the
+/// provider default".
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ThinkingLevelMapJson {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub off: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub low: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub medium: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xhigh: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<String>,
+}
+
+/// Compat flags for one model. All ten fields round-trip the core's `ModelCompat`
+/// verbatim so a future adapter consumer can consume the wire without a second
+/// schema. The Panel does not render them yet (the editor scaffold covers only
+/// the basic fields the task asks for); the wire is here so manual JSON edits
+/// through the Panel are not lossy.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelCompatJson {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uses_max_completion_tokens: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forbids_sampling_params: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_cache_control: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_reasoning_effort: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires_object_properties: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires_derefed_refs: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_prompt_cache: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vendor_behavior_profile: Option<String>,
+}
+
+/// One per-model override entry. `id` is the model identifier from the
+/// provider's ladder — keyed on the server side against `models[i]`. Every
+/// other field is optional; absent means "inherit provider-level / catalog".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelDefJson {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<ModelInputJson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level_map: Option<ThinkingLevelMapJson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<ModelCostJson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compat: Option<ModelCompatJson>,
 }
 
 /// Parameters for `providers.get`.
@@ -751,6 +1015,25 @@ mod tests {
             temperature: None,
             is_default: false,
             verified: false,
+            model_defs: Vec::new(),
+            thinking_level: None,
+            effort: None,
+            cache_retention: None,
+            service_tier: None,
+            stop_sequences: None,
+            media_resolution: None,
+            system_prompt_mode: None,
+            model_behavior: None,
+            metadata_user_id: None,
+            response_format: None,
+            stream_idle_timeout_secs: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            repeat_penalty: None,
+            seed: None,
+            logprobs: None,
+            top_logprobs: None,
+            parallel_tool_calls: None,
         }
         .with_models(vec!["a".into(), "b".into()]);
 
@@ -790,5 +1073,175 @@ mod tests {
             .0,
             "nonsense"
         );
+    }
+
+    /// The new wire fields survive a serde round-trip with their values
+    /// intact. This is the cheapest assertion that an old client sending only
+    /// the legacy subset still parses (no required new field), and that a new
+    /// client sending the new fields has them observable on the response.
+    #[test]
+    fn provider_config_round_trips_model_defs_and_per_model_params() {
+        let original = ProviderConfigJson {
+            protocol: Some("anthropic".into()),
+            enabled: true,
+            models: vec!["claude-opus-4-5".into(), "claude-sonnet-4-5".into()],
+            api_key: None,
+            base_url: Some("https://api.example.com/v1".into()),
+            color: None,
+            timeout_seconds: Some(600),
+            max_tokens: Some(8192),
+            context_window: Some(200_000),
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            top_k: Some(40),
+            model_defs: Some(vec![ModelDefJson {
+                id: "claude-opus-4-5".into(),
+                name: Some("Opus 4.5".into()),
+                base_url: None,
+                context_window: Some(200_000),
+                max_output_tokens: Some(32_000),
+                input: Some(ModelInputJson {
+                    text: true,
+                    image: true,
+                }),
+                reasoning: Some(true),
+                thinking_level_map: Some(ThinkingLevelMapJson {
+                    low: Some("low".into()),
+                    medium: Some("medium".into()),
+                    high: Some("high".into()),
+                    ..ThinkingLevelMapJson::default()
+                }),
+                cost: Some(ModelCostJson {
+                    input: Some(15.0),
+                    output: Some(75.0),
+                    cache_read: Some(1.5),
+                    cache_write: Some(18.75),
+                    reasoning: None,
+                    tiers: vec![CostTierJson {
+                        input_tokens_above: 200_000,
+                        input: Some(30.0),
+                        output: Some(150.0),
+                        cache_read: Some(3.0),
+                        cache_write: Some(37.5),
+                    }],
+                }),
+                compat: Some(ModelCompatJson {
+                    supports_cache_control: Some(true),
+                    ..ModelCompatJson::default()
+                }),
+            }]),
+            thinking_level: Some("medium".into()),
+            effort: Some("high".into()),
+            cache_retention: Some("long".into()),
+            service_tier: Some("auto".into()),
+            stop_sequences: Some("\n\nUser:".into()),
+            media_resolution: None,
+            system_prompt_mode: Some("standard".into()),
+            model_behavior: None,
+            metadata_user_id: Some("aleph-operator".into()),
+            response_format: Some(r#"{"type":"text"}"#.into()),
+            stream_idle_timeout_secs: Some(90),
+            frequency_penalty: Some(0.0),
+            presence_penalty: Some(0.0),
+            repeat_penalty: None,
+            seed: Some(42),
+            logprobs: Some(false),
+            top_logprobs: None,
+            parallel_tool_calls: Some(true),
+        };
+
+        let json = serde_json::to_string(&original).expect("serializes");
+        let decoded: ProviderConfigJson = serde_json::from_str(&json).expect("round-trips");
+
+        assert_eq!(decoded.protocol, original.protocol);
+        assert_eq!(decoded.models, original.models);
+        assert_eq!(decoded.context_window, original.context_window);
+        assert_eq!(decoded.cache_retention, original.cache_retention);
+        assert_eq!(decoded.model_defs.as_ref().map(Vec::len), Some(1));
+        let md = &decoded.model_defs.as_ref().unwrap()[0];
+        assert_eq!(md.id, "claude-opus-4-5");
+        assert_eq!(md.context_window, Some(200_000));
+        assert_eq!(
+            md.input.as_ref().map(|i| (i.text, i.image)),
+            Some((true, true))
+        );
+        assert_eq!(
+            md.cost
+                .as_ref()
+                .and_then(|c| c.tiers.first())
+                .map(|t| t.input_tokens_above),
+            Some(200_000)
+        );
+        assert_eq!(decoded.thinking_level.as_deref(), Some("medium"));
+        assert_eq!(decoded.effort.as_deref(), Some("high"));
+        assert_eq!(decoded.stream_idle_timeout_secs, Some(90));
+        assert_eq!(decoded.seed, Some(42));
+    }
+
+    /// A legacy client that only knows the 11 original fields keeps working:
+    /// every new field defaults to `None` and `model_defs` defaults to `None`
+    /// (not an empty Vec — `None` is the "do not touch prior" sentinel the
+    /// server uses, and it must round-trip from "absent" cleanly).
+    #[test]
+    fn legacy_payload_still_parses_with_defaults() {
+        let legacy = r#"{
+            "protocol": "openai",
+            "enabled": true,
+            "models": ["gpt-4o"],
+            "api_key": null,
+            "base_url": null,
+            "color": null,
+            "timeout_seconds": 300,
+            "max_tokens": null,
+            "context_window": 128000,
+            "temperature": null,
+            "top_p": null,
+            "top_k": null
+        }"#;
+        let parsed: ProviderConfigJson = serde_json::from_str(legacy).expect("legacy parses");
+        assert_eq!(parsed.protocol.as_deref(), Some("openai"));
+        assert_eq!(parsed.context_window, Some(128_000));
+        assert!(parsed.model_defs.is_none());
+        assert!(parsed.thinking_level.is_none());
+        assert!(parsed.effort.is_none());
+        assert!(parsed.cache_retention.is_none());
+        assert!(parsed.seed.is_none());
+        assert!(parsed.parallel_tool_calls.is_none());
+    }
+
+    /// `cache_retention` accepts the three documented values and rejects
+    /// anything else — silently mapping unknown strings to `Short` was the
+    /// bug `docs/reference/FEATURE_LOCATOR.md` calls out as the cache-bill
+    /// killer. The helper turns this into an `INVALID_PARAMS`; this test pins
+    /// the wire-layer tolerance.
+    #[test]
+    fn cache_retention_accepts_the_three_documented_values() {
+        for v in ["off", "short", "long"] {
+            let json = format!(r#"{{"models":["a"],"cache_retention":"{v}"}}"#);
+            let parsed: ProviderConfigJson =
+                serde_json::from_str(&json).unwrap_or_else(|e| panic!("{v} parses: {e}"));
+            assert_eq!(parsed.cache_retention.as_deref(), Some(v));
+        }
+    }
+
+    /// Duplicate ids in a single `model_defs` payload pass through the wire
+    /// unchanged — the helper is where the user-visible dedup error lives.
+    /// This test pins the contract: the wire stays honest about what the
+    /// client sent so the helper is the only layer that decides "first
+    /// wins" vs "last wins" vs "reject".
+    #[test]
+    fn model_defs_with_duplicate_ids_is_well_formed() {
+        let payload = r#"{
+            "models": ["a"],
+            "model_defs": [
+                {"id": "a", "context_window": 100000},
+                {"id": "a", "context_window": 200000}
+            ]
+        }"#;
+        let parsed: ProviderConfigJson = serde_json::from_str(payload).expect("parses");
+        let defs = parsed.model_defs.expect("present");
+        assert_eq!(defs.len(), 2);
+        assert_eq!(defs[0].context_window, Some(100_000));
+        assert_eq!(defs[1].context_window, Some(200_000));
     }
 }

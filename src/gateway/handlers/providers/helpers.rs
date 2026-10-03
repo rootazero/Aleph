@@ -5,6 +5,11 @@ use crate::config::{Config, ProviderConfig};
 use crate::gateway::security::SharedTokenManager;
 use crate::providers::presets::get_merged_preset;
 
+use aleph_protocol::providers::{
+    CostTierJson, ModelCompatJson, ModelCostJson, ModelDefJson, ModelInputJson,
+    ThinkingLevelMapJson,
+};
+
 use super::types::{ProviderConfigJson, ProviderInfo};
 
 /// Build the wire row for one configured provider.
@@ -38,6 +43,26 @@ pub(super) fn provider_info_row(
         temperature: cfg.temperature,
         is_default: default_provider.is_some_and(|d| d == name),
         verified: cfg.verified,
+        // Per-model overrides — readback so the Panel can pre-fill accurately.
+        model_defs: cfg.model_defs.iter().map(model_def_to_wire).collect(),
+        thinking_level: cfg.thinking_level.clone(),
+        effort: cfg.effort.clone(),
+        cache_retention: cfg.cache_retention.as_ref().map(cache_retention_to_wire),
+        service_tier: cfg.service_tier.clone(),
+        stop_sequences: cfg.stop_sequences.clone(),
+        media_resolution: cfg.media_resolution.clone(),
+        system_prompt_mode: cfg.system_prompt_mode.clone(),
+        model_behavior: cfg.model_behavior.clone(),
+        metadata_user_id: cfg.metadata_user_id.clone(),
+        response_format: cfg.response_format.as_ref().map(response_format_to_wire),
+        stream_idle_timeout_secs: cfg.stream_idle_timeout_secs,
+        frequency_penalty: cfg.frequency_penalty,
+        presence_penalty: cfg.presence_penalty,
+        repeat_penalty: cfg.repeat_penalty,
+        seed: cfg.seed,
+        logprobs: cfg.logprobs,
+        top_logprobs: cfg.top_logprobs,
+        parallel_tool_calls: cfg.parallel_tool_calls,
     }
     .with_models(cfg.models.clone())
 }
@@ -88,7 +113,7 @@ pub(super) fn build_provider_config_for_persistence(
     params: ProviderConfigJson,
     presets_override: &PresetsOverride,
     prior: Option<&ProviderConfig>,
-) -> ProviderConfig {
+) -> Result<ProviderConfig, String> {
     // api_key is runtime-only (#[serde(skip)]) — kept in memory, never persisted
     let api_key = normalize_optional_string(params.api_key);
 
@@ -178,10 +203,287 @@ pub(super) fn build_provider_config_for_persistence(
     cfg.max_tokens = params.max_tokens;
     cfg.context_window = params.context_window;
     cfg.temperature = params.temperature;
-    cfg.top_p = params.top_p;
-    cfg.top_k = params.top_k;
+    // `top_p` / `top_k` are the only pre-existing scalars absent from
+    // `ProviderInfo` readback, so the Panel can never echo them back and would
+    // otherwise wipe them on every save. Guard them like the new fields below:
+    // an absent DTO value preserves the stored value.
+    if let Some(v) = params.top_p {
+        cfg.top_p = Some(v);
+    }
+    if let Some(v) = params.top_k {
+        cfg.top_k = Some(v);
+    }
+    // New provider-level knobs (added for feat/per-model-params-core). Each is
+    // guarded by `is_some()` so an absent DTO field preserves the prior value
+    // — the same survival guarantee the rest of this helper upholds. The
+    // resulting wire field can't carry "explicitly clear"; that is a known
+    // gap (out of scope per design §5.1) and goes through the config file
+    // when an operator needs it.
+    if let Some(v) = params.thinking_level {
+        cfg.thinking_level = Some(v);
+    }
+    if let Some(v) = params.effort {
+        cfg.effort = Some(v);
+    }
+    if let Some(v) = params.cache_retention {
+        cfg.cache_retention = Some(cache_retention_from_wire(&v)?);
+    }
+    if let Some(v) = params.service_tier {
+        cfg.service_tier = Some(v);
+    }
+    if let Some(v) = params.stop_sequences {
+        cfg.stop_sequences = Some(v);
+    }
+    if let Some(v) = params.media_resolution {
+        cfg.media_resolution = Some(v);
+    }
+    if let Some(v) = params.system_prompt_mode {
+        cfg.system_prompt_mode = Some(v);
+    }
+    if let Some(v) = params.model_behavior {
+        cfg.model_behavior = Some(v);
+    }
+    if let Some(v) = params.metadata_user_id {
+        cfg.metadata_user_id = Some(v);
+    }
+    if let Some(v) = params.response_format {
+        cfg.response_format = Some(response_format_from_wire(&v)?);
+    }
+    if let Some(v) = params.stream_idle_timeout_secs {
+        cfg.stream_idle_timeout_secs = Some(v);
+    }
+    if let Some(v) = params.frequency_penalty {
+        cfg.frequency_penalty = Some(v);
+    }
+    if let Some(v) = params.presence_penalty {
+        cfg.presence_penalty = Some(v);
+    }
+    if let Some(v) = params.repeat_penalty {
+        cfg.repeat_penalty = Some(v);
+    }
+    if let Some(v) = params.seed {
+        cfg.seed = Some(v);
+    }
+    if let Some(v) = params.logprobs {
+        cfg.logprobs = Some(v);
+    }
+    if let Some(v) = params.top_logprobs {
+        cfg.top_logprobs = Some(v);
+    }
+    if let Some(v) = params.parallel_tool_calls {
+        cfg.parallel_tool_calls = Some(v);
+    }
+    // Per-model overrides: `None` keeps prior (default branch above already
+    // left it alone); `Some(vec)` replaces, with `Some(vec![])` clearing.
+    if let Some(defs) = params.model_defs {
+        cfg.model_defs = dedup_model_defs(defs.into_iter().map(model_def_from_wire))?;
+    }
     // Any edit invalidates a previous connectivity check.
     cfg.verified = false;
 
-    cfg
+    Ok(cfg)
 }
+
+// ---- Wire <-> core conversions for the per-model fields added in this commit.
+//
+// These exist on the helper side (not in `aleph_protocol`) because the wire
+// types live in the protocol crate which cannot depend on alephcore. Mapping
+// keeps the wire shape stable: adding a field to the core type does not
+// require a matching wire change, and adding a wire field does not require
+// editing every consumer.
+
+// ---------------------------------------------------------------------------
+// cache_retention
+// ---------------------------------------------------------------------------
+
+fn cache_retention_to_wire(v: &CacheRetentionCore) -> String {
+    match v {
+        CacheRetentionCore::Off => "off".to_string(),
+        CacheRetentionCore::Short => "short".to_string(),
+        CacheRetentionCore::Long => "long".to_string(),
+    }
+}
+
+fn cache_retention_from_wire(s: &str) -> Result<CacheRetentionCore, String> {
+    match s {
+        "off" => Ok(CacheRetentionCore::Off),
+        "short" => Ok(CacheRetentionCore::Short),
+        "long" => Ok(CacheRetentionCore::Long),
+        other => Err(format!(
+            "invalid cache_retention {other:?}: expected one of \"off\", \"short\", \"long\""
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// response_format — the wire keeps the editor simple as a JSON string; the
+// core uses an enum. Round-trip is exact for the text/json_object forms.
+// ---------------------------------------------------------------------------
+
+fn response_format_to_wire(_v: &ResponseFormatCore) -> String {
+    // Serialised JSON string from the core enum. The wire carries a plain
+    // string today so the Panel editor does not have to render a tagged enum.
+    serde_json::to_string(_v).unwrap_or_default()
+}
+
+fn response_format_from_wire(s: &str) -> Result<ResponseFormatCore, String> {
+    serde_json::from_str::<ResponseFormatCore>(s)
+        .map_err(|e| format!("invalid response_format {s:?}: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// ModelDef <-> ModelDefJson
+// ---------------------------------------------------------------------------
+
+fn model_def_to_wire(d: &ModelDefCore) -> ModelDefJson {
+    ModelDefJson {
+        id: d.id.clone(),
+        name: d.name.clone(),
+        base_url: d.base_url.clone(),
+        context_window: d.context_window,
+        max_output_tokens: d.max_output_tokens,
+        input: d.input.as_ref().map(|i| ModelInputJson {
+            text: i.text,
+            image: i.image,
+        }),
+        reasoning: d.reasoning,
+        thinking_level_map: d.thinking_level_map.as_ref().map(|m| ThinkingLevelMapJson {
+            off: m.off.clone(),
+            minimal: m.minimal.clone(),
+            low: m.low.clone(),
+            medium: m.medium.clone(),
+            high: m.high.clone(),
+            xhigh: m.xhigh.clone(),
+            max: m.max.clone(),
+        }),
+        cost: d.cost.as_ref().map(|c| ModelCostJson {
+            input: c.input,
+            output: c.output,
+            cache_read: c.cache_read,
+            cache_write: c.cache_write,
+            reasoning: c.reasoning,
+            tiers: c
+                .tiers
+                .iter()
+                .map(|t| CostTierJson {
+                    input_tokens_above: t.input_tokens_above,
+                    input: t.input,
+                    output: t.output,
+                    cache_read: t.cache_read,
+                    cache_write: t.cache_write,
+                })
+                .collect(),
+        }),
+        compat: d.compat.as_ref().map(|k| ModelCompatJson {
+            uses_max_completion_tokens: k.uses_max_completion_tokens,
+            forbids_sampling_params: k.forbids_sampling_params,
+            temperature_policy: k.temperature_policy.clone(),
+            supports_cache_control: k.supports_cache_control,
+            supports_reasoning_effort: k.supports_reasoning_effort,
+            requires_object_properties: k.requires_object_properties,
+            requires_derefed_refs: k.requires_derefed_refs,
+            supports_prompt_cache: k.supports_prompt_cache,
+            thinking_format: k.thinking_format.clone(),
+            vendor_behavior_profile: k.vendor_behavior_profile.clone(),
+        }),
+    }
+}
+
+fn model_def_from_wire(d: ModelDefJson) -> Result<ModelDefCore, String> {
+    let id = d.id.trim().to_string();
+    if id.is_empty() {
+        return Err("model_defs entry has empty `id`".to_string());
+    }
+    if let Some(cw) = d.context_window {
+        if cw == 0 {
+            return Err(format!("model_defs[{id}].context_window must be > 0"));
+        }
+    }
+    if let Some(mot) = d.max_output_tokens {
+        if mot == 0 {
+            return Err(format!("model_defs[{id}].max_output_tokens must be > 0"));
+        }
+    }
+    Ok(ModelDefCore {
+        id,
+        name: d.name,
+        base_url: d.base_url,
+        context_window: d.context_window,
+        max_output_tokens: d.max_output_tokens,
+        input: d.input.map(|i| ModelInputCore {
+            text: i.text,
+            image: i.image,
+        }),
+        reasoning: d.reasoning,
+        thinking_level_map: d.thinking_level_map.map(|m| ThinkingLevelMapCore {
+            off: m.off,
+            minimal: m.minimal,
+            low: m.low,
+            medium: m.medium,
+            high: m.high,
+            xhigh: m.xhigh,
+            max: m.max,
+        }),
+        cost: d.cost.map(|c| ModelCostCore {
+            input: c.input,
+            output: c.output,
+            cache_read: c.cache_read,
+            cache_write: c.cache_write,
+            reasoning: c.reasoning,
+            tiers: c
+                .tiers
+                .into_iter()
+                .map(|t| CostTierCore {
+                    input_tokens_above: t.input_tokens_above,
+                    input: t.input,
+                    output: t.output,
+                    cache_read: t.cache_read,
+                    cache_write: t.cache_write,
+                })
+                .collect(),
+        }),
+        compat: d.compat.map(|k| ModelCompatCore {
+            uses_max_completion_tokens: k.uses_max_completion_tokens,
+            forbids_sampling_params: k.forbids_sampling_params,
+            temperature_policy: k.temperature_policy,
+            supports_cache_control: k.supports_cache_control,
+            supports_reasoning_effort: k.supports_reasoning_effort,
+            requires_object_properties: k.requires_object_properties,
+            requires_derefed_refs: k.requires_derefed_refs,
+            supports_prompt_cache: k.supports_prompt_cache,
+            thinking_format: k.thinking_format,
+            vendor_behavior_profile: k.vendor_behavior_profile,
+        }),
+    })
+}
+
+/// Drop entries that share an `id` with a previous one. The spec says
+/// "per-id dedup"; we keep the FIRST occurrence so an operator who adds an
+/// override in the Panel does not lose it because a stale read also carried
+/// an entry. This is the helper side of the wire-roundtrip test that
+/// confirms both copies survive the wire layer.
+fn dedup_model_defs(
+    defs: impl IntoIterator<Item = Result<ModelDefCore, String>>,
+) -> Result<Vec<ModelDefCore>, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for d in defs {
+        let d = d?;
+        if seen.insert(d.id.clone()) {
+            out.push(d);
+        }
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Local aliases for the core types so the conversions above stay readable.
+// Keeping the imports at the top of the file would shadow the wire-side
+// `ModelDefJson` / `ModelCostJson` etc. with the core-side names; this type
+// alias block makes the wire-side names the canonical ones in this file.
+// ---------------------------------------------------------------------------
+use crate::config::types::provider::{
+    CacheRetention as CacheRetentionCore, CostTier as CostTierCore, ModelCompat as ModelCompatCore,
+    ModelCost as ModelCostCore, ModelDef as ModelDefCore, ModelInput as ModelInputCore,
+    ResponseFormat as ResponseFormatCore, ThinkingLevelMap as ThinkingLevelMapCore,
+};

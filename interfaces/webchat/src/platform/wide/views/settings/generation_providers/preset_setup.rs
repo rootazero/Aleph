@@ -75,7 +75,10 @@ pub(super) fn PresetSetupPanel(
                 },
                 enabled: true,
                 color: color.clone(),
-                capabilities: capabilities.iter().map(|c| c.as_str().to_string()).collect(),
+                capabilities: capabilities
+                    .iter()
+                    .map(|c| c.as_str().to_string())
+                    .collect(),
                 // A preset knows the endpoint, not the operator's patience.
                 // `None` lets the provider's own tuned default stand instead of
                 // pinning every preset-created provider to a generic 120 s.

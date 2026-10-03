@@ -150,12 +150,15 @@ async fn update_provider_inner(
         // stop_sequences, thinking_level, service_tier, effort, …) survive an
         // edit to an unrelated field.
         let prior = cfg.providers.get(&params.name).cloned();
-        let mut provider_config = build_provider_config_for_persistence(
+        let mut provider_config = match build_provider_config_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override,
             prior.as_ref(),
-        );
+        ) {
+            Ok(cfg) => cfg,
+            Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+        };
 
         // Store new API key in vault if provided; otherwise vault retains the old one
         if let Some(ref api_key) = provider_config.api_key {
@@ -285,12 +288,15 @@ async fn create_provider_inner(
         // Convert JSON config to ProviderConfig. `create` has no prior entry
         // (the guard above rejects an existing name), so there is nothing to
         // carry forward.
-        let mut provider_config = build_provider_config_for_persistence(
+        let mut provider_config = match build_provider_config_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override,
             None,
-        );
+        ) {
+            Ok(cfg) => cfg,
+            Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+        };
 
         // Store API key in vault (then clear from config so it's never persisted)
         if let Some(ref api_key) = provider_config.api_key {
