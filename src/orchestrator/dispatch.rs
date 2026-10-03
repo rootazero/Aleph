@@ -1194,6 +1194,11 @@ impl Orchestrator {
         // SQLite session. Pinned by
         // `hook_transcripts::tests::the_harness_spawn_carries_the_transcript_source`.
         let transcripts = crate::extension::hooks::current_transcript_source();
+        // These run-wide task-locals are published by `run_agent_loop` but do
+        // not cross the harness spawn boundary unless captured and re-scoped.
+        let exec_workspace = crate::sandbox::context::current_exec_workspace();
+        let fs_scope = crate::tools::fs_scope::current();
+        let pending_media = crate::gateway::media::current_pending_media();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -1247,31 +1252,40 @@ impl Orchestrator {
                 crate::projects::with_project_root(
                     // rust-doctor-disable-next-line excessive-clone
                     workspace_override.clone(),
-                    crate::scope::with_scope(
-                        scope_attr,
-                        crate::scope::with_room_author(
-                            room_author,
-                            crate::tools::turn_context::with_originator(
-                                originator,
-                                crate::extension::hooks::with_transcript_source(
-                                    transcripts,
-                                    harness.run(
-                                        session_key,
-                                        spec_clone,
-                                        input_clone,
-                                        sandbox_clone,
-                                        event_tx,
-                                        cancel_clone,
-                                        tool_service_override,
-                                        trace_sink,
-                                        interaction_manifest,
-                                        workspace_override,
-                                        max_iterations_override,
-                                        transient_context,
-                                        think_level,
-                                        envelope,
-                                        model_directive,
-                                        run_id,
+                    crate::sandbox::context::with_exec_workspace(
+                        exec_workspace,
+                        crate::tools::fs_scope::with_fs_scope(
+                            fs_scope,
+                            crate::scope::with_scope(
+                                scope_attr,
+                                crate::scope::with_room_author(
+                                    room_author,
+                                    crate::tools::turn_context::with_originator(
+                                        originator,
+                                        crate::gateway::media::with_pending_media(
+                                            pending_media,
+                                            crate::extension::hooks::with_transcript_source(
+                                                transcripts,
+                                                harness.run(
+                                                    session_key,
+                                                    spec_clone,
+                                                    input_clone,
+                                                    sandbox_clone,
+                                                    event_tx,
+                                                    cancel_clone,
+                                                    tool_service_override,
+                                                    trace_sink,
+                                                    interaction_manifest,
+                                                    workspace_override,
+                                                    max_iterations_override,
+                                                    transient_context,
+                                                    think_level,
+                                                    envelope,
+                                                    model_directive,
+                                                    run_id,
+                                                ),
+                                            ),
+                                        ),
                                     ),
                                 ),
                             ),
@@ -1401,6 +1415,77 @@ mod outcome_tests {
              press the button) and the room narrowing in \
              `approval_addressable_by_caller`."
         );
+    }
+
+    /// The gateway's run context must survive the harness `tokio::spawn`.
+    /// Each row pins all three links: gateway publication, pre-spawn capture,
+    /// and re-scoping around `harness.run`.
+    #[test]
+    fn the_harness_spawn_carries_gateway_run_context() {
+        use crate::utils::source_scan::production_code_text;
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let dispatch_path = std::path::Path::new("src/orchestrator/dispatch.rs");
+        let dispatch = production_code_text(
+            dispatch_path,
+            &std::fs::read_to_string(root.join(dispatch_path)).unwrap(),
+        );
+        let run_loop_path = std::path::Path::new("src/gateway/execution_engine/run_loop/mod.rs");
+        let run_loop = production_code_text(
+            run_loop_path,
+            &std::fs::read_to_string(root.join(run_loop_path)).unwrap(),
+        );
+
+        let dispatch_at = dispatch
+            .find("pub async fn dispatch(")
+            .expect("the harness dispatch is where it was");
+        let spawn_at = dispatch_at
+            + dispatch[dispatch_at..]
+                .find("tokio::spawn(async move {")
+                .expect("dispatch spawns the harness");
+        let pre_spawn = &dispatch[dispatch_at..spawn_at];
+        let spawned = &dispatch[spawn_at..];
+        let harness_at = spawned
+            .find("harness.run(")
+            .expect("the spawned task runs the harness");
+        let harness_scope = &spawned[..harness_at];
+        let contains = |haystack: &str, needle: &str| {
+            haystack
+                .split_whitespace()
+                .collect::<String>()
+                .contains(&needle.split_whitespace().collect::<String>())
+        };
+
+        for (publisher, capture, wrapper) in [
+            (
+                "with_exec_workspace(",
+                "let exec_workspace = crate::sandbox::context::current_exec_workspace();",
+                "with_exec_workspace(exec_workspace,",
+            ),
+            (
+                "with_fs_scope(",
+                "let fs_scope = crate::tools::fs_scope::current();",
+                "with_fs_scope(fs_scope,",
+            ),
+            (
+                "with_pending_media(",
+                "let pending_media = crate::gateway::media::current_pending_media();",
+                "with_pending_media(pending_media,",
+            ),
+        ] {
+            assert!(
+                contains(&run_loop, publisher),
+                "run_agent_loop no longer publishes `{publisher}`"
+            );
+            assert!(
+                contains(pre_spawn, capture),
+                "dispatch must capture `{capture}` before tokio::spawn"
+            );
+            assert!(
+                contains(harness_scope, wrapper),
+                "the harness spawn must re-scope the captured value via `{wrapper}`"
+            );
+        }
     }
 
     /// Every terminate token this enum can produce has words on the terminal
