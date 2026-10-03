@@ -150,7 +150,7 @@ sensitive = true
 
 | status | 含义 | 补救 |
 |--------|------|------|
-| `loaded` | 活跃，capability 对模型可见 | — |
+| `loaded` | 活跃，capability 对模型可见（`PluginStatus::Loaded`） | — |
 | `disabled` | operator 关掉了（`plugins.toml`）；或 `origin: claude_cache`（Claude Code 装的，`plugins.toml` 里没有显式 enable 就是关，`status_detail` 写明「installed by Claude Code … not enabled in Aleph」）| `al plugin enable <name>` 或 Panel 插件开关（同一个 `plugins.enable` RPC，按 registry 解析 id，任何 origin 都认）；离线 `aleph-server plugin enable <name>` 同样认得 Claude Code 装的 id。`claude_cache` 行**模型不能启用**（`plugin_manage` 拒绝并给出上面的人类命令），只能禁用 |
 | `error` | manifest 解析失败 / mount 的某一步失败（`<step>: <reason>`，已整体回滚）/ 声明的 MCP server 启动失败（`mcp:<server_id>: <reason>`，插件仍在 mount 状态）| `status_detail` 给出原因 |
 | `blocked` | owner trust policy 拒绝了它 | `plugin_manage(action='trust', name=…)` |

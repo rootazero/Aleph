@@ -1194,6 +1194,38 @@ impl Orchestrator {
         // SQLite session. Pinned by
         // `hook_transcripts::tests::the_harness_spawn_carries_the_transcript_source`.
         let transcripts = crate::extension::hooks::current_transcript_source();
+        // Sixth capture at the same boundary: the run's authorised exec root.
+        // Published run-tree-wide by `run_agent_loop` (`gateway/execution_engine
+        // /run_loop/mod.rs`); `bash` and `code_exec` read it via
+        // `sandbox::context::current_exec_workspace()` to set the child's cwd
+        // and to derive the `writable_roots` it jails the session to. Without
+        // this carry the gateway-owned value dies here and every shell call
+        // spawned from inside the run lands in `workspaces/<hash(session)>` 
+        // an empty hash directory  and every absolute path into the real
+        // project is refused "cwd outside workspace root". Distinct from
+        // `workspace_override` (an explicit arg to `harness.run` for CWD +
+        // prompt context) and from `with_project_root` (the per-project memory
+        // seam): the sandbox judges paths against this one, not against either
+        // of those. Pinned by
+        // `outcome_tests::the_harness_spawn_carries_exec_workspace_fs_scope_pending_media`.
+        let exec_workspace = crate::sandbox::context::current_exec_workspace();
+        // Seventh capture at the same boundary: the per-run `FsScope`
+        // (`<workspace>/output/documents` base for normal runs, the worktree
+        // root with the parent-repo rebase for worktree-isolated agents).
+        // File tools consult it at their single path-resolution chokepoint,
+        // and a lost scope reads exactly like the pre-scope behaviour 
+        // relative paths silently escape the run's workspace artifact dir
+        // into the shared `ToolContextHandle`. Pinned by the same guard.
+        let fs_scope = crate::tools::fs_scope::current();
+        // Eighth capture at the same boundary: the run's channel-delivery
+        // buffer, published next to `originator` in `run_agent_loop` so the
+        // tool chokepoint's media-harvest can reach it without it being
+        // threaded through every `ToolService` construction. Without this,
+        // only the slash fast path (which holds the buffer directly) could
+        // ever deliver media to a channel  a model-initiated
+        // `media_send` / `image_generate` reached the artifact pane and
+        // stopped there. Pinned by the same guard.
+        let pending_media = crate::gateway::media::current_pending_media();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -1247,15 +1279,34 @@ impl Orchestrator {
                 crate::projects::with_project_root(
                     // rust-doctor-disable-next-line excessive-clone
                     workspace_override.clone(),
-                    crate::scope::with_scope(
-                        scope_attr,
-                        crate::scope::with_room_author(
-                            room_author,
-                            crate::tools::turn_context::with_originator(
-                                originator,
-                                crate::extension::hooks::with_transcript_source(
-                                    transcripts,
-                                    harness.run(
+                    // Re-establish the run's authorised exec root: the
+                    // outer-most layer, because every layer below it
+                    // (file tools, command tools, the sandbox itself)
+                    // reads `current_exec_workspace()` to derive cwd /
+                    // writable roots / jail anchor. Published `None` is
+                    // published positively  same shadowing rule as
+                    // `with_project_root`  so a nested run cannot leak
+                    // an outer run's workspace into this one.
+                    crate::sandbox::context::with_exec_workspace(
+                        exec_workspace,
+                        // Re-establish the per-run filesystem scope: file
+                        // tools prefer it over the shared
+                        // `ToolContextHandle`, so a concurrent run
+                        // rewriting the handle mid-run no longer redirects
+                        // THIS run's relative-path writes.
+                        crate::tools::fs_scope::with_fs_scope(
+                            fs_scope,
+                            crate::scope::with_scope(
+                                scope_attr,
+                                crate::scope::with_room_author(
+                                    room_author,
+                                    crate::tools::turn_context::with_originator(
+                                        originator,
+                                        crate::gateway::media::with_pending_media(
+                                            pending_media,
+                                            crate::extension::hooks::with_transcript_source(
+                                                transcripts,
+                                                harness.run(
                                         session_key,
                                         spec_clone,
                                         input_clone,
@@ -1272,6 +1323,9 @@ impl Orchestrator {
                                         envelope,
                                         model_directive,
                                         run_id,
+                                                ),
+                                            ),
+                                        ),
                                     ),
                                 ),
                             ),
@@ -1485,6 +1539,112 @@ mod outcome_tests {
         );
     }
 
+
+    /// The harness spawn must re-establish `EXEC_WORKSPACE`, `FS_SCOPE` and
+    /// `PENDING_MEDIA`. Source-level for the same reason as its two siblings
+    /// (`the_harness_spawn_reestablishes_the_run_tree_originator` and
+    /// `the_harness_spawn_carries_the_transcript_source`): a lost task-local
+    /// reads exactly like a run that never had one (both are `None`), so a
+    /// runtime-only guard inside one process sees nothing wrong while every
+    /// caller downstream reads `None`.
+    ///
+    /// The three are grouped into ONE guard because they share a failure mode
+    /// (a `tokio::spawn` boundary that does not re-seed task-locals published
+    /// on the run-tree side) and a single fix (the same boundary re-seeding all
+    /// three). Pinning them together means the fix that resolves one resolves
+    /// all three, and a fix that breaks one is caught by the same red.
+    #[test]
+    fn the_harness_spawn_carries_exec_workspace_fs_scope_pending_media() {
+        use crate::utils::source_scan::{code_text, production_text};
+
+        let rel = "src/orchestrator/dispatch.rs";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        let code = code_text(&production_text(
+            std::path::Path::new(rel),
+            &std::fs::read_to_string(&path).unwrap(),
+        ));
+
+        let dispatch_at = code
+            .find("pub async fn dispatch(")
+            .expect("the harness dispatch is where it was");
+        let spawn_at = dispatch_at
+            + code[dispatch_at..]
+                .find("tokio::spawn(")
+                .expect("dispatch spawns the harness");
+        let open = spawn_at + "tokio::spawn".len();
+        let mut depth = 0usize;
+        let close = code[open..]
+            .char_indices()
+            .find_map(|(i, c)| {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(open + i)
+            })
+            .expect("balanced parentheses");
+
+        // Whitespace-free, so the checks below read the shape, not the layout.
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+
+        // Each of the three task-locals must be (a) captured BEFORE the spawn
+        // and (b) re-scoped AROUND the spawned harness run. Reading only the
+        // form (a) would also pass `with_exec_workspace(None, ..)`, which is
+        // the literal the historical bug used.
+        let pre_spawn = squash(&code[dispatch_at..spawn_at]);
+        assert!(
+            pre_spawn.contains("letexec_workspace=crate::sandbox::context::current_exec_workspace();"),
+            "{rel}: dispatch reads `current_exec_workspace()` before the spawn"
+        );
+        assert!(
+            pre_spawn.contains("letfs_scope=crate::tools::fs_scope::current();"),
+            "{rel}: dispatch reads `fs_scope::current()` before the spawn"
+        );
+        assert!(
+            pre_spawn.contains("letpending_media=crate::gateway::media::current_pending_media();"),
+            "{rel}: dispatch reads `current_pending_media()` before the spawn"
+        );
+
+        let spawned = squash(&code[open..close]);
+        // The CAPTURED value, not merely a call: `with_exec_workspace(None, ..)`
+        // would keep the call and lose the value. The CAPTURED NAME
+        // (`exec_workspace`, `fs_scope`, `pending_media`) is the only thing
+        // that proves that.
+        assert!(
+            spawned.contains("with_exec_workspace(exec_workspace,"),
+            "{rel}: the captured exec workspace is re-scoped around the spawned harness run"
+        );
+        assert!(
+            spawned.contains("with_fs_scope(fs_scope,"),
+            "{rel}: the captured fs scope is re-scoped around the spawned harness run"
+        );
+        assert!(
+            spawned.contains("with_pending_media(pending_media,"),
+            "{rel}: the captured pending media is re-scoped around the spawned harness run"
+        );
+
+        // Cross-reference: the gateway side really does publish these three
+        // task-locals, so the carry here is not duplicating an empty value.
+        // Same shape as the originator guard's `with_originator(` needle.
+        let run_loop = squash(&std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src/gateway/execution_engine/run_loop/mod.rs"),
+        )
+        .unwrap());
+        assert!(
+            run_loop.contains("with_exec_workspace("),
+            "run_agent_loop no longer scopes EXEC_WORKSPACE; this guard is now              describing a requirement that does not exist — delete it or              follow the task-local to its new home"
+        );
+        assert!(
+            run_loop.contains("with_fs_scope("),
+            "run_agent_loop no longer scopes FS_SCOPE; this guard is now              describing a requirement that does not exist — delete it or              follow the task-local to its new home"
+        );
+        assert!(
+            run_loop.contains("with_pending_media("),
+            "run_agent_loop no longer scopes PENDING_MEDIA; this guard is now              describing a requirement that does not exist — delete it or              follow the task-local to its new home"
+        );
+    }
     #[test]
     fn flow_outcome_default_is_completed_clean_run() {
         let outcome = FlowOutcome::default();
