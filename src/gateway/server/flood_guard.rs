@@ -77,7 +77,7 @@ mod tests {
     }
 
     #[test]
-    fn default_budget_matches_openclaw() {
+    fn default_budget_is_ten_strikes() {
         assert_eq!(MAX_UNAUTHORIZED_STRIKES, 10);
     }
 }

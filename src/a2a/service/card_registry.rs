@@ -39,12 +39,7 @@ impl CardRegistry {
             let trust_level = entry
                 .trust_level
                 .as_deref()
-                .and_then(|s| match s {
-                    "local" => Some(TrustLevel::Local),
-                    "trusted" => Some(TrustLevel::Trusted),
-                    "public" => Some(TrustLevel::Public),
-                    _ => None,
-                })
+                .and_then(|s| serde_json::from_str::<TrustLevel>(&format!("\"{s}\"")).ok())
                 .unwrap_or_else(|| TrustLevel::infer_from_url(&entry.url));
 
             let slug = slug_from_name(&entry.name);

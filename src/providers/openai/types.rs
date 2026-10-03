@@ -164,9 +164,6 @@ pub struct OpenAiFunction {
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenAiToolCall {
     pub id: String,
-    #[serde(rename = "type")]
-    #[allow(dead_code)] // deserialized from API, not read
-    pub call_type: Option<String>,
     pub function: OpenAiFunctionCall,
 }
 

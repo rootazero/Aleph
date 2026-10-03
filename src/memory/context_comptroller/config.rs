@@ -1,23 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ComptrollerConfig {
-    /// Similarity threshold for redundancy detection (default: 0.95)
-    pub similarity_threshold: f32,
-
-    /// Token budget (default: 100000)
-    pub token_budget: usize,
-
-    /// Fold threshold - remaining % to trigger compression (default: 0.2)
-    pub fold_threshold: f32,
-}
-
-impl Default for ComptrollerConfig {
-    fn default() -> Self {
-        Self {
-            similarity_threshold: 0.95,
-            token_budget: 100000,
-            fold_threshold: 0.2,
-        }
-    }
-}
+/// Configuration handle for [`ContextComptroller`].
+///
+/// All knobs previously listed here (`similarity_threshold`, `token_budget`,
+/// `fold_threshold`) were dead data: the comptroller's [`arbitrate`] method
+/// receives a per-call [`TokenBudget`] instead, and similarity/fold dedup was
+/// never wired. The struct is kept as a serialized config handle so callers
+/// (and downstream consumers of the serialized form) do not churn; once those
+/// knobs are actually implemented, add them back here with `#[serde(default)]`
+/// so older configs still deserialize cleanly.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ComptrollerConfig {}

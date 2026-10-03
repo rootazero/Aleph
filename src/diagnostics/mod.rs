@@ -107,6 +107,7 @@ impl DiagnosticEngine {
             Arc::new(checks::LoopGraphCheck::new(data_dir.clone())),
             Arc::new(checks::CacheHealthCheck::new(data_dir.clone())),
             Arc::new(checks::CacheHitRateCheck::new(data_dir.clone())),
+            Arc::new(checks::FoldEconomicsCheck::new(data_dir.clone())),
             Arc::new(checks::StaleLockCheck::new(data_dir.clone())),
             Arc::new(checks::SqliteIntegrityCheck::new(data_dir.clone())),
             Arc::new(checks::DiskSpaceCheck::new(data_dir)),

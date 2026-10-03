@@ -43,6 +43,16 @@ pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 4_000;
 /// what was asked only turns one read into several.
 pub const MAX_RESULT_BUDGET_TOKENS: usize = 8_000;
 
+/// Default number of error-line previews that [`inline_error_digest`]
+/// inlines before the persist marker, sized for [`DEFAULT_RESULT_BUDGET_TOKENS`].
+/// Larger budgets never raise the cap; see [`scale_to_budget`].
+const INLINE_ERROR_DIGEST_DEFAULT_LINES: usize = 8;
+
+/// Minimum number of error-line previews regardless of budget, so a
+/// sub-default budget still names the failure rather than dropping the preview
+/// silently. Floor for [`scale_to_budget`].
+const INLINE_ERROR_DIGEST_FLOOR_LINES: usize = 2;
+
 /// Process-wide ceiling on every per-result budget, installed at boot from the
 /// model's usable window (`turn_budget::budget_for_window`). Absent = no
 /// ceiling, which is exactly today's behavior.
@@ -199,21 +209,29 @@ pub(crate) fn resolve_result_budget_under(
     )
 }
 
-/// The read family: the tool whose result is exactly the window the model
-/// asked for (`offset` / `limit`). Layer 2 gives it no budget of its own — it
-/// is never offloaded there, because the only way back from an offloaded read
-/// is another read — and bounds it by [`read_backstop_tokens`] instead. The
-/// per-turn spill does NOT exempt it: a turn's reads still have to fit the
+/// The read family: the tools whose result is exactly the window the model
+/// asked for. Layer 2 gives them no budget of their own — they are never
+/// offloaded there, because the only way back from an offloaded read is
+/// another read — and bounds them by [`read_backstop_tokens`] instead. The
+/// per-turn spill does NOT exempt them: a turn's reads still have to fit the
 /// window, and a spilled read is persisted and indexed, so it is a re-read,
 /// not a loss.
 ///
-/// One name: the builtin `file_read`. Nothing registers or aliases a tool as
-/// `read_file` / `Read` (MCP tools arrive qualified `server__tool`), so those
-/// spellings, which this list used to carry, matched no call.
+/// Two names:
+/// - `file_read` — the window is the `offset` / `limit` the model named.
+/// - `session_decompress` — the window is a fold's span (Context Fabric spec
+///   2026-10-01 §3.1b). Same invariant, one level up: it is the ONLY way back
+///   from a folded span, so offloading its result would be circular in
+///   exactly the way the paragraph above names.
+///
+/// Nothing registers or aliases a tool as `read_file` / `Read` (MCP tools
+/// arrive qualified `server__tool`), so those spellings, which this list used
+/// to carry, matched no call.
 #[must_use]
 pub(crate) fn is_read_family(tool_name: &str) -> bool {
     use crate::tools::AlephTool;
     tool_name == <crate::builtin_tools::FileReadTool as AlephTool>::NAME
+        || tool_name == <crate::builtin_tools::SessionDecompressTool as AlephTool>::NAME
 }
 
 tokio::task_local! {
@@ -1070,7 +1088,13 @@ fn inline_error_digest(text: &str, budget_tokens: Option<usize>) -> Option<Strin
     if digest.error_count == 0 {
         return None;
     }
-    let cap = budget_tokens.map_or(8, |b| crate::tool_output::scale_to_budget(8, 2, b));
+    let cap = budget_tokens.map_or(INLINE_ERROR_DIGEST_DEFAULT_LINES, |b| {
+        crate::tool_output::scale_to_budget(
+            INLINE_ERROR_DIGEST_DEFAULT_LINES,
+            INLINE_ERROR_DIGEST_FLOOR_LINES,
+            b,
+        )
+    });
     Some(digest.render(cap))
 }
 
@@ -2265,5 +2289,26 @@ mod tests {
         );
         // Slicing stays on char boundaries (no panic, valid UTF-8 out).
         assert!(out.chars().count() > 0);
+    }
+
+    /// Guard for the read family's membership (Context Fabric spec 2026-10-01
+    /// §3.1b): `file_read` and `session_decompress` are BOTH verbatim-recall
+    /// tools — their result IS the window the model asked for, so Layer 2
+    /// never offloads it ("the only way back from an offloaded read is another
+    /// read"). A refactor that drops either name reintroduces the circular
+    /// offload this family exists to prevent.
+    #[test]
+    fn verbatim_family_includes_both_tools() {
+        use crate::tools::AlephTool;
+        assert!(is_read_family(
+            <crate::builtin_tools::FileReadTool as AlephTool>::NAME
+        ));
+        assert!(is_read_family(
+            <crate::builtin_tools::SessionDecompressTool as AlephTool>::NAME
+        ));
+        // …and the boundary still means something: an offloading-family tool
+        // is not silently absorbed.
+        assert!(!is_read_family("ctx_search"));
+        assert!(!is_read_family("bash"));
     }
 }

@@ -150,15 +150,6 @@ impl ReadSkillTool {
         self
     }
 
-    /// Check a skill's inline commands against `consent` instead of the
-    /// process-wide registry (a test's own file).
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
-        self.consent = Some(consent);
-        self
-    }
-
     /// Where `skill_read` would load `skill_id` from, in a run whose project
     /// is `project_dir` (and whose agent id task-local is in scope): every
     /// candidate directory, the one it reads first. Named so the `/<skill>`
@@ -218,15 +209,6 @@ impl ReadSkillTool {
         hits
     }
 
-    /// Read the first `name:` frontmatter line from `<skill_dir>/SKILL.md`
-    /// and return the same slug the registry uses (lowercase, spaces → `-`).
-    /// Returns `None` for any I/O / parse failure so the caller can simply
-    /// skip that directory instead of erroring out of the whole lookup.
-    #[allow(dead_code)]
-    fn skill_md_slug(skill_dir: &std::path::Path) -> Option<String> {
-        slug_from_skill_md(skill_dir)
-    }
-
     /// Validate `skill_id` to prevent path traversal attacks
     fn validate_skill_id(&self, skill_id: &str) -> std::result::Result<(), ToolError> {
         // Check for empty
@@ -277,7 +259,7 @@ impl ReadSkillTool {
                 std::path::Component::ParentDir => {
                     return Err(ToolError::InvalidArgs(
                         "invalid file_name: traversal via '..' is not allowed".into(),
-                    ))
+                    ));
                 }
                 std::path::Component::Normal(seg) => {
                     if seg.to_string_lossy().starts_with('.') {
@@ -289,7 +271,7 @@ impl ReadSkillTool {
                 _ => {
                     return Err(ToolError::InvalidArgs(
                         "file_name contains an invalid path component".into(),
-                    ))
+                    ));
                 }
             }
         }

@@ -124,6 +124,54 @@ impl StrategyStore {
             .map_err(|e| AlephError::other(format!("strategy delete: {e}")))?;
         Ok(())
     }
+
+    /// Remove every row scoped to `session_id` — the explicit-flow rows
+    /// (`goal_key`, `loop_key`) AND the naked-loop row (`session_key`) in
+    /// a single transaction. Without this primitive the explicit flows
+    /// have a delete path (`store.delete(&goal_key(...))`) but the
+    /// session-scoped rows leak across restarts and get welded into the next
+    /// session that happens to reuse the id, pinning a stale objective
+    /// into the prompt.
+    ///
+    /// The team-scoped row (`team_key`) is NOT touched here — team
+    /// membership outlives any single session; use [`Self::delete_for_team`]
+    /// when the team itself is torn down.
+    pub fn delete_for_session(&self, session_id: &str) -> anyhow::Result<usize> {
+        let conn = self.lock();
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::other(format!("strategy delete_for_session: {e}")))?;
+        let mut total = 0usize;
+        for prefix in ["goal:", "loop:", "session:"] {
+            let key = format!("{prefix}{session_id}");
+            let rows = tx
+                .execute(
+                    "DELETE FROM strategies WHERE key = ?1",
+                    rusqlite::params![key],
+                )
+                .map_err(|e| AlephError::other(format!("strategy delete_for_session: {e}")))?;
+            total += rows;
+        }
+        tx.commit()
+            .map_err(|e| AlephError::other(format!("strategy delete_for_session commit: {e}")))?;
+        Ok(total)
+    }
+
+    /// Remove the team-scoped row (`team_key`). Team-scoped strategies
+    /// are welded into every member's prompt at broadcast, which is why
+    /// the row must be torn down with the team itself rather than at any
+    /// individual member's session end. Returns the row count deleted.
+    pub fn delete_for_team(&self, team_id: &str) -> anyhow::Result<usize> {
+        let key = format!("team:{team_id}");
+        let rows = self
+            .lock()
+            .execute(
+                "DELETE FROM strategies WHERE key = ?1",
+                rusqlite::params![key],
+            )
+            .map_err(|e| AlephError::other(format!("strategy delete_for_team: {e}")))?;
+        Ok(rows)
+    }
 }
 
 #[cfg(test)]
@@ -243,6 +291,62 @@ mod tests {
             store.get("team:t1").unwrap().unwrap().objective,
             "first",
             "the original row is preserved (NOT upserted)"
+        );
+    }
+
+    #[test]
+    fn delete_for_session_removes_all_session_scoped_rows_but_leaves_teams() {
+        let (store, _d) = temp_store();
+        store.put(&goal_key("sess-1"), &sample("g")).unwrap();
+        store.put(&loop_key("sess-1"), &sample("l")).unwrap();
+        store
+            .put(&crate::strategy::session_key("sess-1"), &sample("s"))
+            .unwrap();
+        // Team row for a different id — must survive.
+        store
+            .put(&crate::strategy::team_key("team-other"), &sample("t"))
+            .unwrap();
+
+        let removed = store.delete_for_session("sess-1").unwrap();
+        assert_eq!(removed, 3, "all three session-scoped rows removed");
+        assert!(store.get(&goal_key("sess-1")).unwrap().is_none());
+        assert!(store.get(&loop_key("sess-1")).unwrap().is_none());
+        assert!(store
+            .get(&crate::strategy::session_key("sess-1"))
+            .unwrap()
+            .is_none());
+        assert!(
+            store
+                .get(&crate::strategy::team_key("team-other"))
+                .unwrap()
+                .is_some(),
+            "team row is independent of session lifecycle"
+        );
+    }
+
+    #[test]
+    fn delete_for_session_is_a_noop_when_no_rows_match() {
+        let (store, _d) = temp_store();
+        assert_eq!(store.delete_for_session("ghost").unwrap(), 0);
+    }
+
+    #[test]
+    fn delete_for_team_removes_only_the_team_row() {
+        let (store, _d) = temp_store();
+        store
+            .put(&crate::strategy::team_key("team-x"), &sample("x"))
+            .unwrap();
+        store.put(&goal_key("any-sess"), &sample("g")).unwrap();
+
+        let removed = store.delete_for_team("team-x").unwrap();
+        assert_eq!(removed, 1);
+        assert!(store
+            .get(&crate::strategy::team_key("team-x"))
+            .unwrap()
+            .is_none());
+        assert!(
+            store.get(&goal_key("any-sess")).unwrap().is_some(),
+            "session-scoped rows are untouched by team teardown"
         );
     }
 }

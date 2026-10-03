@@ -60,7 +60,10 @@ fn write_index(claude_home: &Path, installs: &[(&str, &str, &str)]) {
 /// command hook. Returns the cache dir.
 fn write_cc_plugin(claude_home: &Path, market: &str, name: &str, version: &str) -> PathBuf {
     let root = claude_home
-        .join("plugins/cache")
+        // Component-wise joins: callers compare the returned path against
+        // manager-reported, separator-normalized paths.
+        .join("plugins")
+        .join("cache")
         .join(market)
         .join(name)
         .join(version);
@@ -177,7 +180,10 @@ async fn a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home
 #[tokio::test]
 async fn one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy() {
     let aleph_home = tempfile::tempdir().unwrap();
-    let own = aleph_home.path().join("plugins/dup");
+    // Component-wise joins: this path is compared against the manager's
+    // separator-normalized `PluginInfo.path` below, and `join("a/b")` keeps
+    // the forward slash verbatim on Windows.
+    let own = aleph_home.path().join("plugins").join("dup");
     std::fs::create_dir_all(own.join(".claude-plugin")).unwrap();
     std::fs::write(own.join(".claude-plugin/plugin.json"), r#"{"name":"dup"}"#).unwrap();
     let _home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(aleph_home.path());

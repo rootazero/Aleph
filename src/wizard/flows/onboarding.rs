@@ -286,7 +286,20 @@ impl OnboardingFlow {
         prompter: &RpcPrompter,
         data: &OnboardingData,
     ) -> Result<(), WizardSessionError> {
-        let review_text = format!(
+        // Re-prompt on "no" so a user who hits the wrong button doesn't lose
+        // every answer collected so far to a single misclick — the old code
+        // returned `WizardSessionError::Cancelled` and the flow aborted.
+        let mut confirmed = false;
+        while !confirmed {
+            let review_text = Self::render_review(data);
+            prompter.note(&review_text, Some("Review")).await?;
+            confirmed = prompter.confirm("Apply this configuration?", true).await?;
+        }
+        Ok(())
+    }
+
+    fn render_review(data: &OnboardingData) -> String {
+        format!(
             "Configuration Summary:\n\n\
              Primary Provider: {}\n\
              Primary Model: {}\n\
@@ -310,32 +323,7 @@ impl OnboardingFlow {
             } else {
                 data.messaging_apps.join(", ")
             },
-        );
-
-        prompter.note(&review_text, Some("Review")).await?;
-
-        let confirmed = prompter.confirm("Apply this configuration?", true).await?;
-
-        if !confirmed {
-            return Err(WizardSessionError::Cancelled);
-        }
-
-        // KNOWN GAP (deferred): the answers collected into `OnboardingData` are
-        // dropped when `run()` returns. `WizardFlow::run` yields only
-        // `Result<(), _>`, and neither `WizardSession` nor the gateway's
-        // `WizardSessionManager` exposes a channel for a flow's result, so
-        // nothing persists the provider/model/key selections. Closing this needs
-        // a result seam on the flow contract plus wiring in
-        // `src/gateway/handlers/wizard.rs` and the boot path
-        // (`src/bin/aleph-server/commands/start/mod.rs`) — an API change that is
-        // out of scope for an in-module fix. Until then this wizard is a
-        // preview: the outro below promises more than the flow delivers.
-
-        prompter
-            .outro("Aleph is ready! Run 'al chat' to start.")
-            .await?;
-
-        Ok(())
+        )
     }
 }
 
@@ -356,6 +344,20 @@ impl WizardFlow for OnboardingFlow {
         Self::configure_thinking(prompter, &mut data).await?;
         Self::configure_messaging(prompter, &mut data).await?;
         Self::review_and_finalize(prompter, &data).await?;
+
+        // KNOWN GAP (deferred): the answers collected into `OnboardingData` are
+        // dropped when `run()` returns. `WizardFlow::run` yields only
+        // `Result<(), _>`, and neither `WizardSession` nor the gateway's
+        // `WizardSessionManager` exposes a channel for a flow's result, so
+        // nothing persists the provider/model/key selections. Closing this needs
+        // a result seam on the flow contract plus wiring in
+        // `src/gateway/handlers/wizard.rs` and the boot path
+        // (`src/bin/aleph-server/commands/start/mod.rs`) — an API change that is
+        // out of scope for an in-module fix. Until then this wizard is a
+        // preview: the outro below promises more than the flow delivers.
+        prompter
+            .outro("Aleph is ready! Run 'aleph chat' to start.")
+            .await?;
 
         Ok(())
     }

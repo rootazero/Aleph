@@ -150,15 +150,18 @@ impl ProviderHealth {
         self.lock().get(name).map(|r| r.kind)
     }
 
-    /// Acquire the map lock, recovering from poisoning.
+    /// Acquire the map lock.
     ///
     /// The only operations performed under this lock are `HashMap` reads and
-    /// inserts, none of which panic, so a poisoned mutex can only come from a
-    /// panic elsewhere while the guard was held. Recovering rather than
-    /// propagating keeps ordering infallible: a poisoned lock must not be
-    /// able to change which backend answers.
+    /// inserts, none of which panic. A poisoned mutex therefore can only
+    /// originate from a panic on another thread while the guard was held —
+    /// not a state this code can produce. Propagating keeps ordering honest:
+    /// if the lock is poisoned, the caller should know, not silently
+    /// continue with a recovered guard that may hide a real bug.
     fn lock(&self) -> MutexGuard<'_, HashMap<String, FailureRecord>> {
-        self.failed_at.lock().unwrap_or_else(|e| e.into_inner())
+        self.failed_at
+            .lock()
+            .expect("lock held across non-panicking HashMap ops")
     }
 
     /// Test-only: forget every recorded failure, so a wiring test can put a

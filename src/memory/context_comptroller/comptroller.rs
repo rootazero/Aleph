@@ -8,6 +8,11 @@ pub struct RetrievalResult {
 }
 
 pub struct ContextComptroller {
+    // `ComptrollerConfig` was emptied (its similarity/fold/token_budget knobs
+    // were dead data) but is still passed by every caller and threaded through
+    // `new` to keep the serialized config handle stable. When the dead knobs
+    // come back, they'll be read here; until then, allow the unused field.
+    #[allow(dead_code)]
     config: ComptrollerConfig,
 }
 
@@ -23,7 +28,6 @@ impl ContextComptroller {
     #[must_use]
     pub fn arbitrate(&self, results: RetrievalResult, budget: TokenBudget) -> ArbitratedContext {
         let mut tokens_saved = 0;
-        let _ = &self.config; // config retained for future use
 
         // Sort by similarity score (descending) for priority-based selection
         let mut kept_facts = results.facts;

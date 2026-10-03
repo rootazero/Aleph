@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::ops::execute_write;
-use super::path_utils::get_denied_paths;
+use super::path_utils::{get_denied_paths, DeniedPath};
 use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 use crate::error::Result;
 use crate::tools::AlephTool;
@@ -74,7 +74,7 @@ pub struct FileWriteOutput {
 
 /// Standalone file-write tool that enforces `content` as a required parameter.
 pub struct FileWriteTool {
-    denied_paths: Vec<String>,
+    denied_paths: Vec<DeniedPath>,
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }
 
@@ -94,13 +94,17 @@ impl FileWriteTool {
 
     /// A tool that refuses exactly `denied_paths` (a test's own list, so a
     /// `~/…`-shaped entry can live in a tempdir instead of the real home).
-    //
+//
     // Only the case-variant credential-leaf test consumes this constructor,
     // and that test is gated to case-insensitive filesystems (macOS /
     // Windows). On Linux's case-sensitive ext4 the test is not built, and
     // without this gate the constructor is dead code there.
+    // Type takes branch's `Vec<DeniedPath>` (test calls
+    // `DeniedPath::literal(...)`); cfg gate keeps HEAD's narrower scope so
+    // the constructor is not emitted on Linux test builds where the test
+    // never runs.
     #[cfg(all(test, any(target_os = "macos", windows)))]
-    pub(crate) fn with_denied_paths(denied_paths: Vec<String>) -> Self {
+    pub(crate) fn with_denied_paths(denied_paths: Vec<DeniedPath>) -> Self {
         Self {
             denied_paths,
             tool_context_handle: None,

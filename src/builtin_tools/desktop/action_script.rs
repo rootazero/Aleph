@@ -218,7 +218,11 @@ fn strip_quotes(s: &str) -> &str {
 }
 
 fn build_action(name: &str, kw: &Kwargs<'_>) -> Result<DesktopBatchAction, ScriptParseError> {
-    let mut action = blank_batch_action();
+    // No script verb maps to a postcondition check or a force override;
+    // verify_state is issued as its own JSON action, and force is an
+    // explicit per-call escape hatch. Element tokens come from ax_snapshot,
+    // which the script syntax has no way to carry.
+    let mut action = DesktopBatchAction::empty("");
     match name {
         // ── Click family ────────────────────────────────────────
         "click" | "left_click" | "left_single" | "tap" => {
@@ -351,59 +355,6 @@ fn build_action(name: &str, kw: &Kwargs<'_>) -> Result<DesktopBatchAction, Scrip
     Ok(action)
 }
 
-const fn blank_batch_action() -> DesktopBatchAction {
-    DesktopBatchAction {
-        action: String::new(),
-        region: None,
-        image_base64: None,
-        x: None,
-        y: None,
-        button: None,
-        text: None,
-        keys: None,
-        bundle_id: None,
-        app: None,
-        window_id: None,
-        start_x: None,
-        start_y: None,
-        end_x: None,
-        end_y: None,
-        delta_x: None,
-        delta_y: None,
-        width: None,
-        height: None,
-        duration_ms: None,
-        press_action: None,
-        duration: None,
-        fps: None,
-        with_audio: None,
-        display_id: None,
-        format: None,
-        quality: None,
-        max_width: None,
-        max_height: None,
-        timeout_ms: None,
-        coord_space: None,
-        coord_factors: None,
-        describe: None,
-        role: None,
-        element_title: None,
-        ax_action_name: None,
-        pid: None,
-        observe: None,
-        // The UI-TARS action script has no syntax for it: `force` is an explicit
-        // escape hatch the model opts into per call, never a script default.
-        force: None,
-        // No script verb maps to a postcondition check; verify_state is issued
-        // as its own JSON action, never expanded from a UI-TARS line.
-        expect: Vec::new(),
-        stable_samples: None,
-        // A token is minted by ax_snapshot output the model reads as JSON; the
-        // UI-TARS script syntax has no way to carry one.
-        element: None,
-    }
-}
-
 /// Split a hotkey string like `"ctrl shift a"` or `"ctrl+c"` into individual
 /// key tokens. Shared by the `hotkey`, `press`, and `release` verbs.
 fn split_hotkey(key: &str) -> Vec<String> {
@@ -444,12 +395,8 @@ pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
         .strip_prefix("<point>")
         .and_then(|s| s.strip_suffix("</point>"))
     {
-        let nums = parse_floats(inner);
-        if nums.len() >= 2 {
-            return Some((
-                *nums.first().expect("invariant: length checked above"),
-                *nums.get(1).expect("invariant: length checked above"),
-            ));
+        if let [x, y, ..] = parse_floats(inner).as_slice() {
+            return Some((*x, *y));
         }
         return None;
     }
@@ -458,36 +405,17 @@ pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
         .strip_prefix("<bbox>")
         .and_then(|s| s.strip_suffix("</bbox>"))
     {
-        let nums = parse_floats(inner);
-        if nums.len() >= 4 {
-            return Some((
-                (*nums.first().expect("invariant: length checked above")
-                    + *nums.get(2).expect("invariant: length checked above"))
-                    / 2.0,
-                (*nums.get(1).expect("invariant: length checked above")
-                    + *nums.get(3).expect("invariant: length checked above"))
-                    / 2.0,
-            ));
+        if let [x1, y1, x2, y2, ..] = parse_floats(inner).as_slice() {
+            return Some(((x1 + x2) / 2.0, (y1 + y2) / 2.0));
         }
         return None;
     }
 
     // (x, y) or [x, y] or [x1, y1, x2, y2]
     let trimmed = raw.trim_matches(|c| c == '(' || c == ')' || c == '[' || c == ']');
-    let nums = parse_floats(trimmed);
-    match nums.len() {
-        2 => Some((
-            *nums.first().expect("invariant: length matched above"),
-            *nums.get(1).expect("invariant: length matched above"),
-        )),
-        4 => Some((
-            (*nums.first().expect("invariant: length matched above")
-                + *nums.get(2).expect("invariant: length matched above"))
-                / 2.0,
-            (*nums.get(1).expect("invariant: length matched above")
-                + *nums.get(3).expect("invariant: length matched above"))
-                / 2.0,
-        )),
+    match parse_floats(trimmed).as_slice() {
+        [x, y] => Some((*x, *y)),
+        [x1, y1, x2, y2] => Some(((x1 + x2) / 2.0, (y1 + y2) / 2.0)),
         _ => None,
     }
 }

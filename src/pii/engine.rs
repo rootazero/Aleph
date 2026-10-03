@@ -6,6 +6,7 @@ use crate::config::PrivacyConfig;
 use crate::pii::allowlist::PiiAllowlist;
 use crate::pii::rules::{PiiRule, BUILTIN_COUNT};
 use crate::sync_primitives::{Arc, RwLock};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
 
@@ -307,19 +308,25 @@ impl PiiEngine {
     }
 
     /// Compute an effective `PrivacyConfig` by applying platform overrides.
-    fn effective_config(&self, platform: Option<&str>) -> PrivacyConfig {
+    ///
+    /// Returns `Cow::Borrowed` on every fast path (no platform named, named
+    /// platform with no policy, or policy where every field is `None`) so the
+    /// hot `filter_with_platform` path does not deep-clone `custom_rules`
+    /// (`Vec<...>` + `HashMap<...>`) per call. Only the rare override-mutates
+    /// path takes an owned copy.
+    fn effective_config(&self, platform: Option<&str>) -> Cow<'_, PrivacyConfig> {
         let Some(p) = platform else {
             // No platform override requested; the global config stands.
-            return self.config.clone();
+            return Cow::Borrowed(&self.config);
         };
         let Some(policy) = self.lookup_platform_policy(p) else {
             // Platform named but no policy defined for it (case-insensitive
             // lookup already attempted) — fall back to global.
-            return self.config.clone();
+            return Cow::Borrowed(&self.config);
         };
         if !policy_has_any_override(policy) {
             // Policy exists but every field is `None`; treat as identity.
-            return self.config.clone();
+            return Cow::Borrowed(&self.config);
         }
         // Owned copy is required because at least one override mutates the config.
         // rust-doctor-disable-next-line excessive-clone
@@ -355,7 +362,7 @@ impl PiiEngine {
             // rust-doctor-disable-next-line excessive-clone
             cfg.ip_address = v.clone();
         }
-        cfg
+        Cow::Owned(cfg)
     }
 
     /// Filter PII from text using a specific config.
@@ -476,7 +483,7 @@ impl PiiEngine {
     #[must_use]
     pub fn filter_with_platform(&self, text: &str, platform: Option<&str>) -> FilterResult {
         let config = self.effective_config(platform);
-        self.filter_with_config(text, &config)
+        self.filter_with_config(text, config.as_ref())
     }
 }
 

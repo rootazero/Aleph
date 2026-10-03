@@ -62,11 +62,13 @@ impl CronStore {
     }
 
     /// Reload all jobs from the database, discarding in-memory changes.
-    /// Returns true if the data actually changed.
-    pub fn reload_if_changed(&mut self) -> Result<bool, String> {
-        // SQLite is always authoritative; reload unconditionally
-        self.force_reload()?;
-        Ok(true)
+    /// The historical `Result<bool, _>` shape promised a "skip-if-unchanged"
+    /// optimization that never materialized (SQLite is authoritative, reload
+    /// is unconditional), so callers cannot actually act on the bool. The
+    /// signature now matches `force_reload` so callers stop writing
+    /// `if store.reload_if_changed()?` branches that are always taken.
+    pub fn reload_if_changed(&mut self) -> Result<(), String> {
+        self.force_reload()
     }
 
     /// Always reload from database, discarding in-memory state.

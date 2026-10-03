@@ -138,6 +138,9 @@ pub struct ProfileManager {
     /// backends are rebuilt per call, so the rules and the loops' kill
     /// switches must outlive any one backend.
     route_registry: Arc<super::cdp_backend::routes::RouteRegistry>,
+    /// The recording registry (`browser_record` 的 per-tab screencast →
+    /// ffmpeg 管线). Same residency argument as `route_registry`.
+    recording_registry: Arc<super::cdp_backend::recording::RecordingRegistry>,
     /// The live CDP engines, for `driver = "cdp"` profiles.
     ///
     /// An `Arc` because [`Self::get_backend`] is SYNCHRONOUS (and the idle
@@ -299,6 +302,7 @@ impl ProfileManager {
             config.cdp_command_timeout(),
             engine::readiness::READY_GATE_BUDGET,
         ));
+        let recording_budget = config.cdp_command_timeout();
 
         Self {
             profiles: RwLock::new(profiles),
@@ -309,6 +313,9 @@ impl ProfileManager {
             idle_reaper_started: AtomicBool::new(false),
             tab_registry: Arc::new(TabRegistry::new()),
             route_registry: Arc::new(super::cdp_backend::routes::RouteRegistry::new()),
+            recording_registry: Arc::new(super::cdp_backend::recording::RecordingRegistry::new(
+                recording_budget,
+            )),
             engines,
         }
     }
@@ -555,6 +562,9 @@ impl ProfileManager {
                     // The shared mock-route table: rules and interception
                     // loops outlive the per-call backend.
                     self.route_registry.clone(),
+                    // The shared recording registry: recordings outlive the
+                    // per-call backend that started them.
+                    self.recording_registry.clone(),
                 )))
             }
         }
@@ -580,6 +590,12 @@ impl ProfileManager {
     /// builds (see the field's own doc for why it lives here).
     pub fn route_registry(&self) -> &Arc<super::cdp_backend::routes::RouteRegistry> {
         &self.route_registry
+    }
+
+    /// The shared recording registry handed to every cdp backend this
+    /// manager builds (see the field's own doc for why it lives here).
+    pub fn recording_registry(&self) -> &Arc<super::cdp_backend::recording::RecordingRegistry> {
+        &self.recording_registry
     }
 
     /// The per-command CDP timeout both engines are driven with.

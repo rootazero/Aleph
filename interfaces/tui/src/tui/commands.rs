@@ -1280,6 +1280,17 @@ async fn execute_compress(state: &mut AppState, client: &AlephClient, args: &str
         );
         return;
     }
+    // The gateway routes `session.compact` by session_key; sending the call
+    // with an empty key would either be rejected or land on whatever default
+    // the server uses, neither of which matches the user's intent (the TUI
+    // is unattached at this point — there is no conversation to compact).
+    // Surface the situation in the panel instead of leaking a useless RPC.
+    if state.session_key.is_empty() {
+        state.add_system_message(
+            "Cannot /compress: no session attached. Send a message first.".to_string(),
+        );
+        return;
+    }
     // `/compress <instructions>` — the trailing free text steers what the
     // summary must preserve (codex / pi / kimi-cli parity), matching what the
     // Panel's `/compact <instructions>` sends through the tool path.

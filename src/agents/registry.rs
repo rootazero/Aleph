@@ -90,6 +90,18 @@ impl AgentRegistry {
         }
     }
 
+    /// Build a `VisibilityCtx` from an optional project root. The three
+    /// methods that need it (`available_agent_ids`, `spawnable_agent_ids`,
+    /// `resolve`) all construct the same context from the same input; one
+    /// helper keeps the (path → VisibilityCtx) shape in sync.
+    fn visibility_ctx(
+        project_root: Option<&std::path::Path>,
+    ) -> crate::extension::visibility::VisibilityCtx {
+        crate::extension::visibility::VisibilityCtx::from_project_root(
+            project_root.map(std::path::Path::to_path_buf),
+        )
+    }
+
     /// Create a registry with built-in agents
     #[must_use]
     pub fn with_builtins() -> Self {
@@ -141,9 +153,7 @@ impl AgentRegistry {
     /// too) does not exist — while a delegation to that very id would have
     /// succeeded.
     pub fn available_agent_ids(&self, project_root: Option<&std::path::Path>) -> Vec<String> {
-        let ctx = crate::extension::visibility::VisibilityCtx::from_project_root(
-            project_root.map(std::path::Path::to_path_buf),
-        );
+        let ctx = Self::visibility_ctx(project_root);
         let mut ids = self.list_ids();
         ids.extend(visible_plugin_subagents(&ctx).into_iter().map(|a| a.id));
         ids.sort();
@@ -159,9 +169,7 @@ impl AgentRegistry {
     /// error is how a model discovers the string `main` in the first place,
     /// so the disclosure surface has to agree with the gate.
     pub fn spawnable_agent_ids(&self, project_root: Option<&std::path::Path>) -> Vec<String> {
-        let ctx = crate::extension::visibility::VisibilityCtx::from_project_root(
-            project_root.map(std::path::Path::to_path_buf),
-        );
+        let ctx = Self::visibility_ctx(project_root);
         let mut ids: Vec<String> = self.list_subagents().into_iter().map(|a| a.id).collect();
         // B1-07: apply the same `mode == SubAgent` filter to plugin-shipped
         // ids that `resolve_spawnable` applies to all sources — they are the
@@ -326,9 +334,7 @@ impl AgentRegistry {
         // delegatable id but never shadows a builtin/user/project one. Filtered
         // by the same `project_root` this call already received — an explicit
         // root and the visibility ctx must not disagree.
-        let ctx = crate::extension::visibility::VisibilityCtx::from_project_root(
-            project_root.map(std::path::Path::to_path_buf),
-        );
+        let ctx = Self::visibility_ctx(project_root);
         visible_plugin_subagents(&ctx)
             .into_iter()
             .find(|a| a.id == id)

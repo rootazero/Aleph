@@ -43,7 +43,7 @@ use tokio::process::Command;
 use crate::utils::no_window::NoWindow;
 
 use super::engine::Engine;
-use super::error::{engine_unavailable, BrowserError};
+use super::error::{BrowserError, engine_unavailable};
 use super::profile::{BrowserRuntimeConfig, BrowserType};
 
 /// How long the `--dry-run` probe may take.
@@ -257,11 +257,7 @@ fn capped(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
+    &s[..s.floor_char_boundary(max_bytes)]
 }
 
 /// Installed `chromium-<revision>` siblings of the dry-run's own answer,
@@ -536,7 +532,7 @@ async fn playwright_managed(cli_binary: &Path) -> Result<PathBuf, String> {
             return Err(format!(
                 "playwright-cli install-browser --dry-run did not answer in {}s",
                 DRY_RUN_TIMEOUT.as_secs()
-            ))
+            ));
         }
     };
     if !output.status.success() {
@@ -663,12 +659,18 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
     #[test]
     fn the_executable_is_found_in_each_known_layout() {
         let mac = vec![
-            PathBuf::from("/c/chromium-1219/chrome-mac-arm64/Google Chrome for Testing.app/Contents/Info.plist"),
-            PathBuf::from("/c/chromium-1219/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
+            PathBuf::from(
+                "/c/chromium-1219/chrome-mac-arm64/Google Chrome for Testing.app/Contents/Info.plist",
+            ),
+            PathBuf::from(
+                "/c/chromium-1219/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            ),
         ];
         assert_eq!(
             executable_among(&mac),
-            Some(PathBuf::from("/c/chromium-1219/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"))
+            Some(PathBuf::from(
+                "/c/chromium-1219/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+            ))
         );
 
         let linux = vec![
@@ -699,7 +701,9 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         let files = vec![
             PathBuf::from("/c/chromium-1219/INSTALLATION_COMPLETE"),
             PathBuf::from("/c/chromium-1219/DEPENDENCIES_VALIDATED"),
-            PathBuf::from("/c/chromium-1219/chrome-mac-arm64/Google Chrome for Testing.app/Contents/Info.plist"),
+            PathBuf::from(
+                "/c/chromium-1219/chrome-mac-arm64/Google Chrome for Testing.app/Contents/Info.plist",
+            ),
         ];
         assert_eq!(executable_among(&files), None);
     }

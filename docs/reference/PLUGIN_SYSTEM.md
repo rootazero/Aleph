@@ -502,25 +502,28 @@ id + 插件的可见性键；其它 skill——**用户自己写的也算**—�
 
 | 方法 | 说明 |
 |------|------|
-| `plugin.list` / `plugins.list` | 列出已安装插件 |
+| `plugins.list` | 列出已安装插件 |
 | `plugin.install` / `plugins.install` | 安装插件（URL） |
 | `plugin.uninstall` / `plugins.uninstall` | 卸载插件 |
 | `plugin.update` | 升级已装插件（原子换装 + 版本比对，`force` 强制）|
-| `plugin.enable` / `plugins.enable` | 启用插件 |
-| `plugin.disable` / `plugins.disable` | 禁用插件 |
+| `plugins.enable` | 启用插件 |
+| `plugins.disable` | 禁用插件 |
 | `plugin.marketplace.list` | 列出 marketplace **注册项**（name/source/type）——不是内容 |
 | `plugin.marketplace.browse` | 列出 marketplace **内容**（可选 `marketplace` / `query` 子串，匹配名称与描述）|
 | `plugin.marketplace.add` | 添加 marketplace |
 | `plugin.marketplace.update` | 更新缓存 |
 | `plugin.marketplace.remove` | 移除 marketplace |
 | `plugin.marketplace.install` | 从 marketplace 安装 |
-| `plugin.config.get` | 读插件配置 + 它 manifest 声明的 JSON Schema 与 UI hints |
-| `plugin.config.set` | 整体替换插件配置（按 schema 校验，**报全部**违规；下次 reload 生效）|
 
-`plugin.*`（单数）是 CC 兼容方法名，`plugins.*`（复数）保留作为向后兼容别名。
+`plugins.*`（复数）是每个客户端实际调用的命名空间；`plugin.*`（单数）只剩有客户端的四个动词（`install` /
+`uninstall` / `update` / `reload`）与 `plugin.marketplace.*`。2026-09-20 之前单数还注册着 `list` /
+`installFromZip` / `enable` / `disable` / `config.get` / `config.set` 六个零客户端动词，且这里的注释把
+"谁是遗留"说反了；插件配置的唯一面现在是 `plugin_manage(config_get / config_set)`。
 
-⚠️ **两个命名空间的能力集并不相等**：`callTool` **只**在复数上，`update` / `reload` / `config.*` / `marketplace.*` **只**在
-单数上（`executeCommand` / `load` / `unload` 于 2026-09-20 CUT——零客户端，且 `load`/`unload` 绕过 registry
+⚠️ **两个命名空间的能力集并不相等**：`callTool` / `list` / `installFromZip` / `enable` / `disable` **只**在
+复数上（后四个的单数注册——连同 `config.get` / `config.set` 一起——于 2026-09-20 本轮 CUT：零客户端，插件
+配置的唯一面现在是 `plugin_manage` 工具），`update` / `reload` / `marketplace.*` **只**在单数上
+（`executeCommand` / `load` / `unload` 于 2026-09-20 CUT——零客户端，且 `load`/`unload` 绕过 registry
 直接对 WASM loader 寻址，与 mount/unmount 生命周期相悖）。
 
 **这一段曾经描述的缺陷已经修完，分两轮**：Panel 的设置页此前只说复数命名空间，于是
@@ -717,7 +720,6 @@ manifest 原样喂给它 —— 真 resolver 一装，`[capabilities.http.creden
 | loader 快照 → WASM guest / MCP 子进程 | 已解析 | 插件代码要真值 |
 | hook 子进程环境 | 已解析 | 同上 |
 | `plugin_manage(config_get / show)` | **存储形态** | 这段文字进模型上下文 |
-| `plugin.config.get` RPC | **存储形态** | 这段文字进 Panel |
 
 在 `plugin_settings` 里解析是一行，代价是把每个配置好的密钥灌进转录和设置页 ——
 所以运行时形态是另一个函数（`plugin_settings_for_runtime`），名字说明它站在哪一边。

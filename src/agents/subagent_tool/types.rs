@@ -140,6 +140,19 @@ pub(super) const MAX_LISTED_COMPLETED: usize = 20;
 /// preview width.
 pub(super) const LIST_RESULT_PREVIEW_CHARS: usize = 200;
 
+/// UTF-8-safe head slice of a sub-agent's output, ellipsised when cut (P7 —
+/// byte slicing a model-authored string is how this panics on CJK). Shared
+/// between `loop_tool::completed_row_json` and `recovery::to_list_row`'s two
+/// arms so the ellipsis convention has one definition.
+pub(super) fn preview(text: &str) -> String {
+    let head: String = text.chars().take(LIST_RESULT_PREVIEW_CHARS).collect();
+    if head.chars().count() < text.chars().count() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
 /// Gap between a child's own wall-clock timeout and the `subagent` tool's
 /// advertised budget, so the CHILD's `tokio::time::timeout` is what fires. The
 /// model then reads "Sub-agent timed out after Ns" (actionable: it knows which

@@ -96,39 +96,36 @@ impl InstallRegistry {
                 .unwrap_or_default()
                 .as_nanos()
         ));
+        // On any error below, drop the staging file so the next save does not
+        // find a half-written one (create_new(true) would block on it).
+        let cleanup_tmp = |e: std::io::Error| -> std::io::Result<()> {
+            let _ = std::fs::remove_file(&tmp_path);
+            Err(e)
+        };
         // `create_new(true)` refuses on a pre-existing tmp file, so the writer
         // gets a unique-by-construction handle even when two startups race.
-        match std::fs::OpenOptions::new()
+        // A concurrent writer is mid-save: refuse rather than clobber its tmp;
+        // the next save will pick a fresh name.
+        let mut f = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&tmp_path)
-        {
-            Ok(mut f) => {
-                if let Err(e) = f.write_all(content.as_bytes()) {
-                    let _ = std::fs::remove_file(&tmp_path);
-                    return Err(e);
-                }
-            }
-            Err(e) => {
-                // A concurrent writer is mid-save. Refuse rather than clobber
-                // its tmp; the next save will pick a fresh name.
-                return Err(e);
-            }
+            .open(&tmp_path)?;
+        if let Err(e) = f.write_all(content.as_bytes()) {
+            return cleanup_tmp(e);
         }
-        if let Err(e) = std::fs::rename(&tmp_path, &path) {
-            if e.kind() == std::io::ErrorKind::AlreadyExists {
+        match std::fs::rename(&tmp_path, &path) {
+            Ok(()) => {}
+            // BUNDLED-R4-07: Windows' rename refuses on an existing target.
+            // POSIX rename replaces atomically, so the retry never fires there.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 if let Err(rm) = std::fs::remove_file(&path) {
-                    let _ = std::fs::remove_file(&tmp_path);
-                    return Err(rm);
+                    return cleanup_tmp(rm);
                 }
-                if let Err(e) = std::fs::rename(&tmp_path, &path) {
-                    let _ = std::fs::remove_file(&tmp_path);
-                    return Err(e);
+                if let Err(rn) = std::fs::rename(&tmp_path, &path) {
+                    return cleanup_tmp(rn);
                 }
-            } else {
-                let _ = std::fs::remove_file(&tmp_path);
-                return Err(e);
             }
+            Err(e) => return cleanup_tmp(e),
         }
         debug!(path = %path.display(), "Saved skills manifest");
         Ok(())

@@ -148,4 +148,83 @@ impl UnifiedTool {
         self.visible_channels = channels;
         self
     }
+
+    /// Populate `requires_confirmation` and `safety_level` from a tool's
+    /// handler-side flags. Every registration path (MCP, builtin, skills,
+    /// plugins, custom commands) MUST call this on a `UnifiedTool` before
+    /// handing it to `register_with_conflict_resolution`; the catalog-side
+    /// flags drive `infer_visible_channels`, which gates iMessage / Telegram
+    /// / Discord exclusion on them. Skipping this helper makes the entry
+    /// default to `requires_confirmation=false, safety_level=ReadOnly`, and
+    /// `infer_visible_channels` falls through to `Vec::new()` for the entry,
+    /// exposing the tool to every channel — including iMessage.
+    ///
+    /// Policy (matches the contract the MCP path established in round-8):
+    /// - `requires_confirmation=true` → `with_requires_confirmation(true)`
+    /// - `!read_only && requires_confirmation` → `IrreversibleHighRisk`
+    ///   (panel/cli-only gating kicks in for destructive tools)
+    /// - `!read_only && !requires_confirmation` → `Reversible`
+    ///   (catalog reflects that the tool mutates state, without the
+    ///   panel/cli-only gate on its own)
+    /// - `read_only` → safety level left at the default `ReadOnly`
+    ///
+    /// (occams-r9 tool_metadata C-NEW-1.)
+    #[must_use]
+    pub fn populate_safety_profile(mut self, read_only: bool, requires_confirmation: bool) -> Self {
+        if requires_confirmation {
+            self = self.with_requires_confirmation(true);
+        }
+        if !read_only && requires_confirmation {
+            self = self.with_safety_level(ToolSafetyLevel::IrreversibleHighRisk);
+        } else if !read_only {
+            self = self.with_safety_level(ToolSafetyLevel::Reversible);
+        }
+        self
+    }
+}
+
+#[cfg(test)]
+mod populate_safety_profile_tests {
+    use super::*;
+    use crate::tool_metadata::ToolSource;
+
+    fn fresh(name: &str) -> UnifiedTool {
+        UnifiedTool::new(
+            format!("test:{name}"),
+            name,
+            "test tool",
+            ToolSource::Native,
+        )
+    }
+
+    #[test]
+    fn read_only_tool_keeps_default_safety_level() {
+        let tool = fresh("ro").populate_safety_profile(true, false);
+        assert!(!tool.requires_confirmation);
+        assert_eq!(tool.safety_level, ToolSafetyLevel::ReadOnly);
+    }
+
+    #[test]
+    fn mutating_without_confirmation_is_reversible() {
+        let tool = fresh("mut").populate_safety_profile(false, false);
+        assert!(!tool.requires_confirmation);
+        assert_eq!(tool.safety_level, ToolSafetyLevel::Reversible);
+    }
+
+    #[test]
+    fn mutating_with_confirmation_is_irreversible_high_risk() {
+        let tool = fresh("destruct").populate_safety_profile(false, true);
+        assert!(tool.requires_confirmation);
+        assert_eq!(tool.safety_level, ToolSafetyLevel::IrreversibleHighRisk);
+    }
+
+    #[test]
+    fn read_only_with_confirmation_still_irreversible_high_risk() {
+        // Edge case: a tool that asks for confirmation even though it
+        // declares read_only. The MCP path produces the same shape, so the
+        // helper must too — confirmation wins over the read_only declaration.
+        let tool = fresh("weird").populate_safety_profile(true, true);
+        assert!(tool.requires_confirmation);
+        assert_eq!(tool.safety_level, ToolSafetyLevel::IrreversibleHighRisk);
+    }
 }

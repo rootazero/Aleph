@@ -11,6 +11,7 @@
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use std::fmt::Write as _;
 
 use super::markdown::{escape_attr, escape_text};
 use super::{ExportArtifact, MAX_INLINE_ARTIFACT_BYTES, MAX_INLINE_TOTAL_BYTES};
@@ -100,49 +101,52 @@ pub(super) fn render_artifacts(heading: &str, artifacts: &[ExportArtifact]) -> S
                 if is_image(&art.mime_type) {
                     // `<img>` cannot execute its payload, so the real MIME is
                     // safe to keep — the browser needs it to decode.
-                    out.push_str(&format!(
+                    let _ = writeln!(
+                        out,
                         "<figure class=\"art art--image\">\
                          <img src=\"data:{mime};base64,{data}\" alt=\"{name}\">\
                          <figcaption>{label} <span class=\"size\">{size}</span></figcaption>\
-                         </figure>\n",
+                         </figure>",
                         mime = escape_attr(&art.mime_type),
                         data = escape_attr(&encoded),
                         name = name,
                         label = escape_text(&art.filename),
                         size = size,
-                    ));
+                    );
                 } else {
                     // Non-image payloads are handed out as an opaque download.
                     // The declared MIME is deliberately dropped in favour of
                     // `application/octet-stream`: it removes the whole class of
                     // `data:text/html` navigation tricks in one move, and the
                     // saved file still carries its real extension.
-                    out.push_str(&format!(
+                    let _ = writeln!(
+                        out,
                         "<a class=\"art art--file\" download=\"{name}\" \
                          href=\"data:application/octet-stream;base64,{data}\">\
                          <span class=\"icon\" aria-hidden=\"true\">↓</span>\
                          <span class=\"label\">{label}</span>\
                          <span class=\"size\">{size}</span>\
-                         </a>\n",
+                         </a>",
                         name = name,
                         data = escape_attr(&encoded),
                         label = escape_text(&art.filename),
                         size = size,
-                    ));
+                    );
                 }
             }
             None => {
                 // Listed, not embedded. A silently dropped attachment is worse
                 // than a visible placeholder.
-                out.push_str(&format!(
+                let _ = writeln!(
+                    out,
                     "<div class=\"art art--omitted\">\
                      <span class=\"label\">{label}</span>\
                      <span class=\"size\">{size}</span>\
                      <span class=\"note\">not embedded</span>\
-                     </div>\n",
+                     </div>",
                     label = escape_text(&art.filename),
                     size = size,
-                ));
+                );
             }
         }
     }

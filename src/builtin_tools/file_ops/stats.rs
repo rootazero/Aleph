@@ -7,7 +7,7 @@
 use std::path::Path;
 use tracing::{debug, info};
 
-use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern};
+use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern, DeniedPath};
 use super::types::{
     is_skipped_dir_path, FileInfo, FileOpsOutput, StatsSort, StatsSummary, DEFAULT_ENTRY_LIMIT,
 };
@@ -31,7 +31,7 @@ const MAX_LINE_COUNT_BYTES: u64 = 16 * 1024 * 1024; // 16 MB
 pub async fn execute_stats(
     dir: &Path,
     pattern: Option<&str>,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&std::path::Path>,
     limit: Option<usize>,
     sort_by: Option<StatsSort>,
@@ -139,18 +139,11 @@ pub async fn execute_stats(
         // and that answer must survive whatever the row budget does.
         total_files += 1;
         if files.len() < cap {
-            files.push(FileInfo {
-                name: path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                path: path.to_string_lossy().to_string(),
-                is_dir: false,
-                size,
-                extension: path.extension().map(|e| e.to_string_lossy().to_string()),
-                lines,
-                mtime,
-            });
+            let mut info = FileInfo::with_path(&path);
+            info.size = size;
+            info.lines = lines;
+            info.mtime = mtime;
+            files.push(info);
         }
     }
 

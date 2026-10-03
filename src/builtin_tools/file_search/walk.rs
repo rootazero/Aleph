@@ -56,7 +56,7 @@ use ignore::WalkBuilder;
 
 use crate::builtin_tools::error::ToolError;
 use crate::builtin_tools::file_ops::{
-    check_and_resolve_path, is_blocked_proc_path, path_is_denied, SKIPPED_DIRS,
+    check_and_resolve_path, is_blocked_proc_path, path_is_denied, DeniedPath, SKIPPED_DIRS,
 };
 
 /// Hard ceiling on files **visited** by one walk — not on files returned.
@@ -104,7 +104,7 @@ pub(super) struct WalkRequest<'a> {
     /// single lever for "yes, I really do want to search `target/`".
     pub respect_ignore: bool,
     /// Merged credential + `deny_read_globs` floor from `get_denied_paths()`.
-    pub denied_paths: &'a [String],
+    pub denied_paths: &'a [DeniedPath],
     /// Workspace output dir used as the relative-path base, from `ToolContext`.
     pub output_dir: Option<&'a Path>,
 }
@@ -290,7 +290,7 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    fn req<'a>(path: &'a str, glob: Option<&'a str>, denied: &'a [String]) -> WalkRequest<'a> {
+    fn req<'a>(path: &'a str, glob: Option<&'a str>, denied: &'a [DeniedPath]) -> WalkRequest<'a> {
         WalkRequest {
             path,
             glob,
@@ -479,7 +479,9 @@ mod tests {
         fs::write(dir.path().join("ok.txt"), "fine").unwrap();
 
         let canonical_root = dir.path().canonicalize().unwrap();
-        let denied = vec![canonical_root.join("secrets").to_string_lossy().to_string()];
+        let denied = vec![DeniedPath::literal(
+            canonical_root.join("secrets").to_string_lossy(),
+        )];
         let root = dir.path().to_string_lossy().to_string();
         let (canonical, report) = walk(&req(&root, None, &denied)).unwrap();
 

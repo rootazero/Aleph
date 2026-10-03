@@ -113,6 +113,40 @@ pub trait SessionEventStore: Send + Sync + 'static {
         to: Option<EventSeq>,
     ) -> Result<Vec<SessionEventRecord>, SessionError>;
 
+    /// Load events with seq in [from..to) WITH their retirement state — the
+    /// one read that looks past `retired_at` at full payloads
+    /// ([`load_retired_run_anchors`](Self::load_retired_run_anchors) reads
+    /// only two marker kinds, from the `event_type` column).
+    ///
+    /// Its one consumer is `session_decompress` (Context Fabric spec
+    /// 2026-10-01 §3.1b): restoring a folded span means reading the rows
+    /// `Retire::Through` soft-retired, and answering honestly about a span
+    /// `Retire::From` erased means seeing those rows too — a fold whose own
+    /// record was hard-retired must still resolve, or its error would read
+    /// "no such fold" instead of "erased". The BM25-mirror flag is the
+    /// on-disk witness that tells the two retirements apart: `Through` keeps
+    /// the mirror (compacted turns stay recallable), `From` deletes it in
+    /// the same transaction (erased turns must not come back).
+    ///
+    /// Decode policy mirrors the live read's `fold_strict`: ignorable rows
+    /// drop, the first undecodable row refuses the slice — a restoration
+    /// that silently skipped a row would present a gap as the whole span.
+    ///
+    /// Default `Ok(vec![])`, for the same reason as
+    /// [`load_retired_run_anchors`](Self::load_retired_run_anchors): a store
+    /// with no soft delete has nothing retired to restore. A store that DOES
+    /// soft-delete must override it, or every decompress answers as if the
+    /// fold's rows were gone.
+    async fn load_events_with_retirement(
+        &self,
+        session_id: &SessionId,
+        from: Option<EventSeq>,
+        to: Option<EventSeq>,
+    ) -> Result<Vec<RetiredEventRow>, SessionError> {
+        let _ = (session_id, from, to);
+        Ok(Vec::new())
+    }
+
     /// Return the highest seq stored for this session, or 0 if none.
     ///
     /// Counts retired events too: seq is an allocation counter, and reusing a
@@ -271,6 +305,24 @@ pub trait SessionEventStore: Send + Sync + 'static {
         let _ = (session_id, query, limit);
         Ok(Vec::new())
     }
+}
+
+/// One row from [`SessionEventStore::load_events_with_retirement`]: the
+/// decoded event plus the two retirement facts the fold-restoration path
+/// needs.
+#[derive(Debug, Clone)]
+pub struct RetiredEventRow {
+    /// The decoded event with its seq.
+    pub record: SessionEventRecord,
+    /// `retired_at` is stamped (either retirement kind).
+    pub retired: bool,
+    /// The BM25 mirror row for this seq survives. `Retire::Through`
+    /// (compaction) keeps it; `Retire::From` (clear/rewind) deletes it in the
+    /// same transaction — making this the on-disk witness that distinguishes
+    /// a compacted span from an erased one. Rows with no content body (turn
+    /// markers, checkpoints) never had a mirror row; only content-bearing
+    /// rows make the flag meaningful.
+    pub fts_mirror_present: bool,
 }
 
 /// One BM25 hit from [`SessionEventStore::search_events`].
@@ -827,6 +879,63 @@ impl SessionEventStore for SqliteEventStore {
             .map_err(SessionError::UndecodableRecord)
     }
 
+    async fn load_events_with_retirement(
+        &self,
+        session_id: &SessionId,
+        from: Option<EventSeq>,
+        to: Option<EventSeq>,
+    ) -> Result<Vec<RetiredEventRow>, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        // Same saturating-bound rule as `load_events_range`.
+        let from_val = i64::try_from(from.unwrap_or(0)).unwrap_or(i64::MAX);
+        let to_val = to.and_then(|v| i64::try_from(v).ok()).unwrap_or(i64::MAX);
+
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT e.seq, e.payload_json, e.created_at, e.retired_at,
+                        (SELECT COUNT(*) FROM session_events_fts f
+                         WHERE f.session_id = e.session_id AND f.seq = e.seq)
+                 FROM session_events e
+                 WHERE e.session_id = ?1 AND e.seq >= ?2 AND e.seq < ?3
+                 ORDER BY e.seq ASC",
+            )
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![session_key, from_val, to_val], |row| {
+                let seq: i64 = row.get(0)?;
+                let payload: String = row.get(1)?;
+                let created_at: i64 = row.get(2)?;
+                let retired_at: Option<i64> = row.get(3)?;
+                let fts_rows: i64 = row.get(4)?;
+                Ok((seq, payload, created_at, retired_at.is_some(), fts_rows > 0))
+            })
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, payload, created_at, retired, fts_mirror_present) =
+                row.map_err(|e| SessionError::Storage(e.to_string()))?;
+            let seq = u64::try_from(seq)
+                .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
+            // The trait contract's decode policy: ignorable rows drop, the
+            // first undecodable row refuses the slice (fold_strict's shape,
+            // kept per-row here so the retirement flags stay aligned).
+            match decode_row(seq, created_at, &payload) {
+                DecodedRow::Event(record) => out.push(RetiredEventRow {
+                    record,
+                    retired,
+                    fts_mirror_present,
+                }),
+                DecodedRow::Skipped { seq, kind_tag } => {
+                    tracing::debug!(seq, kind_tag, "session_events: ignorable row skipped");
+                }
+                DecodedRow::Undecodable(u) => return Err(SessionError::UndecodableRecord(u)),
+            }
+        }
+        Ok(out)
+    }
+
     async fn load_rows(&self, session_id: &SessionId) -> Result<Vec<DecodedRow>, SessionError> {
         let session_key = session_id_to_string(session_id)?;
         let conn = self.conn.lock().await;
@@ -1165,7 +1274,8 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::RunStarted { .. }
         | SessionEvent::RunFinished { .. }
         | SessionEvent::ResumeAttempted { .. }
-        | SessionEvent::CompactionPerformed { .. } => None,
+        | SessionEvent::CompactionPerformed { .. }
+        | SessionEvent::FoldRecorded { .. } => None,
     }
 }
 
@@ -1209,6 +1319,7 @@ pub(crate) const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::SubagentSpawned { .. } => "subagent_spawned",
         SessionEvent::SubagentReturned { .. } => "subagent_returned",
         SessionEvent::CompactionPerformed { .. } => "compaction_performed",
+        SessionEvent::FoldRecorded { .. } => "fold_recorded",
         SessionEvent::SessionForked { .. } => "session_forked",
         SessionEvent::Error { .. } => "error",
     }
@@ -1230,21 +1341,34 @@ const MAX_FTS_BODY_CHARS: usize = 8_000;
 /// This is mechanical field extraction — not semantic classification — so it
 /// stays on the right side of R7 (LLM sovereignty): the model decides what is
 /// relevant via its query; we only surface the raw text it can match against.
-fn render_event_text(event: &SessionEvent) -> Option<String> {
-    let raw: Cow<'_, str> = match event {
-        SessionEvent::UserMessage { content, .. } => Cow::Borrowed(&content.text),
-        SessionEvent::AssistantMessage { content, .. } => Cow::Borrowed(&content.text),
-        SessionEvent::SystemMessage { content, .. } => Cow::Borrowed(content),
-        SessionEvent::ToolCallRequested { name, input, .. } => {
-            Cow::Owned(format!("{name} {input}"))
+/// The content an event carries, as `(role label, raw body)` — raw meaning
+/// untrimmed and uncapped, the verbatim text `session_decompress` restores.
+/// `None` for events with no content body. This is the ONE place that decides
+/// which variants are content-bearing: the FTS mirror (`render_event_text`
+/// trims and caps the same body) and the fold-restoration path both derive
+/// from it, so indexing and restoration cannot drift apart.
+pub(crate) fn event_content_text(event: &SessionEvent) -> Option<(&'static str, Cow<'_, str>)> {
+    let labelled: (&'static str, Cow<'_, str>) = match event {
+        SessionEvent::UserMessage { content, .. } => ("user", Cow::Borrowed(&content.text)),
+        SessionEvent::AssistantMessage { content, .. } => {
+            ("assistant", Cow::Borrowed(&content.text))
         }
-        SessionEvent::ToolResult { output, .. } => render_json(&output.value),
-        SessionEvent::ToolError { error, .. } => Cow::Borrowed(error),
-        SessionEvent::ToolCallDenied { reason, .. } => Cow::Borrowed(reason),
-        SessionEvent::SubagentReturned { summary, .. } => Cow::Borrowed(summary),
-        SessionEvent::Error { message, .. } => Cow::Borrowed(message),
+        SessionEvent::SystemMessage { content, .. } => ("system", Cow::Borrowed(content)),
+        SessionEvent::ToolCallRequested { name, input, .. } => {
+            ("tool_call", Cow::Owned(format!("{name} {input}")))
+        }
+        SessionEvent::ToolResult { output, .. } => ("tool_result", render_json(&output.value)),
+        SessionEvent::ToolError { error, .. } => ("tool_error", Cow::Borrowed(error)),
+        SessionEvent::ToolCallDenied { reason, .. } => ("tool_denied", Cow::Borrowed(reason)),
+        SessionEvent::SubagentReturned { summary, .. } => ("subagent", Cow::Borrowed(summary)),
+        SessionEvent::Error { message, .. } => ("error", Cow::Borrowed(message)),
         _ => return None,
     };
+    Some(labelled)
+}
+
+fn render_event_text(event: &SessionEvent) -> Option<String> {
+    let (_, raw) = event_content_text(event)?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         None
@@ -1303,6 +1427,11 @@ pub(crate) const SESSION_EVENT_STORE_READERS: &[(&str, &str)] = &[
     (
         "src/builtin_tools/recall_events.rs",
         "`Ok(empty)` plus a note to the model (\"not available in this deployment\")",
+    ),
+    (
+        "src/builtin_tools/decompress.rs",
+        "`Err` (\"session event log not available\") — without the log there are no folds to \
+         restore, and an empty answer would read as \"nothing was ever compacted\"",
     ),
     (
         "src/diagnostics/mod.rs",

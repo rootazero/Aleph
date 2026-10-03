@@ -1,0 +1,151 @@
+{
+  "module": "src/providers (batch A1: openai + openai_responses)",
+  "reviewer": "occams-r6 subagent (pi)",
+  "summary": "Several large functions in the SSE/request-building hot loop bypass care; one wasted re-clone on the Incompatible-strict path; one identity-allocation helper that looks like a round-trip sanitize; one parallel convert_messages across the two protocols that duplicates user/tool-result extraction.",
+  "totals": {"critical": 0, "high": 1, "medium": 5, "low": 7},
+  "findings": [
+    {
+      "id": "P-A-001",
+      "severity": "High",
+      "category": "abstraction",
+      "file": "src/providers/protocols/openai_responses/mod.rs",
+      "line": 470,
+      "title": "parse_sse_event_multi is a single 300+ line match across 16+ variants",
+      "description": "The `parse_sse_event_multi` function contains the entire StreamEvent variant dispatch as a single `match` with inline extraction logic per arm (item_to_call HashMap mutation, OutputItem reconstruction, usage extraction, error mapping, reasoning delta emission). This is the largest function in the file (lines 470-790) and dwarfs the rest of the parser's complexity. Both `ensure_openai_tool_envelope` and `normalize_node` in openai_strict_schema.rs already carry `rust-doctor-disable-next-line high-cyclomatic-complexity`; this function has no such waiver and is significantly more complex than either.",
+      "fix_proposal": "Extract per-variant handlers (e.g. `parse_text_delta`, `parse_function_call_args_delta`, `parse_completed`, `parse_failed`) into private free functions, each taking a `&mut StreamParseState` (item_to_call + pending). Then `parse_sse_event_multi` becomes a 16-arm match that just routes the parsed event to the right one.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-A-002",
+      "severity": "Medium",
+      "category": "allocation",
+      "file": "src/providers/responses/shared.rs",
+      "line": 175,
+      "title": "build_tools wastes `td.parameters.clone()` on Incompatible-strict path",
+      "description": "The strict-normalization branch clones `td.parameters` twice on the `StrictResult::Incompatible` arm: the first clone is mutated by `normalize_strict_schema`, then the assignment `params = td.parameters.clone()` discards it to start fresh for `lenient_multi_type_rewrite`. The first clone is only necessary for the `Ok` arm; on `Incompatible` it could be skipped, or the second clone avoided by running `lenient_multi_type_rewrite` over the partially-normalized `params` (it is idempotent and tolerates prior transforms). This wastes one deep `serde_json::Value` clone per Incompatible tool per request — the path that fires precisely when a tool schema is already complex.",
+      "fix_proposal": "Restructure as: `let mut params = td.parameters.clone();` once at the top, then either `normalize_strict_schema(&mut params, true) → Ok` (keep) or on `Incompatible` simply run `lenient_multi_type_rewrite(&mut params)` in place. The lenient pass is a no-op on already-normalized subtrees and handles fresh ones.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-A-003",
+      "severity": "Medium",
+      "category": "duplicate",
+      "file": "src/providers/protocols/openai_chat/proto_impl.rs",
+      "line": 67,
+      "title": "convert_messages walks UnifiedMessage in both Chat and Responses adapters",
+      "description": "Both `openai_chat/proto_impl.rs::convert_messages` (lines 67-170) and `responses/shared.rs::convert_messages` reimplement the same three-arm walk over `UnifiedMessage` (User/Assistant/ToolResult). The user-text extraction, the Assistant tool-call serialization, and the ToolResult text join are byte-equivalent shape decisions; only the wire-shape output diverges (Message vs InputItem). ~100 lines of `filter_map(...).collect::<Vec<_>>().join(\"\\n\")` plumbing appears in both.",
+      "fix_proposal": "Extract a small helper module (e.g. `providers::protocols::unified_extract`) exposing `extract_user_text(content) -> String`, `extract_assistant_text(content) -> String`, `extract_assistant_tool_calls(content) -> Vec<ToolCallTuple>`, `extract_tool_result_text(content) -> String`. Each adapter then walks UnifiedMessage once and dispatches the tuples into its wire shape.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-A-004",
+      "severity": "Medium",
+      "category": "abstraction",
+      "file": "src/providers/protocols/openai_chat/adapter.rs",
+      "line": 53,
+      "title": "build_request is 250 lines of inline JSON construction",
+      "description": "The single `build_request` function (lines 53-280) builds the wire body by ~15 inline `body[\"...\"] = json!(...)` writes gated by capability/option checks. Each capability branch (prompt_cache, response_format, seed, logprobs, top_logprobs, tools, tool_choice, parallel_tool_calls, service_tier, stop, reasoning_effort, max_tokens, frequency/presence penalty, top_p, temperature) is 5-20 lines. The function dwarfs the rest of the file and carries the `rust-doctor-disable-next-line high-cyclomatic-complexity` waiver — exactly the signal that it has crossed the threshold where extraction pays.",
+      "fix_proposal": "Extract per-section builders (`apply_max_tokens`, `apply_sampling`, `apply_reasoning`, `apply_stop`, `apply_prompt_cache`, `apply_response_format`, `apply_tools`, `apply_tool_choice`, `apply_capability_gated_extras`) each taking `&mut serde_json::Value` and `&ProviderConfig`. `build_request` becomes a thin orchestrator.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-A-005",
+      "severity": "Medium",
+      "category": "abstraction",
+      "file": "src/providers/protocols/openai_chat/sse.rs",
+      "line": 22,
+      "title": "parse_chat_sse_event is a single 200-line function with five inline sub-parsers",
+      "description": "The function (lines 22-220) handles in-band error mapping, usage extraction (with two payload-shape fallbacks for cache_read_tokens), tool-call delta buffering, finish_reason → StopReason translation, and tool-call-end emission inline as one `serde_json::Value` match body. Each concern is independently testable but currently entangled.",
+      "fix_proposal": "Extract `parse_usage(&Value) -> Option<TokenUsage>`, `parse_choice_delta(&Value, &mut IndexIdTracker, &mut VecDeque)`, `parse_finish_reason(&str) -> Option<StopReason>`, then `parse_chat_sse_event` becomes a 30-line orchestrator that calls each.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-A-006",
+      "severity": "Medium",
+      "category": "abstraction",
+      "file": "src/providers/protocols/openai_chat/adapter.rs",
+      "line": 300,
+      "title": "stream_deltas inline SSE state machine mixes parser, deferral, and truncation guards",
+      "description": "The `unfold` body in `stream_deltas` (lines 300-450) carries the State struct with seven fields (`bytes`, `line_buf`, `index_tracker`, `pending`, `deferred_done`, `done_emitted`, `done`) and a single `loop` that interleaves line parsing, deferral calls (`defer_done_until_usage`), buffer-bounds checks, and end-of-stream truncation guards. The truncation-guard logic at the bottom (release deferred Done, decide whether to emit Timeout) is conceptually a separate concern that is currently tangled with byte-reading.",
+      "fix_proposal": "Extract `try_parse_line(line: &str, state: &mut State) -> LineAction` returning whether to continue/drain/terminate, and `finalize_truncation(state: &mut State)` handling the end-of-stream guard. The unfold body then becomes a tighter three-arm dispatch.",
+      "confidence": "low"
+    },
+    {
+      "id": "P-A-007",
+      "severity": "Low",
+      "category": "dead-code",
+      "file": "src/providers/openai/types.rs",
+      "line": 100,
+      "title": "OpenAiToolCall.call_type carries #[allow(dead_code)] — unused field",
+      "description": "The `OpenAiToolCall` struct (inbound) has `#[allow(dead_code)]` on the `call_type` field. The outbound type is `OpenAiToolCallOut` (which sets `call_type: \"function\"` unconditionally). The inbound field is set in `proto_impl.rs::convert_messages` (line ~155) but never read on the outbound conversion path. The annotation suggests this field was kept for symmetry with the wire shape but the inbound deserializer does not actually need it.",
+      "fix_proposal": "Remove `call_type` from `OpenAiToolCall` entirely, or remove `#[allow(dead_code)]` if downstream readers do consume it. Verify with `rg \"call_type\"` against `src/providers/openai/types.rs` callers.",
+      "confidence": "low"
+    },
+    {
+      "id": "P-A-008",
+      "severity": "Low",
+      "category": "dead-code",
+      "file": "src/providers/protocols/openai_common/tools.rs",
+      "line": 30,
+      "title": "desanitize_tool_name is an identity function that allocates unconditionally",
+      "description": "`desanitize_tool_name(name: &str) -> String` does no transformation — the comment claims it reverses `sanitize_tool_name`'s underscore substitution but the implementation simply calls `.to_string()` and returns. Every caller that holds an owned `String` could instead hold the `&str` it already had, and every caller that needs an owned `String` could call `.to_string()` themselves. The \"desanitize\" naming implies a transformation that does not happen, which is worse than a missing function.",
+      "fix_proposal": "Either (a) remove `desanitize_tool_name` and have callers use the input `&str` or call `.to_string()` directly, or (b) implement the actual reversal (replace `_` with original character, requiring a mapping table), or (c) rename to `to_owned_tool_name` and drop the misleading \"desanitize\" framing.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-A-009",
+      "severity": "Low",
+      "category": "allocation",
+      "file": "src/providers/protocols/openai_common/provider_policy.rs",
+      "line": 280,
+      "title": "is_local_host allocates a HashSet on every call",
+      "description": "`is_local_host(host: &str) -> bool` constructs `HashSet::from([...])` containing four loopback entries on every invocation. The function is called from `detect_endpoint_class`, which itself runs per request-build. A 4-entry `&[&str]` linear scan is faster than the hashmap build for this size and removes the per-call allocation.",
+      "fix_proposal": "Replace with `const LOOPBACK: &[&str] = &[\"localhost\", \"127.0.0.1\", \"::1\", \"[::1]\"];` and `LOOPBACK.iter().any(|l| l.eq_ignore_ascii_case(host))`.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-A-010",
+      "severity": "Low",
+      "category": "error-handling",
+      "file": "src/providers/responses/shared.rs",
+      "line": 270,
+      "title": "extract_tool_calls silently swallows JSON parse errors by falling back to String",
+      "description": "`extract_tool_calls` deserializes each tool call's arguments string into a `serde_json::Value`; on failure the function logs nothing, drops the error, and stores the raw string in the output. A malformed argument stream that reaches the consumer is indistinguishable from a perfectly-valid one — which is precisely when downstream validation would benefit from knowing.",
+      "fix_proposal": "On parse failure, return `Result<...>` with the original string preserved AND the underlying `serde_json::Error`, or at minimum emit a `tracing::warn!` with the call id and error. The function is the one place the wire-time deserialize error can be reported before downstream code treats the call as well-formed.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-A-011",
+      "severity": "Low",
+      "category": "abstraction",
+      "file": "src/providers/protocols/openai_common/openai_strict_schema.rs",
+      "line": 167,
+      "title": "lenient_rewrite_node lacks the high-cyclomatic-complexity waiver used by sibling parsers",
+      "description": "In the same file, both `ensure_openai_tool_envelope` (line 60) and `normalize_node` (line 297) carry `// rust-doctor-disable-next-line high-cyclomatic-complexity` comments. The sibling `lenient_rewrite_node` (lines ~167-220) has the same nested-match + recursive shape but no such waiver. With clippy running at `-D warnings` per AGENTS.md, this is a build flag inconsistency that risks regressing on the next strict-mode lint bump.",
+      "fix_proposal": "Add `// rust-doctor-disable-next-line high-cyclomatic-complexity` immediately above `pub fn lenient_multi_type_rewrite` (and consider the inner `lenient_rewrite_node` too) to match the sibling waiver pattern.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-A-012",
+      "severity": "Low",
+      "category": "api-surface",
+      "file": "src/providers/openai/types.rs",
+      "line": 60,
+      "title": "MessageContent is `untagged`, mixing Text and Multimodal discrimination",
+      "description": "`MessageContent` uses `#[serde(untagged)]` to discriminate between `Text(String)` and `Multimodal { content: Vec<ContentBlock> }`. An untagged enum on a public wire type silently accepts whichever shape the JSON matches first — for a value like `null` or `[]` the choice is order-dependent. The Responses-side equivalent uses a typed enum; this one does not.",
+      "fix_proposal": "Switch to `#[serde(untagged)]` only after verifying both variants are reachable from `UnifiedMessage::User` — or change to `#[serde(tag = \"type\", content = \"content\")]` so the wire format is self-describing. Trade-off: changes the wire shape for any persisted/recorded message.",
+      "confidence": "low"
+    },
+    {
+      "id": "P-A-013",
+      "severity": "Low",
+      "category": "error-handling",
+      "file": "src/providers/protocols/openai_responses/mod.rs",
+      "line": 135,
+      "title": "validate_provider_base_url errors are logged, not propagated",
+      "description": "`build_endpoint` calls `validate_provider_base_url` in both the Codex and standard branches and only emits `tracing::error!`. The sibling `openai_chat/adapter.rs::build_endpoint` does the same; the comment in chat says \"Match the sibling adapter behaviour... The earlier return of the *unvalidated* raw_base_url let a tampered preset smuggle non-HTTP schemes into the URL parser for this protocol alone.\" This means the fix for the chat adapter (return an error) was not propagated here — both protocols share the same bug.",
+      "fix_proposal": "Match the chat-adapter behavior of returning an error or apply the agreed-upon policy of logging-and-falling-through consistently across both adapters. If the policy is intentional, document it in one place (the http_client module) and reference it from both call sites.",
+      "confidence": "low"
+    }
+  ]
+}

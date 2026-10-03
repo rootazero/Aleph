@@ -655,6 +655,21 @@ pub struct DesktopOutput {
     pub message: Option<String>,
 }
 
+impl DesktopOutput {
+    /// A refusal carrying a message — one constructor so the dozens of
+    /// `success: false, data: None, message: Some(...)` call sites (limb
+    /// failures, validation refusals, blocked-app guards, hard-blocks) cannot
+    /// spell the literal in tens of places.
+    #[must_use]
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            data: None,
+            message: Some(message.into()),
+        }
+    }
+}
+
 /// Closed-set evidence grade for whether a successful mutating action took
 /// effect — the `effect` field injected into `data` by `DesktopTool::call`.
 ///

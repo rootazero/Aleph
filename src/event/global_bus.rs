@@ -138,19 +138,19 @@ impl std::fmt::Display for SubscriptionId {
 /// visibility is tightened in one patch" — is tightened here (2026-09
 /// severed-wire review). The struct was also re-exported as
 /// `crate::event::Subscription` with zero callers; that re-export is gone.
+///
+/// `SubscriptionId` is intentionally absent: the HashMap key in
+/// [`GlobalBus::subscriptions`] already carries it, and the previous
+/// duplicated `id` field cost one clone on every subscribe without owning
+/// any behaviour.
 struct Subscription {
-    /// Unique identifier for this subscription
-    id: SubscriptionId,
-    /// Filter to match events
     filter: EventFilter,
-    /// Callback to invoke when matching events arrive
     callback: Arc<dyn Fn(GlobalEvent) + Send + Sync>,
 }
 
 impl std::fmt::Debug for Subscription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Subscription")
-            .field("id", &self.id)
             .field("filter", &self.filter)
             .field("callback", &"<callback>")
             .finish()
@@ -294,7 +294,6 @@ impl GlobalBus {
     ) -> SubscriptionId {
         let id = SubscriptionId::new(uuid::Uuid::new_v4().to_string());
         let subscription = Subscription {
-            id: id.clone(),
             filter,
             callback: Arc::new(callback),
         };

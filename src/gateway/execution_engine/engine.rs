@@ -196,8 +196,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     }
 
     /// Check inline commands against `consent` instead of the process-wide
-    /// registry (a test's own file).
-    #[cfg(test)]
+    /// registry (a test's own file). Only `#[cfg(unix)]` tests exercise the
+    /// consented-shell path, so the setter is gated to match its callers.
+    #[cfg(all(test, unix))]
     pub(super) fn with_inline_consent(
         mut self,
         consent: Arc<crate::extension::hooks::ShellHookConsent>,
@@ -223,8 +224,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// Pass the same cell the boot path fills once the `ToolCatalog` is
     /// populated (`agent_init`'s `command_parser_cell`). Sharing the cell —
     /// rather than each surface constructing its own parser — is what keeps
-    /// `command.execute`, `chat.send`, `agent.run` and this engine's fallback
-    /// answering `/foo` identically.
+    /// `chat.send`, `agent.run` and this engine's fallback answering `/foo`
+    /// identically.
     #[must_use]
     pub fn with_command_parser_cell(mut self, cell: crate::command::CommandParserCell) -> Self {
         self.command_parser = cell;

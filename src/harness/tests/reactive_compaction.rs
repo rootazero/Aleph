@@ -516,6 +516,7 @@ fn budget_config() -> ContextBudgetConfig {
         summarizer_input_budget: 48_000,
         circuit_breaker_max: 10,
         max_splits: 3,
+        fold_nudge_growth_tokens: 50_000,
     }
 }
 
@@ -532,6 +533,7 @@ fn near_full_budget_config() -> ContextBudgetConfig {
         summarizer_input_budget: 48_000,
         circuit_breaker_max: 10,
         max_splits: 3,
+        fold_nudge_growth_tokens: 50_000,
     }
 }
 

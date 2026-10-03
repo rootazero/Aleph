@@ -7,7 +7,7 @@ use tracing::info;
 
 use super::batch::{execute_batch_move, execute_organize};
 use super::ops::{execute_copy, execute_delete, execute_list, execute_mkdir, execute_move};
-use super::path_utils::{check_and_resolve_path, get_denied_paths};
+use super::path_utils::{check_and_resolve_path, get_denied_paths, DeniedPath};
 use super::search::execute_search;
 use super::stats::execute_stats;
 use super::types::{FileOperation, FileOpsArgs, FileOpsOutput};
@@ -18,7 +18,7 @@ use crate::tools::AlephTool;
 /// File operations tool
 pub struct FileOpsTool {
     /// Denied path patterns (security)
-    denied_paths: Vec<String>,
+    denied_paths: Vec<DeniedPath>,
     /// Optional `ToolContext` handle for workspace-scoped output path resolution
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }

@@ -258,6 +258,7 @@ fn budget_for(p: &HttpProvider) -> ContextBudget {
         summarizer_input_budget: 48_000,
         circuit_breaker_max: 3,
         max_splits: 3,
+        fold_nudge_growth_tokens: 50_000,
     });
     budget.set_reasoning_replay(p.reasoning_replay(None));
     budget

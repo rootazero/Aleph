@@ -315,7 +315,6 @@ where
     R: alephcore::executor::ToolRegistry + 'static,
 {
     use alephcore::gateway::handlers::agent::{build_run_request, AgentRunParams};
-    use alephcore::gateway::handlers::chat::SendParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
     use serde::Serialize;
     use serde_json::{json, Value};
@@ -327,8 +326,10 @@ where
         pub streaming: bool,
     }
 
-    // Parse params
-    let params: SendParams = match request.params {
+    // Parse params — `chat.send` accepts the same shape as `agent.run` (the
+    // `input` field carries `serde(alias = "message")` since 7d88f469e dropped
+    // the historical `SendParams` copy). One shared struct, no field drift.
+    let params: AgentRunParams = match request.params {
         Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map)) {
             Ok(p) => p,
             Err(e) => {
@@ -349,7 +350,7 @@ where
     };
 
     // Validate message
-    if params.message.trim().is_empty() {
+    if params.input.trim().is_empty() {
         return alephcore::gateway::JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
@@ -419,31 +420,21 @@ where
         output_mode,
     ));
 
-    // `chat.send` is `agent.run` with a `message` field: project it onto the
-    // canonical params and let the one shared builder produce the RunRequest,
-    // so attachments, the model picker, the voice pin, the project_root gate
-    // and the surface/authorization metadata are honored identically on this
-    // real-`ExecutionEngine` path and on the Simulated-fallback
-    // `AgentRunManager::start_run`. Every one of those was previously dropped
-    // here (`attachments: Vec::new()`, `model_override: None`, no
-    // `platform` / `caller_role` / `conversation_id`).
+    // `chat.send` IS `agent.run` since 7d88f469e: the params already ARE the
+    // canonical struct, so the projection is identity except for the one
+    // deliberate gate this surface keeps — a caller-supplied `peer_id` must
+    // not cross from the chat surface into session identity (Panel has no
+    // per-user peer IDs). Everything else — attachments, the model picker,
+    // the voice pin, the project_root gate and the surface/authorization
+    // metadata — is honored identically on this real-`ExecutionEngine` path
+    // and on the Simulated-fallback `AgentRunManager::start_run` by the one
+    // shared builder.
     let run_params = AgentRunParams {
-        input: params.message.clone(),
-        session_key: params.session_key,
-        channel: params.channel,
         peer_id: None, // Panel has no per-user peer IDs
-        stream: params.stream,
-        thinking: params.thinking,
-        attachments: params.attachments,
-        agent_id: params.agent_id,
-        project_root: params.project_root,
-        model_override: params.model_override,
-        exec_tier: params.exec_tier,
-        mode: params.mode,
-        memory: params.memory,
-        voice_input: params.voice_input,
-        project_id: params.project_id,
+        ..params
     };
+    let stream = run_params.stream;
+    let slash_input = run_params.input.clone();
     let mut run_request = match build_run_request(
         run_id.clone(),
         &session_key,
@@ -463,7 +454,7 @@ where
     // its own copy of "parse, then serialize", which is one more place for
     // the four surfaces to disagree about what `/foo` means.
     engine
-        .stamp_slash_mode(&params.message, &mut run_request.metadata)
+        .stamp_slash_mode(&slash_input, &mut run_request.metadata)
         .await;
 
     // Spawn onto the shared per-session busy wait lane (same queue the inbound
@@ -484,7 +475,7 @@ where
     let result = ChatSendResult {
         run_id,
         session_key: session_key_str,
-        streaming: params.stream,
+        streaming: stream,
     };
 
     alephcore::gateway::JsonRpcResponse::success(request.id, json!(result))

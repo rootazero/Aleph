@@ -11,21 +11,7 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod integration_tests {
-    use crate::memory::{context_comptroller::ComptrollerConfig, ripple::RippleConfig};
-
-    #[tokio::test]
-    async fn test_comptroller_config() {
-        // Test that ComptrollerConfig can be created
-        let config = ComptrollerConfig {
-            similarity_threshold: 0.95,
-            token_budget: 1000,
-            fold_threshold: 0.2,
-        };
-
-        assert_eq!(config.similarity_threshold, 0.95);
-        assert_eq!(config.token_budget, 1000);
-        println!("ComptrollerConfig created: {:?}", config);
-    }
+    use crate::memory::ripple::RippleConfig;
 
     #[tokio::test]
     async fn test_ripple_config() {
@@ -43,14 +29,12 @@ mod integration_tests {
     }
 
     #[tokio::test]
-    async fn test_default_config() {
-        // Test default configuration
-        let config = ComptrollerConfig::default();
-
-        assert_eq!(config.similarity_threshold, 0.95);
-        assert_eq!(config.token_budget, 100000);
-        assert_eq!(config.fold_threshold, 0.2);
-        println!("Default config: {:?}", config);
+    async fn test_comptroller_config_is_default() {
+        // ComptrollerConfig was emptied in occams-r5 (its similarity/fold/
+        // token_budget knobs were dead data); the struct is kept as a
+        // serde-stable handle only. This test pins the contract that
+        // ::default() is total and the type is constructible.
+        let _config = crate::memory::context_comptroller::ComptrollerConfig::default();
     }
 }
 

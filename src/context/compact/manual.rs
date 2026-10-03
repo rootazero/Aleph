@@ -29,7 +29,8 @@
 //!    steered by the user's own `/compact <instructions>` directive.
 //! 4. **One transaction**: append the summary as a `SystemMessage` plus a
 //!    `CompactionPerformed` checkpoint — finally giving that long-declared,
-//!    never-produced event a producer — and **soft-retire** the compacted
+//!    never-produced event a producer — and its `FoldRecorded` fold-registry
+//!    entry (Context Fabric spec §3.1a), and **soft-retire** the compacted
 //!    prefix (`Retire::Through`) in the same [`SessionService::emit_batch`]
 //!    call. The rows survive (the log stays append-only, `/undo` and export
 //!    are unaffected) and the BM25 mirror is deliberately kept, so
@@ -480,6 +481,30 @@ pub async fn compact_session(
             // The summary's turn_id: the one reference known BEFORE the batch
             // commits (its seq is allocated by the actor inside the commit).
             summary_ref: summary_turn.to_string(),
+            at,
+        },
+        // The fold-registry record, in the SAME batch as its checkpoint —
+        // both land or neither does (Context Fabric spec §3.1a, FL §2.14).
+        // `strategy`/`trigger` name the manual path's one producer this round;
+        // richer origin attribution (model tool vs slash vs RPC) needs the
+        // origin plumbed through `run_manual_compaction`, deferred to the
+        // decompress task.
+        SessionEvent::FoldRecorded {
+            fold_id: crate::context::compact::folds::derive_fold_id(
+                &session_id.to_key_string(),
+                from_seq,
+            ),
+            from_seq,
+            to_seq: cut_seq,
+            summary_ref: summary_turn.to_string(),
+            strategy: crate::context::compact::folds::FoldStrategy::Manual
+                .as_str()
+                .to_string(),
+            trigger: crate::context::compact::folds::FoldTrigger::ManualCommand
+                .as_str()
+                .to_string(),
+            folded_tokens: tokens_before as u64,
+            summary_tokens: tokens_after as u64,
             at,
         },
     ];
@@ -1246,6 +1271,82 @@ mod tests {
             summary.created_at_ms, ckpt.created_at_ms,
             "the double stamps one created_at_ms per batch; seq is the order inside it"
         );
+    }
+
+    /// Context Fabric spec §3.1a: every manual compaction leaves a
+    /// `FoldRecorded` in the SAME batch as its `CompactionPerformed`, and the
+    /// registry view lists exactly one fold carrying the compaction's real
+    /// token accounting — an effect assertion over the log, not a call count.
+    #[tokio::test]
+    async fn manual_compact_records_a_fold_in_the_same_batch_as_the_checkpoint() {
+        let (service, _store, sid) = seeded_session(40).await;
+        let outcome = compact_session(
+            &service,
+            None,
+            &sid,
+            &ManualCompactOptions {
+                instructions: None,
+                keep_tokens: Some(MIN_KEEP_TOKENS),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(outcome.compacted, "{:?}", outcome.skipped_reason);
+
+        let after = service.get_events(&sid, None, None).await.unwrap();
+        let ckpt = after
+            .iter()
+            .find(|r| matches!(r.event, SessionEvent::CompactionPerformed { .. }))
+            .expect("checkpoint live");
+        let fold_ev = after
+            .iter()
+            .find(|r| matches!(r.event, SessionEvent::FoldRecorded { .. }))
+            .expect("the fold record must be live in the same log");
+        assert_eq!(
+            fold_ev.seq,
+            ckpt.seq + 1,
+            "same batch ⇒ the fold record lands adjacent to its checkpoint"
+        );
+        let (
+            SessionEvent::CompactionPerformed {
+                from_seq,
+                to_seq,
+                summary_ref,
+                ..
+            },
+            SessionEvent::FoldRecorded {
+                from_seq: f_from,
+                to_seq: f_to,
+                summary_ref: f_ref,
+                folded_tokens,
+                summary_tokens,
+                ..
+            },
+        ) = (&ckpt.event, &fold_ev.event)
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            (f_from, f_to, f_ref),
+            (from_seq, to_seq, summary_ref),
+            "the fold annotates the checkpoint's exact span and summary"
+        );
+        assert_eq!(*folded_tokens, outcome.tokens_before as u64);
+        assert_eq!(*summary_tokens, outcome.tokens_after as u64);
+
+        // The registry view over this session lists ONE fold (recorded wins
+        // over the legacy derivation for the same span) with Manual provenance.
+        let events: Vec<SessionEvent> = after.iter().map(|r| r.event.clone()).collect();
+        let folds = crate::context::compact::folds::list_folds(
+            &sid.to_key_string(),
+            &events,
+        );
+        assert_eq!(folds.len(), 1, "one compaction, one fold: {folds:?}");
+        assert_eq!(
+            folds[0].strategy,
+            crate::context::compact::folds::FoldStrategy::Manual
+        );
+        assert_eq!(folds[0].folded_tokens, outcome.tokens_before as u64);
     }
 
     #[tokio::test]

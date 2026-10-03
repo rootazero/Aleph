@@ -29,10 +29,7 @@ use super::types::{
     HealthStatus, ListChangeKind, McpCommand, McpManagerConfig, McpManagerEvent, McpServerInfo,
     McpServerStatusDetail, McpTransportType, ServerHealth,
 };
-use crate::mcp::{
-    ExternalServerConfig, McpClient, McpPrompt, McpRemoteServerConfig, McpResource, McpTool,
-    TransportPreference,
-};
+use crate::mcp::{ExternalServerConfig, McpClient, McpRemoteServerConfig, TransportPreference};
 
 /// Configuration for health check behavior
 #[derive(Debug, Clone)]
@@ -425,18 +422,6 @@ impl McpManagerActor {
             } => {
                 let status = self.get_status(&server_id).await;
                 let _ = respond_to.send(status);
-            }
-            McpCommand::AggregateTools { respond_to } => {
-                let tools = self.aggregate_tools().await;
-                let _ = respond_to.send(tools);
-            }
-            McpCommand::AggregateResources { respond_to } => {
-                let resources = self.aggregate_resources().await;
-                let _ = respond_to.send(resources);
-            }
-            McpCommand::AggregatePrompts { respond_to } => {
-                let prompts = self.aggregate_prompts().await;
-                let _ = respond_to.send(prompts);
             }
             McpCommand::AggregateInstructions { respond_to } => {
                 let instructions = self.aggregate_instructions().await;
@@ -1026,13 +1011,13 @@ impl McpManagerActor {
         })
     }
 
-    // ===== Aggregation Methods =====
+    // ===== Aggregation =====
 
     /// Aggregate items from all healthy servers using the provided accessor.
     ///
     /// Servers are visited in sorted id order, not `HashMap` iteration order.
-    /// Every one of these aggregations reaches the provider request: tools and
-    /// instructions land in the prompt directly, and `HashMap` order is stable
+    /// The aggregation reaches the provider request: server instructions land
+    /// in the system prompt directly, and `HashMap` order is stable
     /// only while the map is untouched — a server reconnecting after a health
     /// blip, a lazy connect, an `mcp install`/`remove`, or a rehash on growth
     /// permutes it. That would re-emit byte-identical content in a different
@@ -1068,24 +1053,6 @@ impl McpManagerActor {
         }
 
         result
-    }
-
-    /// Aggregate tools from all healthy servers
-    async fn aggregate_tools(&self) -> Vec<McpTool> {
-        self.aggregate_from_healthy(|c| async move { c.list_tools().await })
-            .await
-    }
-
-    /// Aggregate resources from all healthy servers
-    async fn aggregate_resources(&self) -> Vec<McpResource> {
-        self.aggregate_from_healthy(|c| async move { c.list_resources().await })
-            .await
-    }
-
-    /// Aggregate prompts from all healthy servers
-    async fn aggregate_prompts(&self) -> Vec<McpPrompt> {
-        self.aggregate_from_healthy(|c| async move { c.list_prompts().await })
-            .await
     }
 
     /// Aggregate server-provided `instructions` from all healthy servers.
@@ -1284,34 +1251,35 @@ mod tests {
         assert!(status.is_none());
     }
 
-    #[tokio::test]
-    async fn test_aggregate_tools_empty() {
-        let dir = tempdir().unwrap();
-        let config_path = dir.path().join("mcp_config.json");
-
-        let (actor, _handle) = McpManagerActor::new(Some(config_path)).await.unwrap();
-        let tools = actor.aggregate_tools().await;
-        assert!(tools.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_aggregate_resources_empty() {
-        let dir = tempdir().unwrap();
-        let config_path = dir.path().join("mcp_config.json");
-
-        let (actor, _handle) = McpManagerActor::new(Some(config_path)).await.unwrap();
-        let resources = actor.aggregate_resources().await;
-        assert!(resources.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_aggregate_prompts_empty() {
-        let dir = tempdir().unwrap();
-        let config_path = dir.path().join("mcp_config.json");
-
-        let (actor, _handle) = McpManagerActor::new(Some(config_path)).await.unwrap();
-        let prompts = actor.aggregate_prompts().await;
-        assert!(prompts.is_empty());
+    /// `McpCommand` is the actor's whole vocabulary. Three words nobody
+    /// spoke after the `mcp.{tools,resources,prompts}` RPCs were cut
+    /// (`AggregateTools`, `AggregateResources`, `AggregatePrompts`) are gone;
+    /// this pins the vocabulary so a resurrected arm needs a caller first.
+    /// Source-level: an enum variant with no constructor site compiles fine
+    /// and looks like capability. `AggregateInstructions` is the positive
+    /// control — the prompt builder still speaks it — and is counted by the
+    /// same scan, so a scan that sees nothing cannot pass.
+    #[test]
+    fn the_command_vocabulary_has_no_uncalled_aggregate_words() {
+        let types_src = include_str!("types.rs");
+        let code_lines_naming = |word: &str| {
+            types_src
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .filter(|l| l.contains(word))
+                .count()
+        };
+        for gone in ["AggregateTools", "AggregateResources", "AggregatePrompts"] {
+            assert_eq!(
+                code_lines_naming(gone),
+                0,
+                "{gone} is back in McpCommand without a caller"
+            );
+        }
+        assert!(
+            code_lines_naming("AggregateInstructions {") > 0,
+            "AggregateInstructions is the positive control (the prompt builder still calls it)"
+        );
     }
 
     #[tokio::test]

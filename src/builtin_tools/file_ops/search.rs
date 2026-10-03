@@ -3,7 +3,7 @@
 use std::path::Path;
 use tracing::{debug, info};
 
-use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern};
+use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern, DeniedPath};
 use super::types::{
     is_skipped_dir_path, FileInfo, FileOpsOutput, DEFAULT_ENTRY_LIMIT, SKIPPED_DIRS,
 };
@@ -13,7 +13,7 @@ use crate::builtin_tools::error::ToolError;
 pub async fn execute_search(
     dir: &Path,
     pattern: &str,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&std::path::Path>,
     limit: Option<usize>,
 ) -> Result<FileOpsOutput, ToolError> {
@@ -70,18 +70,10 @@ pub async fn execute_search(
                 if let Ok(metadata) = tokio::fs::metadata(&path).await {
                     matched += 1;
                     if files.len() < cap {
-                        files.push(FileInfo {
-                            name: path
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default(),
-                            path: path.to_string_lossy().to_string(),
-                            is_dir: metadata.is_dir(),
-                            size: metadata.len(),
-                            extension: path.extension().map(|e| e.to_string_lossy().to_string()),
-                            lines: None,
-                            mtime: None,
-                        });
+                        let mut info = FileInfo::with_path(&path);
+                        info.is_dir = metadata.is_dir();
+                        info.size = metadata.len();
+                        files.push(info);
                     }
                 } else {
                     // Stat failure is treated as "matched but not added to

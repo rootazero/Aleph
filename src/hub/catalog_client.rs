@@ -323,7 +323,7 @@ mod tests {
       "entries":[{"id":"aleph-hub:acme/foo","kind":"mcp","category":"developer","name":"Foo",
       "description":"d","repo_url":"https://github.com/acme/foo","trust_tier":"verified",
       "install_spec":{"type":"mcp_stdio","command":"npx","args":["@acme/foo"],"env":[]},
-      "via":"clawhub"}]}"#;
+      "via":"upstream-hub"}]}"#;
 
     fn client() -> AlephHubCatalog {
         AlephHubCatalog::new(
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(e.source_id, "aleph-hub");
         assert_eq!(e.kind, ExtensionKind::Mcp);
         assert_eq!(e.category, ExtensionCategory::Developer);
-        assert_eq!(e.via.as_deref(), Some("clawhub")); // wire `via` wins
+        assert_eq!(e.via.as_deref(), Some("upstream-hub")); // wire `via` wins
         assert!(matches!(e.install_spec, Some(InstallSpec::McpStdio { .. })));
     }
 

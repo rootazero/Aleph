@@ -20,9 +20,9 @@ use crate::builtin_tools::browser_tools::{
     BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool, BrowserDragTool,
     BrowserEmulateTool, BrowserEvaluateTool, BrowserExecTool, BrowserFillFormTool,
     BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool, BrowserOpenTool, BrowserPdfTool,
-    BrowserPressKeyTool, BrowserProfileTool, BrowserResizeTool, BrowserScreenshotTool,
-    BrowserScrollTool, BrowserSelectTool, BrowserSessionTool, BrowserSnapshotTool, BrowserTabsTool,
-    BrowserTypeTool, BrowserUploadTool, BrowserWaitForTool,
+    BrowserPressKeyTool, BrowserProfileTool, BrowserQaTool, BrowserRecordTool, BrowserResizeTool,
+    BrowserScreenshotTool, BrowserScrollTool, BrowserSelectTool, BrowserSessionTool,
+    BrowserSnapshotTool, BrowserTabsTool, BrowserTypeTool, BrowserUploadTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::{
     ApplyPatchTool, AutomationTool, BashExecTool, CodeCheckTool, CodeExecTool, DesktopTool,
@@ -631,6 +631,18 @@ impl BuiltinToolRegistry {
         let browser_scroll_tool = BrowserScrollTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_pdf_tool = BrowserPdfTool::new(Arc::clone(&browser_profile_manager));
+        // `start` joins the gated set: it writes a growing video file and
+        // streams the page's pixels through an encoder — the same
+        // page-content capture class as a screenshot. `stop`/`status` stay
+        // ungated inside the tool (an off-switch behind a gate is fail-dead).
+        let browser_record_tool = BrowserRecordTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
+        // `browser_qa` is a pure READ orchestration (wait probes + ring reads
+        // + an evidence screenshot that rides the screenshot verb's own
+        // posture), so it is constructed UNGATED on purpose (spec §3.3: the
+        // approval gate is not entered); the dialog-gate census comment in
+        // cdp_backend/actions.rs carries the same accounting.
+        let browser_qa_tool = BrowserQaTool::new(Arc::clone(&browser_profile_manager));
         let browser_network_tool = BrowserNetworkTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_dialog_tool = BrowserDialogTool::new(Arc::clone(&browser_profile_manager))
@@ -811,6 +823,8 @@ impl BuiltinToolRegistry {
                 browser_hover_tool.definition(),
                 browser_scroll_tool.definition(),
                 browser_pdf_tool.definition(),
+                browser_record_tool.definition(),
+                browser_qa_tool.definition(),
                 browser_network_tool.definition(),
                 browser_dialog_tool.definition(),
                 browser_drag_tool.definition(),
@@ -1312,6 +1326,8 @@ impl BuiltinToolRegistry {
             browser_hover_tool,
             browser_scroll_tool,
             browser_pdf_tool,
+            browser_record_tool,
+            browser_qa_tool,
             browser_network_tool,
             browser_dialog_tool,
             browser_drag_tool,

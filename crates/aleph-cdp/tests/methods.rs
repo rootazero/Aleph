@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use aleph_cdp::methods::{
-    browser, dom, dom_snapshot, emulation, fetch, input, network, page, runtime, target,
+    browser, dom, dom_snapshot, emulation, fetch, input, network, page, runtime, screencast, target,
 };
 use aleph_cdp::testkit::{scripted, FakeCdpServer, Responder};
 use aleph_cdp::{CdpConnection, CdpError, ConnectOptions, SessionId, TargetId};
@@ -1684,6 +1684,117 @@ async fn fetch_fail_request_maps_reasons() {
     assert_eq!(frames.len(), 2);
     assert_eq!(frames[0]["params"]["errorReason"], "Failed");
     assert_eq!(frames[1]["params"]["errorReason"], "BlockedByClient");
+}
+
+// ===================== Screencast =====================
+
+#[tokio::test]
+async fn screencast_frame_event_decodes_base64_into_bytes() {
+    // Review Focus #5 of the plan: on the wire `data` is base64; feeding the encoded text to
+    // ffmpeg produces a zero-frame video that can still exit 0 — a silent lie. "e30=" is "{}"
+    // in base64, so the decoded bytes must be exactly [0x7b, 0x7d].
+    let frame = screencast::screencast_frame(&json!({
+        "data": "e30=", "sessionId": 7,
+        "metadata": {"timestamp": 1234.5, "deviceWidth": 800, "deviceHeight": 600}
+    }))
+    .expect("decode");
+    assert_eq!(frame.data, b"{}");
+    assert_eq!(frame.session_id, 7);
+    assert_eq!(frame.timestamp, Some(1234.5));
+
+    // `metadata.timestamp` is optional on the wire; an engine that omits it is not malformed.
+    let no_ts = screencast::screencast_frame(&json!({
+        "data": "e30=", "sessionId": 8, "metadata": {}
+    }))
+    .expect("decode without timestamp");
+    assert_eq!(no_ts.timestamp, None);
+}
+
+#[tokio::test]
+async fn start_screencast_sends_format_and_quality_only_for_jpeg() {
+    // `quality` alongside `format: png` is rejected by Chrome — the same discipline as
+    // capture_screenshot (page.rs). Both arms pin the exact wire shape.
+    let (server, conn) = replying("Page.startScreencast", json!({})).await;
+    screencast::start_screencast(
+        &conn,
+        None,
+        screencast::ScreencastFormat::Jpeg { quality: 80 },
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("start jpeg");
+    assert_eq!(
+        server.last_params("Page.startScreencast"),
+        Some(json!({ "format": "jpeg", "quality": 80 })),
+    );
+
+    let (server, conn) = replying("Page.startScreencast", json!({})).await;
+    screencast::start_screencast(
+        &conn,
+        None,
+        screencast::ScreencastFormat::Png,
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("start png");
+    let params = server
+        .last_params("Page.startScreencast")
+        .expect("a startScreencast frame reached the engine");
+    assert_eq!(params, json!({ "format": "png" }));
+    assert!(
+        params.get("quality").is_none(),
+        "png must not carry `quality` — Chrome rejects the combination: {params}"
+    );
+}
+
+#[tokio::test]
+async fn start_screencast_omits_none_options_and_sends_some_ones() {
+    // CDP reads an explicit null differently from an absent key, so None must NOT serialise.
+    let (server, conn) = replying("Page.startScreencast", json!({})).await;
+    screencast::start_screencast(
+        &conn,
+        None,
+        screencast::ScreencastFormat::Png,
+        Some(1280),
+        Some(720),
+        Some(2),
+    )
+    .await
+    .expect("start with options");
+    assert_eq!(
+        server.last_params("Page.startScreencast"),
+        Some(json!({
+            "format": "png",
+            "maxWidth": 1280,
+            "maxHeight": 720,
+            "everyNthFrame": 2,
+        })),
+    );
+}
+
+#[tokio::test]
+async fn screencast_frame_ack_carries_the_session_id() {
+    let (server, conn) = replying("Page.screencastFrameAck", json!({})).await;
+    screencast::screencast_frame_ack(&conn, None, 7)
+        .await
+        .expect("ack");
+    assert_eq!(
+        server.last_params("Page.screencastFrameAck"),
+        Some(json!({ "sessionId": 7 }))
+    );
+}
+
+#[tokio::test]
+async fn stop_screencast_sends_no_params() {
+    let (server, conn) = replying("Page.stopScreencast", json!({})).await;
+    screencast::stop_screencast(&conn, None)
+        .await
+        .expect("stop");
+    assert_eq!(server.last_params("Page.stopScreencast"), Some(json!({})));
 }
 
 // ===================== The void census =====================

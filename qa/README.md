@@ -69,7 +69,24 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # (about:blank must still be the document), the page
                                    # receiving the mock body — and measured Unsupported
                                    # on v0.2.2: navigation pauses are advisory, so the
-                                   # real page completes unanswered)
+                                   # real page completes unanswered;
+                                   # round-2/C2's screencast probed since 2026-09-30
+                                   # under the C1-tightened criterion (arrival alone is
+                                   # not usability): >=3 frames, EVERY one base64-
+                                   # decodable AND JPEG-magic'd (FFD8), acked after the
+                                   # check, and stopScreencast actually stops (frames
+                                   # in flight during the stop round-trip are not
+                                   # counted — the engine sent them before processing
+                                   # stop) — measured Supported on v0.2.2;
+                                   # round-2/C3's error_events probed since 2026-10-01:
+                                   # an ASYNC throw whose callback is proven to have
+                                   # run (a window flag set before the throw), the
+                                   # Runtime.exceptionThrown event must arrive naming
+                                   # the probe marker — measured Unsupported on v0.2.2
+                                   # (the event NEVER arrives, the second silent-miss
+                                   # of its kind after Page.javascriptDialogOpening);
+                                   # the tool face ([error] in the console ring) is
+                                   # asserted only when the engine half delivers)
 ./qa/browser_dual/run.sh escape    # the host this branch is BUILT for: no playwright-cli
                                    # anywhere (PATH scrubbed, fnm env unset, scratch
                                    # ledger). obscura still opens AND so does a Chrome
@@ -956,6 +973,39 @@ document, and the read-back answers a clean null on the new document —
 indistinguishable from "never landed"). So obscura's row stays `Unsupported`,
 now as a measured verdict on v0.2.2 rather than a fail-closed unknown, and its
 probe asserts the refusal reaches the model, never a fabricated verification.
+Round-2/C2 (2026-09-30) added the `screencast` row: `Page.startScreencast{jpeg}`
+is fired at the Aleph-launched obscura and the frames are READ, under the
+C1-tightened criterion — arrival alone is not usability, a frame counts only
+when its data base64-decodes AND starts with the JPEG magic (FFD8); every frame
+is acked after its check (the production pacing direction), the probe's own rAF
+loop is asserted to advance first (a silent stream on a frozen page would blame
+the engine for the fixture), and "frames after stop" counts only frames
+arriving after stop RESOLVED — obscura measurably has 1–2 in flight during the
+stop round-trip, and counting those would certify a tighter stop than the
+engine promised. Measured Supported on v0.2.2 (12/12 decodable, acks accepted,
+clean stop), and the chromium row's first real-machine reading (Chrome 151,
+full ffmpeg encode leg included) lives in the probe that certified it:
+`docs/superpowers/specs/2026-09-27-browser-recording-design/probes/`.
+Round-2/C3 (2026-10-01) added the `error_events` row: an ASYNC throw (a
+synchronous one is entitled to live only in the evaluate call's own
+exceptionDetails) whose callback is PROVEN to have run — a window flag is set
+before the throw, so a silent event stream is attributable to the engine and
+never to the fixture (判据 §2) — and the `Runtime.exceptionThrown` event must
+arrive naming the probe marker. Measured Unsupported on v0.2.2: the event
+never arrives (two independent readings — this stage and
+`docs/superpowers/specs/2026-09-30-browser-qa-design/probes/qa-events-probe.mjs`
+— agree), the second silent-miss of its kind after
+`Page.javascriptDialogOpening`. The same probe took the hitchhiked reading
+C3 Task 1's death detector needed: obscura DOES emit `Target.targetDestroyed`
+for the `Target.closeTarget` shape (targetId matched), while `Page.close` is
+unimplemented on this build (recorded unprovocable, not a reading); chromium
+(Chrome 151) delivers both destroy shapes AND the exception event, which
+upgraded its `error_events` row from the same-pump inference to a measurement.
+The tool face of `error_events` — the `[error]` line Aleph's own event pump
+folds into the console ring, which is what `browser_qa`'s check_errors
+consumes — is asserted only when the engine half delivers: an engine that
+never emits the event has nothing to fold, and redding the stage for that
+would blame our code for the engine's silence.
 
 **`switch` is the only place spec §5.5's "the login survives" is a fact rather
 than an intention.** Its load-bearing claims are the two no RPC can see: the

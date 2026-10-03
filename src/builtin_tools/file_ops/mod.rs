@@ -14,7 +14,7 @@ mod image_read;
 mod ops;
 mod path_utils;
 pub(crate) use path_utils::{
-    check_and_resolve_path, get_denied_paths, is_blocked_proc_path, path_is_denied,
+    check_and_resolve_path, get_denied_paths, is_blocked_proc_path, path_is_denied, DeniedPath,
 };
 pub(crate) mod read;
 mod read_cache;
@@ -201,6 +201,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_path_denies_protected() {
+        // `~` in these inputs and in the denylist entries must be the same
+        // home — see `gateway::handlers::fs`'s credential parity test.
+        let _home = crate::runtimes::post_install::HomeEnvGuard::acquire();
         let tool = FileOpsTool::new();
 
         // Test that protected paths are denied — the original SSH/PGP/AWS set

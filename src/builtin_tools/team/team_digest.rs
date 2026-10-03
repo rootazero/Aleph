@@ -9,8 +9,8 @@ use tracing::debug;
 use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
-use crate::teams::events::{EventLogStore, TeamEvent};
 use crate::teams::TeamStore;
+use crate::teams::events::{EventLogStore, TeamEvent};
 use crate::tools::AlephTool;
 // UTF-8 safe truncation by character count, no marker — digest lines are
 // reassembled downstream, so a stray ellipsis would leak into the payload.
@@ -84,6 +84,18 @@ fn format_event(event: &TeamEvent) -> String {
     let event_type = event.event_type.as_str();
     let agent = &event.agent_id;
 
+    // Truncate to `max_chars`, appending an ellipsis only when something was
+    // actually cut — digest lines are reassembled downstream and a stray
+    // marker on an in-budget string leaks into the payload.
+    let clip = |s: &str, max_chars: usize| -> String {
+        let truncated = truncate_str(s, max_chars);
+        if truncated.len() < s.len() {
+            format!("{truncated}...")
+        } else {
+            s.to_string()
+        }
+    };
+
     // Extract a brief summary from the payload
     let brief = if event.payload.is_null()
         || event.payload == serde_json::Value::Object(Default::default())
@@ -95,37 +107,17 @@ fn format_event(event: &TeamEvent) -> String {
             .iter()
             .take(3)
             .map(|(k, v)| {
-                let val_str = match v {
-                    serde_json::Value::String(s) => {
-                        let truncated = truncate_str(s, 80);
-                        if truncated.len() < s.len() {
-                            format!("{truncated}...")
-                        } else {
-                            s.clone()
-                        }
-                    }
-                    other => {
-                        let s = other.to_string();
-                        let truncated = truncate_str(&s, 80);
-                        if truncated.len() < s.len() {
-                            format!("{truncated}...")
-                        } else {
-                            s
-                        }
-                    }
+                let s = match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
                 };
-                format!("{k}={val_str}")
+                format!("{k}={}", clip(&s, 80))
             })
             .collect();
         format!(" ({})", parts.join(", "))
     } else {
         let s = event.payload.to_string();
-        let truncated = truncate_str(&s, 100);
-        if truncated.len() < s.len() {
-            format!(" ({truncated}...)")
-        } else {
-            format!(" ({s})")
-        }
+        format!(" ({})", clip(&s, 100))
     };
 
     format!("[{ts}] {event_type} by {agent}{brief}")
@@ -134,8 +126,7 @@ fn format_event(event: &TeamEvent) -> String {
 #[async_trait]
 impl AlephTool for TeamDigestTool {
     const NAME: &'static str = "team_digest";
-    const DESCRIPTION: &'static str =
-        "Generate a summary of recent team activity for the specified time period. \
+    const DESCRIPTION: &'static str = "Generate a summary of recent team activity for the specified time period. \
         Returns raw event data for you to synthesize into a digest.";
 
     type Args = TeamDigestArgs;

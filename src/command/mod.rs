@@ -21,10 +21,10 @@ pub use parser::{CommandContext, CommandParser, ParsedCommand};
 /// skills have registered. Every consumer therefore holds this cell rather
 /// than the parser, and reads it per request.
 ///
-/// It is a *shared* cell, not one per consumer: `command.execute`, `chat.send`,
-/// `agent.run` and the execution engine's own fallback all resolve slash input
-/// through the same parser, which is what stops the four surfaces from growing
-/// four slightly different ideas of what `/foo` means.
+/// It is a *shared* cell, not one per consumer: `chat.send`, `agent.run` and
+/// the execution engine's own fallback all resolve slash input through the
+/// same parser, which is what stops the surfaces from growing slightly
+/// different ideas of what `/foo` means.
 pub type CommandParserCell = crate::sync_primitives::Arc<
     tokio::sync::RwLock<Option<crate::sync_primitives::Arc<CommandParser>>>,
 >;

@@ -8,8 +8,7 @@
 use crate::bundled::{BUNDLED_SKILLS, OFFICIAL_SKILLS_REPO};
 use crate::domain::skill::{SkillManifest, SkillSource};
 use crate::domain::Entity; // brings `manifest.id()` into scope (status.rs does the same)
-use crate::hub::catalog_client::ALEPH_HUB_ID;
-use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
+use crate::hub::types::{ExtensionEntry, ExtensionKind, InstallSpec};
 use crate::skill::manifest::parse_skill_content;
 
 /// Project one bundled skill into a Hub catalog entry. `dir_name` is the bundle
@@ -22,27 +21,15 @@ fn project_skill(dir_name: &str, manifest: &SkillManifest) -> ExtensionEntry {
         git_ref: None,
         sha256: None,
     };
-    ExtensionEntry {
-        id: format!("{ALEPH_HUB_ID}:{}", manifest.id()),
-        kind: ExtensionKind::Skill,
-        category: ExtensionCategory::Other,
-        name: manifest.name().to_string(),
-        description: manifest.description().to_string(),
-        author: None,
-        icon: None,
-        tags: vec![ExtensionKind::Skill.as_str().to_string()],
-        version: None,
-        source_id: ALEPH_HUB_ID.to_string(),
-        repo_url: Some(OFFICIAL_SKILLS_REPO.to_string()),
-        trust_tier: TrustTier::Official,
-        requires_config: spec.requires_config(),
-        config_schema: None,
-        installed: false,
-        enabled: false,
-        update_available: false,
-        via: Some(ALEPH_HUB_ID.to_string()),
-        install_spec: Some(spec),
-    }
+    super::official_plugins::aleph_hub_official_entry(
+        ExtensionKind::Skill,
+        manifest.id().as_str(),
+        manifest.name().to_string(),
+        manifest.description().to_string(),
+        OFFICIAL_SKILLS_REPO,
+        None,
+        spec,
+    )
 }
 
 /// Project the in-binary bundled official skills into Hub catalog entries.
@@ -79,6 +66,9 @@ pub fn primer_entries() -> Vec<ExtensionEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Dropped from the parent's imports by cea4632b3 as production-unused —
+    // but the assertions below read them. Test-only, on purpose.
+    use crate::hub::types::{ExtensionCategory, TrustTier};
 
     const SAMPLE: &str = "---\nname: PDF Tools\ndescription: Work with PDFs.\n---\nBody.";
 

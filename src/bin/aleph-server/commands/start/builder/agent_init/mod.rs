@@ -1000,8 +1000,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         )
         .with_app_config(app_config_arc.clone())
         .with_tool_health(tool_health.clone())
-        // Share the one parser cell with `command.execute`, `chat.send` and
-        // `agent.run`, so all four slash surfaces resolve `/foo` identically.
+        // Share the one parser cell with `chat.send` and `agent.run`, so the
+        // slash surfaces resolve `/foo` identically.
         // Filled by `init_tool_catalog` further down, before readiness.
         .with_command_parser_cell(command_parser_cell.clone());
         if let Some(ref state_db) = resilience_db {

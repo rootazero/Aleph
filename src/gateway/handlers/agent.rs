@@ -35,7 +35,13 @@ pub struct Attachment {
 /// Parameters for agent.run request
 #[derive(Debug, Clone, Deserialize)]
 pub struct AgentRunParams {
-    /// User input message
+    /// User input message.
+    ///
+    /// The `message` alias lets `chat.send` reuse this struct verbatim — the
+    /// historical `SendParams` shape had to keep an exact copy of every field
+    /// in this struct, and any drift between the two produced the kind of bug
+    /// the `chat.send vs agent.run` regression test exists to guard.
+    #[serde(alias = "message")]
     pub input: String,
     /// Optional session key (auto-generated if not provided)
     #[serde(default)]

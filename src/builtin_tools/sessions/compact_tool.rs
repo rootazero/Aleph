@@ -67,7 +67,9 @@ impl AlephTool for SessionCompactTool {
          replaying them in full, keeping the most recent turns verbatim. Frees context without \
          losing the thread — the summarized turns stay searchable and stay in the user's \
          transcript. Pass `instructions` to steer what the summary must preserve. Use when the \
-         user asks to compact, compress, or shorten the conversation.";
+         user asks to compact, compress, or shorten the conversation — and consider calling it \
+         proactively when the conversation keeps growing, rather than waiting for the system to \
+         force an emergency compaction you do not control.";
 
     type Args = SessionCompactArgs;
     type Output = SessionCompactOutput;

@@ -15,7 +15,7 @@
 //!
 //! - **Server Lifecycle**: Add, remove, start, stop, restart servers
 //! - **Health Monitoring**: Circuit breaker pattern with automatic restarts
-//! - **Tool Aggregation**: Unified view of tools from all servers
+//! - **Instructions Aggregation**: Server `instructions` from all healthy servers
 //! - **Configuration Persistence**: Save/load server configurations with env var expansion
 //! - **Event Broadcasting**: Notify subscribers of state changes
 //!

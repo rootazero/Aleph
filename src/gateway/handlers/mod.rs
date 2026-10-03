@@ -343,13 +343,6 @@ impl HandlerRegistry {
         registry.register("commands.list", |req| async move {
             JsonRpcResponse::success(req.id, serde_json::json!({ "commands": [] }))
         });
-        registry.register("command.execute", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "command.execute requires ToolRegistry — wire in Gateway startup".to_string(),
-            )
-        });
 
         // User-level hooks file admin (`~/.aleph/hooks.json`).
         // No context needed — the handlers reach the extension manager
@@ -361,7 +354,7 @@ impl HandlerRegistry {
         registry.register("hooks.events", hooks_admin::handle_hooks_events);
         registry.register("hooks.registry", hooks_admin::handle_hooks_registry);
 
-        // Plugin handlers (plural — legacy namespace, kept for backward compatibility)
+        // Plugin handlers (plural — this is the namespace every client calls: Panel, CLI, qa)
         registry.register("plugins.list", plugins::handle_list);
         registry.register("plugins.install", plugins::handle_install);
         registry.register("plugins.installFromZip", plugins::handle_install_from_zip);
@@ -370,20 +363,11 @@ impl HandlerRegistry {
         registry.register("plugins.disable", plugins::handle_disable);
         registry.register("plugins.callTool", plugins::handle_call_tool);
 
-        // Plugin handlers (singular — canonical CC-compatible namespace)
-        registry.register("plugin.list", plugins::handle_list);
+        // Plugin handlers (singular — only the verbs that have a client; the rest were cut 2026-09-20)
         registry.register("plugin.install", plugins::handle_install_unified);
-        registry.register("plugin.installFromZip", plugins::handle_install_from_zip);
         registry.register("plugin.uninstall", plugins::handle_uninstall);
         registry.register("plugin.update", plugins::handle_update);
-        registry.register("plugin.enable", plugins::handle_enable);
-        registry.register("plugin.disable", plugins::handle_disable);
         registry.register("plugin.reload", plugins::handle_reload);
-        // Per-plugin configuration. The manifest could declare a
-        // `config_schema` since the type existed; nothing could read or write
-        // a value against it until these two.
-        registry.register("plugin.config.get", plugins::handle_config_get);
-        registry.register("plugin.config.set", plugins::handle_config_set);
 
         // Plugin marketplace handlers
         registry.register("plugin.marketplace.list", plugins::handle_marketplace_list);
@@ -1378,6 +1362,53 @@ mod tests {
         // them (census in the commit that removed them).
         assert!(!registry.has_method("plugins.load"));
         assert!(!registry.has_method("plugins.unload"));
+    }
+
+    /// The singular `plugin.*` namespace was described as "canonical" while
+    /// every client called the plural. The six verbs no client ever called
+    /// are gone; the ones with a client (install/uninstall/update/reload,
+    /// marketplace.*) stay. A method that is registered but never called is
+    /// not compatibility, it is surface.
+    #[test]
+    fn the_uncalled_singular_plugin_verbs_are_not_registered() {
+        let registry = HandlerRegistry::new();
+        for orphan in [
+            "plugin.list",
+            "plugin.installFromZip",
+            "plugin.enable",
+            "plugin.disable",
+            "plugin.config.get",
+            "plugin.config.set",
+        ] {
+            assert!(
+                !registry.has_method(orphan),
+                "{orphan} is registered again — it had zero clients when it was cut (2026-09-20)"
+            );
+        }
+        for kept in [
+            "plugin.install",
+            "plugin.uninstall",
+            "plugin.update",
+            "plugin.reload",
+        ] {
+            assert!(
+                registry.has_method(kept),
+                "{kept} has a client and must stay"
+            );
+        }
+    }
+
+    /// `command.execute` was a second face for what `chat.send` already does
+    /// with the same `CommandParser`, and no client ever called it. The
+    /// ToolCatalog-less base stub and the startup override both go.
+    #[test]
+    fn command_execute_is_not_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(!registry.has_method("command.execute"));
+        assert!(
+            registry.has_method("commands.list"),
+            "commands.list is the surviving face"
+        );
     }
 
     #[test]

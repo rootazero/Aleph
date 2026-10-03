@@ -9,6 +9,7 @@ use tracing::{debug, info};
 
 use super::path_utils::{
     check_and_resolve_path, contains_denied_descendant, path_is_denied, resolve_for_removal,
+    DeniedPath,
 };
 use super::types::{FileInfo, FileOpsOutput, DEFAULT_ENTRY_LIMIT};
 use crate::builtin_tools::error::ToolError;
@@ -17,7 +18,7 @@ use crate::tools::path_locks::{lock_path, lock_path_pair};
 /// Execute a list operation
 pub async fn execute_list(
     path: &Path,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&std::path::Path>,
     limit: Option<usize>,
 ) -> Result<FileOpsOutput, ToolError> {
@@ -70,17 +71,10 @@ pub async fn execute_list(
         };
 
         let entry_path = entry.path();
-        files.push(FileInfo {
-            name: entry.file_name().to_string_lossy().to_string(),
-            path: entry_path.to_string_lossy().to_string(),
-            is_dir: metadata.is_dir(),
-            size: metadata.len(),
-            extension: entry_path
-                .extension()
-                .map(|e| e.to_string_lossy().to_string()),
-            lines: None,
-            mtime: None,
-        });
+        let mut info = FileInfo::with_path(&entry_path);
+        info.is_dir = metadata.is_dir();
+        info.size = metadata.len();
+        files.push(info);
     }
 
     // Sort: directories first, then by name
@@ -126,7 +120,7 @@ pub async fn execute_list(
 /// function a single, focused I/O boundary.
 pub(super) async fn read_file_bytes(
     path: &Path,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     max_read_size: u64,
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<(PathBuf, u64, Vec<u8>), ToolError> {
@@ -197,7 +191,7 @@ pub(super) async fn execute_write(
     path: &Path,
     content: &str,
     create_parents: bool,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<WriteOutcome, ToolError> {
     let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
@@ -302,7 +296,7 @@ pub async fn execute_move(
     from: &Path,
     to: &Path,
     create_parents: bool,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
     // A symlink source must be renamed as the LINK, not its target (which
@@ -392,7 +386,7 @@ pub async fn execute_copy(
     from: &Path,
     to: &Path,
     create_parents: bool,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
     let from_canonical = check_and_resolve_path(from, denied_paths, output_dir_override)?;
@@ -608,7 +602,7 @@ impl CopyTally {
 fn copy_dir_recursive(
     from: &Path,
     to: &Path,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     visited: &mut std::collections::HashSet<PathBuf>,
 ) -> Result<CopyTally, ToolError> {
     let mut tally = CopyTally::default();
@@ -710,7 +704,7 @@ fn count_path_entries(path: &Path) -> usize {
 /// Execute a delete operation
 pub async fn execute_delete(
     path: &Path,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
     // Deleting a symlink must unlink the LINK, not descend into its target
@@ -802,7 +796,7 @@ pub async fn execute_delete(
 pub async fn execute_mkdir(
     path: &Path,
     create_parents: bool,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
     let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
@@ -943,7 +937,7 @@ mod tests {
         let secret_dir = root.path().join("secret");
         fs::create_dir(&secret_dir).unwrap();
         fs::write(secret_dir.join("id_rsa"), b"PRIVATE KEY").unwrap();
-        let denied = vec![secret_dir.to_string_lossy().to_string()];
+        let denied = vec![DeniedPath::literal(secret_dir.to_string_lossy())];
 
         // A source dir containing a symlink INTO the denied store.
         let src = root.path().join("src");
@@ -973,7 +967,7 @@ mod tests {
         let secret_dir = src.join("data");
         fs::create_dir(&secret_dir).unwrap();
         fs::write(secret_dir.join("pairing.db"), b"DB").unwrap();
-        let denied = vec![secret_dir.to_string_lossy().to_string()];
+        let denied = vec![DeniedPath::literal(secret_dir.to_string_lossy())];
 
         let dst = root.path().join("backup");
         let out = execute_copy(&src, &dst, true, &denied, None).await.unwrap();
@@ -999,7 +993,7 @@ mod tests {
         let secret_dir = src.join("data");
         fs::create_dir(&secret_dir).unwrap();
         fs::write(secret_dir.join("pairing.db"), b"DB").unwrap();
-        let denied = vec![secret_dir.to_string_lossy().to_string()];
+        let denied = vec![DeniedPath::literal(secret_dir.to_string_lossy())];
 
         let dst = root.path().join("backup");
         let out = execute_copy(&src, &dst, true, &denied, None).await.unwrap();
@@ -1104,7 +1098,7 @@ mod tests {
         fs::create_dir(&config).unwrap();
         let vault = config.join("secrets.vault");
         fs::write(&vault, b"ENCRYPTED").unwrap();
-        let denied = vec![vault.to_string_lossy().to_string()];
+        let denied = vec![DeniedPath::literal(vault.to_string_lossy())];
 
         let err = execute_delete(&config, &denied, None)
             .await
@@ -1123,7 +1117,7 @@ mod tests {
         fs::create_dir(&config).unwrap();
         let vault = config.join("secrets.vault");
         fs::write(&vault, b"ENCRYPTED").unwrap();
-        let denied = vec![vault.to_string_lossy().to_string()];
+        let denied = vec![DeniedPath::literal(vault.to_string_lossy())];
 
         let dest = root.path().join("relocated");
         let err = execute_move(&config, &dest, false, &denied, None)

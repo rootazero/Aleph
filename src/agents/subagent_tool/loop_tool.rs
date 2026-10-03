@@ -22,8 +22,7 @@ use super::recovery::{self, Recovered};
 use super::spawn::CancelGuard;
 use super::types::{
     wave_aware_child_timeout_cap, wave_count, BatchTask, SubagentAction, BATCH_ABORT_DRAIN_SECS,
-    BATCH_CANCEL_GRACE_SECS, BATCH_FANOUT_SLACK_SECS, LIST_RESULT_PREVIEW_CHARS,
-    MAX_LISTED_COMPLETED,
+    BATCH_CANCEL_GRACE_SECS, BATCH_FANOUT_SLACK_SECS, MAX_LISTED_COMPLETED,
 };
 use super::SubagentTool;
 
@@ -192,6 +191,7 @@ impl LoopTool for SubagentTool {
         Self::schema_value()
     }
 
+    /// Resolve an `agent_type` to an `AgentDef`, or build the `ToolResult::Error`
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
         // Gap B follow-up — the harness Act phase forks a per-call child of
         // the run cancel and threads it here. `cancel_for_child_with(&cancel)`
@@ -232,22 +232,9 @@ impl LoopTool for SubagentTool {
                 };
 
                 // Resolve team_name to team_id via teammate_manager
-                let resolved_team_id = if let Some(ref mgr) = self.agent_resolution.teammate_manager
-                {
-                    match mgr
-                        .ensure_team(&team_name, &self.agent_resolution.parent_agent_id)
-                        .await
-                    {
-                        Ok(id) => id,
-                        Err(e) => {
-                            return ToolResult::Error {
-                                error: format!("Failed to resolve team '{team_name}': {e}"),
-                                retryable: false,
-                            };
-                        }
-                    }
-                } else {
-                    team_name.clone()
+                let resolved_team_id = match self.resolve_team_id(&team_name).await {
+                    Ok(id) => id,
+                    Err(err) => return err,
                 };
 
                 match router
@@ -293,22 +280,9 @@ impl LoopTool for SubagentTool {
                 };
 
                 // Resolve team_name to team_id via teammate_manager
-                let resolved_team_id = if let Some(ref mgr) = self.agent_resolution.teammate_manager
-                {
-                    match mgr
-                        .ensure_team(&team_name, &self.agent_resolution.parent_agent_id)
-                        .await
-                    {
-                        Ok(id) => id,
-                        Err(e) => {
-                            return ToolResult::Error {
-                                error: format!("Failed to resolve team '{team_name}': {e}"),
-                                retryable: false,
-                            };
-                        }
-                    }
-                } else {
-                    team_name.clone()
+                let resolved_team_id = match self.resolve_team_id(&team_name).await {
+                    Ok(id) => id,
+                    Err(err) => return err,
                 };
 
                 match inbox
@@ -898,63 +872,17 @@ impl LoopTool for SubagentTool {
                 let mut prepared: Vec<(AgentDef, String, Option<String>, u64)> =
                     Vec::with_capacity(batch.len());
                 for (idx, batch_task) in batch.iter().enumerate() {
-                    let agent_def = if let Some(ref agent_type) = batch_task.agent_type {
-                        match self
-                            .agent_resolution
-                            .agent_registry
-                            .resolve_spawnable(agent_type, project_root_ref)
-                        {
-                            Some(def) => def,
-                            None => {
-                                let available = self
-                                    .agent_resolution
-                                    .agent_registry
-                                    .spawnable_agent_ids(project_root_ref)
-                                    .join(", ");
-                                return ToolResult::Error {
-                                    error: format!(
-                                        "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
-                                    ),
-                                    retryable: false,
-                                };
-                            }
-                        }
-                    } else if let Some(ref agent_type) = args.agent_type {
-                        match self
-                            .agent_resolution
-                            .agent_registry
-                            .resolve_spawnable(agent_type, project_root_ref)
-                        {
-                            Some(def) => def,
-                            None => {
-                                let available = self
-                                    .agent_resolution
-                                    .agent_registry
-                                    .spawnable_agent_ids(project_root_ref)
-                                    .join(", ");
-                                return ToolResult::Error {
-                                    error: format!(
-                                        "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
-                                    ),
-                                    retryable: false,
-                                };
-                            }
-                        }
-                    } else {
-                        match self
-                            .agent_resolution
-                            .agent_registry
-                            .lookup_with_overlay("default", project_root_ref)
-                        {
-                            Some(def) => def,
-                            None => {
-                                return ToolResult::Error {
-                                    error: "No default agent registered in AgentRegistry"
-                                        .to_string(),
-                                    retryable: false,
-                                };
-                            }
-                        }
+                    let agent_type = batch_task
+                        .agent_type
+                        .as_deref()
+                        .or(args.agent_type.as_deref());
+                    let agent_def = match self.resolve_agent_or_error(
+                        agent_type,
+                        &format!("batch task {idx}: "),
+                        project_root_ref,
+                    ) {
+                        Ok(def) => def,
+                        Err(err) => return err,
                     };
                     let model = batch_task.model.clone().or_else(|| args.model.clone());
                     let timeout = batch_task.timeout_secs.unwrap_or(args.timeout_secs);
@@ -1014,9 +942,9 @@ impl LoopTool for SubagentTool {
                 let child_cap_secs =
                     wave_aware_child_timeout_cap(prepared.len(), permits, agg_rounds);
                 let waves = u64::try_from(wave_count(prepared.len(), permits)).unwrap_or(u64::MAX);
-                for row in &mut prepared {
-                    row.3 = row.3.min(child_cap_secs);
-                }
+                prepared
+                    .iter_mut()
+                    .for_each(|row| row.3 = row.3.min(child_cap_secs));
                 // Backstop for children that never get to arm their own clock:
                 // the permit wait inside the spawner happens BEFORE its
                 // `tokio::time::timeout`, so a queued child is invisible to
@@ -1233,43 +1161,13 @@ impl LoopTool for SubagentTool {
                 // dumb). Skipped when no proposal succeeded — there is nothing
                 // to fold, so the raw batch is returned untouched.
                 if args.synthesize && !proposals.is_empty() {
-                    let aggregator_def = if let Some(ref agent_type) = args.agent_type {
-                        match self
-                            .agent_resolution
-                            .agent_registry
-                            .resolve_spawnable(agent_type, project_root_ref)
-                        {
-                            Some(def) => def,
-                            None => {
-                                let available = self
-                                    .agent_resolution
-                                    .agent_registry
-                                    .spawnable_agent_ids(project_root_ref)
-                                    .join(", ");
-                                return ToolResult::Error {
-                                    error: format!(
-                                        "aggregator: Unknown agent_type '{agent_type}'. Available agents: {available}"
-                                    ),
-                                    retryable: false,
-                                };
-                            }
-                        }
-                    } else {
-                        match self
-                            .agent_resolution
-                            .agent_registry
-                            .lookup_with_overlay("default", project_root_ref)
-                        {
-                            Some(def) => def,
-                            None => {
-                                return ToolResult::Error {
-                                    error:
-                                        "aggregator: No default agent registered in AgentRegistry"
-                                            .to_string(),
-                                    retryable: false,
-                                };
-                            }
-                        }
+                    let aggregator_def = match self.resolve_agent_or_error(
+                        args.agent_type.as_deref(),
+                        "aggregator: ",
+                        project_root_ref,
+                    ) {
+                        Ok(def) => def,
+                        Err(err) => return err,
                     };
 
                     let goal = if args.task.trim().is_empty() {
@@ -1416,41 +1314,13 @@ impl LoopTool for SubagentTool {
         // 2. Resolve agent definition (per-run project overlay first).
         let project_root = crate::projects::current_project_root();
         let project_root_ref = project_root.as_deref();
-        let agent_def = if let Some(ref agent_type) = args.agent_type {
-            match self
-                .agent_resolution
-                .agent_registry
-                .resolve_spawnable(agent_type, project_root_ref)
-            {
-                Some(def) => def,
-                None => {
-                    let available = self
-                        .agent_resolution
-                        .agent_registry
-                        .spawnable_agent_ids(project_root_ref)
-                        .join(", ");
-                    return ToolResult::Error {
-                        error: format!(
-                            "Unknown agent_type '{agent_type}'. Available agents: {available}"
-                        ),
-                        retryable: false,
-                    };
-                }
-            }
-        } else {
-            match self
-                .agent_resolution
-                .agent_registry
-                .lookup_with_overlay("default", project_root_ref)
-            {
-                Some(def) => def,
-                None => {
-                    return ToolResult::Error {
-                        error: "No default agent registered in AgentRegistry".to_string(),
-                        retryable: false,
-                    };
-                }
-            }
+        let agent_def = match self.resolve_agent_or_error(
+            args.agent_type.as_deref(),
+            "",
+            project_root_ref,
+        ) {
+            Ok(def) => def,
+            Err(err) => return err,
         };
 
         // 3. Check nesting depth
@@ -1562,6 +1432,69 @@ impl LoopTool for SubagentTool {
 }
 
 impl SubagentTool {
+    /// Resolve an `agent_type` to an `AgentDef`, or build the
+    /// `ToolResult::Error` that should be returned to the model. Shared by
+    /// the batch, aggregator, and single-run paths in `execute` — each was a
+    /// copy of the same resolve-then-fallback dance with a different
+    /// `error_prefix` ("batch task {idx}: ", "aggregator: ", ""). Inherent
+    /// method (not a trait method), so it lives here rather than inside the
+    /// `impl LoopTool for SubagentTool` block where the trait-method-only
+    /// check would reject it.
+    fn resolve_agent_or_error(
+        &self,
+        agent_type: Option<&str>,
+        error_prefix: &str,
+        project_root_ref: Option<&std::path::Path>,
+    ) -> Result<AgentDef, ToolResult> {
+        if let Some(t) = agent_type {
+            if let Some(def) = self
+                .agent_resolution
+                .agent_registry
+                .resolve_spawnable(t, project_root_ref)
+            {
+                return Ok(def);
+            }
+            let available = self
+                .agent_resolution
+                .agent_registry
+                .spawnable_agent_ids(project_root_ref)
+                .join(", ");
+            return Err(ToolResult::Error {
+                error: format!(
+                    "{error_prefix}Unknown agent_type '{t}'. Available agents: {available}"
+                ),
+                retryable: false,
+            });
+        }
+        match self
+            .agent_resolution
+            .agent_registry
+            .lookup_with_overlay("default", project_root_ref)
+        {
+            Some(def) => Ok(def),
+            None => Err(ToolResult::Error {
+                error: format!("{error_prefix}No default agent registered in AgentRegistry"),
+                retryable: false,
+            }),
+        }
+    }
+
+    /// Resolve a `team_name` to a team_id through the optional
+    /// `teammate_manager`, falling back to the raw name when no manager is
+    /// configured. Returns a fully-formed `ToolResult::Error` on failure so
+    /// the caller can short-circuit. Shared by `SendMessage` and `ReadInbox`.
+    async fn resolve_team_id(&self, team_name: &str) -> Result<String, ToolResult> {
+        let Some(mgr) = self.agent_resolution.teammate_manager.as_ref() else {
+            return Ok(team_name.to_string());
+        };
+        mgr.ensure_team(team_name, &self.agent_resolution.parent_agent_id)
+            .await
+            .map_err(|e| ToolResult::Error {
+                error: format!("Failed to resolve team '{team_name}': {e}"),
+                retryable: false,
+            })
+    }
+
     /// Report a `wait` that was cut short by the harness cancel token.
     ///
     /// # Why the wait listens to the token at all
@@ -2019,7 +1952,7 @@ fn completed_row_json(request_id: &str, snap: &CompletedSnapshot) -> Value {
             "status": "completed",
             "request_id": request_id,
             "task": snap.task,
-            "result_preview": preview(final_text),
+            "result_preview": super::types::preview(final_text),
             "result_chars": final_text.chars().count(),
             "iterations": iterations,
             "tool_calls_made": tool_calls_made,
@@ -2057,16 +1990,7 @@ fn unknown_request_id(request_id: &str) -> ToolResult {
     }
 }
 
-/// UTF-8-safe head slice of a sub-agent's output, ellipsised when cut (P7 —
-/// byte slicing a model-authored string is how this panics on CJK).
-fn preview(text: &str) -> String {
-    let head: String = text.chars().take(LIST_RESULT_PREVIEW_CHARS).collect();
-    if head.chars().count() < text.chars().count() {
-        format!("{head}…")
-    } else {
-        head
-    }
-}
+
 
 /// Render a finished background sub-agent as a JSON object. `ok_status` is
 /// the `status` string for a success (`completed` / `already_completed`);

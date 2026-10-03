@@ -119,17 +119,7 @@ impl StdioTransport {
 /// Write a JSON-RPC request through a `SharedStdin`. Extracted so cancel
 /// handles can reuse the same NDJSON framing without owning the transport.
 pub async fn write_request(stdin: &SharedStdin, req: &AcpRequest) -> Result<()> {
-    let mut line = serde_json::to_string(req)?;
-    line.push('\n');
-    let mut guard = stdin.lock().await;
-    guard
-        .write_all(line.as_bytes())
-        .await
-        .map_err(|e| AlephError::IoError(format!("ACP stdin write error: {e}")))?;
-    guard
-        .flush()
-        .await
-        .map_err(|e| AlephError::IoError(format!("ACP stdin flush error: {e}")))?;
+    write_framed(stdin, req).await?;
     debug!("ACP sent: method={} id={}", req.method, req.id);
     Ok(())
 }
@@ -137,6 +127,16 @@ pub async fn write_request(stdin: &SharedStdin, req: &AcpRequest) -> Result<()> 
 /// Write a raw JSON-RPC value (a response to an agent→client request) through a
 /// `SharedStdin` with NDJSON framing.
 pub async fn write_value(stdin: &SharedStdin, value: &serde_json::Value) -> Result<()> {
+    write_framed(stdin, value).await
+}
+
+/// Serialize `value` to NDJSON (one JSON object + `\n`), lock the shared stdin,
+/// and write+flush. Centralizes the framing used by both [`write_request`] and
+/// [`write_value`] so the wire shape has one source of truth.
+async fn write_framed<T>(stdin: &SharedStdin, value: &T) -> Result<()>
+where
+    T: serde::Serialize,
+{
     let mut line = serde_json::to_string(value)?;
     line.push('\n');
     let mut guard = stdin.lock().await;

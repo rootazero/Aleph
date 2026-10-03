@@ -1,6 +1,6 @@
 ---
 name: echo-basic
-description: Basic echo command (OpenClaw compatible)
+description: Basic echo command (frontmatter smoke fixture)
 metadata:
   requires:
     bins: ["echo"]
@@ -8,7 +8,7 @@ metadata:
 
 # Echo Basic Tool
 
-A simple echo command for testing OpenClaw compatibility.
+A simple echo command for testing SKILL.md frontmatter parsing.
 
 ## Examples
 

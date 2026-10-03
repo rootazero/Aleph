@@ -9,6 +9,17 @@
 //! strategy reads it before paying a side-channel summarization call.
 
 mod cheap_poison;
+/// Cross-run fingerprint-cache carry-over for [`ContextCompactor`](compactor) —
+/// the process-wide per-session slot that survives a run boundary, plus the
+/// zero-cost session-memory reuse wiring. Private to the compaction module
+/// because both are loaded into `ContextCompactor` at construction time and
+/// nothing outside this directory constructs or inspects either.
+mod compaction_cache;
+/// Pure window-construction helpers shared by every compaction path (window
+/// selection, fingerprint hashing, transcript serialization). Private to the
+/// compaction module because each helper is an internal step of one of the
+/// drain sites the compactor orchestrates.
+pub(crate) mod compaction_window;
 pub mod compactor;
 pub mod directive;
 /// Event-level cut-boundary guards shared by the drain sites that cut into
@@ -21,6 +32,17 @@ mod event_snap;
 /// reason [`plan_carry`] is: the only legitimate producer is a drain.
 mod file_carry;
 pub mod fit;
+/// The fold ledger: lazy per-fold payback verdicts (`judge_fold`) over the
+/// fold registry's token accounting plus the `compactor:<agent>` metering
+/// channel. Pure functions only — no background sweep, no hot-path cost; the
+/// `core/fold-economics` doctor check calls in when someone asks whether a
+/// fold net-saved tokens or cost more than it will ever repay.
+pub mod fold_ledger;
+/// The fold registry: a derived, read-only view over `FoldRecorded` /
+/// `CompactionPerformed` events that makes every compaction's retired span
+/// addressable. No parallel table — `session_events` stays the single source
+/// of truth.
+pub mod folds;
 /// Re-emit the newest screenshot below the summary, so the image the preflight
 /// image-stripping stage deliberately protects survives the drain that runs
 /// immediately after it on the same vector.

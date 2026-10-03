@@ -74,6 +74,13 @@ pub enum Action {
     // -- Focus --
     /// Focus the input textarea
     FocusInput,
+    /// Focus the input textarea AND insert `ch` at the cursor. Used when the
+    /// user pressed a printable character while the chat panel had it — the
+    /// prior `FocusInput` alone silently dropped the keystroke that triggered
+    /// the focus switch (the cursor moved into the textarea but no character
+    /// appeared). The character is buffered into the action so the dispatch
+    /// loop can insert it after `Focus::Input` is set.
+    FocusInputWithChar(char),
     /// Focus the chat panel (for scrolling)
     FocusChat,
 
@@ -2133,6 +2140,15 @@ impl AppState {
         // up: this client does not cancel on switch, and making the side
         // question the one exception would be a surprise, not a fix.)
         self.btw.clear_for_session_switch();
+        // The send-history belongs to the outgoing conversation: recalling
+        // its lines after `/session` would surface prompts from a different
+        // context. Clear both the buffer and the up/down cursor together —
+        // a stale `history_index` left pointing into a freshly emptied vec
+        // is read by `keys.rs` via `send_history.get(idx)`, which returns
+        // None and the textarea silently loses the keystroke. Wiping the
+        // index keeps the next Up arrow safe.
+        self.send_history.clear();
+        self.history_index = None;
         // New session = different context window; drop the stale gauge until
         // the next run's first `ContextGauge` refreshes it.
         self.context_gauge = None;

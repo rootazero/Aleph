@@ -79,13 +79,12 @@ fn truncate_error_body(s: String) -> String {
     if s.len() <= MAX_ERROR_BODY_CHARS {
         s
     } else {
-        // Truncate on a char boundary to keep the message valid UTF-8 even
-        // when the cut lands inside a multi-byte sequence.
-        let mut end = MAX_ERROR_BODY_CHARS;
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        let mut truncated = s[..end].to_string();
+        // Floor to a char boundary to keep the message valid UTF-8 even
+        // when the cut would land inside a multi-byte sequence. `str` on
+        // the project's MSRV ships `floor_char_boundary` as stable, so the
+        // hand-rolled `while !is_char_boundary` walk is no longer needed.
+        let cut = s.floor_char_boundary(MAX_ERROR_BODY_CHARS);
+        let mut truncated = s[..cut].to_string();
         truncated.push_str("…[truncated]");
         truncated
     }
@@ -132,9 +131,10 @@ fn call_once(
 fn build_client(url: &str) -> anyhow::Result<reqwest::blocking::Client> {
     let mut builder =
         reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10));
+    let is_https = url.starts_with("https://");
     let host = host_of(url)
         .ok_or_else(|| anyhow::anyhow!("could not parse host out of endpoint URL {url:?}"))?;
-    if url.starts_with("https://") && !is_loopback_host(&host) {
+    if is_https && !is_loopback_host(&host) {
         anyhow::bail!(
             "refusing to connect to admin IPC endpoint over HTTPS on \
              non-loopback host ({host} from {url}); a self-signed or otherwise \
@@ -143,7 +143,7 @@ fn build_client(url: &str) -> anyhow::Result<reqwest::blocking::Client> {
              .ipc-endpoint.json."
         );
     }
-    if url.starts_with("https://") {
+    if is_https {
         // Self-signed cert on loopback is the supported local TLS setup.
         builder = builder.danger_accept_invalid_certs(true);
     }
@@ -173,7 +173,10 @@ fn host_of(url: &str) -> Option<String> {
 }
 
 fn is_loopback_host(host: &str) -> bool {
-    matches!(host, "127.0.0.1" | "::1" | "localhost")
+    // `IpAddr::is_loopback` covers `127.0.0.0/8` and `::1` (and the rest of
+    // the loopback range on platforms that recognise it), which subsumes
+    // both literal aliases — no need to spell them out.
+    host == "localhost"
         || host
             .parse::<std::net::IpAddr>()
             .map(|ip| ip.is_loopback())

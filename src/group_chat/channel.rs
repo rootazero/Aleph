@@ -64,16 +64,23 @@ impl DefaultGroupChatCommandParser {
 /// message verbatim (quotes are preserved so a channel-specific parser can
 /// still apply its own conventions downstream).
 fn parse_continue_command(args: &str) -> Option<GroupChatRequest> {
+    let (session_id, message) = split_session_and_message(args)?;
+    Some(GroupChatRequest::Continue {
+        session_id: session_id.to_string(),
+        message: message.to_string(),
+    })
+}
+
+/// Split a `<session_id> <message...>` argument string on the first
+/// whitespace and reject empty halves.
+fn split_session_and_message(args: &str) -> Option<(&str, &str)> {
     let (session_id, message) = args.split_once(char::is_whitespace)?;
     let session_id = session_id.trim();
     let message = message.trim();
     if session_id.is_empty() || message.is_empty() {
         return None;
     }
-    Some(GroupChatRequest::Continue {
-        session_id: session_id.to_string(),
-        message: message.to_string(),
-    })
+    Some((session_id, message))
 }
 
 /// Parses `/groupchat mention <session_id> <message with @persona_id ...>`.
@@ -83,12 +90,7 @@ fn parse_continue_command(args: &str) -> Option<GroupChatRequest> {
 /// (alphanumerics, `_`, `-`). The message is passed through unchanged so the
 /// coordinator still sees the raw text the user typed.
 fn parse_mention_command(args: &str) -> Option<GroupChatRequest> {
-    let (session_id, message) = args.split_once(char::is_whitespace)?;
-    let session_id = session_id.trim();
-    let message = message.trim();
-    if session_id.is_empty() || message.is_empty() {
-        return None;
-    }
+    let (session_id, message) = split_session_and_message(args)?;
     let targets: Vec<String> = message
         .split_whitespace()
         .filter_map(|tok| {

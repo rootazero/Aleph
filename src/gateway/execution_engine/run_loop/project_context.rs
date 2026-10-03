@@ -220,8 +220,6 @@ pub(crate) fn collect_project_skill_block(workspace: &std::path::Path) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// P4.16 review I-2 residual: the SessionStart seam guard above drives
     /// `fire_session_start`, so a fire site that bypassed it — re-inlining
     /// its own dispatch — would stay green. Census: outside `src/extension/`

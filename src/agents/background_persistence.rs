@@ -485,50 +485,48 @@ fn summarize_orphans(runs: &[RecoveredRun]) -> String {
             }
             if !run.partial_result.is_empty() {
                 out.push_str("  result:\n");
-                for line in run.partial_result.lines() {
-                    out.push_str("    ");
-                    out.push_str(line);
-                    out.push('\n');
-                }
+                let indented: String = run
+                    .partial_result
+                    .lines()
+                    .map(|line| format!("    {line}\n"))
+                    .collect();
+                out.push_str(&indented);
             }
         }
     };
 
-    let mut out = String::new();
+    let mut blocks: Vec<String> = Vec::new();
     if !interrupted.is_empty() {
-        out.push_str(&format!(
+        let mut block = format!(
             "{} background sub-agent(s) were still running when the daemon last stopped. \
              They did not fail — their process disappeared. Partial progress below; \
              re-delegate anything still needed.\n",
             interrupted.len()
-        ));
-        render(&mut out, &interrupted);
+        );
+        render(&mut block, &interrupted);
+        blocks.push(block);
     }
     if !finished.is_empty() {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(&format!(
+        let mut block = format!(
             "{} background sub-agent(s) FINISHED before the daemon stopped, but the \
              completion notice never reached you. Their results are below — this work \
              is done, do not repeat it.\n",
             finished.len()
-        ));
-        render(&mut out, &finished);
+        );
+        render(&mut block, &finished);
+        blocks.push(block);
     }
     if !unsuccessful.is_empty() {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(&format!(
+        let mut block = format!(
             "{} background sub-agent(s) ended without success before the daemon stopped — \
              see each one's outcome. Whatever they recorded is below; the task itself may \
              still be undone, so read it and decide whether to re-run.\n",
             unsuccessful.len()
-        ));
-        render(&mut out, &unsuccessful);
+        );
+        render(&mut block, &unsuccessful);
+        blocks.push(block);
     }
-    out
+    blocks.join("\n")
 }
 
 // ============================================================================

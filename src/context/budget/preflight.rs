@@ -329,7 +329,7 @@ pub fn default_pipeline(
     } else {
         vec![
             Box::new(FileOpSupersedeStage::default().with_min_pressure_ratio(preventive_floor)),
-            Box::new(ToolResultPruningStage::default()),
+            Box::new(ToolResultPruningStage),
             Box::new(HistoricalImageStrippingStage),
         ]
     };
@@ -777,6 +777,7 @@ mod tests {
             summarizer_input_budget: 48_000,
             circuit_breaker_max: 3,
             max_splits: 3,
+            fold_nudge_growth_tokens: 50_000,
         };
         use crate::providers::message::ContentBlock;
         let image = || ContentBlock::Image {

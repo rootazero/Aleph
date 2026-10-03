@@ -133,7 +133,6 @@ impl StateDatabase {
         migration::migrate_task_traces_to_agent_trace(conn)?;
         migration::migrate_task_traces_unique_step_index(conn)?;
         migration::migrate_add_channel_offsets(conn)?;
-        migration::migrate_add_paired_users(conn)?;
         migration::migrate_add_sticker_descriptions(conn)?;
         migration::migrate_add_group_chat_owner(conn)?;
         migration::migrate_add_agent_tasks_adjudicated_at(conn)?;
@@ -218,11 +217,15 @@ impl StateDatabase {
     /// Mirrors [`crate::memory::store::sqlite::SqliteMemoryBackend::with_conn`]
     /// for the resilience layer. Acquires `self.conn` (an
     /// `Arc<std::sync::Mutex<Connection>>`) and invokes `f` on the
-    /// blocking pool via `tokio::task::spawn_blocking`. Use this in
-    /// preference to `self.conn.lock()` inside any `async fn` whose
-    /// body holds the guard across I/O — otherwise the calling tokio
-    /// worker blocks until the SQLite query returns, and a queue of
-    /// slow queries collapses executor parallelism (Risk 4 of the
+    /// blocking pool via `tokio::task::spawn_blocking`. Every async database
+    /// accessor in this crate (`channel_offsets`, `group_chat`, `tasks`,
+    /// `memory_events`, `traces`, `sticker_descriptions`) routes through
+    /// this helper — no production caller should reach for `self.conn.lock()`
+    /// any more, and any new async fn that needs the SQLite handle should adopt
+    /// the same path. Use this in preference to `self.conn.lock()` inside any
+    /// `async fn` whose body holds the guard across I/O — otherwise the
+    /// calling tokio worker blocks until the SQLite query returns, and a
+    /// queue of slow queries collapses executor parallelism (Risk 4 of the
     /// review backlog).
     ///
     /// Constraints (from `spawn_blocking`):
@@ -234,11 +237,8 @@ impl StateDatabase {
     /// - `f` runs synchronously on a blocking-pool thread; do not
     ///   `.await` inside it.
     ///
-    /// The 27 async-fnned lock sites across `memory_events.rs`,
-    /// `traces.rs`, `tasks.rs` are migrated in a follow-up commit;
-    /// sync methods (`sticker_descriptions`, `channel_offsets`,
-    /// `group_chat`) cannot await and remain on the direct `lock()`
-    /// path.
+    /// All async database accessors in this crate now route through this
+    /// helper. Any new async fn needing the connection should do likewise.
     pub async fn with_conn<F, R>(&self, f: F) -> Result<R, AlephError>
     where
         F: FnOnce(&mut Connection) -> Result<R, AlephError> + Send + 'static,

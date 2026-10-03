@@ -10,8 +10,8 @@ use crate::error::{AlephError, Result};
 use crate::memory::notes::sanitize_title;
 use crate::memory::notes::store::NoteStore;
 
-use super::args::{NoteManageArgs, NoteManageResult};
 use super::NoteManageTool;
+use super::args::{NoteManageArgs, NoteManageResult};
 
 impl NoteManageTool {
     pub(super) async fn handle_delete(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
@@ -26,12 +26,7 @@ impl NoteManageTool {
             .ok_or_else(|| AlephError::tool("filename is required for delete"))?;
 
         let safe_filename = sanitize_title(filename)?;
-        let file_path = self
-            .indexer
-            .memory_dir()
-            .join(agent_id)
-            .join(category)
-            .join(format!("{safe_filename}.md"));
+        let file_path = self.note_file_path(agent_id, category, &safe_filename);
 
         if !file_path.exists() {
             return Err(AlephError::tool(format!(

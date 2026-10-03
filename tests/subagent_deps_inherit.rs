@@ -151,6 +151,11 @@ async fn subagent_base_carries_4_p1_fields() {
             fresh_tail_count: 6,
             summarizer_input_budget: 48_000,
             circuit_breaker_max: 3,
+            // `fold_nudge_growth_tokens` joined the config 2026-10-02
+            // (fix/nudge-crossrun); this literal is only compiled by
+            // `--all-targets`, which is how the omission slipped past the
+            // branch's `--lib` filter sweep. Default-aligned sentinel.
+            fold_nudge_growth_tokens: 50_000,
             // `diminishing_window` / `diminishing_threshold` were cut from
             // `ContextBudgetConfig` by a later audit. This literal kept naming
             // them, which `cargo check` and `--lib` never compile — only

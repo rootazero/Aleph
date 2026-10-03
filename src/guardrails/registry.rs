@@ -165,14 +165,17 @@ impl GuardrailRegistry {
         events: Vec<SessionEventRecord>,
         tail_start: usize,
     ) -> SessionInputScreen {
-        // Fail-closed on stale tail_start: if the caller hands us a tail index
-        // past the end of the event log, the slice below silently degrades to
-        // an empty scan and every Block on a user paste would degrade to
-        // redaction (the redact-only fallback for the *boundary grace* path).
-        // That is a fail-open: the user-supplied paste proceeds. Reject the
-        // call explicitly so the orchestrator can decide between retrying
-        // (after refresh) and ending the turn.
-        if tail_start > events.len() {
+        // Fail-closed on stale tail_start: if the caller hands us a tail
+        // index past the end of the event log, the slice below silently
+        // degrades to an empty scan and every Block on a user paste would
+        // degrade to redaction (the redact-only fallback for the *boundary
+        // grace* path). That is a fail-open: the user-supplied paste proceeds.
+        // Reject the call explicitly so the orchestrator can decide between
+        // retrying (after refresh) and ending the turn. The `.get(..)` shape
+        // folds the bound check and the slice into one — using direct
+        // `events[start..]` indexing would be clippy-blind and the explicit
+        // bound check would still be needed for the error log.
+        let Some(slice) = events.get(tail_start..) else {
             tracing::error!(
                 subsystem = "guardrails",
                 event = "screen_session_input_tail_out_of_range",
@@ -180,17 +183,6 @@ impl GuardrailRegistry {
                 events_len = events.len(),
                 "caller-supplied tail_start exceeds event log length; refusing to scan"
             );
-            return SessionInputScreen::Blocked(format!(
-                "tail_start ({tail_start}) exceeds event log length ({})",
-                events.len()
-            ));
-        }
-        // `.get(..)` is the P7-correct idiom for length-bounded slicing —
-        // the explicit `tail_start > events.len()` guard above covers the
-        // out-of-bounds case, but routing through `.get(..)` lets the bound
-        // check and the slice share one check instead of relying on the
-        // clippy-blind `events[start..]` indexing above.
-        let Some(slice) = events.get(tail_start..) else {
             return SessionInputScreen::Blocked(format!(
                 "tail_start ({tail_start}) exceeds event log length ({})",
                 events.len()

@@ -247,18 +247,21 @@ fn compress_screenshot(output: &str) -> String {
     // length % 4 == 2 is just an alphanumeric token that happened to have
     // an `=` at the tail (CSV cell, hex dump tail) — not a screenshot.
     let length_aligned_to_base64 = || matches!(output.len() % 4, 0 | 1);
-    let looks_like_base64 = base64_marker_count() >= 2
-        && length_aligned_to_base64()
-        && (base64_marker_count() >= 2 || has_base64_padding());
+    let looks_like_base64 =
+        base64_marker_count() >= 2 && length_aligned_to_base64() && has_base64_padding();
     if starts_with_data_image
         || (output.len() > 100 && prefix_is_base64_chars() && looks_like_base64)
     {
         return "[Screenshot captured successfully]".to_owned();
     }
-    // May contain metadata lines before or instead of base64 — keep first 5 lines
+    // May contain metadata lines before or instead of base64 — keep first 5 lines.
+    // Apply [`cap_line`] per kept line so a single overlong metadata line
+    // (mirroring compress_snapshot's structural-summary arm) cannot blow up
+    // the bounded preview; the snapshot arm applies cap_line at line 333.
     let lines: Vec<&str> = output.lines().collect();
     let total = lines.len();
-    let kept = &lines[..total.min(5)];
+    let kept_raw = &lines[..total.min(5)];
+    let kept: Vec<String> = kept_raw.iter().map(|l| cap_line(l)).collect();
     let mut result = kept.join("\n");
     if total > 5 {
         let remaining = total - 5;

@@ -170,6 +170,8 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "browser_hover",
             "browser_scroll",
             "browser_pdf",
+            "browser_record",
+            "browser_qa",
             "browser_network",
             "browser_dialog",
             "browser_drag",
@@ -270,6 +272,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         tools: &[
             "session_new",
             "session_compact",
+            "session_decompress",
             "session_rename",
             "session_set_mode",
         ],

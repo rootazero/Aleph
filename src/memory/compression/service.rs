@@ -108,22 +108,10 @@ impl CompressionService {
     /// Otherwise, L1 generation is skipped.
     pub fn new(
         database: MemoryBackend,
-        provider: Arc<dyn AiProvider>,
-        embedder: Arc<dyn EmbeddingProvider>,
-        config: CompressionConfig,
-    ) -> Self {
-        Self::new_with_backend(database, provider, embedder, config, None)
-    }
-
-    /// Create a new compression service with an optional `MemoryBackend` (kept for API compatibility)
-    pub fn new_with_backend(
-        database: MemoryBackend,
         _provider: Arc<dyn AiProvider>,
         _embedder: Arc<dyn EmbeddingProvider>,
         config: CompressionConfig,
-        _memory_backend: Option<MemoryBackend>,
     ) -> Self {
-        // rust-doctor-disable-next-line excessive-clone
         let scheduler = Arc::new(CompressionScheduler::new(config.scheduler.clone()));
 
         Self {

@@ -731,7 +731,7 @@ mod tests {
 
         let floor = crate::memory::assembler::FeedbackFloorLoader::new(root.clone());
         assert!(
-            floor.load("default").await.is_empty(),
+            floor.load_many(&["default".to_string()]).await.is_empty(),
             "a machine-written lesson must not land in the always-on prompt floor"
         );
     }

@@ -1,0 +1,85 @@
+{
+  "module": "src/orchestrator (batch B: harness_bridge)",
+  "reviewer": "occams-r6 reviewer (MiniMax-M3)",
+  "summary": "Mostly well-factored code with explicit context-cache invariants and detailed bug-history comments. Main efficiency issues are in prompt_build.rs (redundant per-turn event fetch + token projection between two helpers, BTreeMap for non-keyed lookup) and one public-API surface that's likely over-exposed.",
+  "totals": {"critical": 0, "high": 2, "medium": 3, "low": 2},
+  "findings": [
+    {
+      "id": "O-B-001",
+      "severity": "High",
+      "category": "allocation",
+      "file": "src/orchestrator/harness_bridge/prompt_build.rs",
+      "line": 65,
+      "title": "memory_injection_headroom and context_pressure_reminder duplicate per-turn event fetch + token projection",
+      "description": "Both helpers independently call `self.session_service.get_events(session_id, None, None).await`, then `crate::harness::agent::prompt::build_prompt(&events, events.len())`, then loop over `replay.projected(&messages)` summing `estimate_message_tokens_aware`. They share zero state, are called from the same `build_system_prompt` invocation (one directly, one via `context_pressure_reminder` at prompt_build.rs:738), and re-compute the same `history_tokens` figure. On a session with N events this is 2× event-fetch I/O + 2× message projection + 2× per-message token estimation per turn whenever `[context_budget]` is enabled. Memory prose is on the cacheable prefix hot path — this is the hot path.",
+      "fix_proposal": "Factor a small `HistoryTokenSnapshot { messages: Vec<UnifiedMessage>, history_tokens: usize }` helper that takes `&dyn SessionService, &SessionId, &dyn AiProvider, f64` and returns it once. Pass it into both helpers (or compute once in `build_system_prompt` and forward). Reuse the cached `messages: Vec` for downstream `phase_3` prompt assembly if applicable.",
+      "confidence": "high"
+    },
+    {
+      "id": "O-B-002",
+      "severity": "High",
+      "category": "api-surface",
+      "file": "src/orchestrator/harness_bridge/mod.rs",
+      "line": 53,
+      "title": "Six context_blocks free-functions re-exported as `pub` but appear to be crate-internal producers",
+      "description": "`pub use context_blocks::{active_execution_plan, active_standing_goal, active_strategy, active_timer_loop, compute_runtime_state_blocks, live_deadline_status};` exposes six async/fn entry points. The functions are documented as 'mirror of X' / 'thin async wrapper' / 'free async function so it can be unit-tested without a full AgentHarnessRunner' — pure internal helpers that produce fragments consumed by `PromptBuilder` calls inside the same file. There is no external consumer in the assigned batch and no indication these are part of the public harness bridge contract.",
+      "fix_proposal": "Downgrade the re-export to `pub(crate) use context_blocks::{...};` (preserves `super::*` paths) or `pub(super)` if a child module needs them. Verify no external crate imports `harness_bridge::{active_execution_plan, ...}` before changing — search `crates/` and integration tests. If anything external needs one, narrow the re-export to just that one.",
+      "confidence": "medium"
+    },
+    {
+      "id": "O-B-003",
+      "severity": "Medium",
+      "category": "allocation",
+      "file": "src/orchestrator/harness_bridge/prompt_build.rs",
+      "line": 455,
+      "title": "`available_agents` uses BTreeMap when precedence is plain insert-if-absent",
+      "description": "`available_agents` builds `BTreeMap<String, AgentDef>` from `builtin_agents()` filtered by `AgentMode::SubAgent`, then `self.agent_registry.list_subagents()` with `.insert` (registry wins on collision), then `visible_plugin_subagents` with `entry().or_insert` (lowest precedence). The precedence is purely insert-if-absent — registry over builtin, plugin last. Deterministic ordering comes from sorting at the END (`.into_values()` then `.map(...)` — but `BTreeMap::into_values` is already sorted by key, so the BTreeMap isn't actually needed for ordering; the `.collect::<Vec<_>>()` after the `.into_values()` is what serializes). The BTreeMap forces O(N log N) on every prompt assembly, with N = agent count.",
+      "fix_proposal": "Use `HashMap<String, AgentDef>` with the same insert pattern; collect to Vec and `.sort_by(|a, b| a.id.cmp(&b.id))` once before serializing — same O(N log N) total, but HashMap construction is faster and removes the BTreeMap invariant.",
+      "confidence": "medium"
+    },
+    {
+      "id": "O-B-004",
+      "severity": "Medium",
+      "category": "abstraction",
+      "file": "src/orchestrator/harness_bridge/prompt_build.rs",
+      "line": 817,
+      "title": "`*_chars` log fields are byte counts, not character counts — misleading naming",
+      "description": "`curated_chars` (prompt_build.rs:817), `memory_chars` (prompt_build.rs:838), and `identity_chars` (prompt_build.rs:858) all use `String::len`, which returns **bytes**, not characters. A 400-character objective with CJK content reads as ~1200 chars but logs as `1200`. Same for `prompt_chars = prompt.len()` (line 826) and the cache-stable/dynamic summaries using `chars().count()` (lines 829-832, actually correct). The mix of `String::len` and `chars().count()` is inconsistent and the named `*_chars` is wrong for three of four metrics.",
+      "fix_proposal": "Replace `String::len` with `s.chars().count()` in the three `_chars` accumulators; keep `prompt.len()` as-is (byte count is the right unit for a context-budget log). Or rename to `*_bytes` for honesty.",
+      "confidence": "high"
+    },
+    {
+      "id": "O-B-005",
+      "severity": "Medium",
+      "category": "duplicate",
+      "file": "src/orchestrator/harness_bridge/error.rs",
+      "line": 124,
+      "title": "`has_any_status` is a one-line wrapper around `llm_retry::has_status_code`",
+      "description": "`fn has_any_status(msg: &str, codes: &[u16]) -> bool { codes.iter().any(|c| crate::providers::llm_retry::has_status_code(msg, *c)) }` — a one-line closure over a delegate. The wrapper adds no value (no caching, no transformation, no early-return) and the call site (`is_transient_harness_message`) already iterates `TRANSIENT_STATUSES` in a tight block. `has_any_marker` (line 18) is a sibling and similarly thin. The local helpers are clutter — the file doc references the prior `contains_http_status` and explicitly says this was 'a byte-for-byte reimplementation' that was deleted, but the surviving `has_any_status` is the same shape.",
+      "fix_proposal": "Inline: `crate::providers::llm_retry::has_status_code(msg, *c)` directly in the `is_transient_harness_message` match. Drop both `has_any_marker` and `has_any_status`.",
+      "confidence": "medium"
+    },
+    {
+      "id": "O-B-006",
+      "severity": "Low",
+      "category": "async",
+      "file": "src/orchestrator/harness_bridge/context_blocks.rs",
+      "line": 13,
+      "title": "`active_execution_plan` is async but does only one sync I/O hop via `session_plan`",
+      "description": "`pub async fn active_execution_plan(session_key: &str) -> Option<String>` wraps `crate::builtin_tools::scratchpad::session_plan(session_key).await`. The async-ness comes from the inner call's own async signature — this function adds no other `await` points. The sibling `live_deadline_status` (line 67) reads a chrono clock + two store calls and is genuinely worth being async. For `active_execution_plan` the async signature just forces every caller into a `.await` and `tokio::join!` overhead.",
+      "fix_proposal": "Keep async if callers rely on it for `tokio::join!` concurrency (it does — see resolve_prompt_context at prompt_build.rs:919 which joins four of these). This is fine as-is; noting for completeness.",
+      "confidence": "low"
+    },
+    {
+      "id": "O-B-007",
+      "severity": "Low",
+      "category": "api-surface",
+      "file": "src/orchestrator/harness_bridge/mod.rs",
+      "line": 60,
+      "title": "`AgentHarnessRunner` has 20+ pub fields; most are crate-internal collaborators",
+      "description": "All `AgentHarnessRunner` fields are `pub` (mod.rs:60-228). The struct is constructed by the orchestrator's boot sequence using values sourced from the same crate's `Arc<AgentRegistry>`, `Arc<dyn SessionService>`, etc. None of the imports (`crate::agents::AgentRegistry`, `crate::providers::...`) suggest an external crate constructs the runner. Per AGENTS.md: 'Visibility: Default private, `pub(crate)` for internal sharing'.",
+      "fix_proposal": "Downgrade fields to `pub(crate)`. The boot code lives in the same crate. `pub` exposes every field to downstream crates and locks the surface for refactors (renames, type swaps). AGENTS.md R4 explicitly says interface layers are pure I/O — the runner is platform-internal and shouldn't be `pub`.",
+      "confidence": "low"
+    }
+  ]
+}

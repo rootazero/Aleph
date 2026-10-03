@@ -65,83 +65,50 @@ impl VideoGenerateTool {
         &self,
         args: VideoGenerateArgs,
     ) -> std::result::Result<VideoGenerateOutput, ToolError> {
-        use crate::builtin_tools::{notify_tool_result, notify_tool_start};
-
         let start = Instant::now();
-
-        // Truncate prompt for display (UTF-8 safe)
-        let prompt_display = if args.prompt.chars().count() > 30 {
-            let end = args
-                .prompt
-                .char_indices()
-                .nth(30)
-                .map_or(args.prompt.len(), |(i, _)| i);
-            format!("{}...", &args.prompt[..end])
-        } else {
-            args.prompt.clone()
-        };
-        notify_tool_start(Self::NAME, &format!("生成视频: {prompt_display}"));
 
         info!(prompt = %args.prompt, provider = ?args.provider, "Starting video generation");
 
-        // Acquire lock in scoped block — drop before await
+        // Find provider — lock must be dropped before any .await call.
         let (provider_name, provider) = {
             let reg = self.registry.read().unwrap_or_else(|e| e.into_inner());
 
             if let Some(ref name) = args.provider {
                 let p = reg.get(name).ok_or_else(|| {
-                    let error_msg = format!("Video provider '{name}' not found");
-                    notify_tool_result(Self::NAME, &error_msg, false);
-                    ToolError::InvalidArgs(error_msg)
+                    ToolError::InvalidArgs(format!("Video provider '{name}' not found"))
                 })?;
                 if !p.supports(GenerationType::Video) {
-                    let error_msg = format!("Provider '{name}' does not support video generation");
-                    notify_tool_result(Self::NAME, &error_msg, false);
-                    return Err(ToolError::InvalidArgs(error_msg));
+                    return Err(ToolError::InvalidArgs(format!(
+                        "Provider '{name}' does not support video generation"
+                    )));
                 }
                 (name.clone(), p)
             } else {
                 reg.first_for_type(GenerationType::Video).ok_or_else(|| {
-                    let error_msg = "No video generation provider available".to_string();
-                    notify_tool_result(Self::NAME, &error_msg, false);
-                    ToolError::Execution(error_msg)
+                    ToolError::Execution("No video generation provider available".to_string())
                 })?
             }
-            // Lock is dropped here at end of block
         };
 
         info!(provider = %provider_name, "Using video provider");
 
         // Build request
         let mut request = GenerationRequest::video(&args.prompt);
-        if let Some(ref ar) = args.aspect_ratio {
-            request.params.aspect_ratio = Some(ar.clone());
-        }
+        request.params.aspect_ratio = args.aspect_ratio;
 
-        // Execute generation
-        let output = provider.generate(request).await.map_err(|e| {
-            let error_msg = format!("Video generation failed: {e}");
-            notify_tool_result(Self::NAME, &error_msg, false);
-            ToolError::from(e)
-        })?;
+        let output = provider.generate(request).await.map_err(ToolError::from)?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        // Process output
         let (video_location, location_type) = match &output.data {
             GenerationData::Url(url) => (url.clone(), "url"),
             GenerationData::LocalPath(path) => (path.clone(), "file"),
             GenerationData::Bytes(_) => {
-                let error_msg =
-                    "Video provider returned raw bytes — expected URL or file path".to_string();
-                notify_tool_result(Self::NAME, &error_msg, false);
-                return Err(ToolError::Execution(error_msg));
+                return Err(ToolError::Execution(
+                    "Video provider returned raw bytes — expected URL or file path".to_string(),
+                ));
             }
         };
-
-        // Notify success
-        let result_summary = format!("视频生成完成 ({duration_ms} ms, provider: {provider_name})");
-        notify_tool_result(Self::NAME, &result_summary, true);
 
         let display = format!(
             "🎬 视频已生成 ({:.1}s)\n{}",
@@ -152,12 +119,12 @@ impl VideoGenerateTool {
         Ok(VideoGenerateOutput {
             _display: display,
             _media: vec![MediaItem {
-                url: video_location.to_string(),
+                url: video_location.clone(),
                 media_type: "video".into(),
                 mime_type: Some(detect_mime(&video_location, "video")),
                 filename: None,
             }],
-            video_location: video_location.to_string(),
+            video_location,
             location_type: location_type.to_string(),
             prompt: args.prompt,
             provider: provider_name,

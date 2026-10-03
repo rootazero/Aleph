@@ -13,6 +13,11 @@ pub type SessionId = crate::routing::session_key::SessionKey;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
+    // NotFound/Serialization are reserved for future service impls that look
+    // up sessions by id or hand JSON through the trait; the in-process actor
+    // service never produces them. Keep them in the enum so adding a new impl
+    // doesn't require a public surface break.
+    #[allow(dead_code)]
     #[error("session not found: {0:?}")]
     NotFound(SessionId),
     #[error("actor shutdown")]
@@ -23,6 +28,7 @@ pub enum SessionError {
     ShutdownTimeout,
     #[error("storage error: {0}")]
     Storage(String),
+    #[allow(dead_code)] // reserved for future service impls; see NotFound.
     #[error("serialization: {0}")]
     Serialization(#[from] serde_json::Error),
     /// A live `session_events` row this build cannot decode. The read that
@@ -75,7 +81,14 @@ pub trait SessionService: Send + Sync + 'static {
         events: Vec<SessionEvent>,
         retire: Option<Retire>,
     ) -> Result<Vec<EventSeq>, SessionError> {
-        let _ = (id, events, retire);
+        // Only the in-process actor service can emit atomically. Reading-mode
+        // impls (and any future impl that splits storage from sequencing)
+        // return this same "not supported" shape, so the params are unused on
+        // purpose — suppress the lint with leading underscores rather than
+        // suppress `unused_variables` project-wide.
+        let _id = id;
+        let _events = events;
+        let _retire = retire;
         Err(SessionError::Other(
             "this SessionService cannot append atomically (only InProcessActorSessionService can)"
                 .into(),

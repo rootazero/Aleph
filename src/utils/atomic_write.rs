@@ -10,6 +10,7 @@
 use crate::error::AlephError;
 use std::path::Path;
 use tokio::fs;
+use tracing::warn;
 
 /// Write UTF-8 `content` atomically to `path`. One-line forwarder to
 /// [`atomic_write_bytes`], which holds the actual implementation and its
@@ -72,9 +73,18 @@ pub async fn atomic_write_bytes(path: &Path, content: &[u8]) -> Result<(), Aleph
     })?;
 
     // Preserve the destination's existing permissions across the rename.
-    // Best-effort: a failure here must not abort an otherwise-good write.
+    // Best-effort: a failure here must not abort an otherwise-good write,
+    // but the operator deserves a warning so the file landing with the
+    // wrong mode is not silently invisible.
     if let Ok(meta) = fs::metadata(path).await {
-        let _ = fs::set_permissions(&tmp_path, meta.permissions()).await;
+        if let Err(e) = fs::set_permissions(&tmp_path, meta.permissions()).await {
+            warn!(
+                target: "aleph.utils.atomic_write",
+                tmp_path = %tmp_path.display(),
+                error = %e,
+                "atomic_write: failed to copy permissions from destination;                  temp file landed with default umask mode before rename"
+            );
+        }
     }
 
     fs::rename(&tmp_path, path)

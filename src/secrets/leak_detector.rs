@@ -124,7 +124,7 @@ pub fn default_patterns_bytes() -> &'static [(&'static str, regex::bytes::Regex)
                 })
                 .collect()
         });
-    &DEFAULT_BYTE_PATTERNS
+    DEFAULT_BYTE_PATTERNS.as_slice()
 }
 
 /// Known secret format patterns.
@@ -402,7 +402,6 @@ impl LeakDetector {
         let mut pairs: Vec<(usize, u64)> =
             self.injected.iter().map(|(&(h, l), _)| (l, h)).collect();
         pairs.sort_unstable();
-        pairs.dedup();
 
         let bytes = content.as_bytes();
         let mut matches: Vec<(usize, usize)> = Vec::new();

@@ -62,9 +62,27 @@ pub(crate) struct CacheEntry {
 
 static URL_CACHE: Lazy<Mutex<LruCache<CacheKey, CacheEntry>>> = Lazy::new(|| {
     Mutex::new(LruCache::new(
-        NonZeroUsize::new(CACHE_CAPACITY).unwrap_or_else(|| unreachable!("CACHE_CAPACITY > 0")),
+        NonZeroUsize::new(CACHE_CAPACITY).expect("CACHE_CAPACITY is a non-zero const"),
     ))
 });
+
+/// Acquire the URL cache's mutex, recovering the inner guard on poison.
+///
+/// `web_fetch` is a long-running daemon: a panic in one request's holder
+/// would poison the mutex and break every subsequent cache lookup, so the
+/// recovery is structural rather than conventional — five call sites used to
+/// inline the same `unwrap_or_else(|e| e.into_inner())` body with an
+/// `tracing::error!` each, which is exactly the kind of drift-prone
+/// duplication the recovery rule guards against.
+fn lock_url_cache() -> std::sync::MutexGuard<'static, LruCache<CacheKey, CacheEntry>> {
+    URL_CACHE.lock().unwrap_or_else(|e| {
+        tracing::error!(
+            reason = %e,
+            "web_fetch URL_CACHE poisoned: a previous holder panicked; recovering"
+        );
+        e.into_inner()
+    })
+}
 
 /// Best-effort URL canonicalisation. Falls back to the raw URL if `url`
 /// can't parse it (e.g. caller already sent something the SSRF layer
@@ -125,7 +143,7 @@ pub(crate) fn cache_key(url: &str, mode: &ExtractMode) -> CacheKey {
 }
 
 pub(crate) fn cache_lookup(key: &CacheKey) -> Option<WebFetchResult> {
-    let mut guard = URL_CACHE.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch URL_CACHE poisoned: a previous holder panicked; recovering"); e.into_inner() });
+    let mut guard = lock_url_cache();
     // `LruCache::get` mutates recency, so we need &mut.
     let entry = guard.get(key)?;
     if entry.inserted_at.elapsed() > CACHE_TTL {
@@ -136,7 +154,7 @@ pub(crate) fn cache_lookup(key: &CacheKey) -> Option<WebFetchResult> {
 }
 
 pub(crate) fn cache_store(key: CacheKey, result: WebFetchResult) {
-    let mut guard = URL_CACHE.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch URL_CACHE poisoned: a previous holder panicked; recovering"); e.into_inner() });
+    let mut guard = lock_url_cache();
     guard.put(
         key,
         CacheEntry {
@@ -148,7 +166,7 @@ pub(crate) fn cache_store(key: CacheKey, result: WebFetchResult) {
 
 #[cfg(test)]
 pub(crate) fn cache_clear() {
-    URL_CACHE.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch URL_CACHE poisoned: a previous holder panicked; recovering"); e.into_inner() }).clear();
+    lock_url_cache().clear();
 }
 
 #[cfg(test)]
@@ -230,7 +248,7 @@ mod tests {
         // `cache_store` so the test doesn't have to actually wait 15
         // minutes for the TTL to elapse.
         {
-            let mut guard = URL_CACHE.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch URL_CACHE poisoned: a previous holder panicked; recovering"); e.into_inner() });
+            let mut guard = lock_url_cache();
             guard.put(
                 key.clone(),
                 CacheEntry {
@@ -246,7 +264,7 @@ mod tests {
             "expired entry must be reported as a miss"
         );
         // And evicted.
-        let guard = URL_CACHE.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch URL_CACHE poisoned: a previous holder panicked; recovering"); e.into_inner() });
+        let guard = lock_url_cache();
         assert!(guard.peek(&key).is_none(), "expired entry must be evicted");
     }
 

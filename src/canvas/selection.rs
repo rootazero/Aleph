@@ -63,13 +63,13 @@ impl SelectionTable {
         let stamp = self.next_stamp;
         self.next_stamp += 1;
         if self.entries.len() >= MAX_LIVE && !self.entries.contains_key(canvas_id) {
-            let victim = self
+            if let Some(victim_key) = self
                 .entries
                 .iter()
                 .min_by_key(|(_, e)| e.stamp)
-                .map(|(k, _)| k.clone());
-            if let Some(victim) = victim {
-                self.entries.remove(&victim);
+                .map(|(k, _)| k.clone())
+            {
+                self.entries.remove(&victim_key);
             }
         }
         self.entries
@@ -90,37 +90,35 @@ fn table() -> &'static Mutex<SelectionTable> {
     TABLE.get_or_init(|| Mutex::new(SelectionTable::default()))
 }
 
+/// Run `f` against the process-wide selection table, recovering from a
+/// poisoned mutex by logging the cause and using the inner value. The
+/// table's only writers are these two wrappers, so the only path to a
+/// poisoned lock is a panic inside one of them — and the recovery keeps
+/// later calls answering questions instead of refusing them.
+fn with_table<R>(f: impl FnOnce(&mut SelectionTable) -> R) -> R {
+    let mut guard = table().lock().unwrap_or_else(|e| {
+        tracing::error!(
+            reason = %e,
+            "canvas lock table poisoned: a previous holder panicked mid-insert; recovering"
+        );
+        e.into_inner()
+    });
+    f(&mut guard)
+}
+
 /// Record the latest selection pushed for `canvas_id` (last write wins).
 ///
 /// Callers gate visibility BEFORE writing (the RPC face checks
 /// `canvas_visible` first); this table is storage, not an authority.
 pub fn set(canvas_id: &str, shape_ids: Vec<String>) {
-    table()
-        .lock()
-        .unwrap_or_else(|e| {
-            tracing::error!(
-                reason = %e,
-                "canvas lock table poisoned: a previous holder panicked mid-insert; recovering"
-            );
-            e.into_inner()
-        })
-        .set(canvas_id, shape_ids);
+    with_table(|t| t.set(canvas_id, shape_ids));
 }
 
 /// The most recent selection pushed for `canvas_id`; empty when none (or
 /// when the entry was evicted — indistinguishable on purpose, see module doc).
 #[must_use]
 pub fn get(canvas_id: &str) -> Vec<String> {
-    table()
-        .lock()
-        .unwrap_or_else(|e| {
-            tracing::error!(
-                reason = %e,
-                "canvas lock table poisoned: a previous holder panicked mid-insert; recovering"
-            );
-            e.into_inner()
-        })
-        .get(canvas_id)
+    with_table(|t| t.get(canvas_id))
 }
 
 #[cfg(test)]

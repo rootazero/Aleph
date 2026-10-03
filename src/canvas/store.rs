@@ -120,18 +120,6 @@ impl CanvasStore {
         };
         let id = format!("cv-{}", uuid::Uuid::new_v4().simple());
         let now = now_ms();
-        let doc = CanvasDoc {
-            id: id.clone(),
-            title,
-            owner_user_id,
-            project_id,
-            revision: 1,
-            shapes: Vec::new(),
-            decks: Vec::new(),
-            created_at_ms: now,
-            updated_at_ms: now,
-            timeline: None,
-        };
         let mut guard = self.locks.lock(&id, self.doc_path(&id)).await?;
         // Existence guard: a residual `<root>/<id>/doc.json` (manual restore,
         // operator copy-paste, leftover from a previous install) used to be
@@ -144,7 +132,18 @@ impl CanvasStore {
                 "canvas id collision: {id} already exists"
             )));
         }
-        guard.insert(doc);
+        guard.insert(CanvasDoc {
+            id,
+            title,
+            owner_user_id,
+            project_id,
+            revision: 1,
+            shapes: Vec::new(),
+            decks: Vec::new(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            timeline: None,
+        });
         let committed = guard.commit().await?;
         Ok(committed.clone())
     }
@@ -276,7 +275,6 @@ impl CanvasStore {
             warn!(canvas = %id, error = %e,
                 "canvas: orphan asset sweep after apply failed");
         }
-        drop(guard);
         Ok(new_revision)
     }
 
@@ -294,16 +292,15 @@ impl CanvasStore {
             // is swallowable because the directory might also be missing.
             let dir = self.root.join(id);
             match tokio::fs::remove_dir(&dir).await {
-                Ok(()) => return Err(CanvasError::NotFound(format!("canvas {id}"))),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    return Err(CanvasError::NotFound(format!("canvas {id}")))
-                }
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
                     return Err(CanvasError::Internal(format!(
                         "failed to clean leftover canvas dir {id}: {e}"
                     )));
                 }
             }
+            return Err(CanvasError::NotFound(format!("canvas {id}")));
         }
         // KEEP the per-canvas lock through `remove_dir_all`. The previous
         // shape dropped the guard first to avoid blocking other ops on the

@@ -6,10 +6,10 @@
 //! persist?).
 
 use crate::error::{AlephError, Result};
-use crate::memory::notes::{canonicalize_category, KnowledgeNote, CATEGORY_DIRS};
+use crate::memory::notes::{CATEGORY_DIRS, KnowledgeNote, canonicalize_category};
 
-use super::args::{NoteManageArgs, NoteRelationArg};
 use super::NoteManageTool;
+use super::args::{NoteManageArgs, NoteRelationArg};
 
 impl NoteManageTool {
     /// Default agent ID (used when `args.agent_id` is absent). Must match the
@@ -27,6 +27,23 @@ impl NoteManageTool {
     #[cfg(test)]
     pub(super) fn memory_dir(&self) -> &std::path::Path {
         self.indexer.memory_dir()
+    }
+
+    /// On-disk path of a note under `(agent_id, category, safe_filename)`.
+    /// Three callers (`create` / `update` / `delete`) used to spell the same
+    /// `memory_dir().join(agent_id).join(category).join(format!("{safe}.md"))`
+    /// chain; one helper now.
+    pub(super) fn note_file_path(
+        &self,
+        agent_id: &str,
+        category: &str,
+        safe_filename: &str,
+    ) -> std::path::PathBuf {
+        self.indexer
+            .memory_dir()
+            .join(agent_id)
+            .join(category)
+            .join(format!("{safe_filename}.md"))
     }
 
     /// Resolve the effective `agent_id` (storage partition key) for this

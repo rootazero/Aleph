@@ -48,6 +48,12 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
+/// Default token lifetime when the OAuth provider omits `expires_in` from its
+/// response. `unwrap_or`ing this is fallback behaviour, not a normal case —
+/// the helpers below log when they have to so a misbehaving provider is
+/// visible in telemetry rather than silently extending sessions.
+const DEFAULT_TOKEN_LIFETIME_SECS: u64 = 3600;
+
 /// `OpenAI` OAuth client ID (public client, same as Codex CLI)
 const OPENAI_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
@@ -147,6 +153,20 @@ impl std::fmt::Debug for CodexAuth {
 /// network/POW time spent between the check and the request reaching the
 /// server, both of which can otherwise turn a "just valid" token into a 401.
 const EXPIRY_SKEW: Duration = Duration::from_secs(60);
+
+/// Guard that aborts a `tokio` task on drop.
+///
+/// Wraps the `JoinHandle` of the OAuth callback listener at `localhost:1455`.
+/// Without this, dropping a `JoinHandle` would merely detach the task — the
+/// fixed-port listener would stay bound across every subsequent login
+/// attempt and bind would fail.
+struct ServerAbortOnDrop(tokio::task::JoinHandle<std::result::Result<(), crate::error::AlephError>>);
+
+impl Drop for ServerAbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 impl CodexAuth {
     /// Check if the access token has expired (with a clock-skew safety margin)
@@ -297,21 +317,24 @@ impl CodexAuth {
             }),
         );
 
-        // Spawn the server
-        let server_handle = tokio::spawn(async move {
+        // Spawn the server. Wrapped in `ServerAbortOnDrop` so the listener dies with
+        // the helper — cancellation during the browser-flow or token-exchange
+        // must not leave `localhost:1455` bound across attempts.
+        // The `_server_handle` binding is intentionally never read directly:
+        // its only purpose is to drop the `ServerAbortOnDrop` guard at end of
+        // scope, which aborts the listener task.
+        let _server_handle = ServerAbortOnDrop(tokio::spawn(async move {
             axum::serve(listener, app)
                 .await
                 .map_err(|e| AlephError::network(format!("OAuth callback server error: {e}")))
-        });
+        }));
 
         // Open the browser
         info!("Opening browser for Codex authentication...");
         if let Err(e) = open::that(&authorize_url) {
             error!(?e, "Failed to open browser");
-            // Abort the callback server before bailing — otherwise the detached
-            // task stays bound to the fixed port 1455 and every subsequent
-            // login attempt fails to bind.
-            server_handle.abort();
+            // server_handle aborts on drop via `ServerAbortOnDrop`; explicit
+            // `.abort()` is no longer needed (drop covers all early-return arms).
             return Err(AlephError::provider(format!(
                 "Failed to open browser for authentication: {e}. Please open this URL manually: {authorize_url}"
             )));
@@ -321,27 +344,21 @@ impl CodexAuth {
         let code = match tokio::time::timeout(CALLBACK_TIMEOUT, rx).await {
             Ok(Ok(Ok(code))) => code,
             Ok(Ok(Err(err))) => {
-                server_handle.abort();
                 return Err(AlephError::authentication("chatgpt", &err));
             }
             Ok(Err(_)) => {
-                server_handle.abort();
                 return Err(AlephError::authentication(
                     "chatgpt",
                     "OAuth callback channel closed unexpectedly",
                 ));
             }
             Err(_) => {
-                server_handle.abort();
                 return Err(AlephError::authentication(
                     "chatgpt",
                     "OAuth authentication timed out (5 minutes). Please try again.",
                 ));
             }
         };
-
-        // Abort the server now that we have the code
-        server_handle.abort();
 
         debug!("Exchanging authorization code for tokens (with PKCE verifier)");
         Self::exchange_code_for_token(&code, port, &pkce).await
@@ -385,7 +402,7 @@ impl CodexAuth {
             .await
             .map_err(|e| AlephError::provider(format!("Failed to parse token response: {e}")))?;
 
-        let expires_in = token_resp.expires_in.unwrap_or(3600);
+        let expires_in = token_resp.expires_in.unwrap_or(DEFAULT_TOKEN_LIFETIME_SECS);
         let expires_at = SystemTime::now() + Duration::from_secs(expires_in);
         let session_id = uuid::Uuid::new_v4().to_string();
 
@@ -446,7 +463,7 @@ impl CodexAuth {
         if let Some(new_refresh) = token_resp.refresh_token {
             self.refresh_token = Some(new_refresh);
         }
-        let expires_in = token_resp.expires_in.unwrap_or(3600);
+        let expires_in = token_resp.expires_in.unwrap_or(DEFAULT_TOKEN_LIFETIME_SECS);
         self.expires_at = SystemTime::now() + Duration::from_secs(expires_in);
 
         debug!("Codex token refreshed successfully");

@@ -72,25 +72,50 @@ pub(crate) fn outcome_from_str(s: &str) -> ApprovalOutcome {
         // emit one warn! per call, swamping the log. Process-wide counter is
         // sufficient because a node process holds at most one `ApprovalSlot`.
         other => {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static DRIFT_COUNTER: AtomicU64 = AtomicU64::new(0);
-            const WARN_EVERY: u64 = 100;
-            let n = DRIFT_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
-            if n == 1 || n.is_multiple_of(WARN_EVERY) {
-                tracing::warn!(
-                    outcome = %other,
-                    count = n,
-                    "node approval got an outcome string it does not recognize; \
-                     fail-closed to Unavailable (drift, not a refusal)"
-                );
-            } else {
-                tracing::debug!(
-                    outcome = %other,
-                    "node approval got an outcome string it does not recognize (drift)"
-                );
-            }
+            rate_limited_warn_drift(other);
             ApprovalOutcome::Unavailable
         }
+    }
+}
+
+/// Log a drift-style outcome at warn every Nth call (debug the rest), so a
+/// misconfigured center cannot swamp the log. Shared by `outcome_from_str`
+/// (drift guard) and `request_approval`'s no-channel arm — both share the
+/// same shape: a per-process `AtomicU64` counter, an `is_multiple_of(N)` gate,
+/// and `warn!` on the boundary / `debug!` otherwise. The counters are
+/// distinct (drift vs. no-channel) so each side keeps its own line.
+fn rate_limited_warn_drift(outcome: &str) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static DRIFT_COUNTER: AtomicU64 = AtomicU64::new(0);
+    const WARN_EVERY: u64 = 100;
+    let n = DRIFT_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+    if n == 1 || n.is_multiple_of(WARN_EVERY) {
+        tracing::warn!(
+            outcome = %outcome,
+            count = n,
+            "node approval got an outcome string it does not recognize; \
+             fail-closed to Unavailable (drift, not a refusal)"
+        );
+    } else {
+        tracing::debug!(
+            outcome = %outcome,
+            "node approval got an outcome string it does not recognize (drift)"
+        );
+    }
+}
+
+fn rate_limited_warn_no_channel() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    const WARN_EVERY: u64 = 100;
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+    if n == 1 || n.is_multiple_of(WARN_EVERY) {
+        tracing::warn!(
+            count = n,
+            "node approval requested with no live center channel; refusing as unavailable"
+        );
+    } else {
+        tracing::debug!("node approval unavailable: no live center channel");
     }
 }
 
@@ -113,21 +138,9 @@ impl ApprovalRequester for CenterApprovalRequester {
         let Some(channel) = channel else {
             // (B5-02) Rate-limit the no-channel warning: a headless node that
             // has lost its center connection would otherwise log the same line
-            // for every escalation. Warn every 100th denial with the running
-            // count; debug! for the rest. The counter is process-wide because
-            // a node process holds at most one `ApprovalSlot`.
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static COUNTER: AtomicU64 = AtomicU64::new(0);
-            const WARN_EVERY: u64 = 100;
-            let n = COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
-            if n == 1 || n.is_multiple_of(WARN_EVERY) {
-                tracing::warn!(
-                    count = n,
-                    "node approval requested with no live center channel; refusing as unavailable"
-                );
-            } else {
-                tracing::debug!("node approval unavailable: no live center channel");
-            }
+            // for every escalation. Counter is process-wide because a node
+            // process holds at most one `ApprovalSlot`.
+            rate_limited_warn_no_channel();
             return ApprovalOutcome::Unavailable.into();
         };
         // `action` carries the redacted summary the center's operator card

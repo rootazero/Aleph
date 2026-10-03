@@ -49,6 +49,18 @@ impl SessionKey {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    /// `None` for the default/unnamed session, `Some(&self.name)` otherwise.
+    /// Replaces the empty-string → None / non-empty → Some(`\u{...}`) projection
+    /// that callers otherwise re-derive at every emit/list site.
+    #[must_use]
+    pub fn session_name_opt(&self) -> Option<&str> {
+        if self.name.is_empty() {
+            None
+        } else {
+            Some(&self.name)
+        }
+    }
 }
 
 pub(super) fn canonicalize_cwd(cwd: &str) -> PathBuf {
@@ -78,7 +90,7 @@ pub(super) fn canonicalize_cwd(cwd: &str) -> PathBuf {
     }
 }
 
-pub(super) fn normalize_path(path: &std::path::Path) -> PathBuf {
+pub(crate) fn normalize_path(path: &std::path::Path) -> PathBuf {
     use std::path::Component;
     let mut result = PathBuf::new();
     for component in path.components() {

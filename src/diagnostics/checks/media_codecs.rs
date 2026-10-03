@@ -25,11 +25,9 @@
 //! `sqlite_integrity` use to separate machine-readable states inside one
 //! severity.
 
-use std::time::Duration;
-
 use async_trait::async_trait;
 
-use crate::diagnostics::check::{HealthCheck, Posture, DEFAULT_CHECK_TIMEOUT};
+use crate::diagnostics::check::{HealthCheck, Posture};
 use crate::diagnostics::finding::Finding;
 #[cfg(any(target_os = "linux", test))]
 use crate::diagnostics::finding::Severity;
@@ -223,15 +221,6 @@ impl HealthCheck for MediaCodecsCheck {
 
     fn title(&self) -> &'static str {
         "Media decoders"
-    }
-
-    /// Inner bound: four formats x up to two `gst-inspect-1.0` invocations. A
-    /// cold run rebuilds the GStreamer registry once (seconds); every later
-    /// invocation reads the cache. The default 20s ceiling covers that with
-    /// room, and the engine turns an overrun into a named Warning rather than
-    /// a stall inside an agent turn.
-    fn timeout(&self) -> Duration {
-        DEFAULT_CHECK_TIMEOUT
     }
 
     #[cfg(target_os = "linux")]

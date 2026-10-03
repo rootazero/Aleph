@@ -762,8 +762,20 @@ impl RerankConfigApi {
 
     /// Update rerank configuration
     pub async fn update(state: &DashboardState, config: RerankConfig) -> Result<(), String> {
-        let params = serde_json::to_value(&config)
+        let mut params = serde_json::to_value(&config)
             .map_err(|e| format!("Failed to serialize rerank config: {e}"))?;
+        // The Panel's settings page loads `config` via `get()`, which
+        // deliberately echoes an empty `api_key` (the secret is never
+        // re-emitted; only `has_api_key` flags its presence). Round-tripping
+        // that empty string back to the server used to overwrite the stored
+        // vault key on every unrelated save. Strip the field when empty so
+        // the handler preserves the existing key; a non-empty value is the
+        // operator's explicit new key and must be forwarded.
+        if config.api_key.is_empty() {
+            if let Some(obj) = params.as_object_mut() {
+                obj.remove("api_key");
+            }
+        }
         state.rpc_call("rerank_config.update", params).await?;
         Ok(())
     }
@@ -773,6 +785,10 @@ impl RerankConfigApi {
         state: &DashboardState,
         config: RerankConfig,
     ) -> Result<TestRerankResponse, String> {
+        // `test` intentionally keeps `api_key` in the payload: when the
+        // operator types a fresh key, the form's signal carries it here so
+        // the server can verify it before commit. The server falls back to
+        // the vault when the field is absent.
         let params = serde_json::to_value(&config)
             .map_err(|e| format!("Failed to serialize rerank config: {e}"))?;
         let result = state.rpc_call("rerank_config.test", params).await?;

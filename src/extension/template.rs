@@ -802,6 +802,9 @@ mod tests {
 
     /// `<tmp>/skill` as the base with its own `inside.txt`, and a real
     /// `<tmp>/outside.txt` beside it: the tempdir, the base, the outside path.
+    /// Both helpers serve only the `#[cfg(unix)]` path-escape tests below;
+    /// gated to match so non-unix test builds stay warning-clean.
+    #[cfg(unix)]
     fn escape_fixture() -> (TempDir, PathBuf, String) {
         let temp = TempDir::new().unwrap();
         let base = temp.path().join("skill");
@@ -813,6 +816,7 @@ mod tests {
     }
 
     /// Each `(template, arguments)` rendered against `base`, no shell.
+    #[cfg(unix)]
     async fn render_each(base: &Path, cases: &[(&str, String)]) -> Vec<String> {
         let mut out = Vec::new();
         for (template, arguments) in cases {
@@ -1123,11 +1127,17 @@ mod tests {
             },
         );
         assert!(cmd.get_kill_on_drop(), "kill_on_drop is not set");
-        let shown = format!("{:#?}", cmd.as_std());
-        assert!(
-            shown.contains("stdin: Some(") && shown.contains("Null"),
-            "stdin is not closed: {shown}"
-        );
+        // std offers a command's stdin only through its Debug output, and the
+        // Windows Debug impl prints just the program line — there is no
+        // cross-platform reader, so the stdin introspection is unix-only.
+        #[cfg(unix)]
+        {
+            let shown = format!("{:#?}", cmd.as_std());
+            assert!(
+                shown.contains("stdin: Some(") && shown.contains("Null"),
+                "stdin is not closed: {shown}"
+            );
+        }
         assert_eq!(cmd.as_std().get_current_dir(), Some(cwd.as_path()));
     }
 

@@ -73,14 +73,28 @@ fn validate_answer(step: &WizardStep, value: &Value) -> Result<(), WizardSession
             }
         }
         StepType::Text => {
-            if value.is_string() {
-                Ok(())
-            } else {
-                Err(WizardSessionError::InvalidAnswer(format!(
+            if !value.is_string() {
+                return Err(WizardSessionError::InvalidAnswer(format!(
                     "Step '{}' expects a string",
                     step.id
-                )))
+                )));
             }
+            // Sensitive text steps (password-style: API keys, tokens, shared
+            // secrets) must not accept empty / whitespace-only answers —
+            // downstream code stores the answer verbatim, so "" would pin a
+            // blank credential and the next panel launch would either error
+            // cryptically or silently downgrade to a guest session. Non-
+            // sensitive text prompts can stay permissive.
+            if step.sensitive {
+                let s = value.as_str().unwrap_or("");
+                if s.trim().is_empty() {
+                    return Err(WizardSessionError::InvalidAnswer(format!(
+                        "Step '{}' requires a non-empty value",
+                        step.id
+                    )));
+                }
+            }
+            Ok(())
         }
         StepType::Select => {
             if offered(value) {
@@ -126,7 +140,20 @@ pub trait WizardFlow: Send + Sync {
     }
 }
 
-/// Wizard session managing the flow execution
+/// Wizard session managing the flow execution.
+///
+/// # Concurrency contract
+///
+/// A `WizardSession` is owned by **exactly one in-flight `next()` at a time**.
+/// The receiver is held inside `self.step_rx` behind an async-aware `Mutex`,
+/// and `next()` blocks on `.lock().await` for the entire duration of one
+/// poll. Two concurrent `next()` calls would serialise on that lock and
+/// every step would go to whichever caller acquired it last; the other
+/// caller would either hang or, after `try_lock` short-circuit, see the
+/// session's terminal status and miss the buffered steps. The router
+/// (`gateway/handlers/wizard.rs`) serialises `WizardSession` ownership on
+/// its own state machine, so clients consume `next()` strictly
+/// sequentially.
 pub struct WizardSession {
     id: String,
     status: Arc<RwLock<WizardStatus>>,

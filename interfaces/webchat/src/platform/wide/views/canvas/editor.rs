@@ -1427,7 +1427,7 @@ mod tests_body_visible {
         // Chat route + pane open on the Canvas body → the board is on screen,
         // keyboard chords belong to it.
         let ws = split_with_body(WorkspaceBody::Canvas);
-        assert!(canvas_body_visible("/", Some(&ws)));
+        assert!(canvas_body_visible("/", Some(ws)));
     }
 
     #[test]
@@ -1435,7 +1435,7 @@ mod tests_body_visible {
         // Chat route + pane open on a different body (Artifacts) → the pane
         // is open, the canvas is NOT the selected body, the gate refuses.
         let ws = split_with_body(WorkspaceBody::Artifacts);
-        assert!(!canvas_body_visible("/", Some(&ws)));
+        assert!(!canvas_body_visible("/", Some(ws)));
     }
 
     #[test]
@@ -1445,9 +1445,9 @@ mod tests_body_visible {
         // Canvas body stored, the gate must refuse — Delete / Space / paste
         // would otherwise mutate a board nobody can see.
         let ws = split_with_body(WorkspaceBody::Canvas);
-        assert!(!canvas_body_visible("/settings", Some(&ws)));
-        assert!(!canvas_body_visible("/memory", Some(&ws)));
-        assert!(!canvas_body_visible("/dashboard", Some(&ws)));
+        assert!(!canvas_body_visible("/settings", Some(ws)));
+        assert!(!canvas_body_visible("/memory", Some(ws)));
+        assert!(!canvas_body_visible("/dashboard", Some(ws)));
     }
 
     #[test]
@@ -1470,6 +1470,6 @@ mod tests_body_visible {
         // Split mode.
         ws.body.set(WorkspaceBody::Canvas);
         assert_eq!(ws.mode.get_untracked(), LayoutMode::ChatOnly);
-        assert!(!canvas_body_visible("/", Some(&ws)));
+        assert!(!canvas_body_visible("/", Some(ws)));
     }
 }

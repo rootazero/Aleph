@@ -35,6 +35,18 @@ impl CustomAcpAdapter {
             .as_deref()
             .unwrap_or(&self.harness_id)
     }
+
+    /// Owned env-vec copy of the configured env table. Both `build_config`
+    /// (session lifetime) and `execute_oneshot` (one-shot spawn) need the
+    /// table shaped as `Vec<(String, String)>` to thread through stdlib env
+    /// inheritance, so the clone lives in one place.
+    fn env_vec(&self) -> Vec<(String, String)> {
+        self.config
+            .env
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
 }
 
 #[async_trait]
@@ -52,12 +64,7 @@ impl AcpAdapter for CustomAcpAdapter {
     }
 
     fn build_config(&self, cwd: Option<&str>) -> AdapterConfig {
-        let env: Vec<(String, String)> = self
-            .config
-            .env
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let env = self.env_vec();
 
         // Map trust_level -> PermissionPolicy. `Full` trusts the harness
         // fully; `Disabled` denies all filesystem access. See ACP-07.
@@ -81,12 +88,7 @@ impl AcpAdapter for CustomAcpAdapter {
     }
 
     async fn execute_oneshot(&self, prompt: &str, cwd: &str) -> Result<String> {
-        let env: Vec<(String, String)> = self
-            .config
-            .env
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let env = self.env_vec();
 
         super::run_oneshot_command(
             &self.harness_id,

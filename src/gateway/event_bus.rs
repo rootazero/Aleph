@@ -396,27 +396,11 @@ pub struct GatewayEventBus {
 }
 
 impl GatewayEventBus {
-    /// Create a new event bus with default channel size
+    /// Create a new event bus with default channel size.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_capacity(EVENT_CHANNEL_SIZE)
-    }
-
-    /// Create a new event bus with a custom channel size.
-    ///
-    /// `pub(crate)` because every production construction goes through
-    /// [`Self::new`], which is now defined AS this function — previously the
-    /// two built the same value independently, which is why this one read as
-    /// dead code and why the channel size lived in two places (判据 §1).
-    ///
-    /// ⚠️ The 2026-09-04 severed-wire audit kept it with the reason "so the
-    /// `#[cfg(test)]` blocks that exercise capacity-bound paths still
-    /// compile". Measured 2026-09-05: there are no such blocks, and there
-    /// never were — the sentence described a consumer that does not exist.
-    #[must_use]
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        let (sender, _) = broadcast::channel(capacity);
-        let (typed_sender, _) = broadcast::channel(capacity);
+        let (sender, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
+        let (typed_sender, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
         Self {
             sender,
             typed_sender,

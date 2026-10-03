@@ -34,6 +34,22 @@ pub(crate) const fn effective_config_path_slot() -> &'static dyn SlotStatus {
     &EFFECTIVE_CONFIG_PATH
 }
 
+/// Typed shadow of `[security.ssrf]` — the strongly-typed
+/// `SecurityConfig` schema lives in the gateway layer, so we mirror the
+/// fields the Panel writes back into a private deserialise target here
+/// rather than reverse-depend on `gateway`. Lives only for the duration
+/// of [`apply_security_ssrf_overrides`].
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct SecuritySsrfOverrides {
+    enabled: Option<bool>,
+    allow_tool_private_network: Option<bool>,
+    max_redirects: Option<i64>,
+    allowed_hosts: Option<Vec<String>>,
+    blocked_hosts: Option<Vec<String>>,
+    strip_auth_on_cross_origin: Option<bool>,
+}
+
 impl Config {
     /// Get the default config path using unified directory
     ///
@@ -404,23 +420,27 @@ impl Config {
         let Ok(table) = raw_toml.parse::<toml::Table>() else {
             return;
         };
-        let Some(security) = table.get("security").and_then(|v| v.as_table()) else {
+        let Some(ssrf_table) = table
+            .get("security")
+            .and_then(|v| v.as_table())
+            .and_then(|s| s.get("ssrf"))
+            .and_then(|v| v.as_table())
+        else {
             return;
         };
-        let Some(ssrf) = security.get("ssrf").and_then(|v| v.as_table()) else {
+        let Ok(overrides) = toml::Value::Table(ssrf_table.clone())
+            .try_into::<SecuritySsrfOverrides>()
+        else {
             return;
         };
 
-        if let Some(v) = ssrf.get("enabled").and_then(|v| v.as_bool()) {
+        if let Some(v) = overrides.enabled {
             config.ssrf.enabled = v;
         }
-        if let Some(v) = ssrf
-            .get("allow_tool_private_network")
-            .and_then(|v| v.as_bool())
-        {
+        if let Some(v) = overrides.allow_tool_private_network {
             config.ssrf.allow_private_network = v;
         }
-        if let Some(v) = ssrf.get("max_redirects").and_then(|v| v.as_integer()) {
+        if let Some(v) = overrides.max_redirects {
             // Validate rather than silently clamp: a 9999 (or negative) value
             // was previously coerced to 255/0 and accepted, defeating the
             // SSRF redirect bound instead of rejecting the bad config.
@@ -432,44 +452,18 @@ impl Config {
                 ),
             }
         }
-        if let Some(arr) = ssrf.get("allowed_hosts").and_then(|v| v.as_array()) {
-            config.ssrf.allowed_hosts = arr
-                .iter()
-                .filter_map(|v| {
-                    v.as_str().map(String::from).or_else(|| {
-                        tracing::warn!(
-                            value = tracing::field::display(v),
-                            "security.ssrf.allowed_hosts: non-string entry ignored"
-                        );
-                        None
-                    })
-                })
-                .collect();
+        if let Some(v) = overrides.allowed_hosts {
+            config.ssrf.allowed_hosts = v;
         }
-        if let Some(arr) = ssrf.get("blocked_hosts").and_then(|v| v.as_array()) {
-            config.ssrf.blocked_hosts = arr
-                .iter()
-                .filter_map(|v| {
-                    v.as_str().map(String::from).or_else(|| {
-                        tracing::warn!(
-                            value = tracing::field::display(v),
-                            "security.ssrf.blocked_hosts: non-string entry ignored"
-                        );
-                        None
-                    })
-                })
-                .collect();
+        if let Some(v) = overrides.blocked_hosts {
+            config.ssrf.blocked_hosts = v;
         }
         // Panel-managed toggle: when the operator turns the credential-strip
         // off, every cross-origin redirect would otherwise keep its
         // Authorization/Cookie headers — the precise failure this field exists
-        // to silence. Covered by the same JSON-value-extraction pattern used
-        // for `enabled` above; a missing key leaves the field at its
-        // serde-default value (`default_strip_auth` → `true`).
-        if let Some(v) = ssrf
-            .get("strip_auth_on_cross_origin")
-            .and_then(|v| v.as_bool())
-        {
+        // to silence. A missing key leaves the field at its serde-default
+        // value (`default_strip_auth` → `true`).
+        if let Some(v) = overrides.strip_auth_on_cross_origin {
             config.ssrf.strip_auth_on_cross_origin = v;
         }
     }

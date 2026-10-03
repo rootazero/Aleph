@@ -315,18 +315,32 @@ const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
 /// per-goal `gate_command` that would be rejected here is a gate that can never
 /// pass judgment, and the model must learn that when it sets the gate — not
 /// silently, several autonomous iterations later, at the completion claim.
+/// Characters permitted in a hook `command` string. Kept as a `&[char]`
+/// (not a `&str`) so the per-call lookup is a single integer compare
+/// instead of a UTF-8 scan of the entire allow-list, and so a future edit
+/// that drops a character compiles a diff that names the dropped glyph
+/// instead of merging into a 100-character line.
+///
+/// Backslash is the standard Windows path separator and a perfectly legal
+/// character in a `cmd /C C:\path\to\script.ps1` goal-gate command.
+/// cmd.exe does not treat `\` as a metacharacter on its own — only the
+/// `^` escape and unescaped `"` introduce quoting — so adding `\` here
+/// costs no safety and stops legitimate Windows goal-gates from being
+/// silently rejected. Newline / carriage-return are absent on purpose;
+/// the `is_shell_safe` call uses a single `iter().all()` and they are
+/// rejected by omission.
+const SAFE_CHARS: &[char] = &[
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+    'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+    'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    ' ', '/', '.', '_', '-', ':', '"', '\'', '=', '\\',
+];
+
 #[must_use]
 pub fn is_shell_safe(command: &str) -> bool {
-    // Backslash is the standard Windows path separator and a perfectly
-    // legal character in a `cmd /C C:\path\to\script.ps1` goal-gate
-    // command. cmd.exe does not treat `\` as a metacharacter on its own
-    // — only the `^` escape and unescaped `"` introduce quoting — so
-    // adding `\` here costs no safety and stops legitimate Windows
-    // goal-gates from being silently rejected.
-    const SAFE: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /._-:\"'=\\";
-    // Newline / carriage-return are already absent from `SAFE`, so the
-    // single `contains` check covers them — no extra explicit comparison.
-    command.chars().all(|c| SAFE.contains(c))
+    command.chars().all(|c| SAFE_CHARS.contains(&c))
 }
 
 /// Build a platform-appropriate shell invocation for `command`.
@@ -694,6 +708,49 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn safe_chars_snapshot_is_locked() {
+        // Snapshot the allow-list so a future edit that silently widens or
+        // narrows the set lands as a reviewed diff here instead of passing
+        // silently. The first char to go is the one a security regression
+        // // needs, so write it long-form and sort it lexicographically
+        // instead of by category — a reviewer eyeballs it as a set of glyphs.
+        let expected: &[char] = &[
+            ' ', '"', '\'', '/', '\\', ':', '=', '.', '-', '_',
+            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+            'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J',
+            'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
+            'U', 'V', 'W', 'X', 'Y', 'Z',
+            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
+            'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't',
+            'u', 'v', 'w', 'x', 'y', 'z',
+        ];
+        assert_eq!(SAFE_CHARS, expected);
+    }
+
+    #[test]
+    fn is_shell_safe_accepts_windows_path_and_rejects_shell_metachars() {
+        // Allowed: alphanumerics, common punctuation, backslash (Windows path).
+        assert!(is_shell_safe("C:\\Users\\me\\Documents\\script.ps1"));
+        assert!(is_shell_safe("cargo test --quiet"));
+        // Rejected: shell metacharacters, newlines, NUL.
+        for bad in [
+            "rm -rf /; echo done",   // `;` is not in the allow-list
+            "echo `whoami`",         // backtick
+            "echo $(cmd)",            // curl
+            "echo hi\nrm -rf /",     // newline
+            "echo hi\rdone",          // CR
+            "echo hi>file",           // redirect
+            "echo hi<file",           // redirect
+            "echo hi|grep h",         // pipe
+            "echo hi&&rm",            // control
+            "",                       // empty is allowed — nothing to forbid
+        ] {
+            assert!(!is_shell_safe(bad), "{bad:?} should be rejected");
+        }
+        assert!(is_shell_safe("")); // sanity: empty command is a no-op, allow
     }
 
     #[test]

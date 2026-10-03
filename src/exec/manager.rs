@@ -258,6 +258,22 @@ impl PendingEntry {
     }
 }
 
+/// How many milliseconds remain on `entry`'s deadline, floored at 0.
+///
+/// Three readers (`get_pending`, `list_pending`, the expiry sweep) compute
+/// this from the same two fields; the helper is the one place the wall-clock
+/// vs `created_at` relationship is named.
+fn remaining_ms(entry: &PendingEntry, now: Instant) -> u64 {
+    let elapsed = now.duration_since(entry.created_at);
+    let timeout_ms = entry
+        .record
+        .expires_at_ms
+        .saturating_sub(entry.record.created_at_ms);
+    Duration::from_millis(timeout_ms)
+        .saturating_sub(elapsed)
+        .as_millis() as u64
+}
+
 /// Pending approval info for external access
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingApproval {
@@ -901,19 +917,9 @@ impl ExecApprovalManager {
         pending
             .get(id)
             .filter(|entry| entry.is_live())
-            .map(|entry| {
-                let now = Instant::now();
-                let elapsed = now.duration_since(entry.created_at);
-                let timeout_ms = entry
-                    .record
-                    .expires_at_ms
-                    .saturating_sub(entry.record.created_at_ms);
-                let remaining = Duration::from_millis(timeout_ms).saturating_sub(elapsed);
-
-                PendingApproval {
-                    record: entry.record.clone(),
-                    remaining_ms: remaining.as_millis() as u64,
-                }
+            .map(|entry| PendingApproval {
+                record: entry.record.clone(),
+                remaining_ms: remaining_ms(entry, Instant::now()),
             })
     }
 
@@ -935,18 +941,9 @@ impl ExecApprovalManager {
         let mut out: Vec<PendingApproval> = pending
             .values()
             .filter(|entry| entry.is_live())
-            .map(|entry| {
-                let elapsed = now.duration_since(entry.created_at);
-                let timeout_ms = entry
-                    .record
-                    .expires_at_ms
-                    .saturating_sub(entry.record.created_at_ms);
-                let remaining = Duration::from_millis(timeout_ms).saturating_sub(elapsed);
-
-                PendingApproval {
-                    record: entry.record.clone(),
-                    remaining_ms: remaining.as_millis() as u64,
-                }
+            .map(|entry| PendingApproval {
+                record: entry.record.clone(),
+                remaining_ms: remaining_ms(entry, now),
             })
             .collect();
         // `id` breaks the tie: two approvals raised in the same millisecond

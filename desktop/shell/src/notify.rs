@@ -51,12 +51,24 @@ const TOPIC_SURFACE_NOTIFY: &str = "surface.notify";
 const NOTIFY_TOPICS: &[&str] = &[TOPIC_SURFACE_NOTIFY, TOPIC_SURFACE_APPROVAL];
 
 /// Run the bridge forever, reconnecting with exponential backoff.
+///
+/// A [`crate::connection::target_change_rx`] watch receiver is held alongside
+/// the WebSocket so an operator Remote-A → Remote-B switch (W-18) terminates
+/// the in-flight A-bound session on the next select tick and the loop
+/// reconnects against the freshly-loaded B target. Without this, the bridge
+/// would stay subscribed to A indefinitely and B's `surface.notify` events
+/// would never reach the user.
 pub async fn run_notification_bridge(app: AppHandle) {
+    let mut target_rx = crate::connection::target_change_rx();
     let mut backoff = INITIAL_BACKOFF;
     loop {
         let target = crate::connection::load_target();
-        match session(&app, &target).await {
-            Ok(()) => backoff = INITIAL_BACKOFF,
+        match session(&app, &target, &mut target_rx).await {
+            Ok(SessionExit::Closed) => backoff = INITIAL_BACKOFF,
+            Ok(SessionExit::TargetChanged) => {
+                tracing::debug!("notification bridge: target changed, reconnecting");
+                backoff = INITIAL_BACKOFF;
+            }
             Err(e) => tracing::debug!("notification bridge disconnected: {e}"),
         }
         tokio::time::sleep(backoff).await;
@@ -64,12 +76,26 @@ pub async fn run_notification_bridge(app: AppHandle) {
     }
 }
 
+/// Reason a session ended, returned to the reconnect loop.
+enum SessionExit {
+    /// The socket closed cleanly (server-side `Close`, EOF, or a clean error).
+    Closed,
+    /// The operator switched the connection target mid-session (W-18); the
+    /// loop should reconnect against the new target rather than retiling the
+    /// old one.
+    TargetChanged,
+}
+
 /// One connection: connect, handshake, subscribe, then forward events
-/// until the socket closes or errors.
+/// until the socket closes, errors, or the target changes. The
+/// `target_rx` receiver is consulted via [`tokio::select!`] on every
+/// iteration so an operator switch does not leave the bridge bound to the
+/// previous Gateway.
 async fn session(
     app: &AppHandle,
     target: &crate::connection::ConnectionTarget,
-) -> Result<(), String> {
+    target_rx: &mut tokio::sync::watch::Receiver<()>,
+) -> Result<SessionExit, String> {
     // NOTE (cert trust): `connect_async` validates `wss://` with the platform
     // TLS roots (native-tls, same stack as shared/client). It does NOT take
     // part in the workspace TOFU pin (`cert_trust::TrustStore`), which today
@@ -90,43 +116,58 @@ async fn session(
         .await
         .map_err(|e| format!("subscribe send failed: {e}"))?;
 
-    while let Some(frame) = ws.next().await {
-        match frame.map_err(|e| format!("stream error: {e}"))? {
-            Message::Text(text) => match serde_json::from_str::<Value>(text.as_str()) {
-                Ok(value) => {
-                    // A JSON-RPC error on our own `connect`/`subscribe` means the
-                    // Gateway refused to authorize this bridge — typically a
-                    // remote token-protected Gateway we have not (yet) presented
-                    // a valid token to. End the session (Err, not a silent drop)
-                    // so the caller backs off and reconnects, re-reading the
-                    // token the Panel may have just deposited. Without this the
-                    // bridge would block forever on a walled connection and R5
-                    // banners would silently stop on remote.
-                    if let Some(reason) = handshake_error(&value) {
-                        return Err(format!(
-                            "Gateway refused the desktop notification bridge ({reason}); \
-                             present a valid Gateway token to enable desktop notifications"
-                        ));
-                    }
-                    store_issued_device_token(&value);
-                    handle_message(app, &value);
+    loop {
+        // Race the next WS frame against the operator-driven target switch.
+        // `changed()` resolves when `signal_target_change()` publishes a
+        // tick on the global watch; we close the stream and return
+        // TargetChanged so the outer reconnect loop reads the new target.
+        tokio::select! {
+            _ = target_rx.changed() => {
+                let _ = ws.close(None).await;
+                return Ok(SessionExit::TargetChanged);
+            }
+            frame = ws.next() => {
+                let Some(frame) = frame else {
+                    return Ok(SessionExit::Closed);
+                };
+                let frame = frame.map_err(|e| format!("stream error: {e}"))?;
+                match frame {
+                    Message::Text(text) => match serde_json::from_str::<Value>(text.as_str()) {
+                        Ok(value) => {
+                            // A JSON-RPC error on our own `connect`/`subscribe` means the
+                            // Gateway refused to authorize this bridge — typically a
+                            // remote token-protected Gateway we have not (yet) presented
+                            // a valid token to. End the session (Err, not a silent drop)
+                            // so the caller backs off and reconnects, re-reading the
+                            // token the Panel may have just deposited. Without this the
+                            // bridge would block forever on a walled connection and R5
+                            // banners would silently stop on remote.
+                            if let Some(reason) = handshake_error(&value) {
+                                return Err(format!(
+                                    "Gateway refused the desktop notification bridge ({reason}); \
+                                     present a valid Gateway token to enable desktop notifications"
+                                ));
+                            }
+                            store_issued_device_token(&value);
+                            handle_message(app, &value);
+                        }
+                        Err(e) => {
+                            // A malformed frame may still carry event payload (approval
+                            // titles/bodies, run summaries) — keep the raw text out of
+                            // the warn log; it is available at trace level only.
+                            tracing::warn!(
+                                frame_len = text.len(),
+                                "notification bridge: failed to parse JSON frame: {e}"
+                            );
+                            tracing::trace!(raw = text.as_str(), "notification bridge: raw bad frame");
+                        }
+                    },
+                    Message::Close(_) => return Ok(SessionExit::Closed),
+                    Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => {}
                 }
-                Err(e) => {
-                    // A malformed frame may still carry event payload (approval
-                    // titles/bodies, run summaries) — keep the raw text out of
-                    // the warn log; it is available at trace level only.
-                    tracing::warn!(
-                        frame_len = text.len(),
-                        "notification bridge: failed to parse JSON frame: {e}"
-                    );
-                    tracing::trace!(raw = text.as_str(), "notification bridge: raw bad frame");
-                }
-            },
-            Message::Close(_) => return Ok(()),
-            Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => {}
+            }
         }
     }
-    Ok(())
 }
 
 /// If `msg` is a JSON-RPC error response to the bridge's own `connect` (id 1)

@@ -26,21 +26,17 @@
 /// task-local is still in scope at the read.
 #[must_use]
 pub fn audit_identity(domain: &str, action: &str, target: &str) -> (String, String) {
-    match crate::tools::turn_context::current_turn_context() {
-        Some(turn) => {
-            let agent_id = turn.session_key.agent_id().to_string();
-            let context = if turn.is_channel_routable() {
-                format!(
-                    "{domain}.{action} ({target}) via {}/{}",
-                    turn.channel_id, turn.conversation_id
-                )
-            } else {
-                format!("{domain}.{action} ({target})")
-            };
-            (agent_id, context)
-        }
-        None => ("main".to_string(), format!("{domain}.{action} ({target})")),
-    }
+    let base = format!("{domain}.{action} ({target})");
+    let Some(turn) = crate::tools::turn_context::current_turn_context() else {
+        return ("main".to_string(), base);
+    };
+    let agent_id = turn.session_key.agent_id().to_string();
+    let context = if turn.is_channel_routable() {
+        format!("{base} via {}/{}", turn.channel_id, turn.conversation_id)
+    } else {
+        base
+    };
+    (agent_id, context)
 }
 
 #[cfg(test)]

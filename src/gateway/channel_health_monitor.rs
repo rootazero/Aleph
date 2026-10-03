@@ -428,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn config_default_matches_openclaw_reference() {
+    fn config_default_is_300s_300s_10_per_hour() {
         let c = ChannelHealthConfig::default();
         assert_eq!(c.check_secs, 300);
         assert_eq!(c.stale_secs, 300);

@@ -202,7 +202,7 @@ pub struct ExtensionEntry {
     pub enabled: bool,
     #[serde(default)]
     pub update_available: bool,
-    /// Upstream provenance label (e.g. "clawhub", "github:owner"); filled from
+    /// Upstream provenance label (e.g. "github:owner", "upstream-hub"); filled from
     /// the published catalog. None for local/installed entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,

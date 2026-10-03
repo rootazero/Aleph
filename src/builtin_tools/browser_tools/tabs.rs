@@ -114,6 +114,16 @@ pub struct BrowserTabsOutput {
     pub message: Option<String>,
 }
 
+impl BrowserTabsOutput {
+    fn failed(message: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            tabs: None,
+            message: Some(message.into()),
+        }
+    }
+}
+
 /// Lists, switches, or closes browser tabs.
 #[derive(Clone)]
 pub struct BrowserTabsTool {
@@ -139,11 +149,10 @@ impl AlephTool for BrowserTabsTool {
         let (profile, backend) = match resolved {
             Ok(pair) => pair,
             Err(e) => {
-                return Ok(BrowserTabsOutput {
-                    success: false,
-                    tabs: None,
-                    message: Some(super::backend_error_text(&self.manager, &e)),
-                });
+                return Ok(BrowserTabsOutput::failed(super::backend_error_text(
+                    &self.manager,
+                    &e,
+                )));
             }
         };
 
@@ -167,14 +176,10 @@ impl AlephTool for BrowserTabsTool {
                         message: Some(message),
                     })
                 }
-                Err(e) => Ok(BrowserTabsOutput {
-                    success: false,
-                    tabs: None,
-                    message: Some(format!(
-                        "List tabs failed: {}",
-                        super::backend_error_text(&self.manager, &e)
-                    )),
-                }),
+                Err(e) => Ok(BrowserTabsOutput::failed(format!(
+                    "List tabs failed: {}",
+                    super::backend_error_text(&self.manager, &e)
+                ))),
             },
             TabAction::Switch { tab_id } => match backend.switch_tab(&tab_id).await {
                 Ok(()) => Ok(BrowserTabsOutput {
@@ -185,14 +190,10 @@ impl AlephTool for BrowserTabsTool {
                         tab_id, args.profile
                     )),
                 }),
-                Err(e) => Ok(BrowserTabsOutput {
-                    success: false,
-                    tabs: None,
-                    message: Some(format!(
-                        "Switch tab failed: {}",
-                        super::backend_error_text(&self.manager, &e)
-                    )),
-                }),
+                Err(e) => Ok(BrowserTabsOutput::failed(format!(
+                    "Switch tab failed: {}",
+                    super::backend_error_text(&self.manager, &e)
+                ))),
             },
             TabAction::Close { tab_id } => match backend.close_tab(&tab_id).await {
                 Ok(()) => {
@@ -212,14 +213,10 @@ impl AlephTool for BrowserTabsTool {
                         )),
                     })
                 }
-                Err(e) => Ok(BrowserTabsOutput {
-                    success: false,
-                    tabs: None,
-                    message: Some(format!(
-                        "Close tab failed: {}",
-                        super::backend_error_text(&self.manager, &e)
-                    )),
-                }),
+                Err(e) => Ok(BrowserTabsOutput::failed(format!(
+                    "Close tab failed: {}",
+                    super::backend_error_text(&self.manager, &e)
+                ))),
             },
         }
     }
@@ -460,6 +457,8 @@ mod tests {
         ("pdf", include_str!("pdf.rs")),
         ("press_key", include_str!("press_key.rs")),
         ("profile_tool", include_str!("profile_tool.rs")),
+        ("qa", include_str!("qa.rs")),
+        ("record", include_str!("record.rs")),
         ("resize", include_str!("resize.rs")),
         ("screenshot", include_str!("screenshot.rs")),
         ("scroll", include_str!("scroll.rs")),

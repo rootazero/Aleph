@@ -22,10 +22,10 @@ pub struct ParsedCommand {
     /// `plugin:diag:ping`, `custom:3:translate`).
     ///
     /// `resolve_command` already knows the full id; carrying it here means
-    /// downstream consumers (the `command.execute` RPC, the channel fast-path
-    /// serializer) no longer reconstruct it lossily from `source_type` +
-    /// `command_name` — a reconstruction that silently dropped the MCP server,
-    /// plugin id, and custom rule-index segments.
+    /// the fast-path serializer (`serialize_parsed_command`, shared by
+    /// `chat.send` and the channel router) no longer reconstructs it lossily
+    /// from `source_type` + `command_name` — a reconstruction that silently
+    /// dropped the MCP server, plugin id, and custom rule-index segments.
     pub tool_id: String,
     /// Arguments after the command name
     pub arguments: Option<String>,
@@ -131,10 +131,23 @@ impl CommandParser {
         })
     }
 
-    /// Get a reference to the underlying `ToolCatalog`
+    /// Get a reference to the underlying `ToolCatalog`.
+    ///
+    /// Returns `&ToolCatalog` (auto-deref from the inner `Arc`) — all current
+    /// callers treat it as a borrowed catalog; clone `Arc<ToolCatalog>` from
+    /// `Self::tool_registry_arc` if a shared-owner handle is needed.
     #[must_use]
-    pub const fn tool_registry(&self) -> &Arc<ToolCatalog> {
+    pub fn tool_registry(&self) -> &ToolCatalog {
         &self.tool_registry
+    }
+
+    /// Clone the underlying `Arc<ToolCatalog>` for shared ownership.
+    ///
+    /// Split from `tool_registry()` so the common borrowed-reference path
+    /// does not pay for an `Arc` in its return type.
+    #[must_use]
+    pub fn tool_registry_arc(&self) -> Arc<ToolCatalog> {
+        Arc::clone(&self.tool_registry)
     }
 }
 

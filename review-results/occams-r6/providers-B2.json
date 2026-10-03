@@ -1,0 +1,217 @@
+{
+  "module": "src/providers (batch B2: protocols/*)",
+  "reviewer": "MiniMax-M3",
+  "summary": "SSE unfold+pending-queue state machine duplicated 4x across anthropic/responses/chat/gemini adapters (~150 LOC each); provider_policy parallel hierarchies in anthropic and openai_common diverge in field names, family detectors, and policy-apply semantics; tool-call id mapping inconsistent (HashMap<String,String> vs IndexIdTracker); sanitize_anthropic_tool_name duplicates sanitize_tool_name from openai_common with diverging semantics; openai_responses silently logs validate_provider_base_url violations instead of failing.",
+  "totals": {"critical": 0, "high": 6, "medium": 9, "low": 4},
+  "findings": [
+    {
+      "id": "P-B2-001",
+      "severity": "High",
+      "category": "duplicate",
+      "file": "src/providers/protocols/openai_responses/mod.rs",
+      "line": 380,
+      "title": "SSE unfold+pending-queue state machine duplicated across all 4 adapters",
+      "description": "The `unfold` closure with state struct (bytes, line_buf, pending VecDeque, done, saw_terminal) plus truncation guard is repeated nearly verbatim in anthropic/adapter.rs (~lines 750-900), openai_responses/mod.rs (~380-580), openai_chat/adapter.rs, and gemini/adapter.rs. Each copy is ~150 lines with the same byte_buffer accumulation, line-parse loop, MAX_SSE_LINE_BYTES bound check, and truncation guard pattern. The four diverge only in (a) what events they push to pending and (b) what counts as a terminal delta. Any change to the SSE framing or truncation policy has to be applied in 4 places — the existing divergence is already visible (chat uses deferred_done state, anthropic uses stream_was_truncated predicate, responses uses saw_terminal bool + tail flush).",
+      "fix_proposal": "Extract a single `run_sse_unfold<F>(bytes, idle_secs, is_terminal, provider, on_data_line, on_eof) -> BoxStream` driver into openai_common::sse (or a new openai_common::unfold). Each adapter supplies only its own per-line handler and EOF policy. Eliminates ~600 lines of duplication and pins the truncation contract to one place.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-B2-002",
+      "severity": "High",
+      "category": "duplicate",
+      "file": "src/providers/protocols/openai_responses/mod.rs",
+      "line": 124,
+      "title": "Non-2xx error handling inconsistent across adapters — openai_responses lacks typed classification",
+      "description": "anthropic/adapter.rs::classify_anthropic_error_response has typed mapping for 401/403 (auth), 429 (RateLimitError with Retry-After), 529/overloaded_error (transient), 400/422 (invalid), _ (generic). openai_responses/mod.rs only special-cases 429 + an `is_usage_limit_body` check, then falls through to a bare `AlephError::provider`. openai_chat and gemini adapters show the same flat mapping (only 429 + usage-limit). On Anthropic, a 529/overloaded response is correctly typed `ErrorClass::Transient`; on Responses/Chat/Gemini the same overload condition is indistinguishable from a permanent provider fault, so failover::decide won't retry it in place.",
+      "fix_proposal": "Lift the typed-classification pattern from classify_anthropic_error_response into openai_common::provider_policy (or a new openai_common::error_classify) and call it from all four adapters. Each adapter supplies its own envelope parser (responses: `error.code/message` at the root; gemini: `error.status/message`; chat: `error.message` or `error.code`). Keeps the per-protocol shapes local, makes the typing total.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-B2-003",
+      "severity": "High",
+      "category": "api-surface",
+      "file": "src/providers/protocols/openai_responses/mod.rs",
+      "line": 113,
+      "title": "openai_responses validate_provider_base_url logs but does not propagate",
+      "description": "build_endpoint logs `tracing::error!(...)` when validate_provider_base_url fails but does not return Err, and the call site does not check it either. The user sees the malformed URL silently. anthropic/proto_impl.rs and gemini/adapter.rs have the identical defensive log. A user typo in base_url ('https//' missing colon, ftp:// scheme) silently goes to the wire and fails with a generic reqwest error instead of an `InvalidConfig`.",
+      "fix_proposal": "Return Result<String> from build_endpoint in all three adapters and `serve` on the validation error from the call site. The `tracing::error!` becomes a redundant safety net only when the upstream validation is upgraded to log-on-glow.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-B2-004",
+      "severity": "High",
+      "category": "abstraction",
+      "file": "src/providers/protocols/openai_common/provider_policy.rs",
+      "line": 70,
+      "title": "provider_policy duplicated across openai_common and anthropic — diverging field names and shapes",
+      "description": "openai_common::provider_policy has EndpointClass enum (14 variants), ProviderCapabilities struct (12 fields), and a `PayloadPolicy::apply` that mutates serde_json::Map directly. anthropic::provider_policy has AnthropicEndpointClass {Official, Custom}, AnthropicCapabilities struct (14 fields), and an `AnthropicPolicy::apply` that takes serde_json::Value + .as_object_mut(). Same conceptual machinery (classify host → flip capability bits → strip unsupported body fields), but: (a) EndpointClass names diverge (AnthropicPublic vs Official), (b) fields diverge (Anthropic has requires_reasoning_content_in_tool_input, openai has supports_strict_schema), (c) apply functions have different signatures, (d) Family detectors exist only on the anthropic side (Kimi/MiniMax/Azure/Bedrock/Vertex) while the openai side bakes them into EndpointClass variants.",
+      "fix_proposal": "Consolidate into one `provider_policy::Policy` core with a per-protocol `Capability` trait. EndpointClass becomes a thin tag; resolve_capabilities returns a Policy<Capability> where Capability carries the union of all capability fields. apply(body) is shared. Per-family detectors live as `match` arms in one place. The duplication is structural — a future capability bit (e.g. supports_server_compaction) will be added in one of the two hierarchies and quietly not apply on the other.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-B2-005",
+      "severity": "High",
+      "category": "duplicate",
+      "file": "src/providers/protocols/openai_common/openai_strict_schema.rs",
+      "line": 350,
+      "title": "sanitize_tool_name and sanitize_anthropic_tool_name are near-duplicates with diverging semantics",
+      "description": "openai_common::tools::sanitize_tool_name replaces anything not [a-zA-Z0-9_-] with `_` (no length cap, no prefix). anthropic.rs::sanitize_anthropic_tool_name does the same character replacement, but additionally prefixes `t_` if the first char is non-ASCII-alpha and truncates to 128. Both are pub(crate) and called from their own adapters. The truncation/prepend is captured by Anthropic's regex `^[a-zA-Z][a-zA-Z0-9_-]{0,127}$`, but openai_chat has no equivalent restriction. A tool name `0foo` is correctly prefixed to `t_0foo` on Anthropic but sent as-is on openai_chat — which is the right answer for OpenAI but obscures that the two adapters are silently handling different invariants. The `desanitize_tool_name` in openai_common::tools.rs is an identity function — a stub for symmetry.",
+      "fix_proposal": "Add a doc comment on sanitize_tool_name noting the OpenAI-side semantics (no prefix, no cap), and on sanitize_anthropic_tool_name noting the Anthropic regex. Consider hoisting both into `tools.rs` with explicit `for_anthropic(name)` / `for_openai(name)` naming. Remove the stub `desanitize_tool_name` if it has no callers.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-B2-006",
+      "severity": "High",
+      "category": "duplicate",
+      "file": "src/providers/protocols/openai_responses/mod.rs",
+      "line": 408,
+      "title": "openai_responses stream_deltas uses HashMap<String,String> while chat/anthropic use IndexIdTracker",
+      "description": "openai_responses::stream_deltas carries `item_to_call: HashMap<String, String>` (item_id → call_id). openai_chat/sse.rs and anthropic/sse.rs use `IndexIdTracker` (positional u32 index → call_id). The Responses API emits item_id (string); the Chat Completions and Anthropic SSE Events emit positional index. The divergence is real — but the chat parser additionally supports `pending_args` buffering, which the Responses parser does not need (it gets a single `FunctionCallArgumentsDone` event with the full arguments). The two could share a single `IdMap` trait with `track(item_id|id|index, ...)` and a shared `take_pending`.",
+      "fix_proposal": "Generalize IndexIdTracker to accept either u32 index or String key, and migrate openai_responses to use it. The OpenAI Responses API's own streaming emits the item_id before any function-call deltas, so the pending_args buffer is a no-op there — the unified type becomes Optional.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-B2-007",
+      "severity": "Medium",
+      "category": "abstraction",
+      "file": "src/providers/protocols/anthropic.rs",
+      "line": 23,
+      "title": "CLAUDE_CODE_IDENTITY/CLAUDE_CODE_USER_AGENT/ANTHROPIC_VERSION are pub constants leaking the adapter surface",
+      "description": "ANTHROPIC_VERSION=\"2023-06-01\", CLAUDE_CODE_USER_AGENT=\"claude-cli/2.1.74\", CLAUDE_CODE_IDENTITY=\"You are Claude Code, Anthropic's official CLI for Claude.\" are declared `pub` in src/providers/protocols/anthropic.rs. They are only used inside anthropic/*.rs. The constants are wire-format versions and headers — useful for diagnostics, but they should not be re-exported from the protocol module. mod.rs re-exports AnthropicProtocol but not these constants, so external consumption is implicit (other modules that import the anthropic module would get them).",
+      "fix_proposal": "Make them pub(crate) — there is no external consumer. If the version string is meant to be observable for tests, expose `pub(crate) const` and have the few diagnostic paths that need it import from the module root.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-B2-008",
+      "severity": "Medium",
+      "category": "allocation",
+      "file": "src/providers/protocols/gemini/sse.rs",
+      "line": 88,
+      "title": "Gemini synthetic fc id uses synchronous uuid::Uuid::new_v4 in hot streaming path",
+      "description": "When Gemini returns a functionCall with no native id, the parser generates `gemini_fc_{counter}_{nonce}` with `uuid::Uuid::new_v4().simple().to_string()`. This is on every mid-stream tool-call parse path. uuid::Uuid::new_v4() allocates a 32-byte array, formats it via Hex lower-dial-table, and creates a String. In practice this fires ≤ ~10 times per turn, so cost is negligible — but the comment in the code says \"mandatory nonce\" because a bare counter repeats on every response and breaks orphan resolution.",
+      "fix_proposal": "Acceptable as-is for the actual call rate. If you want to eliminate the alloc, pass a process-start counter+session-id once at adapter init and concatenate. Not worth changing unless the synthetic-id path becomes hotter.",
+      "confidence": "low"
+    },
+    {
+      "id": "P-B2-009",
+      "severity": "Medium",
+      "category": "duplicate",
+      "file": "src/providers/protocols/openai_responses/mod.rs",
+      "line": 380,
+      "title": "MAX_SSE_LINE_BYTES reborrowed from openai_common::sse in all four adapters with same bound logic",
+      "description": "anthropic/adapter.rs, openai_responses/mod.rs, openai_chat/adapter.rs, gemini/adapter.rs each re-reference `crate::providers::protocols::openai_common::sse::MAX_SSE_LINE_BYTES` and apply the same `if line_buf.len() > MAX_SSE_LINE_BYTES` check before parsing the next line. The constant lives in openai_common::sse but the bound logic is duplicated. If the bound is ever changed (say, lower for a hostile-provider guard), it has to be the constant AND applied consistently — currently the constant is referenced, but the check string is also copied per adapter.",
+      "fix_proposal": "Already extracted as a constant — good. Lift the bound check itself into the shared `run_sse_unfold` driver proposed in P-B2-001.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-B2-010",
+      "severity": "Medium",
+      "category": "abstraction",
+      "file": "src/providers/protocols/openai_responses/mod.rs",
+      "line": 590,
+      "title": "parse_sse_event_multi has 30+ match arms — Rust compiler emits high cyclomatic complexity warning",
+      "description": "openai_responses/mod.rs::parse_sse_event_multi handles every stream event type in one match (TextDelta, TextDone, OutputItemAdded (FunctionCall), FunctionCallArgumentsDelta, FunctionCallArgumentsDone, OutputItemDone (FunctionCall, Reasoning), Completed, Failed, Error, ReasoningSummary*, ReasoningText*, InProgress, PartAdded/Done, ItemAdded/Done). The rust-doctor-disable-next-line high-cyclomatic-complexity comment acknowledges it. Several arms (the OutputItemDone non-FunctionCall, the InProgress/ContentPartAdded/PartDone) do nothing but emit a debug log; they were added for completeness but pollute the function.",
+      "fix_proposal": "Move the no-op debug-log arms into a single `_ => debug!(...)` fallback with the event-type guard. The 'real' arms stay distinct. Cyclomatic complexity drops by ~15.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-B2-011",
+      "severity": "Medium",
+      "category": "duplicate",
+      "file": "src/providers/protocols/openai_chat/sse.rs",
+      "line": 235,
+      "title": "openai_chat has deferred_done pattern that no other adapter needs",
+      "description": "openai_chat/sse.rs::defer_done_until_usage holds the terminal Done back until a trailing Usage chunk lands, because OpenAI Chat Completions emits finish_reason and Usage in separate SSE chunks (in that order). openai_responses's Responses API emits a single Completed event carrying both Usage and stop_reason, so no deferral. anthropic emits both in message_delta (terminal) + message_start (initial) on separate events, so it tracks saw_terminal but never defers. gemini emits Usage in usageMetadata which can arrive in any chunk including before finishReason. The four protocols solve the same `Done must come last` invariant four different ways.",
+      "fix_proposal": "Move the `Done last` invariant into the shared unfold driver. Each adapter returns a `Termination::Done|Error|Usage|Incomplete` enum per parse step; the driver decides push order. Eliminates four hand-rolled state machines.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-B2-012",
+      "severity": "Medium",
+      "category": "duplicate",
+      "file": "src/providers/protocols/openai_responses/mod.rs",
+      "line": 295,
+      "title": "openai_responses build_responses_request takes 4 args vs anthropic Chat adapter's method call",
+      "description": "build_responses_request(payload, model, variant, config) is a 4-arg pub fn that builds the request body from ambient state. The companion anthropic Chat adapter's build_responses_request lives on the adapter instance with `&self`, avoiding passing config/variant explicitly. The Responses version was probably lifted to a free fn for codex_factory registration in registry.rs, but the variant+config could be carried by the adapter struct.",
+      "fix_proposal": "Move build_responses_request onto `&self` and have it look up `self.variant` and the cached stream_idle. The 4-arg shape makes the function harder to test in isolation (you need a synthetic variant+config for every test).",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-B2-013",
+      "severity": "Medium",
+      "category": "duplicate",
+      "file": "src/providers/protocols/anthropic/provider_policy.rs",
+      "line": 230,
+      "title": "extract_hostname reimplemented in anthropic/provider_policy.rs and openai_common/provider_policy.rs",
+      "description": "anthropic/provider_policy.rs::extract_hostname does `if url.contains(\"://\") { url.to_string() } else { format!(\"https://{url}\") }` then parses via url::Url. openai_common/provider_policy.rs has an extract_hostname doing the same. The two implementations are byte-identical. anthropic also has extract_path which openai_common doesn't.",
+      "fix_proposal": "Hoist extract_hostname + extract_path into a `provider_policy::url_helpers` module (or into http_client since it's where validate_provider_base_url already lives). One source of truth for URL parsing.",
+      "confidence": "high"
+    },
+    {
+      "id": "P-B2-014",
+      "severity": "Medium",
+      "category": "abstraction",
+      "file": "src/providers/protocols/configurable.rs",
+      "line": 65,
+      "title": "ConfigurableProtocol::new Box::leaks definition.name to get &'static str",
+      "description": "new() calls `Box::leak(definition.name.into_boxed_str()) as &'static str` to populate `name_static: &'static str` — required because ProtocolAdapter::name returns &'static str and the protocol name comes from YAML. Every custom protocol load leaks one allocation that lives for the process. The comment marks it intentional, but with many custom protocols loaded this becomes a real leak.",
+      "fix_proposal": "Change ProtocolAdapter::name to return `Cow<'static, str>` (or `&str` with an Arc<String> field), so the leak goes away. Alternatively, intern names via `once_cell::sync::Lazy<HashMap<String, &'static str>>` so identical names share the leaked str.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-B2-015",
+      "severity": "Low",
+      "category": "api-surface",
+      "file": "src/providers/protocols/anthropic.rs",
+      "line": 24,
+      "title": "AnthropicProtocol fields name_map and stream_idle_timeout_secs are pub/Arc-internal but not pub(crate) audit",
+      "description": "AnthropicProtocol has `pub name_map: ToolNameMap` and `pub stream_idle_timeout_secs: Arc<AtomicU64>` in its struct definition (looking at standard visibility patterns). These are accessed from anthropic/adapter.rs (e.g. `state.name_map: self.name_map.clone()`). They should be private with adapter.rs as the consumer — but the field types are Arc<RwLock<HashMap>> which is `pub(crate)` visibility is sufficient. Similar pattern in openai_responses has `client: Client, variant: ResponsesVariant` already private — good.",
+      "fix_proposal": "Verify that name_map is not `pub` in the AnthropicProtocol struct — the structure inferred from adapter.rs's access pattern suggests it is. If `pub`, make it private.",
+      "confidence": "low"
+    },
+    {
+      "id": "P-B2-016",
+      "severity": "Low",
+      "category": "abstraction",
+      "file": "src/providers/protocols/openai_responses/mod.rs",
+      "line": 590,
+      "title": "ToolCallArgsComplete delta emitted only by openai_responses — Chat/Anthropic send bare proto deltas",
+      "description": "openai_responses emits ProviderDelta::ToolCallArgsComplete (carrying the authoritative copy of the args) when FunctionCallArgumentsDone or OutputItemDone carries complete arguments. openai_chat and anthropic SSE parsers emit only ToolCallArgDelta fragments, no final 'here are the authoritative args' event. Consumers of the unified delta stream have to either (a) trust the accumulated fragments are complete (chat's fragment can be truncated mid-stream, see the `idx` arg buffer) or (b) collect the final output_item. The provider API supports both shapes but the unification only happens for Responses.",
+      "fix_proposal": "Either (a) drop ToolCallArgsComplete from the unified type since only Responses uses it, or (b) emit it in chat/anthropic too at the End / Stop event. Right now it's a half-supported variant.",
+      "confidence": "medium"
+    },
+    {
+      "id": "P-B2-017",
+      "severity": "Low",
+      "category": "duplicate",
+      "file": "src/providers/protocols/openai_common/openai_strict_schema.rs",
+      "line": 1,
+      "title": "openai_strict_schema.rs is 1477 lines — single-largest file in protocols/*, dense with regex/string gymnastics",
+      "description": "flatten_tool_schema_unions (Anthropic calls this), ensure_openai_tool_envelope, lenient_multi_type_rewrite, normalize_strict_schema, deref_json_schema, ensure_property_types — all in one file. They share helper logic but operate on serde_json::Value with subtle differences (e.g. lenient handles ['null',X] but flatten doesn't). The 1477-line file is hard to navigate and the relationships between the 6 helpers are documented in tests, not in source.",
+      "fix_proposal": "Split into openai_common/schemas/mod.rs (root), openai_common/schemas/flatten.rs (flatten_tool_schema_unions), openai_common/schemas/strict.rs (normalize_strict_schema + StrictResult), openai_common/schemas/deref.rs (deref_json_schema + ensure_property_types). Each file becomes a single responsibility.",
+      "confidence": "low"
+    },
+    {
+      "id": "P-B2-018",
+      "severity": "Low",
+      "category": "api-surface",
+      "file": "src/providers/protocols/openai_responses/mod.rs",
+      "line": 28,
+      "title": "ResponsesVariant fields are all pub (extra_headers, store, text, include)",
+      "description": "ResponsesVariant is a public config struct with all fields `pub`. External callers (and tests) construct it by `..Default::default()` which is fine, but the field naming is mixed (store: Option<bool>, include: Option<Vec<String>>) and the inner `TextConfig` has only `format` and `verbosity`. This is intentional for the codex() constructor and the variants live together; the pattern is OK. Note for completeness only.",
+      "fix_proposal": "None — the field surface is the contract for the builder pattern. Document the field semantics in the type-level doc comment.",
+      "confidence": "low"
+    },
+    {
+      "id": "P-B2-019",
+      "severity": "Low",
+      "category": "abstraction",
+      "file": "src/providers/protocols/registry.rs",
+      "line": 65,
+      "title": "PROTOCOL_REGISTRY unwrap_or_else(|e| e.into_inner()) repeated on every lock acquisition",
+      "description": "The pattern `let map = self.inner.read().unwrap_or_else(|e| e.into_inner());` appears 6+ times in registry.rs. It handles poisoned-lock recovery (a thread panicked while holding the lock), which is the Rust convention — but if you actually poison a lock, the registry is now in an inconsistent state and the call proceeds anyway. This is a deliberate trade-off (better to keep the registry usable than crash on poison) but the pattern should be a helper.",
+      "fix_proposal": "Add a `lock_or_recover<T>(Mutex<T>) -> MutexGuard<T>` and `read_or_recover<T>(RwLock<T>) -> RwLockReadGuard<T>` helper in sync_primitives or at the top of registry.rs. The poison-recovery decision is centralized.",
+      "confidence": "low"
+    }
+  ]
+}

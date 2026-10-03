@@ -620,6 +620,12 @@ impl ToolRegistry for BuiltinToolRegistry {
             "browser_pdf" => {
                 Box::pin(async move { self.browser_pdf_tool.call_json(arguments).await })
             }
+            "browser_record" => {
+                Box::pin(async move { self.browser_record_tool.call_json(arguments).await })
+            }
+            "browser_qa" => {
+                Box::pin(async move { self.browser_qa_tool.call_json(arguments).await })
+            }
             "browser_network" => {
                 Box::pin(async move { self.browser_network_tool.call_json(arguments).await })
             }
@@ -725,6 +731,44 @@ impl ToolRegistry for BuiltinToolRegistry {
                         )
                     })?;
                     tool.call_json(arguments).await
+                })
+            }
+
+            // Session decompress tool — inject session key from session context.
+            // Built fresh per call: a unit struct over the process-global event
+            // store, so there is no registry field to hold.
+            "session_decompress" => {
+                let arguments = {
+                    let mut args = arguments;
+                    // Prefer the race-free per-turn session key; see session_new above.
+                    let session_key =
+                        crate::tools::turn_context::current_session_key().or_else(|| {
+                            self.session_context_handle
+                                .as_ref()
+                                .and_then(|h| match h.try_read() {
+                                    Ok(ctx) => Some(ctx),
+                                    Err(_) => {
+                                        tracing::warn!(
+                                            "session_decompress: session context lock contended; \
+                                             session key unresolved — no __session_key injected"
+                                        );
+                                        None
+                                    }
+                                })
+                                .map(|ctx| ctx.session_key_str.clone())
+                        });
+                    if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
+                        obj.insert(
+                            "__session_key".into(),
+                            serde_json::Value::String(session_key),
+                        );
+                    }
+                    args
+                };
+                Box::pin(async move {
+                    crate::builtin_tools::SessionDecompressTool::new()
+                        .call_json(arguments)
+                        .await
                 })
             }
 

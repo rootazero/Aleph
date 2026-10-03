@@ -87,6 +87,13 @@ impl ToolState {
     /// `set_active("Skill_Read", false)` would silently no-op while
     /// `check_conflict("Skill_Read")` finds the tool — that asymmetry is the
     /// bug TOOLMETA-001.
+    ///
+    /// # Currently test-only
+    ///
+    /// See the catalog-level doc on [`ToolCatalog::set_active`]: no
+    /// production caller ships today. The doc on this method describes the
+    /// intended operator-pause contract, not a reachable workflow.
+    /// (occams-r9 tool_metadata C-NEW-2.)
     pub async fn set_active(&self, name: &str, active: bool) -> bool {
         let mut tools = self.tools.write().await;
         let mut changed = false;

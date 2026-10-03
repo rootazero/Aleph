@@ -817,3 +817,280 @@ async fn think_tool_use_after_act_returns_continue() {
 
     assert_eq!(state, TurnState::Continue);
 }
+
+// -- Growth-step fold nudge (Context Fabric, spec 2026-10-01 §1d, Task 4) ----
+//
+// The nudge is scheduled by `GrowthNudgeTracker` (run-scoped bookkeeping on
+// `AgentHarness`) and rendered by `nudges::compact_growth_nudge`; think.rs
+// appends it to the transient tail. These tests pin the scheduling contract
+// and the transience guarantee — no harness run is needed because the tracker
+// is the whole decision.
+
+use crate::harness::agent::think::GrowthNudgeTracker;
+use crate::providers::message::UnifiedMessage;
+use crate::thinker::nudges::{
+    compact_growth_nudge, is_synthetic_reminder, FOLD_NUDGE_GROWTH_TOKENS,
+};
+
+/// Crossing the growth threshold since the baseline fires the nudge exactly
+/// once: firing rebases, so the same prompt size does not nudge twice.
+#[test]
+fn nudge_fires_at_growth_threshold() {
+    let mut tracker = GrowthNudgeTracker::new();
+    // First observation of a run only sets the baseline.
+    assert!(tracker
+        .consider(10_000, 0, false, FOLD_NUDGE_GROWTH_TOKENS)
+        .is_none());
+    // Below the threshold: silence.
+    assert!(tracker
+        .consider(
+            10_000 + FOLD_NUDGE_GROWTH_TOKENS - 1,
+            0,
+            false,
+            FOLD_NUDGE_GROWTH_TOKENS
+        )
+        .is_none());
+    // At the threshold: fire, and the copy must point at the tool and teach
+    // what the summary instructions must preserve.
+    let nudge = tracker
+        .consider(
+            10_000 + FOLD_NUDGE_GROWTH_TOKENS,
+            0,
+            false,
+            FOLD_NUDGE_GROWTH_TOKENS,
+        )
+        .expect("growth at the threshold earns the nudge");
+    assert!(nudge.contains("session_compact"), "{nudge}");
+    assert!(nudge.contains("instructions"), "{nudge}");
+    assert!(
+        is_synthetic_reminder(&nudge),
+        "harness scaffolding, so the cache layer never breakpoints it"
+    );
+    // Firing rebased the accounting: no repeat at the same size.
+    assert!(tracker
+        .consider(
+            10_000 + FOLD_NUDGE_GROWTH_TOKENS,
+            0,
+            false,
+            FOLD_NUDGE_GROWTH_TOKENS
+        )
+        .is_none());
+}
+
+/// While the compaction circuit breaker is counting ineffective compactions,
+/// the nudge is suppressed — urging the model to compact right after
+/// compaction proved useless is nagging. Suppression must NOT rebase: the
+/// accumulated growth still earns the nudge once the breaker clears.
+#[test]
+fn nudge_suppressed_when_breaker_tripped() {
+    let mut tracker = GrowthNudgeTracker::new();
+    assert!(tracker
+        .consider(10_000, 0, false, FOLD_NUDGE_GROWTH_TOKENS)
+        .is_none());
+    assert!(tracker
+        .consider(
+            10_000 + FOLD_NUDGE_GROWTH_TOKENS,
+            0,
+            true,
+            FOLD_NUDGE_GROWTH_TOKENS
+        )
+        .is_none());
+    assert!(tracker
+        .consider(
+            10_000 + FOLD_NUDGE_GROWTH_TOKENS + 1,
+            0,
+            false,
+            FOLD_NUDGE_GROWTH_TOKENS
+        )
+        .is_some());
+}
+
+/// A fold rebases the accounting even when the tracker did not fire: growth
+/// is measured from the last fold (or run start), so a post-fold prompt needs
+/// a full new threshold of growth before the next nudge.
+#[test]
+fn nudge_resets_after_fold() {
+    let mut tracker = GrowthNudgeTracker::new();
+    assert!(tracker
+        .consider(10_000, 0, false, FOLD_NUDGE_GROWTH_TOKENS)
+        .is_none());
+    assert!(tracker
+        .consider(
+            10_000 + FOLD_NUDGE_GROWTH_TOKENS,
+            0,
+            false,
+            FOLD_NUDGE_GROWTH_TOKENS
+        )
+        .is_some());
+    // A fold lands (the marker is the latest fold's to_seq); the post-fold
+    // prompt is small again. Observing the new marker rebases silently.
+    assert!(tracker
+        .consider(12_000, 40, false, FOLD_NUDGE_GROWTH_TOKENS)
+        .is_none());
+    assert!(tracker
+        .consider(
+            12_000 + FOLD_NUDGE_GROWTH_TOKENS - 1,
+            40,
+            false,
+            FOLD_NUDGE_GROWTH_TOKENS
+        )
+        .is_none());
+    assert!(tracker
+        .consider(
+            12_000 + FOLD_NUDGE_GROWTH_TOKENS,
+            40,
+            false,
+            FOLD_NUDGE_GROWTH_TOKENS
+        )
+        .is_some());
+}
+
+/// A custom (smaller) threshold from
+/// `ContextBudgetConfig::fold_nudge_growth_tokens` fires proportionally
+/// earlier: the tracker measures growth against the caller-supplied
+/// threshold, and the copy reports that threshold — never the module
+/// constant (R9: configurability exposed, spec O2 overruled 2026-10-02).
+#[test]
+fn nudge_custom_threshold_fires_earlier() {
+    let mut tracker = GrowthNudgeTracker::new();
+    const CUSTOM: u64 = 5_000;
+    assert!(tracker.consider(10_000, 0, false, CUSTOM).is_none());
+    assert!(tracker
+        .consider(10_000 + CUSTOM - 1, 0, false, CUSTOM)
+        .is_none());
+    let nudge = tracker
+        .consider(10_000 + CUSTOM, 0, false, CUSTOM)
+        .expect("the custom step earns the nudge at its own threshold");
+    assert!(nudge.contains("session_compact"), "{nudge}");
+    assert!(nudge.contains("nudge threshold: 5000"), "{nudge}");
+}
+
+/// Cross-run resume: a run whose session already folded seeds the baseline
+/// from the estimated post-fold size, so growth earned by earlier runs
+/// counts toward THIS run's first nudge instead of being silently forgiven
+/// by a fresh baseline. (The estimate errs high, so any inaccuracy delays
+/// the first nudge rather than firing it early.)
+#[test]
+fn nudge_cross_run_seed_continues_growth() {
+    let mut tracker = GrowthNudgeTracker::new();
+    // The resumed run's estimate: post-fold prompt was 20k; the fold marker
+    // is that fold's to_seq.
+    tracker.seed_cross_run(20_000, 40);
+    // Below the threshold counting inherited growth: silence. Crucially the
+    // FIRST observation does not re-baseline — that was the old per-run bug.
+    assert!(tracker
+        .consider(
+            20_000 + FOLD_NUDGE_GROWTH_TOKENS - 1,
+            40,
+            false,
+            FOLD_NUDGE_GROWTH_TOKENS
+        )
+        .is_none());
+    // At the threshold: fire on this run's first observation.
+    let nudge = tracker
+        .consider(
+            20_000 + FOLD_NUDGE_GROWTH_TOKENS,
+            40,
+            false,
+            FOLD_NUDGE_GROWTH_TOKENS,
+        )
+        .expect("inherited growth earns the nudge without a re-baseline");
+    assert!(nudge.contains("session_compact"), "{nudge}");
+}
+
+/// The seed is one-shot: once any baseline exists (first observation or a
+/// prior seed), `seed_cross_run` is a no-op — the in-run ledger is never
+/// re-seeded by stale log state.
+#[test]
+fn nudge_cross_run_seed_is_one_shot() {
+    let mut tracker = GrowthNudgeTracker::new();
+    assert!(tracker
+        .consider(10_000, 0, false, FOLD_NUDGE_GROWTH_TOKENS)
+        .is_none());
+    // Baseline exists now; a stale seed attempt must not move it.
+    tracker.seed_cross_run(999_999, 0);
+    assert!(tracker
+        .consider(
+            10_000 + FOLD_NUDGE_GROWTH_TOKENS,
+            0,
+            false,
+            FOLD_NUDGE_GROWTH_TOKENS
+        )
+        .is_some());
+}
+
+/// Seeded ledger, then a fold lands in-run: the marker change rebases onto
+/// the post-fold prompt (the `consider` path, not a second seed), and the
+/// next nudge needs a full new growth step.
+#[test]
+fn nudge_cross_run_seed_then_inrun_fold_rebases() {
+    let mut tracker = GrowthNudgeTracker::new();
+    tracker.seed_cross_run(20_000, 40);
+    // A fold lands (new marker 90); the post-fold prompt is 12k — below the
+    // seed, yet observing the new marker rebases silently.
+    assert!(tracker
+        .consider(12_000, 90, false, FOLD_NUDGE_GROWTH_TOKENS)
+        .is_none());
+    assert!(tracker
+        .consider(
+            12_000 + FOLD_NUDGE_GROWTH_TOKENS,
+            90,
+            false,
+            FOLD_NUDGE_GROWTH_TOKENS
+        )
+        .is_some());
+}
+
+/// The nudge rides the transient tail: it is pushed onto the in-memory
+/// message vector AFTER `build_prompt_with_transient_tail` returns, so the
+/// session log never sees it and the persisted prefix of the next prompt is
+/// byte-identical whether or not a nudge fired (Review Focus #4).
+#[test]
+fn nudge_is_transient_not_persisted() {
+    let records = vec![
+        SessionEventRecord {
+            seq: 1,
+            event: user_message_event("migrate the vector store"),
+            created_at_ms: now_ms(),
+        },
+        SessionEventRecord {
+            seq: 2,
+            event: user_message_event("proceed"),
+            created_at_ms: now_ms(),
+        },
+    ];
+
+    let (mut messages, mut transient_tail) =
+        crate::harness::agent::prompt::build_prompt_with_transient_tail(&records, 0);
+    let persisted_len = messages.len() - transient_tail;
+
+    // The injection path, mirrored exactly as think.rs performs it.
+    let nudge = compact_growth_nudge(FOLD_NUDGE_GROWTH_TOKENS + 2_000, FOLD_NUDGE_GROWTH_TOKENS);
+    messages.push(UnifiedMessage::user(&nudge));
+    transient_tail += 1;
+
+    // (a) Nothing reached the session log: the events are the same records,
+    //     and no serialization of them carries the nudge text.
+    let log_json = serde_json::to_string(&records).unwrap();
+    assert!(
+        !log_json.contains(&nudge),
+        "a persisted nudge would replay as a user turn forever"
+    );
+
+    // (b) The nudge lives strictly inside the transient tail: the persisted
+    //     prefix holds only what the log produced.
+    assert_eq!(messages.len() - transient_tail, persisted_len);
+    let tail = &messages[persisted_len..];
+    assert_eq!(tail.len(), 1);
+    let tail_text = format!("{:?}", tail[0]);
+    assert!(tail_text.contains("session_compact"), "{tail_text}");
+
+    // (c) Rebuilding from the same log next turn reproduces the identical
+    //     persisted prefix — the fired nudge leaves no residue.
+    let (rebuilt, _) = crate::harness::agent::prompt::build_prompt_with_transient_tail(&records, 0);
+    assert_eq!(
+        serde_json::to_string(&rebuilt).unwrap(),
+        serde_json::to_string(&messages[..persisted_len]).unwrap(),
+        "the persisted prefix must be byte-identical with or without a fired nudge"
+    );
+}

@@ -54,44 +54,27 @@ impl AudioGenerateTool {
         &self,
         args: AudioGenerateArgs,
     ) -> std::result::Result<AudioGenerateOutput, ToolError> {
-        use crate::builtin_tools::{notify_tool_result, notify_tool_start};
-
         let start = Instant::now();
-
-        let prompt_display = if args.prompt.chars().count() > 30 {
-            let end = args
-                .prompt
-                .char_indices()
-                .nth(30)
-                .map_or(args.prompt.len(), |(i, _)| i);
-            format!("{}...", &args.prompt[..end])
-        } else {
-            args.prompt.clone()
-        };
-        notify_tool_start(Self::NAME, &format!("生成音频: {prompt_display}"));
 
         info!(prompt = %args.prompt, provider = ?args.provider, "Starting audio generation");
 
+        // Find provider — lock must be dropped before any .await call.
         let (provider_name, provider) = {
             let reg = self.registry.read().unwrap_or_else(|e| e.into_inner());
 
             if let Some(ref name) = args.provider {
                 let p = reg.get(name).ok_or_else(|| {
-                    let error_msg = format!("Audio provider '{name}' not found");
-                    notify_tool_result(Self::NAME, &error_msg, false);
-                    ToolError::InvalidArgs(error_msg)
+                    ToolError::InvalidArgs(format!("Audio provider '{name}' not found"))
                 })?;
                 if !p.supports(GenerationType::Audio) {
-                    let error_msg = format!("Provider '{name}' does not support audio generation");
-                    notify_tool_result(Self::NAME, &error_msg, false);
-                    return Err(ToolError::InvalidArgs(error_msg));
+                    return Err(ToolError::InvalidArgs(format!(
+                        "Provider '{name}' does not support audio generation"
+                    )));
                 }
                 (name.clone(), p)
             } else {
                 reg.first_for_type(GenerationType::Audio).ok_or_else(|| {
-                    let error_msg = "No audio generation provider available".to_string();
-                    notify_tool_result(Self::NAME, &error_msg, false);
-                    ToolError::Execution(error_msg)
+                    ToolError::Execution("No audio generation provider available".to_string())
                 })?
             }
         };
@@ -99,11 +82,7 @@ impl AudioGenerateTool {
         info!(provider = %provider_name, "Using audio provider");
 
         let request = GenerationRequest::audio(&args.prompt);
-        let output = provider.generate(request).await.map_err(|e| {
-            let error_msg = format!("Audio generation failed: {e}");
-            notify_tool_result(Self::NAME, &error_msg, false);
-            ToolError::from(e)
-        })?;
+        let output = provider.generate(request).await.map_err(ToolError::from)?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -111,15 +90,11 @@ impl AudioGenerateTool {
             GenerationData::Url(url) => (url.clone(), "url"),
             GenerationData::LocalPath(path) => (path.clone(), "file"),
             GenerationData::Bytes(_) => {
-                let error_msg =
-                    "Audio provider returned raw bytes — expected URL or file path".to_string();
-                notify_tool_result(Self::NAME, &error_msg, false);
-                return Err(ToolError::Execution(error_msg));
+                return Err(ToolError::Execution(
+                    "Audio provider returned raw bytes — expected URL or file path".to_string(),
+                ));
             }
         };
-
-        let result_summary = format!("音频生成完成 ({duration_ms} ms, provider: {provider_name})");
-        notify_tool_result(Self::NAME, &result_summary, true);
 
         let display = format!(
             "🎵 音频已生成 ({:.1}s)\n{}",
@@ -130,12 +105,12 @@ impl AudioGenerateTool {
         Ok(AudioGenerateOutput {
             _display: display,
             _media: vec![MediaItem {
-                url: audio_location.to_string(),
+                url: audio_location.clone(),
                 media_type: "audio".into(),
                 mime_type: Some(detect_mime(&audio_location, "audio")),
                 filename: None,
             }],
-            audio_location: audio_location.to_string(),
+            audio_location,
             location_type: location_type.to_string(),
             prompt: args.prompt,
             provider: provider_name,
