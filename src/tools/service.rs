@@ -161,13 +161,10 @@ impl RefusedBy {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ToolSource {
-    Builtin,
-    Mcp { server_id: String },
-    Extension { plugin_id: String },
-}
+// `ToolSource` now lives in `tools::descriptor` (single definition). This
+// re-export keeps every existing `crate::tools::service::ToolSource` /
+// `crate::tools::ToolSource` path compiling unchanged.
+pub use crate::tools::descriptor::ToolSource;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolDefinitionMetadata {

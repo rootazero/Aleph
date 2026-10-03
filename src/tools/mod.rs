@@ -36,6 +36,7 @@ pub mod attempt_summary;
 pub mod budget;
 pub mod concurrency;
 pub mod context;
+pub mod descriptor;
 pub mod error_kind;
 pub mod fallback_registry;
 pub mod fs_scope;
@@ -106,6 +107,7 @@ pub mod turn_context;
 pub use scoped::{ScopedToolService, ToolDefinitionRewriter};
 
 pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
+pub use descriptor::{DescriptorError, ReplayPolicy, ToolCapabilityDescriptor, ToolKind};
 pub use null::NullToolService;
 pub use registry::ToolHandlerRegistry;
 pub use server::AlephToolServer;
