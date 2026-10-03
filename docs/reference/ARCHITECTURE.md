@@ -258,7 +258,6 @@ pattern.
 | **arena** | `src/arena/` | Arena functionality |
 | **browser** | `src/browser/` | Browser automation |
 | **capability** | `src/capability/` | Capability system |
-| **clawhub** | `src/clawhub/` | ClawHub integration |
 | **cluster** | `src/cluster/` | Single-center node federation — reverse RPC, node registry, `node_invoke`/`node_file`, approval routing ([CLUSTER.md](./CLUSTER.md)) |
 | **components** | `src/components/` | Shared components |
 | **compressor** | `src/compressor/` | Context compression |
@@ -267,6 +266,7 @@ pattern.
 | **event** | `src/event/` | Event system |
 | **generation** | `src/generation/` | Media generation |
 | **group_chat** | `src/group_chat/` | Group chat management |
+| **hub** | `src/hub/` | Aleph Hub — extension catalog + install pipeline ([ALEPH_HUB.md](./ALEPH_HUB.md)) |
 | **intent** | `src/intent/` | Intent recognition |
 | **logging** | `src/logging/` | Logging infrastructure |
 | **loop_graph** | `src/loop_graph/` | Loop-governance topology (who watches/audits/anchors whom) — scaffolding only, adjudication stays in LLM turns ([GRAPH_LAYER.md](./GRAPH_LAYER.md)) |
