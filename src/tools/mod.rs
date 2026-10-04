@@ -114,7 +114,7 @@ pub use descriptor::{
 };
 pub use null::NullToolService;
 pub use registration_scope::{ToolDisposeReport, ToolRegistrationScope};
-pub use registry::ToolHandlerRegistry;
+pub use registry::{RegistrySnapshot, ToolHandlerRegistry};
 pub use server::AlephToolServer;
 pub use service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource};
 pub use traits::{AlephTool, AlephToolDyn};

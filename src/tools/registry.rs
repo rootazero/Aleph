@@ -33,7 +33,39 @@ pub struct RegistryEntry {
     pub descriptor: Arc<ToolCapabilityDescriptor>,
 }
 
-/// A registry mutation event.
+/// One immutable registry generation. Entries, the mutation revision and the
+/// closed flag are captured from the same `ArcSwap` state, so a recovery
+/// adapter cannot pair a handler from one generation with a descriptor from
+/// another.
+#[derive(Clone)]
+pub struct RegistrySnapshot {
+    entries: Arc<HashMap<String, RegistryEntry>>,
+    revision: u64,
+    closed: bool,
+}
+
+impl RegistrySnapshot {
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    #[must_use]
+    pub fn entry(&self, name: &str) -> Option<&RegistryEntry> {
+        self.entries.get(name)
+    }
+
+    #[must_use]
+    pub fn entries(&self) -> &HashMap<String, RegistryEntry> {
+        &self.entries
+    }
+}
+
 ///
 /// Carries the `revision` assigned to the mutation, the affected `name` and the
 /// tool `source`, so a subscriber can rebuild its view from the
@@ -425,15 +457,27 @@ impl ToolHandlerRegistry {
         )
     }
 
+    /// Frozen handler+descriptor+registry-state view from one generation.
+    /// Recovery adapters must use this instead of pairing independent reads.
+    #[must_use]
+    pub fn snapshot_state(&self) -> RegistrySnapshot {
+        let state = self.shared.inner.load();
+        RegistrySnapshot {
+            entries: Arc::new(state.entries.clone()),
+            revision: state.revision,
+            closed: state.closed,
+        }
+    }
+
+
     /// Frozen handler+descriptor view from one registry generation. Consumers
     /// that project callable tools should prefer this over pairing
     /// `snapshot()` and `descriptor_snapshot()` independently.
     #[must_use]
     pub fn entries_snapshot(&self) -> Arc<HashMap<String, RegistryEntry>> {
-        Arc::new(self.shared.inner.load().entries.clone())
+        Arc::clone(&self.snapshot_state().entries)
     }
 
-    /// Frozen descriptor view — the canonical capability snapshot.
     #[must_use]
     pub fn descriptor_snapshot(&self) -> Arc<HashMap<String, Arc<ToolCapabilityDescriptor>>> {
         let state = self.shared.inner.load();
@@ -704,12 +748,17 @@ mod tests {
         assert!(snap.contains_key("b"));
         let descriptors = reg.descriptor_snapshot();
         assert_eq!(descriptors.len(), 2);
-        assert!(descriptors.contains_key("a"));
-        assert!(descriptors.contains_key("b"));
-    }
+        let snapshot = reg.snapshot_state();
+        assert_eq!(snapshot.revision(), 2);
+        assert!(!snapshot.is_closed());
+        assert!(snapshot.entry("a").is_some());
+        assert!(snapshot.entry("b").is_some());
+        reg.close();
+        let closed = reg.snapshot_state();
+        assert_eq!(closed.revision(), 2);
+        assert!(closed.is_closed());
+        assert!(closed.entry("a").is_some());
 
-    #[test]
-    fn duplicate_register_returns_other() {
         let reg = ToolHandlerRegistry::new();
         reg.register(desc("dup"), fake("dup")).unwrap();
         let err = reg.register(desc("dup"), fake("dup")).unwrap_err();
