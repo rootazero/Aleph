@@ -88,7 +88,27 @@
 
 ---
 
-## Module Dependencies
+## Capability Plane
+
+Capability is a semantic contract, not another plugin or dependency-injection container. In the first converged slice, a callable Tool is represented by one `ToolCapabilityDescriptor` and one live handler in `ToolHandlerRegistry`. The descriptor is the source for discovery and projection; the handler is the execution implementation. `LoopToolRegistry`, provider metadata, ToolCatalog, MCP bridge, and recovery are consumers of that contract, not parallel registries.
+
+```text
+Tool registration
+  -> ToolCapabilityDescriptor + live handler (one atomic generation)
+  -> entries_snapshot() / revision change feed
+  -> model metadata | ToolCatalog | MCP bridge | Loop execution index
+  -> EffectScope-compatible registration disposer
+  -> recovery ReplayPolicy lookup (fail-closed until call-time revision exists)
+```
+
+The registry stores descriptor and handler together so a hot replacement cannot produce a mixed-generation projection. `ToolRegistrationScope` disposes registrations in reverse order and uses generation checks to protect replacements. Visibility (what a session may see) remains separate from lifecycle (when a registration is disposed). The process-global slots in `src/capability/mod.rs` remain boot-install diagnostics and are not this runtime registry.
+
+Recovery deliberately does not infer replay safety from a tool name, source, or idempotence flag. `ReplayPolicyLookup` reads the current descriptor, but `ToolCallRequested` does not yet persist the call-time descriptor revision. Therefore both `Safe` and `Unsafe` unresolved calls produce the existing unknown-outcome and verification path; automatic Safe replay is a later change that must add and validate the durable revision contract first.
+
+`src/harness/` remains outside this convergence layer. Future Capability kinds should be added only after a real consumer, ownership rule, projection, and recovery/lifecycle contract have been identified.
+
+---
+
 
 ```
                     ┌─────────────┐

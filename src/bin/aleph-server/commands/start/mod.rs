@@ -239,11 +239,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             use alephcore::tools::registry::RegistryChange;
             loop {
                 match rx.recv().await {
-                    Ok(RegistryChange::Registered { name, source }) => {
-                        tracing::info!(tool = %name, source = ?source, "tool_registry: registered");
+                    Ok(RegistryChange::Registered { name, revision, source }) => {
+                        tracing::info!(tool = %name, revision, source = ?source, "tool_registry: registered");
                     }
-                    Ok(RegistryChange::Unregistered { name, source }) => {
-                        tracing::info!(tool = %name, source = ?source, "tool_registry: unregistered");
+                    Ok(RegistryChange::Replaced { name, revision, source }) => {
+                        tracing::info!(tool = %name, revision, source = ?source, "tool_registry: replaced");
+                    }
+                    Ok(RegistryChange::Unregistered { name, revision, source }) => {
+                        tracing::info!(tool = %name, revision, source = ?source, "tool_registry: unregistered");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(
