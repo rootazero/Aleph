@@ -109,6 +109,7 @@ pub mod i18n;
 pub mod idempotency;
 pub mod inter_agent_policy;
 pub mod lane;
+pub mod mcp_face;
 pub mod media;
 pub mod method_admin;
 pub mod method_authz;

@@ -346,6 +346,7 @@ pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
     crate::gateway::execution_engine::tool_service_builder::confirmation_requester_slot(),
     crate::gateway::execution_engine::tool_service_builder::config_approval_requester_slot(),
     crate::gateway::execution_engine::tool_service_builder::mcp_tool_registry_slot(),
+    crate::gateway::mcp_face::mcp_face_slot(),
     crate::gateway::execution_engine::concurrency_handle::concurrency_limiter_slot(),
     crate::gateway::codex_token_refresher::global_slot(),
     crate::gateway::i18n::installed_locale_slot(),

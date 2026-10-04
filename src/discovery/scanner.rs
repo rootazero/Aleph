@@ -48,6 +48,10 @@ impl DirectoryScanner {
         #[cfg(not(test))]
         let resolved = claude_home_dir();
         let claude_home = if config.scan_claude_dirs {
+            #[cfg(test)]
+            if let Ok(p) = &resolved {
+                crate::utils::paths::assert_not_real_claude_home(p, "DirectoryScanner::new");
+            }
             match resolved {
                 Ok(p) if p.exists() => Some(p),
                 Ok(_) => None,

@@ -54,6 +54,14 @@ impl ToolState {
         removed
     }
 
+    /// Remove one catalog entry by its resolved identity.
+    ///
+    /// Used by generation-aware capability disposers that must not remove
+    /// unrelated tools from the same source.
+    pub async fn remove_by_id(&self, id: &str) -> bool {
+        self.tools.write().await.remove(id).is_some()
+    }
+
     /// Remove the skill-sourced entries whose `ToolSource::Skill { id, .. }` is
     /// one of `skill_ids`. The inverse of `ToolRegistrar::register_skills`
     /// for a plugin's `commands/*.md` entries; the plugin lifecycle calls it

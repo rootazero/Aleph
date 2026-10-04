@@ -1908,6 +1908,45 @@ deny_read_globs = ["**/.env", "**/*.pem"]
         );
     }
 
+    /// Pin (P5.11 / P4.18 concern 2): the operator `deny_read_globs` snapshot
+    /// is ONE per process, latched by whichever test first reaches
+    /// `get_denied_paths` under whatever `$ALEPH_HOME` was current. A second
+    /// home with its own `[sandbox] deny_read_globs` is NOT read. Production
+    /// is unaffected (`$ALEPH_HOME` is constant and `[sandbox]` is
+    /// restart-scoped); the pin exists so a future test that writes a config
+    /// and expects the file tools to honour its globs fails here, with the
+    /// reason, instead of passing or failing by test order. Test it through
+    /// `parse_deny_read_globs`, which is per-document.
+    #[test]
+    fn the_operator_glob_snapshot_is_process_wide_not_per_home() {
+        use crate::runtimes::post_install::HomeEnvGuards;
+        let parent = tempdir().unwrap();
+        let aleph = parent.path().join("aleph");
+        fs::create_dir_all(&aleph).unwrap();
+        let _env = HomeEnvGuards::acquire_and_set(&aleph, parent.path().join("home"));
+        let before = configured_deny_read_globs();
+        let config = crate::config::Config::effective_path();
+        assert!(
+            config.starts_with(&aleph),
+            "refusing to write a config outside the test's tempdir: {}",
+            config.display()
+        );
+        fs::write(
+            &config,
+            "[sandbox]\ndeny_read_globs = [\"**/p511-only-here\"]\n",
+        )
+        .unwrap();
+        let after = configured_deny_read_globs();
+        assert!(
+            std::ptr::eq(before, after),
+            "the snapshot was re-read: it is documented as once per process"
+        );
+        assert!(
+            !after.iter().any(|e| e.as_str() == "**/p511-only-here"),
+            "a config written under a later $ALEPH_HOME reached the snapshot"
+        );
+    }
+
     /// A code-built entry is matched as built, never re-expanded.
     ///
     /// `ALEPH_HOME=~/<x>` reaches the process unexpanded when systemd,

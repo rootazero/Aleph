@@ -1,8 +1,8 @@
 # Aleph Hub — 扩展目录与安装 (Extension Catalog & Install)
 
 > 定位速查见 [FEATURE_LOCATOR.md §5.21](FEATURE_LOCATOR.md)。本文补它不承载的三件：
-> **线上契约**、**安装管线各阶段的强制点**、以及 **openclaw `clawhub` 逐项对照表**
-> （改这一层前先看那张表，不必重做对比）。
+> **线上契约**、**安装管线各阶段的强制点**、以及 **§7 的设计裁定清单**
+> （改这一层前先看那张表：哪些能力是有意不做的，为什么）。
 
 ---
 
@@ -51,7 +51,7 @@ Aleph 本地**不混源**。2026-06-20 曾把它做成多源联邦（`SourceProv
     "requires_config": true,
     "install_spec": { "type": "mcp_stdio", "command": "npx", "args": ["@acme/foo"],
                       "env": [{ "name": "TOKEN", "required": true, "secret": true }] },
-    "via": "clawhub"              // 可选上游出处标签；给了就胜过 manifest.name
+    "via": "github:acme"          // 可选上游出处标签；给了就胜过 manifest.name
   }]
 }
 ```
@@ -227,32 +227,27 @@ entry_id  kind  source_id  via  version  spec_digest  local_ref  installed_at
 
 ---
 
-## 7. openclaw `clawhub` 逐项对照 (Gap Analysis)
+## 7. 设计裁定：有意不做的能力（与它们的理由）
 
-参考实现：`T:/Github/openclaw` 的 `src/skills/lifecycle/clawhub.ts`、
-`src/infra/clawhub.ts`、`src/security/install-policy.ts`、
-`src/state/claw-package-{adoption,lifecycle-lease}.ts`。
+这一节曾是一张与某个参考实现的逐项对照表（2026-09-20 起去掉对照框架；裁定本身不变——
+每一条的主语是 Aleph 自己的形状，不是"别人有而我们没有"）。
 
-| 维度 | openclaw | Aleph 现状 |
+| 能力 | Aleph 的裁定 | 理由 |
 |---|---|---|
-| 目录检索 | `searchClawHubSkills/Packages` + `plugins search` CLI | ✅ `hub_catalog_search`（name/description/tags/author，服务端 `matches_query`） |
-| 安装出处 | `.clawhub/origin.json` + `lock.json` 双份，**一致才可信** | ✅ 单份 `install_origin` 表；**有意**不做双份互证（见 §5「为什么这样切」） |
-| 内容摘要 | `digestClawHubSkillTree`（排序、排除元数据、拒符号链接） | ✅ 复用 `directory_digest`（排序、排除 `.git`、符号链接既不哈希也不拷贝、`/` 归一） |
-| 产物完整性 | `assertDownloadedArtifactIntegrity` | ✅ `GitDir.sha256` 在第一次写盘前比对 |
-| 目录完整性 | 逐产物 sha256 | ✅ `entry_count` + id 唯一性 + 保留命名空间；`content_hash` 有意 CUT |
-| 不可变 ref | 强制 40 位 commit SHA，拒可变 ref | ⚠️ 部分：`git_ref` 生效且 detached、解析不出报错，但**不强制** SHA（tag/branch 也接受）。单源策展目录下 tag 由我们自己发布，强制 SHA 的收益不抵可读性损失 |
-| 权威钳制 | `isDefaultClawHubBaseUrl` → official/third-party | ✅ `TrustTier::clamped_to(源上限)` |
-| 版本/更新 | lockfile version + `plugins update` | ⚠️ 部分：**检测**已实现（徽标会亮）；**一键更新**未做——见 §8 |
-| 兼容门 | `satisfiesPluginApiRange` / `satisfiesGatewayMinimum` | ❌ 未做。Aleph 的 plugin API 目前无版本区间概念；等真出现破坏性 API 分代再谈 |
-| 并发租约 | `withClawPackageLifecycleLease`（sqlite 租约 + 心跳） | ❌ 未做。见 §8 |
-| owner 限定引用 / 歧义 | `@owner/slug` + `ambiguous_slug` | N/A：单份策展目录，id 全局唯一由 `validate()` 保证 |
-| 遥测 | `reportClawHubSkillInstallTelemetry` | ❌ **有意不做**（隐私） |
-| promotions feed | `fetchClawHubPromotions` | ❌ **有意不做**：编辑位应由目录发布端决定，本地 `featured_picks` 只是确定性占位 |
-
-**刻意不移植**：openclaw 的 `install-policy.ts` 是一套可配置的安装期静态扫描 +
-外部命令钩子（749 行）。Aleph 的对位面是 `[sandbox.command_policy]` 硬底线 +
-exec tier + 披露门，三者已在 `src/tools/scoped/` 有唯一强制点；把第二套策略引擎装进
-安装路径会造出第二个强制点（违 SECURITY.md 的单点原则）。
+| 目录检索 | ✅ `hub_catalog_search`（name/description/tags/author，服务端 `matches_query`） | — |
+| 安装出处 | ✅ 单份 `install_origin` 表；**有意**不做双文件互证（origin + lock） | 见 §5「为什么这样切」：一份真源，两份就是判据 §1 |
+| 内容摘要 | ✅ 复用 `directory_digest`（排序、排除 `.git`、符号链接既不哈希也不拷贝、`/` 归一） | 与 skills 同一把尺 |
+| 产物完整性 | ✅ `GitDir.sha256` 在第一次写盘前比对 | — |
+| 目录完整性 | ✅ `entry_count` + id 唯一性 + 保留命名空间；`content_hash` 有意 CUT | 单源策展目录下逐产物哈希是第二份真源 |
+| 不可变 ref | ⚠️ `git_ref` 生效且 detached、解析不出报错，但**不强制** 40 位 SHA（tag/branch 也接受） | 单源策展目录下 tag 由我们自己发布；强制 SHA 的收益不抵可读性损失 |
+| 权威钳制 | ✅ `TrustTier::clamped_to(源上限)` | — |
+| 版本/更新 | ⚠️ **检测**已实现（徽标会亮）；**一键更新**未做 | 见 §8 |
+| 兼容门（plugin API 版本区间） | ❌ 未做 | Aleph 的 plugin API 无版本区间概念；等真出现破坏性 API 分代再谈（用户裁定 2026-08-19 继续 defer） |
+| 并发租约（安装期 sqlite 租约 + 心跳） | ❌ 未做 | 见 §8 |
+| owner 限定引用 / 歧义 slug | N/A | 单份策展目录，id 全局唯一由 `validate()` 保证 |
+| 安装遥测 | ❌ **有意不做** | 隐私 |
+| promotions feed | ❌ **有意不做** | 编辑位应由目录发布端决定，本地 `featured_picks` 只是确定性占位 |
+| 安装期策略引擎（可配置静态扫描 + 外部命令钩子） | ❌ **有意不做** | Aleph 的对位面是 `[sandbox.command_policy]` 硬底线 + exec tier + 披露门，三者已在 `src/tools/scoped/` 有唯一强制点；把第二套策略引擎装进安装路径会造出第二个强制点（违 SECURITY.md 的单点原则） |
 
 ---
 
@@ -264,7 +259,7 @@ exec tier + 披露门，三者已在 `src/tools/scoped/` 有唯一强制点；�
 2. **没有一键更新**。检测已通（徽标会亮），执行路径是"卸载 + 重装"，用户可自行完成。
    一个 `extensions.update` 需要先回答"更新失败时回滚到哪"，那是独立设计。
 3. **无安装并发租约**。同一条目并发安装会争同一个 `.git-cache` 检出目录。单进程 +
-   用户手势驱动的安装下这是边缘情况；真要做的对位是 openclaw 的 sqlite 租约。
+   用户手势驱动的安装下这是边缘情况；真要做的对位是安装期 sqlite 租约 + 心跳。
 4. **OCI/Docker MCP 一律拒绝**（无容器运行时）。这是能力缺口而非防御选择。
 5. **`hub.heyaleph.com` 的 artifact 尚未上线**；`ALEPH_HUB_URL` 已指向它，冷启动
    primer 保证离线可用。

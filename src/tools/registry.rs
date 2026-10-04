@@ -1,23 +1,195 @@
-//! `ToolHandlerRegistry` — ArcSwap-backed name → handler map.
+//! `ToolHandlerRegistry` — descriptor-backed, ArcSwap-snapshotted capability
+//! registry.
+//!
+//! The registry is the single runtime source of truth for a Tool capability:
+//! every entry pairs a `ToolHandler` with the [`ToolCapabilityDescriptor`] that
+//! describes it, and both are written in one atomic `ArcSwap` swap so a
+//! subscriber can never observe a half-registered tool. The model-visible
+//! `ToolDefinition` is a *projection* of the descriptor, not a second source.
+//!
+//! Every successful mutation (register / replace / unregister) advances a
+//! registry-wide monotonic `revision`; the assigned revision is stored on the
+//! entry's descriptor and handed back in change events and [`RegistrationHandle`]s
+//! so a stale handle can never remove a newer entry.
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
+use std::sync::Weak;
 
 use arc_swap::ArcSwap;
 use tokio::sync::broadcast;
 
+use crate::tools::descriptor::{ReplayPolicyLookup, ToolCapabilityDescriptor};
 use crate::tools::handlers::ToolHandler;
-use crate::tools::service::{ToolError, ToolSource};
+use crate::tools::service::{ToolDefinition, ToolError, ToolSource};
 
-#[derive(Debug, Clone)]
-pub enum RegistryChange {
-    Registered { name: String, source: ToolSource },
-    Unregistered { name: String, source: ToolSource },
+/// One registry value: the callable handler plus the frozen descriptor that is
+/// its capability contract.
+#[derive(Clone)]
+pub struct RegistryEntry {
+    pub handler: Arc<dyn ToolHandler>,
+    pub descriptor: Arc<ToolCapabilityDescriptor>,
 }
 
-pub struct ToolHandlerRegistry {
-    inner: Arc<ArcSwap<HashMap<String, Arc<dyn ToolHandler>>>>,
+/// A registry mutation event.
+///
+/// Carries the `revision` assigned to the mutation, the affected `name` and the
+/// tool `source`, so a subscriber can rebuild its view from the
+/// [`ToolHandlerRegistry::snapshot`] / [`descriptor_snapshot`] rather than
+/// trusting an incremental delta.
+///
+/// [`descriptor_snapshot`]: ToolHandlerRegistry::descriptor_snapshot
+#[derive(Debug, Clone)]
+pub enum RegistryChange {
+    Registered {
+        name: String,
+        revision: u64,
+        source: ToolSource,
+    },
+    Replaced {
+        name: String,
+        revision: u64,
+        source: ToolSource,
+    },
+    Unregistered {
+        name: String,
+        revision: u64,
+        source: ToolSource,
+    },
+}
+
+/// Immutable registry state; swapped wholesale under `ArcSwap` so entries,
+/// revision and the closed flag move together.
+#[derive(Clone, Default)]
+struct RegistryState {
+    entries: HashMap<String, RegistryEntry>,
+    revision: u64,
+    closed: bool,
+}
+
+/// Shared inner owned by the registry and referenced weakly by handles, so a
+/// handle never keeps the registry alive.
+struct RegistryShared {
+    inner: ArcSwap<RegistryState>,
     change_tx: broadcast::Sender<RegistryChange>,
+    /// Serializes state publication with its change-event broadcast.
+    ///
+    /// The `ArcSwap` swap and the corresponding `change_tx.send` are two
+    /// separate steps: without this lock, two concurrent mutations could
+    /// interleave as `swap(rev=2); swap(rev=1); send(rev=1); send(rev=2)`,
+    /// publishing change events out of revision order. Holding this lock
+    /// across both steps guarantees subscribers observe events in the exact
+    /// order revisions were assigned.
+    ///
+    /// A plain `std::sync::Mutex` is sufficient — `broadcast::Sender::send`
+    /// is synchronous and never blocks, so no async mutex is needed. Poisoned
+    /// locks are recovered via `PoisonError::into_inner`: the guarded data is
+    /// only the unit token, and the real state lives behind `ArcSwap`, so
+    /// resuming after a panic in a mutator is safe.
+    mutation_lock: std::sync::Mutex<()>,
+}
+
+impl RegistryShared {
+    /// Acquire the mutation lock, recovering from a poisoned lock rather than
+    /// unwrapping (production code must not panic on a downstream mutation
+    /// panic).
+    fn lock_mutations(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.mutation_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// An idempotent, generation-guarded registration disposer.
+///
+/// `dispose` removes the entry only if it is still the exact revision this
+/// handle registered; once replaced or unregistered it reports `false` and
+/// leaves the newer state untouched. Repeated calls after a successful dispose
+/// return `false` and emit no further event.
+pub struct RegistrationHandle {
+    shared: Weak<RegistryShared>,
+    name: String,
+    revision: u64,
+}
+
+impl std::fmt::Debug for RegistrationHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegistrationHandle")
+            .field("name", &self.name)
+            .field("revision", &self.revision)
+            .finish()
+    }
+}
+
+impl RegistrationHandle {
+    /// The tool name this handle registered.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The revision assigned when this handle registered.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Remove the entry iff it still matches this handle's revision.
+    ///
+    /// Idempotent: the first successful dispose removes the entry and advances
+    /// the registry revision; later calls (or calls after a replacement) return
+    /// `false` without mutating state or emitting an event.
+    #[must_use]
+    pub fn dispose(&self) -> bool {
+        let Some(shared) = self.shared.upgrade() else {
+            return false;
+        };
+        // Hold the mutation lock across state swap + event send so this
+        // dispose's Unregistered event cannot be published out of order
+        // relative to a concurrent mutation's event.
+        let _guard = shared.lock_mutations();
+        let mut disposed = false;
+        let mut new_revision = 0u64;
+        let mut source: Option<ToolSource> = None;
+        shared.inner.rcu(|current| {
+            let Some(entry) = current.entries.get(&self.name) else {
+                return Arc::clone(current);
+            };
+            // Generation guard: a stale handle must not remove a replacement.
+            if entry.descriptor.revision != self.revision {
+                return Arc::clone(current);
+            }
+            let mut next = (**current).clone();
+            next.entries.remove(&self.name);
+            next.revision = current.revision + 1;
+            new_revision = next.revision;
+            source = Some(entry.descriptor.source.clone());
+            disposed = true;
+            Arc::new(next)
+        });
+        if disposed {
+            if let Some(source) = source {
+                let _ = shared.change_tx.send(RegistryChange::Unregistered {
+                    name: self.name.clone(),
+                    revision: new_revision,
+                    source,
+                });
+            }
+        }
+        disposed
+    }
+}
+
+#[derive(Clone)]
+pub struct ToolHandlerRegistry {
+    shared: Arc<RegistryShared>,
+}
+
+impl ReplayPolicyLookup for ToolHandlerRegistry {
+    fn replay_policy(&self, name: &str) -> Option<crate::tools::descriptor::ReplayPolicy> {
+        self.descriptor(name)
+            .map(|descriptor| descriptor.replay_policy)
+    }
 }
 
 impl ToolHandlerRegistry {
@@ -25,77 +197,266 @@ impl ToolHandlerRegistry {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(256);
         Self {
-            inner: Arc::new(ArcSwap::from_pointee(HashMap::new())),
-            change_tx: tx,
+            shared: Arc::new(RegistryShared {
+                inner: ArcSwap::from_pointee(RegistryState::default()),
+                change_tx: tx,
+                mutation_lock: std::sync::Mutex::new(()),
+            }),
         }
     }
 
-    pub fn register(&self, name: String, handler: Arc<dyn ToolHandler>) -> Result<(), ToolError> {
-        // Atomic check-and-insert via `ArcSwap::rcu`. Returning the
-        // current `Arc` from the closure is a no-op swap (compare_and_swap
-        // sees pointer equality), so a concurrent register for the same name
-        // either wins the CAS or rolls into the next rcu iteration with the
-        // newly inserted key visible. The prior load/clone/store sequence
-        // had a TOCTOU window where both callers passed `contains_key` and
-        // both then overwrote each other — closing that is the point of this
-        // change.
-        let source = handler.definition().source.clone();
-        let mut inserted = false;
-        self.inner.rcu(|current| {
-            // `rcu` re-runs this closure on every lost CAS, so the flag has to
-            // speak for the CURRENT attempt only. Without this reset, a thread
-            // that found the key absent on its first pass (setting the flag),
-            // then lost the CAS and saw the key present on its second, still
-            // reported success — so N concurrent registers for one name could
-            // all return `Ok` and the `Duplicate` error callers rely on never
-            // fired. Only the final invocation is the one whose value is
-            // stored, so only its verdict may survive.
-            inserted = false;
-            if current.contains_key(&name) {
+    /// Register a new capability. Rejects a descriptor that fails validation, a
+    /// descriptor that does not match its handler's own definition (ignoring
+    /// the registry-assigned revision), a duplicate name, and a closed
+    /// registry. On success the entry is stored under `descriptor.name` with a
+    /// freshly assigned monotonic revision.
+    pub fn register(
+        &self,
+        descriptor: ToolCapabilityDescriptor,
+        handler: Arc<dyn ToolHandler>,
+    ) -> Result<RegistrationHandle, ToolError> {
+        // Serialize the whole mutation so the revision assigned below and the
+        // change event carrying it are published atomically in order.
+        let _guard = self.shared.lock_mutations();
+        let definition = handler.definition();
+        let name = descriptor.name.clone();
+        let mut outcome: Result<u64, ToolError> = Ok(0);
+        self.shared.inner.rcu(|current| {
+            if current.closed {
+                outcome = Err(ToolError::RegistryClosed { name: name.clone() });
+                return Arc::clone(current);
+            }
+            let assigned = current.revision + 1;
+            let normalized = ToolCapabilityDescriptor {
+                revision: assigned,
+                ..descriptor.clone()
+            };
+            if let Err(e) = normalized.validate() {
+                outcome = Err(ToolError::InvalidDescriptor {
+                    name: name.clone(),
+                    reason: e.to_string(),
+                });
+                return Arc::clone(current);
+            }
+            if !normalized.matches_definition(&definition) {
+                outcome = Err(ToolError::DescriptorMismatch {
+                    name: name.clone(),
+                    reason: mismatch_reason(&normalized, &definition),
+                });
+                return Arc::clone(current);
+            }
+            if current.entries.contains_key(&name) {
+                outcome = Err(ToolError::Duplicate { name: name.clone() });
                 return Arc::clone(current);
             }
             let mut next = (**current).clone();
-            next.insert(name.clone(), handler.clone());
-            inserted = true;
+            next.entries.insert(
+                name.clone(),
+                RegistryEntry {
+                    handler: Arc::clone(&handler),
+                    descriptor: Arc::new(normalized),
+                },
+            );
+            next.revision = assigned;
+            outcome = Ok(assigned);
             Arc::new(next)
         });
-        if !inserted {
-            return Err(ToolError::Duplicate { name });
-        }
-        let _ = self
-            .change_tx
-            .send(RegistryChange::Registered { name, source });
-        Ok(())
+        let revision = outcome?;
+        let _ = self.shared.change_tx.send(RegistryChange::Registered {
+            name: name.clone(),
+            revision,
+            source: descriptor.source,
+        });
+        Ok(RegistrationHandle {
+            shared: Arc::downgrade(&self.shared),
+            name,
+            revision,
+        })
     }
 
+    /// Replace an existing capability's handler and descriptor in one atomic
+    /// swap. Callers already holding the previous handler keep their stable
+    /// `Arc`; subsequent [`resolve`](Self::resolve) sees the new one. Returns
+    /// `ToolError::NotFound` when the name was never registered.
+    pub fn replace(
+        &self,
+        descriptor: ToolCapabilityDescriptor,
+        handler: Arc<dyn ToolHandler>,
+    ) -> Result<RegistrationHandle, ToolError> {
+        let _guard = self.shared.lock_mutations();
+        let definition = handler.definition();
+        let name = descriptor.name.clone();
+        let mut outcome: Result<u64, ToolError> = Ok(0);
+        self.shared.inner.rcu(|current| {
+            if current.closed {
+                outcome = Err(ToolError::RegistryClosed { name: name.clone() });
+                return Arc::clone(current);
+            }
+            if !current.entries.contains_key(&name) {
+                outcome = Err(ToolError::NotFound { name: name.clone() });
+                return Arc::clone(current);
+            }
+            let assigned = current.revision + 1;
+            let normalized = ToolCapabilityDescriptor {
+                revision: assigned,
+                ..descriptor.clone()
+            };
+            if let Err(e) = normalized.validate() {
+                outcome = Err(ToolError::InvalidDescriptor {
+                    name: name.clone(),
+                    reason: e.to_string(),
+                });
+                return Arc::clone(current);
+            }
+            if !normalized.matches_definition(&definition) {
+                outcome = Err(ToolError::DescriptorMismatch {
+                    name: name.clone(),
+                    reason: mismatch_reason(&normalized, &definition),
+                });
+                return Arc::clone(current);
+            }
+            let mut next = (**current).clone();
+            next.entries.insert(
+                name.clone(),
+                RegistryEntry {
+                    handler: Arc::clone(&handler),
+                    descriptor: Arc::new(normalized),
+                },
+            );
+            next.revision = assigned;
+            outcome = Ok(assigned);
+            Arc::new(next)
+        });
+        let revision = outcome?;
+        let _ = self.shared.change_tx.send(RegistryChange::Replaced {
+            name: name.clone(),
+            revision,
+            source: descriptor.source,
+        });
+        Ok(RegistrationHandle {
+            shared: Arc::downgrade(&self.shared),
+            name,
+            revision,
+        })
+    }
+
+    /// Resolve the live handler for `name`.
+    #[must_use]
+    pub fn resolve(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
+        self.shared
+            .inner
+            .load()
+            .entries
+            .get(name)
+            .map(|entry| Arc::clone(&entry.handler))
+    }
+
+    /// Resolve the live descriptor for `name`.
+    #[must_use]
+    pub fn descriptor(&self, name: &str) -> Option<Arc<ToolCapabilityDescriptor>> {
+        self.shared
+            .inner
+            .load()
+            .entries
+            .get(name)
+            .map(|entry| Arc::clone(&entry.descriptor))
+    }
+
+    /// Remove a capability by name, returning the removed handler.
+    ///
+    /// Unlike [`RegistrationHandle::dispose`] this is unguarded; it is the
+    /// teardown path (`unregister_mcp_tools`) that removes by an externally
+    /// derived name set.
     #[must_use]
     pub fn unregister(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
-        // Atomic check-and-remove, same rcu guard as `register`. The closure
-        // captures the to-be-removed handler so a successful swap hands it
-        // back to the caller; a missing key returns the current `Arc` (no-op
-        // swap) and leaves `removed` `None`.
+        let _guard = self.shared.lock_mutations();
         let mut removed: Option<Arc<dyn ToolHandler>> = None;
-        self.inner.rcu(|current| {
-            let Some(handler) = current.get(name).cloned() else {
+        let mut new_revision = 0u64;
+        let mut source: Option<ToolSource> = None;
+        self.shared.inner.rcu(|current| {
+            let Some(entry) = current.entries.get(name) else {
                 return Arc::clone(current);
             };
             let mut next = (**current).clone();
-            next.remove(name);
-            removed = Some(handler);
+            next.entries.remove(name);
+            next.revision = current.revision + 1;
+            removed = Some(Arc::clone(&entry.handler));
+            new_revision = next.revision;
+            source = Some(entry.descriptor.source.clone());
             Arc::new(next)
         });
         let removed = removed?;
-        let source = removed.definition().source.clone();
-        let _ = self.change_tx.send(RegistryChange::Unregistered {
-            name: name.to_string(),
-            source,
-        });
+        if let Some(source) = source {
+            let _ = self.shared.change_tx.send(RegistryChange::Unregistered {
+                name: name.to_string(),
+                revision: new_revision,
+                source,
+            });
+        }
         Some(removed)
     }
 
+    /// Frozen handler view (compatibility projection).
     #[must_use]
     pub fn snapshot(&self) -> Arc<HashMap<String, Arc<dyn ToolHandler>>> {
-        self.inner.load_full()
+        let state = self.shared.inner.load();
+        Arc::new(
+            state
+                .entries
+                .iter()
+                .map(|(name, entry)| (name.clone(), Arc::clone(&entry.handler)))
+                .collect(),
+        )
+    }
+
+    /// Frozen handler+descriptor view from one registry generation. Consumers
+    /// that project callable tools should prefer this over pairing
+    /// `snapshot()` and `descriptor_snapshot()` independently.
+    #[must_use]
+    pub fn entries_snapshot(&self) -> Arc<HashMap<String, RegistryEntry>> {
+        Arc::new(self.shared.inner.load().entries.clone())
+    }
+
+    /// Frozen descriptor view — the canonical capability snapshot.
+    #[must_use]
+    pub fn descriptor_snapshot(&self) -> Arc<HashMap<String, Arc<ToolCapabilityDescriptor>>> {
+        let state = self.shared.inner.load();
+        Arc::new(
+            state
+                .entries
+                .iter()
+                .map(|(name, entry)| (name.clone(), Arc::clone(&entry.descriptor)))
+                .collect(),
+        )
+    }
+
+    /// The current monotonic revision. Advances by one on every successful
+    /// register / replace / unregister.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.shared.inner.load().revision
+    }
+
+    /// Close the registry: stop accepting registrations and replacements.
+    /// Existing resolution and disposal continue to work. Idempotent.
+    pub fn close(&self) {
+        // Serialize with other mutations so a concurrent register/replace
+        // either fully precedes or fully follows the close, rather than
+        // racing its state swap against the closed flag.
+        let _guard = self.shared.lock_mutations();
+        self.shared.inner.rcu(|current| {
+            if current.closed {
+                return Arc::clone(current);
+            }
+            let mut next = (**current).clone();
+            next.closed = true;
+            Arc::new(next)
+        });
+    }
+
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.shared.inner.load().closed
     }
 
     /// Subscribe to registry mutation events.
@@ -103,7 +464,9 @@ impl ToolHandlerRegistry {
     /// Each receiver gets a 256-slot circular buffer (see channel allocation
     /// in `new()`). Slow consumers lose the oldest events rather than
     /// blocking publishers — this is the intended behavior for diagnostic
-    /// taps and tool-catalog refresh hooks.
+    /// taps and tool-catalog refresh hooks. A lagged subscriber must rebuild
+    /// from [`snapshot`](Self::snapshot) rather than treat the gap as "no
+    /// change".
     ///
     /// First production consumer: the boot-time `RegistryChange` logger in
     /// `aleph-server commands::start` records every MCP server connect /
@@ -111,7 +474,7 @@ impl ToolHandlerRegistry {
     /// — never block on this channel.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<RegistryChange> {
-        self.change_tx.subscribe()
+        self.shared.change_tx.subscribe()
     }
 }
 
@@ -121,10 +484,47 @@ impl Default for ToolHandlerRegistry {
     }
 }
 
+/// Which descriptor fields disagree with the handler's own definition, for the
+/// `DescriptorMismatch` diagnostic. The revision is deliberately excluded —
+/// the registry owns it.
+fn mismatch_reason(descriptor: &ToolCapabilityDescriptor, definition: &ToolDefinition) -> String {
+    let mut fields: Vec<&str> = Vec::new();
+    if descriptor.name != definition.name {
+        fields.push("name");
+    }
+    if descriptor.source != definition.source {
+        fields.push("source");
+    }
+    if descriptor.description != definition.description {
+        fields.push("description");
+    }
+    if descriptor.input_schema != definition.input_schema {
+        fields.push("input_schema");
+    }
+    if descriptor.requires_confirmation != definition.metadata.requires_approval {
+        fields.push("requires_confirmation");
+    }
+    if descriptor.idempotent != definition.metadata.idempotent {
+        fields.push("idempotent");
+    }
+    if descriptor.concurrent_safe != definition.metadata.concurrent_safe {
+        fields.push("concurrent_safe");
+    }
+    if descriptor.max_duration_ms != definition.metadata.max_duration_ms {
+        fields.push("max_duration_ms");
+    }
+    if fields.is_empty() {
+        "descriptor and handler definition disagree".to_string()
+    } else {
+        format!("fields differ: {}", fields.join(", "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::events::ToolOutput;
+    use crate::tools::descriptor::{ReplayPolicy, SCHEMA_VERSION, ToolKind};
     use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolSource};
     use async_trait::async_trait;
     use serde_json::Value;
@@ -160,29 +560,64 @@ mod tests {
         })
     }
 
+    /// A descriptor whose every projected field matches [`fake`]. `revision` is
+    /// left 0 on purpose: the registry assigns it.
+    fn desc(name: &str) -> ToolCapabilityDescriptor {
+        ToolCapabilityDescriptor {
+            name: name.into(),
+            kind: ToolKind::Tool,
+            schema_version: SCHEMA_VERSION,
+            description: String::new(),
+            input_schema: serde_json::json!({}),
+            source: ToolSource::Builtin,
+            replay_policy: ReplayPolicy::Unsafe,
+            requires_confirmation: false,
+            idempotent: false,
+            concurrent_safe: false,
+            max_duration_ms: None,
+            revision: 0,
+        }
+    }
+
+    #[test]
+    fn replay_lookup_is_descriptor_based_not_tool_name_special_case() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("arbitrary_name"), fake("arbitrary_name"))
+            .expect("register");
+        assert_eq!(
+            ReplayPolicyLookup::replay_policy(&reg, "arbitrary_name"),
+            Some(ReplayPolicy::Unsafe)
+        );
+        assert_eq!(ReplayPolicyLookup::replay_policy(&reg, "missing"), None);
+    }
+
     #[test]
     fn register_and_snapshot() {
         let reg = ToolHandlerRegistry::new();
-        reg.register("a".into(), fake("a")).unwrap();
-        reg.register("b".into(), fake("b")).unwrap();
+        reg.register(desc("a"), fake("a")).unwrap();
+        reg.register(desc("b"), fake("b")).unwrap();
         let snap = reg.snapshot();
         assert_eq!(snap.len(), 2);
         assert!(snap.contains_key("a"));
         assert!(snap.contains_key("b"));
+        let descriptors = reg.descriptor_snapshot();
+        assert_eq!(descriptors.len(), 2);
+        assert!(descriptors.contains_key("a"));
+        assert!(descriptors.contains_key("b"));
     }
 
     #[test]
     fn duplicate_register_returns_other() {
         let reg = ToolHandlerRegistry::new();
-        reg.register("dup".into(), fake("dup")).unwrap();
-        let err = reg.register("dup".into(), fake("dup")).unwrap_err();
+        reg.register(desc("dup"), fake("dup")).unwrap();
+        let err = reg.register(desc("dup"), fake("dup")).unwrap_err();
         assert!(matches!(err, ToolError::Duplicate { name } if name == "dup"));
     }
 
     #[test]
     fn unregister_removes() {
         let reg = ToolHandlerRegistry::new();
-        reg.register("z".into(), fake("z")).unwrap();
+        reg.register(desc("z"), fake("z")).unwrap();
         let removed = reg.unregister("z").unwrap();
         assert_eq!(removed.definition().name, "z");
         assert_eq!(reg.snapshot().len(), 0);
@@ -197,11 +632,11 @@ mod tests {
     #[test]
     fn snapshot_stable_against_concurrent_register() {
         // Emit a snapshot, then register while holding the snapshot — snapshot's
-        // contents must be unchanged (that's the ArcSwap guarantee).
+        // contents must be unchanged (frozen view).
         let reg = ToolHandlerRegistry::new();
-        reg.register("x".into(), fake("x")).unwrap();
+        reg.register(desc("x"), fake("x")).unwrap();
         let snap1 = reg.snapshot();
-        reg.register("y".into(), fake("y")).unwrap();
+        reg.register(desc("y"), fake("y")).unwrap();
         assert_eq!(snap1.len(), 1); // snap1 frozen
         assert_eq!(reg.snapshot().len(), 2); // new snapshot sees both
     }
@@ -210,7 +645,7 @@ mod tests {
     fn change_events_are_sent() {
         let reg = ToolHandlerRegistry::new();
         let mut rx = reg.subscribe();
-        reg.register("e".into(), fake("e")).unwrap();
+        reg.register(desc("e"), fake("e")).unwrap();
         let evt = rx.try_recv().expect("event");
         assert!(matches!(evt, RegistryChange::Registered { .. }));
         let _ = reg.unregister("e");
@@ -234,14 +669,14 @@ mod tests {
         for _ in 0..THREADS {
             let r = Arc::clone(&reg);
             handles.push(thread::spawn(move || {
-                r.register("race".into(), fake("race"))
+                r.register(desc("race"), fake("race"))
             }));
         }
         let mut wins = 0usize;
         let mut dupes = 0usize;
         for h in handles {
             match h.join().expect("join") {
-                Ok(()) => wins += 1,
+                Ok(_handle) => wins += 1,
                 Err(ToolError::Duplicate { .. }) => dupes += 1,
                 Err(e) => panic!("unexpected error: {e:?}"),
             }
@@ -273,7 +708,7 @@ mod tests {
         for i in 0..THREADS {
             let r = Arc::clone(&reg);
             let name = format!("t{i}");
-            handles.push(thread::spawn(move || r.register(name.clone(), fake(&name))));
+            handles.push(thread::spawn(move || r.register(desc(&name), fake(&name))));
         }
         for h in handles {
             h.join()
@@ -281,5 +716,177 @@ mod tests {
                 .expect("distinct-name register must succeed");
         }
         assert_eq!(reg.snapshot().len(), THREADS);
+    }
+
+    // ------------------------------------------------------------------
+    // Task 2 brief tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn registration_assigns_monotonic_revision_and_emits_it() {
+        let reg = ToolHandlerRegistry::new();
+        let mut rx = reg.subscribe();
+
+        let h1 = reg.register(desc("a"), fake("a")).unwrap();
+        let h2 = reg.register(desc("b"), fake("b")).unwrap();
+
+        assert_eq!(h1.revision(), 1, "first registration gets revision 1");
+        assert_eq!(h2.revision(), 2, "second registration gets revision 2");
+        assert_eq!(reg.revision(), 2);
+        assert_eq!(reg.descriptor("a").unwrap().revision, 1);
+        assert_eq!(reg.descriptor("b").unwrap().revision, 2);
+
+        let e1 = rx.try_recv().expect("first event");
+        assert!(matches!(
+            e1,
+            RegistryChange::Registered { revision: 1, ref name, .. } if name == "a"
+        ));
+        let e2 = rx.try_recv().expect("second event");
+        assert!(matches!(
+            e2,
+            RegistryChange::Registered { revision: 2, ref name, .. } if name == "b"
+        ));
+    }
+
+    #[test]
+    fn replacement_keeps_old_handler_alive_and_new_resolve_uses_new_handler() {
+        let reg = ToolHandlerRegistry::new();
+        let mut rx = reg.subscribe();
+
+        let first = reg.register(desc("t"), fake("t")).unwrap();
+        let old = reg.resolve("t").expect("old handler");
+        assert_eq!(first.revision(), 1);
+
+        let second = reg.replace(desc("t"), fake("t")).unwrap();
+        assert_eq!(second.revision(), 2);
+
+        let new = reg.resolve("t").expect("new handler");
+        assert!(
+            !Arc::ptr_eq(&old, &new),
+            "resolve must return the replacement handler"
+        );
+        // The old handler is still alive and fully usable for in-flight calls.
+        assert_eq!(old.definition().name, "t");
+        assert_eq!(reg.descriptor("t").unwrap().revision, 2);
+        assert_eq!(reg.snapshot().len(), 1);
+
+        let evt = rx.try_recv().expect("register event");
+        assert!(matches!(
+            evt,
+            RegistryChange::Registered { revision: 1, .. }
+        ));
+        let evt = rx.try_recv().expect("replace event");
+        assert!(matches!(
+            evt,
+            RegistryChange::Replaced { revision: 2, ref name, .. } if name == "t"
+        ));
+    }
+
+    #[test]
+    fn stale_registration_handle_cannot_remove_replacement() {
+        let reg = ToolHandlerRegistry::new();
+
+        let stale = reg.register(desc("t"), fake("t")).unwrap(); // revision 1
+        let _current = reg.replace(desc("t"), fake("t")).unwrap(); // revision 2
+
+        assert!(
+            !stale.dispose(),
+            "a handle for a superseded revision must not dispose the replacement"
+        );
+        assert!(reg.resolve("t").is_some(), "replacement must survive");
+        assert_eq!(reg.snapshot().len(), 1);
+    }
+
+    #[test]
+    fn close_rejects_register_and_dispose_is_idempotent() {
+        let reg = ToolHandlerRegistry::new();
+        let handle = reg.register(desc("t"), fake("t")).unwrap();
+        assert!(!reg.is_closed());
+
+        reg.close();
+        reg.close(); // idempotent
+        assert!(reg.is_closed());
+
+        let err = reg.register(desc("u"), fake("u")).unwrap_err();
+        assert!(matches!(err, ToolError::RegistryClosed { ref name } if name == "u"));
+
+        // Existing handles stay disposable after close.
+        assert!(handle.dispose(), "first dispose removes");
+        assert_eq!(reg.snapshot().len(), 0);
+        assert!(!handle.dispose(), "second dispose is a no-op");
+        assert!(!handle.dispose(), "third dispose is a no-op");
+    }
+
+    #[test]
+    fn descriptor_handler_mismatch_is_rejected() {
+        let reg = ToolHandlerRegistry::new();
+        let mut mismatched = desc("t");
+        // Handler advertises an empty schema; descriptor claims properties.
+        mismatched.input_schema = serde_json::json!({
+            "type": "object",
+            "properties": { "x": { "type": "string" } }
+        });
+
+        let before = reg.revision();
+        let err = reg.register(mismatched, fake("t")).unwrap_err();
+        assert!(matches!(err, ToolError::DescriptorMismatch { ref name, .. } if name == "t"));
+
+        // Fail-closed: no state mutation and no revision advance.
+        assert_eq!(reg.snapshot().len(), 0);
+        assert_eq!(reg.revision(), before);
+    }
+
+    /// Regression: the `ArcSwap` state swap and the `change_tx.send` were two
+    /// separate steps, so concurrent mutations could publish their change
+    /// events out of revision order (thread A assigns revision 2 and sends it,
+    /// then thread B — which assigned revision 1 — sends). The mutation lock
+    /// covers both steps, so a subscriber must observe events in strictly
+    /// increasing revision order.
+    #[test]
+    fn concurrent_mutations_publish_events_in_revision_order() {
+        use std::sync::Arc;
+        use std::thread;
+        const THREADS: usize = 16;
+        let reg = Arc::new(ToolHandlerRegistry::new());
+        let mut rx = reg.subscribe();
+
+        let mut handles = Vec::with_capacity(THREADS);
+        for i in 0..THREADS {
+            let r = Arc::clone(&reg);
+            let name = format!("ord{i}");
+            handles.push(thread::spawn(move || r.register(desc(&name), fake(&name))));
+        }
+        for h in handles {
+            h.join()
+                .expect("join")
+                .expect("distinct-name register must succeed");
+        }
+
+        let mut seen_revisions = Vec::with_capacity(THREADS);
+        while let Ok(evt) = rx.try_recv() {
+            match evt {
+                RegistryChange::Registered { revision, .. } => seen_revisions.push(revision),
+                other => panic!("unexpected event kind: {other:?}"),
+            }
+        }
+
+        assert_eq!(
+            seen_revisions.len(),
+            THREADS,
+            "every successful mutation must emit exactly one change event"
+        );
+        let mut sorted = seen_revisions.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            (1..=THREADS as u64).collect::<Vec<_>>(),
+            "every revision 1..=N must be published exactly once"
+        );
+        for pair in seen_revisions.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "published change events must be in revision order, got {seen_revisions:?}"
+            );
+        }
     }
 }

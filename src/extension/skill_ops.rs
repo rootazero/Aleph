@@ -6,11 +6,11 @@
 //! plugin-side data today read through [`super::ExtensionManager`] itself
 //! (`active_plugin_tools_snapshot`, `plugin_agent_to_def`, the registry's
 //! iterators) and the per-request tool service, so the eleven dead methods
-//! were cut from this module on 2026-09-04.
+//! were cut from this module on 2026-09-04; the zero-caller `discovery()`
+//! accessor followed on 2026-10-02.
 //!
 //! What remains: [`ExtensionManager::skill_system`] (handle accessor used by
-//! tool catalog init), [`ExtensionManager::discovery`] (read-only handle), and
-//! [`ExtensionManager::hook_executor_snapshot`] (cheap handle clone consumed
+//! tool catalog init) and [`ExtensionManager::hook_executor_snapshot`] (cheap handle clone consumed
 //! by the hook executor when wiring plugin hooks). Plugin `commands/` entries
 //! are registered per mount by `slash_effect.rs`, not listed from here.
 
@@ -23,11 +23,6 @@ impl ExtensionManager {
     /// holding the extension manager's internal lock for the full agent run.
     pub async fn hook_executor_snapshot(&self) -> super::hooks::HookExecutor {
         self.hook_executor.read().await.clone()
-    }
-
-    /// Get the discovery manager
-    pub fn discovery(&self) -> &crate::discovery::DiscoveryManager {
-        &self.discovery
     }
 
     /// Get the Skill System v2 instance.

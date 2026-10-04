@@ -759,7 +759,7 @@ handler = "memory_stats"
 
 [[aleph.commands]]
 name = "stats"
-handler = "memory_stats"
+description = "Show stats"
 
 [aleph.prompt]
 file = "SYSTEM.md"

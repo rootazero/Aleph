@@ -31,10 +31,11 @@
 //! its `in_flight` slot across the whole candidate, and the team path holds the
 //! dispatcher's task-row lock.
 
-use crate::session::events::{now_ms, ParkReason, RunOutcome, SessionEvent};
-use crate::session::reduction::{reduce_run, DanglingProvenance, RunProgress, RunReduction};
+use crate::session::events::{ParkReason, RunOutcome, SessionEvent, now_ms};
+use crate::session::reduction::{DanglingProvenance, RunProgress, RunReduction, reduce_run};
 use crate::session::service::{SessionError, SessionId};
 use crate::session::store::SessionEventStore;
+use crate::tools::descriptor::{ReplayPolicy, ReplayPolicyLookup};
 
 /// One extra true sentence the caller wants every repaired call to carry.
 ///
@@ -160,7 +161,40 @@ pub fn boundary_repair_text(
     }
 }
 
-/// Turn a reduction's dangling set into appendable answer events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplayDecision {
+    /// The descriptor is absent, Unsafe, or cannot be proven Safe because the
+    /// event does not persist the call-time descriptor snapshot.
+    VerifyOnly,
+}
+
+fn replay_decision(tool: &str, lookup: Option<&dyn ReplayPolicyLookup>) -> ReplayDecision {
+    match lookup.and_then(|registry| registry.replay_policy(tool)) {
+        Some(ReplayPolicy::Safe) | Some(ReplayPolicy::Unsafe) | None => ReplayDecision::VerifyOnly,
+    }
+}
+
+/// Descriptor-aware recovery text. The current event shape has no call-time
+/// descriptor revision, so every policy remains fail-closed: recovery never
+/// auto-replays a dangling call. Keeping the lookup here makes the boundary
+/// explicit and prevents future callers from inferring replay safety from a
+/// tool name, source, or idempotence flag.
+#[must_use]
+pub fn boundary_repair_text_with_policy(
+    tool: &str,
+    provenance: DanglingProvenance,
+    denied: bool,
+    parked: Option<ParkReason>,
+    degrade: Option<&DegradeNote>,
+    lookup: Option<&dyn ReplayPolicyLookup>,
+) -> String {
+    match replay_decision(tool, lookup) {
+        ReplayDecision::VerifyOnly => {
+            boundary_repair_text(tool, provenance, denied, parked, degrade)
+        }
+    }
+}
+
 ///
 /// **Both provenances get an event.** Leaving the older ones unanswered is not
 /// the cheaper option: `build_prompt` drops an orphan `tool_use` whose result
@@ -176,6 +210,16 @@ pub fn boundary_repair_text(
 /// model as N separate degradations.
 #[must_use]
 pub fn repairs_for(reduction: &RunReduction, degrade: Option<&DegradeNote>) -> Vec<SessionEvent> {
+    repairs_for_with_policy(reduction, degrade, None)
+}
+
+/// Descriptor-aware variant of [`repairs_for`].
+#[must_use]
+pub fn repairs_for_with_policy(
+    reduction: &RunReduction,
+    degrade: Option<&DegradeNote>,
+    lookup: Option<&dyn ReplayPolicyLookup>,
+) -> Vec<SessionEvent> {
     let at = now_ms();
     reduction
         .dangling
@@ -184,12 +228,13 @@ pub fn repairs_for(reduction: &RunReduction, degrade: Option<&DegradeNote>) -> V
         .map(|(i, call)| SessionEvent::ToolError {
             turn_id: call.turn_id,
             call_id: call.call_id.clone(),
-            error: boundary_repair_text(
+            error: boundary_repair_text_with_policy(
                 &call.tool_name,
                 call.provenance,
                 call.denied,
                 call.parked,
                 if i == 0 { degrade } else { None },
+                lookup,
             ),
             at,
         })
@@ -210,7 +255,22 @@ pub async fn repair_boundary(
     reduction: &RunReduction,
     degrade: Option<&DegradeNote>,
 ) -> Result<RepairReport, SessionError> {
-    let repairs = repairs_for(reduction, degrade);
+    repair_boundary_with_policy(store, session, reduction, degrade, None).await
+}
+
+/// Descriptor-aware variant of [`repair_boundary`].
+///
+/// This is deliberately fail-closed until `ToolCallRequested` persists the
+/// call-time descriptor revision. The lookup is still consulted so callers do
+/// not grow a second recovery policy based on tool names.
+pub async fn repair_boundary_with_policy(
+    store: &dyn SessionEventStore,
+    session: &SessionId,
+    reduction: &RunReduction,
+    degrade: Option<&DegradeNote>,
+    lookup: Option<&dyn ReplayPolicyLookup>,
+) -> Result<RepairReport, SessionError> {
+    let repairs = repairs_for_with_policy(reduction, degrade, lookup);
     if repairs.is_empty() {
         // A degrade note with nothing to attach it to is the caller's problem
         // to place (`SystemMessage`), not this function's to invent a carrier
@@ -367,7 +427,64 @@ mod tests {
         }
     }
 
-    /// Every arm must carry the five semantic points, asserted on MEANING
+    struct TestReplayLookup {
+        policy: Option<ReplayPolicy>,
+    }
+
+    impl ReplayPolicyLookup for TestReplayLookup {
+        fn replay_policy(&self, _name: &str) -> Option<ReplayPolicy> {
+            self.policy
+        }
+    }
+
+    #[test]
+    fn missing_descriptor_keeps_unknown_outcome_repair() {
+        let text = boundary_repair_text_with_policy(
+            "arbitrary_tool",
+            DanglingProvenance::ThisRestart,
+            false,
+            None,
+            None,
+            None,
+        );
+        assert!(text.contains("OUTCOME UNKNOWN"));
+        assert!(text.contains(VERIFY_CLOSE));
+    }
+
+    #[test]
+    fn unsafe_descriptor_never_auto_replays_a_dangling_call() {
+        let lookup = TestReplayLookup {
+            policy: Some(ReplayPolicy::Unsafe),
+        };
+        let text = boundary_repair_text_with_policy(
+            "arbitrary_tool",
+            DanglingProvenance::ThisRestart,
+            false,
+            None,
+            None,
+            Some(&lookup),
+        );
+        assert!(text.contains("OUTCOME UNKNOWN"));
+        assert!(text.contains(VERIFY_CLOSE));
+    }
+
+    #[test]
+    fn safe_descriptor_also_requires_call_time_snapshot_before_replay() {
+        let lookup = TestReplayLookup {
+            policy: Some(ReplayPolicy::Safe),
+        };
+        let text = boundary_repair_text_with_policy(
+            "another_tool",
+            DanglingProvenance::EarlierRun,
+            false,
+            None,
+            None,
+            Some(&lookup),
+        );
+        assert!(text.contains("OUTCOME UNKNOWN"));
+        assert!(text.contains(VERIFY_CLOSE));
+    }
+
     /// rather than bytes: `!contains("failed")` gets hit by the text's own
     /// negation sentence, which is how the first version of this guard went red
     /// for the wrong reason.

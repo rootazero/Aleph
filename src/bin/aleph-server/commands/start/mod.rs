@@ -239,11 +239,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             use alephcore::tools::registry::RegistryChange;
             loop {
                 match rx.recv().await {
-                    Ok(RegistryChange::Registered { name, source }) => {
-                        tracing::info!(tool = %name, source = ?source, "tool_registry: registered");
+                    Ok(RegistryChange::Registered { name, revision, source }) => {
+                        tracing::info!(tool = %name, revision, source = ?source, "tool_registry: registered");
                     }
-                    Ok(RegistryChange::Unregistered { name, source }) => {
-                        tracing::info!(tool = %name, source = ?source, "tool_registry: unregistered");
+                    Ok(RegistryChange::Replaced { name, revision, source }) => {
+                        tracing::info!(tool = %name, revision, source = ?source, "tool_registry: replaced");
+                    }
+                    Ok(RegistryChange::Unregistered { name, revision, source }) => {
+                        tracing::info!(tool = %name, revision, source = ?source, "tool_registry: unregistered");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(
@@ -2003,6 +2006,64 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             }),
         );
+    }
+
+    // MCP server face (`/mcp`, spec §3.7). Built over the SAME
+    // `BuiltinToolRegistry` the run loop dispatches through, mounted on the
+    // gateway router, and installed process-wide so
+    // `extension::lifecycle::after_transition` can broadcast
+    // `notifications/tools/list_changed`. Declined — with the reason on the
+    // capability roster — when the operator turned it off or there is no
+    // registry to serve (simulated mode).
+    {
+        let mcp_server_cfg = app_config.read().await.mcp_server.clone();
+        match (mcp_server_cfg.enabled, agent_result.tool_registry.as_ref()) {
+            (false, _) => {
+                alephcore::gateway::mcp_face::decline_mcp_face("[mcp_server] enabled = false");
+            }
+            (true, None) => {
+                alephcore::gateway::mcp_face::decline_mcp_face(
+                    "no tool registry: simulated mode (no provider API key), nothing to serve on /mcp",
+                );
+            }
+            (true, Some(tool_registry)) => {
+                let registry: Arc<dyn alephcore::executor::ToolRegistry> = tool_registry.clone();
+                let face = Arc::new(alephcore::gateway::mcp_face::McpFace::new(
+                    &mcp_server_cfg,
+                    registry,
+                    tool_registry.unified_tools().cloned().collect(),
+                    Some(app_config.clone()),
+                    agent_result.tool_catalog.as_ref().map(|c| c.health()),
+                    server.operator_presence_probe(),
+                ));
+                // G5, runtime half: every configured name the catalogue does
+                // not know at boot. A warning, not a refusal — bridged MCP
+                // tools register asynchronously and a name that belongs to
+                // one serves as soon as its server is up. The same derivation
+                // runs again after a live `expose` change (P6.9).
+                let unknown = face.unknown_expose();
+                for name in &unknown {
+                    tracing::warn!(
+                        tool = %name,
+                        "[mcp_server].expose names a tool this server does not know at boot; \
+                         it will not appear in tools/list unless a plugin or MCP server registers it"
+                    );
+                }
+                if !args.daemon {
+                    println!(
+                        "  MCP server face: /mcp ({} tools exposed{})",
+                        mcp_server_cfg.expose.len(),
+                        if unknown.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", {} unknown at boot — see log", unknown.len())
+                        }
+                    );
+                }
+                server.set_mcp_face(face.clone());
+                alephcore::gateway::mcp_face::install_mcp_face(face);
+            }
+        }
     }
 
     // Panel voice channel — native capture (record_start/stop) + TTS playback
@@ -4071,6 +4132,24 @@ mod tests {
              `Gone` for every member it has no row for (final review I3); got arm head \
              {arm_head:?}"
         );
+    }
+
+    /// Same shape as the spend census above: the face has a process-global
+    /// handle, and a handle boot never installs is a route that never mounts
+    /// and a `list_changed` nobody sends — with nothing red. Both arms must
+    /// exist in production text: an install, and a decline with a reason.
+    #[test]
+    fn boot_installs_or_declines_the_mcp_face() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::production_prefix(&src);
+        assert!(production.len() < src.len());
+        let production = alephcore::utils::source_scan::code_text(&production);
+        for call in ["install_mcp_face(", "decline_mcp_face(", "set_mcp_face("] {
+            assert!(
+                production.contains(call),
+                "start/mod.rs must contain a production call to {call}"
+            );
+        }
     }
 
     /// `users.*` has TWO registration faces — this file at boot, and

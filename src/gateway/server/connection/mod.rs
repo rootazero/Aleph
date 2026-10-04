@@ -764,11 +764,7 @@ pub async fn handle_connection(
                                                             bootstrap_ticket,
                                                             device_id,
                                                             device_name,
-                                                            |t| {
-                                                                crate::gateway::security::SharedTokenManager::global()
-                                                                    .map(|m| m.validate(t).unwrap_or(false))
-                                                                    .unwrap_or(false)
-                                                            },
+                                                            crate::gateway::security::SharedTokenManager::global_validate,
                                                             mgr,
                                                         )
                                                     } else {
@@ -777,11 +773,7 @@ pub async fn handle_connection(
                                                         let authorized = crate::gateway::handlers::connect::connect_authorized(
                                                             ctx.client_is_local,
                                                             presented_token,
-                                                            |t| {
-                                                                crate::gateway::security::SharedTokenManager::global()
-                                                                    .map(|m| m.validate(t).unwrap_or(false))
-                                                                    .unwrap_or(false)
-                                                            },
+                                                            crate::gateway::security::SharedTokenManager::global_validate,
                                                         );
                                                         if authorized {
                                                             crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized { device_id: None }

@@ -171,6 +171,12 @@ pub struct Config {
     /// A2A protocol configuration
     #[serde(default)]
     pub a2a: crate::a2a::config::A2AConfig,
+    /// Aleph-as-MCP-server face (`POST/GET/DELETE /mcp`) — spec §3.7.
+    /// Always emitted so the operator can read the exposure whitelist off the
+    /// file. `expose` applies live (`mcp_server.expose` is a live subsection);
+    /// `enabled` needs a restart.
+    #[serde(default)]
+    pub mcp_server: crate::gateway::mcp_face::config::McpFaceConfig,
     /// ACP (Agent Communication Protocol) harness configuration
     #[serde(default)]
     pub acp: AcpConfig,
@@ -415,6 +421,7 @@ impl Default for Config {
             prompt: PromptSectionConfig::default(),
             channels: HashMap::new(),
             a2a: crate::a2a::config::A2AConfig::default(),
+            mcp_server: crate::gateway::mcp_face::config::McpFaceConfig::default(),
             acp: AcpConfig::default(),
             execution: ExecutionConfig::default(),
             agents: AgentsConfig::default(),

@@ -818,7 +818,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let mcp_tool_names = match super::super::tool_service_builder::mcp_tool_registry() {
                 Some(mcp_registry) => {
                     let joined = join_mcp_tools(
-                        &mcp_registry.snapshot(),
+                        &mcp_registry.entries_snapshot(),
                         &mut loop_registry_inner,
                         |name| {
                             agent.is_tool_allowed(name)
@@ -1784,28 +1784,32 @@ fn publish_artifact_invalidation(
 /// empty set means allow-all in `ScopedToolService`, and inserting names would
 /// flip it restrictive. Returns the joined names.
 pub(super) fn join_mcp_tools(
-    snapshot: &std::collections::HashMap<String, Arc<dyn crate::tools::handlers::ToolHandler>>,
+    snapshot: &std::collections::HashMap<String, crate::tools::registry::RegistryEntry>,
     registry: &mut crate::tools::runtime::LoopToolRegistry,
     is_allowed: impl Fn(&str) -> bool,
     visible: &crate::tools::handlers::McpServerFilter,
     allowed_names: &mut std::collections::BTreeSet<String>,
 ) -> std::collections::BTreeSet<String> {
     let mut joined = std::collections::BTreeSet::new();
-    for (name, handler) in snapshot {
+    for (name, entry) in snapshot {
         if !is_allowed(name) {
             continue;
         }
-        if !mcp_handler_admitted(handler.as_ref(), visible) {
+        if !mcp_handler_admitted(entry.handler.as_ref(), visible) {
             continue;
         }
         if registry.get(name).is_some() {
             continue;
         }
-        let handler = handler
+        let handler = entry
+            .handler
             .bind_visible_servers(visible)
-            .unwrap_or_else(|| Arc::clone(handler));
+            .unwrap_or_else(|| Arc::clone(&entry.handler));
         registry.register(Box::new(
-            crate::tools::adapters::McpRegistryTool::from_registry_entry(name, handler),
+            crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                handler,
+                &entry.descriptor,
+            ),
         ));
         if !allowed_names.is_empty() {
             allowed_names.insert(name.clone());

@@ -16,6 +16,7 @@
 | `src/gateway/session_store/` `session_manager/` | FL §6.9 | E.0 | `qa/session_order/run.sh` |
 | `src/gateway/pty/` `interfaces/webchat/.../views/terminal/` | FL §6.11 · 判据清单 §0（分派表的静默 no-op · 有损可观测量） | E.0 | — |
 | `src/gateway/runtime/` `crates/agent-detect/` `src/builtin_tools/terminal.rs` | [TERMINAL_RUNTIME.md](docs/reference/TERMINAL_RUNTIME.md) · FL §6.12 | E.4 | `qa/terminal/run.sh {identify,wait,quiet,cwd,real,tui}`（`panel` 要浏览器） |
+| `src/gateway/mcp_face/` | [GATEWAY.md](docs/reference/GATEWAY.md) MCP 面 · FL §5.27 | E.4 E.9 | `qa/mcp_face/run.sh {handshake,tools,auth,list_changed,deny}`（每阶段证明什么见 [`qa/README.md`](qa/README.md)） |
 | `src/memory/` `src/note/` | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) + memory/ 三分册 · FL §2.5 §2.9 §2.16 | E.5 | `qa/memory_curated/run.sh` |
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · FL §3.6 §4.9 | E.9 | — |
 | `src/spend/` `src/providers/metering.rs` | FL §5.22（round-7 的 per-principal 美元上限：`[policies.spend]` → `SpendLedger` → 两条执行臂）· FL §5.25（`install_ledger` / `install_policy` 两个进程级句柄——`MeteringProvider` 的生产构造点散在多个模块（普查 `rg "MeteringProvider::new\("`，剥掉测试模块），所以裁决是进程级而非构造参数穿线） | E.0 E.9 | `qa/spend_budget/run.sh`（**需要真 python3**，Windows 主机上是 UNRUN 而不是 PASS——见 [`qa/README.md`](qa/README.md) 该条目） |

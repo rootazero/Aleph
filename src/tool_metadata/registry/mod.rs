@@ -237,6 +237,15 @@ impl ToolCatalog {
         n
     }
 
+    /// Remove one catalog entry by its resolved identity.
+    pub async fn remove_by_id(&self, id: &str) -> bool {
+        let removed = self.state.remove_by_id(id).await;
+        if removed {
+            self.health.invalidate_all();
+        }
+        removed
+    }
+
     /// Remove the slash entries registered for the given skill ids.
     pub async fn unregister_skills(&self, skill_ids: &[String]) -> usize {
         let n = self.state.remove_skills(skill_ids).await;

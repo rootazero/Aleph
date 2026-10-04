@@ -661,6 +661,41 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
                                  # loads — the CLI and the server are two authors
 ./qa/plugins/run.sh trust        # owner trust: default posture, enforce, vouch, restart,
                                  # withdraw. Three restarts, because the policy is a LOAD gate
+./qa/plugins/run.sh browse       # marketplace contents are listable, and a name found that
+                                 # way actually installs; the CLI's `plugin marketplace browse`
+                                 # prints the same rows with their marketplace column. Only a
+                                 # real boot proves the bundled extractor, the resolver and
+                                 # the RPC agree (a unit test can build the layout — the bug
+                                 # this round pinned was a sentinel resolved as a relative
+                                 # path by the lookup side only)
+./qa/plugins/run.sh marketplaces # the *registration* surface — different from `browse`,
+                                 # which lists a marketplace's contents: list / add / remove,
+                                 # and the removable bit the Panel draws its button from.
+                                 # Needs it because the built-in `aleph-official` is injected
+                                 # into every `list()` and refused by every `remove()`, and
+                                 # on a fresh install it is the only row on screen — whether
+                                 # the Panel draws a Remove button the server would refuse is
+                                 # a question only the real manager can answer; the CLI's
+                                 # typed row names the server-side refusal in place
+./qa/plugins/run.sh panel        # BOOTS AND WAITS: the same market-panel surfaces through
+                                 # the browser, plus the source classifier (a Windows path
+                                 # like `C:\dir\mk` must come back tagged 'local', named
+                                 # 'mk', with a refusal about a missing path — not
+                                 # classified GITHUB and named 'c:\dir\mk'). Needs `just
+                                 # wasm` first (debug `rust_embed` serves dist/ from disk);
+                                 # a stale dist renders the previous round and every
+                                 # assertion below passes or fails for the wrong reason
+
+./qa/mcp_face/run.sh handshake   # MCP server face: three versions negotiate to themselves,
+                                 # unsupported → 2025-11-25, sessions minted / 400 / 404
+./qa/mcp_face/run.sh tools       # tools/list ⊆ [mcp_server].expose on the REAL registry;
+                                 # a read-only call answers text, isError:false
+./qa/mcp_face/run.sh auth        # LAN request: 401 without / with a wrong bearer, the shared
+                                 # gateway token admitted (SKIP without a LAN address)
+./qa/mcp_face/run.sh list_changed # plugin_manage disable/enable → SSE list_changed and the
+                                 # plugin's tool leaves / re-enters tools/list
+./qa/mcp_face/run.sh deny        # unexposed → -32602; confirmation-gated with NO operator
+                                 # surface → isError:true naming the Panel
 ./qa/plugins/run.sh visibility   # a plugin under a registered project's .aleph/plugins
                                  # reaches the model — skill index, agent catalog, joined MCP
                                  # tool — only for a run bound to that project; the oracle is
@@ -1763,6 +1798,13 @@ widened a narrowly-scoped change into that question. Tracked in
   是 `attach` 里那条 argv 断言（`--use-mock-keychain` 在场、且在 `extra_args` 之后）与
   `engine/chromium.rs` 的 `rposition` 单测，**不是任何场景自己的绿**。全文见
   `docs/reference/FEATURE_LOCATOR.md` §3.12 第七轮 ①③。
+- **`mcp_face`** — 改 `src/gateway/mcp_face/` 或 `[mcp_server]` 前跑 `{handshake,tools,auth,list_changed,deny}`。
+  单测把一个 stub 注册表推过路由器就能全绿；只有真机能证明**面被安装了**（slot 没装 = 404 且没有一处变红——
+  `run.sh` 先 grep 启动横幅再驱动）、`expose` 真从 `config.toml` 读进来、真注册表的 schema 到达了
+  `tools/list`、以及**出席探针读的是真连接表**。`deny` 阶段**刻意不开任何 WebSocket**——loopback 的 WS
+  客户端本身就是一个 operator 面，开着它去断言「无人可批」等于断言一个没被武装的闸。`list_changed`
+  证的是 `lifecycle.rs::after_transition` 里那一行 `try_mcp_face()` 真的把通知送到了一条打开的 SSE 流上——
+  单测装的是 stub 面，只有真机能证明 boot 装的那个面就是 lifecycle 通知的那个。
 - **`browser_dual`** — 改 `src/browser/engine/`、`src/browser/cdp_backend/`、`src/browser/page_state/`
   或 `crates/aleph-cdp/` 前跑。阶段清单在本文件顶部的命令块与
   `qa/browser_dual/run.sh` 的头注释里（**不在这里再抄一份**）；每个阶段在证明什么、以及几条它**没有**

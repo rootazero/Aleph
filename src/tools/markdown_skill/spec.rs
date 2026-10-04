@@ -11,11 +11,11 @@ use std::collections::BTreeMap;
 /// **Deprecated:** Phase 1 of skill data model unification (see
 /// `docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md`
 /// and `docs/reference/SKILL_MODEL_TAXONOMY.md`).
-/// Phase 2 (earliest 2026-06-03) absorbs the fields into
-/// `crate::domain::skill::SkillManifest` and deletes this type.
+/// Phase 2 (gated ≥ 2026-06-03, **overdue and unscheduled as of 2026-09-20**) absorbs
+/// the fields into `crate::domain::skill::SkillManifest` and deletes this type.
 #[deprecated(
     since = "26.5.20",
-    note = "use crate::domain::skill::SkillManifest via From impl; will be removed in Phase 2 (≥2026-06-03) per docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md"
+    note = "use crate::domain::skill::SkillManifest via From impl; slated for removal in Phase 2 (overdue since 2026-06-03, unscheduled as of 2026-09-20 — see docs/reference/SKILL_MODEL_TAXONOMY.md)"
 )]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlephSkillSpec {

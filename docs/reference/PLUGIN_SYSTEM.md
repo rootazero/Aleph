@@ -150,11 +150,11 @@ sensitive = true
 
 | status | 含义 | 补救 |
 |--------|------|------|
-| `loaded` | 活跃，capability 对模型可见 | — |
-| `disabled` | operator 关掉了（`plugins.toml`）；或 `origin: claude_cache`（Claude Code 装的，`plugins.toml` 里没有显式 enable 就是关，`status_detail` 写明「installed by Claude Code … not enabled in Aleph」）| `al plugin enable <name>` 或 Panel 插件开关（同一个 `plugins.enable` RPC，按 registry 解析 id，任何 origin 都认）；离线 `aleph-server plugin enable <name>` 同样认得 Claude Code 装的 id。`claude_cache` 行**模型不能启用**（`plugin_manage` 拒绝并给出上面的人类命令），只能禁用 |
-| `error` | manifest 解析失败 / mount 的某一步失败（`<step>: <reason>`，已整体回滚）/ 声明的 MCP server 启动失败（`mcp:<server_id>: <reason>`，插件仍在 mount 状态）| `status_detail` 给出原因 |
-| `blocked` | owner trust policy 拒绝了它 | `plugin_manage(action='trust', name=…)` |
-| `pending` | 已 mount，但某个声明的依赖尚未到达终态（MCP manager 未接上 / server 未完成 `initialize` / 运行时未 provision）| `status_detail` 列出 `waiting on …`；`aleph doctor` 的 `extension/plugins-activated` 逐个点名 |
+| `loaded` | 活跃，capability 对模型可见（`PluginStatus::Loaded`） | — |
+| `pending` | 已 mount，但某个声明的依赖尚未到达终态（`PluginStatus::Pending { waiting_on }`：MCP manager 未接上 → `mcp:manager`；server 未完成 `initialize` → `mcp:<server_id>`）。**不因超时变 `error`**（判据 §8：「还没准备好」≠「失败了」） | `status_detail` 列出 `waiting on …`；`aleph doctor` 的 `extension/plugins-activated` 逐个点名 |
+| `disabled` | operator 关掉了（`plugins.toml`；`PluginStatus::Disabled`）。`origin: claude_cache` 详见 Runtime 模型后的 ClaudeCache 段落（默认 disabled，模型不能 `plugin_manage enable`，只能禁用）| `al plugin enable <name>` 或 Panel 插件开关（同一个 `plugins.enable` RPC，按 registry 解析 id，任何 origin 都认）；离线 `aleph-server plugin enable <name>` 同样认得 Claude Code 装的 id。`claude_cache` 行**模型不能启用**（`plugin_manage` 拒绝并给出上面的人类命令），只能禁用 |
+| `error` | manifest 解析失败，或 `mount` 某一步失败——`PluginStatus::Error("<step>: <reason>")`，由 `lifecycle.rs::write_failed_row` 这一处写入；已注册的部分已 dispose（**全有或全无**）。声明的 MCP server 启动失败（`mcp:<server_id>: <reason>`，插件仍在 mount 状态）| `status_detail` 给出原因 |
+| `blocked` | owner trust policy 拒绝了它（`PluginStatus::Blocked(reason)`） | `plugin_manage(action='trust', name=…)` |
 
 > **2026-08-16 之前只有前两个是真的。** `Overridden` / `Error` 是**零生产者**的枚举变体：
 > 重名插件在 `load_all` 里被 `continue` 静默丢弃，manifest 解析失败只有一句 `debug!`，
@@ -174,6 +174,7 @@ sensitive = true
 > 因为整个 owner trust policy 零生产者（见下文「策略住在哪」）。现在它由
 > `[trust] enforce` 产生，且 `qa/plugins/run.sh trust` 真机断言它与「不存在」不同：
 > 被拒的插件**必须留下带 id 的行**，否则 operator 手里没有可以 vouch 的东西。
+> `activation_gate` 认得的**终态集合从枚举派生**（守卫 G6），不是手写清单；`Pending` 计入 `is_active()`。
 
 ## Runtime 模型
 
@@ -182,6 +183,13 @@ sensitive = true
 | 不填 / `"static"` | Static | 纯 Markdown，无 runtime | Skills/agents/commands only |
 | `"mcp"` | Mcp | 读取 `.mcp.json`，通过 MCP 协议 | Node.js、Python 等 |
 | `"wasm"` | Wasm | Extism 沙箱直接加载 | 高性能安全插件 |
+
+Runtime 与 **origin** 是两个轴。origin（`PluginOrigin`）多了一个值：`ClaudeCache`——`~/.claude/plugins/`
+里 Claude Code 已装的插件（读 `installed_plugins.json`，解析到 `cache/<marketplace>/<plugin>/<version>/`）。
+**只读发现**：Aleph 永不写 `~/.claude/`，不读 `settings.json`；这一 origin 的插件**默认 disabled**
+（`plugins.toml` 里缺席即 disabled，只对这个 origin 如此），`plugin_manage list` 带 origin 露出，
+一个动词启用，启用态只写 `plugins.toml`。`installed_plugins.json` 形状变了 → 整个来源跳过 + 一条 warn，
+其它来源不受影响。
 
 ---
 
@@ -338,21 +346,34 @@ version = "0.1.0"
 
 ---
 
-## Scope 管理
+## Scope 管理：发现路径 与 可见性是两件事
 
-| Scope | 路径 | 用途 |
-|-------|------|------|
-| `user` | `~/.aleph/plugins/installed/` | 个人全局（默认） |
-| `project` | `<project>/.aleph/plugins/` | 团队共享，入 VCS |
-| `local` | `<project>/.aleph/plugins.local/` | 个人项目级，gitignore |
-| `agent-level` | `~/.aleph/agents/<id>/plugins/` | Agent 专属（Aleph 独有） |
+**发现路径**（谁被扫到，优先级高→低）：
 
-**优先级（高→低）：** `agent-level` > `local` > `project` > `user` > `bundled`
+| Scope | 路径 | `ScopeKey` |
+|-------|------|-----------|
+| `agent-level` | `~/.aleph/agents/<id>/plugins/` | `Global` |
+| `local` | `<project>/.aleph/plugins.local/` | `Project(root)` |
+| `project` | `<project>/.aleph/plugins/`、`<project>/.claude/` | `Project(root)` |
+| `user` | `~/.aleph/plugins/installed/` | `Global` |
+| `claude-cache` | `~/.claude/plugins/cache/…`（只读） | `Global` |
+| `bundled` | 编译期嵌入 | `Global` |
+
+**可见性**（谁在哪个请求里看得见，2026-09-20 起）：每条 registry 行在发现时带一个 `ScopeKey`；
+每张脸在**请求构建时**调同一个谓词 `visible_to(key, ctx)`（`src/extension/visibility.rs`，前身是只服务
+hooks 的 `scope.rs::project_scope_allows`）：`Global` 永远可见；`Project(p)` 只对
+`ctx.project_root == Some(p)` 的会话可见。五张脸共用：tool index · skills 索引 · agents 解析 · slash 列表 ·
+MCP tool bridge（按拥有 server 的插件的 key 过滤；server 进程本身仍是全局的）。hooks 的
+`project_scope_allows` 改为调它。**`VisibilityCtx.project_root` 只有一份推导**——hooks 今天那一份
+（`executor.rs:918` 上游）抽出来共用，不新造第二个「当前项目」。
+
+⚠️ **行为变更**：**无 project 的会话只见 `Global`**（fail-closed；此前是全部可见）。一个在 `~` 里起的
+会话再也看不到某个项目的 `.claude/` 插件——这是有意的。
 
 ```bash
-al plugin install <name> --scope user      # 默认
-al plugin install <name> --scope project   # 团队共享
-al plugin install <name> --scope local     # 个人项目
+aleph plugin install <name> --scope user      # 默认
+aleph plugin install <name> --scope project   # 团队共享
+aleph plugin install <name> --scope local     # 个人项目
 ```
 
 ---
@@ -378,14 +399,31 @@ al plugin list
 | CC 组件 | Aleph 支持 | 说明 |
 |---------|-----------|------|
 | `skills/*/SKILL.md` | ✅ 完全支持 | 通过 SkillSystem 加载 |
-| `agents/*.md` | ✅ 完全支持 | 自动发现 |
-| `commands/*.md` | ✅ 支持 | 注册为 `/插件:命令`（命名空间化）。`/cmd args` 时正文按 CC/pi 语法渲染（`$1…$N` / `${N:-默认}` / `$ARGUMENTS`、`@./文件`、`` !`cmd` ``），作为**本回合的 transient 用户内容**交给模型、**不落盘**——会话存的是原始 `/cmd args`（**与 CC 不同**：CC 把展开后的正文存成用户消息）。只渲染 owner 闸判过的那条注册（`/插件:命令` 的精确键；同名的内置 / 用户 skill 永远不会渲染插件命令）；渲染发生在 `BeforeAgentStart` / `UserPromptSubmit` 之后——被 hook 拦下的回合一条 `` !`cmd` `` 都不跑。`` !`cmd` `` 与 `hooks.json` 命令走同一份同意清单（事件 `SlashCommand`，`aleph-server hooks list` / `test` 审批；以 hook 身份批过的同文本不算），**只对 operator 跑，且本回合的工具闸 deny `bash` 时不跑**——与模型自己的 `bash` 同一个推导（全局 / agent / channel 三层合并后的权限 + 执行档位），所以任一层 deny `bash`、`plan` 档、`/btw` 旁问都不跑；`ask` 照跑（同意清单本身就是这条命令的那一问）（channel 的 guest 发送者一律只见占位符，正文照常渲染）；在会话工作目录里、以守护进程用户身份跑，**不在沙箱内，也不受 `[sandbox.command_policy]` 约束**；参数只作数据、不作源码；环境先清空，只继承 shell 与程序运行所需的（`PATH HOME USER LOGNAME SHELL TERM TMPDIR TZ`、`LANG`、POSIX 的 `LC_*` 类别与 `LC_ALL`——不是任意 `LC_` 名，ssh 正是借 `LC_*` 转发任意变量）、XDG 基目录（`XDG_RUNTIME_DIR` 除外：那是用户控制 socket 所在的目录，dbus 经它的 `bus` 够得到 keyring 与 `systemctl --user`，与 ssh-agent socket 同属不继承的凭据通道）、代理（大小写两种拼法）与私有 CA 证书变量（代理 URL 可能带凭据；照样继承，因为 inline 命令只对 operator 跑，那是 operator 自己的网络），没有任何 `{{secret:…}}` 设置；**相对路径拒绝按同意自己的顺序看候选词**（先是第一个带脚本扩展名的词，再是每个路径形状的词），**在同意绑定的那个脚本——第一个真实存在的绝对 / `~/` 路径——处停下；停下之前遇到相对路径形状的词，这条 inline 命令就不跑**——不只是脚本，`git diff src/app.ts` 这样的参数也一样（同意分不清脚本与参数，会审、会哈希插件目录里的那份，实际跑的却是会话目录里的；插件自己的脚本写 `${CLAUDE_PLUGIN_ROOT}/…`）。**停下之后的词不再看**：`sh ${CLAUDE_PLUGIN_ROOT}/setup.sh && ./scripts/build.sh` 会跑会话目录里的 `build.sh`，不做内容绑定，而这份批准的内容绑定只覆盖 `setup.sh`——operator 批准的就是这段文本。命令写出去的目标（`2>/dev/null`、`> out/log`）与 URL 不算候选词，读进来的（`sh <x.sh`）算。`model:` 只钉本回合（CC 别名 `sonnet`/`opus`/`haiku` 不生效、仅记日志；已退役的 id 直接拒绝本回合）|
+| `agents/*.md` | ✅ 完全支持 | frontmatter → `AgentDef`，**正文 → `AgentDef.system_prompt`**（2026-09-20 起；此前正文丢弃）。`permissionMode` **解析但不应用**（见下方 DEVIATION 3）；`color` 忽略 |
+| `commands/*.md` | ✅ 完全支持 | slash 条目随 mount/unmount 注册/撤销；`/cmd args` 时**正文经 `SkillTemplate` 展开后注入本轮**（`$ARGUMENTS` / `$1..$N` / `${N:-d}` / `@file` 经沙箱读 / `` !`cmd` `` 经 shell 同意闸）——展开后的正文**瞬时投递**，转录里持久化的是原始 `/cmd args`（U-c）。`argument-hint` 进列表；`allowed-tools` 作本轮静态 retain；`model` 走请求级 pin；`disable-model-invocation` 只留人类入口 |
+| `hooks/hooks.json` `timeout` | ⚠️ 偏离 | Claude Code 默认 600 s；Aleph 默认 **300 s** 且上限 **300 s**（`MAX_HOOK_TIMEOUT_SECS`，`src/extension/hooks/mod.rs`）——hook 在工具派发内运行，本就受 180 s tool budget 约束，更长的值会被钳到 300 并记一条 warn。写 `timeout: 600` 不报错，只是拿不到 600。 |
 | `hooks/hooks.json` (command type) | ✅ 支持 | Shell 命令型 hook。**继承守护进程的整份环境**（与 CC 一致：CC 的 hook 继承 CC 的环境，守护进程环境里的 provider key、channel bot token 因此对 hook 可见），而插件命令的 `` !`cmd` `` 不继承（见上一行） |
 | `.mcp.json` (MCP servers) | ✅ 支持 | 通过 MCP client 启动 |
 | `.claude-plugin/plugin.json` | ✅ 完全支持 | CC JSON parser |
 | `marketplace.json` | ✅ 完全支持 | Marketplace 系统 |
 | `outputStyles` | ⏳ 延后 | 解析但不执行 |
 | `.lsp.json` | ⏳ 延后 | 解析但不执行 |
+
+**DEVIATION（有意与 Claude Code 不同；验收表 `scan-cc-plugin-format.md` 70 项里标 DEVIATION 的就是这几条）：**
+
+1. **hook `timeout` 默认 300 s、上限 300 s**（CC 600 s）——见上表那一行；理由：hook 跑在工具派发内，受 tool budget 约束。
+2. **skills 的 CC 专属字段**：`skills/*/SKILL.md` Claude-Code-only fields (`when_to_use`, `argument-hint`, `arguments`, `disallowed-tools`, `model`, `effort`, `context: fork`, `agent`, `background`, `hooks`, `paths`, `shell`) parse without error and are NOT honoured, except `disable-model-invocation`, `user-invocable`, `allowed-tools` (pre-grant) and `when_to_use` (read). A skill relying on `context: fork` runs inline; one relying on skill-scoped `hooks` gets none.
+3. **agent `permissionMode` 不应用**：sub-agent 跑在父的 `ScopedToolService` 上，没有自己的执行档；值被解析并以 `debug!` 记下它本会映射到的档，偏离可见于日志而不是静默。
+4. **不读 `~/.claude/settings.json`**：启用态由 `plugins.toml` 决定（U6）。
+5. **用户级 hooks 文件在 `~/.aleph/hooks.json`**，不是 `~/.claude/settings.json` 的 `hooks` 键。
+
+**CONNECT（与 CC 对齐，2026-09-20 接线；不是偏离）：**
+
+- **exit code 2 = block**：JSON 决策与 exit-code 决策在同一个函数里派生；Interceptor 型事件 exit 2 → `blocked { reason: stderr }`（stderr 空也 block，通用原因）；其它非零 → 非阻塞警告；Observer 型只记日志。`hookSpecificOutput.updatedInput` 与 `update_input:` 前缀走同一条路；`permissionDecision: "block"` 亦读作 Block。
+- **`hook_event_name` = hook 注册时用的那个拼法**（U-b）：注册为 `PreToolUse` 的 hook 收到 `"hook_event_name":"PreToolUse"`，注册为 `before_tool_call` 的收到 `before_tool_call`——注册行上一个字段、一份推导，Aleph 原生脚本不变；别名表 `CC_TOOL_ALIASES` 只在 matcher 派发时把 CC 名（`Bash` / `Edit` / `Write` / `mcp__srv__tool`）翻成 Aleph 名。
+- **`permission_mode`** 从会话执行档映射，`ExecTier::Auto → "auto"`（CC 六值枚举里的真值）。
+- **`allowed-tools` 双语义**：command → 本轮限制；skill → 预授权跳审批、不限制。
+- **无 project 的会话只见 `Global` 插件**（行为变更，见 Scope 管理；CC 没有对应概念，不列为偏离）。
 
 ---
 
@@ -622,8 +660,8 @@ agent 循环的执行器。
 MCP 插件的 `.mcp.json` server 现已作为 **transient（仅运行时，不落盘）** server 注册到运行中的 `McpManager`，工具经现有 tool bridge 自动注册。
 
 - **transient 通道**：`McpManagerHandle::add_transient_server` / `remove_transient_server`（`src/mcp/manager/`）。与 `add_server` 不同，它只 `start_server_internal`，**不** upsert/持久化到用户 MCP 配置文件——插件 server 由插件生命周期管理，绝不污染用户配置。`server_id` 形如 `plugin:<id>/<name>`。
-- **注册编排**：每个 MCP-kind 插件的 server 由它自己的 `mount`（`lifecycle.rs`，effect `mcp_server` → `register_transient_servers`）交给 manager，`reload()` = 全部 unmount + 重新 mount，不再另行调用 sync。boot 时 MCP handle 在 `agent_init` 里、首次 `ensure_loaded()` 之前就装上（`set_mcp_handle`，与 memory registry / tool catalog 同一处注入，由 `boot_order_tests` 钉住）。
-- **卸载清理**：`unmount` 按注册的逆序跑 disposer，`mcp_server` 的 disposer 对该插件登记的每个 server 调 `remove_transient_server`，避免残留进程/工具。
+- **注册编排（2026-09-20 起走 lifecycle）**：`mount(id)` 对 MCP-kind 插件调 `add_transient_server`，返回的 `Disposer` 记入该插件的 `EffectScope`（step `"mcp_server"`）；`unmount(id)` 逆序 dispose 即 `remove_transient_server`。此前 `set_plugin_enabled(true)` 什么都不做、只有 `reload()` 调 `sync_mcp_plugin_servers`（判据 §14 闸的两个方向不对称）——那条路已删。
+- **卸载清理**：不再有单独的「捕获 server id 再拆」逻辑——server id 住在 disposer 闭包里，dispose 就是拆。
 - `list_servers` 同时列出 transient client（不止 config），使 `mcp.list` 与 tool bridge 的 lag-recovery `resync_all` 都能感知插件 server。
 
 ### 远程 MCP transport
@@ -677,8 +715,8 @@ manifest 缓存的 key 覆盖 kind 的每个输入（含插件根的 `.mcp.json`
 需要：从 WASM 模块导出函数列表中发现并注册 tools。
 
 ### Aleph-plugins 仓库
-当前状态：目录结构已迁移到 CC 兼容格式（`.claude-plugin/plugin.toml`），Node.js 插件标记为 `runtime = "mcp"` 但 `src/index.js` 仍是旧 IPC 格式。
-需要：将每个 Node.js 插件的入口文件改为 MCP Server SDK 实现。
+当前状态：目录结构已迁移到 CC 兼容格式（`.claude-plugin/plugin.toml`），Node.js 插件标记为 `runtime = "mcp"` 但 `src/index.js` 仍是旧 IPC 格式——那个格式（`method === "plugin.call"`）从来没有宿主，例：`plugins/media-office/src/index.js:349`；其 `:264 onPostToolUse` 是无人能调的 JS hook handler。本仓 2026-09-20 删掉了同形状的 `examples/plugins/media-video`。
+需要：将每个 Node.js 插件的入口文件改为 MCP Server SDK 实现（兄弟仓 Aleph-plugins 的 follow-up）。
 
 ---
 
@@ -729,14 +767,12 @@ manifest 原样喂给它 —— 真 resolver 一装，`[capabilities.http.creden
 
 ---
 
-## Manifest 解析缓存（openclaw parity）
+## Manifest 解析缓存
 
 `manifest_cache::ManifestCache`（`src/extension/manifest/manifest_cache.rs`）—
 LRU（512 条），key = `(canonical path, size, mtime, ctime, dev, ino)`。Boot 时
 `parse_manifest_from_dir_cached_global(dir)` 自动咨询/填充；热重载期间任何
-in-place 编辑都会改变 key tuple，cache 自然 miss。openclaw 也有相同模式
-（`plugin-cache-primitives.createPluginCacheKey`），但 Aleph 版本借助 Rust
-类型系统多加了 `dev`/`ino` 字段以对抗硬链接替换。
+in-place 编辑都会改变 key tuple，cache 自然 miss。key 里带 `dev`/`ino` 是为了对抗硬链接替换（`canonicalize` 关不掉硬链接——附录 E.3）。
 
 ---
 
@@ -745,7 +781,7 @@ in-place 编辑都会改变 key tuple，cache 自然 miss。openclaw 也有相�
 **不存在懒激活。所有 enabled 插件在 boot 时一次性加载。** `[plugin.activation]`
 块**不被任何 adapter 读取**，写了等于没写。
 
-曾经有过一个 openclaw `activation-planner.ts` 的 Rust 移植
+曾经有过一个从参考实现的 activation planner 移植来的 Rust 版
 （`src/extension/activation.rs` 的 `ActivationPlanner` / `ActivationHints` /
 `ActivationTrigger` / `ActivationPlan` / `CapabilityKind` / `tier_kinds`，约 600 行），
 本轮按 R10 YAGNI 整体删除。删的理由比「planner 没有生产调用者」更深一层：
@@ -756,7 +792,7 @@ in-place 编辑都会改变 key tuple，cache 自然 miss。openclaw 也有相�
 
 **重连不是补一个调用点**：懒激活需要一条「按 trigger 重入」的加载路径，而
 `load_plugins` 是 boot 时对插件目录的一次性遍历——那条路径得先造出来。要复活
-请从 openclaw 的 `activation-planner.ts` 和
+请从参考实现的 activation planner 和
 `git log --follow src/extension/plugin_trust.rs` 起步，不要从被删的 Rust 起步——
 它从未对着真实 registry 跑过。
 
@@ -765,7 +801,7 @@ in-place 编辑都会改变 key tuple，cache 自然 miss。openclaw 也有相�
 
 ---
 
-## Owner Trust Policy（P3.5 — openclaw parity）
+## Owner Trust Policy（P3.5）
 
 锚点 `src/extension/plugin_trust.rs`（该文件曾名 `activation.rs`，
 activation planner 删除后按内容更名）。
@@ -776,7 +812,7 @@ Aleph 暴露 `OwnerTrustPolicy::permissive()` (默认) 和
 allowlist 中。`LoadSummary.skipped_by_trust` 记录被策略跳过的 plugin 数，让
 operator 看到"装了但没启用"的 plugin。
 
-这对应 openclaw 的 `passesManifestOwnerBasePolicy` + bundled 短路。
+Bundled / Config origin 短路、其余按 allowlist——这是 Aleph 自己的规则，不再标注出处。
 
 ### 策略住在哪、谁能拨（2026-08-19 接线）
 
@@ -847,6 +883,39 @@ R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型�
 
 ---
 
+## 生命周期四原语（2026-09-20，`src/extension/lifecycle.rs`）
+
+| 原语 | 语义 |
+|---|---|
+| `mount(id: &str) -> Result<PluginStatus, MountError>` | 解析 manifest → owner-trust / enabled 门（`plugins.toml`；`ClaudeCache` origin 按 origin 判默认 disabled）→ 新建 `EffectScope` → **按固定顺序**注册六种效果 → 任一步失败即 `dispose` 已注册部分（**全有或全无**）→ `write_failed_row` 写 `Error("<step>: <reason>")`；成功写 `Loaded`（MCP-kind 先 `Pending { waiting_on }`，server 完成 `initialize` 后由 `watch_server_starts` 改 `Loaded`） |
+| `unmount(id: &str) -> Result<DisposeReport, UnmountError>` | 从 `scopes`（`Mutex<HashMap<String, EffectScope>>`）取出该插件的 `EffectScope` → `dispose`（逆序；单条失败记日志带 step 标签、**不停**）→ 写 `Disabled` / 移除行 |
+| `reload_plugin(id)` | `unmount` + `mount`。2026-09-20 前的窄孪生（只刷 tool index、跳过 hooks / projections / MCP / services）已删 |
+| `reload()` | 对每个已发现插件 `unmount` + `mount`；`stop_orphaned_services` 变成 dispose 的自然结果 |
+
+六种效果与它们的逆（注册顺序即下表顺序；dispose 逆序，所以 registry 行最后撤——视图重算时它已不在）：
+
+| step 标签 | 注册 ↔ 逆 |
+|---|---|
+| `registry_row` | `PluginRegistry::register_plugin` ↔ `unregister_plugin` |
+| `wasm_module` | `PluginLoader` load ↔ unload |
+| `mcp_server` | `McpManagerHandle::add_transient_server` ↔ `remove_transient_server` |
+| `service` | `service_manager` start ↔ stop |
+| `memory_extension` | `MemoryExtensionRegistry::register*` ↔ `unregister(plugin_id)`（**2026-09-20 新增**——此前 disable 后 `[memory]` 扩展仍挂着） |
+| `slash_command` | ToolCatalog `register_skills` ↔ `unregister_skills(&[String])`（**新增**；disposer 持有它注册的那些 id——此前只在 boot 注册一次） |
+
+**规则只有一句**：它有逆操作吗？有 → **效果**，注册函数返回 `#[must_use] Disposer`，由 lifecycle 放进该插件的
+`EffectScope`；没有但能从 registry 重算 → **视图**（tool index 快照、`PLUGIN_SKILL_DIRS`、`PLUGIN_SUBAGENTS`、
+`HookExecutor`），由下一节那一个函数派生；两者都不是 → 它不该由插件写入运行时。
+
+**每次迁移之后，且只在 `after_transition()` 这一处（每个公共原语跑一次）**：`republish_plugin_projections()` +
+`sync_hooks_from_registry()` + `if let Some(face) = try_mcp_face() { face.notify_tools_list_changed() }`。
+迁移在既有的 `load_guard` 上串行。`set_plugin_enabled(true/false)`、watcher、`plugin.reload` / `hooks.reload` RPC
+都只调这四个原语——没有第五条改激活态的路。插件 id 就是 `String`（无 newtype）。
+
+守卫：G1 census（`registrar/` `service_ops.rs` `src/extension/loader.rs` `memory/extensions/` 里产生运行时副作用的
+`pub fn` 必须返回 `Disposer`）· G2 往返（夹具插件覆盖六种效果，`mount` → 六面快照 → `unmount` → 快照 == mount 前）·
+G3（`publishing_plugin_projections_has_exactly_one_author` 改钉 `lifecycle.rs` 里的那个调用点）。
+
 ## 进程级投影的单一咽喉（`projection.rs`）
 
 一个插件不只活在 `PluginRegistry` 里。加载它会把它**发布**到四个活得比任何单次调用都久的面：
@@ -858,11 +927,13 @@ R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型�
 | `SkillSystem` | 模型的 `<available_skills>` 索引（base 目录 merge 进 `skill_dirs`；插件目录不进——从 `PLUGIN_SKILL_DIRS` 现读，禁用即离开索引） |
 | `ExtensionManager::active_plugin_tools` | 工具名索引 |
 
-这些是 **effect 不是返回值**——之后的任何一次调用都不会提醒你它们还装在那儿。
-Cordis（DeepSeek-Harness 的插件框架）解决同一问题的办法是让每次注册都成为插件 fiber
-上的 effect，一次 `dispose()` 统一回收。**Aleph 刻意不引入 fiber 运行时**
-（R10，见 HARNESS_PHILOSOPHY §2.3）；等价保证在这里更便宜也更合仓库形状：
-**一个函数从 registry 派生整套投影，每一条能改变插件激活状态的路径都调它。**
+这些是 **effect 不是返回值**——之后的任何一次调用都不会提醒你它们还装在那儿。2026-08-16 的答案是
+「一个函数从 registry 派生整套投影，每一条能改变插件激活状态的路径都调它」，并刻意不引入 fiber 运行时。
+**那个答案只对了一半**（2026-09-20）：它证明的是「改激活态的路径都调了那一个函数」，证不出「那个函数
+盖住了所有面」——派生列举了三个面，三个月里在派生之外漏了四处（memory extension 无 unregister、slash
+只在 boot 注册、MCP disable→enable 不重挂、`reload_plugin` 窄孪生）。这是列举法（判据 §5）。
+现在**效果归 `EffectScope`、视图归派生**（上一节）：派生函数仍然只写一遍谓词，但它只负责**可重算**的
+东西，且**唯一的触发点是 `lifecycle.rs::after_transition`**。DI 容器 / Proxy 上下文 / 级联重启仍不采。
 
 它替换掉的缺陷：此前这份推导有**两个作者**，且**谓词不一致**——
 

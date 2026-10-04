@@ -14,6 +14,8 @@
 //! always alongside the reader so the model can enumerate URIs/names instead
 //! of guessing them (or falling back to `cat`).
 
+use std::collections::HashMap;
+
 use crate::sync_primitives::Arc;
 
 use tokio::sync::broadcast::error::RecvError;
@@ -26,9 +28,11 @@ use crate::builtin_tools::mcp_resource::{
 };
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle, McpTransportType};
 use crate::tool_metadata::ToolCatalog;
+use crate::tools::descriptor::ToolCapabilityDescriptor;
 use crate::tools::handlers::builtin::BuiltinHandler;
 use crate::tools::handlers::registration::{register_mcp_tools, unregister_mcp_tools};
 use crate::tools::handlers::{McpServerFilter, ToolHandler};
+use crate::tools::registration_scope::ToolRegistrationScope;
 use crate::tools::registry::ToolHandlerRegistry;
 use crate::tools::AlephToolDyn;
 
@@ -106,15 +110,28 @@ pub fn spawn_tool_bridge(
     let mut events = handle.subscribe();
     tokio::spawn(async move {
         tracing::info!("MCP tool bridge started");
-        // Whether each capability builtin is currently in the registry.
+        // Whether each capability cluster is currently live in the registry.
         let mut resource_live = false;
         let mut prompt_live = false;
         let mut login_live = false;
+        // Per-server ownership: every registry entry a server's sync makes is
+        // tracked in that server's scope, keyed by `server_id`, so teardown is
+        // generation-guarded and can never remove a replacement.
+        let mut server_scopes: HashMap<String, ToolRegistrationScope> = HashMap::new();
+        // Capability builtins live in their own scopes, separate from every
+        // server and from each other, so a cluster can be disposed alone.
+        let mut capabilities = CapabilityScopes::new();
         let catalog = tool_catalog.as_ref();
-        resync_all(&handle, &registry, catalog).await;
+        // One-time residue sweep. A previous process, or the boot auto-start
+        // path that ran before this bridge subscribed, may have left registry
+        // entries that no scope owns. The scope map is still empty here, so a
+        // name-based sweep cannot race a replacement.
+        sweep_server_residue(&handle, &registry, catalog).await;
+        resync_all(&handle, &registry, catalog, &mut server_scopes).await;
         reconcile_capability_tools(
             &handle,
             &registry,
+            &mut capabilities,
             &mut resource_live,
             &mut prompt_live,
             &mut login_live,
@@ -123,10 +140,11 @@ pub fn spawn_tool_bridge(
         loop {
             match events.recv().await {
                 Ok(event) => {
-                    apply_event(&handle, &registry, catalog, event).await;
+                    apply_event(&handle, &registry, catalog, &mut server_scopes, event).await;
                     reconcile_capability_tools(
                         &handle,
                         &registry,
+                        &mut capabilities,
                         &mut resource_live,
                         &mut prompt_live,
                         &mut login_live,
@@ -138,10 +156,11 @@ pub fn spawn_tool_bridge(
                     // have missed a transition, so reconcile every server
                     // against the registry rather than guessing.
                     tracing::warn!(skipped, "MCP tool bridge lagged; resyncing all servers");
-                    resync_all(&handle, &registry, catalog).await;
+                    resync_all(&handle, &registry, catalog, &mut server_scopes).await;
                     reconcile_capability_tools(
                         &handle,
                         &registry,
+                        &mut capabilities,
                         &mut resource_live,
                         &mut prompt_live,
                         &mut login_live,
@@ -150,6 +169,7 @@ pub fn spawn_tool_bridge(
                 }
                 Err(RecvError::Closed) => {
                     tracing::info!("MCP manager event channel closed; tool bridge exiting");
+                    dispose_bridge_scopes(&mut server_scopes, &mut capabilities).await;
                     break;
                 }
             }
@@ -162,23 +182,34 @@ async fn apply_event(
     handle: &McpManagerHandle,
     registry: &ToolHandlerRegistry,
     tool_catalog: Option<&Arc<ToolCatalog>>,
+    server_scopes: &mut HashMap<String, ToolRegistrationScope>,
     event: McpManagerEvent,
 ) {
     match event {
         McpManagerEvent::ServerStarted { server_id, .. }
         | McpManagerEvent::ToolsChanged { server_id, .. } => {
-            sync_server(handle, registry, tool_catalog, &server_id).await;
+            sync_server(handle, registry, tool_catalog, server_scopes, &server_id).await;
         }
         McpManagerEvent::ServerStopped { server_id, .. }
         | McpManagerEvent::ServerCrashed { server_id, .. }
         | McpManagerEvent::ServerRemoved { server_id, .. } => {
-            let removed = unregister_mcp_tools(registry, tool_catalog, &server_id).await;
-            if !removed.is_empty() {
-                tracing::info!(
-                    server_id = %server_id,
-                    count = removed.len(),
-                    "MCP tool bridge: unregistered tools for departed server"
-                );
+            // Dispose exactly the departing server's scope. Its handles are
+            // generation-guarded, so a stale scope can never delete a
+            // replacement; every other server's scope is left untouched.
+            if let Some(scope) = server_scopes.remove(&server_id) {
+                dispose_server_scope(scope, &server_id).await;
+            } else {
+                // No scope ever owned this server (its sync failed, or the
+                // entry predates the scope map). Fall back to the name-based
+                // compatibility sweep so nothing leaks.
+                let removed = unregister_mcp_tools(registry, tool_catalog, &server_id).await;
+                if !removed.is_empty() {
+                    tracing::info!(
+                        server_id = %server_id,
+                        count = removed.len(),
+                        "MCP tool bridge: swept unowned tools for departed server"
+                    );
+                }
             }
         }
         // ServerRestarting is followed by ServerStarted (resync) or
@@ -195,6 +226,7 @@ async fn sync_server(
     handle: &McpManagerHandle,
     registry: &ToolHandlerRegistry,
     tool_catalog: Option<&Arc<ToolCatalog>>,
+    server_scopes: &mut HashMap<String, ToolRegistrationScope>,
     server_id: &str,
 ) {
     let client = match handle.get_client(server_id).await {
@@ -222,7 +254,14 @@ async fn sync_server(
         .and_then(|configs| configs.into_iter().find(|c| c.id == server_id))
         .and_then(|c| c.timeout_seconds);
     let tools = client.list_tools().await;
-    let _ = unregister_mcp_tools(registry, tool_catalog, server_id).await;
+    // Replace this server's previous scope. Disposing it first is what makes a
+    // shrinking `tools/list` safe: the stale generation-guarded handles cannot
+    // remove the entries the fresh registration is about to create, and the
+    // dropped tool has no surviving handler.
+    if let Some(previous) = server_scopes.remove(server_id) {
+        dispose_server_scope(previous, server_id).await;
+    }
+    let mut scope = ToolRegistrationScope::new(format!("mcp:server:{server_id}"));
     let registered = register_mcp_tools(
         registry,
         tool_catalog,
@@ -230,13 +269,56 @@ async fn sync_server(
         server_id,
         &tools,
         timeout_seconds,
+        &mut scope,
     )
     .await;
+    server_scopes.insert(server_id.to_string(), scope);
     tracing::info!(
         server_id,
         count = registered.len(),
         "MCP tool bridge: synced server tools into registry"
     );
+}
+
+/// One-time startup cleanup of registry entries that no scope owns. Only ever
+/// called before the bridge begins syncing, while the scope map is still
+/// empty, so a name-based sweep for a known server cannot remove a replacement.
+async fn sweep_server_residue(
+    handle: &McpManagerHandle,
+    registry: &ToolHandlerRegistry,
+    tool_catalog: Option<&Arc<ToolCatalog>>,
+) {
+    match handle.list_servers().await {
+        Ok(servers) => {
+            for info in servers {
+                let removed = unregister_mcp_tools(registry, tool_catalog, &info.id).await;
+                if !removed.is_empty() {
+                    tracing::info!(
+                        server_id = %info.id,
+                        count = removed.len(),
+                        "MCP tool bridge: swept pre-existing tools for server"
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "MCP tool bridge: residue sweep list_servers failed");
+        }
+    }
+}
+
+/// Dispose one server's scope, logging (but never aborting on) step failures —
+/// a failed step must not skip the rest of the teardown.
+async fn dispose_server_scope(scope: ToolRegistrationScope, server_id: &str) {
+    let report = scope.dispose().await;
+    for (step, error) in report.failures() {
+        tracing::warn!(
+            server_id,
+            step,
+            error = %error,
+            "MCP tool bridge: server scope dispose step failed"
+        );
+    }
 }
 
 /// Reconcile every known server against the registry. Used after a broadcast
@@ -245,15 +327,51 @@ async fn resync_all(
     handle: &McpManagerHandle,
     registry: &ToolHandlerRegistry,
     tool_catalog: Option<&Arc<ToolCatalog>>,
+    server_scopes: &mut HashMap<String, ToolRegistrationScope>,
 ) {
     match handle.list_servers().await {
         Ok(servers) => {
-            for info in servers {
-                sync_server(handle, registry, tool_catalog, &info.id).await;
+            let present: std::collections::HashSet<String> =
+                servers.iter().map(|s| s.id.clone()).collect();
+            for info in &servers {
+                sync_server(handle, registry, tool_catalog, server_scopes, &info.id).await;
+            }
+            // Departures missed while lagged: dispose the scope of any server
+            // that left while we were not receiving its event.
+            let departed: Vec<String> = server_scopes
+                .keys()
+                .filter(|id| !present.contains(*id))
+                .cloned()
+                .collect();
+            for id in departed {
+                if let Some(scope) = server_scopes.remove(&id) {
+                    dispose_server_scope(scope, &id).await;
+                }
             }
         }
         Err(e) => {
             tracing::warn!(error = %e, "MCP tool bridge: resync_all list_servers failed");
+        }
+    }
+}
+
+/// Independently-disposable owner scopes for the capability builtins.
+///
+/// Each cluster — the resource read+discovery trio, the prompt read+discovery
+/// pair, and the OAuth login tool — is owned by its own scope, so removing one
+/// cluster leaves the other clusters and every server's tools untouched.
+struct CapabilityScopes {
+    resource: ToolRegistrationScope,
+    prompt: ToolRegistrationScope,
+    login: ToolRegistrationScope,
+}
+
+impl CapabilityScopes {
+    fn new() -> Self {
+        Self {
+            resource: ToolRegistrationScope::new("mcp:capability:resource"),
+            prompt: ToolRegistrationScope::new("mcp:capability:prompt"),
+            login: ToolRegistrationScope::new("mcp:capability:login"),
         }
     }
 }
@@ -271,6 +389,7 @@ async fn resync_all(
 async fn reconcile_capability_tools(
     handle: &McpManagerHandle,
     registry: &ToolHandlerRegistry,
+    scopes: &mut CapabilityScopes,
     resource_live: &mut bool,
     prompt_live: &mut bool,
     login_live: &mut bool,
@@ -296,72 +415,126 @@ async fn reconcile_capability_tools(
         .any(|s| !matches!(s.transport, McpTransportType::Stdio));
 
     if want_resource != *resource_live {
-        // The read + discovery tools share the resource capability gate: offering
-        // one without the other either strands the model (read with no way to
-        // discover) or dangles a discovery tool over nothing. The template-list
-        // tool rides the same gate (see `RESOURCE_TEMPLATE_LIST_TOOL`).
-        set_capability(registry, handle, RESOURCE_LIST_TOOL, want_resource, |s| {
-            Arc::new(McpListResourcesTool::new(s))
-        });
-        set_capability(
-            registry,
-            handle,
-            RESOURCE_TEMPLATE_LIST_TOOL,
-            want_resource,
-            |s| Arc::new(McpListResourceTemplatesTool::new(s)),
-        );
-        *resource_live = set_capability(registry, handle, RESOURCE_TOOL, want_resource, |s| {
-            Arc::new(McpReadResourceTool::new(s))
-        });
+        if want_resource {
+            // The read + discovery tools share the resource capability gate:
+            // offering one without the other either strands the model (read
+            // with no way to discover) or dangles a discovery tool over
+            // nothing. The template-list tool rides the same gate (see
+            // `RESOURCE_TEMPLATE_LIST_TOOL`).
+            set_capability(registry, handle, &mut scopes.resource, RESOURCE_LIST_TOOL, |s| {
+                Arc::new(McpListResourcesTool::new(s))
+            });
+            set_capability(
+                registry,
+                handle,
+                &mut scopes.resource,
+                RESOURCE_TEMPLATE_LIST_TOOL,
+                |s| Arc::new(McpListResourceTemplatesTool::new(s)),
+            );
+            *resource_live =
+                set_capability(registry, handle, &mut scopes.resource, RESOURCE_TOOL, |s| {
+                    Arc::new(McpReadResourceTool::new(s))
+                });
+        } else {
+            dispose_capability_scope(&mut scopes.resource, "resource").await;
+            *resource_live = false;
+        }
     }
     if want_prompt != *prompt_live {
-        set_capability(registry, handle, PROMPT_LIST_TOOL, want_prompt, |s| {
-            Arc::new(McpListPromptsTool::new(s))
-        });
-        *prompt_live = set_capability(registry, handle, PROMPT_TOOL, want_prompt, |s| {
-            Arc::new(McpGetPromptTool::new(s))
-        });
+        if want_prompt {
+            set_capability(registry, handle, &mut scopes.prompt, PROMPT_LIST_TOOL, |s| {
+                Arc::new(McpListPromptsTool::new(s))
+            });
+            *prompt_live = set_capability(registry, handle, &mut scopes.prompt, PROMPT_TOOL, |s| {
+                Arc::new(McpGetPromptTool::new(s))
+            });
+        } else {
+            dispose_capability_scope(&mut scopes.prompt, "prompt").await;
+            *prompt_live = false;
+        }
     }
     if want_login != *login_live {
-        *login_live = set_capability(registry, handle, LOGIN_TOOL, want_login, |s| {
-            Arc::new(McpLoginTool::new(s))
-        });
+        if want_login {
+            *login_live = set_capability(registry, handle, &mut scopes.login, LOGIN_TOOL, |s| {
+                Arc::new(McpLoginTool::new(s))
+            });
+        } else {
+            dispose_capability_scope(&mut scopes.login, "login").await;
+            *login_live = false;
+        }
+    }
+}
+
+async fn dispose_bridge_scopes(
+    server_scopes: &mut HashMap<String, ToolRegistrationScope>,
+    capabilities: &mut CapabilityScopes,
+) {
+    let server_ids: Vec<String> = server_scopes.keys().cloned().collect();
+    for server_id in server_ids {
+        if let Some(scope) = server_scopes.remove(&server_id) {
+            dispose_server_scope(scope, &server_id).await;
+        }
+    }
+    dispose_capability_scope(&mut capabilities.resource, "resource").await;
+    dispose_capability_scope(&mut capabilities.prompt, "prompt").await;
+    dispose_capability_scope(&mut capabilities.login, "login").await;
+}
+
+/// Dispose a capability cluster's scope and replace it with a fresh empty one
+/// so a later enable re-registers cleanly. Step failures are logged, never
+/// propagated: one bad step must not skip the rest of the teardown.
+async fn dispose_capability_scope(scope: &mut ToolRegistrationScope, owner: &str) {
+    let previous = std::mem::replace(
+        scope,
+        ToolRegistrationScope::new(format!("mcp:capability:{owner}")),
+    );
+    let report = previous.dispose().await;
+    for (step, error) in report.failures() {
+        tracing::warn!(
+            owner,
+            step,
+            error = %error,
+            "MCP capability builtin scope dispose step failed"
+        );
     }
 }
 
 /// Builds one capability builtin over the servers a caller may see.
 type BuildCapability = fn(VisibleServers) -> Arc<dyn AlephToolDyn>;
 
-/// Add or remove a single capability builtin from the registry; returns its
-/// resulting live state (`true` == registered).
+/// Add a single capability builtin to its cluster scope; returns whether it
+/// registered. The returned handle is tracked in `scope`, so removing the
+/// whole cluster is one generation-guarded `scope.dispose()`.
 fn set_capability(
     registry: &ToolHandlerRegistry,
     handle: &McpManagerHandle,
+    scope: &mut ToolRegistrationScope,
     name: &'static str,
-    want: bool,
     build: BuildCapability,
 ) -> bool {
-    if want {
-        // rust-doctor-disable-next-line excessive-clone
-        let handle = handle.clone();
-        let handler: Arc<dyn ToolHandler> = Arc::new(CapabilityHandler::new(name, handle, build));
-        match registry.register(name.to_string(), handler) {
-            Ok(()) => {
-                tracing::info!(
-                    tool = name,
-                    "MCP tool bridge: capability builtin registered"
-                );
-                true
-            }
-            Err(e) => {
-                tracing::warn!(tool = name, error = ?e, "MCP capability builtin register failed");
-                false
-            }
+    // rust-doctor-disable-next-line excessive-clone
+    let handle = handle.clone();
+    let handler: Arc<dyn ToolHandler> = Arc::new(CapabilityHandler::new(name, handle, build));
+    // Project the descriptor from the handler's own definition so the
+    // registry pairing check is satisfied by construction.
+    let descriptor = ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
+    match registry.register(descriptor, handler) {
+        Ok(handle) => {
+            // Own the generation-guarded disposer so the cluster scope can
+            // tear this builtin down without a name-based `unregister` that
+            // could remove a replacement.
+            debug_assert_eq!(handle.name(), name);
+            scope.track(handle);
+            tracing::info!(
+                tool = name,
+                "MCP tool bridge: capability builtin registered"
+            );
+            true
         }
-    } else {
-        let _ = registry.unregister(name);
-        tracing::info!(tool = name, "MCP tool bridge: capability builtin removed");
-        false
+        Err(e) => {
+            tracing::warn!(tool = name, error = ?e, "MCP capability builtin register failed");
+            false
+        }
     }
 }
 
@@ -547,7 +720,19 @@ mod tests {
     use super::test_support::{fake_manager, server_info};
     use super::*;
     use crate::mcp::McpTool;
+    use crate::tools::handlers::mcp::McpHandler;
     use crate::tools::handlers::registration::register_mcp_tools;
+
+    fn mcp_tool(name: &str) -> McpTool {
+        McpTool {
+            name: name.into(),
+            description: "d".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            requires_confirmation: false,
+            read_only: false,
+            idempotent: false,
+        }
+    }
 
     /// Each capability builtin exactly as `reconcile_capability_tools`
     /// registers it over `servers`, bound to `visible` the way the run loop's
@@ -558,9 +743,11 @@ mod tests {
     ) -> std::collections::HashMap<String, Arc<dyn ToolHandler>> {
         let registry = ToolHandlerRegistry::new();
         let (mut resource, mut prompt, mut login) = (false, false, false);
+        let mut capabilities = CapabilityScopes::new();
         reconcile_capability_tools(
             &fake.handle,
             &registry,
+            &mut capabilities,
             &mut resource,
             &mut prompt,
             &mut login,
@@ -634,6 +821,45 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn bridge_scope_shutdown_removes_server_and_capability_tools() {
+        use test_support::capable_server;
+        let registry = ToolHandlerRegistry::new();
+        let manager = fake_manager(vec![capable_server("remote")]);
+        let mut capabilities = CapabilityScopes::new();
+        let (mut resource_live, mut prompt_live, mut login_live) = (false, false, false);
+        reconcile_capability_tools(
+            &manager.handle,
+            &registry,
+            &mut capabilities,
+            &mut resource_live,
+            &mut prompt_live,
+            &mut login_live,
+        )
+        .await;
+        assert!(resource_live && prompt_live && login_live);
+
+        let mut server_scopes = HashMap::new();
+        let client = Arc::new(crate::mcp::McpClient::new());
+        let mut server_scope = ToolRegistrationScope::new("mcp:server:local");
+        register_mcp_tools(
+            &registry,
+            None,
+            client,
+            "local",
+            &[mcp_tool("owned")],
+            None,
+            &mut server_scope,
+        )
+        .await;
+        server_scopes.insert("local".to_string(), server_scope);
+
+        assert_eq!(registry.snapshot().len(), 7);
+        dispose_bridge_scopes(&mut server_scopes, &mut capabilities).await;
+        assert!(registry.snapshot().is_empty());
+        assert!(server_scopes.is_empty());
+    }
+
     async fn eventually_absent(registry: &ToolHandlerRegistry, name: &str) -> bool {
         for _ in 0..100 {
             if !registry.snapshot().contains_key(name) {
@@ -677,6 +903,7 @@ mod tests {
                 idempotent: false,
             }],
             None,
+            &mut ToolRegistrationScope::new("mcp:server:srv"),
         )
         .await;
         assert!(
@@ -696,5 +923,136 @@ mod tests {
         );
 
         bridge.abort();
+    }
+
+    /// A resync (a shrinking `tools/list`) must dispose the server's previous
+    /// scope and register the current list into a fresh one, so a tool the
+    /// server dropped leaves no dangling handler behind.
+    #[tokio::test]
+    async fn sync_disposes_previous_scope_so_a_removed_tool_leaves_the_registry() {
+        let registry = ToolHandlerRegistry::new();
+        let manager = fake_manager(vec![server_info("srv")]);
+        let mut scopes: HashMap<String, ToolRegistrationScope> = HashMap::new();
+
+        // Seed a scope owning a tool the server will no longer advertise.
+        let mut previous = ToolRegistrationScope::new("mcp:server:srv");
+        register_mcp_tools(
+            &registry,
+            None,
+            Arc::new(crate::mcp::McpClient::new()),
+            "srv",
+            &[mcp_tool("old")],
+            None,
+            &mut previous,
+        )
+        .await;
+        assert!(registry.snapshot().contains_key("srv__old"));
+        scopes.insert("srv".to_string(), previous);
+
+        // The fake client lists no tools, so the sync disposes the old scope
+        // and registers nothing.
+        sync_server(&manager.handle, &registry, None, &mut scopes, "srv").await;
+
+        assert!(
+            !registry.snapshot().contains_key("srv__old"),
+            "a tool the server dropped must not leak after a resync"
+        );
+        assert!(
+            scopes.contains_key("srv"),
+            "the server keeps a fresh (empty) owning scope"
+        );
+    }
+
+    /// A departure event disposes exactly the departing server's scope; the
+    /// other servers' registrations are untouched.
+    #[tokio::test]
+    async fn departure_event_disposes_only_the_departing_servers_scope() {
+        let registry = ToolHandlerRegistry::new();
+        let client = Arc::new(crate::mcp::McpClient::new());
+        let mut scopes: HashMap<String, ToolRegistrationScope> = HashMap::new();
+        for (id, tool) in [("alpha", "a"), ("beta", "b")] {
+            let mut scope = ToolRegistrationScope::new(format!("mcp:server:{id}"));
+            register_mcp_tools(
+                &registry,
+                None,
+                Arc::clone(&client),
+                id,
+                &[mcp_tool(tool)],
+                None,
+                &mut scope,
+            )
+            .await;
+            scopes.insert(id.to_string(), scope);
+        }
+        assert!(registry.snapshot().contains_key("alpha__a"));
+        assert!(registry.snapshot().contains_key("beta__b"));
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let (event_tx, _) = tokio::sync::broadcast::channel(8);
+        let handle = McpManagerHandle::new(tx, event_tx);
+        apply_event(
+            &handle,
+            &registry,
+            None,
+            &mut scopes,
+            McpManagerEvent::ServerStopped {
+                server_id: "alpha".to_string(),
+                server_name: "alpha".to_string(),
+            },
+        )
+        .await;
+
+        assert!(
+            !registry.snapshot().contains_key("alpha__a"),
+            "the departed server's tools are gone"
+        );
+        assert!(
+            registry.snapshot().contains_key("beta__b"),
+            "the other server's tools are untouched"
+        );
+        assert!(!scopes.contains_key("alpha"));
+        assert!(scopes.contains_key("beta"));
+    }
+
+    /// The generation-guarded handles a scope owns must never delete a
+    /// replacement: disposing a superseded server scope after a newer
+    /// registration took the same qualified name is a no-op.
+    #[tokio::test]
+    async fn stale_server_scope_dispose_does_not_remove_a_replacement() {
+        let registry = ToolHandlerRegistry::new();
+        let client = Arc::new(crate::mcp::McpClient::new());
+        let mut stale = ToolRegistrationScope::new("mcp:server:srv");
+        register_mcp_tools(
+            &registry,
+            None,
+            Arc::clone(&client),
+            "srv",
+            &[mcp_tool("t")],
+            None,
+            &mut stale,
+        )
+        .await;
+
+        // A newer registration takes over the same qualified name.
+        let replacement: Arc<dyn ToolHandler> = Arc::new(McpHandler::new(
+            Arc::clone(&client),
+            "srv".to_string(),
+            "t".to_string(),
+            "replacement".to_string(),
+            serde_json::json!({"type": "object"}),
+        ));
+        let descriptor =
+            ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0);
+        registry
+            .replace(descriptor, Arc::clone(&replacement))
+            .expect("replace succeeds");
+
+        assert!(stale.dispose().await.all_ok());
+        let live = registry.resolve("srv__t");
+        assert!(
+            live.is_some(),
+            "a superseded scope must not remove the replacement"
+        );
+        assert!(Arc::ptr_eq(&live.unwrap(), &replacement));
     }
 }

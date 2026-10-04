@@ -105,7 +105,7 @@ pub(crate) const fn mcp_tool_registry_slot() -> &'static dyn SlotStatus {
 
 /// The MCP tool registry, if boot installed one (absent in unit tests and
 /// simulated mode — callers treat `None` as "no external MCP tools").
-pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandlerRegistry>> {
+pub(crate) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandlerRegistry>> {
     MCP_TOOL_REGISTRY.get()
 }
 

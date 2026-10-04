@@ -38,3 +38,4 @@
 - **非 serde 的序列化栈** —— 全栈 serde
 - **第二个 VT / 终端模拟器实现**（含移植 herdr 的 `pane/terminal` + `terminal/state`）—— 服务端 VT 的唯一真源是 `src/gateway/pty/screen/`；跑别人 agent 需要的能力（alt-screen / graphics / OSC 进度 / kitty keyboard）一律**扩容它**，不引第二份（2026-09-01 用户裁定；判据 §1「同一事实的两份表述」）
 - **第二个 CDP 客户端实现**（`chromiumoxide` / `headless_chrome` / 在 `src/browser/` 里再手写一份）—— 唯一真源是 **`crates/aleph-cdp`**（零 Aleph 依赖的传输层：一条连接、多 session、逐命令超时、断连时把全部 pending 一次性失败）。两个引擎、每一个 `browser_*` 动词、`page_state` 的两个 fetcher 全走它；缺方法就**给它加一个 `methods::` 包装**，不引第二份（2026-09-06；判据 §1）
+- **第二个 MCP server 实现**（在 `src/gateway/` 之外再挂一个 `/mcp`、或在 `src/mcp/` 里造一套 server 侧类型）—— 唯一真源是 **`src/gateway/mcp_face/`**（一张接口脸：Streamable HTTP `/mcp`、`tools/*` + `list_changed`，把 `tools/call` 翻成同一条 scoped dispatch），**wire 类型来自 `src/mcp/{jsonrpc,protocol,types}.rs`，不复制**；stdio 传输刻意不做（宿主 spawn 第二个 `aleph-server` 会撞单例 flock）（2026-09-20；判据 §1）→ [GATEWAY.md](docs/reference/GATEWAY.md) MCP 面

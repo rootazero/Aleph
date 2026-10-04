@@ -145,12 +145,19 @@ impl ToolErrorKind {
 /// (`Execution`, `Other`). Checked before any content scan, so the read-back
 /// face agrees with `classify_tool_error` (判据 §12).
 fn kind_from_head(lower: &str) -> Option<ToolErrorKind> {
-    const HEADS: [(&str, ToolErrorKind); 5] = [
+    const HEADS: [(&str, ToolErrorKind); 9] = [
         ("permission denied for tool ", ToolErrorKind::Permission),
         ("invalid input for tool ", ToolErrorKind::Validation),
         ("tool not found: ", ToolErrorKind::ToolNotFound),
         ("duplicate tool name: ", ToolErrorKind::Duplicate),
         ("approval for tool ", ToolErrorKind::Timeout),
+        ("invalid tool descriptor for ", ToolErrorKind::Validation),
+        ("descriptor mismatch for tool ", ToolErrorKind::Validation),
+        ("registry closed: ", ToolErrorKind::Execution),
+        (
+            "unknown registration revision ",
+            ToolErrorKind::Execution,
+        ),
     ];
     if let Some((_, kind)) = HEADS.iter().find(|(head, _)| lower.starts_with(head)) {
         return Some(*kind);
@@ -347,6 +354,15 @@ pub fn classify_tool_error(err: &ToolError) -> ToolErrorKind {
         }
         ToolError::NotFound { .. } => ToolErrorKind::ToolNotFound,
         ToolError::Duplicate { .. } => ToolErrorKind::Duplicate,
+        // Registry admission failures are developer/contract errors, not a
+        // verdict on a tool that ran. `Validation` marks the contract refusal;
+        // a closed registry or a stale revision is an Execution-layer refusal.
+        ToolError::InvalidDescriptor { .. } | ToolError::DescriptorMismatch { .. } => {
+            ToolErrorKind::Validation
+        }
+        ToolError::RegistryClosed { .. } | ToolError::UnknownRevision { .. } => {
+            ToolErrorKind::Execution
+        }
         // Never falls through to the string scan: the cause of a cancellation
         // is whatever the tool happened to be saying when the run stopped, and
         // classifying *that* would hand the model a routing hint about a
@@ -496,6 +512,19 @@ mod tests {
             },
             ToolError::Cancelled { name: "t".into() },
             ToolError::Duplicate { name: "t".into() },
+            ToolError::InvalidDescriptor {
+                name: "t".into(),
+                reason: "empty name".into(),
+            },
+            ToolError::DescriptorMismatch {
+                name: "t".into(),
+                reason: "source differs".into(),
+            },
+            ToolError::RegistryClosed { name: "t".into() },
+            ToolError::UnknownRevision {
+                name: "t".into(),
+                revision: 3,
+            },
             ToolError::Other("opaque".into()),
         ];
 
@@ -555,6 +584,19 @@ mod tests {
             },
             ToolError::Cancelled { name: t() },
             ToolError::Duplicate { name: t() },
+            ToolError::InvalidDescriptor {
+                name: t(),
+                reason: prose.into(),
+            },
+            ToolError::DescriptorMismatch {
+                name: t(),
+                reason: prose.into(),
+            },
+            ToolError::RegistryClosed { name: t() },
+            ToolError::UnknownRevision {
+                name: t(),
+                revision: 7,
+            },
             ToolError::Other(prose.into()),
         ];
         errors.extend(RefusedBy::ALL.map(|by| ToolError::Refused {
@@ -575,6 +617,10 @@ mod tests {
                 | ToolError::Transport { .. }
                 | ToolError::Cancelled { .. }
                 | ToolError::Duplicate { .. }
+                | ToolError::InvalidDescriptor { .. }
+                | ToolError::DescriptorMismatch { .. }
+                | ToolError::RegistryClosed { .. }
+                | ToolError::UnknownRevision { .. }
                 | ToolError::Other(_) => {}
             }
             assert_eq!(classify_error_str(&e.to_string()), e.kind(), "{e}");

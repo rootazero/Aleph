@@ -88,7 +88,27 @@
 
 ---
 
-## Module Dependencies
+## Capability Plane
+
+Capability is a semantic contract, not another plugin or dependency-injection container. In the first converged slice, a callable Tool is represented by one `ToolCapabilityDescriptor` and one live handler in `ToolHandlerRegistry`. The descriptor is the source for discovery and projection; the handler is the execution implementation. `LoopToolRegistry`, provider metadata, ToolCatalog, MCP bridge, and recovery are consumers of that contract, not parallel registries.
+
+```text
+Tool registration
+  -> ToolCapabilityDescriptor + live handler (one atomic generation)
+  -> entries_snapshot() / revision change feed
+  -> model metadata | ToolCatalog | MCP bridge | Loop execution index
+  -> EffectScope-compatible registration disposer
+  -> recovery ReplayPolicy lookup (fail-closed until call-time revision exists)
+```
+
+The registry stores descriptor and handler together so a hot replacement cannot produce a mixed-generation projection. `ToolRegistrationScope` disposes registrations in reverse order and uses generation checks to protect replacements. Visibility (what a session may see) remains separate from lifecycle (when a registration is disposed). The process-global slots in `src/capability/mod.rs` remain boot-install diagnostics and are not this runtime registry.
+
+Recovery deliberately does not infer replay safety from a tool name, source, or idempotence flag. `ReplayPolicyLookup` reads the current descriptor, but `ToolCallRequested` does not yet persist the call-time descriptor revision. Therefore both `Safe` and `Unsafe` unresolved calls produce the existing unknown-outcome and verification path; automatic Safe replay is a later change that must add and validate the durable revision contract first.
+
+`src/harness/` remains outside this convergence layer. Future Capability kinds should be added only after a real consumer, ownership rule, projection, and recovery/lifecycle contract have been identified.
+
+---
+
 
 ```
                     ┌─────────────┐
@@ -258,7 +278,6 @@ pattern.
 | **arena** | `src/arena/` | Arena functionality |
 | **browser** | `src/browser/` | Browser automation |
 | **capability** | `src/capability/` | Capability system |
-| **clawhub** | `src/clawhub/` | ClawHub integration |
 | **cluster** | `src/cluster/` | Single-center node federation — reverse RPC, node registry, `node_invoke`/`node_file`, approval routing ([CLUSTER.md](./CLUSTER.md)) |
 | **components** | `src/components/` | Shared components |
 | **compressor** | `src/compressor/` | Context compression |
@@ -267,6 +286,7 @@ pattern.
 | **event** | `src/event/` | Event system |
 | **generation** | `src/generation/` | Media generation |
 | **group_chat** | `src/group_chat/` | Group chat management |
+| **hub** | `src/hub/` | Aleph Hub — extension catalog + install pipeline ([ALEPH_HUB.md](./ALEPH_HUB.md)) |
 | **intent** | `src/intent/` | Intent recognition |
 | **logging** | `src/logging/` | Logging infrastructure |
 | **loop_graph** | `src/loop_graph/` | Loop-governance topology (who watches/audits/anchors whom) — scaffolding only, adjudication stays in LLM turns ([GRAPH_LAYER.md](./GRAPH_LAYER.md)) |

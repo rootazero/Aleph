@@ -93,7 +93,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_plugin_handler_uses_extension_snapshot_for_dynamic_tool() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        // with_defaults() turns the Claude root on and resolves it off `$HOME`,
+        // so `$HOME` must move with `$ALEPH_HOME` (P5.11).
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+            tmp.path().join("aleph"),
+            tmp.path().join("home"),
+        );
         let manager = Arc::new(
             crate::extension::ExtensionManager::with_defaults()
                 .await
@@ -129,7 +135,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_plugin_handler_ignores_disabled_plugin_tool() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        // with_defaults() turns the Claude root on and resolves it off `$HOME`,
+        // so `$HOME` must move with `$ALEPH_HOME` (P5.11).
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+            tmp.path().join("aleph"),
+            tmp.path().join("home"),
+        );
         let manager = Arc::new(
             crate::extension::ExtensionManager::with_defaults()
                 .await

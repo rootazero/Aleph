@@ -287,6 +287,7 @@ mod tests {
         ("republish_plugin_projections(", "lifecycle.rs"),
         ("sync_hooks_from_registry(", "lifecycle.rs"),
         ("after_transition(", "lifecycle.rs"),
+        ("notify_tools_list_changed(", "lifecycle.rs"),
     ];
 
     #[test]
