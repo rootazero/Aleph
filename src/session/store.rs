@@ -305,7 +305,58 @@ pub trait SessionEventStore: Send + Sync + 'static {
         let _ = (session_id, query, limit);
         Ok(Vec::new())
     }
+
+    /// Atomically claim one still-unanswered Tool call for restricted replay.
+    /// Implementations must compare the durable head and the call's outcome
+    /// state in the same transaction as the cursor increment.
+    async fn claim_replay_call(
+        &self,
+        session_id: &SessionId,
+        expected_head: EventSeq,
+        call_id: &str,
+        max_attempts: u32,
+    ) -> Result<ReplayClaimResult, SessionError> {
+        let _ = (session_id, expected_head, call_id, max_attempts);
+        Err(SessionError::Storage(
+            "this event store cannot claim replay calls".into(),
+        ))
+    }
+
+    /// Commit one real replay outcome for a previously claimed call. The
+    /// implementation must verify the opaque claim token and that the call is
+    /// still unanswered in the same transaction as the append.
+    async fn commit_replay_outcome(
+        &self,
+        session_id: &SessionId,
+        call_id: &str,
+        claim_token: &str,
+        event: &SessionEvent,
+        created_at_ms: i64,
+    ) -> Result<ReplayOutcomeResult, SessionError> {
+        let _ = (session_id, call_id, claim_token, event, created_at_ms);
+        Err(SessionError::Storage(
+            "this event store cannot commit replay outcomes".into(),
+        ))
+    }
 }
+
+/// Result of the serialized per-call replay claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplayClaimResult {
+    Claimed { attempt: u32, claim_token: String },
+    HeadChanged { expected: EventSeq, found: EventSeq },
+    NotDangling,
+    BudgetExhausted { attempts: u32, max_attempts: u32 },
+}
+
+/// Result of the unanswered-call precondition and outcome append.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplayOutcomeResult {
+    Committed { seq: EventSeq },
+    AlreadyAnswered,
+    ClaimLost,
+}
+
 
 /// One row from [`SessionEventStore::load_events_with_retirement`]: the
 /// decoded event plus the two retirement facts the fold-restoration path
@@ -368,6 +419,14 @@ pub fn migrate_add_session_events(conn: &Connection) -> Result<(), AlephError> {
 
         CREATE INDEX IF NOT EXISTS idx_session_events_session_type
             ON session_events(session_id, event_type);
+
+        CREATE TABLE IF NOT EXISTS session_replay_cursors (
+            session_id  TEXT NOT NULL,
+            call_id     TEXT NOT NULL,
+            attempts    INTEGER NOT NULL,
+            claim_token TEXT NOT NULL,
+            PRIMARY KEY (session_id, call_id)
+        );
         "#,
         )
         .and_then(|()| add_retired_at_column(conn));
@@ -705,6 +764,71 @@ fn retire_in_txn(
     }
 }
 
+fn replay_call_state(
+    tx: &rusqlite::Transaction<'_>,
+    session_key: &str,
+    call_id: &str,
+) -> Result<(usize, usize), SessionError> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT seq, payload_json, created_at FROM session_events
+             WHERE session_id = ?1 AND retired_at IS NULL ORDER BY seq ASC",
+        )
+        .map_err(|e| SessionError::Storage(e.to_string()))?;
+    let rows = stmt
+        .query_map(params![session_key], |row| {
+            let seq: i64 = row.get(0)?;
+            let payload: String = row.get(1)?;
+            let created_at: i64 = row.get(2)?;
+            Ok((seq, payload, created_at))
+        })
+        .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+    let mut requested = 0usize;
+    let mut outcomes = 0usize;
+    for row in rows {
+        let (seq, payload, created_at) = row.map_err(|e| SessionError::Storage(e.to_string()))?;
+        let seq = u64::try_from(seq)
+            .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
+        let event = match decode_row(seq, created_at, &payload) {
+            DecodedRow::Event(record) => record.event,
+            DecodedRow::Skipped { .. } => continue,
+            DecodedRow::Undecodable(record) => {
+                return Err(SessionError::UndecodableRecord(record));
+            }
+        };
+        match event {
+            SessionEvent::ToolCallRequested { call_id: id, .. } if id == call_id => {
+                requested += 1;
+            }
+            SessionEvent::ToolResult { call_id: id, .. }
+            | SessionEvent::ToolError { call_id: id, .. }
+                if id == call_id =>
+            {
+                outcomes += 1;
+            }
+            _ => {}
+        }
+    }
+    Ok((requested, outcomes))
+}
+
+fn replay_head(tx: &rusqlite::Transaction<'_>, session_key: &str) -> Result<EventSeq, SessionError> {
+    let max_seq: Option<i64> = tx
+        .query_row(
+            "SELECT MAX(seq) FROM session_events WHERE session_id = ?1",
+            params![session_key],
+            |row| row.get(0),
+        )
+        .map_err(|e| SessionError::Storage(e.to_string()))?;
+    match max_seq {
+        Some(value) if value >= 0 => u64::try_from(value)
+            .map_err(|_| SessionError::Storage(format!("stored seq {value} is invalid"))),
+        Some(value) => Err(SessionError::Storage(format!("stored seq {value} is negative"))),
+        None => Ok(0),
+    }
+}
+
 /// Run `f` with `PRAGMA synchronous=FULL` in force, then put the connection
 /// back at NORMAL — on every exit path. `f` returns a plain value, so no `?`
 /// inside it can skip the restore; the only early return here is a raise that
@@ -852,6 +976,174 @@ impl SessionEventStore for SqliteEventStore {
         }
 
         Ok(())
+    }
+
+    async fn claim_replay_call(
+        &self,
+        session_id: &SessionId,
+        expected_head: EventSeq,
+        call_id: &str,
+        max_attempts: u32,
+    ) -> Result<ReplayClaimResult, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        let mut conn = self.conn.lock().await;
+        Ok(with_synchronous_full(&mut conn, |conn| {
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|e| SessionError::Storage(format!("replay claim BEGIN failed: {e}")))?;
+            let found_head = replay_head(&tx, &session_key)?;
+            if found_head != expected_head {
+                return Ok(ReplayClaimResult::HeadChanged {
+                    expected: expected_head,
+                    found: found_head,
+                });
+            }
+            let (requested, outcomes) = replay_call_state(&tx, &session_key, call_id)?;
+            if requested != 1 || outcomes != 0 {
+                return Ok(ReplayClaimResult::NotDangling);
+            }
+            let stored_attempts: Option<i64> = tx
+                .query_row(
+                    "SELECT attempts FROM session_replay_cursors
+                     WHERE session_id = ?1 AND call_id = ?2",
+                    params![session_key, call_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| SessionError::Storage(e.to_string()))?;
+            let attempts = stored_attempts.unwrap_or(0);
+            if attempts < 0 {
+                return Err(SessionError::Storage("negative replay attempt cursor".into()));
+            }
+            let attempts = u32::try_from(attempts)
+                .map_err(|_| SessionError::Storage("replay attempt cursor overflow".into()))?;
+            if attempts >= max_attempts {
+                return Ok(ReplayClaimResult::BudgetExhausted {
+                    attempts,
+                    max_attempts,
+                });
+            }
+            let next_attempt = attempts + 1;
+            let claim_token = uuid::Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO session_replay_cursors
+                 (session_id, call_id, attempts, claim_token)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(session_id, call_id) DO UPDATE SET
+                   attempts = excluded.attempts,
+                   claim_token = excluded.claim_token",
+                params![session_key, call_id, i64::from(next_attempt), claim_token],
+            )
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+            tx.commit()
+                .map_err(|e| SessionError::Storage(format!("replay claim COMMIT failed: {e}")))?;
+            Ok(ReplayClaimResult::Claimed {
+                attempt: next_attempt,
+                claim_token,
+            })
+        })??)
+    }
+
+    async fn commit_replay_outcome(
+        &self,
+        session_id: &SessionId,
+        call_id: &str,
+        claim_token: &str,
+        event: &SessionEvent,
+        created_at_ms: i64,
+    ) -> Result<ReplayOutcomeResult, SessionError> {
+        let event_call_id = match event {
+            SessionEvent::ToolResult { call_id, .. } | SessionEvent::ToolError { call_id, .. } => {
+                call_id
+            }
+            _ => {
+                return Err(SessionError::Other(
+                    "replay outcome must be ToolResult or ToolError".into(),
+                ));
+            }
+        };
+        if event_call_id != call_id {
+            return Err(SessionError::Other(
+                "replay outcome call_id does not match claim".into(),
+            ));
+        }
+        let row = EncodedRow {
+            seq: 0,
+            turn_id: extract_turn_id(event).map(|id| id.to_string()),
+            event_type: event_type_tag(event),
+            payload: encode_row(event)?,
+            created_at: created_at_ms,
+            fts_body: render_event_text(event),
+        };
+        let session_key = session_id_to_string(session_id)?;
+        let mut conn = self.conn.lock().await;
+        let result = with_synchronous_full(&mut conn, |conn| -> Result<ReplayOutcomeResult, SessionError> {
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|e| SessionError::Storage(format!("replay outcome BEGIN failed: {e}")))?;
+            let stored_token: Option<String> = tx
+                .query_row(
+                    "SELECT claim_token FROM session_replay_cursors
+                     WHERE session_id = ?1 AND call_id = ?2",
+                    params![session_key, call_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| SessionError::Storage(e.to_string()))?;
+            if stored_token.as_deref() != Some(claim_token) {
+                return Ok(ReplayOutcomeResult::ClaimLost);
+            }
+            let (requested, outcomes) = replay_call_state(&tx, &session_key, call_id)?;
+            if requested != 1 || outcomes != 0 {
+                return Ok(ReplayOutcomeResult::AlreadyAnswered);
+            }
+            let seq = replay_head(&tx, &session_key)?
+                .checked_add(1)
+                .ok_or_else(|| SessionError::Storage("seq overflow".into()))?;
+            let seq_i64 = i64::try_from(seq)
+                .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
+            tx.execute(
+                "INSERT INTO session_events
+                 (session_id, seq, turn_id, event_type, payload_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    session_key,
+                    seq_i64,
+                    row.turn_id,
+                    row.event_type,
+                    row.payload,
+                    row.created_at,
+                ],
+            )
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+            let deleted = tx
+                .execute(
+                    "DELETE FROM session_replay_cursors
+                     WHERE session_id = ?1 AND call_id = ?2 AND claim_token = ?3",
+                    params![session_key, call_id, claim_token],
+                )
+                .map_err(|e| SessionError::Storage(e.to_string()))?;
+            if deleted != 1 {
+                return Ok(ReplayOutcomeResult::ClaimLost);
+            }
+            tx.commit().map_err(|e| {
+                SessionError::Storage(format!("replay outcome COMMIT failed: {e}"))
+            })?;
+            Ok(ReplayOutcomeResult::Committed { seq })
+        })??;
+        if let ReplayOutcomeResult::Committed { seq } = result {
+            if let Some(body) = row.fts_body {
+                if let Err(e) = conn.execute(
+                    "INSERT INTO session_events_fts
+                     (body, session_id, seq, event_type, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![body, session_key, seq, row.event_type, row.created_at],
+                ) {
+                    tracing::debug!(error = %e, "replay outcome FTS index insert failed");
+                }
+            }
+        }
+        Ok(result)
     }
 
     async fn load_all_events(
@@ -1800,14 +2092,21 @@ mod tests {
             )
             .unwrap();
         assert_eq!(table_count, 1);
+        let cursor_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type='table' AND name='session_replay_cursors'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cursor_count, 1);
     }
 
     // -----------------------------------------------------------------------
     // SqliteEventStore tests
-    // -----------------------------------------------------------------------
-
     use crate::routing::session_key::SessionKey;
-    use crate::session::events::{now_ms, MessageContent, TurnTrigger};
+    use crate::session::events::{now_ms, MessageContent, ToolOutput, TurnTrigger};
 
     fn make_store() -> SqliteEventStore {
         let conn = Connection::open_in_memory().unwrap();
@@ -1843,14 +2142,80 @@ mod tests {
             at,
         }
     }
+    fn tool_requested(tid: uuid::Uuid, call_id: &str, at: i64) -> SessionEvent {
+        SessionEvent::ToolCallRequested {
+            turn_id: tid,
+            call_id: call_id.into(),
+            name: "safe_tool".into(),
+            input: serde_json::json!({"value": 1}),
+            identity: Some(crate::tools::descriptor::ToolCallIdentity {
+                schema_version: crate::tools::descriptor::SCHEMA_VERSION,
+                revision: 1,
+                replay_policy: crate::tools::descriptor::ReplayPolicy::Safe,
+                replay_contract_fingerprint: None,
+            }),
+            at,
+        }
+    }
 
+    #[tokio::test]
+    async fn replay_claim_is_expected_head_and_budget_bounded() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store.append(&sid, 1, &tool_requested(tid, "call-1", at), at).await.unwrap();
+        let head = store.load_head_seq(&sid).await.unwrap();
+
+        let first = store.claim_replay_call(&sid, head, "call-1", 2).await.unwrap();
+        let ReplayClaimResult::Claimed { attempt, claim_token } = first else {
+            panic!("expected first claim");
+        };
+        assert_eq!(attempt, 1);
+
+        let stale = store.claim_replay_call(&sid, head - 1, "call-1", 2).await.unwrap();
+        assert!(matches!(stale, ReplayClaimResult::HeadChanged { .. }));
+
+        let second = store.claim_replay_call(&sid, head, "call-1", 2).await.unwrap();
+        assert!(matches!(second, ReplayClaimResult::Claimed { attempt: 2, .. }));
+        let exhausted = store.claim_replay_call(&sid, head, "call-1", 2).await.unwrap();
+        assert!(matches!(exhausted, ReplayClaimResult::BudgetExhausted { attempts: 2, max_attempts: 2 }));
+
+        let result = SessionEvent::ToolResult {
+            turn_id: tid,
+            call_id: "call-1".into(),
+            output: ToolOutput { value: serde_json::json!({"ok": true}), metadata: Default::default() },
+            at: at + 1,
+        };
+        assert!(matches!(store.commit_replay_outcome(&sid, "call-1", &claim_token, &result, at + 1).await.unwrap(), ReplayOutcomeResult::ClaimLost));
+    }
+
+    #[tokio::test]
+    async fn replay_outcome_requires_claim_and_answers_once() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store.append(&sid, 1, &tool_requested(tid, "call-2", at), at).await.unwrap();
+        let claim = store.claim_replay_call(&sid, 1, "call-2", 1).await.unwrap();
+        let ReplayClaimResult::Claimed { claim_token, .. } = claim else { panic!("expected claim") };
+        let result = SessionEvent::ToolError {
+            turn_id: tid,
+            call_id: "call-2".into(),
+            error: "replay failed".into(),
+            at: at + 1,
+        };
+        assert!(matches!(store.commit_replay_outcome(&sid, "call-2", "wrong", &result, at + 1).await.unwrap(), ReplayOutcomeResult::ClaimLost));
+        assert!(matches!(store.commit_replay_outcome(&sid, "call-2", &claim_token, &result, at + 1).await.unwrap(), ReplayOutcomeResult::Committed { seq: 2 }));
+        assert!(matches!(store.commit_replay_outcome(&sid, "call-2", &claim_token, &result, at + 2).await.unwrap(), ReplayOutcomeResult::ClaimLost));
+        assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 2);
+    }
     #[tokio::test]
     async fn append_and_load_preserves_order() {
         let store = make_store();
         let sid = sample_session_id();
         let tid = uuid::Uuid::new_v4();
         let at = now_ms();
-
         let e1 = turn_started(tid, at);
         let e2 = SessionEvent::UserMessage {
             turn_id: tid,
