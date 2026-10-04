@@ -51,30 +51,29 @@ pub struct McpRegistryTool {
 }
 
 impl McpRegistryTool {
-    /// Wrap a registry entry. `name` is the registry key (the provider-safe
-    /// qualified name `server__tool`); the definition supplies everything
-    /// else. Returns `None` for non-MCP handlers — builtins that share the
-    /// bridge registry (`mcp_read_resource`, `mcp_get_prompt`, `mcp_login`)
-    /// are wrapped too, but with their declared source rather than a
-    /// fabricated one.
-    pub fn from_registry_entry(name: &str, handler: Arc<dyn ToolHandler>) -> Self {
-        let def = handler.definition();
-        let server_id = match def.source {
-            ToolSource::Mcp { ref server_id } => server_id.clone(),
+    /// Wrap a registry entry. The descriptor supplies the provider-safe name,
+    /// public schema, and safety contract; execution delegates to the live
+    /// handler paired with that descriptor in one registry generation.
+    pub fn from_registry_entry(
+        handler: Arc<dyn ToolHandler>,
+        descriptor: &crate::tools::descriptor::ToolCapabilityDescriptor,
+    ) -> Self {
+        let server_id = match &descriptor.source {
+            ToolSource::Mcp { server_id } => server_id.clone(),
             // Capability-gated builtins routed through the same bridge
             // registry have no originating server; attribute their output
             // to the registry key so the sanitizer boundary stays labeled.
             _ => String::new(),
         };
         Self {
-            name: name.to_string(),
-            description: def.description,
-            schema: def.input_schema,
+            name: descriptor.name.clone(),
+            description: descriptor.description.clone(),
+            schema: descriptor.input_schema.clone(),
             server_id,
-            concurrent_safe: def.metadata.concurrent_safe,
-            requires_confirmation: def.metadata.requires_approval,
-            idempotent: def.metadata.idempotent,
-            max_duration_ms: def.metadata.max_duration_ms,
+            concurrent_safe: descriptor.concurrent_safe,
+            requires_confirmation: descriptor.requires_confirmation,
+            idempotent: descriptor.idempotent,
+            max_duration_ms: descriptor.max_duration_ms,
             handler,
         }
     }
@@ -399,7 +398,12 @@ mod tests {
     }
 
     fn adapter(handler: FakeHandler) -> McpRegistryTool {
-        McpRegistryTool::from_registry_entry("search_server__mcp_search", Arc::new(handler))
+        let handler: Arc<dyn ToolHandler> = Arc::new(handler);
+        let descriptor = crate::tools::descriptor::ToolCapabilityDescriptor::from_definition(
+            &handler.definition(),
+            1,
+        );
+        McpRegistryTool::from_registry_entry(handler, &descriptor)
     }
 
     #[test]
@@ -408,6 +412,32 @@ mod tests {
         assert_eq!(a.name(), "search_server__mcp_search");
         assert_eq!(a.description(), "Search via MCP");
         assert_eq!(a.schema()["required"], json!(["query"]));
+    }
+
+    #[test]
+    fn adapter_projects_the_descriptor_not_handler_definition() {
+        let handler: Arc<dyn ToolHandler> = Arc::new(FakeHandler::success());
+        let mut descriptor = crate::tools::descriptor::ToolCapabilityDescriptor::from_definition(
+            &handler.definition(),
+            1,
+        );
+        descriptor.name = "canonical_name".into();
+        descriptor.description = "canonical description".into();
+        descriptor.input_schema =
+            json!({"type": "object", "properties": {"x": {"type": "number"}}});
+        descriptor.requires_confirmation = true;
+        descriptor.concurrent_safe = true;
+        descriptor.idempotent = true;
+        descriptor.max_duration_ms = Some(1234);
+
+        let adapter = McpRegistryTool::from_registry_entry(handler, &descriptor);
+        assert_eq!(adapter.name(), "canonical_name");
+        assert_eq!(adapter.description(), "canonical description");
+        assert_eq!(adapter.schema()["properties"]["x"]["type"], "number");
+        assert!(adapter.requires_confirmation());
+        assert!(adapter.is_concurrent_safe(&json!({})));
+        assert!(adapter.is_idempotent());
+        assert_eq!(adapter.max_duration_ms(), Some(1234));
     }
 
     #[test]

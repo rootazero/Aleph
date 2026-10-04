@@ -2,7 +2,7 @@
 
 - 日期：2026-10-03
 - 分支：`feature/capability-tool-descriptor`
-- 状态：待用户审阅
+- 状态：第一期实现完成，待最终门禁与合并
 - 范围：第一期 Capability 收敛子项目
 
 ## 1. 背景与目标
@@ -43,7 +43,7 @@ recovery replay decision
 | `src/tools/service.rs::ToolDefinition` / metadata | 保留兼容入口，减少重复字段来源 | 从 descriptor 生成现有工具定义/展示数据 |
 | `src/tools/runtime.rs::LoopToolRegistry` | 保持为消费者 | resolve handler、并发/确认/幂等查询，不拥有全局发现事实 |
 | `src/extension/effects/scope.rs::EffectScope` | 复用 | 绑定注册效果和 disposer，逆序清理 |
-| session/recovery 相关模块 | 增加 descriptor 语义读取接缝 | 根据调用时 descriptor 的 replay policy 处理未知结果 |
+| session/recovery 相关模块 | 增加 `ReplayPolicyLookup` descriptor 读取接缝 | 当前调用事件未保存 call-time revision，因此 Safe/Unsafe 都沿用未知结果 + 验证提示；自动 Safe replay 延后至持久化契约补齐 |
 | MCP 或 RPC 的一个已有出口 | 接入单一投影 | 验证同一 descriptor 的跨面一致性 |
 | `docs/reference/FEATURE_LOCATOR.md` | 补充状态和入口 | 记录 descriptor 真源、投影和生命周期契约 |
 
@@ -66,8 +66,7 @@ recovery replay decision
 ### Replay 规则
 
 - `Unsafe`：调用已落盘但没有结果时，恢复不得自动重放；必须生成现有恢复路径可理解的未知结果/验证提示。
-- `Safe`：只有调用时记录的 descriptor 与当前解析到的 descriptor 都明确允许 Safe，才可自动重放；descriptor 被替换或缺失时降级为未知结果。
-- 外部 MCP/ACP 工具默认 `Unsafe`，除非已有协议元数据明确提供只读/安全语义；本期不凭“外部”身份推断 Safe。
+- 本期已接入 `ReplayPolicyLookup`，恢复按当前 descriptor 查询 replay policy；由于 `ToolCallRequested` 尚无调用时 descriptor revision，`Safe` 也不能满足双重证明条件，故当前实现对所有未决外部调用 fail-closed，生成未知结果/验证提示。后续若增加调用时 revision，必须同时更新事件 schema、恢复幂等测试和替换代际测试。
 
 ## 5. 注册与生命周期
 
@@ -95,7 +94,7 @@ Capability-backed ToolHandlerRegistry
 
 协议层只读取 descriptor 的投影，不反向修改 descriptor。`LoopToolRegistry` 解析 handler 时必须通过 registry 的既有 resolve/adapter seam；如果当前结构确实承担执行索引，则保留该索引，但删除其中重复的 descriptor/visibility/replay 元数据。
 
-本期必须证明至少一个多面动词由同一 descriptor 驱动，例如：注册后的工具列表、一个既有协议 schema/列表出口、以及 recovery 的 replay 判定不能各自重新推导。
+本期必须证明至少一个多面动词由同一 descriptor 驱动：MCP 注册同时投影到 provider metadata、ToolCatalog、MCP bridge 与 Loop execution index；recovery 通过 `ReplayPolicyLookup` 读取同一 descriptor 的 replay policy，并在缺少调用时 revision 时保持 fail-closed。
 
 ## 7. 错误、并发与替换语义
 
@@ -116,7 +115,7 @@ Capability-backed ToolHandlerRegistry
 3. EffectScope dispose 会移除注册，且 disposer 幂等、逆序清理和失败报告行为正确。
 4. 替换期间已有调用保持旧实现，新调用使用新实现。
 5. 同一 descriptor 驱动至少两个已有出口/消费者，防止投影漂移。
-6. `ReplayPolicy::Safe`：满足调用时与当前 descriptor 双重 Safe 时可走现有安全重放路径。
+6. `ReplayPolicy::Safe`：当前实现验证 descriptor lookup 已接入，但因调用时 revision 未持久化，Safe 与 Unsafe 都必须走未知结果/人工验证；自动 Safe replay 作为后续 schema 变更，不在本期伪造。
 7. `ReplayPolicy::Unsafe` 或 descriptor 被替换/缺失：生成未知结果/人工验证提示，不自动重放。
 8. subscription lag 或 snapshot 重建（若现有 broadcast 语义适用）。
 9. `src/harness/` 没有改动；被替代的旧元数据/注册结构确实被删除或明确证明仍是执行索引而非第二事实源。

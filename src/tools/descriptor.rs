@@ -55,6 +55,10 @@ pub enum ToolSource {
     Extension { plugin_id: String },
 }
 
+pub trait ReplayPolicyLookup: Send + Sync {
+    fn replay_policy(&self, name: &str) -> Option<ReplayPolicy>;
+}
+
 /// Why a [`ToolCapabilityDescriptor`] failed [`ToolCapabilityDescriptor::validate`].
 #[derive(Debug, thiserror::Error)]
 pub enum DescriptorError {
@@ -125,6 +129,50 @@ impl ToolCapabilityDescriptor {
             max_duration_ms: definition.metadata.max_duration_ms,
             revision,
         }
+    }
+
+    /// Project the callable contract to the provider-facing metadata shape.
+    /// UI category is intentionally a consumer classification; the full source
+    /// identity remains on the descriptor.
+    #[must_use]
+    pub fn to_metadata_definition(&self) -> crate::tool_metadata::ToolDefinition {
+        let category = match &self.source {
+            ToolSource::Builtin => crate::tool_metadata::ToolCategory::Builtin,
+            ToolSource::Mcp { .. } => crate::tool_metadata::ToolCategory::Mcp,
+            ToolSource::Extension { .. } => crate::tool_metadata::ToolCategory::Custom,
+        };
+        crate::tool_metadata::ToolDefinition {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            parameters: self.input_schema.clone(),
+            requires_confirmation: self.requires_confirmation,
+            category,
+            strict: false,
+        }
+    }
+
+    /// Project descriptor-owned fields to the command/UI catalog. The catalog
+    /// still owns routing, visibility, conflict resolution, and presentation
+    /// metadata.
+    #[must_use]
+    pub fn to_unified_tool(&self, id: String) -> crate::tool_metadata::UnifiedTool {
+        let source = match &self.source {
+            ToolSource::Builtin => crate::tool_metadata::ToolSource::Builtin,
+            ToolSource::Mcp { server_id } => crate::tool_metadata::ToolSource::Mcp {
+                server: server_id.clone(),
+            },
+            ToolSource::Extension { plugin_id } => crate::tool_metadata::ToolSource::Plugin {
+                plugin_id: plugin_id.clone(),
+            },
+        };
+        crate::tool_metadata::UnifiedTool::new(
+            id,
+            self.name.clone(),
+            self.description.clone(),
+            source,
+        )
+        .with_parameters_schema(self.input_schema.clone())
+        .populate_safety_profile(self.idempotent, self.requires_confirmation)
     }
 
     /// Validate the descriptor's invariants.
@@ -207,6 +255,33 @@ mod tests {
             source,
             ..descriptor_with("test_tool", json!({"type": "object"}))
         }
+    }
+
+    #[test]
+    fn descriptor_projects_source_schema_and_safety_to_metadata_and_catalog() {
+        let mut descriptor = descriptor_with_source(ToolSource::Mcp {
+            server_id: "search".into(),
+        });
+        descriptor.requires_confirmation = true;
+        descriptor.idempotent = true;
+        descriptor.concurrent_safe = true;
+        descriptor.max_duration_ms = Some(1_234);
+
+        let metadata = descriptor.to_metadata_definition();
+        assert_eq!(metadata.category, crate::tool_metadata::ToolCategory::Mcp);
+        assert!(metadata.requires_confirmation);
+        assert_eq!(metadata.parameters, descriptor.input_schema);
+
+        let catalog = descriptor.to_unified_tool("mcp:search:test_tool".into());
+        assert_eq!(catalog.id, "mcp:search:test_tool");
+        assert_eq!(catalog.name, "test_tool");
+        assert_eq!(catalog.description, descriptor.description);
+        assert_eq!(catalog.parameters_schema, Some(descriptor.input_schema));
+        assert!(catalog.requires_confirmation);
+        assert!(matches!(
+            catalog.source,
+            crate::tool_metadata::ToolSource::Mcp { ref server } if server == "search"
+        ));
     }
 
     #[test]
@@ -355,7 +430,10 @@ mod tests {
     fn validate_rejects_name_longer_than_provider_limit() {
         let long = "a".repeat(MAX_NAME_LEN + 1);
         let d = descriptor_with(&long, json!({"type": "object"}));
-        assert!(matches!(d.validate(), Err(DescriptorError::NameTooLong { .. })));
+        assert!(matches!(
+            d.validate(),
+            Err(DescriptorError::NameTooLong { .. })
+        ));
     }
 
     #[test]

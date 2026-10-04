@@ -245,6 +245,28 @@ pub struct ToolDefinition {
     pub metadata: ToolDefinitionMetadata,
 }
 
+impl ToolDefinition {
+    /// Build the callable service form from the canonical descriptor fields.
+    #[must_use]
+    pub fn from_descriptor(
+        descriptor: &crate::tools::descriptor::ToolCapabilityDescriptor,
+    ) -> Self {
+        Self {
+            name: descriptor.name.clone(),
+            description: descriptor.description.clone(),
+            input_schema: descriptor.input_schema.clone(),
+            source: descriptor.source.clone(),
+            metadata: ToolDefinitionMetadata {
+                requires_approval: descriptor.requires_confirmation,
+                idempotent: descriptor.idempotent,
+                concurrent_safe: descriptor.concurrent_safe,
+                max_duration_ms: descriptor.max_duration_ms,
+                ..Default::default()
+            },
+        }
+    }
+}
+
 #[async_trait]
 pub trait ToolService: Send + Sync + 'static {
     async fn execute(&self, name: &str, input: serde_json::Value) -> Result<ToolOutput, ToolError>;
@@ -369,27 +391,15 @@ pub trait ToolService: Send + Sync + 'static {
     }
 }
 
-/// Convert a slice of loop-side `ToolDefinition`s into the `tool_metadata`
-/// `ToolDefinition` representation expected by LLM providers.
-///
-/// This is the single source of truth for the conversion. Per Stage 2
-/// of the 12-module roadmap, `ToolService` impls cache the output of this
-/// helper (keyed on their internal mutation signal) so each turn's tool
-/// list is an O(1) `Arc::clone` rather than an O(n) `Vec` allocation.
-///
-/// Information loss (e.g., `ToolSource::Mcp` collapses to `category: Builtin`,
-/// `metadata.requires_approval` is dropped) is preserved as-is from the
-/// pre-Stage-2 behavior. Fixing the lossy mapping is out of Stage 2 scope.
+/// Convert loop-side definitions to the provider metadata shape by projecting
+/// descriptor-owned fields. Runtime tools outside the ToolHandlerRegistry are
+/// adapted to temporary revision-1 descriptors at this boundary.
 #[must_use]
 pub fn to_metadata_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::ToolDefinition]> {
     defs.iter()
-        .map(|def| crate::tool_metadata::ToolDefinition {
-            name: def.name.clone(),
-            description: def.description.clone(),
-            parameters: def.input_schema.clone(),
-            requires_confirmation: false,
-            category: crate::tool_metadata::ToolCategory::Builtin,
-            strict: false,
+        .map(|def| {
+            crate::tools::descriptor::ToolCapabilityDescriptor::from_definition(def, 1)
+                .to_metadata_definition()
         })
         .collect::<Vec<_>>()
         .into()
@@ -429,6 +439,18 @@ mod metadata_form_tests {
         assert!(!d.requires_confirmation);
         assert!(matches!(d.category, ToolCategory::Builtin));
         assert!(!d.strict);
+    }
+
+    #[test]
+    fn projects_mcp_source_and_confirmation_to_provider_metadata() {
+        let mut definition = loop_def("mcp_search");
+        definition.source = ToolSource::Mcp {
+            server_id: "search".into(),
+        };
+        definition.metadata.requires_approval = true;
+        let projected = to_metadata_form(&[definition]);
+        assert_eq!(projected[0].category, ToolCategory::Mcp);
+        assert!(projected[0].requires_confirmation);
     }
 
     #[test]

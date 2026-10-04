@@ -183,14 +183,15 @@ impl McpFace {
         if let Some(reg) =
             crate::gateway::execution_engine::tool_service_builder::mcp_tool_registry()
         {
-            for (name, handler) in reg.snapshot().iter() {
+            let snapshot = reg.entries_snapshot();
+            for (name, entry) in snapshot.iter() {
                 if !expose.contains(name) || registry.get(name).is_some() {
                     continue;
                 }
                 registry.register(Box::new(
                     crate::tools::adapters::McpRegistryTool::from_registry_entry(
-                        name,
-                        Arc::clone(handler),
+                        Arc::clone(&entry.handler),
+                        &entry.descriptor,
                     ),
                 ));
                 allowed.insert(name.clone());

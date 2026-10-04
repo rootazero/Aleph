@@ -99,19 +99,21 @@ pub mod handlers;
 pub mod mcp_scope_view;
 pub mod null;
 pub mod probes;
-pub mod registry;
 pub mod registration_scope;
+pub mod registry;
 pub mod runtime_state;
 pub mod scoped;
 pub mod service;
 pub mod turn_context;
 pub use scoped::{ScopedToolService, ToolDefinitionRewriter};
 
-pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
-pub use descriptor::{DescriptorError, ReplayPolicy, ToolCapabilityDescriptor, ToolKind};
+pub use context::{ToolContext, ToolContextHandle, new_tool_context_handle};
+pub use descriptor::{
+    DescriptorError, ReplayPolicy, ReplayPolicyLookup, ToolCapabilityDescriptor, ToolKind,
+};
 pub use null::NullToolService;
-pub use registry::ToolHandlerRegistry;
 pub use registration_scope::{ToolDisposeReport, ToolRegistrationScope};
+pub use registry::ToolHandlerRegistry;
 pub use server::AlephToolServer;
 pub use service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource};
 pub use traits::{AlephTool, AlephToolDyn};

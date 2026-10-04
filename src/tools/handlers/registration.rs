@@ -10,7 +10,6 @@ use crate::sync_primitives::Arc;
 
 use crate::mcp::{McpClient, McpTool};
 use crate::tool_metadata::ToolCatalog;
-use crate::tool_metadata::{ToolSource as CatalogToolSource, UnifiedTool};
 use crate::tools::descriptor::ToolCapabilityDescriptor;
 use crate::tools::handlers::mcp::McpHandler;
 use crate::tools::handlers::ToolHandler;
@@ -126,6 +125,9 @@ pub async fn register_mcp_tools(
         // construction. Revision 0 is normalized to the registry-assigned
         // value inside `register`.
         let descriptor = ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
+        let catalog_builder = tool_catalog
+            .is_some()
+            .then(|| descriptor.to_unified_tool(format!("mcp:{server_id}:{qualified}")));
         match registry.register(descriptor, handler) {
             Ok(handle) => {
                 // `handle` is the generation-guarded disposer for this entry.
@@ -140,30 +142,11 @@ pub async fn register_mcp_tools(
                         qualified.clone(),
                         Arc::new(McpServerProbe::new(Arc::clone(&client), server_id)),
                     );
-                    // R8 same-source catalog registration: makes the MCP tool
-                    // visible to commands.list / tools.catalog and resolvable as
-                    // a slash command. Uses the CATALOG-side ToolSource::Mcp
-                    // { server }, id = mcp:{server}:{qualified}, command name =
-                    // the provider-safe qualified name.
-                    //
-                    // Wire the handler-side `requires_confirmation` flag into the
-                    // catalog so `infer_visible_channels` actually produces the
-                    // gated visibility it advertises (rather than falling through
-                    // to `Vec::new()` for every catalog entry). The handler side
-                    // already gates the call; this keeps catalog and handler
-                    // aligned so a future list-filter that respects catalog-side
-                    // `requires_confirmation` does not disagree with the dispatch
-                    // layer.
-                    let builder = UnifiedTool::new(
-                        format!("mcp:{server_id}:{qualified}"),
-                        qualified.clone(),
-                        tool.description.clone(),
-                        CatalogToolSource::Mcp {
-                            server: server_id.to_string(),
-                        },
-                    )
-                    .populate_safety_profile(tool.read_only, tool.requires_confirmation);
-                    let catalog_id = disp.register_with_conflict_resolution(builder).await;
+                    let catalog_id = disp
+                        .register_with_conflict_resolution(
+                            catalog_builder.expect("catalog projection was prepared"),
+                        )
+                        .await;
                     catalog_entries.push((qualified.clone(), revision, catalog_id));
                 }
                 registered.push(qualified);
@@ -260,6 +243,7 @@ pub async fn unregister_mcp_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool_metadata::{ToolSource as CatalogToolSource, UnifiedTool};
     use serde_json::json;
 
     /// A throwaway scope for one call. These tests assert registration
@@ -328,8 +312,16 @@ mod tests {
         // recoverable error. The declared budget must outlive that timeout.
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
-        register_mcp_tools(&reg, None, client, "srv", &[tool("slow", "d")], Some(600), &mut scope())
-            .await;
+        register_mcp_tools(
+            &reg,
+            None,
+            client,
+            "srv",
+            &[tool("slow", "d")],
+            Some(600),
+            &mut scope(),
+        )
+        .await;
         let def = reg.snapshot().get("srv__slow").unwrap().definition();
         let budget = def.metadata.max_duration_ms.expect("MCP tool is budgeted");
         assert!(
@@ -344,7 +336,16 @@ mod tests {
         // (300s) applies; the definition must still carry a budget above it.
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
-        register_mcp_tools(&reg, None, client, "srv", &[tool("slow", "d")], None, &mut scope()).await;
+        register_mcp_tools(
+            &reg,
+            None,
+            client,
+            "srv",
+            &[tool("slow", "d")],
+            None,
+            &mut scope(),
+        )
+        .await;
         let def = reg.snapshot().get("srv__slow").unwrap().definition();
         let budget = def.metadata.max_duration_ms.expect("MCP tool is budgeted");
         assert!(budget > 300_000, "budget {budget}ms must clear the default");
@@ -375,9 +376,16 @@ mod tests {
         let mut bad2 = tool("scalar", "d");
         bad2.input_schema = json!("nope");
         let good = tool("ok", "d");
-        let names =
-            register_mcp_tools(&reg, None, client, "srv", &[bad, bad2, good], None, &mut scope())
-                .await;
+        let names = register_mcp_tools(
+            &reg,
+            None,
+            client,
+            "srv",
+            &[bad, bad2, good],
+            None,
+            &mut scope(),
+        )
+        .await;
         // Only the valid tool is registered; the two broken ones are skipped.
         assert_eq!(names, vec!["srv__ok"]);
         let snap = reg.snapshot();
@@ -391,7 +399,8 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
         let tools = [tool("get_time", "a"), tool("set_tz", "b")];
-        let names = register_mcp_tools(&reg, None, client, "clock", &tools, None, &mut scope()).await;
+        let names =
+            register_mcp_tools(&reg, None, client, "clock", &tools, None, &mut scope()).await;
         assert_eq!(names, vec!["clock__get_time", "clock__set_tz"]);
         let snap = reg.snapshot();
         assert!(snap.contains_key("clock__get_time"));
@@ -473,8 +482,16 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         let disp = Arc::new(ToolCatalog::new());
         let client = Arc::new(McpClient::new());
-        register_mcp_tools(&reg, Some(&disp), client, "srv", &[tool("a", "d")], None, &mut scope())
-            .await;
+        register_mcp_tools(
+            &reg,
+            Some(&disp),
+            client,
+            "srv",
+            &[tool("a", "d")],
+            None,
+            &mut scope(),
+        )
+        .await;
         let removed = unregister_mcp_tools(&reg, Some(&disp), "srv").await;
         assert_eq!(removed, vec!["srv__a"]);
         // Re-registering immediately should not collide with a leftover probe
@@ -490,13 +507,31 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         let catalog = Arc::new(ToolCatalog::new());
         let client = Arc::new(McpClient::new());
-        let t = tool("do_thing", "does a thing");
-        let names =
-            register_mcp_tools(&reg, Some(&catalog), client, "srv", &[t], None, &mut scope()).await;
+        let mut t = tool("do_thing", "does a thing");
+        t.requires_confirmation = true;
+        let names = register_mcp_tools(
+            &reg,
+            Some(&catalog),
+            client,
+            "srv",
+            &[t],
+            None,
+            &mut scope(),
+        )
+        .await;
         assert_eq!(names.len(), 1);
         let in_catalog = catalog.list_by_mcp_server("srv").await;
         assert_eq!(in_catalog.len(), 1, "MCP tool must appear in ToolCatalog");
         assert_eq!(in_catalog[0].name, names[0]);
+        assert!(in_catalog[0].requires_confirmation);
+        assert_eq!(
+            in_catalog[0].parameters_schema,
+            Some(json!({"type": "object"}))
+        );
+        assert!(matches!(
+            in_catalog[0].source,
+            CatalogToolSource::Mcp { ref server } if server == "srv"
+        ));
     }
 
     #[tokio::test]
@@ -620,8 +655,7 @@ mod tests {
             json!({"type": "object"}),
         );
         let replacement: Arc<dyn ToolHandler> = Arc::new(replacement);
-        let descriptor =
-            ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0);
+        let descriptor = ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0);
         reg.replace(descriptor, Arc::clone(&replacement))
             .expect("replace succeeds");
         catalog

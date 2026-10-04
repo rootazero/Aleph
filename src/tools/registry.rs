@@ -19,7 +19,7 @@ use std::sync::Weak;
 use arc_swap::ArcSwap;
 use tokio::sync::broadcast;
 
-use crate::tools::descriptor::ToolCapabilityDescriptor;
+use crate::tools::descriptor::{ReplayPolicyLookup, ToolCapabilityDescriptor};
 use crate::tools::handlers::ToolHandler;
 use crate::tools::service::{ToolDefinition, ToolError, ToolSource};
 
@@ -183,6 +183,13 @@ impl RegistrationHandle {
 #[derive(Clone)]
 pub struct ToolHandlerRegistry {
     shared: Arc<RegistryShared>,
+}
+
+impl ReplayPolicyLookup for ToolHandlerRegistry {
+    fn replay_policy(&self, name: &str) -> Option<crate::tools::descriptor::ReplayPolicy> {
+        self.descriptor(name)
+            .map(|descriptor| descriptor.replay_policy)
+    }
 }
 
 impl ToolHandlerRegistry {
@@ -402,6 +409,14 @@ impl ToolHandlerRegistry {
         )
     }
 
+    /// Frozen handler+descriptor view from one registry generation. Consumers
+    /// that project callable tools should prefer this over pairing
+    /// `snapshot()` and `descriptor_snapshot()` independently.
+    #[must_use]
+    pub fn entries_snapshot(&self) -> Arc<HashMap<String, RegistryEntry>> {
+        Arc::new(self.shared.inner.load().entries.clone())
+    }
+
     /// Frozen descriptor view — the canonical capability snapshot.
     #[must_use]
     pub fn descriptor_snapshot(&self) -> Arc<HashMap<String, Arc<ToolCapabilityDescriptor>>> {
@@ -509,7 +524,7 @@ fn mismatch_reason(descriptor: &ToolCapabilityDescriptor, definition: &ToolDefin
 mod tests {
     use super::*;
     use crate::session::events::ToolOutput;
-    use crate::tools::descriptor::{ReplayPolicy, ToolKind, SCHEMA_VERSION};
+    use crate::tools::descriptor::{ReplayPolicy, SCHEMA_VERSION, ToolKind};
     use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolSource};
     use async_trait::async_trait;
     use serde_json::Value;
@@ -562,6 +577,18 @@ mod tests {
             max_duration_ms: None,
             revision: 0,
         }
+    }
+
+    #[test]
+    fn replay_lookup_is_descriptor_based_not_tool_name_special_case() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("arbitrary_name"), fake("arbitrary_name"))
+            .expect("register");
+        assert_eq!(
+            ReplayPolicyLookup::replay_policy(&reg, "arbitrary_name"),
+            Some(ReplayPolicy::Unsafe)
+        );
+        assert_eq!(ReplayPolicyLookup::replay_policy(&reg, "missing"), None);
     }
 
     #[test]
@@ -641,7 +668,9 @@ mod tests {
         let mut handles = Vec::with_capacity(THREADS);
         for _ in 0..THREADS {
             let r = Arc::clone(&reg);
-            handles.push(thread::spawn(move || r.register(desc("race"), fake("race"))));
+            handles.push(thread::spawn(move || {
+                r.register(desc("race"), fake("race"))
+            }));
         }
         let mut wins = 0usize;
         let mut dupes = 0usize;
@@ -742,7 +771,10 @@ mod tests {
         assert_eq!(reg.snapshot().len(), 1);
 
         let evt = rx.try_recv().expect("register event");
-        assert!(matches!(evt, RegistryChange::Registered { revision: 1, .. }));
+        assert!(matches!(
+            evt,
+            RegistryChange::Registered { revision: 1, .. }
+        ));
         let evt = rx.try_recv().expect("replace event");
         assert!(matches!(
             evt,

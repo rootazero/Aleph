@@ -2556,8 +2556,10 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
         // descriptor from that definition; revision 0 is normalized by the
         // registry. The returned handle is test-local (the entry lives for the
         // test), so it is intentionally dropped.
-        let handler: Arc<dyn crate::tools::handlers::ToolHandler> =
-            Arc::new(McpHandlerOf { name: name.to_string(), server });
+        let handler: Arc<dyn crate::tools::handlers::ToolHandler> = Arc::new(McpHandlerOf {
+            name: name.to_string(),
+            server,
+        });
         let descriptor = crate::tools::descriptor::ToolCapabilityDescriptor::from_definition(
             &handler.definition(),
             0,
@@ -2573,7 +2575,7 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
         let mut registry = crate::tools::runtime::LoopToolRegistry::new();
         let mut allowed: std::collections::BTreeSet<String> = ["file_read".to_string()].into();
         let joined = join_mcp_tools(
-            &bridged.snapshot(),
+            &bridged.entries_snapshot(),
             &mut registry,
             |_| true,
             &visible_mcp_servers(ctx, Some(Arc::clone(&manager))),
@@ -2627,7 +2629,7 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
         project_root: Some(canonical_root(proj.path())),
     };
     let joined = join_mcp_tools(
-        &bridged.snapshot(),
+        &bridged.entries_snapshot(),
         &mut registry,
         |_| true,
         &visible_mcp_servers(here, Some(Arc::clone(&manager))),

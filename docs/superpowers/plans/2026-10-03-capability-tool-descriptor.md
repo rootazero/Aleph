@@ -241,12 +241,12 @@ git commit -m "feat: scope tool registrations"
 - Modify: `src/tool_metadata/types/definition.rs:1-60`（保持现有 `ToolDefinition` wire shape；source/category 映射不增加重复事实字段）
 - Modify: `src/tool_metadata/registry/mod.rs:70-190`（保留 UI/routing/conflict/visibility，避免其成为 callable metadata 真源）
 - Modify: `src/gateway/execution_engine/run_loop/inner.rs:1786-1810`（用原子 registry-entry snapshot join MCP handler 与 descriptor，避免热替换时跨 snapshot 拼接不同代）
+- Modify: `src/gateway/mcp_face/mod.rs:180-205`（既有 MCP gateway projection 消费原子 descriptor-entry snapshot）
 - Test: `src/tools/service.rs` projection tests、`src/tools/adapters/mcp_adapter.rs` tests、`src/tools/handlers/registration.rs` tests、`src/gateway/execution_engine/run_loop/tests.rs` atomic descriptor-to-loop join tests
 
 **Interfaces:**
 - `ToolDefinition::from_descriptor(descriptor: &ToolCapabilityDescriptor) -> Self`。
 - `ToolHandlerRegistry::entries_snapshot() -> Arc<HashMap<String, RegistryEntry>>` 返回同一原子状态中的 handler+descriptor 对。
-- `ToolCapabilityDescriptor::to_metadata_definition(&self) -> crate::tool_metadata::ToolDefinition`。
 - `ToolCapabilityDescriptor::to_metadata_definition(&self) -> crate::tool_metadata::ToolDefinition`。
 - `ToolCapabilityDescriptor::to_unified_tool(&self, id: String) -> UnifiedTool`，只设置 descriptor 拥有的公共字段；UI/routing/conflict 字段仍由 `ToolCatalog` 自己管理。
 - `LoopToolRegistry::tool_definitions()` 不重新计算 replay/source/approval 元数据；只读取 registry descriptor projection 或保留执行专用运行时字段。
@@ -304,7 +304,7 @@ git commit -m "refactor: project tool metadata from descriptors"
 
 **Interfaces:**
 - `pub trait ReplayPolicyLookup { fn replay_policy(&self, name: &str) -> Option<ReplayPolicy>; }`，registry 实现只按 descriptor lookup，不按 name 特判。
-- `boundary_repair_text`/`repairs_for` 可接受 `Option<&dyn ReplayPolicyLookup>`，缺失 lookup 或缺失 descriptor 一律走现有未知结果/验证提示。
+- `boundary_repair_text_with_policy` / `repairs_for_with_policy` / `repair_boundary_with_policy` 提供可选 lookup 接口；原有函数保持兼容并默认走 fail-closed 路径。当前 `ResumeCoordinator` 尚未持有全局 Tool registry，因此生产恢复继续使用兼容入口；接入 coordinator 前必须先解决 registry 的生命周期/可见性所有权，不得用进程全局工具表猜恢复权限。
 - 本期不修改 `SessionEvent::ToolCallRequested`；不伪造 call-time revision，不修改 `src/harness/`。
 
 - [ ] **Step 1: Write the failing tests**
@@ -382,6 +382,15 @@ git commit -m "docs: document tool capability descriptor boundaries"
 
 ---
 
+### Verification record
+
+- Target worktree `CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=1 cargo check -p alephcore --all-targets --message-format short` passed after the implementation edits.
+- Targeted tests passed: recovery 13, registry 15, descriptor 16, metadata projection 4, MCP adapter 15, MCP registration 17; earlier MCP face 11 and run-loop 46/47 passed, with the known environment-sensitive project-skill test as the one failure.
+- Full `cargo test -p alephcore --lib --message-format short` completed with `20586 passed; 23 failed; 20 ignored`; the failures are existing source-scan, stop-hooks, config/plugin, dreaming, scoped-gate, and environment-sensitive baseline failures, not new descriptor/recovery failures.
+- `cargo clippy -p alephcore --all-targets -- -D warnings` remains blocked by pre-existing `result_large_err`/`large_enum_variant` diagnostics under `src/gateway/mcp_face/http.rs` and `src/gateway/mcp_face/protocol.rs`; no new lint was reported for the changed descriptor/registry/recovery code.
+
+---
+
 ### Task 7: 全量门禁、差异清理与最终提交
 
 **Files:**
@@ -414,7 +423,7 @@ CARGO_BUILD_JOBS=2 cargo clippy -p alephcore --all-targets -- -D warnings
 CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib
 ```
 
-Expected: all commands exit 0. If a compile error repeats twice, stop and report the exact short diagnostic rather than adding speculative compatibility layers.
+Expected: target worktree check succeeds; clippy and full tests must be reported with any pre-existing baseline failures rather than misclassified as green.
 
 - [ ] **Step 3: Run targeted behavior gates**
 
