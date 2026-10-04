@@ -605,6 +605,7 @@ mod tests {
             concurrent_safe: false,
             max_duration_ms: None,
             revision: 0,
+            implementation_contract: None,
         }
     }
 
@@ -625,6 +626,10 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         let mut d = desc("arbitrary_name");
         d.replay_policy = ReplayPolicy::Safe;
+        d.implementation_contract = Some(crate::tools::descriptor::ImplementationContract {
+            id: "test:arbitrary".into(),
+            version: "1".into(),
+        });
         reg.register(d, fake("arbitrary_name")).expect("register");
 
         let identity = ToolDescriptorLookup::tool_call_identity(&reg, "arbitrary_name")
@@ -677,6 +682,10 @@ mod tests {
 
         let mut next = desc("t");
         next.replay_policy = ReplayPolicy::Safe;
+        next.implementation_contract = Some(crate::tools::descriptor::ImplementationContract {
+            id: "test:t".into(),
+            version: "1".into(),
+        });
         reg.replace(next, fake("t")).expect("replace");
 
         let identity = ToolDescriptorLookup::tool_call_identity(&reg, "t").unwrap();

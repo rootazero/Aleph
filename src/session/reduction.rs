@@ -1029,6 +1029,7 @@ mod tests {
             schema_version: crate::tools::descriptor::SCHEMA_VERSION,
             revision: 7,
             replay_policy: ReplayPolicy::Safe,
+            replay_contract_fingerprint: None,
         };
         let events = vec![
             rec(1, started("r1"),),

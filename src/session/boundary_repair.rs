@@ -485,6 +485,7 @@ mod tests {
             schema_version: crate::tools::descriptor::SCHEMA_VERSION,
             revision,
             replay_policy: policy,
+            replay_contract_fingerprint: None,
         }
     }
 

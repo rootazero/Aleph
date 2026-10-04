@@ -333,6 +333,7 @@ impl ToolDescriptorLookup for StaticToolDescriptorLookup {
             schema_version: SCHEMA_VERSION,
             revision: 7,
             replay_policy: ReplayPolicy::Safe,
+            replay_contract_fingerprint: None,
         })
     }
 }

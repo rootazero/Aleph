@@ -3096,6 +3096,7 @@ mod tests {
                 schema_version: 1,
                 revision: 3,
                 replay_policy: ReplayPolicy::Safe,
+                replay_contract_fingerprint: None,
             }),
             at: 1,
         };
@@ -3112,6 +3113,7 @@ mod tests {
                 schema_version: 1,
                 revision: 3,
                 replay_policy: ReplayPolicy::Safe,
+                replay_contract_fingerprint: None,
             })
         );
 
