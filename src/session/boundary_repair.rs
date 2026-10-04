@@ -164,10 +164,10 @@ pub fn boundary_repair_text(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReplayDecision {
     /// Stored and current capabilities both prove `Safe` at the same schema
-    /// version and revision, so the dangling call may be auto-replayed once a
-    /// later phase ships an executor. Phase 2A classifies only: eligibility
-    /// never executes a Tool, appends a replay result, or alters external
-    /// state.
+    /// version and replay-contract fingerprint, so the dangling call may be
+    /// auto-replayed once a later phase ships an executor. Phase 2A classifies
+    /// only: eligibility never executes a Tool, appends a replay result, or
+    /// alters external state.
     AutoReplayEligible,
     /// The descriptor is absent, Unsafe, or cannot be proven Safe because the
     /// event does not persist the call-time descriptor snapshot, because the
@@ -181,11 +181,19 @@ enum ReplayDecision {
 /// * a stored call-time identity, and
 /// * a current descriptor that still resolves for `tool`, and
 /// * stored and current policy both exactly `Safe`, and
-/// * equal schema versions and equal revisions (same capability generation).
+/// * equal schema versions, and
+/// * a stored and current replay-contract fingerprint that are both present and equal, proving the same audited implementation contract.
 ///
 /// Every other shape — missing identity, missing descriptor, either policy
-/// `Unsafe`, a schema-version or revision mismatch — is `VerifyOnly`. `Safe` is
-/// never inferred from a tool name, source, or idempotence flag.
+/// `Unsafe`, a missing or drifted fingerprint, or a schema-version mismatch —
+/// is `VerifyOnly`. `Safe` is never inferred from a tool name, source, or
+/// idempotence flag.
+///
+/// `revision` is deliberately **not** compared here: it is a process-local
+/// TOCTOU guard, not a durable generation, and comparing it across a restart
+/// would wrongly reject an unchanged contract. The later permit path, derived
+/// from one immutable registry snapshot, re-checks revision equality where
+/// applicable.
 fn replay_decision(
     tool: &str,
     stored: Option<&ToolCallIdentity>,
@@ -200,7 +208,8 @@ fn replay_decision(
     if stored.replay_policy != ReplayPolicy::Safe
         || current.replay_policy != ReplayPolicy::Safe
         || stored.schema_version != current.schema_version
-        || stored.revision != current.revision
+        || stored.replay_contract_fingerprint.is_none()
+        || stored.replay_contract_fingerprint != current.replay_contract_fingerprint
     {
         return ReplayDecision::VerifyOnly;
     }
@@ -210,10 +219,10 @@ fn replay_decision(
 /// Descriptor-aware recovery text. The call-time descriptor identity is
 /// compared against the current descriptor's identity, so eligibility is a
 /// fail-closed classification: `AutoReplayEligible` only when the stored and
-/// current contracts both prove `Safe` at the same schema version and revision.
-/// Phase 2A does not act on eligibility — both arms emit the same
-/// unknown-outcome sentence — and never infers replay safety from a tool name,
-/// source, or idempotence flag.
+/// current contracts both prove `Safe` at the same schema version and
+/// replay-contract fingerprint. Phase 2A does not act on eligibility — both
+/// arms emit the same unknown-outcome sentence — and never infers replay
+/// safety from a tool name, source, or idempotence flag.
 #[must_use]
 pub fn boundary_repair_text_with_policy(
     tool: &str,
@@ -485,7 +494,13 @@ mod tests {
             schema_version: crate::tools::descriptor::SCHEMA_VERSION,
             revision,
             replay_policy: policy,
-            replay_contract_fingerprint: None,
+            replay_contract_fingerprint: (policy == ReplayPolicy::Safe).then(|| {
+                crate::tools::descriptor::ReplayContractFingerprint::parse(&format!(
+                    "v1:{}",
+                    "0a".repeat(crate::tools::descriptor::REPLAY_CONTRACT_DIGEST_LEN),
+                ))
+                .unwrap()
+            }),
         }
     }
 
@@ -549,10 +564,12 @@ mod tests {
         assert!(text.contains(VERIFY_CLOSE));
     }
 
-    /// Dual `Safe` at the same schema version and revision is the *only* shape
-    /// that classifies `AutoReplayEligible`; every drift is fail-closed.
+    /// Dual `Safe` at the same schema version and replay-contract fingerprint
+    /// is the *only* shape that classifies `AutoReplayEligible`; every drift
+    /// is fail-closed. A revision bump alone does not change eligibility —
+    /// revision is a process-local TOCTOU guard deferred to the permit path.
     #[test]
-    fn eligibility_requires_dual_safe_and_matching_generation() {
+    fn eligibility_requires_dual_safe_and_matching_schema_and_fingerprint() {
         let stored = identity(ReplayPolicy::Safe, 3);
         let matching = TestDescriptorLookup {
             identity: Some(identity(ReplayPolicy::Safe, 3)),
@@ -583,8 +600,9 @@ mod tests {
         };
         assert_eq!(
             replay_decision("t", Some(&stored), Some(&revision_drift)),
-            ReplayDecision::VerifyOnly,
-            "a replacement that bumped revision is a different generation"
+            ReplayDecision::AutoReplayEligible,
+            "a revision bump is a process-local TOCTOU guard, not a durable \
+             generation, so cross-restart eligibility ignores it"
         );
 
         let mut schema_drifted = identity(ReplayPolicy::Safe, 3);
@@ -603,11 +621,53 @@ mod tests {
             ReplayDecision::VerifyOnly,
             "a legacy row with no stored identity can never replay"
         );
+        let fingerprint_drift = TestDescriptorLookup {
+            identity: Some(ToolCallIdentity {
+                replay_contract_fingerprint: crate::tools::descriptor::ReplayContractFingerprint::parse(&format!(
+                    "v1:{}",
+                    "0b".repeat(crate::tools::descriptor::REPLAY_CONTRACT_DIGEST_LEN),
+                ))
+                .ok(),
+                ..identity(ReplayPolicy::Safe, 3)
+            }),
+        };
+        assert_eq!(
+            replay_decision("t", Some(&stored), Some(&fingerprint_drift)),
+            ReplayDecision::VerifyOnly,
+            "a changed implementation contract fingerprint is not replayable"
+        );
+
+        let missing_fingerprint = TestDescriptorLookup {
+            identity: Some(ToolCallIdentity {
+                replay_contract_fingerprint: None,
+                ..identity(ReplayPolicy::Safe, 3)
+            }),
+        };
+        assert_eq!(
+            replay_decision("t", Some(&stored), Some(&missing_fingerprint)),
+            ReplayDecision::VerifyOnly,
+            "Safe without a stable implementation contract is fail-closed"
+        );
+
+        // A legacy row whose stored identity predates the fingerprint must stay
+        // VerifyOnly even when the current descriptor is Safe with a valid
+        // token: the stored side proves what actually ran, and it cannot.
+        let stored_missing_fingerprint = ToolCallIdentity {
+            replay_contract_fingerprint: None,
+            ..identity(ReplayPolicy::Safe, 3)
+        };
+        assert_eq!(
+            replay_decision("t", Some(&stored_missing_fingerprint), Some(&matching)),
+            ReplayDecision::VerifyOnly,
+            "a legacy row with no stored fingerprint can never replay"
+        );
+
         assert_eq!(
             replay_decision("t", Some(&stored), None),
             ReplayDecision::VerifyOnly,
             "an absent lookup can never replay"
         );
+
         let resolves_nothing = TestDescriptorLookup { identity: None };
         assert_eq!(
             replay_decision("t", Some(&stored), Some(&resolves_nothing)),
