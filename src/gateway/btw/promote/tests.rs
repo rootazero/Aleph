@@ -185,6 +185,7 @@ fn the_final_assistant_step_is_the_answer() {
         user(turn, "/btw which file loads config?"),
         assistant(turn, "Let me grep for it."),
         SessionEvent::ToolCallRequested {
+            identity: None,
             turn_id: turn,
             call_id: "c1".into(),
             name: "file_read".into(),

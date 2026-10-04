@@ -45,6 +45,36 @@ pub enum ReplayPolicy {
     Safe,
 }
 
+/// The durable, call-time identity of a Tool capability.
+///
+/// Captured when a `ToolCallRequested` event is emitted and persisted with it,
+/// so recovery can prove a crash-interrupted call targeted the same callable
+/// contract it now resolves — without persisting handler code, plugin paths, or
+/// mutable runtime state. These three fields are the minimum needed to
+/// re-evaluate replay eligibility; the event's existing `name` and `call_id`
+/// remain the call's outer identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCallIdentity {
+    pub schema_version: u32,
+    pub revision: u64,
+    pub replay_policy: ReplayPolicy,
+}
+
+impl ToolCallIdentity {
+    /// Copy the durable identity fields from one descriptor.
+    ///
+    /// The descriptor's explicit `replay_policy` is carried verbatim; `Safe` is
+    /// never inferred from `idempotent`, `concurrent_safe`, source, or name.
+    #[must_use]
+    pub fn from_descriptor(descriptor: &ToolCapabilityDescriptor) -> Self {
+        Self {
+            schema_version: descriptor.schema_version,
+            revision: descriptor.revision,
+            replay_policy: descriptor.replay_policy,
+        }
+    }
+}
+
 /// Where a tool capability originates. Kept here (rather than in `service`) as
 /// the single definition; `tools::service` re-exports it for existing callers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,6 +87,16 @@ pub enum ToolSource {
 
 pub trait ReplayPolicyLookup: Send + Sync {
     fn replay_policy(&self, name: &str) -> Option<ReplayPolicy>;
+}
+
+/// Read-only lookup of a Tool's durable call-time identity.
+///
+/// Implementations read the *current* descriptor for `name` and copy only
+/// [`ToolCallIdentity`]'s durable fields. This is a same-generation snapshot
+/// read, not a replay authorization API — the recovery predicate lives in
+/// `session::boundary_repair`.
+pub trait ToolDescriptorLookup: Send + Sync {
+    fn tool_call_identity(&self, name: &str) -> Option<ToolCallIdentity>;
 }
 
 /// Why a [`ToolCapabilityDescriptor`] failed [`ToolCapabilityDescriptor::validate`].
@@ -287,6 +327,55 @@ mod tests {
     #[test]
     fn default_replay_policy_is_unsafe() {
         assert_eq!(ReplayPolicy::default(), ReplayPolicy::Unsafe);
+    }
+
+    #[test]
+    fn tool_call_identity_copies_descriptor_fields_verbatim() {
+        let mut descriptor = descriptor_with("t", json!({"type": "object"}));
+        descriptor.revision = 9;
+        descriptor.replay_policy = ReplayPolicy::Safe;
+
+        let identity = ToolCallIdentity::from_descriptor(&descriptor);
+        assert_eq!(
+            identity,
+            ToolCallIdentity {
+                schema_version: SCHEMA_VERSION,
+                revision: 9,
+                replay_policy: ReplayPolicy::Safe,
+            }
+        );
+        assert_eq!(identity.replay_policy, descriptor.replay_policy);
+    }
+
+    #[test]
+    fn tool_call_identity_defaults_to_unsafe() {
+        let descriptor = descriptor_with("t", json!({"type": "object"}));
+        assert_eq!(
+            ToolCallIdentity::from_descriptor(&descriptor).replay_policy,
+            ReplayPolicy::Unsafe
+        );
+    }
+
+    #[test]
+    fn tool_call_identity_round_trips() {
+        let identity = ToolCallIdentity {
+            schema_version: SCHEMA_VERSION,
+            revision: 42,
+            replay_policy: ReplayPolicy::Unsafe,
+        };
+        let encoded = serde_json::to_string(&identity).unwrap();
+        let decoded: ToolCallIdentity = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, identity);
+    }
+
+    /// Fail-closed at the enum layer: an unknown/future policy name must not
+    /// deserialize into *any* variant, so it can never be read as `Safe`. (The
+    /// event-level decoder that maps this error to `identity: None` is a later
+    /// session task.)
+    #[test]
+    fn unknown_replay_policy_never_decodes_to_safe() {
+        let decoded: Result<ReplayPolicy, _> = serde_json::from_str("\"FuturePolicy\"");
+        assert!(decoded.is_err());
     }
 
     #[test]

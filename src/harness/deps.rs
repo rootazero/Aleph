@@ -20,6 +20,9 @@ use tokio::sync::Mutex;
 pub struct HarnessDeps {
     pub session: Arc<dyn SessionService>,
     pub tools: Arc<dyn ToolService>,
+    /// Read-only call-time descriptor identity lookup. This is wiring only:
+    /// replay policy remains in the session recovery layer.
+    pub tool_descriptor_lookup: Option<Arc<dyn crate::tools::descriptor::ToolDescriptorLookup>>,
     /// The LLM provider. Provider-tier failover (ordered chain, model-level
     /// fallback, circuit breaker) is layered *inside* this `AiProvider` via
     /// `providers::FailoverProvider`; the harness sees one provider and never

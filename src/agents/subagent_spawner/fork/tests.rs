@@ -48,6 +48,7 @@ fn assistant(turn: TurnId, text: &str) -> SessionEventRecord {
 
 fn call(turn: TurnId, id: &str) -> SessionEventRecord {
     rec(SessionEvent::ToolCallRequested {
+        identity: None,
         turn_id: turn,
         call_id: id.to_string(),
         name: "bash".to_string(),

@@ -1070,6 +1070,7 @@ mod tests {
                 .emit_event(
                     &child_id,
                     SessionEvent::ToolCallRequested {
+                        identity: None,
                         turn_id: parent_turn,
                         call_id: call.to_string(),
                         name: "bash".into(),

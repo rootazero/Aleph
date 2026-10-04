@@ -1789,6 +1789,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Route-mode cloud escalation reuses the shared ApprovalGate; its
             // channel requester is late-bound below at `set_requester`.
             Some(approval_gate.clone()),
+            // The MCP `tool_registry_phase2` is the registry the live agent
+            // loop resolves tool names against, so it is the only lookup whose
+            // generation can back a durable `ToolCallRequested.identity`.
+            Some(tool_registry_phase2.clone()),
         )
         .await
         {

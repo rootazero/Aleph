@@ -3084,6 +3084,48 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_requested_identity_survives_encode_decode_row() {
+        use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity};
+
+        let event = SessionEvent::ToolCallRequested {
+            turn_id: uuid::Uuid::new_v4(),
+            call_id: "c".into(),
+            name: "bash".into(),
+            input: serde_json::json!({ "cmd": "ls" }),
+            identity: Some(ToolCallIdentity {
+                schema_version: 1,
+                revision: 3,
+                replay_policy: ReplayPolicy::Safe,
+            }),
+            at: 1,
+        };
+        let json = encode_row(&event).unwrap();
+        let DecodedRow::Event(record) = decode_row(1, 1, &json) else {
+            panic!("identity-bearing row must decode: {json}");
+        };
+        let SessionEvent::ToolCallRequested { identity, .. } = record.event else {
+            panic!("expected ToolCallRequested");
+        };
+        assert_eq!(
+            identity,
+            Some(ToolCallIdentity {
+                schema_version: 1,
+                revision: 3,
+                replay_policy: ReplayPolicy::Safe,
+            })
+        );
+
+        let legacy = r#"{"type":"tool_call_requested","turn_id":"00000000-0000-0000-0000-000000000000","call_id":"c","name":"bash","input":{},"at":1,"v":1}"#;
+        let DecodedRow::Event(record) = decode_row(2, 1, legacy) else {
+            panic!("legacy row must decode");
+        };
+        let SessionEvent::ToolCallRequested { identity, .. } = record.event else {
+            panic!("expected ToolCallRequested");
+        };
+        assert_eq!(identity, None);
+    }
+
+    #[test]
     fn an_unknown_variant_is_undecodable_unless_the_row_says_ignorable() {
         assert!(matches!(
             decode_row(7, 1, r#"{"type":"from_the_future","v":9}"#),

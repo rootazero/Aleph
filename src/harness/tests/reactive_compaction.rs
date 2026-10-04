@@ -469,6 +469,7 @@ fn build_deps(
     context_compactor: Option<Arc<ContextCompactor>>,
 ) -> HarnessDeps {
     HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools: Arc::new(EmptyTools),
         llm,

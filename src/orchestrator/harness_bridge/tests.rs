@@ -1004,6 +1004,7 @@ fn runner_with_failing_provider(
         agent_registry: registry,
         session_service,
         tool_service: std::sync::Arc::new(crate::tools::NullToolService::new()),
+        tool_descriptor_lookup: None,
         default_provider: std::sync::Arc::new(
             crate::providers::default_handle::StaticDefault::new(provider),
         ),

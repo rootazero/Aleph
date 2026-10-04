@@ -486,6 +486,11 @@ impl AgentHarness {
                 call_id: call.id.clone(),
                 name: call.name.clone(),
                 input: call.arguments.clone(),
+                identity: self
+                    .deps
+                    .tool_descriptor_lookup
+                    .as_ref()
+                    .and_then(|lookup| lookup.tool_call_identity(&call.name)),
                 at: now_ms(),
             };
             self.deps.session.emit_event(session_id, requested).await?;
@@ -818,6 +823,11 @@ impl AgentHarness {
                 call_id: call.id.clone(),
                 name: call.name.clone(),
                 input: call.arguments.clone(),
+                identity: self
+                    .deps
+                    .tool_descriptor_lookup
+                    .as_ref()
+                    .and_then(|lookup| lookup.tool_call_identity(&call.name)),
                 at: now_ms(),
             };
             self.deps.session.emit_event(session_id, requested).await?;

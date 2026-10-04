@@ -865,6 +865,10 @@ impl HarnessRunner for AgentHarnessRunner {
                 None => budget,
             });
         let deps = HarnessDeps {
+            // Call-time descriptor identity lookup: same registry generation that
+            // resolved the handler, threaded from the runner for ToolCallRequested.
+            // rust-doctor-disable-next-line excessive-clone
+            tool_descriptor_lookup: self.tool_descriptor_lookup.clone(),
             // rust-doctor-disable-next-line excessive-clone
             session: self.session_service.clone(),
             tools,

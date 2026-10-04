@@ -78,6 +78,7 @@ impl FastPathJournal {
                 envelope: Some(envelope),
             },
             SessionEvent::ToolCallRequested {
+                identity: None,
                 turn_id: self.turn_id,
                 call_id: self.call_id.clone(),
                 name: self.tool.clone(),

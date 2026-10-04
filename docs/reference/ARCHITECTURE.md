@@ -103,9 +103,10 @@ Tool registration
 
 The registry stores descriptor and handler together so a hot replacement cannot produce a mixed-generation projection. `ToolRegistrationScope` disposes registrations in reverse order and uses generation checks to protect replacements. Visibility (what a session may see) remains separate from lifecycle (when a registration is disposed). The process-global slots in `src/capability/mod.rs` remain boot-install diagnostics and are not this runtime registry.
 
-Recovery deliberately does not infer replay safety from a tool name, source, or idempotence flag. `ReplayPolicyLookup` reads the current descriptor, but `ToolCallRequested` does not yet persist the call-time descriptor revision. Therefore both `Safe` and `Unsafe` unresolved calls produce the existing unknown-outcome and verification path; automatic Safe replay is a later change that must add and validate the durable revision contract first.
+Recovery deliberately does not infer replay safety from a tool name, source, or idempotence flag. `ReplayPolicyLookup` reads the current descriptor. Phase 2A now persists an optional call-time `ToolCallIdentity` on `ToolCallRequested` and carries it through `DanglingCall`; old rows decode to `None`, and unknown nested policy values fail closed. Recovery classifies a call as replay-eligible only when stored and current identities are both `Safe` with equal schema version and revision. Phase 2A still does not execute eligible tools: it emits the existing unknown-outcome verification event. Safe execution remains a separate Phase 2B decision requiring an executor and external-effect/idempotency contract.
 
-`src/harness/` remains outside this convergence layer. Future Capability kinds should be added only after a real consumer, ownership rule, projection, and recovery/lifecycle contract have been identified.
+The two real `ToolCallRequested` producers in `src/harness/agent/act.rs` receive only a read-only lookup through `HarnessDeps`. The startup path passes the existing MCP `ToolHandlerRegistry` explicitly; fixtures and builtin paths without a registry remain `None` and therefore fail closed. This is wiring, not recovery policy: the harness does not decide replay or execute recovery.
+
 
 ---
 

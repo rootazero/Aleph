@@ -352,6 +352,7 @@ async fn budget_critical_compacts_and_continues_with_prior_text() {
 
     let budget = ContextBudget::new(&tiny_budget_config(10, 0.40, 0.50));
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -420,6 +421,7 @@ async fn budget_critical_compacts_and_continues_no_prior_text() {
 
     let budget = ContextBudget::new(&tiny_budget_config(10, 0.40, 0.50));
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -506,6 +508,7 @@ async fn budget_warning_invokes_compactor_before_llm() {
     ));
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -595,6 +598,7 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
     );
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -707,6 +711,7 @@ async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
             .build(),
     );
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -839,6 +844,7 @@ async fn tool_loop_halt_fires_salvage_grace_turn_and_closes_orphan() {
             .build(),
     );
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -995,6 +1001,7 @@ async fn per_tool_budget_overrun_recovers_as_tool_error_not_run_abort() {
     ]);
     let provider = Arc::new(OneShotSleepyCallProvider);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: sleepy_tool_service(),
         llm: provider as Arc<dyn AiProvider>,
@@ -1085,6 +1092,7 @@ async fn veto_cap_follows_profile_steer_max() {
     // Veto fires on turn 5; second on turn 6; then the cap triggers a grace turn.
     // 20 iterations is safely above 6 and safely below old-const-10's turn count.
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -1239,6 +1247,7 @@ async fn grace_turn_payload_has_no_orphaned_tool_calls() {
             .build(),
     );
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -1461,6 +1470,7 @@ async fn weak_model_fanout_then_thrash_steers_and_delivers_partial() {
             .build(),
     );
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),

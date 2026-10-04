@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::tools::descriptor::ToolCallIdentity;
+
 pub type Timestamp = i64; // unix milliseconds
 pub type EventSeq = u64;
 pub type TurnId = uuid::Uuid;
@@ -359,6 +361,26 @@ impl RunEnvelopeSnapshot {
     }
 }
 
+/// Field-local, fail-closed decoder for [`SessionEvent::ToolCallRequested`]'s
+/// optional `identity`.
+///
+/// An unknown nested `replay_policy` word, a missing required nested field, or
+/// any malformed identity value decodes to `None` while the outer event stays
+/// decodable — a future policy word is never reinterpreted as `Safe`. This
+/// deliberately does **not** extend the public [`crate::tools::descriptor::ReplayPolicy`]
+/// enum: the decoder, not the enum, absorbs the unknown value. A legacy row
+/// with no `identity` key at all is `None` via `#[serde(default)]` and never
+/// reaches this function.
+fn deserialize_call_identity<'de, D>(
+    deserializer: D,
+) -> Result<Option<ToolCallIdentity>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(raw.and_then(|value| serde_json::from_value::<ToolCallIdentity>(value).ok()))
+}
+
 // NOTE: `PartialEq` is intentionally omitted from `SessionEvent` because
 // some variants carry types that do not implement it.
 // Tests that need comparison should compare on the serialized JSON form.
@@ -520,6 +542,21 @@ pub enum SessionEvent {
         call_id: String,
         name: String,
         input: serde_json::Value,
+        /// The durable, call-time capability identity of the tool this request
+        /// targeted (schema version, registry revision, replay policy).
+        ///
+        /// Captured from the same registry generation that resolves the
+        /// handler, so recovery can prove the call-time contract and the
+        /// currently-resolved one are the same generation. `None` means
+        /// *unknown* — a legacy row without the field, or an identity the
+        /// fail-closed decoder refused — and is never replay eligible. Absent
+        /// from the wire when `None` so legacy readers stay byte-identical.
+        #[serde(
+            default,
+            deserialize_with = "deserialize_call_identity",
+            skip_serializing_if = "Option::is_none"
+        )]
+        identity: Option<ToolCallIdentity>,
         at: Timestamp,
     },
     ToolCallApproved {
@@ -828,6 +865,7 @@ pub(crate) mod fixtures {
             (
                 "ToolCallRequested",
                 SessionEvent::ToolCallRequested {
+                    identity: None,
                     turn_id: t,
                     call_id: "c".into(),
                     name: "bash".into(),
@@ -963,6 +1001,7 @@ pub(crate) mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::descriptor::ReplayPolicy;
 
     #[test]
     fn session_forked_event_round_trips_through_json() {
@@ -1003,6 +1042,77 @@ mod tests {
             serde_json::to_string(&serde_json::from_str::<SessionEvent>(&json).unwrap()).unwrap(),
             json
         );
+    }
+
+    #[test]
+    fn tool_call_requested_identity_round_trips_through_json() {
+        let ev = SessionEvent::ToolCallRequested {
+            turn_id: TurnId::new_v4(),
+            call_id: "c1".into(),
+            name: "bash".into(),
+            input: serde_json::json!({ "cmd": "ls" }),
+            identity: Some(ToolCallIdentity {
+                schema_version: 1,
+                revision: 7,
+                replay_policy: ReplayPolicy::Safe,
+            }),
+            at: 1_700_000_000_000,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"identity\""), "{json}");
+        let back: SessionEvent = serde_json::from_str(&json).unwrap();
+        match back {
+            SessionEvent::ToolCallRequested { identity, .. } => {
+                assert_eq!(
+                    identity,
+                    Some(ToolCallIdentity {
+                        schema_version: 1,
+                        revision: 7,
+                        replay_policy: ReplayPolicy::Safe,
+                    })
+                );
+            }
+            other => panic!("expected ToolCallRequested, got {other:?}"),
+        }
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+    }
+
+    #[test]
+    fn tool_call_requested_legacy_row_without_identity_decodes_to_none() {
+        let legacy = r#"{"type":"tool_call_requested","turn_id":"00000000-0000-0000-0000-000000000000","call_id":"c","name":"bash","input":{},"at":1}"#;
+        let back: SessionEvent = serde_json::from_str(legacy).unwrap();
+        let SessionEvent::ToolCallRequested { identity, .. } = back else {
+            panic!("expected ToolCallRequested");
+        };
+        assert!(identity.is_none());
+    }
+
+    #[test]
+    fn tool_call_requested_unknown_nested_replay_policy_decodes_identity_to_none() {
+        let future = r#"{"type":"tool_call_requested","turn_id":"00000000-0000-0000-0000-000000000000","call_id":"c","name":"bash","input":{},"identity":{"schema_version":1,"revision":1,"replay_policy":"FuturePolicy"},"at":1}"#;
+        let back: SessionEvent = serde_json::from_str(future)
+            .expect("outer event must still decode when inner policy is unknown");
+        let SessionEvent::ToolCallRequested { identity, .. } = back else {
+            panic!("expected ToolCallRequested");
+        };
+        assert_eq!(identity, None);
+    }
+
+    #[test]
+    fn tool_call_requested_with_identity_is_still_durability_barrier() {
+        let ev = SessionEvent::ToolCallRequested {
+            turn_id: TurnId::new_v4(),
+            call_id: "c".into(),
+            name: "bash".into(),
+            input: serde_json::json!({}),
+            identity: Some(ToolCallIdentity {
+                schema_version: 1,
+                revision: 1,
+                replay_policy: ReplayPolicy::Unsafe,
+            }),
+            at: 1,
+        };
+        assert_eq!(durability_of(&ev), Durability::Barrier);
     }
 
     #[test]

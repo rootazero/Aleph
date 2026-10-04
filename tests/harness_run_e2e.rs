@@ -132,6 +132,7 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
     AgentHarness::new(HarnessDeps {
         session,
         tools: Arc::new(NoopTool),
+        tool_descriptor_lookup: None,
         llm: Scripted::new(),
         verifier_chain: None,
         context_budget: None,

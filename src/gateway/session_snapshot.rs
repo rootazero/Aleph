@@ -311,6 +311,7 @@ mod last_run_tests {
 
     fn requested(call: &str) -> SessionEvent {
         SessionEvent::ToolCallRequested {
+            identity: None,
             turn_id: TurnId::new_v4(),
             call_id: call.to_string(),
             name: "bash_exec".to_string(),

@@ -18,6 +18,7 @@ use crate::session::events::{
     now_ms, EventSeq, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, TurnTrigger,
 };
 use crate::session::service::{SessionError, SessionHandle, SessionId, SessionService};
+use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity, ToolDescriptorLookup, SCHEMA_VERSION};
 use crate::tools::result_processing::RecoveryTools;
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 
@@ -324,6 +325,18 @@ fn turn_started_event() -> SessionEvent {
 
 // -- Tests -------------------------------------------------------------------
 
+struct StaticToolDescriptorLookup;
+
+impl ToolDescriptorLookup for StaticToolDescriptorLookup {
+    fn tool_call_identity(&self, name: &str) -> Option<ToolCallIdentity> {
+        (name == "read_file").then_some(ToolCallIdentity {
+            schema_version: SCHEMA_VERSION,
+            revision: 7,
+            replay_policy: ReplayPolicy::Safe,
+        })
+    }
+}
+
 #[tokio::test]
 async fn act_executes_tools_sequentially() {
     let tool_calls = vec![
@@ -348,6 +361,7 @@ async fn act_executes_tools_sequentially() {
     ]);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: Some(Arc::new(StaticToolDescriptorLookup)),
         session: session.clone(),
         tools: tools.clone(),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
@@ -407,6 +421,19 @@ async fn act_executes_tools_sequentially() {
     assert_eq!(requested, 2, "one ToolCallRequested per call");
     assert_eq!(results, 2, "one ToolResult per successful call");
     assert_eq!(errors, 0, "no ToolError on success path");
+    let identities: Vec<_> = events
+        .iter()
+        .filter_map(|record| match &record.event {
+            SessionEvent::ToolCallRequested { identity, .. } => identity.as_ref(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(identities.len(), 2, "serial requests must carry identity");
+    assert!(identities.iter().all(|identity| {
+        identity.schema_version == SCHEMA_VERSION
+            && identity.revision == 7
+            && identity.replay_policy == ReplayPolicy::Safe
+    }));
 }
 
 #[tokio::test]
@@ -425,6 +452,7 @@ async fn act_tool_failure_returns_harness_tool_error() {
     })]);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools,
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
@@ -496,6 +524,7 @@ async fn act_tool_error_event_carries_persistence_hint() {
     })]);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools,
         llm: CapturingProvider::with_tool_calls("fetching…", tool_calls),
@@ -616,6 +645,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
             at: now_ms(),
         },
         SessionEvent::ToolCallRequested {
+            identity: None,
             turn_id,
             call_id: "c1".into(),
             name: "read_file".into(),
@@ -634,6 +664,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
     let provider = CapturingProvider::text_only("done");
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(ScriptedToolsNever),
         llm: provider.clone(),
@@ -810,6 +841,7 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
     })]);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools,
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
@@ -928,6 +960,7 @@ async fn tool_error_trace_carries_retryable_flag() {
     })]);
     let (sink, traced) = super::stability::RecordingTraceSink::new();
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: tools.clone(),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
@@ -1053,6 +1086,7 @@ async fn g3_repairs_case_mismatched_tool_name() {
     let tools = LowercaseOnlyTools::new("read_file");
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: tools.clone(),
         llm: CapturingProvider::with_tool_calls(
@@ -1122,6 +1156,7 @@ async fn g3_does_not_repair_when_lowercase_is_also_unknown() {
     let tools = LowercaseOnlyTools::new("read_file");
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: tools.clone(),
         llm: CapturingProvider::with_tool_calls(
@@ -1188,6 +1223,7 @@ async fn g1_last_step_injects_max_steps_hint() {
     let provider = CapturingProvider::text_only("final summary");
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools,
         llm: provider.clone(),
@@ -1247,6 +1283,7 @@ async fn g1_does_not_inject_when_not_last_step() {
     let provider = CapturingProvider::text_only("ok");
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools,
         llm: provider.clone(),
@@ -1343,6 +1380,7 @@ async fn act_parallel_overlaps_concurrent_safe_calls_and_preserves_order() {
     );
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: Some(Arc::new(StaticToolDescriptorLookup)),
         session: session.clone(),
         tools: tools.clone(),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls.clone()),
@@ -1414,6 +1452,19 @@ async fn act_parallel_overlaps_concurrent_safe_calls_and_preserves_order() {
         vec!["p1".to_string(), "p2".to_string(), "p3".to_string()],
         "ToolResult events must be emitted in input order",
     );
+    let identities = events
+        .iter()
+        .filter_map(|record| match &record.event {
+            SessionEvent::ToolCallRequested { identity, .. } => identity.as_ref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(identities.len(), 3, "parallel requests must carry identity");
+    assert!(identities.iter().all(|identity| {
+        identity.schema_version == SCHEMA_VERSION
+            && identity.revision == 7
+            && identity.replay_policy == ReplayPolicy::Safe
+    }));
 
     // The execution log records the actual ToolService::execute order. With
     // a concurrency cap of 8 and 3 calls, all three should kick off before
@@ -1510,6 +1561,7 @@ async fn act_parallel_fires_live_done_in_completion_order_with_real_durations() 
 
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(DelayByArgTools),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls.clone()),
@@ -1612,6 +1664,7 @@ async fn act_falls_back_to_serial_when_any_call_is_unsafe() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: tools.clone(),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
@@ -1683,6 +1736,7 @@ async fn deferred_results_emit_one_tool_result_per_skipped_call() {
     let tools = ScriptedTools::new(vec![]);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools,
         llm: CapturingProvider::text_only("idle"),
@@ -1789,6 +1843,7 @@ async fn serial_batch_defers_all_when_steer_present_before_first_call() {
     let tools = ScriptedTools::new(vec![]);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: tools.clone(),
         llm: CapturingProvider::text_only("idle"),
@@ -1878,6 +1933,7 @@ async fn serial_batch_runs_full_when_no_midturn_steer() {
     ]);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: tools.clone(),
         llm: CapturingProvider::text_only("idle"),
@@ -1967,6 +2023,7 @@ async fn group_boundary_defers_remaining_groups_when_steer_present() {
     let tools = ScriptedTools::new_concurrent(vec![], std::time::Duration::ZERO);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: tools.clone(),
         llm: CapturingProvider::text_only("idle"),
@@ -2097,6 +2154,7 @@ async fn overrunning_tool_yields_recoverable_error_not_stalled_turn() {
 
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools,
         llm: CapturingProvider::text_only("idle"),
@@ -2206,6 +2264,7 @@ async fn undeclared_tool_is_not_judged_by_the_harness_turn_timeout() {
 
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools,
         llm: CapturingProvider::text_only("idle"),
@@ -2263,6 +2322,7 @@ async fn undeclared_tool_is_not_judged_by_the_harness_turn_timeout() {
 /// `think.rs::race_llm_call`, where no human stands in front of the future.
 fn scoped_deps(session: Arc<MockSession>, tools: Arc<dyn ToolService>) -> HarnessDeps {
     HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools,
         llm: CapturingProvider::text_only("idle"),
@@ -2543,6 +2603,7 @@ async fn group_boundary_stops_and_closes_out_when_the_run_is_cancelled() {
     );
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: tools.clone(),
         llm: CapturingProvider::text_only("idle"),
@@ -2631,6 +2692,7 @@ async fn group_boundary_stops_and_closes_out_when_the_run_is_cancelled() {
 async fn queued_parallel_call_is_timed_from_its_own_start_not_admission() {
     let session = MockSession::new(vec![turn_started_event()]);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(DelayByArgTools),
         llm: CapturingProvider::text_only("idle"),
@@ -2746,6 +2808,7 @@ async fn spilled_result_text(
     };
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools,
         llm: CapturingProvider::with_tool_calls("calling…", vec![call]),

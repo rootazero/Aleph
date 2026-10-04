@@ -19,7 +19,9 @@ use std::sync::Weak;
 use arc_swap::ArcSwap;
 use tokio::sync::broadcast;
 
-use crate::tools::descriptor::{ReplayPolicyLookup, ToolCapabilityDescriptor};
+use crate::tools::descriptor::{
+    ReplayPolicyLookup, ToolCallIdentity, ToolCapabilityDescriptor, ToolDescriptorLookup,
+};
 use crate::tools::handlers::ToolHandler;
 use crate::tools::service::{ToolDefinition, ToolError, ToolSource};
 
@@ -189,6 +191,20 @@ impl ReplayPolicyLookup for ToolHandlerRegistry {
     fn replay_policy(&self, name: &str) -> Option<crate::tools::descriptor::ReplayPolicy> {
         self.descriptor(name)
             .map(|descriptor| descriptor.replay_policy)
+    }
+}
+
+impl ToolDescriptorLookup for ToolHandlerRegistry {
+    /// Copy the durable identity fields from the current descriptor for `name`.
+    ///
+    /// `descriptor` reads one `RegistryEntry` (handler and descriptor written in
+    /// the same atomic swap), so the returned identity and the handler a caller
+    /// resolves are always the same registry generation. Returns `None` for an
+    /// unknown name — a missing descriptor is unknown, never allow-all. This is
+    /// a snapshot read and never authorizes replay.
+    fn tool_call_identity(&self, name: &str) -> Option<ToolCallIdentity> {
+        self.descriptor(name)
+            .map(|descriptor| ToolCallIdentity::from_descriptor(&descriptor))
     }
 }
 
@@ -532,6 +548,7 @@ mod tests {
     struct FakeHandler {
         name: String,
         source: ToolSource,
+        idempotent: bool,
     }
 
     #[async_trait]
@@ -548,7 +565,10 @@ mod tests {
                 description: String::new(),
                 input_schema: serde_json::json!({}),
                 source: self.source.clone(),
-                metadata: ToolDefinitionMetadata::default(),
+                metadata: ToolDefinitionMetadata {
+                    idempotent: self.idempotent,
+                    ..Default::default()
+                },
             }
         }
     }
@@ -557,6 +577,15 @@ mod tests {
         Arc::new(FakeHandler {
             name: name.into(),
             source: ToolSource::Builtin,
+            idempotent: false,
+        })
+    }
+
+    fn fake_idempotent(name: &str) -> Arc<dyn ToolHandler> {
+        Arc::new(FakeHandler {
+            name: name.into(),
+            source: ToolSource::Builtin,
+            idempotent: true,
         })
     }
 
@@ -589,6 +618,70 @@ mod tests {
             Some(ReplayPolicy::Unsafe)
         );
         assert_eq!(ReplayPolicyLookup::replay_policy(&reg, "missing"), None);
+    }
+
+    #[test]
+    fn tool_call_identity_reflects_current_descriptor() {
+        let reg = ToolHandlerRegistry::new();
+        let mut d = desc("arbitrary_name");
+        d.replay_policy = ReplayPolicy::Safe;
+        reg.register(d, fake("arbitrary_name")).expect("register");
+
+        let identity = ToolDescriptorLookup::tool_call_identity(&reg, "arbitrary_name")
+            .expect("identity for registered tool");
+        assert_eq!(identity.schema_version, SCHEMA_VERSION);
+        assert_eq!(identity.revision, 1);
+        assert_eq!(identity.replay_policy, ReplayPolicy::Safe);
+        assert_eq!(
+            ToolDescriptorLookup::tool_call_identity(&reg, "missing"),
+            None
+        );
+    }
+
+    #[test]
+    fn tool_call_identity_defaults_to_unsafe_policy() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("plain"), fake("plain")).expect("register");
+        assert_eq!(
+            ToolDescriptorLookup::tool_call_identity(&reg, "plain")
+                .unwrap()
+                .replay_policy,
+            ReplayPolicy::Unsafe
+        );
+    }
+
+    #[test]
+    fn tool_call_identity_never_infers_safe_from_idempotent() {
+        let reg = ToolHandlerRegistry::new();
+        let mut d = desc("idem");
+        d.idempotent = true;
+        reg.register(d, fake_idempotent("idem")).expect("register");
+        assert_eq!(
+            ToolDescriptorLookup::tool_call_identity(&reg, "idem")
+                .unwrap()
+                .replay_policy,
+            ReplayPolicy::Unsafe
+        );
+    }
+
+    #[test]
+    fn tool_call_identity_tracks_replacement_generation() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("t"), fake("t")).expect("register");
+        assert_eq!(
+            ToolDescriptorLookup::tool_call_identity(&reg, "t")
+                .unwrap()
+                .revision,
+            1
+        );
+
+        let mut next = desc("t");
+        next.replay_policy = ReplayPolicy::Safe;
+        reg.replace(next, fake("t")).expect("replace");
+
+        let identity = ToolDescriptorLookup::tool_call_identity(&reg, "t").unwrap();
+        assert_eq!(identity.revision, 2, "identity must track the new generation");
+        assert_eq!(identity.replay_policy, ReplayPolicy::Safe);
     }
 
     #[test]

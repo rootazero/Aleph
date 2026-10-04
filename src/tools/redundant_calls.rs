@@ -269,6 +269,7 @@ mod tests {
 
     fn req(call_id: &str, name: &str, input: serde_json::Value) -> SessionEventRecord {
         mk(SessionEvent::ToolCallRequested {
+            identity: None,
             turn_id: uuid::Uuid::nil(),
             call_id: call_id.to_string(),
             name: name.to_string(),

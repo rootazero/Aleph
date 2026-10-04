@@ -1321,6 +1321,7 @@ mod tests {
             (
                 5,
                 SessionEvent::ToolCallRequested {
+                    identity: None,
                     turn_id: tid,
                     call_id: "c1".into(),
                     name: "bash_exec".into(),

@@ -275,6 +275,7 @@ async fn fresh_session() -> (Arc<dyn SessionService>, SessionId) {
 
 fn harness(session: Arc<dyn SessionService>, tools: ScopedToolService) -> AgentHarness {
     AgentHarness::new(HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools: Arc::new(tools),
         llm: Arc::new(crate::providers::mock::MockProvider::new("idle")),

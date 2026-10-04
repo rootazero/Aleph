@@ -44,6 +44,7 @@ use crate::session::events::{
     EventSeq, ParkReason, RunEnvelopeSnapshot, SessionEvent, SessionEventRecord, Timestamp, TurnId,
 };
 use crate::session::store::{MarkerSlice, UndecodableRecord};
+use crate::tools::descriptor::ToolCallIdentity;
 
 /// One thing a session log says that it must not say.
 ///
@@ -284,6 +285,11 @@ pub struct DanglingCall {
     pub call_id: String,
     pub tool_name: String,
     pub turn_id: TurnId,
+    /// The durable, call-time capability identity carried on this call's
+    /// `ToolCallRequested`, if the record had one. `None` means *unknown* — a
+    /// legacy row without the field, or one the fail-closed decoder refused —
+    /// and is never replay eligible.
+    pub identity: Option<ToolCallIdentity>,
     /// `seq` of the `ToolCallRequested`. A `call_id` can be dispatched more
     /// than once ([`LogContradiction::DuplicateDispatch`]), so the id alone
     /// does not name a dispatch; the seq does.
@@ -488,6 +494,8 @@ struct Dispatch<'a> {
     call_id: &'a str,
     tool_name: &'a str,
     turn_id: TurnId,
+    /// Carried through from the `ToolCallRequested` onto the [`DanglingCall`].
+    identity: Option<ToolCallIdentity>,
     /// `seq` of the receipt that answered it, once one has.
     answered: Option<EventSeq>,
     denied: bool,
@@ -604,6 +612,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                 turn_id,
                 call_id,
                 name,
+                identity,
                 ..
             } => {
                 if after_finish_without_start && saw_run_started && unmarked_first.is_none() {
@@ -629,6 +638,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                     call_id,
                     tool_name: name,
                     turn_id: *turn_id,
+                    identity: *identity,
                     answered: None,
                     denied: false,
                     parked: None,
@@ -731,6 +741,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
             call_id: d.call_id.to_string(),
             tool_name: d.tool_name.to_string(),
             turn_id: d.turn_id,
+            identity: d.identity,
             seq: d.seq,
             provenance,
             denied: d.denied,
@@ -915,6 +926,7 @@ mod tests {
     use super::fixtures::{kind_index, one_of_each_kind};
     use super::*;
     use crate::session::events::{MessageContent, ParkReason, RunOutcome, TurnTrigger};
+    use crate::tools::descriptor::ReplayPolicy;
 
     /// Needles for the source census at the bottom of this module. Defined up
     /// here, far from every call site in these tests, so the census window
@@ -987,12 +999,51 @@ mod tests {
 
     fn requested(call: &str) -> SessionEvent {
         SessionEvent::ToolCallRequested {
+            identity: None,
             turn_id: TurnId::new_v4(),
             call_id: call.to_string(),
             name: "bash_exec".to_string(),
             input: serde_json::json!({}),
             at: 3,
         }
+    }
+
+    fn requested_with_identity(call: &str, identity: ToolCallIdentity) -> SessionEvent {
+        SessionEvent::ToolCallRequested {
+            identity: Some(identity),
+            turn_id: TurnId::new_v4(),
+            call_id: call.to_string(),
+            name: "bash_exec".to_string(),
+            input: serde_json::json!({}),
+            at: 3,
+        }
+    }
+
+    /// The queued identity snapshot survives reduction verbatim: the dangling
+    /// call carries back the exact schema version, revision and replay policy
+    /// that were recorded at call time, and a legacy row with no identity stays
+    /// `None`.
+    #[test]
+    fn dangling_call_retains_the_recorded_identity_snapshot() {
+        let snapshot = ToolCallIdentity {
+            schema_version: crate::tools::descriptor::SCHEMA_VERSION,
+            revision: 7,
+            replay_policy: ReplayPolicy::Safe,
+        };
+        let events = vec![
+            rec(1, started("r1"),),
+            rec(2, requested_with_identity("c1", snapshot),),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert_eq!(reduction.dangling.len(), 1);
+        let retained = reduction.dangling[0].identity.expect("snapshot retained");
+        assert_eq!(retained.schema_version, snapshot.schema_version);
+        assert_eq!(retained.revision, 7);
+        assert_eq!(retained.replay_policy, ReplayPolicy::Safe);
+
+        let legacy = vec![rec(1, started("r1"),), rec(2, requested("c1"),)];
+        let legacy_reduction = reduce_run(&legacy).expect("legal log");
+        assert!(legacy_reduction.dangling[0].identity.is_none());
     }
 
     fn result_for(call: &str) -> SessionEvent {

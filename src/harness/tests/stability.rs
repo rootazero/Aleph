@@ -269,6 +269,7 @@ pub(super) fn minimal_deps(
     llm: Arc<dyn AiProvider>,
 ) -> HarnessDeps {
     HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools,
         llm,

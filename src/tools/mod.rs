@@ -109,7 +109,8 @@ pub use scoped::{ScopedToolService, ToolDefinitionRewriter};
 
 pub use context::{ToolContext, ToolContextHandle, new_tool_context_handle};
 pub use descriptor::{
-    DescriptorError, ReplayPolicy, ReplayPolicyLookup, ToolCapabilityDescriptor, ToolKind,
+    DescriptorError, ReplayPolicy, ReplayPolicyLookup, ToolCallIdentity,
+    ToolCapabilityDescriptor, ToolDescriptorLookup, ToolKind,
 };
 pub use null::NullToolService;
 pub use registration_scope::{ToolDisposeReport, ToolRegistrationScope};

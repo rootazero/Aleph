@@ -2691,6 +2691,7 @@ mod tests {
 
     fn tool_requested(call_id: &str) -> SessionEvent {
         SessionEvent::ToolCallRequested {
+            identity: None,
             turn_id: TurnId::new_v4(),
             call_id: call_id.to_string(),
             name: "bash_exec".to_string(),

@@ -167,6 +167,7 @@ impl OrchestratorFixture {
             agent_registry,
             session_service: session_service.clone(),
             tool_service,
+            tool_descriptor_lookup: None,
             default_provider: Arc::new(alephcore::providers::StaticDefault::new(scripted))
                 as Arc<dyn alephcore::providers::DefaultProviderHandle>,
             named_providers: HashMap::new(),

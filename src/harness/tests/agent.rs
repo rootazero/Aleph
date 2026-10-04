@@ -242,6 +242,7 @@ fn empty_session(agent_id: &str) -> (Arc<InProcessActorSessionService>, SessionI
 /// provider is never invoked — only the session dep is exercised.
 fn followup_harness(session: Arc<InProcessActorSessionService>) -> AgentHarness {
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools: Arc::new(AlwaysOkTools),
         llm: Arc::new(SleepingProvider {
@@ -484,6 +485,7 @@ async fn harness_accumulates_provider_token_usage() {
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools,
         llm: provider,
@@ -553,6 +555,7 @@ async fn max_iterations_stops_runaway_loop() {
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools,
         llm: provider,
@@ -616,6 +619,7 @@ async fn turn_timeout_returns_ok_with_hit_limit_not_err() {
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools,
         llm: provider,
