@@ -1991,6 +1991,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         acp_manager.clone(),
         mcp_handle.clone(),
     );
+    let mut builtin_registration_scope: Option<alephcore::tools::ToolRegistrationScope> = None;
     // `self_config` and `moa` tools need the same `ConfigPatcher`; it is built
     // after the registry, so we late-bind it now. Both `Arc`s are cheap clones.
     if let Some(tool_registry) = agent_result.tool_registry.as_ref() {
@@ -2010,6 +2011,32 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             }),
         );
+
+        // Register builtin tool routers against the MCP-bridged
+        // `tool_registry_phase2`. The returned scope is the only handle that
+        // can deterministically undo every router this call installed; stash
+        // it into the outer `builtin_registration_scope` so teardown (after
+        // `run_until_shutdown`) can dispose it before the registries
+        // themselves drop.
+        let names: Vec<_> = tool_registry
+            .unified_tools()
+            .map(|t| t.name.clone())
+            .collect();
+        let inner: Arc<dyn alephcore::executor::ToolRegistry> = tool_registry.clone();
+        match alephcore::tools::handlers::builtin::register_builtin_routers(
+            &tool_registry_phase2,
+            inner,
+            names,
+        )
+        .await
+        {
+            Ok(scope) => {
+                builtin_registration_scope = Some(scope);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to register builtin tool routers");
+            }
+        }
     }
 
     // MCP server face (`/mcp`, spec §3.7). Built over the SAME
@@ -3849,6 +3876,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let shutdown_rx = setup_graceful_shutdown(args);
     let run_result = server.run_until_shutdown(shutdown_rx).await;
+    // Dispose the builtin router scope first so it runs before the bash reaper
+    // and any other registry-touching teardown. Taking rather than borrowing
+    // moves ownership out of the `Option` so a second dispose is impossible.
+    if let Some(scope) = builtin_registration_scope.take() {
+        if let Err(e) = scope.dispose().await {
+            tracing::warn!(error = %e, "failed to dispose builtin tool router scope");
+        }
+    }
     // Reap detached background `bash` jobs before the rest of teardown. This
     // has to be an explicit call: `tokio::process::Child::kill_on_drop` is
     // best-effort once the runtime itself is being torn down, so a

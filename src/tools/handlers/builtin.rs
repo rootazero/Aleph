@@ -15,7 +15,10 @@ use serde_json::Value;
 
 use crate::executor::ToolRegistry;
 use crate::session::events::{ToolOutput, ToolOutputMetadata};
+use crate::tools::descriptor::ToolCapabilityDescriptor;
 use crate::tools::handlers::ToolHandler;
+use crate::tools::registration_scope::ToolRegistrationScope;
+use crate::tools::registry::ToolHandlerRegistry;
 use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
 use crate::tools::AlephToolDyn;
 
@@ -255,6 +258,68 @@ impl ToolHandler for BuiltinRegistryRouter {
             },
         }
     }
+}
+
+/// Names of the MCP-bridge capability builtins that are registered with the
+/// `ToolHandlerRegistry` through the [`BuiltinRegistryRouter`] adapter rather
+/// than the direct `BuiltinHandler` path. They go through
+/// `ToolRegistry::execute_tool` so they pick up the same descriptor /
+/// revision accounting as every other tool the agent loop sees.
+const MCP_READ_RESOURCE: &str = "mcp_read_resource";
+const MCP_LIST_RESOURCES: &str = "mcp_list_resources";
+const MCP_LIST_RESOURCE_TEMPLATES: &str = "mcp_list_resource_templates";
+const MCP_GET_PROMPT: &str = "mcp_get_prompt";
+const MCP_LIST_PROMPTS: &str = "mcp_list_prompts";
+const MCP_LOGIN: &str = "mcp_login";
+
+/// Register a batch of [`BuiltinRegistryRouter`] adapters against the given
+/// `ToolHandlerRegistry`, one per `name` in `names`. The function owns the
+/// registrations through a single [`ToolRegistrationScope`] tagged
+/// `capability:builtins` so the bridge can dispose them as one unit.
+///
+/// The six capability builtins (`mcp_read_resource` and friends — see the
+/// `MCP_*` consts above, plus `mcp_login`) are skipped when present in
+/// `names`: they are registered by the MCP bridge itself when an MCP server
+/// boots, and re-registering them here would either fail with `Duplicate` or
+/// — worse — overwrite the bridge's handler with a router that has no
+/// server id in its scope and silently swallows every call.
+pub async fn register_builtin_routers(
+    registry: &ToolHandlerRegistry,
+    tool_registry: Arc<dyn ToolRegistry>,
+    names: impl IntoIterator<Item = String>,
+) -> Result<ToolRegistrationScope, ToolError> {
+    let mut scope = ToolRegistrationScope::new("capability:builtins");
+    for name in names {
+        // Skip the six MCP-bridge capability builtins. They are registered by
+        // the MCP bridge at server-boot time; touching them here would race
+        // the bridge and produce a Duplicate (or, if the bridge later
+        // replaces them, a stale router with no server scope).
+        if matches!(
+            name.as_str(),
+            MCP_READ_RESOURCE
+                | MCP_LIST_RESOURCES
+                | MCP_LIST_RESOURCE_TEMPLATES
+                | MCP_GET_PROMPT
+                | MCP_LIST_PROMPTS
+                | MCP_LOGIN
+        ) {
+            continue;
+        }
+        let handler: Arc<dyn ToolHandler> =
+            Arc::new(BuiltinRegistryRouter::new(name.clone(), Arc::clone(&tool_registry)));
+        let descriptor = ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
+        match registry.register(descriptor, handler) {
+            Ok(handle) => scope.track(handle),
+            Err(e) => {
+                // Partial registration: roll back everything this call has
+                // tracked so far before surfacing the error, so the caller
+                // never sees a half-populated capability bundle.
+                let _ = scope.dispose().await;
+                return Err(e);
+            }
+        }
+    }
+    Ok(scope)
 }
 
 #[cfg(test)]
