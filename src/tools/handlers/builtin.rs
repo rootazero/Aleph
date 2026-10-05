@@ -170,7 +170,7 @@ impl ToolHandler for BuiltinRegistryRouter {
     }
 
     fn definition(&self) -> ToolDefinition {
-        use crate::tool_metadata::types::conflict::ToolSource as CatalogSource;
+        use crate::ToolSource as CatalogSource;
         match self.inner.get_tool(&self.name) {
             Some(unified) => {
                 // Same resolution chain as `BuiltinHandler`: declared → table
@@ -201,7 +201,6 @@ impl ToolHandler for BuiltinRegistryRouter {
                         plugin_id: plugin_id.clone().unwrap_or_else(|| id.clone()),
                     },
                     CatalogSource::Native | CatalogSource::Custom { .. } => ToolSource::Builtin,
-                    _ => ToolSource::Builtin,
                 };
                 ToolDefinition {
                     name: self.name.clone(),
