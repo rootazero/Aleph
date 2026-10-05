@@ -14,6 +14,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::executor::ToolRegistry;
+use crate::mcp::tool_bridge::{
+    LOGIN_TOOL, PROMPT_LIST_TOOL, PROMPT_TOOL, RESOURCE_LIST_TOOL, RESOURCE_TEMPLATE_LIST_TOOL,
+    RESOURCE_TOOL,
+};
 use crate::session::events::{ToolOutput, ToolOutputMetadata};
 use crate::tools::descriptor::ToolCapabilityDescriptor;
 use crate::tools::handlers::ToolHandler;
@@ -265,12 +269,12 @@ impl ToolHandler for BuiltinRegistryRouter {
 /// than the direct `BuiltinHandler` path. They go through
 /// `ToolRegistry::execute_tool` so they pick up the same descriptor /
 /// revision accounting as every other tool the agent loop sees.
-const MCP_READ_RESOURCE: &str = "mcp_read_resource";
-const MCP_LIST_RESOURCES: &str = "mcp_list_resources";
-const MCP_LIST_RESOURCE_TEMPLATES: &str = "mcp_list_resource_templates";
-const MCP_GET_PROMPT: &str = "mcp_get_prompt";
-const MCP_LIST_PROMPTS: &str = "mcp_list_prompts";
-const MCP_LOGIN: &str = "mcp_login";
+///
+/// Re-exported from [`crate::mcp::tool_bridge`] rather than re-typed: the
+/// bridge owns these names as its single source of truth, and a second list
+/// here is the exact "two copies of the same fact" drift this project's
+/// redlines forbid. The bridge's `pub(crate)` constants are visible here
+/// (same crate) despite the module cycle — Rust resolves items crate-wide.
 
 /// Register a batch of [`BuiltinRegistryRouter`] adapters against the given
 /// `ToolHandlerRegistry`, one per `name` in `names`. The function owns the
@@ -278,11 +282,11 @@ const MCP_LOGIN: &str = "mcp_login";
 /// `capability:builtins` so the bridge can dispose them as one unit.
 ///
 /// The six capability builtins (`mcp_read_resource` and friends — see the
-/// `MCP_*` consts above, plus `mcp_login`) are skipped when present in
-/// `names`: they are registered by the MCP bridge itself when an MCP server
-/// boots, and re-registering them here would either fail with `Duplicate` or
-/// — worse — overwrite the bridge's handler with a router that has no
-/// server id in its scope and silently swallows every call.
+/// `RESOURCE_TOOL`/`PROMPT_TOOL`/`LOGIN_TOOL` consts imported above) are
+/// skipped when present in `names`: they are registered by the MCP bridge
+/// itself when an MCP server boots, and re-registering them here would either
+/// fail with `Duplicate` or — worse — overwrite the bridge's handler with a
+/// router that has no server id in its scope and silently swallows every call.
 pub async fn register_builtin_routers(
     registry: &ToolHandlerRegistry,
     tool_registry: Arc<dyn ToolRegistry>,
@@ -296,12 +300,12 @@ pub async fn register_builtin_routers(
         // replaces them, a stale router with no server scope).
         if matches!(
             name.as_str(),
-            MCP_READ_RESOURCE
-                | MCP_LIST_RESOURCES
-                | MCP_LIST_RESOURCE_TEMPLATES
-                | MCP_GET_PROMPT
-                | MCP_LIST_PROMPTS
-                | MCP_LOGIN
+            RESOURCE_TOOL
+                | RESOURCE_LIST_TOOL
+                | RESOURCE_TEMPLATE_LIST_TOOL
+                | PROMPT_TOOL
+                | PROMPT_LIST_TOOL
+                | LOGIN_TOOL
         ) {
             continue;
         }
@@ -478,5 +482,148 @@ mod builtin_handler_tests {
             }
             other => panic!("expected ValidationFailed, got {other:?}"),
         }
+    }
+
+    use std::collections::HashMap;
+
+    /// Mock `ToolRegistry` for `register_builtin_routers` tests: `get_tool`
+    /// resolves nothing (so `BuiltinRegistryRouter::definition()` takes the
+    /// conservative fallback path), while `execute_tool` answers from a
+    /// name→value table so `invoke` can be observed returning a caller-chosen
+    /// sentinel.
+    struct MockToolRegistry {
+        results: HashMap<String, serde_json::Value>,
+    }
+
+    impl crate::executor::ToolRegistry for MockToolRegistry {
+        fn get_tool(&self, _name: &str) -> Option<&crate::tool_metadata::UnifiedTool> {
+            None
+        }
+
+        fn execute_tool(
+            &self,
+            tool_name: &str,
+            _arguments: serde_json::Value,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<serde_json::Value>> + Send + '_>>
+        {
+            let value = self.results.get(tool_name).cloned();
+            let name = tool_name.to_string();
+            Box::pin(async move {
+                value.ok_or_else(|| crate::error::AlephError::tool_not_found(&name))
+            })
+        }
+    }
+
+    /// The six MCP-bridge capability names are registered by the MCP bridge
+    /// itself; `register_builtin_routers` must skip them. Feeding the full six
+    /// alongside one ordinary name registers only the ordinary one.
+    #[tokio::test]
+    async fn register_builtin_routers_skips_the_six_bridge_names() {
+        let registry = ToolHandlerRegistry::new();
+        let tool_registry: Arc<dyn ToolRegistry> = Arc::new(MockToolRegistry {
+            results: HashMap::new(),
+        });
+        let names: Vec<String> = vec![
+            crate::mcp::tool_bridge::RESOURCE_TOOL.to_string(),
+            crate::mcp::tool_bridge::RESOURCE_LIST_TOOL.to_string(),
+            crate::mcp::tool_bridge::RESOURCE_TEMPLATE_LIST_TOOL.to_string(),
+            crate::mcp::tool_bridge::PROMPT_TOOL.to_string(),
+            crate::mcp::tool_bridge::PROMPT_LIST_TOOL.to_string(),
+            crate::mcp::tool_bridge::LOGIN_TOOL.to_string(),
+            "ordinary_builtin".to_string(),
+        ];
+        let scope = register_builtin_routers(&registry, tool_registry, names)
+            .await
+            .expect("registration should succeed");
+        assert_eq!(scope.len(), 1, "only the ordinary name is tracked");
+        assert!(
+            registry.resolve("ordinary_builtin").is_some(),
+            "ordinary name must be registered"
+        );
+        for bridge_name in [
+            crate::mcp::tool_bridge::RESOURCE_TOOL,
+            crate::mcp::tool_bridge::RESOURCE_LIST_TOOL,
+            crate::mcp::tool_bridge::RESOURCE_TEMPLATE_LIST_TOOL,
+            crate::mcp::tool_bridge::PROMPT_TOOL,
+            crate::mcp::tool_bridge::PROMPT_LIST_TOOL,
+            crate::mcp::tool_bridge::LOGIN_TOOL,
+        ] {
+            assert!(
+                registry.resolve(bridge_name).is_none(),
+                "bridge builtin {bridge_name} must not be registered by the router helper"
+            );
+        }
+        assert!(scope.dispose().await.all_ok());
+    }
+
+    /// A routed ordinary tool's `invoke` must delegate to the registry's
+    /// `execute_tool` (returning the sentinel), not answer locally.
+    #[tokio::test]
+    async fn routed_handler_invoke_delegates_to_registry_execute() {
+        let registry = ToolHandlerRegistry::new();
+        let sentinel = serde_json::json!({ "sentinel": 7 });
+        let mut results = HashMap::new();
+        results.insert("ordinary_builtin".to_string(), sentinel.clone());
+        let tool_registry: Arc<dyn ToolRegistry> = Arc::new(MockToolRegistry { results });
+
+        register_builtin_routers(
+            &registry,
+            Arc::clone(&tool_registry),
+            vec!["ordinary_builtin".to_string()],
+        )
+        .await
+        .expect("registration should succeed");
+
+        let handler = registry
+            .resolve("ordinary_builtin")
+            .expect("ordinary name is registered");
+        let output = handler
+            .invoke(serde_json::json!({}))
+            .await
+            .expect("invoke should succeed");
+        assert_eq!(output.value, sentinel, "invoke must forward to execute_tool");
+    }
+
+    /// A duplicate partway through the batch rolls back every earlier
+    /// registration in the same call, leaving only the pre-existing entry.
+    #[tokio::test]
+    async fn register_builtin_routers_rolls_back_on_partial_failure() {
+        let registry = ToolHandlerRegistry::new();
+        let tool_registry: Arc<dyn ToolRegistry> = Arc::new(MockToolRegistry {
+            results: HashMap::new(),
+        });
+
+        // Pre-register "already_there" so the second batch hits a Duplicate.
+        register_builtin_routers(
+            &registry,
+            Arc::clone(&tool_registry),
+            vec!["already_there".to_string()],
+        )
+        .await
+        .expect("first registration should succeed");
+
+        // "new_tool" registers fine, then "already_there" fails → rollback.
+        let err = match register_builtin_routers(
+            &registry,
+            tool_registry,
+            vec!["new_tool".to_string(), "already_there".to_string()],
+        )
+        .await
+        {
+            Ok(_scope) => panic!("duplicate must fail the batch"),
+            Err(e) => e,
+        };
+        match err {
+            ToolError::Duplicate { name } => assert_eq!(name, "already_there"),
+            other => panic!("expected Duplicate, got {other:?}"),
+        }
+        assert!(
+            registry.resolve("new_tool").is_none(),
+            "the partial registration must be rolled back"
+        );
+        assert!(
+            registry.resolve("already_there").is_some(),
+            "the pre-existing entry must be untouched"
+        );
     }
 }

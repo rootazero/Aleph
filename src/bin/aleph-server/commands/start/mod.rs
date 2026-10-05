@@ -3880,8 +3880,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // and any other registry-touching teardown. Taking rather than borrowing
     // moves ownership out of the `Option` so a second dispose is impossible.
     if let Some(scope) = builtin_registration_scope.take() {
-        if let Err(e) = scope.dispose().await {
-            tracing::warn!(error = %e, "failed to dispose builtin tool router scope");
+        // `dispose` returns a `ToolDisposeReport`, not a `Result`: every step
+        // runs even when some fail, so the failure signal is the report's
+        // `all_ok()`, not an `Err`. Matches `registration.rs` / `tool_bridge.rs`.
+        let report = scope.dispose().await;
+        if !report.all_ok() {
+            tracing::warn!(
+                owner = %report.owner,
+                failures = ?report.failures().collect::<Vec<_>>(),
+                "failed to dispose builtin tool router scope"
+            );
         }
     }
     // Reap detached background `bash` jobs before the rest of teardown. This
