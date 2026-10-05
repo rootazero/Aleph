@@ -223,6 +223,7 @@ async fn seed_interrupted_run_with_envelope(
             envelope,
         },
         SessionEvent::ToolCallRequested {
+            identity: None,
             turn_id: tid,
             call_id: "dangling-1".into(),
             name: "bash_exec".into(),
