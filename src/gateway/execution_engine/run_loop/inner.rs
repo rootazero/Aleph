@@ -814,7 +814,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .cloned()
                 .collect();
             let mut allowed_names: std::collections::BTreeSet<String> =
-                plugin_tools.iter().map(|tool| tool.name.clone()).collect();
+                allowed_tools.iter().map(|tool| tool.name.clone()).collect();
 
             let mcp_tool_names = match super::super::tool_service_builder::mcp_tool_registry() {
                 Some(mcp_registry) => {
