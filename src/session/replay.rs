@@ -57,24 +57,19 @@ impl ReplayPermit {
         Self { inner }
     }
 
-    pub(crate) async fn invoke(self, claim_token: String) -> ReplayInvocation {
+    pub(crate) async fn invoke(self, claim_token: String) -> SessionEvent {
         self.inner.invoke(claim_token).await
     }
 }
 
 /// The bridge-side half of a permit: actually runs the prepared handler.
+///
+/// Always produces a real outcome (`ToolResult` for an Ok handler run,
+/// `ToolError` for an Err handler run). A decline happens in `prepare`
+/// (`ReplayPrepare::Refused`), before any claim, so there is no
+/// decline-after-claim outcome to represent here.
 pub(crate) trait ReplayInvoker: Send {
-    fn invoke(self: Box<Self>, claim_token: String) -> BoxFuture<'static, ReplayInvocation>;
-}
-
-/// What a prepared replay produced.
-pub enum ReplayInvocation {
-    /// A real handler ran (Ok → `ToolResult`, Err → `ToolError` are BOTH real
-    /// outcomes); commit with the original `call_id` under the claim.
-    Executed(Box<SessionEvent>),
-    /// No effect ran (permit precondition broke mid-flight); VerifyOnly
-    /// fallback. No commit.
-    NoEffect,
+    fn invoke(self: Box<Self>, claim_token: String) -> BoxFuture<'static, SessionEvent>;
 }
 
 /// Bounded at-least-once: each resume pass may effect a dangling call at most
@@ -89,7 +84,7 @@ mod tests {
     use std::sync::Arc;
 
     /// A minimal in-crate invoker that records it ran and returns a real
-    /// `Executed(ToolResult)`. Lives here (not in the bridge) so the seam's
+    /// `SessionEvent::ToolResult`. Lives here (not in the bridge) so the seam's
     /// single-use/ownership shape can be exercised without the registry.
     struct RecordingInvoker {
         fired: Arc<AtomicBool>,
@@ -97,11 +92,11 @@ mod tests {
     }
 
     impl ReplayInvoker for RecordingInvoker {
-        fn invoke(self: Box<Self>, _claim_token: String) -> BoxFuture<'static, ReplayInvocation> {
+        fn invoke(self: Box<Self>, _claim_token: String) -> BoxFuture<'static, SessionEvent> {
             let RecordingInvoker { fired, call_id } = *self;
             Box::pin(async move {
                 fired.store(true, Ordering::SeqCst);
-                ReplayInvocation::Executed(Box::new(SessionEvent::ToolResult {
+                SessionEvent::ToolResult {
                     turn_id: uuid::Uuid::new_v4(),
                     call_id,
                     output: ToolOutput {
@@ -109,7 +104,7 @@ mod tests {
                         metadata: Default::default(),
                     },
                     at: 0,
-                }))
+                }
             })
         }
     }
@@ -129,17 +124,14 @@ mod tests {
             call_id: "c-1".into(),
         }));
 
-        let invocation = permit.invoke("claim-token".into()).await;
+        let event = permit.invoke("claim-token".into()).await;
 
         assert!(fired.load(Ordering::SeqCst), "invoker must have run");
-        match invocation {
-            ReplayInvocation::Executed(event) => match *event {
-                SessionEvent::ToolResult { call_id, .. } => {
-                    assert_eq!(call_id, "c-1");
-                }
-                _ => panic!("expected Executed(ToolResult)"),
-            },
-            _ => panic!("expected Executed(ToolResult)"),
+        match event {
+            SessionEvent::ToolResult { call_id, .. } => {
+                assert_eq!(call_id, "c-1");
+            }
+            _ => panic!("expected ToolResult"),
         }
     }
 

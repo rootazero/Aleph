@@ -42,7 +42,7 @@ use crate::session::reduction::{
     RunReduction,
 };
 use crate::session::replay::{
-    ReplayInvocation, ReplayPrepare, ReplayPreparer, ReplayRequest, REPLAY_MAX_ATTEMPTS_PER_CALL,
+    ReplayPrepare, ReplayPreparer, ReplayRequest, REPLAY_MAX_ATTEMPTS_PER_CALL,
 };
 use crate::session::service::{SessionError, SessionId};
 use crate::session::store::{
@@ -1991,31 +1991,24 @@ impl ResumeCoordinator {
                 break;
             };
 
-            match permit.invoke(claim_token.clone()).await {
-                ReplayInvocation::Executed(event) => {
-                    match self
-                        .event_store
-                        .commit_replay_outcome(
-                            session_id,
-                            &req.call_id,
-                            &claim_token,
-                            &event,
-                            now_ms(),
-                        )
-                        .await
-                    {
-                        Ok(ReplayOutcomeResult::Committed { .. }) => report.replayed += 1,
-                        Ok(ReplayOutcomeResult::AlreadyAnswered | ReplayOutcomeResult::ClaimLost) => {
-                        }
-                        Err(e) => {
-                            self.refuse_replay(session_id, e, report);
-                            break;
-                        }
-                    }
+            let event = permit.invoke(claim_token.clone()).await;
+            match self
+                .event_store
+                .commit_replay_outcome(
+                    session_id,
+                    &req.call_id,
+                    &claim_token,
+                    &event,
+                    now_ms(),
+                )
+                .await
+            {
+                Ok(ReplayOutcomeResult::Committed { .. }) => report.replayed += 1,
+                Ok(ReplayOutcomeResult::AlreadyAnswered | ReplayOutcomeResult::ClaimLost) => {}
+                Err(e) => {
+                    self.refuse_replay(session_id, e, report);
+                    break;
                 }
-                // The permit's own precondition broke mid-flight: no effect
-                // ran, nothing to commit. The call stays dangling for repair.
-                ReplayInvocation::NoEffect => {}
             }
 
             // Re-derive: the commit above changed the log, so the next loop
@@ -3997,10 +3990,10 @@ mod tests {
             fired: Arc<AtomicBool>,
         }
         impl ReplayInvoker for FakeInvoker {
-            fn invoke(self: Box<Self>, _claim_token: String) -> BoxFuture<'static, ReplayInvocation> {
+            fn invoke(self: Box<Self>, _claim_token: String) -> BoxFuture<'static, SessionEvent> {
                 Box::pin(async move {
                     self.fired.store(true, Ordering::SeqCst);
-                    ReplayInvocation::Executed(Box::new(SessionEvent::ToolResult {
+                    SessionEvent::ToolResult {
                         turn_id: self.turn_id,
                         call_id: self.call_id,
                         output: ToolOutput {
@@ -4008,7 +4001,7 @@ mod tests {
                             metadata: Default::default(),
                         },
                         at: now_ms(),
-                    }))
+                    }
                 })
             }
         }

@@ -12,7 +12,7 @@ use futures::future::BoxFuture;
 
 use crate::session::events::{now_ms, SessionEvent, TurnId};
 use crate::session::replay::{
-    ReplayInvocation, ReplayInvoker, ReplayPermit, ReplayPrepare, ReplayPreparer, ReplayRequest,
+    ReplayInvoker, ReplayPermit, ReplayPrepare, ReplayPreparer, ReplayRequest,
 };
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity};
@@ -78,7 +78,7 @@ struct PermitInvoker {
 }
 
 impl ReplayInvoker for PermitInvoker {
-    fn invoke(self: Box<Self>, _claim_token: String) -> BoxFuture<'static, ReplayInvocation> {
+    fn invoke(self: Box<Self>, _claim_token: String) -> BoxFuture<'static, SessionEvent> {
         Box::pin(async move {
             let PermitInvoker {
                 handler,
@@ -88,18 +88,18 @@ impl ReplayInvoker for PermitInvoker {
             } = *self;
             let at = now_ms();
             match handler.invoke(effective_input).await {
-                Ok(output) => ReplayInvocation::Executed(Box::new(SessionEvent::ToolResult {
+                Ok(output) => SessionEvent::ToolResult {
                     turn_id,
                     call_id,
                     output,
                     at,
-                })),
-                Err(e) => ReplayInvocation::Executed(Box::new(SessionEvent::ToolError {
+                },
+                Err(e) => SessionEvent::ToolError {
                     turn_id,
                     call_id,
                     error: e.to_string(),
                     at,
-                })),
+                },
             }
         })
     }
@@ -237,20 +237,17 @@ mod tests {
 
         // The permit is single-use: it is consumed here exactly once.
         match permit.invoke("claim-token".into()).await {
-            ReplayInvocation::Executed(event) => match *event {
-                SessionEvent::ToolResult {
-                    turn_id: t,
-                    call_id,
-                    output,
-                    ..
-                } => {
-                    assert_eq!(t, turn_id);
-                    assert_eq!(call_id, "call-1");
-                    assert_eq!(output.value, serde_json::json!({"tool": "safe_tool"}));
-                }
-                _ => panic!("expected Executed(ToolResult)"),
-            },
-            _ => panic!("expected Executed(ToolResult)"),
+            SessionEvent::ToolResult {
+                turn_id: t,
+                call_id,
+                output,
+                ..
+            } => {
+                assert_eq!(t, turn_id);
+                assert_eq!(call_id, "call-1");
+                assert_eq!(output.value, serde_json::json!({"tool": "safe_tool"}));
+            }
+            _ => panic!("expected ToolResult"),
         }
     }
 
@@ -320,20 +317,17 @@ mod tests {
             effective_input: serde_json::json!({}),
         };
         match Box::new(ok_invoker).invoke("token".into()).await {
-            ReplayInvocation::Executed(event) => match *event {
-                SessionEvent::ToolResult {
-                    turn_id: t,
-                    call_id,
-                    output,
-                    ..
-                } => {
-                    assert_eq!(t, turn_id);
-                    assert_eq!(call_id, "c-ok");
-                    assert_eq!(output.value, serde_json::json!({"tool": "t"}));
-                }
-                _ => panic!("expected Executed(ToolResult)"),
-            },
-            _ => panic!("expected Executed(ToolResult)"),
+            SessionEvent::ToolResult {
+                turn_id: t,
+                call_id,
+                output,
+                ..
+            } => {
+                assert_eq!(t, turn_id);
+                assert_eq!(call_id, "c-ok");
+                assert_eq!(output.value, serde_json::json!({"tool": "t"}));
+            }
+            _ => panic!("expected ToolResult"),
         }
 
         let err_invoker = PermitInvoker {
@@ -343,20 +337,17 @@ mod tests {
             effective_input: serde_json::json!({}),
         };
         match Box::new(err_invoker).invoke("token".into()).await {
-            ReplayInvocation::Executed(event) => match *event {
-                SessionEvent::ToolError {
-                    turn_id: t,
-                    call_id,
-                    error,
-                    ..
-                } => {
-                    assert_eq!(t, turn_id);
-                    assert_eq!(call_id, "c-err");
-                    assert!(error.contains("boom"), "error body: {error}");
-                }
-                _ => panic!("expected Executed(ToolError)"),
-            },
-            _ => panic!("expected Executed(ToolError)"),
+            SessionEvent::ToolError {
+                turn_id: t,
+                call_id,
+                error,
+                ..
+            } => {
+                assert_eq!(t, turn_id);
+                assert_eq!(call_id, "c-err");
+                assert!(error.contains("boom"), "error body: {error}");
+            }
+            _ => panic!("expected ToolError"),
         }
     }
 }
