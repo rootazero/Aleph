@@ -12,11 +12,16 @@
 mod executor;
 mod loader;
 mod parser;
+mod registry_owner;
 mod spec;
 mod tool_adapter;
 mod watcher;
 
 pub use loader::{load_skills_from_dir, SkillLoadReport, SkillLoader};
+pub use registry_owner::{
+    markdown_skill_registry_owner, set_markdown_skill_registry, MarkdownRegistryError,
+    MarkdownSkillRegistryOwner,
+};
 pub use spec::{
     AlephExtensions, AlephSkillSpec, ConfirmationMode, DockerConfig, EvolutionMeta, InputHint,
     NetworkMode, RequiresSpec, SandboxMode, SecuritySpec, SkillMetadata,

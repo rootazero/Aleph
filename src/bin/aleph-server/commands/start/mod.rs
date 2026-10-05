@@ -228,6 +228,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // is write-only and external MCP tools never reach the LLM.
     alephcore::gateway::execution_engine::set_mcp_tool_registry(tool_registry_phase2.clone());
 
+    // Markdown-skill owner install: hand the same registry to the single
+    // writer for SKILL.md-loaded tools so the per-request tool-surface
+    // builder can resolve them through the same `ToolHandlerRegistry` as
+    // MCP-bridged tools. Must follow `set_mcp_tool_registry` so the
+    // owner is configured against the live registry, not a separate one.
+    alephcore::tools::markdown_skill::set_markdown_skill_registry(tool_registry_phase2.clone());
+
     // First production consumer of `ToolHandlerRegistry::subscribe`. Logs every
     // MCP-driven register/unregister so operators can see exactly when
     // remote tools enter or leave the LLM's surface. The channel has a
@@ -2728,6 +2735,24 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                                 tokio::spawn(async move {
                                     let server = alephcore::gateway::handlers::markdown_skills::markdown_skills_server();
                                     for tool in tools {
+                                        // Publish into the markdown-skill owner first
+                                        // so the canonical `ToolHandlerRegistry` reflects
+                                        // the reload. The owner lock is a std Mutex —
+                                        // acquire + install + drop must complete before
+                                        // any `.await` so no lock is held across await.
+                                        let tool_for_owner: Arc<dyn alephcore::tools::AlephToolDyn> =
+                                            Arc::new(tool.clone());
+                                        if let Err(e) =
+                                            alephcore::tools::markdown_skill::markdown_skill_registry_owner()
+                                                .lock()
+                                                .unwrap()
+                                                .install_or_replace(tool_for_owner)
+                                        {
+                                            tracing::warn!(
+                                                error = %e,
+                                                "markdown_skill registry owner install_or_replace failed (skill watcher reload)"
+                                            );
+                                        }
                                         server.replace_tool(tool).await;
                                     }
                                 });

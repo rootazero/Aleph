@@ -19,7 +19,7 @@ use tracing::{info, warn};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use super::parse_params;
 use crate::skill::{install_allowed, scan_content, scan_skill_directory, ThreatLevel, TrustLevel};
-use crate::tools::markdown_skill::{load_skills_from_dir, MarkdownCliTool};
+use crate::tools::markdown_skill::{load_skills_from_dir, markdown_skill_registry_owner, MarkdownCliTool};
 use crate::tools::AlephToolServer;
 
 /// Process-wide markdown-skill tool server. `AlephToolServer` is already
@@ -388,6 +388,23 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
             source_path: Some(load_path.to_string_lossy().to_string()),
             ..MarkdownSkillInfo::from(&tool)
         };
+
+        // Publish into the markdown-skill owner first so the canonical
+        // `ToolHandlerRegistry` reflects the install. The owner lock is a
+        // std Mutex; acquire + install + drop complete before any `.await`
+        // so no lock is held across the await on `replace_tool` below.
+        let tool_for_owner: Arc<dyn crate::tools::AlephToolDyn> = Arc::new(tool.clone());
+        if let Err(e) = markdown_skill_registry_owner()
+            .lock()
+            .unwrap()
+            .install_or_replace(tool_for_owner)
+        {
+            warn!(
+                error = %e,
+                name = %tool_name,
+                "markdown_skill registry owner install_or_replace failed (RPC install)"
+            );
+        }
 
         let update_info = server.replace_tool(tool).await;
 
