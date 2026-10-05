@@ -36,4 +36,16 @@ pub trait ToolHandler: Send + Sync + 'static {
     fn bind_visible_servers(&self, _visible: &McpServerFilter) -> Option<Arc<dyn ToolHandler>> {
         None
     }
+
+    /// Whether this handler's output must be fence-quoted before being shown to
+    /// the model. Only MCP-sourced tools answer `true`: a tool's raw payload is
+    /// arbitrary server-controlled text, so any `<function_results>` /
+    /// `<tool_result>` boundary it could include is untrusted and the harness
+    /// needs to know to wrap the output rather than pass it through verbatim.
+    fn fences_output(&self) -> bool {
+        matches!(
+            self.definition().source,
+            crate::tools::service::ToolSource::Mcp { .. }
+        )
+    }
 }

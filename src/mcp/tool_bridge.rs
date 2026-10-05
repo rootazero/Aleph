@@ -557,7 +557,16 @@ impl CapabilityHandler {
         let none: McpServerFilter = Arc::new(|_| false);
         // rust-doctor-disable-next-line excessive-clone
         let tool = build(VisibleServers::new(handle.clone(), none));
-        let unbound = BuiltinHandler::new(name.to_string(), tool);
+        // Bridge builtins cross an untrusted MCP boundary on every call:
+        // a server can return text containing `<function_results>` /
+        // `<tool_result>` markers and try to inject another model turn, so the
+        // harness fences their output before showing it to the model. The
+        // trait default already answers `true` for `ToolSource::Mcp`, but
+        // these five are registered as `Builtin` (the bridge is process-global
+        // and knows no per-server source at registration time); turning the
+        // knob on here keeps the fence decision at the handler that actually
+        // owns the cross-boundary call.
+        let unbound = BuiltinHandler::new(name.to_string(), tool).with_fences_output(true);
         Self {
             name,
             handle,
@@ -584,7 +593,13 @@ impl ToolHandler for CapabilityHandler {
         // rust-doctor-disable-next-line excessive-clone
         let servers = VisibleServers::new(self.handle.clone(), Arc::clone(visible));
         let tool = (self.build)(servers);
-        Some(Arc::new(BuiltinHandler::new(self.name.to_string(), tool)))
+        Some(Arc::new(
+            BuiltinHandler::new(self.name.to_string(), tool).with_fences_output(true),
+        ))
+    }
+
+    fn fences_output(&self) -> bool {
+        self.unbound.fences_output()
     }
 }
 

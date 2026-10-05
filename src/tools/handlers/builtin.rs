@@ -13,6 +13,7 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::executor::ToolRegistry;
 use crate::session::events::{ToolOutput, ToolOutputMetadata};
 use crate::tools::handlers::ToolHandler;
 use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
@@ -21,11 +22,30 @@ use crate::tools::AlephToolDyn;
 pub struct BuiltinHandler {
     inner: Arc<dyn AlephToolDyn>,
     name: String,
+    /// Whether this handler's output must be fence-quoted before the model
+    /// sees it. `true` for bridge builtins whose payload crosses an untrusted
+    /// MCP boundary (`mcp_read_resource` and friends); `false` for native
+    /// builtins whose output is the harness's own JSON. Surfaced via
+    /// [`ToolHandler::fences_output`] so the harness can route accordingly.
+    fences_output: bool,
 }
 
 impl BuiltinHandler {
     pub fn new(name: String, inner: Arc<dyn AlephToolDyn>) -> Self {
-        Self { inner, name }
+        Self {
+            inner,
+            name,
+            fences_output: false,
+        }
+    }
+
+    /// Builder knob for [`BuiltinHandler::fences_output`]. The default `false`
+    /// covers every native builtin; the MCP bridge turns it on for the five
+    /// capability builtins whose output passes through a server the harness
+    /// does not control.
+    pub fn with_fences_output(mut self, value: bool) -> Self {
+        self.fences_output = value;
+        self
     }
 }
 
@@ -87,6 +107,125 @@ impl ToolHandler for BuiltinHandler {
                 // into `LoopTool::is_concurrent_safe`. They were on the
                 // read-only list yet could never claim `Shared`.
                 concurrent_safe: idempotent,
+            },
+        }
+    }
+
+    fn fences_output(&self) -> bool {
+        self.fences_output
+    }
+}
+
+/// A `ToolHandler` whose `invoke` and `definition` are sourced from a
+/// `ToolRegistry` lookup keyed by [`name`](Self::name).
+///
+/// Phase-2-era `BuiltinHandler` wraps an `AlephToolDyn` directly; the agent
+/// loop's new tool path resolves tools through `ToolRegistry` (the same
+/// registry the agent loop dispatches every tool call against). This router
+/// lets a `BuiltinHandler`-shaped handler stay the single shape the MCP bridge
+/// and the run loop see, while delegating every actual operation to the
+/// registry — so renaming, schema, and side-effect accounting all stay in one
+/// place and the bridge doesn't carry a parallel dispatch table.
+///
+/// The router is a thin adapter, not a re-implementation: its `invoke` simply
+/// forwards to the registry, and its `definition` only differs from a static
+/// `BuiltinHandler`'s in that it has to project the registry's `UnifiedTool`
+/// into a `service::ToolDefinition` for the harness.
+pub struct BuiltinRegistryRouter {
+    name: String,
+    inner: Arc<dyn ToolRegistry>,
+}
+
+impl BuiltinRegistryRouter {
+    pub fn new(name: String, inner: Arc<dyn ToolRegistry>) -> Self {
+        Self { name, inner }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for BuiltinRegistryRouter {
+    async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
+        match self.inner.execute_tool(&self.name, input).await {
+            Ok(value) => Ok(ToolOutput {
+                value,
+                metadata: ToolOutputMetadata::default(),
+            }),
+            // Argument validation failures from `ToolRegistry::execute_tool`
+            // (the agent loop's adapter calls `format_validation_error` through
+            // `AlephTool::call_json`) surface as `AlephError::Validation`; map
+            // them to `ToolError::ValidationFailed` so the harness reports
+            // them as fixable schema errors with the tool-supplied prose,
+            // rather than opaque `Execution` failures.
+            Err(crate::error::AlephError::Validation(cause)) => {
+                Err(ToolError::ValidationFailed {
+                    name: self.name.clone(),
+                    cause,
+                })
+            }
+            Err(e) => Err(ToolError::Execution {
+                name: self.name.clone(),
+                cause: e.to_string(),
+            }),
+        }
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        match self.inner.get_tool(&self.name) {
+            Some(unified) => {
+                let idempotent = crate::tools::retry::is_idempotent_builtin_name(&self.name);
+                // Same resolution chain as `BuiltinHandler`: declared → table
+                // → default. Never `None`: an unbudgeted definition is what
+                // turned a slow tool into a run-level abort.
+                let max_duration_ms =
+                    crate::tools::budget::resolve_tool_budget_ms(&self.name, None);
+                // MCP / extension / other non-builtin sources answer through
+                // this router for tools the agent loop already has registered.
+                // The MCP source variant carries the server id; projecting it
+                // here means the harness can read the origin straight from the
+                // definition without a second lookup.
+                let source = match unified.source {
+                    ToolSource::Builtin => ToolSource::Builtin,
+                    ToolSource::Mcp { server_id } => ToolSource::Mcp { server_id },
+                    ToolSource::Extension { plugin_id } => ToolSource::Extension { plugin_id },
+                };
+                ToolDefinition {
+                    name: self.name.clone(),
+                    description: unified.description,
+                    // MCP / extension tools frequently publish no schema;
+                    // default to a permissive JSON object so the harness's
+                    // schema validator has something to read rather than
+                    // rejecting on missing.
+                    input_schema: unified
+                        .parameters_schema
+                        .unwrap_or_else(|| serde_json::json!({"type": "object"})),
+                    source,
+                    metadata: ToolDefinitionMetadata {
+                        hidden_from_llm: false,
+                        requires_approval: unified.requires_confirmation,
+                        tags: Vec::new(),
+                        idempotent,
+                        max_duration_ms: Some(max_duration_ms),
+                        // See `BuiltinHandler::definition`: idempotent implies
+                        // read-only, which implies safe under parallel
+                        // dispatch — same source of truth, same flag.
+                        concurrent_safe: idempotent,
+                    },
+                }
+            }
+            // The tool was registered at handler-build time but has since
+            // disappeared from the registry (a hot-reload dropped it, an
+            // extension was disabled, etc.). Returning a definition rather
+            // than panicking lets the harness surface "tool no longer
+            // available" as a structured failure on the next call instead of
+            // a crash on definition lookup. The schema is the same
+            // permissive object the present-but-schemaless branch above
+            // returns, so the model still gets a valid JSON Schema to read.
+            None => ToolDefinition {
+                name: self.name.clone(),
+                description: String::new(),
+                input_schema: serde_json::json!({"type": "object"}),
+                source: ToolSource::Builtin,
+                metadata: ToolDefinitionMetadata::default(),
             },
         }
     }
