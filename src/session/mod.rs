@@ -17,6 +17,7 @@ pub mod marker_balance;
 pub mod observer;
 pub mod projection;
 pub mod reduction;
+pub mod replay;
 pub mod service;
 pub mod steer_signal;
 pub mod store;

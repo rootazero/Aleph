@@ -39,9 +39,15 @@ use crate::session::events::{
 };
 use crate::session::reduction::{
     is_disposition_bearing, reduce_disposition, reduce_run, LogContradiction, RunDisposition,
+    RunReduction,
+};
+use crate::session::replay::{
+    ReplayInvocation, ReplayPrepare, ReplayPreparer, ReplayRequest, REPLAY_MAX_ATTEMPTS_PER_CALL,
 };
 use crate::session::service::{SessionError, SessionId};
-use crate::session::store::{MarkerSlice, SessionEventStore};
+use crate::session::store::{
+    MarkerSlice, ReplayClaimResult, ReplayOutcomeResult, SessionEventStore, REPLAY_LEASE_TTL_MS,
+};
 
 /// `FailsClosed`: `handlers/resume.rs` turns a missing handle into
 /// `ResumeOutcome::Unavailable`. Nothing resumes and nothing is harmed — but
@@ -185,6 +191,15 @@ pub struct ResumeReport {
     /// not carry it — a wire field that is 0 on every receipt that route can
     /// produce would read as "checked, none found".
     pub notified: usize,
+    /// Dangling tool calls replayed for real this pass by the §S3 pass — a
+    /// handler ran and its outcome committed under a claim. Report-internal
+    /// like `notified`: the per-session `agent.resume` face repairs the
+    /// boundary but never replays, so its receipt does not carry this count.
+    ///
+    /// Inert (0) until the bin crate wires a `ReplayPreparer` (§S4); even
+    /// then, an on-disk `ToolCallRequested` carries no effective input, so
+    /// every request is refused and the count stays 0.
+    pub replayed: usize,
 }
 
 impl ResumeReport {
@@ -208,6 +223,7 @@ impl ResumeReport {
             degraded,
             unsnapshotted,
             notified,
+            replayed,
         } = other;
         self.scanned += scanned;
         self.resumed += resumed;
@@ -221,6 +237,7 @@ impl ResumeReport {
         self.degraded += degraded;
         self.unsnapshotted += unsnapshotted;
         self.notified += notified;
+        self.replayed += replayed;
     }
 }
 
@@ -1130,6 +1147,12 @@ pub struct ResumeCoordinator {
     /// without the resilience database — then no such row exists to
     /// adjudicate, and the pass is a no-op for the honest reason.
     state_database: Option<Arc<crate::resilience::StateDatabase>>,
+    /// Bridge-side preparer that turns a dangling call into a single-use
+    /// replay permit (§S3). `None` until the bin crate wires one in (§S4);
+    /// the replay-dangling pass is then inert and the VerifyOnly boundary
+    /// repair answers every dangling call. Optional so the in-crate
+    /// coordinator stays constructible without the bridge layer.
+    replay_preparer: Option<Arc<dyn ReplayPreparer>>,
 }
 
 /// RAII claim on one session's resume slot.
@@ -1170,6 +1193,7 @@ impl ResumeCoordinator {
             semaphore: Arc::new(Semaphore::new(permits)),
             in_flight: std::sync::Mutex::new(std::collections::HashSet::new()),
             state_database: None,
+            replay_preparer: None,
         }
     }
 
@@ -1178,6 +1202,15 @@ impl ResumeCoordinator {
     #[must_use]
     pub fn with_state_database(mut self, db: Arc<crate::resilience::StateDatabase>) -> Self {
         self.state_database = Some(db);
+        self
+    }
+
+    /// Hand the coordinator the bridge-side replay preparer (§S3). Without
+    /// this the replay-dangling pass is inert and every dangling call falls
+    /// through to the VerifyOnly boundary repair.
+    #[must_use]
+    pub fn with_replay_preparer(mut self, preparer: Arc<dyn ReplayPreparer>) -> Self {
+        self.replay_preparer = Some(preparer);
         self
     }
 
@@ -1793,6 +1826,17 @@ impl ResumeCoordinator {
             report.unsnapshotted += 1;
         }
 
+        // Replay-dangling pass (§S3): attempt a real replay of each dangling
+        // call before the VerifyOnly boundary repair answers them. Inert until
+        // §S4 wires a `ReplayPreparer` in from the bin crate: it is `None`
+        // here by default, and even when present a request carrying
+        // `effective_input: None` (the current `ToolCallRequested` is
+        // pre-sanitize) is always `Refused`, so nothing claims and nothing
+        // runs. The pass re-derives the reduction and returns it unchanged.
+        let reduction = self
+            .replay_dangling_calls(session_id, reduction, report)
+            .await;
+
         // Crash-boundary repair — append a synthetic ToolError for every
         // dangling call THIS reduction names, so the model sees each one
         // answered instead of silently dropped from the replay. The degrade
@@ -1869,6 +1913,141 @@ impl ResumeCoordinator {
                 report.refused.push((session_id.clone(), refusal));
             }
         }
+    }
+
+    /// §S3: walk this run's dangling calls and replay each one for real before
+    /// the VerifyOnly boundary repair answers them. The pass is inert by
+    /// design until the bin crate wires a preparer (§S4): with no preparer it
+    /// returns the reduction untouched; with one, every request here still
+    /// carries `effective_input: None` (the on-disk `ToolCallRequested` is
+    /// pre-sanitize) so `prepare` is `Refused` and the whole pass consumes no
+    /// claim and no attempt. Each prepared-and-claimed call is replayed under
+    /// a fresh head/generation fence and the reduction is re-derived after
+    /// each commit, so one stale read cannot replay the same call twice.
+    async fn replay_dangling_calls(
+        &self,
+        session_id: &SessionId,
+        mut reduction: RunReduction,
+        report: &mut ResumeReport,
+    ) -> RunReduction {
+        let Some(preparer) = self.replay_preparer.as_ref() else {
+            return reduction;
+        };
+
+        while let Some(dangling) = reduction.dangling.first().cloned() {
+            let req = ReplayRequest {
+                call_id: dangling.call_id.clone(),
+                tool_name: dangling.tool_name.clone(),
+                turn_id: dangling.turn_id,
+                effective_input: None,
+                stored_identity: dangling.identity,
+            };
+            let permit = match preparer.prepare(&req) {
+                ReplayPrepare::Ready(permit) => permit,
+                // Deterministic fail-closed: no effective input ⇒ nothing
+                // replays. Leave every dangling call to the boundary repair.
+                ReplayPrepare::Refused => break,
+            };
+
+            // Fresh fences: the head and retire generation are read at claim
+            // time, not once at scan time, so a write that landed between the
+            // scan's read and this claim cannot be silently overwritten.
+            let head = match self.event_store.load_head_seq(session_id).await {
+                Ok(head) => head,
+                Err(e) => {
+                    self.refuse_replay(session_id, e, report);
+                    break;
+                }
+            };
+            let generation = match self.event_store.load_retire_generation(session_id).await {
+                Ok(generation) => generation,
+                Err(e) => {
+                    self.refuse_replay(session_id, e, report);
+                    break;
+                }
+            };
+            let claim = match self
+                .event_store
+                .claim_replay_call(
+                    session_id,
+                    head,
+                    generation,
+                    &req.call_id,
+                    REPLAY_MAX_ATTEMPTS_PER_CALL,
+                    REPLAY_LEASE_TTL_MS,
+                )
+                .await
+            {
+                Ok(claim) => claim,
+                Err(e) => {
+                    self.refuse_replay(session_id, e, report);
+                    break;
+                }
+            };
+            let ReplayClaimResult::Claimed { claim_token, .. } = claim else {
+                // Another writer changed the head/generation, the call is no
+                // longer dangling, a lease is held, or the budget is spent:
+                // nothing to replay here. Leave the rest to boundary repair.
+                break;
+            };
+
+            match permit.invoke(claim_token.clone()).await {
+                ReplayInvocation::Executed(event) => {
+                    match self
+                        .event_store
+                        .commit_replay_outcome(
+                            session_id,
+                            &req.call_id,
+                            &claim_token,
+                            &event,
+                            now_ms(),
+                        )
+                        .await
+                    {
+                        Ok(ReplayOutcomeResult::Committed { .. }) => report.replayed += 1,
+                        Ok(ReplayOutcomeResult::AlreadyAnswered | ReplayOutcomeResult::ClaimLost) => {
+                        }
+                        Err(e) => {
+                            self.refuse_replay(session_id, e, report);
+                            break;
+                        }
+                    }
+                }
+                // The permit's own precondition broke mid-flight: no effect
+                // ran, nothing to commit. The call stays dangling for repair.
+                ReplayInvocation::NoEffect => {}
+            }
+
+            // Re-derive: the commit above changed the log, so the next loop
+            // iteration must answer against the log as it is now.
+            let events = match self.event_store.load_all_events(session_id).await {
+                Ok(events) => events,
+                Err(e) => {
+                    self.refuse_replay(session_id, e, report);
+                    break;
+                }
+            };
+            match reduce_run(&events) {
+                Ok(next) => reduction = next,
+                Err(c) => {
+                    self.refuse_log(session_id, c, report);
+                    break;
+                }
+            }
+        }
+
+        reduction
+    }
+
+    /// Record a replay-path failure under the same kind the boundary repair
+    /// uses: the dangling call is still dangling and will be answered by the
+    /// VerifyOnly repair, but the attempt to do better failed and the operator
+    /// is told why.
+    fn refuse_replay(&self, session_id: &SessionId, e: SessionError, report: &mut ResumeReport) {
+        report.refused.push((
+            session_id.clone(),
+            ResumeRefusal::BoundaryRepairFailed(e.to_string()),
+        ));
     }
 
     /// The Clean arm's second question, and the whole question for a session
@@ -2606,6 +2785,7 @@ mod tests {
             degraded: 1,
             unsnapshotted: 1,
             notified: 1,
+            replayed: 1,
         };
         let mut total = ResumeReport::default();
         total.absorb(one.clone());
@@ -2625,6 +2805,7 @@ mod tests {
             degraded,
             unsnapshotted,
             notified,
+            replayed,
         } = total;
         assert_eq!(
             [
@@ -2639,8 +2820,9 @@ mod tests {
                 degraded,
                 unsnapshotted,
                 notified,
+                replayed,
             ],
-            [2; 11],
+            [2; 12],
             "every counter is a sum, not the last part's value"
         );
         assert_eq!(refused, [one.refused[0].clone(), one.refused[0].clone()]);
@@ -3743,5 +3925,186 @@ mod tests {
                  resume is double-driving that scheduler again"
             );
         }
+    }
+
+    /// §Phase 2B S5 happy path: a `Ready` permit drives one dangling call
+    /// through the full fence — claim → invoke → commit → re-reduce — against
+    /// the real in-memory store.
+    ///
+    /// This is the ONLY test that can construct a permit: `ReplayPermit::new`
+    /// and `ReplayInvoker` are `pub(crate)`, so the external integration suite
+    /// (a separate crate) can only implement a `ReplayPreparer` that returns
+    /// `Refused`. The fake preparer here deliberately ignores the
+    /// `effective_input` gate (that gate is the bridge adapter's job) so the
+    /// coordinator's claim/commit orchestration can be exercised against the
+    /// real store fence.
+    #[tokio::test]
+    async fn replay_pass_claims_invokes_commits_and_rerereduces() {
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::event_emitter::EventEmitter;
+        use crate::gateway::execution_engine::{ExecutionError, RunStatus};
+        use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+        use crate::gateway::session_store::SessionStore;
+        use crate::session::replay::{ReplayInvoker, ReplayPermit};
+        use crate::session::store::{migrate_add_session_events, SqliteEventStore};
+        use async_trait::async_trait;
+        use futures::future::BoxFuture;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        // Unused by the replay pass, but `ResumeCoordinator::new` requires a
+        // real collaborator. A no-op suffices: `replay_dangling_calls` touches
+        // only `self.event_store` and `self.replay_preparer`.
+        struct NoopAdapter;
+        #[async_trait]
+        impl ExecutionAdapter for NoopAdapter {
+            async fn execute(
+                &self,
+                _request: RunRequest,
+                _agent: Arc<AgentInstance>,
+                _emitter: Arc<dyn EventEmitter + Send + Sync>,
+            ) -> Result<(), ExecutionError> {
+                Ok(())
+            }
+            async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+                Err(ExecutionError::RunNotFound(run_id.to_string()))
+            }
+            async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+                None
+            }
+            async fn active_run_count(&self) -> usize {
+                0
+            }
+        }
+
+        // Always `Ready`: the effective-input gate is deliberately bypassed so
+        // the fence is what this test proves.
+        struct AlwaysReadyPreparer {
+            fired: Arc<AtomicBool>,
+        }
+        impl ReplayPreparer for AlwaysReadyPreparer {
+            fn prepare(&self, req: &ReplayRequest) -> ReplayPrepare {
+                ReplayPrepare::Ready(ReplayPermit::new(Box::new(FakeInvoker {
+                    call_id: req.call_id.clone(),
+                    turn_id: req.turn_id,
+                    fired: self.fired.clone(),
+                })))
+            }
+        }
+
+        struct FakeInvoker {
+            call_id: String,
+            turn_id: TurnId,
+            fired: Arc<AtomicBool>,
+        }
+        impl ReplayInvoker for FakeInvoker {
+            fn invoke(self: Box<Self>, _claim_token: String) -> BoxFuture<'static, ReplayInvocation> {
+                Box::pin(async move {
+                    self.fired.store(true, Ordering::SeqCst);
+                    ReplayInvocation::Executed(Box::new(SessionEvent::ToolResult {
+                        turn_id: self.turn_id,
+                        call_id: self.call_id,
+                        output: ToolOutput {
+                            value: serde_json::json!({"replayed": true}),
+                            metadata: Default::default(),
+                        },
+                        at: now_ms(),
+                    }))
+                })
+            }
+        }
+
+        // Real store, seeded with one unanswered tool call (a dangling call).
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store = Arc::new(SqliteEventStore::new(conn));
+        let sid = SessionId::main("replay-happy");
+        let tid = TurnId::new_v4();
+        let at = now_ms();
+        for (seq, event, created_at_ms) in [
+            (
+                1,
+                SessionEvent::RunStarted {
+                    run_id: "run-1".into(),
+                    at,
+                    project_root: None,
+                    envelope: None,
+                },
+                at,
+            ),
+            (
+                2,
+                SessionEvent::ToolCallRequested {
+                    turn_id: tid,
+                    call_id: "dangling-1".into(),
+                    name: "bash_exec".into(),
+                    input: serde_json::json!({"cmd": "sleep 999"}),
+                    identity: None,
+                    at: at + 1,
+                },
+                at + 1,
+            ),
+        ] {
+            store.append(&sid, seq, &event, created_at_ms).await.unwrap();
+        }
+
+        let reduction = reduce_run(&store.load_all_events(&sid).await.unwrap()).unwrap();
+        assert_eq!(
+            reduction.dangling.len(),
+            1,
+            "seed must leave exactly one dangling call"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let sessions: Arc<dyn SessionStore> = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: dir.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let fired = Arc::new(AtomicBool::new(false));
+        let coordinator = ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            Arc::new(NoopAdapter) as Arc<dyn ExecutionAdapter>,
+            Arc::new(AgentRegistry::new()),
+            sessions,
+            Arc::new(GatewayEventBus::new()),
+        )
+        .with_replay_preparer(Arc::new(AlwaysReadyPreparer {
+            fired: fired.clone(),
+        }));
+
+        let mut report = ResumeReport::default();
+        let next = coordinator
+            .replay_dangling_calls(&sid, reduction, &mut report)
+            .await;
+
+        assert_eq!(report.replayed, 1, "the committed Executed outcome must be counted");
+        assert!(fired.load(Ordering::SeqCst), "the fake handler must have run");
+        assert!(
+            next.dangling.is_empty(),
+            "re-reduce must see the committed outcome and drop the dangling call"
+        );
+
+        // The committed outcome is a real ToolResult on the log, not the
+        // VerifyOnly synthetic ToolError `repair_boundary` would have appended.
+        let all = store.load_all_events(&sid).await.unwrap();
+        assert_eq!(all.len(), 3, "seed (2) + one committed replay outcome");
+        let results: Vec<_> = all
+            .iter()
+            .filter_map(|r| match &r.event {
+                SessionEvent::ToolResult { call_id, .. } if call_id == "dangling-1" => {
+                    Some(call_id.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results, ["dangling-1"], "exactly one replay outcome committed");
+        assert!(
+            all.iter()
+                .all(|r| !matches!(r.event, SessionEvent::ToolError { .. })),
+            "the happy path must not also append a synthetic ToolError"
+        );
     }
 }

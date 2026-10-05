@@ -46,6 +46,7 @@ mod prompt_build;
 mod runner_impl;
 
 pub mod context_estimate;
+pub mod replay_adapter;
 
 #[cfg(test)]
 mod tests;

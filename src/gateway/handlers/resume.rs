@@ -431,6 +431,7 @@ mod tests {
             degraded: 0,
             unsnapshotted: 0,
             notified: 0,
+            replayed: 0,
         }
     }
 
@@ -546,6 +547,7 @@ mod tests {
             degraded: 9,
             unsnapshotted: 10,
             notified: 11,
+            replayed: 12,
             refused: vec![(
                 crate::routing::session_key::SessionKey::ephemeral("wire"),
                 ResumeRefusal::AgentMissing,
@@ -607,6 +609,7 @@ mod tests {
             degraded,
             unsnapshotted,
             notified: _,
+            replayed: _,
             refused,
         } = &report;
         assert!(
