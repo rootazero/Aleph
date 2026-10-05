@@ -796,28 +796,29 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 })
                 .await;
 
-            // Build per-request ToolService with SubagentTool + optional MCP refresh
-            let mut loop_registry_inner = crate::tools::adapters::build_registry_from_tools(
-                self.tool_registry.clone(),
-                &allowed_tools,
-            );
-
+            // Project one immutable capability-registry snapshot for this request.
+            // Builtins, markdown skills, and MCP handlers all use the same
+            // descriptor/handler generation. Plugin tools remain a narrow
+            // compatibility projection below because their executor metadata
+            // (usage origin and result budget) is not represented by this
+            // registry entry.
+            let mut loop_registry_inner = crate::tools::runtime::LoopToolRegistry::new();
+            let plugin_tools: Vec<_> = allowed_tools
+                .iter()
+                .filter(|tool| {
+                    matches!(
+                        &tool.source,
+                        crate::tool_metadata::ToolSource::Plugin { .. }
+                    )
+                })
+                .cloned()
+                .collect();
             let mut allowed_names: std::collections::BTreeSet<String> =
-                allowed_tools.iter().map(|t| t.name.clone()).collect();
+                plugin_tools.iter().map(|tool| tool.name.clone()).collect();
 
-            // External MCP tools: snapshot the bridge-maintained registry
-            // (boot installs it via `set_mcp_tool_registry`) and join each
-            // entry into this request's LoopToolRegistry (`join_mcp_tools`).
-            // The allow-set is the builtin path's: per-agent allowlist plus
-            // `slash_skill_scope` — the SAME set the builtin retain used, not a
-            // second parse of the same metadata key. Face ⑤ is this run's
-            // visible servers, built from `visibility` — the value derived once
-            // near the top of this function for the plugin tool index. The
-            // joined names feed the deferred exposure tier below when
-            // `defer_mcp_tools` is on.
             let mcp_tool_names = match super::super::tool_service_builder::mcp_tool_registry() {
                 Some(mcp_registry) => {
-                    let joined = join_mcp_tools(
+                    let joined = join_canonical_tools(
                         &mcp_registry.entries_snapshot(),
                         &mut loop_registry_inner,
                         |name| {
@@ -829,52 +830,50 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         },
                         &visible_mcp_servers(visibility.clone(), extension_manager.clone()),
                         &mut allowed_names,
+                        |name| {
+                            self.tool_registry
+                                .get_tool(name)
+                                .and_then(|tool| tool.max_result_tokens)
+                        },
                     );
                     if !joined.is_empty() {
                         info!(
                             run_id = run_id,
                             count = joined.len(),
-                            "MCP tools joined tool surface"
+                            "canonical capability snapshot projected"
                         );
                     }
                     joined
                 }
-                None => std::collections::BTreeSet::new(),
+                None => {
+                    // The canonical slot is installed during production boot. If
+                    // an alternate entry point omits it, retain the old executor
+                    // projection explicitly instead of silently exposing no tools.
+                    loop_registry_inner = crate::tools::adapters::build_registry_from_tools(
+                        self.tool_registry.clone(),
+                        &allowed_tools,
+                    );
+                    allowed_names = allowed_tools.iter().map(|tool| tool.name.clone()).collect();
+                    std::collections::BTreeSet::new()
+                }
             };
 
-            // Markdown CLI skills join at the same seam, for the same reason:
-            // the registry is rebuilt per request, so an install that landed
-            // mid-session is simply present on the next turn. They used to
-            // arrive through a `ToolRefreshSource` whose result
-            // `ScopedToolService::list()` discarded, which meant a skill
-            // installed at runtime was never callable at all.
-            //
-            // The predicate is the agent allowlist AND `slash_skill_scope` —
-            // the same set the builtin retain and the MCP join used. This
-            // source is the one the slash-skill narrowing originally forgot:
-            // it joined after the retain and re-widened the surface a skill
-            // had just narrowed.
-            {
-                let joined = super::super::markdown_skill_tools::join_markdown_skills(
-                    &mut loop_registry_inner,
-                    |name| {
-                        agent.is_tool_allowed(name)
-                            && super::super::slash_skill_scope::admits(
-                                slash_skill_scope.as_ref(),
-                                name,
-                            )
-                    },
-                    &mut allowed_names,
-                )
-                .await;
-                if joined > 0 {
-                    info!(
-                        run_id = run_id,
-                        count = joined,
-                        "markdown CLI skills joined tool surface"
-                    );
+            // Plugins intentionally remain on the executor-backed adapter path;
+            // they are not re-created as canonical handlers and therefore keep
+            // their existing usage origin, result budget, and dispatch policy.
+            for adapter in crate::tools::adapters::build_tool_adapters_from_tools(
+                self.tool_registry.clone(),
+                &plugin_tools,
+            ) {
+                let name = adapter.name().to_string();
+                if loop_registry_inner.get(&name).is_none() {
+                    loop_registry_inner.register(adapter);
                 }
             }
+
+            // `allowed_names` is already complete for the canonical snapshot
+            // and plugin compatibility path. An empty set retains the existing
+            // allow-all meaning used by ScopedToolService.
 
             // Register the on-demand schema loader ONLY when progressive
             // disclosure is active. When disabled (core empty / ["*"]), nothing
@@ -1767,6 +1766,66 @@ fn publish_artifact_invalidation(
     crate::gateway::event_emitter::artifact_ping::publish_artifact_ping_on(bus, session_key);
 }
 
+/// Project the one canonical capability snapshot into the request's loop
+/// registry. The snapshot pairs each handler and descriptor generation, so the
+/// loop never observes a handler from one generation with metadata from another.
+/// Returns only MCP-sourced names because the deferred MCP tier must not defer
+/// builtin or markdown capabilities.
+pub(super) fn join_canonical_tools(
+    snapshot: &std::collections::HashMap<String, crate::tools::registry::RegistryEntry>,
+    registry: &mut crate::tools::runtime::LoopToolRegistry,
+    is_allowed: impl Fn(&str) -> bool,
+    visible: &crate::tools::handlers::McpServerFilter,
+    allowed_names: &mut std::collections::BTreeSet<String>,
+    budget_lookup: impl Fn(&str) -> Option<usize>,
+) -> std::collections::BTreeSet<String> {
+    let mut mcp_names = std::collections::BTreeSet::new();
+    for (name, entry) in snapshot {
+        if !is_allowed(name) || registry.get(name).is_some() {
+            continue;
+        }
+        // Plugin handlers retain their executor-backed compatibility projection
+        // so usage origin and result-budget semantics are not silently lost.
+        if matches!(
+            &entry.descriptor.source,
+            crate::tools::service::ToolSource::Extension { .. }
+        ) {
+            continue;
+        }
+        if !mcp_handler_admitted(entry.handler.as_ref(), visible) {
+            continue;
+        }
+        let handler = entry
+            .handler
+            .bind_visible_servers(visible)
+            .unwrap_or_else(|| Arc::clone(&entry.handler));
+        registry.register(Box::new(
+            crate::tools::adapters::McpRegistryTool::from_registry_entry_with_budget(
+                handler,
+                &entry.descriptor,
+                if matches!(
+                    &entry.descriptor.source,
+                    crate::tools::service::ToolSource::Builtin
+                ) {
+                    budget_lookup(name)
+                } else {
+                    None
+                },
+            ),
+        ));
+        if !allowed_names.is_empty() {
+            allowed_names.insert(name.clone());
+        }
+        if matches!(
+            &entry.descriptor.source,
+            crate::tools::service::ToolSource::Mcp { .. }
+        ) {
+            mcp_names.insert(name.clone());
+        }
+    }
+    mcp_names
+}
+
 /// The consumer side of `mcp::spawn_tool_bridge`: every entry of the
 /// bridge-maintained registry `snapshot` (kept in sync with every connected
 /// server's `tools/list`) becomes an LLM-visible `LoopTool` in `registry`.
@@ -1783,6 +1842,7 @@ fn publish_artifact_invalidation(
 /// what it sees. `allowed_names` is only widened when already non-empty — an
 /// empty set means allow-all in `ScopedToolService`, and inserting names would
 /// flip it restrictive. Returns the joined names.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn join_mcp_tools(
     snapshot: &std::collections::HashMap<String, crate::tools::registry::RegistryEntry>,
     registry: &mut crate::tools::runtime::LoopToolRegistry,

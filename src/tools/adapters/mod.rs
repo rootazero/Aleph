@@ -4,4 +4,6 @@ pub mod mcp_adapter;
 pub mod registry_adapter;
 
 pub use mcp_adapter::McpRegistryTool;
-pub use registry_adapter::{build_registry_from_tools, build_tool_adapters_from_tools};
+pub use registry_adapter::{
+    build_registry_from_tools, build_tool_adapters_from_tools, builtin_concurrency_claim,
+};

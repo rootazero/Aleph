@@ -47,6 +47,8 @@ pub struct McpRegistryTool {
     requires_confirmation: bool,
     idempotent: bool,
     max_duration_ms: Option<u64>,
+    max_result_tokens: Option<usize>,
+    builtin_dispatch: bool,
     handler: Arc<dyn ToolHandler>,
 }
 
@@ -57,6 +59,14 @@ impl McpRegistryTool {
     pub fn from_registry_entry(
         handler: Arc<dyn ToolHandler>,
         descriptor: &crate::tools::descriptor::ToolCapabilityDescriptor,
+    ) -> Self {
+        Self::from_registry_entry_with_budget(handler, descriptor, None)
+    }
+
+    pub fn from_registry_entry_with_budget(
+        handler: Arc<dyn ToolHandler>,
+        descriptor: &crate::tools::descriptor::ToolCapabilityDescriptor,
+        max_result_tokens: Option<usize>,
     ) -> Self {
         let server_id = match &descriptor.source {
             ToolSource::Mcp { server_id } => server_id.clone(),
@@ -74,6 +84,8 @@ impl McpRegistryTool {
             requires_confirmation: descriptor.requires_confirmation,
             idempotent: descriptor.idempotent,
             max_duration_ms: descriptor.max_duration_ms,
+            max_result_tokens,
+            builtin_dispatch: matches!(&descriptor.source, ToolSource::Builtin),
             handler,
         }
     }
@@ -98,6 +110,20 @@ impl LoopTool for McpRegistryTool {
         // MCP tool can mutate arbitrary external state, so it claims
         // whole-world exclusive and never joins a parallel group.
         self.concurrent_safe
+    }
+
+    fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        if self.builtin_dispatch {
+            crate::tools::adapters::builtin_concurrency_claim(&self.name, input)
+        } else if self.concurrent_safe {
+            crate::tools::concurrency::ConcurrencyClaim::Shared
+        } else {
+            crate::tools::concurrency::ConcurrencyClaim::global()
+        }
+    }
+
+    fn max_result_tokens(&self) -> Option<usize> {
+        self.max_result_tokens
     }
 
     fn requires_confirmation(&self) -> bool {
@@ -145,13 +171,16 @@ impl LoopTool for McpRegistryTool {
         };
         match outcome {
             Ok(output) => {
-                let source = ContentSource::McpTool {
-                    server: self.server_id.clone(),
-                    tool: self.name.clone(),
+                let output = if self.handler.fences_output() {
+                    let source = ContentSource::McpTool {
+                        server: self.server_id.clone(),
+                        tool: self.name.clone(),
+                    };
+                    fence_mcp_result(output.value, &source)
+                } else {
+                    output.value
                 };
-                ToolResult::Success {
-                    output: fence_mcp_result(output.value, &source),
-                }
+                ToolResult::Success { output }
             }
             // Handler errors are already redacted (`redact_mcp_error`) and
             // classified; carry the retry signal through so the one-shot
@@ -332,6 +361,7 @@ mod tests {
         fail_with: Option<FailKind>,
         read_only: bool,
         destructive: bool,
+        fences_output: bool,
     }
 
     impl FakeHandler {
@@ -340,6 +370,16 @@ mod tests {
                 fail_with: None,
                 read_only: false,
                 destructive: false,
+                fences_output: true,
+            }
+        }
+
+        fn unfenced() -> Self {
+            Self {
+                fail_with: None,
+                read_only: false,
+                destructive: false,
+                fences_output: false,
             }
         }
     }
@@ -383,17 +423,15 @@ mod tests {
                 metadata: ToolDefinitionMetadata {
                     concurrent_safe: self.read_only,
                     requires_approval: self.destructive,
-                    // Mirrors the real chain: `ToolAnnotations::is_idempotent`
-                    // is `idempotentHint || readOnlyHint`, carried into
-                    // metadata by `McpHandler::with_flags`.
                     idempotent: self.read_only,
-                    // Mirrors `McpHandler::with_timeout_seconds`: the owning
-                    // server's request timeout (+ headroom) as a wall-clock
-                    // budget.
                     max_duration_ms: Some(330_000),
                     ..Default::default()
                 },
             }
+        }
+
+        fn fences_output(&self) -> bool {
+            self.fences_output
         }
     }
 
@@ -462,6 +500,7 @@ mod tests {
             fail_with: None,
             read_only: true,
             destructive: false,
+            fences_output: true,
         });
         assert!(a.is_concurrent_safe(&json!({})));
         assert!(matches!(
@@ -489,6 +528,7 @@ mod tests {
             fail_with: None,
             read_only: true,
             destructive: false,
+            fences_output: true,
         });
         assert!(a.is_idempotent());
     }
@@ -499,6 +539,7 @@ mod tests {
             fail_with: None,
             read_only: false,
             destructive: true,
+            fences_output: true,
         });
         assert!(a.requires_confirmation());
     }
@@ -518,6 +559,32 @@ mod tests {
                 assert!(text.contains("EXTERNAL_UNTRUSTED_CONTENT"));
                 assert!(text.contains("search-server"));
                 assert!(text.contains("\"echo\""));
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_respects_handler_fencing_contract() {
+        let plain = adapter(FakeHandler::unfenced());
+        match plain
+            .execute(json!({"query": "hi"}), CancellationToken::new())
+            .await
+        {
+            ToolResult::Success { output } => {
+                assert!(output.get("echo").is_some());
+                assert!(!output.to_string().contains("EXTERNAL_UNTRUSTED_CONTENT"));
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+
+        let fenced = adapter(FakeHandler::success());
+        match fenced
+            .execute(json!({"query": "hi"}), CancellationToken::new())
+            .await
+        {
+            ToolResult::Success { output } => {
+                assert!(output.to_string().contains("EXTERNAL_UNTRUSTED_CONTENT"));
             }
             other => panic!("expected Success, got {other:?}"),
         }
@@ -679,6 +746,7 @@ mod tests {
             fail_with: Some(FailKind::Transport),
             read_only: false,
             destructive: false,
+            fences_output: true,
         });
         match transport.execute(json!({}), CancellationToken::new()).await {
             ToolResult::Error { retryable, error } => {
@@ -692,6 +760,7 @@ mod tests {
             fail_with: Some(FailKind::Execution),
             read_only: false,
             destructive: false,
+            fences_output: true,
         });
         match exec.execute(json!({}), CancellationToken::new()).await {
             ToolResult::Error { retryable, .. } => assert!(!retryable),

@@ -377,6 +377,52 @@ fn session_send_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyCl
     }
 }
 
+/// Resolve the builtin dispatch claim without requiring an executor adapter.
+/// The canonical descriptor projection uses this same policy as the legacy
+/// executor-backed adapter, including input-dependent path/session scopes.
+pub fn builtin_concurrency_claim(
+    name: &str,
+    input: &Value,
+) -> crate::tools::concurrency::ConcurrencyClaim {
+    use crate::tools::concurrency::ConcurrencyClaim;
+    if name == "file_ops" {
+        return file_ops_claim(input);
+    }
+    if name == "apply_patch" {
+        return apply_patch_claim(input);
+    }
+    if name == "doctor" {
+        return doctor_claim(input);
+    }
+    if name == "note_schema" {
+        return note_schema_claim(input);
+    }
+    if name == "a2a_agents" {
+        return a2a_agents_claim(input);
+    }
+    if name == "inbox_read" {
+        return inbox_read_claim(input);
+    }
+    if name == "session_send" {
+        return session_send_claim(input);
+    }
+    if let Some(path) = bounded_file_writer_path(name, input) {
+        return ConcurrencyClaim::paths(std::iter::once(path));
+    }
+    if name == "node_invoke" {
+        if let Some(node) = input.get("node").and_then(Value::as_str) {
+            return ConcurrencyClaim::nodes(std::iter::once(crate::cluster::normalize_node_key(
+                node,
+            )));
+        }
+    }
+    if READ_ONLY_TOOLS.contains(&name) {
+        ConcurrencyClaim::Shared
+    } else {
+        ConcurrencyClaim::global()
+    }
+}
+
 #[async_trait]
 impl<R: ToolRegistry + ?Sized + 'static> LoopTool for RegistryToolAdapter<R> {
     fn name(&self) -> &str {
@@ -411,84 +457,7 @@ impl<R: ToolRegistry + ?Sized + 'static> LoopTool for RegistryToolAdapter<R> {
     }
 
     fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
-        use crate::tools::concurrency::ConcurrencyClaim;
-        let name = self.name.as_str();
-        // `file_ops` multiplexes read-only (list/search/stats → `Shared`) and
-        // mutating (move/copy/delete/… → bounded `Paths`) operations off its
-        // `operation` discriminant, so it is resolved before the allowlist.
-        if name == "file_ops" {
-            return file_ops_claim(input);
-        }
-        // `apply_patch` carries a multi-file V4A envelope and no single path
-        // field; its blast radius is every file the patch body touches, parsed
-        // from the envelope. Bind to that set so disjoint patches parallelize
-        // while patches sharing a file serialize.
-        if name == "apply_patch" {
-            return apply_patch_claim(input);
-        }
-        // Input-dependent read/write multiplexers resolve per-argument, like
-        // `file_ops` above: `doctor` flips on `fix`, `note_schema` and
-        // `a2a_agents` on their `action` tag, `inbox_read` on whether the
-        // call consumes unread state.
-        if name == "doctor" {
-            return doctor_claim(input);
-        }
-        if name == "note_schema" {
-            return note_schema_claim(input);
-        }
-        if name == "a2a_agents" {
-            return a2a_agents_claim(input);
-        }
-        if name == "inbox_read" {
-            return inbox_read_claim(input);
-        }
-        // `session_send` blocks on the named target session; disjoint fan-out
-        // delegations parallelize under a bounded `Sessions` scope.
-        if name == "session_send" {
-            return session_send_claim(input);
-        }
-        // `file_write` / `file_edit` mutate exactly their target path. Bind them
-        // to that concrete path so two writes to the same file serialize while
-        // writes to different files parallelize.
-        if let Some(path) = bounded_file_writer_path(name, input) {
-            return ConcurrencyClaim::paths(std::iter::once(path));
-        }
-        // `node_invoke` drives exactly one cluster node, named right there in the
-        // args. Bind it to that node so a batch touching different machines runs
-        // concurrently (the whole point of owning a fleet) while two calls into
-        // the SAME node serialize — they share its one bash session workspace.
-        //
-        // The key is folded through `normalize_node_key`, the same SSOT the
-        // registry's addressing uses: without it `{"node":"worker-1"}` and
-        // `{"node":"Worker 1"}` in one batch are two *disjoint* scopes, so the
-        // scheduler runs them concurrently against the single workspace this
-        // scope exists to serialize. Residual (accepted): a call addressing the
-        // node by NAME and one addressing it by ID still look disjoint — the
-        // claim is computed from `input` alone, with no registry to resolve
-        // against. Narrowing the spelling variants is free; resolving identity
-        // here is not.
-        //
-        // Deliberately NOT extended to the other two cluster tools:
-        //   * `node_invoke_many` selects by TAG, so its footprint is whatever the
-        //     registry currently matches — not derivable from `input` alone.
-        //   * `node_file` straddles a center-local path AND a node.
-        // Both keep the conservative `Global` claim below.
-        if name == "node_invoke" {
-            if let Some(node) = input.get("node").and_then(Value::as_str) {
-                return ConcurrencyClaim::nodes(std::iter::once(
-                    crate::cluster::normalize_node_key(node),
-                ));
-            }
-        }
-        // Safe default: read-only allowlist → `Shared`; everything else
-        // (known mutators AND any unlisted/unknown tool) → whole-world
-        // exclusive. A forgotten mutator serializes (correct) rather than
-        // racing, which is the whole point of the allowlist inversion.
-        if READ_ONLY_TOOLS.contains(&name) {
-            ConcurrencyClaim::Shared
-        } else {
-            ConcurrencyClaim::global()
-        }
+        builtin_concurrency_claim(&self.name, input)
     }
 
     fn requires_confirmation(&self) -> bool {

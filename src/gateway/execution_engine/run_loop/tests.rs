@@ -2574,12 +2574,13 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
     for (ctx, in_project) in [(elsewhere, false), (here, true)] {
         let mut registry = crate::tools::runtime::LoopToolRegistry::new();
         let mut allowed: std::collections::BTreeSet<String> = ["file_read".to_string()].into();
-        let joined = join_mcp_tools(
+        let joined = join_canonical_tools(
             &bridged.entries_snapshot(),
             &mut registry,
             |_| true,
             &visible_mcp_servers(ctx, Some(Arc::clone(&manager))),
             &mut allowed,
+            |_| None,
         );
 
         let owned_joined = registry.get("plugin_proj_srv__t").is_some();

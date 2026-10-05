@@ -45,6 +45,7 @@ use crate::tools::AlephToolDyn;
 /// `allowed_names` is only widened when it is already non-empty: an empty set
 /// means allow-all in `ScopedToolService`, so inserting into it would flip the
 /// service restrictive — the same guard the MCP and schema-loader joins use.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn join_markdown_skills(
     registry: &mut LoopToolRegistry,
     is_allowed: impl Fn(&str) -> bool,
@@ -72,6 +73,7 @@ pub(crate) async fn join_markdown_skills(
 /// Name/description/schema are snapshotted at construction because
 /// `LoopTool::name`/`description` return borrowed `&str`, whereas
 /// `AlephToolDyn::definition` yields an owned `ToolDefinition`.
+#[cfg_attr(not(test), allow(dead_code))]
 struct MarkdownLoopTool {
     inner: std::sync::Arc<dyn AlephToolDyn>,
     name: String,
@@ -79,6 +81,7 @@ struct MarkdownLoopTool {
     schema: Value,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl MarkdownLoopTool {
     fn new(inner: std::sync::Arc<dyn AlephToolDyn>) -> Self {
         let def = inner.definition();
