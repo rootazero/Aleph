@@ -2,13 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Converge builtin, Plugin, and MCP Tool callables on the descriptor-backed `ToolHandlerRegistry`, preserve Tool lifecycle and fail-closed recovery semantics, project existing consumers from descriptors, and document the verified boundary.
+**Goal:** Converge the main builtin and MCP Tool callables on the descriptor-backed `ToolHandlerRegistry`, preserve Tool lifecycle and fail-closed recovery semantics, project existing consumers from descriptors, and document the verified boundary. Plugin remains on the existing `ToolCatalog`/extension manager bypass; it is out of this phase's canonical-registry scope and is deferred to a separate ExtensionHandler spec.
 
-**Architecture:** Keep `ToolCapabilityDescriptor` plus `ToolHandlerRegistry` as the Tool callable and identity source. Retain `ToolCatalog` for slash-command routing, skill rows, health probes, conflict resolution, and UI metadata, and retain `LoopToolRegistry` only as a per-run execution adapter/index where callers still require it. Reuse current `ToolRegistrationScope`, SessionEvent identity, descriptor lookup, and `boundary_repair` classification; do not add a new scheduler, journal, or replay execution path.
+**Architecture:** Keep `ToolCapabilityDescriptor` plus `ToolHandlerRegistry` as the Tool callable and identity source. Converge only genuinely callable surfaces — the main builtin set and the `AlephToolDyn`/markdown-skill callable surface (wrapped via the existing `BuiltinHandler`), alongside MCP — onto that registry; Plugin stays on its current catalog/extension-manager bypass. Retain `ToolCatalog` for slash-command routing, skill rows, health probes, conflict resolution, UI metadata, and Plugin rows, and retain `LoopToolRegistry` only as a per-run execution adapter/index where callers still require it. Reuse current `ToolRegistrationScope`, SessionEvent identity, descriptor lookup, and `boundary_repair` classification; do not add a new scheduler, journal, or replay execution path.
 
 **Tech Stack:** Rust, Tokio, serde/serde_json, existing ArcSwap registry snapshots, existing ToolCatalog and SessionEventStore, Cargo test/check/clippy.
 
 **Spec:** `docs/superpowers/specs/2026-10-05-capability-phase3-design.md`
+
+**Revision (2026-10-05):** Scope narrowed per user approval. Converge only the main builtin and the markdown-skill `AlephToolDyn` callable surface (wrapped via the existing `BuiltinHandler`), alongside MCP, onto `ToolHandlerRegistry`. Plugin stays on its `ToolCatalog`/extension-manager bypass and is deferred to a separate ExtensionHandler spec. Reason: Task 1 source census confirmed Plugin has no `ToolHandler` implementation (removed 2026-05-20) and must not be synthesized from metadata.
 
 ## Global Constraints
 
@@ -64,7 +66,7 @@
 
 - [ ] **Step 1: Record current registered and callable source paths**
 
-  Trace builtin, Plugin, and MCP from construction through model-visible projection and final invocation. In particular record which builtins are possible to wrap as `ToolHandler`, which Plugin tools have executable handlers versus catalog-only rows, and whether catalog entries carry command-only data that cannot be reconstructed from `ToolCapabilityDescriptor`.
+  Trace builtin, Plugin, and MCP from construction through model-visible projection and final invocation. In particular record which builtins and markdown-skill `AlephToolDyn` entries are possible to wrap as `ToolHandler` (via the existing `BuiltinHandler`), which Plugin tools have executable handlers versus catalog-only rows, and whether catalog entries carry command-only data that cannot be reconstructed from `ToolCapabilityDescriptor`.
 
 - [ ] **Step 2: Verify current tests and repository status without changing files**
 
@@ -74,17 +76,18 @@
 
 - [ ] **Step 3: Gate the implementation scope on the census**
 
-  Confirm that all three promised sources have a callable implementation compatible with `ToolHandler`, or identify the exact source that is catalog-only / non-callable. If Plugin or a builtin family has no actual handler to register, do not synthesize one from metadata: narrow that source claim and stop for a spec amendment before implementation.
+  Confirm that the in-scope callable sources — main builtin and the markdown-skill `AlephToolDyn` surface, alongside MCP — have a callable implementation compatible with `ToolHandler`, or identify the exact source that is catalog-only / non-callable. Plugin is out of scope for the canonical registry this phase: do not synthesize a `ToolHandler` from `UnifiedTool` metadata, keep its existing catalog/extension-manager bypass, and treat its convergence as a deferred ExtensionHandler spec. If a builtin or skill family has no actual handler to register, narrow that source claim and stop for a spec amendment before implementation.
 
 - [ ] **Step 4: Record the census gate before implementation**
 
-  Write the exact callable/non-callable source decision into the executor's task notes. If the approved scope must change because a promised source is catalog-only, stop before Task 2 and request a spec amendment; do not create a product-code or empty census commit. If the boundary is unchanged, proceed with the verified file list and test names from Steps 1-3.
+  Write the exact callable/non-callable source decision into the executor's task notes. If the approved scope must change because a promised builtin/skill source turns out catalog-only, stop before Task 2 and request a spec amendment; do not create a product-code or empty census commit. If the boundary is unchanged, proceed with the verified file list and test names from Steps 1-3.
 
 ## Task 2: Route Callable Tool Registration Through the Descriptor Registry
 
 **Files:**
 - Modify: `src/tools/handlers/builtin.rs`, `src/tools/handlers/registration.rs`, `src/tools/adapters/registry_adapter.rs`, `src/mcp/tool_bridge.rs`
-- Modify only after Task 1 proves a callable path: `src/extension/lifecycle.rs` and the relevant `src/executor/builtin_registry/` construction boundary
+- Modify only after Task 1 proves a callable path: the relevant `src/executor/builtin_registry/` construction boundary and the markdown-skill `AlephToolDyn` adapter boundary (`src/tools/server/`, `src/tools/markdown_skill/`)
+- Not modified this phase: `src/extension/lifecycle.rs` (Plugin remains on its catalog/extension-manager bypass)
 - Test: `src/tools/registry.rs`, `src/tools/handlers/registration.rs`, `src/mcp/tool_bridge.rs`, `tests/plugin_lifecycle_roundtrip.rs`
 
 **Interfaces:**
@@ -94,7 +97,7 @@
 
 - [ ] **Step 1: Add failing source-convergence tests**
 
-  Add tests proving: (a) every callable MCP Tool is resolved by `ToolHandlerRegistry`; (b) each builtin in the selected census slice has descriptor and handler from the same generation; (c) Plugin tools claimed as callable are actually invokable through the registry; (d) non-callable ToolCatalog rows remain discoverable as commands but are not misrepresented as callable Tool capabilities.
+  Add tests proving: (a) every callable MCP Tool is resolved by `ToolHandlerRegistry`; (b) each builtin and markdown-skill `AlephToolDyn` entry in the selected census slice has descriptor and handler from the same generation; (c) Plugin tools remain on the catalog/extension-manager bypass and are not misrepresented as callable Tool capabilities; (d) non-callable ToolCatalog rows remain discoverable as commands but are not misrepresented as callable Tool capabilities.
 
 - [ ] **Step 2: Run the focused tests and confirm the uncovered paths fail**
 
@@ -103,7 +106,7 @@
 
 - [ ] **Step 3: Add source adapters at construction boundaries**
 
-  For each callable source confirmed in Task 1, create its `ToolCapabilityDescriptor` from the handler's `ToolDefinition`, register descriptor and handler together, and track the returned generation-guarded handle in that source's existing owner scope. Do not register a metadata-only catalog row as a callable handler.
+  For each callable source confirmed in Task 1 — main builtin and markdown-skill `AlephToolDyn` (wrapped via `BuiltinHandler`), plus MCP — create its `ToolCapabilityDescriptor` from the handler's `ToolDefinition`, register descriptor and handler together, and track the returned generation-guarded handle in that source's existing owner scope. Do not register a metadata-only catalog row (including Plugin rows) as a callable handler.
 
 - [ ] **Step 4: Preserve stable replace and invocation semantics**
 
@@ -112,12 +115,12 @@
 - [ ] **Step 5: Run source adapter tests**
 
   Run: `cargo test --lib tools::registry`, `cargo test --lib tools::handlers::registration`, `cargo test --lib mcp::tool_bridge`, and `cargo test --test plugin_lifecycle_roundtrip`.
-  Expected: PASS; all registered callable sources in the Task 1 boundary use the canonical registry; no new harness logic.
+  Expected: PASS; all registered callable sources in the Task 1 boundary (builtin, markdown-skill `AlephToolDyn`, MCP) use the canonical registry; Plugin remains on its bypass; no new harness logic.
 
 - [ ] **Step 6: Commit the source convergence**
 
 ```bash
-git add src/tools/handlers/builtin.rs src/tools/handlers/registration.rs src/tools/adapters/registry_adapter.rs src/mcp/tool_bridge.rs src/extension/lifecycle.rs src/executor/builtin_registry tests/plugin_lifecycle_roundtrip.rs
+git add src/tools/handlers/builtin.rs src/tools/handlers/registration.rs src/tools/adapters/registry_adapter.rs src/mcp/tool_bridge.rs src/executor/builtin_registry src/tools/server src/tools/markdown_skill tests/plugin_lifecycle_roundtrip.rs
  git diff --cached --check
 git commit -m "refactor: route tool callables through capability registry"
 ```
@@ -150,7 +153,7 @@ Stage only paths actually changed; omit absent/unmodified paths.
 
 - [ ] **Step 4: Remove temporary revision-1 descriptor fabrication**
 
-  Delete `to_metadata_form` and its tests only when `rg` confirms there are no production callers; replace tests with assertions against the new canonical projection path. If remaining runtime-only tools have no descriptor-backed handler, keep their conversion explicitly compatibility-only and do not claim their identity is canonical.
+  Delete `to_metadata_form` and its tests only when `rg` confirms there are no production callers — which requires builtin canonicalization and migration of every caller, including `ScopedToolService`'s metadata projection — and replace tests with assertions against the new canonical projection path. `to_metadata_form` is a live production path (fabricating revision-1 descriptors for loop-side `ToolDefinition`s); until every caller has a canonical source, keep its conversion explicitly compatibility-only and do not claim its identity is canonical.
 
 - [ ] **Step 5: Run projection and catalog tests**
 
@@ -175,7 +178,7 @@ Stage only paths actually changed; omit unmodified paths.
 
 **Interfaces:**
 - Consume `ToolCallIdentity`, `ToolDescriptorLookup`, `ReplayDecision`, `DanglingCall`, `repairs_for_with_policy`, and `repair_boundary_with_policy` as currently defined.
-- Classification may report eligibility/refusal but is not authorization; Phase 2B stays VerifyOnly and no recovery code in this task may call `ReplayPermit::invoke` or write a new replay outcome.
+- Classification may report eligibility/refusal but is not authorization; Phase 2B stays VerifyOnly and no recovery code in this task may call `ReplayPermit::invoke`, consume a durable replay claim, apply a per-call crash budget, or write a new replay outcome.
 
 - [ ] **Step 1: Add or identify tests for lifecycle boundary cases**
 
@@ -187,7 +190,7 @@ Stage only paths actually changed; omit unmodified paths.
 
 - [ ] **Step 3: Fix only the failing Core seam**
 
-  If recovery lookup is not supplied to the existing coordinator, wire the existing `ToolDescriptorLookup` through the non-harness owner/bridge boundary. If the current production path already supplies it and tests prove fail-closed behavior, make no product-code change for that sub-area. Do not add a registry lookup or replay decision to `src/harness/`.
+  Boundary repair is currently descriptor-blind in production (`repair_boundary` passes `lookup = None`). This phase MAY connect the existing `ToolDescriptorLookup` through the non-harness owner/bridge boundary for classification-only recovery (descriptor-aware `repairs_for_with_policy`/`repair_boundary_with_policy`). This is classification-only: do not call `ReplayPermit::invoke`, do not implement handler replay/claim/budget/outcome execution. If the current production path already supplies the lookup and tests prove fail-closed behavior, make no product-code change for that sub-area. Do not add a registry lookup or replay decision to `src/harness/`.
 
 - [ ] **Step 4: Align structured error projection only where a proven lossy conversion exists**
 
@@ -196,7 +199,7 @@ Stage only paths actually changed; omit unmodified paths.
 - [ ] **Step 5: Run lifecycle and recovery tests**
 
   Run: `cargo test --lib tools::registration_scope`, `cargo test --lib tools::registry`, `cargo test --lib session::events`, `cargo test --lib session::reduction`, `cargo test --lib session::boundary_repair`, `cargo test --lib session::replay`, `cargo test --test resume_coordinator_integration`, and the relevant `cargo test --lib harness::tests::act` only if existing identity plumbing is touched.
-  Expected: classification remains fail-closed; no execution or outcome-writing capability is introduced.
+  Expected: classification remains fail-closed; no execution, claim, budget, or outcome-writing capability is introduced.
 
 - [ ] **Step 6: Commit lifecycle and recovery verification/fixes**
 
@@ -259,7 +262,7 @@ Stage only documentation files actually changed.
 
 - [ ] **Step 3: Verify architectural boundaries and stale paths**
 
-  Search production source for handler registrations not backed by `ToolHandlerRegistry`; search for production `to_metadata_form` or hard-coded temporary descriptor revisions; inspect all new `src/harness/` diffs (expected none unless a pre-approved field-plumbing defect was proven); verify no Phase 2B execution API was added or newly called. Keep ToolCatalog command/skill/health consumers intact.
+  Search production source for handler registrations not backed by `ToolHandlerRegistry` (excluding the documented Plugin catalog/extension-manager bypass); search for production `to_metadata_form` or hard-coded temporary descriptor revisions; inspect all new `src/harness/` diffs (expected none unless a pre-approved field-plumbing defect was proven); verify no Phase 2B execution API was added or newly called. Keep ToolCatalog command/skill/health/Plugin consumers intact.
 
 - [ ] **Step 4: Review the exact staged tree**
 
@@ -274,7 +277,7 @@ Confirm only intended files are staged, commit the final verified changes with `
 
 - [ ] **Step 5: Report delivery and non-goals**
 
-  Summarize source paths converged, compatibility catalog responsibilities retained, tests/gates run, commits, and explicitly list deferred work: universal Capability kinds, durable Safe Replay execution, ownership tree, approval/hook memo migration, and ACP agent server.
+  Summarize source paths converged (builtin, markdown-skill `AlephToolDyn`, MCP), the Plugin bypass retained, compatibility catalog responsibilities retained, tests/gates run, commits, and explicitly list deferred work: Plugin ExtensionHandler convergence, universal Capability kinds, durable Safe Replay execution, ownership tree, approval/hook memo migration, and ACP agent server.
 
 ## Spec Coverage Self-Check
 
@@ -289,4 +292,4 @@ Confirm only intended files are staged, commit the final verified changes with `
 
 ## Executor Handoff Notes
 
-The source census found MCP already registers descriptor/handler pairs in `ToolHandlerRegistry` and tracks catalog projection cleanup through `ToolRegistrationScope`; preserve this behavior rather than reimplementing it. `unregister_mcp_tools` is compatibility/emergency cleanup because name/source sweeping can remove a replacement; normal teardown must remain handle/scope-based. The current production Plugin path appears catalog-only and `ToolHandler`'s extension implementation was removed; Task 1 is a hard scope gate, not permission to manufacture callable Plugin handlers from catalog metadata. `to_metadata_form` currently fabricates temporary revision-1 descriptors and is a removal candidate, but delete it only after all production consumers are traced and migrated. Current recovery has descriptor-aware classification; confirm whether the real ResumeCoordinator supplies the lookup before changing it. `ToolCallEffectiveInput` exists in the current codebase; its Phase 2B production semantics are not a Phase 3 replay-execution authorization.
+The source census found MCP already registers descriptor/handler pairs in `ToolHandlerRegistry` and tracks catalog projection cleanup through `ToolRegistrationScope`; preserve this behavior rather than reimplementing it. `unregister_mcp_tools` is compatibility/emergency cleanup because name/source sweeping can remove a replacement; normal teardown must remain handle/scope-based. Main builtin and the markdown-skill `AlephToolDyn` surface are callable and can be wrapped via the existing `BuiltinHandler` (path proven by `CapabilityHandler`/`set_capability`); they are the canonical-registry candidates this phase. The current production Plugin path is catalog-only and `ToolHandler`'s extension implementation was removed; Plugin is out of scope — do not manufacture callable Plugin handlers from catalog metadata, keep its `ToolCatalog`/extension-manager bypass, and defer convergence to a separate ExtensionHandler spec. `to_metadata_form` currently fabricates temporary revision-1 descriptors and is a removal candidate, but delete it only after all production consumers are traced and migrated (builtin canonicalization must land first). Current recovery has descriptor-aware classification; production `repair_boundary` still passes `lookup = None`, so classification-only lookup wiring is the permitted recovery change this phase. `ToolCallEffectiveInput` exists in the current codebase; its Phase 2B production semantics are not a Phase 3 replay-execution authorization.

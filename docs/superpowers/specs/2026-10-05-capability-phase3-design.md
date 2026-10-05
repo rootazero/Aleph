@@ -3,6 +3,7 @@
 - 日期：2026-10-05
 - 分支：`phase3-capability-architecture`
 - 状态：设计已获批准，待用户审阅书面 spec
+- 修订：2026-10-05（收窄范围）——用户批准将本期完整闭环收窄为 MCP + 主 builtin + 现有可验证的 `AlephToolDyn`/markdown-skill callable surface；Plugin 不纳入 canonical `ToolHandlerRegistry`，保留 `ToolCatalog`/extension manager 旁路，另列 ExtensionHandler spec 为后续事项。修订理由：Task 1 源码 census 证实 Plugin 无 `ToolHandler` 实现（2026-05-20 已移除），不得从 metadata 伪造 handler。
 - 父级设计：`docs/superpowers/specs/2026-10-03-capability-tool-descriptor-design.md`
 - 相关设计：`docs/superpowers/specs/2026-10-04-capability-phase2-durable-tool-design.md`、`docs/superpowers/specs/2026-10-04-capability-phase2b-safe-replay-design.md`
 - 外部参考：Pi Durable 设计、`Everything-externally-composable-is-a-Capability.md`、`pi-durable-overview.md`
@@ -29,7 +30,7 @@
 
 只有同时满足以下条件，本期才算完成：
 
-1. builtin、extension、MCP 至少三类真实 Tool 经过同一 `ToolHandlerRegistry` resolve。
+1. MCP 与主 builtin（含可包装为 `ToolHandler` 的 `AlephToolDyn`/markdown-skill callable surface）至少两类真实 Tool 经过同一 `ToolHandlerRegistry` resolve；Plugin 不在本期 canonical registry 范围，保留现有 `ToolCatalog`/extension manager 旁路作为明确兼容边界。
 2. descriptor 是 Tool identity、schema、revision、replay 和安全策略的单一语义来源。
 3. 至少一个重复的 metadata/registry/旁路 handler 路径被删除，或严格降级为纯执行索引/兼容包装；如果 Phase 1 已经删除该路径，第三期必须重新 census 并保持其不存在。
 4. 至少一个 model/protocol/recovery 多面投影来自同一 descriptor；其中 recovery 面指 classification/lookup，不代表本期实际执行 replay。
@@ -44,7 +45,7 @@
 ### 2.1 本期范围
 
 - 以 `ToolCapabilityDescriptor` 和 `ToolHandlerRegistry` 为核心，收敛 Tool 注册、resolve、替换、移除和投影。
-- 统一 builtin、extension、MCP tool 的 descriptor/handler 同代绑定。
+- 统一主 builtin、markdown-skill 等 `AlephToolDyn` callable surface 与 MCP tool 的 descriptor/handler 同代绑定；Plugin 保留现有 catalog/extension manager 旁路，不在本期统一。
 - 统一 registration scope、handle、dispose 和 disposer 错误报告。
 - 将 caller visibility、invocation policy、durable intent identity、outcome 关联和 recovery lookup 连接到同一 Tool identity；本期不新增 replay execution outcome 路径。
 - 统一 MCP、RPC、CLI、Panel 或其他已有稳定消费者的 descriptor projection helper；至少接通两个真实出口。
@@ -63,6 +64,7 @@
 - 不保存 Rust handler、闭包、插件代码、凭据或可执行对象到 durable store。
 - 不承诺 external effect 与 SQLite 之间的 exactly-once、通用幂等或事务耦合。
 - 不将安全字段、replay policy、visibility 或 schema 在 MCP/RPC/CLI/Panel 中各复制一份。
+- 不将 Plugin 纳入 canonical `ToolHandlerRegistry`，不从 `UnifiedTool` metadata 伪造 Plugin handler；Plugin 继续走现有 `ToolCatalog`/extension manager 旁路，后续由独立 ExtensionHandler spec 决定是否收敛。
 
 ## 3. 参考项目映射与取舍
 
@@ -90,7 +92,8 @@ Pi Durable 的可迁移价值在于 effect sandwich、intent checkpoint、descri
 | `src/extension/effects/scope.rs` | 复用现有 EffectScope 所有权/清理契约 | 不复制第二套 disposer 协议 |
 | `src/tools/service.rs` / metadata | 兼容旧 ToolDefinition，改为由 descriptor 生成展示/执行 DTO | 不维护第二份 identity/replay/visibility |
 | `src/tools/runtime.rs` | 保持 `LoopToolRegistry` 为执行消费者/索引 | 不拥有全局发现事实 |
-| builtin / extension / MCP adapter | 注册 descriptor + handler，并持有 scope/handle | 不绕过 registry 直接写旁路表 |
+| builtin / markdown-skill / MCP adapter | 注册 descriptor + handler，并持有 scope/handle | 不绕过 registry 直接写旁路表 |
+| extension / Plugin adapter | 保留现有 `ToolCatalog` 行与 extension manager `call_plugin_tool` 旁路 | 本期不注册进 `ToolHandlerRegistry`，不从 metadata 伪造 handler |
 | MCP/RPC/CLI/Panel projection | 把 descriptor 映射为协议或展示形状 | 不重新判断 replay、权限或成功语义 |
 | `src/session/events.rs`、`reduction.rs`、`replay.rs`、`boundary_repair.rs` | 保存/读取 durable identity，执行 fail-closed recovery classification；`replay.rs` 继续持有 Phase 2B 的私有 permit/adapter 边界，但本期不放宽生产 VerifyOnly | 不引入第二个 registry 或调度器 |
 | `src/harness/agent/act.rs` | 仅保留 Phase 2 已批准的 serial/parallel `ToolCallRequested` identity 字段搬运 | 不增加 replay、claim、permission 或 handler 执行逻辑 |
@@ -261,7 +264,7 @@ resolve 依次处理 registry identity、caller visibility、invocation policy/a
 1. 源码清点当前 descriptor/handler/metadata 字段和注册入口。
 2. 确认 `ToolHandlerRegistry` 为唯一 Tool callable truth。
 3. 补齐 descriptor + handler 同代绑定、snapshot 和 conflict 错误。
-4. 逐一接入 builtin、extension、MCP adapter。
+4. 逐一接入主 builtin、markdown-skill 等 `AlephToolDyn` callable surface 与 MCP adapter；Plugin 保持 catalog/extension manager 旁路，不纳入本期接入。
 5. 保持现有公开 API 的兼容包装，避免一次性重写所有调用方。
 
 这一组工作由一个实现计划分阶段编排；阶段之间以测试和源码 census 为门，不在计划中并行启动 Agent/Task/Resource 的下一期重构。
@@ -323,7 +326,7 @@ Tool 闭环完成后，才评估 Agent、Task、Resource、Subscription 等下�
 ### 10.4 架构与源码清理
 
 - `src/harness/` 无业务扩张，Phase 2 允许的字段 wiring 除外；
-- 不存在绕过 `ToolHandlerRegistry` 的 Tool 生产/调用路径；
+- 除 Plugin 的 catalog/extension manager 兼容旁路外，不存在绕过 `ToolHandlerRegistry` 的 Tool 生产/调用路径；
 - 被替代的 metadata、registry、replay/permission 分支已删除，或有明确的纯索引/兼容理由；
 - `git diff --check`、项目 Rust check/clippy/目标测试按当前项目门禁执行；
 - 最终以 staged tree 验证提交内容，commit 后 worktree clean。
@@ -354,6 +357,7 @@ Tool 闭环完成后，才评估 Agent、Task、Resource、Subscription 等下�
 - ACP agent server 与所有 transport 的统一能力目录；
 - 跨进程 registry snapshot 的持久化；
 - 没有真实消费者的预先抽象。
+- Plugin 的 `ExtensionHandler` 收敛设计（将 extension/Plugin callable 统一进 canonical registry）。
 
 ## 13. 设计批准记录
 
@@ -365,3 +369,5 @@ Tool 闭环完成后，才评估 Agent、Task、Resource、Subscription 等下�
 4. 安全边界、可观测性、迁移顺序与本期验收范围。
 
 后续步骤是：用户审阅本书面 spec；若批准，才进入 `writing-plans` 阶段生成实现计划。实现计划必须继续遵守独立 worktree、先连线后扩展、任务分支隔离、分阶段验证和旧路径清理要求。
+
+**修订记录（2026-10-05）**：用户批准收窄范围。基于 Task 1 源码 census（`be4737601`），将成功标准 #1 从「builtin + extension + MCP 全部 canonical」收窄为「MCP + 主 builtin + 现有可验证 `AlephToolDyn`/markdown-skill callable surface」；Plugin 无 `ToolHandler` 实现，保留 `ToolCatalog`/extension manager 旁路作为兼容边界，并另列 ExtensionHandler spec 为延后事项。`to_metadata_form` 仍是 live production path，仅在 builtin canonicalization 与全部 caller 迁移后才删除/降级。
