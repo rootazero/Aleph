@@ -51,7 +51,7 @@
 | Per-run execution surface | `src/executor/tool_registry.rs`, `src/executor/builtin_registry/registry/struct_def.rs` | `ToolRegistry::{get_tool,execute_tool}` remains the only main-builtin execution surface; `BuiltinToolRegistry` keeps late-bound Arc/OnceCell context; no longer double-projected via `RegistryToolAdapter`. |
 | Run-loop projection | `src/gateway/execution_engine/run_loop/inner.rs`, `src/tools/adapters/registry_adapter.rs`, `src/tools/adapters/mcp_adapter.rs`, `src/mcp/tool_bridge.rs` | Replace `build_registry_from_tools` + `join_mcp_tools` + `join_markdown_skills` with one `entries_snapshot()` projection via the generalized `McpRegistryTool::from_registry_entry`; remove `RegistryToolAdapter` from the builtin projection path. |
 | Read-only boundary (not modified this phase) | `src/extension/lifecycle.rs` | Plugin stays on its `ToolCatalog`/extension-manager bypass; do not route Plugin through the canonical registry. |
-| Catalog projections | `src/tool_metadata/registry/`, `src/tool_metadata/types/unified/`, `src/tools/service.rs`, `src/tools/scoped/mod.rs`, `src/tools/adapters/registry_adapter.rs` | Keep catalog-specific fields and non-callable rows; `ScopedToolService::metadata_schema` projects from canonical descriptors; delete `to_metadata_form` after migration. |
+| Catalog projections | `src/tool_metadata/registry/`, `src/tool_metadata/types/unified/`, `src/tools/service.rs`, `src/tools/scoped/mod.rs`, `src/tools/adapters/registry_adapter.rs` | Keep catalog-specific fields and non-callable rows; `ScopedToolService::metadata_schema` uses the direct projection helper; retain `to_metadata_form` only as a compatibility wrapper while the existing harness test import remains. |
 | Lifecycle and errors | `src/tools/registration_scope.rs`, `src/extension/effects/scope.rs`, `src/tools/service.rs`, `src/tools/error_kind.rs` | Reuse existing disposers and reports; align structured error mapping without creating a second lifecycle framework. |
 | Durable identity and classification | `src/session/events.rs`, `src/session/reduction.rs`, `src/session/replay.rs`, `src/session/boundary_repair.rs`, `src/gateway/resume_coordinator.rs`, `src/harness/deps.rs`, `src/orchestrator/harness_bridge/` | Verify current identity/lookup/classification wiring and make only the minimum non-harness correction required to keep classification fail-closed. |
 | Tests and references | colocated Rust unit tests, `tests/resume_coordinator_integration.rs`, `tests/plugin_lifecycle_roundtrip.rs`, `docs/reference/FEATURE_LOCATOR.md`, optionally `docs/reference/TOOL_SYSTEM.md` and `docs/reference/ARCHITECTURE.md` | Pin source convergence and projection behavior, then document only verified implementation facts. |
@@ -73,7 +73,7 @@
 ## Task Dependencies
 
 - Task 1 (census gate) is a prerequisite for Task 2 (its five baseline tests must pass and the callable/non-callable decision recorded before any implementation).
-- Task 2 (boot-register builtins + markdown owner + single-snapshot projection) is a hard prerequisite for Task 3 (descriptor projection migration): `ScopedToolService::metadata_schema` can only migrate off `to_metadata_form` once loop-side definitions are canonical-descriptor projections and `to_metadata_form` has no live caller.
+- Task 2 (boot-register builtins + markdown owner + single-snapshot projection) is a hard prerequisite for Task 3 (descriptor projection migration): `ScopedToolService::metadata_schema` can only migrate off the fabricated `to_metadata_form` conversion once loop-side definitions have a direct descriptor-owned projection. Production has now migrated; the compatibility wrapper remains only for the existing harness test import and is not a canonical identity source.
 - Task 2 is a hard prerequisite for Task 4 (lifecycle/recovery): generation-safe replace, stale-handle no-op, owner dispose, and the single-snapshot lag behavior are pinned in Task 2 and verified in Task 4.
 - Task 5 (docs) depends on Tasks 2–4 (line anchors must be recorded after implementation, not from the pre-change census).
 - Task 6 (final verification) depends on all preceding tasks.
@@ -170,11 +170,11 @@ Stage only paths actually changed; omit absent/unmodified paths.
 **Interfaces:**
 - Consume `ToolCapabilityDescriptor::{to_metadata_definition,to_unified_tool}` and `ToolDefinition::from_descriptor(&ToolCapabilityDescriptor) -> ToolDefinition`.
 - Keep command-only fields such as aliases, routing capabilities, UI metadata, health and conflict-resolution state owned by ToolCatalog; descriptor projection owns Tool identity/schema/source and descriptor-backed safety/replay fields.
-- Remove `to_metadata_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::ToolDefinition]>` (`src/tools/service.rs:420`) only after its sole live caller `ScopedToolService::metadata_schema` (`src/tools/scoped/mod.rs:645`) is migrated to canonical descriptor projection; do not preserve revision `1` as a fabricated identity.
+- Remove the fabricated revision-1 conversion from production. `ScopedToolService::metadata_schema` now uses `ToolDefinition::to_metadata_definition` after its existing filters and rewriters. Keep `to_metadata_form` as a compatibility wrapper until the existing `src/harness/tests/tools_surface.rs` import is migrated in a separately approved harness cleanup; it must not be described as canonical identity.
 
 - [ ] **Step 1: Inventory all `to_metadata_form` and hand-built Tool projections**
 
-  Use `rg -n 'to_metadata_form|ToolCapabilityDescriptor::from_definition|to_metadata_definition|to_unified_tool' src tests --glob '*.rs'`. Classify every call as callable Tool projection, command/catalog row, or test helper.
+  Confirm the production `to_metadata_form` caller has migrated and classify remaining test/helper imports. The remaining compatibility wrapper is allowed only when it delegates to the direct projection and carries no fabricated identity semantics.
 
 - [ ] **Step 2: Add failing parity tests for both selected consumers**
 
@@ -182,11 +182,11 @@ Stage only paths actually changed; omit absent/unmodified paths.
 
 - [ ] **Step 3: Route projection through descriptor helpers**
 
-  Replace duplicated mapping only for descriptor-backed Tool entries. After Task 2, loop-side definitions are canonical-descriptor projections, so `ScopedToolService::metadata_schema` projects from the entry's descriptor (or `ToolCapabilityDescriptor::to_metadata_definition()`) instead of `to_metadata_form`. Preserve any catalog-specific metadata in its current owning subsystem and do not invent a descriptor field for unrelated routing/UI data.
+  Replace duplicated mapping only for descriptor-backed Tool entries. `ScopedToolService::metadata_schema` now uses the direct projection helper; preserve any catalog-specific metadata in its current owning subsystem and do not invent a descriptor field for unrelated routing/UI data.
 
 - [ ] **Step 4: Remove temporary revision-1 descriptor fabrication**
 
-  Delete `to_metadata_form` and its tests only when `rg` confirms no production callers remain (builtin canonicalization + `ScopedToolService` migration must both land first), and replace tests with assertions against the new canonical projection path. Until then `to_metadata_form` is compatibility-only and must not be claimed as canonical identity.
+  Do not delete `to_metadata_form` in this phase: its production caller has migrated, but `src/harness/tests/tools_surface.rs` still imports the compatibility wrapper. Delete it only in a separately approved harness cleanup after `rg` confirms no callers remain; current tests assert it agrees with the direct projection and does not create a canonical revision.
 
 - [ ] **Step 5: Run projection and catalog tests**
 

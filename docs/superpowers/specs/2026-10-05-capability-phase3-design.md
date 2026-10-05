@@ -99,7 +99,7 @@ Pi Durable 的可迁移价值在于 effect sandwich、intent checkpoint、descri
 | `src/executor/tool_registry.rs` + `src/executor/builtin_registry/` | `ToolRegistry::execute_tool` 仍是主 builtin 的唯一执行面；`BuiltinToolRegistry` 继续持有 late-bound handles（workspace/session/gateway OnceCell） | 不再被 run-loop 二次投影为 `RegistryToolAdapter` |
 | `src/tools/runtime.rs`（`LoopToolRegistry`） | 变成 request-scoped visible projection：只从 canonical snapshot 构建，不再拥有全局发现事实 | 不保存第二份 handler map |
 | `src/tools/adapters/registry_adapter.rs` | `RegistryToolAdapter` 从主 builtin 投影路径移除/降级为兼容；`McpRegistryTool::from_registry_entry`（handler + descriptor -> `LoopTool`）推广为 canonical handler->LoopTool adapter | 不伪造 revision-1 descriptor |
-| `src/tools/service.rs` / `src/tools/scoped/mod.rs` | `to_metadata_form` 在全部生产 caller 迁移后删除；`ScopedToolService::metadata_schema` 改由 canonical descriptor 投影 | 不维护第二份 identity/replay/visibility |
+| `src/tools/service.rs` / `src/tools/scoped/mod.rs` | `ScopedToolService::metadata_schema` uses the direct descriptor-backed field projection; `to_metadata_form` remains only as a compatibility wrapper until the existing harness test import is migrated | Do not maintain a second canonical identity/replay/visibility source |
 | 主 builtin / markdown-skill（`src/tools/server/`、`src/tools/markdown_skill/`）/ MCP adapter | 注册 descriptor + handler，并持有 scope/handle | 不绕过 registry 直接写旁路表 |
 | extension / Plugin adapter | 保留现有 `ToolCatalog` 行与 extension manager `call_plugin_tool` 旁路 | 本期不注册进 `ToolHandlerRegistry`，不从 metadata 伪造 handler |
 | MCP/RPC/CLI/Panel projection | 把 descriptor 映射为协议或展示形状 | 不重新判断 replay、权限或成功语义 |
@@ -337,10 +337,10 @@ resolve 依次处理 registry identity、caller visibility、invocation policy/a
 3. 统一 conflict、not visible、closed、mismatch、unknown outcome 结构化错误。
 4. 增加 replace、unregister、dispose、in-flight 和并发测试。
 
-### 阶段 E：descriptor 投影迁移（`to_metadata_form` 退休）
+### 阶段 E：descriptor 投影迁移（`to_metadata_form` 生产路径退休）
 
-1. `ScopedToolService::metadata_schema`（`src/tools/scoped/mod.rs:645`）现调用 `to_metadata_form(&defs)` 伪造 revision-1 descriptor。收敛后 loop-side definition 已来自 canonical descriptor，改为直接 `ToolCapabilityDescriptor::to_metadata_definition()`（或 entry 已携带 descriptor 时直接投影）。
-2. 用 `rg -n 'to_metadata_form'` 确认无生产 caller 后删除 `to_metadata_form`（`src/tools/service.rs:420`）与其测试，替换为 canonical 投影断言。
+1. `ScopedToolService::metadata_schema`（`src/tools/scoped/mod.rs`）已改用 `ToolDefinition::to_metadata_definition`，不再通过 revision-1 descriptor 伪造 canonical identity。
+2. `to_metadata_form` 现在只是兼容 wrapper；`src/harness/tests/tools_surface.rs` 仍有测试导入，因此本期不扩大 harness 清理范围。待单独批准的 harness cleanup 迁移该导入后，才能删除 wrapper 与对应测试。
 3. 验证 gating（health/deferred/rewriter）顺序不变。
 
 ### 阶段 F：durable intent/recovery 连线
