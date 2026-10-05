@@ -204,7 +204,7 @@ impl SkillWatcher {
                     // no remove API, so the legacy CLI subprocess store retains a
                     // stale reader entry until its next replace — a known
                     // limitation of the old server reader, not a silent success.
-                    match skill_name_from_path(&path) {
+                    match skill_name_from_path(path) {
                         Some(name) => {
                             let removed = markdown_skill_registry_owner()
                                 .lock()
