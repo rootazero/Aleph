@@ -128,6 +128,16 @@ pub enum LogContradiction {
     /// call's receipt (a detached job's card) is not this — see the arm in
     /// [`reduce_run`]; it is read like an approval after a receipt: silently.
     ParkedWithoutRequest { seq: EventSeq, call_id: String },
+    /// A `ToolCallEffectiveInput` whose `(turn_id, call_id)` matches no
+    /// dispatch. Reading: it pairs with nothing and marks nothing — the
+    /// dangling call it might have named stays `effective_input: None`
+    /// (unknown, not replay eligible).
+    EffectiveInputWithoutRequest { seq: EventSeq, call_id: String },
+    /// Two `ToolCallEffectiveInput` markers for one dispatch carried
+    /// different inputs. Reading: the true input is ambiguous, so the call
+    /// fails closed to `effective_input: None` — it must never be replayed
+    /// from either input.
+    ConflictingEffectiveInput { seq: EventSeq, call_id: String },
     /// A row of this slice did not decode on this build. REJECT — the reducer
     /// never saw the record, so no reading exists; the store names it
     /// ([`UndecodableRecord`]) and this is that name on the contradiction
@@ -163,6 +173,8 @@ impl LogContradiction {
             Self::ClockAnomaly { .. } => "session-log-clock-anomaly",
             Self::ResumeWithoutTarget { .. } => "session-log-resume-without-target",
             Self::ParkedWithoutRequest { .. } => "session-log-parked-without-request",
+            Self::EffectiveInputWithoutRequest { .. } => "session-log-effective-input-without-request",
+            Self::ConflictingEffectiveInput { .. } => "session-log-conflicting-effective-input",
             Self::UndecodableRecord { .. } => "session-log-undecodable-record",
         }
     }
@@ -214,6 +226,14 @@ impl fmt::Display for LogContradiction {
             Self::ParkedWithoutRequest { seq, call_id } => write!(
                 f,
                 "park for call_id `{call_id}` at seq {seq} names no unanswered dispatch"
+            ),
+            Self::EffectiveInputWithoutRequest { seq, call_id } => write!(
+                f,
+                "effective-input marker for call_id `{call_id}` at seq {seq} names no dispatch"
+            ),
+            Self::ConflictingEffectiveInput { seq, call_id } => write!(
+                f,
+                "call_id `{call_id}` received conflicting effective-input markers (latest at seq {seq})"
             ),
             Self::UndecodableRecord { seq } => write!(
                 f,
@@ -290,6 +310,12 @@ pub struct DanglingCall {
     /// legacy row without the field, or one the fail-closed decoder refused —
     /// and is never replay eligible.
     pub identity: Option<ToolCallIdentity>,
+    /// The durable post-guardrail input the handler ran with, if exactly one
+    /// [`SessionEvent::ToolCallEffectiveInput`] paired with this dispatch.
+    /// `None` when the marker is missing (unknown) or when two markers carried
+    /// different inputs ([`LogContradiction::ConflictingEffectiveInput`],
+    /// fail-closed) — in either case this call is never replay eligible.
+    pub effective_input: Option<serde_json::Value>,
     /// `seq` of the `ToolCallRequested`. A `call_id` can be dispatched more
     /// than once ([`LogContradiction::DuplicateDispatch`]), so the id alone
     /// does not name a dispatch; the seq does.
@@ -496,6 +522,14 @@ struct Dispatch<'a> {
     turn_id: TurnId,
     /// Carried through from the `ToolCallRequested` onto the [`DanglingCall`].
     identity: Option<ToolCallIdentity>,
+    /// The durable post-guardrail input the handler ran with, if a
+    /// `ToolCallEffectiveInput` marker paired with this dispatch. `None` when
+    /// no marker exists (unknown) or when markers conflicted (fail-closed).
+    effective_input: Option<serde_json::Value>,
+    /// True once two markers carried different inputs: the call is then
+    /// permanently fail-closed to `effective_input: None` regardless of any
+    /// later marker.
+    effective_input_conflicted: bool,
     /// `seq` of the receipt that answered it, once one has.
     answered: Option<EventSeq>,
     denied: bool,
@@ -639,6 +673,8 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                     tool_name: name,
                     turn_id: *turn_id,
                     identity: *identity,
+                    effective_input: None,
+                    effective_input_conflicted: false,
                     answered: None,
                     denied: false,
                     parked: None,
@@ -716,6 +752,44 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                     },
                 }
             }
+            // The durable effective-input marker (§4.3): pairs with the
+            // NEAREST preceding dispatch of its (turn_id, call_id). Written
+            // only for calls that crossed the dispatch line, so an orphan
+            // (marker with no matching request) is reported, not acted on;
+            // two markers with different inputs for one call fail closed to
+            // `None` (a replayed side effect must never resurrect a call
+            // whose true input is ambiguous).
+            SessionEvent::ToolCallEffectiveInput {
+                turn_id,
+                call_id,
+                input,
+                ..
+            } => {
+                match dispatches
+                    .iter_mut()
+                    .rev()
+                    .find(|d| d.call_id == call_id && d.turn_id == *turn_id)
+                {
+                    Some(d) if !d.effective_input_conflicted => match d.effective_input.as_ref() {
+                        None => d.effective_input = Some(input.clone()),
+                        Some(prev) if prev == input => {}
+                        Some(_) => {
+                            d.effective_input = None;
+                            d.effective_input_conflicted = true;
+                            contradictions.push(LogContradiction::ConflictingEffectiveInput {
+                                seq: record.seq,
+                                call_id: call_id.clone(),
+                            });
+                        }
+                    },
+                    // Already conflict-resolved: stay fail-closed to None.
+                    Some(_) => {}
+                    None => contradictions.push(LogContradiction::EffectiveInputWithoutRequest {
+                        seq: record.seq,
+                        call_id: call_id.clone(),
+                    }),
+                }
+            }
             _ => {}
         }
     }
@@ -742,6 +816,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
             tool_name: d.tool_name.to_string(),
             turn_id: d.turn_id,
             identity: d.identity,
+            effective_input: d.effective_input.clone(),
             seq: d.seq,
             provenance,
             denied: d.denied,
@@ -873,10 +948,12 @@ pub(crate) mod fixtures {
             LogContradiction::ClockAnomaly { .. } => 8,
             LogContradiction::ResumeWithoutTarget { .. } => 9,
             LogContradiction::ParkedWithoutRequest { .. } => 10,
-            LogContradiction::UndecodableRecord { .. } => 11,
+            LogContradiction::EffectiveInputWithoutRequest { .. } => 11,
+            LogContradiction::ConflictingEffectiveInput { .. } => 12,
+            LogContradiction::UndecodableRecord { .. } => 13,
         }
     }
-    pub(crate) const KIND_COUNT: usize = 12;
+    pub(crate) const KIND_COUNT: usize = 14;
 
     /// One sample per variant, asserted complete against `kind_index`.
     pub(crate) fn one_of_each_kind() -> Vec<LogContradiction> {
@@ -907,6 +984,14 @@ pub(crate) mod fixtures {
             LogContradiction::ClockAnomaly { seq: 1 },
             LogContradiction::ResumeWithoutTarget { seq: 1 },
             LogContradiction::ParkedWithoutRequest {
+                seq: 1,
+                call_id: "c".into(),
+            },
+            LogContradiction::EffectiveInputWithoutRequest {
+                seq: 1,
+                call_id: "c".into(),
+            },
+            LogContradiction::ConflictingEffectiveInput {
                 seq: 1,
                 call_id: "c".into(),
             },
@@ -1017,6 +1102,140 @@ mod tests {
             input: serde_json::json!({}),
             at: 3,
         }
+    }
+
+    fn requested_with_turn(turn_id: TurnId, call: &str) -> SessionEvent {
+        SessionEvent::ToolCallRequested {
+            identity: None,
+            turn_id,
+            call_id: call.to_string(),
+            name: "bash_exec".to_string(),
+            input: serde_json::json!({}),
+            at: 3,
+        }
+    }
+
+    fn effective_input_marker(turn_id: TurnId, call: &str, input: serde_json::Value) -> SessionEvent {
+        SessionEvent::ToolCallEffectiveInput {
+            turn_id,
+            call_id: call.to_string(),
+            input,
+            at: 4,
+        }
+    }
+
+    /// The durable effective-input marker pairs with the NEAREST preceding
+    /// dispatch of its `(turn_id, call_id)`, and the dangling call carries it
+    /// forward as the input the handler ran with (§4.3).
+    #[test]
+    fn effective_input_marker_pairs_with_its_dispatch() {
+        let turn = TurnId::new_v4();
+        let events = vec![
+            rec(1, started("r1")),
+            rec(2, requested_with_turn(turn, "c1")),
+            rec(
+                3,
+                effective_input_marker(turn, "c1", serde_json::json!({ "cmd": "ls" })),
+            ),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert_eq!(reduction.dangling.len(), 1);
+        assert_eq!(
+            reduction.dangling[0].effective_input,
+            Some(serde_json::json!({ "cmd": "ls" }))
+        );
+        assert!(reduction.contradictions.is_empty(), "{reduction:?}");
+    }
+
+    /// A marker whose `(turn_id, call_id)` names no dispatch pairs with
+    /// nothing: it is reported, and the call it might have named stays
+    /// unknown (`effective_input: None`) rather than acting on an orphan.
+    #[test]
+    fn effective_input_marker_without_matching_request_is_reported_not_paired() {
+        let turn = TurnId::new_v4();
+        let events = vec![
+            rec(1, started("r1")),
+            rec(2, requested_with_turn(turn, "c1")),
+            rec(
+                3,
+                effective_input_marker(
+                    TurnId::new_v4(),
+                    "c1",
+                    serde_json::json!({ "cmd": "ls" }),
+                ),
+            ),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert_eq!(reduction.dangling.len(), 1);
+        assert_eq!(reduction.dangling[0].effective_input, None);
+        assert!(tags(&reduction)
+            .iter()
+            .any(|t| *t == "session-log-effective-input-without-request"));
+    }
+
+    /// Two markers carrying different inputs for one dispatch make the true
+    /// input ambiguous: the call fails closed to `effective_input: None` and
+    /// the conflict is reported — it must never be replayed from either input.
+    #[test]
+    fn conflicting_effective_input_markers_fail_closed_to_none() {
+        let turn = TurnId::new_v4();
+        let events = vec![
+            rec(1, started("r1")),
+            rec(2, requested_with_turn(turn, "c1")),
+            rec(3, effective_input_marker(turn, "c1", serde_json::json!("a"))),
+            rec(4, effective_input_marker(turn, "c1", serde_json::json!("b"))),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert_eq!(reduction.dangling.len(), 1);
+        assert_eq!(reduction.dangling[0].effective_input, None);
+        assert!(tags(&reduction)
+            .iter()
+            .any(|t| *t == "session-log-conflicting-effective-input"));
+    }
+
+    /// An identical repeated marker is idempotent: no conflict is raised and
+    /// the input is retained once.
+    #[test]
+    fn identical_effective_input_markers_are_idempotent() {
+        let turn = TurnId::new_v4();
+        let events = vec![
+            rec(1, started("r1")),
+            rec(2, requested_with_turn(turn, "c1")),
+            rec(3, effective_input_marker(turn, "c1", serde_json::json!("a"))),
+            rec(4, effective_input_marker(turn, "c1", serde_json::json!("a"))),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert_eq!(reduction.dangling.len(), 1);
+        assert_eq!(
+            reduction.dangling[0].effective_input,
+            Some(serde_json::json!("a"))
+        );
+        assert!(reduction.contradictions.is_empty(), "{reduction:?}");
+    }
+
+    /// A marker landing after the call's receipt is inert: the call is already
+    /// answered (not dangling), so the marker can never resurrect it — it
+    /// pairs with the answered dispatch, which leaves no dangling call.
+    #[test]
+    fn marker_after_receipt_does_not_resurrect_an_answered_call() {
+        let turn = TurnId::new_v4();
+        let result = SessionEvent::ToolResult {
+            turn_id: turn,
+            call_id: "c1".to_string(),
+            output: crate::session::events::ToolOutput {
+                value: serde_json::json!("ok"),
+                metadata: Default::default(),
+            },
+            at: 4,
+        };
+        let events = vec![
+            rec(1, started("r1")),
+            rec(2, requested_with_turn(turn, "c1")),
+            rec(3, result),
+            rec(4, effective_input_marker(turn, "c1", serde_json::json!("late"))),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert!(reduction.dangling.is_empty());
     }
 
     /// The queued identity snapshot survives reduction verbatim: the dangling
@@ -1179,7 +1398,7 @@ mod tests {
     #[test]
     fn the_three_reject_kinds_are_exactly_out_of_order_non_marker_and_undecodable() {
         for c in one_of_each_kind() {
-            let expected = matches!(kind_index(&c), 0 | 1 | 11);
+            let expected = matches!(kind_index(&c), 0 | 1 | 13);
             assert_eq!(c.rejects(), expected, "{c:?}");
         }
     }

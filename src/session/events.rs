@@ -559,6 +559,23 @@ pub enum SessionEvent {
         identity: Option<ToolCallIdentity>,
         at: Timestamp,
     },
+    /// The durable post-guardrail input that actually reached the tool handler
+    /// for a dispatched call (Phase 2B safe-replay marker). Written by the
+    /// harness AFTER the tool-call guardrail, the before-tool hooks, and the
+    /// within-batch / cross-batch dedup have all run — so it records the input
+    /// the handler ran with, not the model's pre-sanitise request. Its
+    /// presence proves a side effect may exist; its absence means "never ran /
+    /// unknown". Emitted only for calls that crossed the dispatch line — a
+    /// guardrail-`Block`ed call, a dedup-skipped call, or a memo hit never
+    /// produces one, so a marker can never revive a call that was refused.
+    /// Barrier durability (§4.3): it must reach disk before the handler is
+    /// treated as replayable.
+    ToolCallEffectiveInput {
+        turn_id: TurnId,
+        call_id: String,
+        input: serde_json::Value,
+        at: Timestamp,
+    },
     ToolCallApproved {
         turn_id: TurnId,
         call_id: String,
@@ -721,6 +738,7 @@ pub enum Durability {
 pub const fn durability_of(event: &SessionEvent) -> Durability {
     match event {
         SessionEvent::ToolCallRequested { .. }
+        | SessionEvent::ToolCallEffectiveInput { .. }
         | SessionEvent::RunStarted { .. }
         | SessionEvent::ResumeAttempted { .. }
         | SessionEvent::UserMessage { .. } => Durability::Barrier,
@@ -869,6 +887,15 @@ pub(crate) mod fixtures {
                     turn_id: t,
                     call_id: "c".into(),
                     name: "bash".into(),
+                    input: serde_json::json!({}),
+                    at: 0,
+                },
+            ),
+            (
+                "ToolCallEffectiveInput",
+                SessionEvent::ToolCallEffectiveInput {
+                    turn_id: t,
+                    call_id: "c".into(),
                     input: serde_json::json!({}),
                     at: 0,
                 },
@@ -1042,6 +1069,30 @@ mod tests {
             serde_json::to_string(&serde_json::from_str::<SessionEvent>(&json).unwrap()).unwrap(),
             json
         );
+    }
+
+    #[test]
+    fn tool_call_effective_input_round_trips_through_json() {
+        let ev = SessionEvent::ToolCallEffectiveInput {
+            turn_id: TurnId::new_v4(),
+            call_id: "c1".into(),
+            input: serde_json::json!({ "cmd": "ls", "args": ["-la"] }),
+            at: 1_700_000_000_000,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"type\":\"tool_call_effective_input\""), "{json}");
+        let back: SessionEvent = serde_json::from_str(&json).unwrap();
+        match &back {
+            SessionEvent::ToolCallEffectiveInput {
+                call_id, input, at, ..
+            } => {
+                assert_eq!(call_id, "c1");
+                assert_eq!(*input, serde_json::json!({ "cmd": "ls", "args": ["-la"] }));
+                assert_eq!(*at, 1_700_000_000_000);
+            }
+            other => panic!("expected ToolCallEffectiveInput, got {other:?}"),
+        }
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
     }
 
     #[test]
@@ -1625,12 +1676,12 @@ mod tests {
             .collect()
     }
 
-    /// The Barrier column of the durability table is exactly the four events
+    /// The Barrier column of the durability table is exactly the five events
     /// U3 ruled on, the sample list constructs every declared variant, nothing
     /// is ignorable yet, and `durability_of` has no wildcard arm to hide a
     /// new variant behind.
     #[test]
-    fn durability_barrier_set_is_exactly_the_four_ruled_events() {
+    fn durability_barrier_set_is_exactly_the_five_ruled_events() {
         let sample = fixtures::sample_of_every_kind();
         let mut sampled: Vec<&str> = sample.iter().map(|(n, _)| *n).collect();
         sampled.sort_unstable();
@@ -1651,6 +1702,7 @@ mod tests {
             [
                 "ResumeAttempted",
                 "RunStarted",
+                "ToolCallEffectiveInput",
                 "ToolCallRequested",
                 "UserMessage"
             ]

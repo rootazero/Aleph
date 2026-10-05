@@ -630,17 +630,28 @@ impl AgentHarness {
                 // limitation once this async fn crosses a `tokio::spawn`
                 // chain (subagent runtimes). Erasing to a BoxFuture is the
                 // standard workaround.
-                let fut: BoxFuture<'static, ExecOutcome> =
+                let fut: BoxFuture<'static, (ExecOutcome, Option<serde_json::Value>)> =
                     Box::pin(crate::approval::with_call_identity(
                         Some(crate::approval::CallIdentity {
                             turn_id,
                             call_id: call.id.clone(),
                         }),
-                        async move { tools.execute_with_cancel(&name, args, call_cancel).await },
+                        async move {
+                            tools.execute_with_cancel_effective(&name, args, call_cancel).await
+                        },
                     ));
                 fut.await
             };
-            match inner {
+            let (outcome, effective_input) = inner;
+            // Durable post-guardrail marker (§4.3): only when the call
+            // actually crossed the dispatch line. Guardrail-Block, within-
+            // batch dedup, and cross-batch dedup all `continue` above and
+            // never reach this, so they produce no marker.
+            if let Some(eff) = effective_input {
+                self.emit_tool_call_effective_input(session_id, turn_id, &call, eff)
+                    .await?;
+            }
+            match outcome {
                 Ok(mut output) => {
                     executed_count = executed_count.saturating_add(1);
                     self.apply_turn_budget(budget_turn_id, &call, &mut output);
@@ -913,8 +924,9 @@ impl AgentHarness {
         // in PASS 0. Each future carries its ORIGINAL index, so the
         // completion loop and PASS 2 address `tool_calls` directly with no
         // positional re-assembly.
-        let mut live_futs: Vec<BoxFuture<'static, (usize, ExecOutcome, u64)>> =
-            Vec::with_capacity(tool_calls.len());
+        let mut live_futs: Vec<
+            BoxFuture<'static, (usize, ExecOutcome, Option<serde_json::Value>, u64)>,
+        > = Vec::with_capacity(tool_calls.len());
         // Gap B follow-up — keep one InFlightGuard per call alive for the
         // duration of the whole parallel dispatch. Each guard drops when this
         // Vec goes out of scope after PASS 2 finishes, which is strictly
@@ -952,12 +964,13 @@ impl AgentHarness {
                 // anything past the cap queues first, and timing from PASS 0
                 // bills a fast tool for the wait it spent not running.
                 let started = Instant::now();
-                let exec = crate::approval::with_call_identity(Some(identity), async move {
-                    tools.execute_with_cancel(&name, args, call_cancel).await
-                })
-                .await;
+                let (exec, effective_input) =
+                    crate::approval::with_call_identity(Some(identity), async move {
+                        tools.execute_with_cancel_effective(&name, args, call_cancel).await
+                    })
+                    .await;
                 let dur_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-                (idx, exec, dur_ms)
+                (idx, exec, effective_input, dur_ms)
             }));
         }
         // Completion-order drive loop (pi/openclaw/codex parity): each live
@@ -970,11 +983,16 @@ impl AgentHarness {
         // stream, is the budgeted surface). Stall-tracker activity is also
         // recorded per completion, so a long mixed batch no longer looks
         // stalled until its slowest member returns.
-        let mut settled: Vec<Option<(u64, Result<ToolOutput, (String, bool)>)>> =
-            (0..tool_calls.len()).map(|_| None).collect();
+        let mut settled: Vec<
+            Option<(
+                u64,
+                Option<serde_json::Value>,
+                Result<ToolOutput, (String, bool)>,
+            )>,
+        > = (0..tool_calls.len()).map(|_| None).collect();
         {
             let mut completions = stream::iter(live_futs).buffer_unordered(parallelism);
-            while let Some((idx, exec, dur_ms)) = completions.next().await {
+            while let Some((idx, exec, effective_input, dur_ms)) = completions.next().await {
                 let call = &tool_calls[idx];
                 let outcome = match exec {
                     Ok(output) => {
@@ -991,7 +1009,7 @@ impl AgentHarness {
                 if let Some(ref tracker) = self.stall_tracker {
                     tracker.record_activity().await;
                 }
-                settled[idx] = Some((dur_ms, outcome));
+                settled[idx] = Some((dur_ms, effective_input, outcome));
             }
         }
         // PASS 1 complete — every future has resolved, so the in-flight
@@ -1010,10 +1028,18 @@ impl AgentHarness {
         // completion-order live events). Skipped indices (cross-batch dedup
         // hits, already errored in PASS 0) pass through with no further action.
         for (idx, slot) in settled.into_iter().enumerate() {
-            let Some((dur_ms, outcome)) = slot else {
+            let Some((dur_ms, effective_input, outcome)) = slot else {
                 continue; // PASS-0 dedup-rejected; already emitted synthetic error.
             };
             let call = &tool_calls[idx];
+            // Durable post-guardrail marker (§4.3): only for calls that
+            // actually crossed the dispatch line. Blocked / dedup-skipped
+            // indices never built a future, so `effective_input` is `None`
+            // and no marker is emitted.
+            if let Some(eff) = effective_input {
+                self.emit_tool_call_effective_input(session_id, turn_id, call, eff)
+                    .await?;
+            }
             match outcome {
                 Ok(mut output) => {
                     executed_count = executed_count.saturating_add(1);
@@ -1089,6 +1115,37 @@ impl AgentHarness {
                 &spill.original_text,
                 self.deps.tools.recovery_tools(),
             ));
+    }
+
+    /// Emit the durable post-guardrail `effective_input` marker for a call
+    /// that actually ran (§4.3). Called ONLY when the tool service reports
+    /// `Some(effective_input)` — i.e. the call crossed the dispatch line
+    /// (every gate passed, handler invoked). A blocked / guardrailed /
+    /// dedup-skipped call never reaches `execute_with_cancel_effective`'s
+    /// dispatch line, so it never produces a replay-eligible marker. The
+    /// marker rides the SAME `effective_input` the handler ran with — not the
+    /// pre-guardrail `call.arguments` — so a future resume proves exactly the
+    /// input that reached the tool.
+    async fn emit_tool_call_effective_input(
+        &self,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        call: &NativeToolCall,
+        effective_input: serde_json::Value,
+    ) -> Result<(), HarnessError> {
+        self.deps
+            .session
+            .emit_event(
+                session_id,
+                SessionEvent::ToolCallEffectiveInput {
+                    turn_id,
+                    call_id: call.id.clone(),
+                    input: effective_input,
+                    at: now_ms(),
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     /// Persist a successful tool call to the transcript: emit

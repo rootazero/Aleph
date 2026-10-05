@@ -362,6 +362,21 @@ impl ToolService for ScopedToolService {
         input: Value,
         cancel: CancellationToken,
     ) -> Result<ToolOutput, ToolError> {
+        self.execute_with_cancel_effective(name, input, cancel)
+            .await
+            .0
+    }
+
+    /// [`Self::execute_with_cancel`], plus the post-guardrail `effective_input`
+    /// the handler actually ran with (see
+    /// [`ToolService::execute_with_cancel_effective`]). The second tuple
+    /// element is `Some(input)` only when the call crossed the dispatch line.
+    async fn execute_with_cancel_effective(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> (Result<ToolOutput, ToolError>, Option<Value>) {
         use futures::FutureExt;
         use std::panic::AssertUnwindSafe;
         use tracing::Instrument;
@@ -480,18 +495,22 @@ impl ToolService for ScopedToolService {
                     panic = %cause,
                     "panic in tool dispatch; contained to this call"
                 );
-                // Through the same sanitizer every other tool error takes:
-                // synthesizing the error out here skips `execute_inner`'s
-                // pipeline, and a panic body is untrusted, unbounded text
-                // (a failed `assert_eq!` prints both operands) that would
-                // otherwise ride into context verbatim on every later turn.
-                Err(Self::sanitize_tool_error(
-                    name,
-                    ToolError::Execution {
-                        name: name.to_string(),
-                        cause: format!("tool panicked: {cause}"),
-                    },
-                ))
+                // A panicked handler DID cross the dispatch line, but its
+                // `effective_input` was captured in a stack local that the
+                // unwind dropped, so it is lost here. Fail closed: return
+                // `None` rather than a guessed input. The call still gets a
+                // (sanitized) ToolError receipt below, so it is answered and
+                // never dangling — no marker is required for it anyway.
+                (
+                    Err(Self::sanitize_tool_error(
+                        name,
+                        ToolError::Execution {
+                            name: name.to_string(),
+                            cause: format!("tool panicked: {cause}"),
+                        },
+                    )),
+                    None,
+                )
             }
         }
     }

@@ -913,6 +913,91 @@ async fn before_tool_hook_update_input_rewrites_args() {
 }
 
 #[tokio::test]
+#[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting)
+async fn execute_with_cancel_effective_returns_rewritten_input() {
+    // The narrow capture contract (task #4): `execute_with_cancel_effective`
+    // must surface the POST-hook input the handler actually ran with — not the
+    // pre-hook dispatch input. A BeforeToolCall `update_input:` rewrite is the
+    // canonical case: the call crosses the dispatch line with the rewritten
+    // value, so the marker must be `Some(rewritten)`.
+    let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        r#"echo 'update_input: {"path":"/etc/hosts","force":true}'"#,
+    )]));
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_hook_executor(executor, "test-session");
+
+    let (result, effective) = svc
+        .execute_with_cancel_effective(
+            "echo",
+            json!({ "path": "/tmp/original" }),
+            CancellationToken::new(),
+        )
+        .await;
+
+    assert!(result.is_ok(), "rewritten call should succeed: {result:?}");
+    assert_eq!(
+        effective,
+        Some(json!({ "path": "/etc/hosts", "force": true })),
+        "the marker must carry the value the handler actually ran with"
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting)
+async fn execute_with_cancel_effective_is_none_when_hook_denies() {
+    // fail-closed: a blocked/guardrailed call never reaches the dispatch line,
+    // so it must not produce a replay-eligible marker.
+    let deny = make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        "echo 'deny: hard policy stop'",
+    );
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new()).with_hook_executor(
+        Arc::new(HookExecutor::new(vec![deny])),
+        "test-session",
+    );
+
+    let (result, effective) = svc
+        .execute_with_cancel_effective(
+            "echo",
+            json!({ "path": "/tmp/x" }),
+            CancellationToken::new(),
+        )
+        .await;
+
+    assert!(result.is_err(), "denied call must refuse: {result:?}");
+    assert_eq!(
+        effective, None,
+        "a denied call must not produce a replay-eligible marker"
+    );
+}
+
+#[tokio::test]
+async fn execute_with_cancel_effective_is_some_of_input_without_hooks() {
+    // Without hooks the effective input is exactly the dispatched input, so a
+    // marker is still producible — but only because the call crossed the
+    // dispatch line.
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new());
+
+    let (result, effective) = svc
+        .execute_with_cancel_effective(
+            "echo",
+            json!({ "path": "/tmp/x" }),
+            CancellationToken::new(),
+        )
+        .await;
+
+    assert!(result.is_ok(), "plain call should succeed: {result:?}");
+    assert_eq!(
+        effective,
+        Some(json!({ "path": "/tmp/x" })),
+        "without hooks the effective input is exactly the dispatched input"
+    );
+}
+
+#[tokio::test]
 #[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / printf / '/tmp')
 async fn before_tool_hook_context_wraps_tool_output_for_llm() {
     // BeforeToolCall hook emits `context:` lines. Historically these
@@ -4466,10 +4551,11 @@ fn a_side_question_refusal_names_itself_not_the_plan_handoff() {
 // §6.2 — every production dispatch into the gate carries a CallIdentity
 // -------------------------------------------------------------------------
 
-/// A file that DEFINES `execute_with_cancel` forwards or implements it (the
-/// trait default, the scoped service, the allowlist / MCP-scope decorators);
-/// ORIGINATORS only call it. Today that set is the harness Act phase alone,
-/// each call inside a `with_call_identity(..)` scope — which is what lets
+/// A file that DEFINES `execute_with_cancel` or `execute_with_cancel_effective`
+/// forwards or implements it (the trait default, the scoped service, the
+/// allowlist / MCP-scope decorators); ORIGINATORS only call it. Today that set
+/// is the harness Act phase alone, each call inside a
+/// `with_call_identity(..)` scope — which is what lets
 /// `session::call_log::emit_for_ambient_call` treat a missing identity as a
 /// counted, logged anomaly rather than an expected shape (spec §6.2). Equality
 /// on the originator set, derived from the source: a new originator must scope
@@ -4487,10 +4573,13 @@ fn every_production_dispatch_into_the_scoped_gate_is_scoped_by_a_call_identity()
     let mut originators: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
     for (rel, src) in rust_sources_under(&root) {
         let code = code_text(&production_text(std::path::Path::new(&rel), &src));
-        if code.contains("fn execute_with_cancel(") {
+        if code.contains("fn execute_with_cancel(")
+            || code.contains("fn execute_with_cancel_effective(")
+        {
             continue;
         }
-        let calls = code.matches(".execute_with_cancel(").count();
+        let calls = code.matches(".execute_with_cancel(").count()
+            + code.matches(".execute_with_cancel_effective(").count();
         if calls > 0 {
             originators.insert(rel, (calls, code.matches("with_call_identity(").count()));
         }

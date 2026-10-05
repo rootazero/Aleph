@@ -389,6 +389,28 @@ pub trait ToolService: Send + Sync + 'static {
     ) -> Result<ToolOutput, ToolError> {
         self.execute(name, input).await
     }
+
+    /// Execute with cancellation AND report the post-guardrail
+    /// `effective_input` the handler actually ran with (§4.3). The second
+    /// tuple element is `Some(input)` ONLY when the call crossed the dispatch
+    /// line — every gate passed and the handler was invoked — and `None` when
+    /// the call was refused before dispatch (a blocked / guardrailed call must
+    /// never produce a replay-eligible marker).
+    ///
+    /// The default is fail-closed `None`: a tool service that cannot name its
+    /// effective input never claims one, so no caller can manufacture a marker
+    /// from a pre-sanitise `input`. Production wrappers
+    /// (`ScopedToolService`, `AllowlistToolService`, `McpScopedToolService`)
+    /// override this to thread the real post-hook value out of the gate chain.
+    async fn execute_with_cancel_effective(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+        cancel: CancellationToken,
+    ) -> (Result<ToolOutput, ToolError>, Option<serde_json::Value>) {
+        let result = self.execute_with_cancel(name, input, cancel).await;
+        (result, None)
+    }
 }
 
 /// Convert loop-side definitions to the provider metadata shape by projecting

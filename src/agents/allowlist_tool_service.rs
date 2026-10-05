@@ -89,6 +89,27 @@ impl ToolService for AllowlistToolService {
         .await
     }
 
+    async fn execute_with_cancel_effective(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> (Result<ToolOutput, ToolError>, Option<Value>) {
+        // Same allowlist gate as `execute_with_cancel`: a disallowed tool is
+        // refused BEFORE dispatch, so it carries no replay-eligible marker.
+        if !self.agent_def.is_tool_allowed(name) {
+            return (Err(self.deny(name, &input).await), None);
+        }
+        crate::tools::result_processing::with_recovery_tools(
+            self.recovery_tools(),
+            crate::identity::as_actor(
+                &self.agent_def.id,
+                self.inner.execute_with_cancel_effective(name, input, cancel),
+            ),
+        )
+        .await
+    }
+
     async fn list(&self) -> Vec<ToolDefinition> {
         self.inner
             .list()

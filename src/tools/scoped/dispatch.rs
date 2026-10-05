@@ -204,18 +204,27 @@ impl ScopedToolService {
     /// (`HookEvent::PermissionDenied`). The input is cloned only when a
     /// `PermissionDenied` hook is registered: a Write call's whole body is
     /// not copied on every dispatch for an event nobody listens to.
+    /// Every gate, then the call — the single dispatch chokepoint. Returns the
+    /// tool result AND the post-guardrail `effective_input` the handler
+    /// actually ran with: `Some(input)` only when the call crossed the
+    /// dispatch line, `None` when any gate (tier / policy rule, operator gate,
+    /// confirmation gate, a `BeforeToolCall` hook's `deny:`/`ask:`-refusal, or
+    /// the post-rewrite confirmation re-check) refused it before the handler
+    /// ran. The input is cloned only when it reaches the dispatch line, so a
+    /// Write call's whole body is not copied for a refusal nobody replays.
     pub(super) async fn execute_inner(
         &self,
         name: &str,
         input: Value,
         cancel: CancellationToken,
-    ) -> Result<ToolOutput, ToolError> {
+    ) -> (Result<ToolOutput, ToolError>, Option<Value>) {
         let for_hook = self
             .hook_executor
             .as_ref()
             .filter(|e| e.has_hooks_for(HookEvent::PermissionDenied))
             .map(|e| (e.clone(), input.clone()));
-        let result = self.execute_gated(name, input, cancel).await;
+        let mut capture: Option<Value> = None;
+        let result = self.execute_gated(name, input, cancel, &mut capture).await;
         if let (
             Err(ToolError::PermissionDenied {
                 name: denied,
@@ -231,7 +240,7 @@ impl ScopedToolService {
                 .execute_observers(HookEvent::PermissionDenied, &ctx)
                 .await;
         }
-        result
+        (result, capture)
     }
 
     /// Every gate, then the call — the body [`Self::execute_inner`] wraps.
@@ -240,6 +249,7 @@ impl ScopedToolService {
         name: &str,
         input: Value,
         cancel: CancellationToken,
+        capture: &mut Option<Value>,
     ) -> Result<ToolOutput, ToolError> {
         // Canonicalize the emitted name to the registered tool name BEFORE any
         // gate. resolve()/execute() swap `.`↔`_`, so a denied / operator-only
@@ -467,6 +477,14 @@ impl ScopedToolService {
         // already spent, and the overrun would kill the very call whose result
         // it was settling.
         let deadline = std::time::Instant::now() + budget;
+
+        // The call crossed the dispatch line: every gate above passed, so
+        // `effective_input` is exactly what the handler will run with. Record
+        // it for the durable replay marker — BEFORE execution, so a crash
+        // between here and the receipt still leaves a truthful post-guardrail
+        // input. A call that never reaches this line (gate denial, hook
+        // refusal, post-rewrite re-check) leaves `capture` at `None`.
+        *capture = Some(effective_input.clone());
 
         let mut result = match tokio::time::timeout(
             budget,

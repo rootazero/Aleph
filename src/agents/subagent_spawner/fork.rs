@@ -238,6 +238,7 @@ pub(crate) fn is_prompt_bearing(event: &SessionEvent) -> bool {
         | SessionEvent::ToolCallApproved { .. }
         | SessionEvent::ToolCallDenied { .. }
         | SessionEvent::ToolCallParked { .. }
+        | SessionEvent::ToolCallEffectiveInput { .. }
         | SessionEvent::SubagentSpawned { .. }
         | SessionEvent::SubagentReturned { .. }
         | SessionEvent::CompactionPerformed { .. }

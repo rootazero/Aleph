@@ -69,6 +69,29 @@ impl ToolService for McpScopedToolService {
         self.parent.execute_with_cancel(name, input, cancel).await
     }
 
+    async fn execute_with_cancel_effective(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+        cancel: CancellationToken,
+    ) -> (Result<ToolOutput, ToolError>, Option<serde_json::Value>) {
+        // Same guard as `execute_with_cancel`: extras-only entries cannot be
+        // dispatched, so they are refused BEFORE dispatch and carry no marker.
+        if self.is_extras_only(name).await {
+            return (
+                Err(ToolError::NotFound {
+                    name: name.to_string(),
+                }),
+                None,
+            );
+        }
+        // Delegate so the inner `ScopedToolService` reports the real
+        // post-guardrail `effective_input` rather than the pre-hook input.
+        self.parent
+            .execute_with_cancel_effective(name, input, cancel)
+            .await
+    }
+
     async fn list(&self) -> Vec<ToolDefinition> {
         // Stage I MVP: extras are NOT advertised. Keeping the surfaces and
         // dispatch consistent prevents the model from invoking a name that

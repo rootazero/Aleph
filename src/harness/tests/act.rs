@@ -137,6 +137,11 @@ struct ScriptedTools {
     concurrent_safe: bool,
     /// What `recovery_tools()` reports — `ALL` unless a test gates it.
     recovery: RecoveryTools,
+    /// When true, `execute_with_cancel_effective` reports the dispatched
+    /// input as the post-hook effective input (the real scoped service does
+    /// this after hooks); when false it reports `None` (the trait default,
+    /// used by every pre-existing test so they stay marker-free).
+    capture_effective: bool,
 }
 
 impl ScriptedTools {
@@ -147,6 +152,18 @@ impl ScriptedTools {
             exec_delay: std::time::Duration::ZERO,
             concurrent_safe: false,
             recovery: RecoveryTools::ALL,
+            capture_effective: false,
+        })
+    }
+
+    fn new_capturing(outcomes: Vec<Result<ToolOutput, ToolError>>) -> Arc<Self> {
+        Arc::new(Self {
+            log: Mutex::new(Vec::new()),
+            outcomes: Mutex::new(outcomes),
+            exec_delay: std::time::Duration::ZERO,
+            concurrent_safe: false,
+            recovery: RecoveryTools::ALL,
+            capture_effective: true,
         })
     }
 
@@ -160,6 +177,7 @@ impl ScriptedTools {
             exec_delay: std::time::Duration::ZERO,
             concurrent_safe: false,
             recovery,
+            capture_effective: false,
         })
     }
 
@@ -173,6 +191,7 @@ impl ScriptedTools {
             exec_delay: delay,
             concurrent_safe: true,
             recovery: RecoveryTools::ALL,
+            capture_effective: false,
         })
     }
 
@@ -200,6 +219,21 @@ impl ToolService for ScriptedTools {
             )));
         }
         outcomes.remove(0)
+    }
+
+    async fn execute_with_cancel_effective(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> (Result<ToolOutput, ToolError>, Option<serde_json::Value>) {
+        let result = self.execute(name, input.clone()).await;
+        let effective = if self.capture_effective {
+            Some(input)
+        } else {
+            None
+        };
+        (result, effective)
     }
 
     async fn list(&self) -> Vec<ToolDefinition> {
@@ -435,6 +469,113 @@ async fn act_executes_tools_sequentially() {
             && identity.revision == 7
             && identity.replay_policy == ReplayPolicy::Safe
     }));
+}
+
+fn capturing_deps(
+    session: std::sync::Arc<MockSession>,
+    tools: std::sync::Arc<ScriptedTools>,
+    tool_calls: Vec<NativeToolCall>,
+) -> HarnessDeps {
+    HarnessDeps {
+        tool_descriptor_lookup: Some(Arc::new(StaticToolDescriptorLookup)),
+        session,
+        tools,
+        llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    }
+}
+
+#[tokio::test]
+async fn act_emits_effective_input_marker_when_tool_reports_one() {
+    // Task #4: when the tool service reports the post-hook effective input,
+    // the harness durably persists a `ToolCallEffectiveInput` marker for the
+    // call (the value that actually crossed the dispatch line).
+    let tool_calls = vec![NativeToolCall {
+        thought_signature: None,
+        id: "c1".into(),
+        name: "read_file".into(),
+        arguments: serde_json::json!({ "path": "a.txt" }),
+    }];
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let tools = ScriptedTools::new_capturing(vec![Ok(ok_output(serde_json::json!({
+        "content": "A"
+    })))]);
+
+    let harness = AgentHarness::new(capturing_deps(session.clone(), tools.clone(), tool_calls));
+    let _state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+
+    let events = session.snapshot().await;
+    let markers: Vec<_> = events
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::ToolCallEffectiveInput { call_id, input, .. } => {
+                Some((call_id.clone(), input.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        markers.len(),
+        1,
+        "exactly one marker for the one executed call"
+    );
+    assert_eq!(markers[0].0, "c1");
+    assert_eq!(markers[0].1, serde_json::json!({ "path": "a.txt" }));
+}
+
+#[tokio::test]
+async fn act_emits_no_effective_input_marker_when_tool_reports_none() {
+    // The trait default is fail-closed `None`: a tool that does not report an
+    // effective input (e.g. any non-Scoped service, or a blocked/guardrailed
+    // call) must not produce a marker, and the harness must not fabricate one
+    // from the pre-dispatch input.
+    let tool_calls = vec![NativeToolCall {
+        thought_signature: None,
+        id: "c1".into(),
+        name: "read_file".into(),
+        arguments: serde_json::json!({ "path": "a.txt" }),
+    }];
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let tools = ScriptedTools::new(vec![Ok(ok_output(serde_json::json!({ "content": "A" })))]);
+
+    let harness = AgentHarness::new(capturing_deps(session.clone(), tools.clone(), tool_calls));
+    let _state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+
+    let events = session.snapshot().await;
+    let markers = events
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolCallEffectiveInput { .. }))
+        .count();
+    assert_eq!(
+        markers, 0,
+        "a tool reporting no effective input emits no marker"
+    );
 }
 
 #[tokio::test]
@@ -1661,6 +1802,7 @@ async fn act_falls_back_to_serial_when_any_call_is_unsafe() {
         exec_delay: std::time::Duration::from_millis(200),
         concurrent_safe: false,
         recovery: RecoveryTools::ALL,
+        capture_effective: false,
     });
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
 

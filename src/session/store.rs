@@ -47,7 +47,8 @@ use tokio::sync::Mutex;
 
 use crate::error::AlephError;
 use crate::session::events::{
-    durability_of, Durability, EventSeq, Retire, SessionEvent, SessionEventRecord,
+    durability_of, Durability, EventSeq, Retire, SessionEvent, SessionEventRecord, Timestamp,
+    TurnId,
 };
 use crate::session::service::{SessionError, SessionId};
 
@@ -378,6 +379,43 @@ pub trait SessionEventStore: Send + Sync + 'static {
             "this event store cannot report retire generation".into(),
         ))
     }
+
+    /// Read back the durable post-guardrail input a call actually ran with
+    /// (§4.3). Fail-closed: `None` when the call has zero markers (unknown —
+    /// never written, so the call is not replay eligible) or two-or-more
+    /// (ambiguous — it was dispatched and marked more than once, so its true
+    /// input is unknowable). `Some` only for exactly one marker.
+    async fn load_tool_call_effective_input(
+        &self,
+        session_id: &SessionId,
+        call_id: &str,
+    ) -> Result<Option<EffectiveInputRecord>, SessionError> {
+        let _ = (session_id, call_id);
+        Err(SessionError::Storage(
+            "this event store cannot read effective inputs".into(),
+        ))
+    }
+
+    /// Release a previously taken claim that will NOT start an effect — the
+    /// inverse of [`claim_replay_call`](Self::claim_replay_call). The
+    /// implementation must verify, in the same transaction as the cursor
+    /// write, that the token is non-empty, that the cursor is still `active`,
+    /// and that the stored token matches. A stale token must never release a
+    /// live claim, so any mismatch fails closed as
+    /// [`ReplayReleaseResult::ClaimLost`]. A successful release frees the
+    /// lease and does NOT consume the attempt (it is decremented) because no
+    /// effect started under it.
+    async fn release_replay_claim(
+        &self,
+        session_id: &SessionId,
+        call_id: &str,
+        claim_token: &str,
+    ) -> Result<ReplayReleaseResult, SessionError> {
+        let _ = (session_id, call_id, claim_token);
+        Err(SessionError::Storage(
+            "this event store cannot release replay claims".into(),
+        ))
+    }
 }
 
 /// Monotonic, session-level counter bumped on every retire/rewind. A replay
@@ -400,6 +438,16 @@ pub const REPLAY_LEASE_TTL_MS: i64 = 300_000;
 /// `state` column values for `session_replay_cursors`.
 const REPLAY_STATE_ACTIVE: &str = "active";
 const REPLAY_STATE_ANSWERED: &str = "answered";
+const REPLAY_STATE_RELEASED: &str = "released";
+
+/// The durable post-guardrail input a call actually ran with (§4.3), read back
+/// from exactly one [`SessionEvent::ToolCallEffectiveInput`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveInputRecord {
+    pub turn_id: TurnId,
+    pub input: serde_json::Value,
+    pub at: Timestamp,
+}
 
 /// Result of the serialized per-call replay claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -426,6 +474,20 @@ pub enum ReplayClaimResult {
 pub enum ReplayOutcomeResult {
     Committed { seq: EventSeq },
     AlreadyAnswered,
+    ClaimLost,
+}
+
+/// Result of releasing a claim that will not start an effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplayReleaseResult {
+    /// The cursor was `active` with the matching token: released. Token and
+    /// lease cleared, state moved to `released`, and the attempt is NOT
+    /// consumed (decremented) because no effect started under it.
+    Released,
+    /// The cursor is already `answered`: nothing to release.
+    AlreadyAnswered,
+    /// No cursor row, the token did not match, or the cursor was not `active`:
+    /// fail-closed — a stale token must never release a live claim.
     ClaimLost,
 }
 
@@ -931,6 +993,61 @@ fn replay_call_state(
         }
     }
     Ok((requested, outcomes))
+}
+
+/// Read back the durable effective-input markers for one call (§4.3).
+/// Fail-closed: `None` when zero markers (unknown — never written, so not
+/// replay eligible) or two-or-more (ambiguous — dispatched and marked more
+/// than once, so the true input is unknowable). `Some` only for exactly one.
+fn replay_effective_input(
+    tx: &rusqlite::Transaction<'_>,
+    session_key: &str,
+    call_id: &str,
+) -> Result<Option<EffectiveInputRecord>, SessionError> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT seq, payload_json, created_at FROM session_events
+             WHERE session_id = ?1 AND event_type = ?2 AND retired_at IS NULL ORDER BY seq ASC",
+        )
+        .map_err(|e| SessionError::Storage(e.to_string()))?;
+    let rows = stmt
+        .query_map(params![session_key, "tool_call_effective_input"], |row| {
+            let seq: i64 = row.get(0)?;
+            let payload: String = row.get(1)?;
+            let created_at: i64 = row.get(2)?;
+            Ok((seq, payload, created_at))
+        })
+        .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+    let mut found: Option<EffectiveInputRecord> = None;
+    for row in rows {
+        let (seq, payload, created_at) = row.map_err(|e| SessionError::Storage(e.to_string()))?;
+        let seq = u64::try_from(seq)
+            .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
+        let event = match decode_row(seq, created_at, &payload) {
+            DecodedRow::Event(record) => record.event,
+            DecodedRow::Skipped { .. } => continue,
+            DecodedRow::Undecodable(record) => {
+                return Err(SessionError::UndecodableRecord(record));
+            }
+        };
+        if let SessionEvent::ToolCallEffectiveInput {
+            turn_id,
+            call_id: id,
+            input,
+            at,
+        } = event
+        {
+            if id == call_id {
+                // A second marker makes the true input ambiguous: fail closed.
+                if found.is_some() {
+                    return Ok(None);
+                }
+                found = Some(EffectiveInputRecord { turn_id, input, at });
+            }
+        }
+    }
+    Ok(found)
 }
 
 fn replay_head(tx: &rusqlite::Transaction<'_>, session_key: &str) -> Result<EventSeq, SessionError> {
@@ -1580,6 +1697,98 @@ impl SessionEventStore for SqliteEventStore {
         }
     }
 
+    async fn load_tool_call_effective_input(
+        &self,
+        session_id: &SessionId,
+        call_id: &str,
+    ) -> Result<Option<EffectiveInputRecord>, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        let mut conn = self.conn.lock().await;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| {
+                SessionError::Storage(format!("effective input BEGIN failed: {e}"))
+            })?;
+        let found = replay_effective_input(&tx, &session_key, call_id)?;
+        tx.commit().map_err(|e| {
+            SessionError::Storage(format!("effective input COMMIT failed: {e}"))
+        })?;
+        Ok(found)
+    }
+
+    async fn release_replay_claim(
+        &self,
+        session_id: &SessionId,
+        call_id: &str,
+        claim_token: &str,
+    ) -> Result<ReplayReleaseResult, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        let mut conn = self.conn.lock().await;
+        Ok(with_synchronous_full(
+            &mut conn,
+            |conn| -> Result<ReplayReleaseResult, SessionError> {
+                let tx = conn
+                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(|e| {
+                        SessionError::Storage(format!("replay release BEGIN failed: {e}"))
+                    })?;
+                // An empty token is never a valid claim (same bypass closed in
+                // commit): rejecting it here means a cleared cursor cannot be
+                // released by an empty-string caller.
+                if claim_token.is_empty() {
+                    return Ok(ReplayReleaseResult::ClaimLost);
+                }
+                let stored: Option<(String, String, i64)> = tx
+                    .query_row(
+                        "SELECT claim_token, state, attempts
+                         FROM session_replay_cursors
+                         WHERE session_id = ?1 AND call_id = ?2",
+                        params![session_key, call_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()
+                    .map_err(|e| SessionError::Storage(e.to_string()))?;
+                let Some((stored_token, state, attempts)) = stored else {
+                    return Ok(ReplayReleaseResult::ClaimLost);
+                };
+                if state == REPLAY_STATE_ANSWERED {
+                    return Ok(ReplayReleaseResult::AlreadyAnswered);
+                }
+                if state != REPLAY_STATE_ACTIVE {
+                    return Ok(ReplayReleaseResult::ClaimLost);
+                }
+                if stored_token != claim_token {
+                    return Ok(ReplayReleaseResult::ClaimLost);
+                }
+                // Release WITHOUT consuming the attempt: no effect started
+                // under this claim, so the budget is preserved for the next
+                // real try. Floor at 0 in case the cursor was hand-seeded.
+                let released_attempts = if attempts > 0 { attempts - 1 } else { 0 };
+                let updated = tx
+                    .execute(
+                        "UPDATE session_replay_cursors
+                         SET state = ?3, claim_token = '', lease_until = 0, attempts = ?4
+                         WHERE session_id = ?1 AND call_id = ?2 AND claim_token = ?5",
+                        params![
+                            session_key,
+                            call_id,
+                            REPLAY_STATE_RELEASED,
+                            released_attempts,
+                            claim_token,
+                        ],
+                    )
+                    .map_err(|e| SessionError::Storage(e.to_string()))?;
+                if updated != 1 {
+                    return Ok(ReplayReleaseResult::ClaimLost);
+                }
+                tx.commit().map_err(|e| {
+                    SessionError::Storage(format!("replay release COMMIT failed: {e}"))
+                })?;
+                Ok(ReplayReleaseResult::Released)
+            },
+        )??)
+    }
+
     async fn retire_from(
         &self,
         session_id: &SessionId,
@@ -1857,6 +2066,7 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::AssistantMessage { turn_id, .. }
         | SessionEvent::SystemMessage { turn_id, .. }
         | SessionEvent::ToolCallRequested { turn_id, .. }
+        | SessionEvent::ToolCallEffectiveInput { turn_id, .. }
         | SessionEvent::ToolCallApproved { turn_id, .. }
         | SessionEvent::ToolCallDenied { turn_id, .. }
         | SessionEvent::ToolCallParked { turn_id, .. }
@@ -1908,6 +2118,7 @@ pub(crate) const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::AssistantRunMeta { .. } => "assistant_run_meta",
         SessionEvent::SystemMessage { .. } => "system_message",
         SessionEvent::ToolCallRequested { .. } => "tool_call_requested",
+        SessionEvent::ToolCallEffectiveInput { .. } => "tool_call_effective_input",
         SessionEvent::ToolCallApproved { .. } => "tool_call_approved",
         SessionEvent::ToolCallDenied { .. } => "tool_call_denied",
         SessionEvent::ToolCallParked { .. } => "tool_call_parked",
@@ -2616,6 +2827,305 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(valid, ReplayClaimResult::Claimed { attempt: 1, .. }));
+    }
+
+    fn effective_input_marker(
+        tid: uuid::Uuid,
+        call_id: &str,
+        input: serde_json::Value,
+        at: i64,
+    ) -> SessionEvent {
+        SessionEvent::ToolCallEffectiveInput {
+            turn_id: tid,
+            call_id: call_id.into(),
+            input,
+            at,
+        }
+    }
+
+    /// §4.3: the durable post-guardrail input is read back exactly as written,
+    /// and a call with no marker reads `None` (unknown, not replay eligible).
+    #[tokio::test]
+    async fn effective_input_is_durably_readable_and_absent_is_none() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+            .await
+            .unwrap();
+        store
+            .append(
+                &sid,
+                2,
+                &effective_input_marker(tid, "call-1", serde_json::json!({ "cmd": "ls" }), at + 1),
+                at + 1,
+            )
+            .await
+            .unwrap();
+
+        let got = store
+            .load_tool_call_effective_input(&sid, "call-1")
+            .await
+            .unwrap()
+            .expect("exactly one marker is present");
+        assert_eq!(got.turn_id, tid);
+        assert_eq!(got.input, serde_json::json!({ "cmd": "ls" }));
+        assert_eq!(got.at, at + 1);
+
+        // A different call_id has no marker: unknown.
+        assert!(store
+            .load_tool_call_effective_input(&sid, "call-absent")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// Two markers for one call make the true input ambiguous: fail closed to
+    /// `None` — the call must never be replayed from either input.
+    #[tokio::test]
+    async fn effective_input_fails_closed_on_multiple_markers() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+            .await
+            .unwrap();
+        store
+            .append(&sid, 2, &effective_input_marker(tid, "call-1", serde_json::json!("a"), at + 1), at + 1)
+            .await
+            .unwrap();
+        store
+            .append(&sid, 3, &effective_input_marker(tid, "call-1", serde_json::json!("b"), at + 2), at + 2)
+            .await
+            .unwrap();
+
+        assert!(store
+            .load_tool_call_effective_input(&sid, "call-1")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// The marker survives a process restart: written under one connection and
+    /// read back under a fresh one over the same file.
+    #[tokio::test]
+    async fn effective_input_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.db");
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            migrate_add_session_events(&conn).unwrap();
+            let store = SqliteEventStore::new(conn);
+            store
+                .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+                .await
+                .unwrap();
+            store
+                .append(
+                    &sid,
+                    2,
+                    &effective_input_marker(tid, "call-1", serde_json::json!({ "v": 7 }), at + 1),
+                    at + 1,
+                )
+                .await
+                .unwrap();
+        }
+
+        // New connection over the same file = a fresh store instance.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let reopened = SqliteEventStore::new(conn);
+        let got = reopened
+            .load_tool_call_effective_input(&sid, "call-1")
+            .await
+            .unwrap()
+            .expect("marker must survive a restart");
+        assert_eq!(got.input, serde_json::json!({ "v": 7 }));
+    }
+
+    /// A claim that will not start an effect can be released: the lease is
+    /// freed and the attempt is NOT consumed, so a later claim starts again at
+    /// attempt 1 (no budget burned).
+    #[tokio::test]
+    async fn release_replay_claim_frees_lease_and_preserves_budget() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+            .await
+            .unwrap();
+        let head = store.load_head_seq(&sid).await.unwrap();
+
+        let first = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        let ReplayClaimResult::Claimed { attempt, claim_token } = first else {
+            panic!("expected first claim");
+        };
+        assert_eq!(attempt, 1);
+
+        // While held, the lease refuses a second claim.
+        let held = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        assert!(matches!(held, ReplayClaimResult::LeaseHeld { attempt: 1, .. }));
+
+        // Release the claim; the next claim is immediately available at attempt 1.
+        assert!(matches!(
+            store
+                .release_replay_claim(&sid, "call-1", &claim_token)
+                .await
+                .unwrap(),
+            ReplayReleaseResult::Released
+        ));
+        let again = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        assert!(matches!(again, ReplayClaimResult::Claimed { attempt: 1, .. }));
+    }
+
+    /// A stale or empty token never releases a live claim; the cursor stays
+    /// active with its lease intact, and the real token stays committable.
+    #[tokio::test]
+    async fn release_replay_claim_fails_closed_on_token_mismatch() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+            .await
+            .unwrap();
+        let head = store.load_head_seq(&sid).await.unwrap();
+        let first = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        let ReplayClaimResult::Claimed { claim_token, .. } = first else {
+            panic!("expected first claim");
+        };
+
+        assert!(matches!(
+            store
+                .release_replay_claim(&sid, "call-1", "wrong-token")
+                .await
+                .unwrap(),
+            ReplayReleaseResult::ClaimLost
+        ));
+        assert!(matches!(
+            store
+                .release_replay_claim(&sid, "call-1", "")
+                .await
+                .unwrap(),
+            ReplayReleaseResult::ClaimLost
+        ));
+
+        // The live claim survives the failed releases: still held by the real
+        // token, which still commits.
+        let held = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        assert!(matches!(held, ReplayClaimResult::LeaseHeld { attempt: 1, .. }));
+        let result = SessionEvent::ToolResult {
+            turn_id: tid,
+            call_id: "call-1".into(),
+            output: ToolOutput {
+                value: serde_json::json!({ "ok": true }),
+                metadata: Default::default(),
+            },
+            at: at + 1,
+        };
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-1", &claim_token, &result, at + 1)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::Committed { seq: 2 }
+        ));
+    }
+
+    /// Releasing a released or answered cursor is fail-closed, and a released
+    /// claim can never be committed with its (now cleared) token.
+    #[tokio::test]
+    async fn release_replay_claim_is_once_only_and_cannot_be_committed() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+            .await
+            .unwrap();
+        let head = store.load_head_seq(&sid).await.unwrap();
+        let first = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        let ReplayClaimResult::Claimed { claim_token, .. } = first else {
+            panic!("expected first claim");
+        };
+
+        assert!(matches!(
+            store
+                .release_replay_claim(&sid, "call-1", &claim_token)
+                .await
+                .unwrap(),
+            ReplayReleaseResult::Released
+        ));
+        // The token was cleared: a second release with the same token is lost.
+        assert!(matches!(
+            store
+                .release_replay_claim(&sid, "call-1", &claim_token)
+                .await
+                .unwrap(),
+            ReplayReleaseResult::ClaimLost
+        ));
+        // A released claim cannot be committed.
+        let result = SessionEvent::ToolResult {
+            turn_id: tid,
+            call_id: "call-1".into(),
+            output: ToolOutput {
+                value: serde_json::json!({ "ok": true }),
+                metadata: Default::default(),
+            },
+            at: at + 1,
+        };
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-1", &claim_token, &result, at + 1)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::ClaimLost
+        ));
+        assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 1);
+    }
+
+    /// Releasing a cursor that has no row (never claimed) is fail-closed.
+    #[tokio::test]
+    async fn release_replay_claim_without_a_cursor_is_claim_lost() {
+        let store = make_store();
+        let sid = sample_session_id();
+        assert!(matches!(
+            store
+                .release_replay_claim(&sid, "call-1", "token")
+                .await
+                .unwrap(),
+            ReplayReleaseResult::ClaimLost
+        ));
     }
 
     /// Regression: a lease at or above the floor whose `now + lease_ms`

@@ -1545,6 +1545,7 @@ mod tests {
             provenance: crate::session::reduction::DanglingProvenance::EarlierRun,
             denied,
             identity: None,
+            effective_input: None,
             parked: None,
         }
     }
