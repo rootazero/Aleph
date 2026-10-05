@@ -170,44 +170,62 @@ impl ToolHandler for BuiltinRegistryRouter {
     }
 
     fn definition(&self) -> ToolDefinition {
+        use crate::tool_metadata::types::conflict::ToolSource as CatalogSource;
         match self.inner.get_tool(&self.name) {
             Some(unified) => {
-                let idempotent = crate::tools::retry::is_idempotent_builtin_name(&self.name);
                 // Same resolution chain as `BuiltinHandler`: declared → table
                 // → default. Never `None`: an unbudgeted definition is what
                 // turned a slow tool into a run-level abort.
                 let max_duration_ms =
                     crate::tools::budget::resolve_tool_budget_ms(&self.name, None);
+                // Same source as `BuiltinHandler`: the read-only list is the
+                // single authority on idempotency, which in turn drives the `Shared`
+                // claim. Routed tools must agree with their own catalog entry, not
+                // declare a stale "always serial" baseline that would silently
+                // serialize read-only MCP bridge calls behind the agent loop.
+                let idempotent = crate::tools::retry::is_idempotent_builtin_name(&self.name);
                 // MCP / extension / other non-builtin sources answer through
                 // this router for tools the agent loop already has registered.
                 // The MCP source variant carries the server id; projecting it
                 // here means the harness can read the origin straight from the
                 // definition without a second lookup.
-                let source = match unified.source {
-                    ToolSource::Builtin => ToolSource::Builtin,
-                    ToolSource::Mcp { server_id } => ToolSource::Mcp { server_id },
-                    ToolSource::Extension { plugin_id } => ToolSource::Extension { plugin_id },
+                let source = match &unified.source {
+                    CatalogSource::Builtin => ToolSource::Builtin,
+                    CatalogSource::Mcp { server } => ToolSource::Mcp {
+                        server_id: server.clone(),
+                    },
+                    CatalogSource::Plugin { plugin_id } => ToolSource::Extension {
+                        plugin_id: plugin_id.clone(),
+                    },
+                    CatalogSource::Skill { id, plugin_id } => ToolSource::Extension {
+                        plugin_id: plugin_id.clone().unwrap_or_else(|| id.clone()),
+                    },
+                    CatalogSource::Native | CatalogSource::Custom { .. } => ToolSource::Builtin,
+                    _ => ToolSource::Builtin,
                 };
                 ToolDefinition {
                     name: self.name.clone(),
-                    description: unified.description,
+                    description: unified.description.clone(),
                     // MCP / extension tools frequently publish no schema;
                     // default to a permissive JSON object so the harness's
                     // schema validator has something to read rather than
                     // rejecting on missing.
                     input_schema: unified
                         .parameters_schema
+                        .clone()
                         .unwrap_or_else(|| serde_json::json!({"type": "object"})),
                     source,
+                    // Project each `&UnifiedTool` field straight through so
+                    // the harness sees the catalog's declared semantics:
+                    // a router-launched tool is callable, and its
+                    // `requires_confirmation` / idempotency / budget must
+                    // come from the same source the registry itself uses.
                     metadata: ToolDefinitionMetadata {
                         hidden_from_llm: false,
                         requires_approval: unified.requires_confirmation,
                         tags: Vec::new(),
                         idempotent,
                         max_duration_ms: Some(max_duration_ms),
-                        // See `BuiltinHandler::definition`: idempotent implies
-                        // read-only, which implies safe under parallel
-                        // dispatch — same source of truth, same flag.
                         concurrent_safe: idempotent,
                     },
                 }
@@ -225,7 +243,16 @@ impl ToolHandler for BuiltinRegistryRouter {
                 description: String::new(),
                 input_schema: serde_json::json!({"type": "object"}),
                 source: ToolSource::Builtin,
-                metadata: ToolDefinitionMetadata::default(),
+                metadata: ToolDefinitionMetadata {
+                    hidden_from_llm: true,
+                    requires_approval: true,
+                    tags: Vec::new(),
+                    idempotent: false,
+                    max_duration_ms: Some(
+                        crate::tools::budget::resolve_tool_budget_ms(&self.name, None),
+                    ),
+                    concurrent_safe: false,
+                },
             },
         }
     }
