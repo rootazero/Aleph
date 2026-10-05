@@ -4,6 +4,7 @@
 - 分支：`phase3-capability-architecture`
 - 状态：设计已获批准，待用户审阅书面 spec
 - 修订：2026-10-05（收窄范围）——用户批准将本期完整闭环收窄为 MCP + 主 builtin + markdown-skill `AlephToolDyn` callable surface（主 builtin 与 markdown-skill 是两个独立 callable source family）；Plugin 不纳入 canonical `ToolHandlerRegistry`，保留 `ToolCatalog`/extension manager 旁路，另列 ExtensionHandler spec 为后续事项。修订理由：Task 1 源码 census 证实 Plugin 无 `ToolHandler` 实现（2026-05-20 已移除），不得从 metadata 伪造 handler。
+- 修订：2026-10-05（Task 2 架构缺口修订）——Task 2 在实现时暴露两处架构缺口：(a) 主 builtin 的 handler 无法在进程级直接注册进 canonical registry，因为其执行上下文是 per-request late-bound 的，且 per-request allowlist 决定可见集；(b) markdown-skill 经 `static Lazy<AlephToolServer>` 维护，无 generation counter、无 owner scope、无 canonical registry 路径。本修订规定精确的分发数据流、owner/scoping 语义、替换行为、请求 allowlist 投影与迁移顺序（见 §5、§6、§9、§13）。
 - 父级设计：`docs/superpowers/specs/2026-10-03-capability-tool-descriptor-design.md`
 - 相关设计：`docs/superpowers/specs/2026-10-04-capability-phase2-durable-tool-design.md`、`docs/superpowers/specs/2026-10-04-capability-phase2b-safe-replay-design.md`
 - 外部参考：Pi Durable 设计、`Everything-externally-composable-is-a-Capability.md`、`pi-durable-overview.md`
@@ -30,9 +31,9 @@
 
 只有同时满足以下条件，本期才算完成：
 
-1. MCP、主 builtin 与 markdown-skill `AlephToolDyn` callable surface 至少两类真实 Tool 经过同一 `ToolHandlerRegistry` resolve；主 builtin 与 markdown-skill 是两个独立 callable source family（markdown-skill 经 `src/tools/server/`、`src/tools/markdown_skill/`），均可包装为 `ToolHandler`。Plugin 不在本期 canonical registry 范围，保留现有 `ToolCatalog`/extension manager 旁路作为明确兼容边界。
+1. MCP、主 builtin 与 markdown-skill `AlephToolDyn` callable surface 至少两类真实 Tool 经过同一 `ToolHandlerRegistry` resolve。主 builtin 以进程级 thin router handler（over `ToolRegistry::execute_tool`）注册进 canonical registry；markdown-skill 以 install/hot-reload 路径注册进同一 canonical registry，持有真实 owner lifecycle。Plugin 不在本期 canonical registry 范围，保留现有 `ToolCatalog`/extension manager 旁路作为明确兼容边界。
 2. descriptor 是 Tool identity、schema、revision、replay 和安全策略的单一语义来源。
-3. 至少一个重复的 metadata/registry/旁路 handler 路径被删除，或严格降级为纯执行索引/兼容包装；如果 Phase 1 已经删除该路径，第三期必须重新 census 并保持其不存在。
+3. 至少一个重复的 metadata/registry/旁路 handler 路径被删除，或严格降级为纯执行索引/兼容包装；主 builtin 的 `RegistryToolAdapter` 二次 handler 投影与 `to_metadata_form` 的 revision-1 descriptor 伪造必须被 canonical snapshot 投影取代。如果 Phase 1 已经删除该路径，第三期必须重新 census 并保持其不存在。
 4. 至少一个 model/protocol/recovery 多面投影来自同一 descriptor；其中 recovery 面指 classification/lookup，不代表本期实际执行 replay。
 5. registration scope 的 dispose 能让能力不可见，并有可观察的清理结果。
 6. Phase 2 的 durable identity、current descriptor lookup 和 fail-closed recovery 形成同一条调用链。
@@ -46,6 +47,8 @@
 
 - 以 `ToolCapabilityDescriptor` 和 `ToolHandlerRegistry` 为核心，收敛 Tool 注册、resolve、替换、移除和投影。
 - 统一主 builtin 与 markdown-skill 两个独立 `AlephToolDyn` callable source family（markdown-skill 经 `src/tools/server/`、`src/tools/markdown_skill/`）与 MCP tool 的 descriptor/handler 同代绑定；Plugin 保留现有 catalog/extension manager 旁路，不在本期统一。
+- 主 builtin 采用进程级注册 + thin router handler（`ToolRegistry::execute_tool`），run-loop 从单一 canonical snapshot 构建 request-scoped visible projection；不创建第二个 handler map，不创建 test-only / dead-write adapter（见 §5.3）。
+- markdown-skill 从 install/hot-reload 直达 canonical registry，具备 generation-safe replace 与真实 owner lifecycle；保留 hot reload，避免 async Drop，使用与 `ToolRegistrationScope`/`EffectScope` 一致的显式 owner disposal（见 §5.4、§6）。
 - 统一 registration scope、handle、dispose 和 disposer 错误报告。
 - 将 caller visibility、invocation policy、durable intent identity、outcome 关联和 recovery lookup 连接到同一 Tool identity；本期不新增 replay execution outcome 路径。
 - 统一 MCP、RPC、CLI、Panel 或其他已有稳定消费者的 descriptor projection helper；至少接通两个真实出口。
@@ -65,6 +68,7 @@
 - 不承诺 external effect 与 SQLite 之间的 exactly-once、通用幂等或事务耦合。
 - 不将安全字段、replay policy、visibility 或 schema 在 MCP/RPC/CLI/Panel 中各复制一份。
 - 不将 Plugin 纳入 canonical `ToolHandlerRegistry`，不从 `UnifiedTool` metadata 伪造 Plugin handler；Plugin 继续走现有 `ToolCatalog`/extension manager 旁路，后续由独立 ExtensionHandler spec 决定是否收敛。
+- 不新增 `ToolSource` 变体来区分主 builtin 与 markdown-skill（见 §5.4 取舍）；不新增全局 Capability trait、第二套 durable store、Core 内平台 API 或大型依赖。
 
 ## 3. 参考项目映射与取舍
 
@@ -87,11 +91,15 @@ Pi Durable 的可迁移价值在于 effect sandwich、intent checkpoint、descri
 | 模块 | 第三期职责 | 边界 |
 |---|---|---|
 | `src/tools/descriptor.rs` | `ToolCapabilityDescriptor` 的 identity、kind、schema、revision、replay、安全和来源语义 | 不注册、不执行、不调用平台 API |
-| `src/tools/registry.rs` | Tool 注册、替换、移除、resolve、snapshot、同代 descriptor/handler 绑定 | 唯一 Tool callable truth；不跨 await 持锁 |
+| `src/tools/registry.rs` | `ToolHandlerRegistry`：Tool 注册、替换、移除、resolve、snapshot、同代 descriptor/handler 绑定 | 唯一 Tool callable truth；不跨 await 持锁 |
 | `src/tools/registration_scope.rs` | 现有 Tool registration owner scope、handle、dispose 和报告语义 | 不新增同名 scope；不隐式拥有外部 invocation |
 | `src/extension/effects/scope.rs` | 复用现有 EffectScope 所有权/清理契约 | 不复制第二套 disposer 协议 |
-| `src/tools/service.rs` / metadata | 兼容旧 ToolDefinition，改为由 descriptor 生成展示/执行 DTO | 不维护第二份 identity/replay/visibility |
-| `src/tools/runtime.rs` | 保持 `LoopToolRegistry` 为执行消费者/索引 | 不拥有全局发现事实 |
+| `src/tools/handlers/builtin.rs` | 新增 `BuiltinRegistryRouter`：主 builtin 的进程级 thin router handler，over `Arc<dyn ToolRegistry>`；保留 `BuiltinHandler`（over `Arc<dyn AlephToolDyn>`）用于 markdown-skill 与既有 capability builtin | 不捕获 per-request late-bound context |
+| `src/tools/server/mod.rs` + `src/tools/markdown_skill/` | `AlephToolServer` 保留为 tool store；新增 `MarkdownSkillRegistryOwner` 持有 canonical registry 写入 + `ToolRegistrationScope` | install/hot-reload 必须写 canonical registry；不绕过 registry 直接写旁路表 |
+| `src/executor/tool_registry.rs` + `src/executor/builtin_registry/` | `ToolRegistry::execute_tool` 仍是主 builtin 的唯一执行面；`BuiltinToolRegistry` 继续持有 late-bound handles（workspace/session/gateway OnceCell） | 不再被 run-loop 二次投影为 `RegistryToolAdapter` |
+| `src/tools/runtime.rs`（`LoopToolRegistry`） | 变成 request-scoped visible projection：只从 canonical snapshot 构建，不再拥有全局发现事实 | 不保存第二份 handler map |
+| `src/tools/adapters/registry_adapter.rs` | `RegistryToolAdapter` 从主 builtin 投影路径移除/降级为兼容；`McpRegistryTool::from_registry_entry`（handler + descriptor -> `LoopTool`）推广为 canonical handler->LoopTool adapter | 不伪造 revision-1 descriptor |
+| `src/tools/service.rs` / `src/tools/scoped/mod.rs` | `to_metadata_form` 在全部生产 caller 迁移后删除；`ScopedToolService::metadata_schema` 改由 canonical descriptor 投影 | 不维护第二份 identity/replay/visibility |
 | 主 builtin / markdown-skill（`src/tools/server/`、`src/tools/markdown_skill/`）/ MCP adapter | 注册 descriptor + handler，并持有 scope/handle | 不绕过 registry 直接写旁路表 |
 | extension / Plugin adapter | 保留现有 `ToolCatalog` 行与 extension manager `call_plugin_tool` 旁路 | 本期不注册进 `ToolHandlerRegistry`，不从 metadata 伪造 handler |
 | MCP/RPC/CLI/Panel projection | 把 descriptor 映射为协议或展示形状 | 不重新判断 replay、权限或成功语义 |
@@ -104,19 +112,15 @@ Pi Durable 的可迁移价值在于 effect sandwich、intent checkpoint、descri
 
 ## 5. 注册与调用数据流
 
-### 5.1 注册
+### 5.1 注册总览
 
 ```text
-主 builtin · markdown-skill（`AlephToolDyn` callable surface）· MCP adapter
-        │ descriptor + handler + owner scope
-        ▼
-ToolHandlerRegistry
-        ├── atomic descriptor/handler entry
-        ├── RegistrationHandle
-        ├── snapshot / change feed
-        └── descriptor lookup
-        ▼
-ToolRegistrationScope / EffectScope
+主 builtin（进程级 boot）
+  -> BuiltinRegistryRouter(Arc<dyn ToolRegistry>)   ─┐
+markdown-skill（install / hot-reload）              ├─> ToolHandlerRegistry
+  -> BuiltinHandler(MarkdownCliTool) + owner scope  ─┤    (descriptor + handler 同代绑定,
+MCP adapter（既有）                                   │     RegistrationHandle,
+  -> McpHandler + ToolRegistrationScope            ─┘     snapshot/change feed)
 ```
 
 Plugin / Extension 不进入上图：保留 `ToolCatalog` / extension manager `call_plugin_tool` 旁路，不从 `UnifiedTool` metadata 伪造 handler。
@@ -152,6 +156,44 @@ resolve 必须先取得同一代 descriptor + handler snapshot，再执行调用
 
 intent/outcome 继续复用 Phase 2 既有 SessionEventStore、Barrier durability、RunReduction、boundary repair 和 ResumeCoordinator，不创建第二个 journal。调用 identity 至少关联 `call_id`、tool name、descriptor identity/revision、schema/implementation contract、replay policy、effective-input proof/fingerprint 和恢复 claim/permit（若适用）。
 
+### 5.3 主 builtin：进程级 router + request-scoped visible projection
+
+主 builtin 的执行上下文（`BuiltinToolRegistry`）是 late-bound 的：workspace/session/gateway 上下文经 `BuiltinToolRegistry` 内的 `Arc` handle / `OnceCell`（`memory_workspace_handle`、`session_context_handle`、`gateway_context`、`node_registry` 等）在每轮由 execution engine 写入，而不是在请求内重建。因此主 builtin 可以在进程级一次性注册，无需把 late-bound context 捕获进 handler。
+
+数据流（生产）：
+
+1. **进程级注册（boot）**：`start/mod.rs` 在创建 `tool_registry_phase2 = Arc::new(ToolHandlerRegistry::new())`（`src/bin/aleph-server/commands/start/mod.rs:224`）后，对 `BuiltinToolRegistry` 的每个主 builtin 名字：
+   - 构造 `BuiltinRegistryRouter { name, inner: Arc<dyn ToolRegistry> }`，其中 `inner` 就是已装配好的 `Arc<BuiltinToolRegistry>`；
+   - `BuiltinRegistryRouter::definition()` 由 `inner.get_tool(&name) -> Option<&UnifiedTool>` 投影为 loop-side `ToolDefinition`（复用 `RegistryToolAdapter` 现用的 `UnifiedTool -> ToolDefinition` 字段投影，保证 model-visible schema 逐字节不变）；
+   - `descriptor = ToolCapabilityDescriptor::from_definition(&router.definition(), revision)`（`source=Builtin`、`replay_policy=Unsafe`、`idempotent` 来自 `is_idempotent_builtin_name`、`max_duration_ms` 来自 `resolve_tool_budget_ms`）；
+   - `tool_registry_phase2.register(descriptor, Arc::new(router))`，并将返回的 `RegistrationHandle` 交给一个进程级 owner scope。
+2. **调用（thin router）**：`BuiltinRegistryRouter::invoke(input)` = `inner.execute_tool(&name, input).await`，把 `crate::error::Result<Value>` 映射为 `Result<ToolOutput, ToolError>`。late-bound context 已在 `inner` 的 handle 内，router 无需每请求注入。
+3. **request-scoped visible projection（run-loop）**：`run_loop/inner.rs` 不再调用 `build_registry_from_tools(self.tool_registry.clone(), &allowed_tools)`。改为读取**一份** canonical snapshot（`tool_registry_phase2.entries_snapshot()`），对每条 entry（主 builtin、markdown-skill、capability builtin 都是 `source=Builtin`；MCP 是 `source=Mcp`）用统一 allowlist predicate（`agent.is_tool_allowed(name) && slash_skill_scope::admits(...)`，MCP 另加 `mcp_handler_admitted` 的 face ⑤）过滤，再用现有 `McpRegistryTool::from_registry_entry(handler, descriptor)`（推广为 canonical handler->LoopTool adapter）包装进 `LoopToolRegistry`。
+
+这样 canonical registry 成为唯一 handler store：主 builtin 的执行路径变为 `LoopTool.execute -> BuiltinRegistryRouter.invoke -> ToolRegistry::execute_tool`，router handler 是真实被调用的路径，不是 dead-write；`build_registry_from_tools` / `RegistryToolAdapter` 对主 builtin 的二次 handler 投影被删除，不产生第二份 handler map。
+
+### 5.4 markdown-skill：install/hot-reload -> canonical registry + owner lifecycle
+
+markdown-skill 现在经 `static Lazy<AlephToolServer>`（`src/gateway/handlers/markdown_skills.rs:27` 的 `MARKDOWN_SKILLS_SERVER`）维护，`AlephToolServer` 只有 `ToolMap = Arc<Mutex<HashMap<String, Arc<dyn AlephToolDyn>>>>` 与 `replace_tool`/`list_tools_arc`，没有 generation counter、没有 scope、没有 canonical registry 写入。因此 install（`markdown_skills.rs:392`）与 hot-reload（`start/mod.rs:2702-2704`）都只 `server.replace_tool(tool)`，run-loop 用 `join_markdown_skills` 从 `list_tools_arc` 快照拼接，与 canonical registry 完全无关。
+
+数据流（生产）：
+
+1. **owner 构造（boot）**：`start/mod.rs` 创建 `MarkdownSkillRegistryOwner`，持有 `Arc<ToolHandlerRegistry>`（= `tool_registry_phase2.clone()`）、一个 `ToolRegistrationScope` 和一张 per-name `RegistrationHandle` map。owner 被传入 install handler 与 `SkillWatcher` callback（两处都有 `tool_registry_phase2` 在作用域内；`markdown_skills_server()` 这个 static 不持有 registry，写入发生在 call site）。
+2. **install/hot-reload**：对每个 `MarkdownCliTool`：
+   - `handler = Arc::new(BuiltinHandler::new(name, Arc::new(tool) as Arc<dyn AlephToolDyn>))`（`BuiltinHandler` over `Arc<dyn AlephToolDyn>`，`src/tools/handlers/builtin.rs`）；
+   - `descriptor = ToolCapabilityDescriptor::from_definition(&handler.definition(), revision)`（`source=Builtin`，与主 builtin 同命名空间，见下取舍）；
+   - `new_handle = registry.replace(descriptor, handler)`（replace 原子换代，旧 entry 被换下）；
+   - owner 把 `new_handle` 存入 per-name map 并 `scope.track(new_handle)`；旧 handle（若有）显式 dispose（换代后已是 stale no-op）。
+   - `AlephToolServer::replace_tool(tool)` 仍更新 `ToolMap` 以保留对 markdown CLI 子进程的 store 引用；但 canonical registry 是 identity + 分发的唯一事实源。
+3. **removal（watcher 报删除）**：owner 对对应 name 调用 `registry.unregister(handle)`，使后续 resolve 不可见。
+4. **shutdown**：owner 经 `ToolRegistrationScope::dispose` 逆序释放全部 handle，报告 `ToolDisposeReport`。不实现 `async Drop`——`MarkdownCliTool` 无 async 资源需清理，替换时旧 `Arc` 引用计数归零即释放；有 `async` 清理需求的路径沿用显式 `dispose`。
+
+取舍（诚实声明）：markdown-skill 与主 builtin 在 canonical registry 中同用 `source=Builtin`（沿用 `BuiltinHandler::definition()` 的既有投影）。本期不新增 `ToolSource::MarkdownSkill { spec_path }` 变体，因为 run-loop 的 allowlist predicate 对两个 family 一致、投影无需按 source 区分，且新增变体会波及 descriptor/metadata/`to_metadata_definition`/`to_unified_tool`。代价是：(a) canonical registry 无法仅凭 `source` 区分两个 family；(b) 同名冲突由 registry 单一命名空间语义裁决。为防用户 skill 静默遮蔽核心 builtin，规定：markdown-skill 的 install/replace 若命中 boot 已注册的核心 builtin 名，必须 fail-closed（结构化 conflict 错误写进 install 响应），不得静默 replace。若未来有消费者需要 source 级 provenance，再独立评估新增变体。
+
+### 5.5 统一 allowlist 与投影
+
+`run_loop/inner.rs` 现按三个来源分别构建 `LoopToolRegistry`：`build_registry_from_tools`（主 builtin，用 `&allowed_tools: Vec<UnifiedTool>`）、`join_mcp_tools`（MCP snapshot）、`join_markdown_skills`（`AlephToolServer` 快照）。三个来源的过滤谓词本已一致（`agent.is_tool_allowed && slash_skill_scope::admits`，注释 `inner.rs:251` 也说明每个 source 重新推导同一谓词）。收敛后三者合一：run-loop 对 canonical snapshot 单遍投影，用同一谓词过滤，MCP 另经 `mcp_handler_admitted`。`build_registry_from_tools` 与 `join_markdown_skills` 删除，`join_mcp_tools` 推广为 canonical join（或等价重命名），主 builtin 与 markdown-skill 的 entry 经 `McpRegistryTool::from_registry_entry` 进入投影。
+
 ## 6. 生命周期、替换与释放
 
 ### 6.1 Registration 状态
@@ -176,7 +218,13 @@ Absent
 - disposer 失败必须进入已有 EffectScope/DisposeReport；不能报告“全部成功”。
 - registry 关闭后不接受新注册/新 resolve，并按现有 scope 规则清理。
 
-### 6.2 In-flight invocation
+### 6.2 owner scope 与 markdown-skill 生命周期
+
+`MarkdownSkillRegistryOwner` 是 markdown-skill family 的 owner：持有 `ToolRegistrationScope`（逆序释放、失败报告、幂等）与 per-name handle map（针对 replace 的定点 dispose）。replace 换代时旧 handle dispose 为 stale no-op（generation guard 保证旧 handle 不能移除替换后的 entry——这是 Task 2/4 的 review focus 之一），新 handle 被 track。shutdown 经 `ToolRegistrationScope::dispose` 显式释放，不用 `async Drop`。
+
+主 builtin 的进程级注册由一个 boot 级 owner scope 持有，进程生命周期内不替换（主 builtin 集在启动后稳定；替换/移除仅对 markdown-skill 与 MCP 适用）。
+
+### 6.3 In-flight invocation
 
 registration scope 拥有 registry entry；已经取得 snapshot 的 invocation 由现有 invocation/in-flight cancellation 语义管理。registration dispose 不强杀已开始的外部操作，也不等待一个可能反向等待 dispose 的 handler；旧调用继续使用 captured handler，并在完成或未知时按已有结果/repair 规则记录。
 
@@ -261,24 +309,41 @@ resolve 依次处理 registry identity、caller visibility、invocation policy/a
 
 ## 9. 迁移顺序
 
-### 阶段 A：建立单一 Tool seam
+### 阶段 A：主 builtin 进程级注册（单一 Tool seam 的第一半）
 
-1. 源码清点当前 descriptor/handler/metadata 字段和注册入口。
-2. 确认 `ToolHandlerRegistry` 为唯一 Tool callable truth。
-3. 补齐 descriptor + handler 同代绑定、snapshot 和 conflict 错误。
-4. 逐一接入主 builtin 与 markdown-skill 两个独立 `AlephToolDyn` callable source family（markdown-skill 经 `src/tools/server/`、`src/tools/markdown_skill/`）与 MCP adapter；Plugin 保持 catalog/extension manager 旁路，不纳入本期接入。
-5. 保持现有公开 API 的兼容包装，避免一次性重写所有调用方。
+1. 源码清点 `BuiltinToolRegistry` 的 `get_tool`/`execute_tool` 与 `RegistryToolAdapter` 的 `UnifiedTool -> ToolDefinition` 投影。
+2. 新增 `BuiltinRegistryRouter`（`src/tools/handlers/builtin.rs`），实现 `ToolHandler`（`definition()` 由 `inner.get_tool` 投影、`invoke()` 由 `inner.execute_tool` 委托）。
+3. `start/mod.rs` 在 `tool_registry_phase2` 创建后注册全部主 builtin（descriptor 由 `from_definition` + `is_idempotent_builtin_name` + `resolve_tool_budget_ms`），handle 交给 boot owner scope。
+4. 新增测试：每个主 builtin 可经 `ToolHandlerRegistry::resolve` 取得 handler，且 `invoke` 委托到 `execute_tool`；descriptor 的 schema 与 `RegistryToolAdapter` 时代逐字节一致。
 
-这一组工作由一个实现计划分阶段编排；阶段之间以测试和源码 census 为门，不在计划中并行启动 Agent/Task/Resource 的下一期重构。
+### 阶段 B：markdown-skill canonical 路径与 owner lifecycle
 
-### 阶段 B：生命周期与错误收敛
+1. 新增 `MarkdownSkillRegistryOwner`，wire 进 install handler 与 `SkillWatcher` callback。
+2. install/hot-reload 走 `registry.replace` + owner track/dispose；removal 走 `registry.unregister`；shutdown 走 `ToolRegistrationScope::dispose`。
+3. 增加 generation-safe replace 测试、stale handle no-op 测试、核心 builtin 名冲突 fail-closed 测试。
+4. 保持 `AlephToolServer` 的 tool store 职责不变（CLI 子进程管理）。
+
+### 阶段 C：run-loop 单快照投影（单一 Tool seam 的第二半）
+
+1. `run_loop/inner.rs` 改为从 canonical snapshot 单遍投影，删除 `build_registry_from_tools` 与 `join_markdown_skills`，推广 `join_mcp_tools`/`McpRegistryTool::from_registry_entry`。
+2. 验证 allowlist predicate 对三个 family 一致；MCP face ⑤ 过滤保留。
+3. 删除主 builtin 的 `RegistryToolAdapter` 二次投影；确认无第二份 handler map、无 dead-write adapter。
+4. 测试：allowlist 收窄后 canonical snapshot 投影与三源时代可见集一致。
+
+### 阶段 D：生命周期与错误收敛
 
 1. 统一 `ToolRegistrationScope`、EffectScope 和 registration handle 的 dispose 语义。
 2. 删除重复注册/注销、旁路 handler map 和局部 descriptor cache。
 3. 统一 conflict、not visible、closed、mismatch、unknown outcome 结构化错误。
 4. 增加 replace、unregister、dispose、in-flight 和并发测试。
 
-### 阶段 C：durable intent/recovery 连线
+### 阶段 E：descriptor 投影迁移（`to_metadata_form` 退休）
+
+1. `ScopedToolService::metadata_schema`（`src/tools/scoped/mod.rs:645`）现调用 `to_metadata_form(&defs)` 伪造 revision-1 descriptor。收敛后 loop-side definition 已来自 canonical descriptor，改为直接 `ToolCapabilityDescriptor::to_metadata_definition()`（或 entry 已携带 descriptor 时直接投影）。
+2. 用 `rg -n 'to_metadata_form'` 确认无生产 caller 后删除 `to_metadata_form`（`src/tools/service.rs:420`）与其测试，替换为 canonical 投影断言。
+3. 验证 gating（health/deferred/rewriter）顺序不变。
+
+### 阶段 F：durable intent/recovery 连线
 
 1. 核对 `SessionEvent`、`ReplayRequest`、`ReplayPermit`、boundary repair 当前字段。
 2. 复用现有事件和 store，不新增平行 journal。
@@ -286,14 +351,14 @@ resolve 依次处理 registry identity、caller visibility、invocation policy/a
 4. 通过 descriptor lookup + revision/contract compatibility 判定恢复。
 5. 保持 Safe Replay 已批准范围；不将 Phase 2B VerifyOnly 改成通用 exactly-once。
 
-### 阶段 D：多面投影
+### 阶段 G：多面投影
 
 1. 统一 descriptor projection helper。
 2. 接入两个已存在且职责不同的消费者：MCP 投影与现有 model-visible `ToolDefinition`/ToolCatalog 投影。
 3. 验证 discovery、invocation、error、unknown outcome 一致。
 4. 删除 transport 自己维护的 metadata/replay/permission 分支。
 
-### 阶段 E：扩展边界评估
+### 阶段 H：扩展边界评估
 
 Tool 闭环完成后，才评估 Agent、Task、Resource、Subscription 等下一期能力。每种能力必须单独回答：是否动态发现、是否稳定 identity、是否可替换 handler、是否跨进程/崩溃、是否需要 subscription/ownership、是否有可复用事实源。本期不因名称相似而自动泛化。
 
@@ -307,14 +372,17 @@ Tool 闭环完成后，才评估 Agent、Task、Resource、Subscription 等下�
 - replace 后旧 invocation 使用旧 handler，新 invocation 使用新 handler；
 - registry close 禁止新 resolve/register；
 - registry 锁不跨 await；
-- concurrent resolve/replace/dispose 不产生半注册状态。
+- concurrent resolve/replace/dispose 不产生半注册状态；
+- `BuiltinRegistryRouter`：每个主 builtin 可 resolve，`invoke` 委托 `execute_tool`，late-bound handle 更新后 router 无需重注册即见新 context；
+- `MarkdownSkillRegistryOwner`：install/replace 后 resolve 到新 generation；removal 后 resolve 不可见；shutdown dispose 逆序且幂等；核心 builtin 名冲突 fail-closed。
 
 ### 10.2 Projection
 
 - 同一 descriptor 至少驱动两个已有出口/消费者；
 - MCP/RPC/CLI/Panel 投影的 identity、schema、revision 和错误原因一致；
 - projection 不重新决定 replay、权限或成功状态；
-- registry snapshot/change feed lag 按已有重建语义处理，不能假装无变化。
+- registry snapshot/change feed lag 按已有重建语义处理，不能假装无变化；
+- run-loop 单快照投影的可见集与三源时代一致（含 allowlist 收窄、slash-skill scope、MCP face ⑤、defer_mcp_tools 提升）。
 
 ### 10.3 Durable/recovery
 
@@ -329,7 +397,7 @@ Tool 闭环完成后，才评估 Agent、Task、Resource、Subscription 等下�
 
 - `src/harness/` 无业务扩张，Phase 2 允许的字段 wiring 除外；
 - 除 Plugin 的 catalog/extension manager 兼容旁路外，不存在绕过 `ToolHandlerRegistry` 的 Tool 生产/调用路径；
-- 被替代的 metadata、registry、replay/permission 分支已删除，或有明确的纯索引/兼容理由；
+- `build_registry_from_tools`、`join_markdown_skills`、`to_metadata_form` 与主 builtin 的 `RegistryToolAdapter` 投影已删除或严格降级，且有明确理由；
 - `git diff --check`、项目 Rust check/clippy/目标测试按当前项目门禁执行；
 - 最终以 staged tree 验证提交内容，commit 后 worktree clean。
 
@@ -339,7 +407,8 @@ Tool 闭环完成后，才评估 Agent、Task、Resource、Subscription 等下�
 
 - Tool Capability descriptor 的定义入口；
 - `ToolHandlerRegistry` 唯一事实源和 `LoopToolRegistry` 纯消费者边界；
-- registration scope、owner、dispose/disposer report 规则；
+- registration scope、owner、dispose/disposer report 规则（含 `MarkdownSkillRegistryOwner`）；
+- `BuiltinRegistryRouter` 与 `ToolRegistry::execute_tool` 的 thin router 关系；
 - model/protocol/recovery projection 入口；
 - discover 与 invoke 的分离；
 - replay 默认 Unsafe、调用时 identity 和当前 descriptor 双重检查；
@@ -360,6 +429,7 @@ Tool 闭环完成后，才评估 Agent、Task、Resource、Subscription 等下�
 - 跨进程 registry snapshot 的持久化；
 - 没有真实消费者的预先抽象。
 - Plugin 的 `ExtensionHandler` 收敛设计（将 extension/Plugin callable 统一进 canonical registry）。
+- `ToolSource::MarkdownSkill { spec_path }` 变体（若未来需要 source 级 provenance 区分主 builtin 与 markdown-skill）。
 
 ## 13. 设计批准记录
 
@@ -373,3 +443,10 @@ Tool 闭环完成后，才评估 Agent、Task、Resource、Subscription 等下�
 后续步骤是：用户审阅本书面 spec；若批准，才进入 `writing-plans` 阶段生成实现计划。实现计划必须继续遵守独立 worktree、先连线后扩展、任务分支隔离、分阶段验证和旧路径清理要求。
 
 **修订记录（2026-10-05）**：用户批准收窄范围。基于 Task 1 源码 census（记录于 `.superpowers/sdd/2026-10-05-capability-phase3/task-1-report.md`，该报告未提交），将成功标准 #1 从「builtin + extension + MCP 全部 canonical」收窄为「MCP + 主 builtin + markdown-skill `AlephToolDyn` callable surface」；Plugin 无 `ToolHandler` 实现，保留 `ToolCatalog`/extension manager 旁路作为兼容边界，并另列 ExtensionHandler spec 为延后事项。`to_metadata_form` 仍是 live production path，仅在 builtin canonicalization 与全部 caller 迁移后才删除/降级。
+
+**修订记录（2026-10-05，Task 2 架构缺口）**：Task 2 实现暴露两处架构缺口，据此规定精确分发语义：
+
+1. **主 builtin**：进程级注册 `BuiltinRegistryRouter`（thin router over `ToolRegistry::execute_tool`），late-bound context 留在 `BuiltinToolRegistry` 的 Arc handle/OnceCell 内，不捕获进 handler；run-loop 从单一 canonical snapshot（`entries_snapshot()`）构建 request-scoped visible projection，用统一 allowlist predicate 过滤，删除 `build_registry_from_tools`/`RegistryToolAdapter` 的二次 handler 投影。不创建第二份 handler map、不创建 test-only/dead-write adapter。
+2. **markdown-skill**：install/hot-reload 经 `MarkdownSkillRegistryOwner` 写入 canonical registry（`registry.replace` + `ToolRegistrationScope` track/dispose），generation-safe replace，removal 走 `unregister`，shutdown 走显式 `dispose`，不用 `async Drop`。保留 `AlephToolServer` 的 tool store 职责。与主 builtin 同用 `source=Builtin`，核心 builtin 名冲突 fail-closed。
+
+两份文档只改 spec + plan，不改任何 `src/tests`。commit message：`docs: specify callable dispatch architecture`。

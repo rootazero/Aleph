@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Converge the main builtin, the markdown-skill `AlephToolDyn` callable surface, and MCP Tool callables on the descriptor-backed `ToolHandlerRegistry`, preserve Tool lifecycle and fail-closed recovery semantics, project existing consumers from descriptors, and document the verified boundary. The main builtin and the markdown-skill surface are two independent callable source families, both wrapped via the existing `BuiltinHandler`; markdown-skill flows through `src/tools/server/` and `src/tools/markdown_skill/`. Plugin remains on the existing `ToolCatalog`/extension manager bypass; it is out of this phase's canonical-registry scope and is deferred to a separate ExtensionHandler spec.
+**Goal:** Converge the main builtin, the markdown-skill `AlephToolDyn` callable surface, and MCP Tool callables on the descriptor-backed `ToolHandlerRegistry`, preserve Tool lifecycle and fail-closed recovery semantics, project existing consumers from descriptors, and document the verified boundary. The main builtin and the markdown-skill surface are two independent callable source families. Main builtins register at boot through a process-level thin router handler (`BuiltinRegistryRouter` over `ToolRegistry::execute_tool`); markdown skills register through a real owner (`MarkdownSkillRegistryOwner`) on the install/hot-reload path. Both project into the run-loop from one canonical snapshot; Plugin remains on the existing `ToolCatalog`/extension-manager bypass and is deferred to a separate ExtensionHandler spec.
 
-**Architecture:** Keep `ToolCapabilityDescriptor` plus `ToolHandlerRegistry` as the Tool callable and identity source. Converge only genuinely callable surfaces — the main builtin set and the markdown-skill `AlephToolDyn` surface (two independent callable source families, both wrapped via the existing `BuiltinHandler`; markdown-skill via `src/tools/server/` and `src/tools/markdown_skill/`), alongside MCP — onto that registry; Plugin stays on its current catalog/extension-manager bypass. Retain `ToolCatalog` for slash-command routing, skill rows, health probes, conflict resolution, UI metadata, and Plugin rows, and retain `LoopToolRegistry` only as a per-run execution adapter/index where callers still require it. Reuse current `ToolRegistrationScope`, SessionEvent identity, descriptor lookup, and `boundary_repair` classification; do not add a new scheduler, journal, or replay execution path.
+**Architecture:** Keep `ToolCapabilityDescriptor` plus `ToolHandlerRegistry` as the Tool callable and identity source. Converge only genuinely callable surfaces — the main builtin set (boot-registered via `BuiltinRegistryRouter`, whose late-bound context stays inside `BuiltinToolRegistry`'s Arc/OnceCell handles) and the markdown-skill `AlephToolDyn` surface (install/hot-reload via `MarkdownSkillRegistryOwner` writing `registry.replace` + `ToolRegistrationScope`), alongside MCP — onto that registry; Plugin stays on its current catalog/extension-manager bypass. The run-loop builds its request-scoped `LoopToolRegistry` from a **single** `entries_snapshot()` projection filtered by one allowlist predicate (`agent.is_tool_allowed && slash_skill_scope::admits`, MCP additionally gated by `mcp_handler_admitted`), replacing `build_registry_from_tools` + `join_mcp_tools` + `join_markdown_skills`. Retain `ToolCatalog` for slash-command routing, skill rows, health probes, conflict resolution, UI metadata, and Plugin rows. Reuse current `ToolRegistrationScope`, SessionEvent identity, descriptor lookup, and `boundary_repair` classification; do not add a new scheduler, journal, or replay execution path.
 
 **Tech Stack:** Rust, Tokio, serde/serde_json, existing ArcSwap registry snapshots, existing ToolCatalog and SessionEventStore, Cargo test/check/clippy.
 
 **Spec:** `docs/superpowers/specs/2026-10-05-capability-phase3-design.md`
 
-**Revision (2026-10-05):** Scope narrowed per user approval. Converge the main builtin set and the markdown-skill `AlephToolDyn` surface — two independent callable source families, both wrapped via the existing `BuiltinHandler` (markdown-skill via `src/tools/server/` and `src/tools/markdown_skill/`) — alongside MCP, onto `ToolHandlerRegistry`. Plugin stays on its `ToolCatalog`/extension-manager bypass and is deferred to a separate ExtensionHandler spec. Reason: Task 1 source census confirmed Plugin has no `ToolHandler` implementation (removed 2026-05-20) and must not be synthesized from metadata.
+**Revision (2026-10-05):** Scope narrowed per user approval (MCP + main builtin + markdown-skill only; Plugin deferred). **Second revision (2026-10-05, Task-2 gap):** Task 2 exposed two architecture gaps — main builtin handlers cannot be directly registered because their execution context is per-request late-bound, and markdown skills live in a `static Lazy<AlephToolServer>` with no generation/scope/registry path. This plan now specifies: (a) process-level `BuiltinRegistryRouter` over `ToolRegistry::execute_tool` for main builtins, with late-bound context retained in `BuiltinToolRegistry`; (b) `MarkdownSkillRegistryOwner` for generation-safe install/hot-reload replacement into the canonical registry with explicit owner disposal (no async Drop); (c) run-loop single-snapshot projection replacing the three-source construction. See spec §5.3–5.5, §9, §13.
 
 ## Global Constraints
 
@@ -22,12 +22,17 @@
 - Do not persist handlers, closures, plugin code, credentials, or other executable objects; do not add another journal, heavy dependency, global Capability trait, or generic registry.
 - `ToolCatalog` remains responsible for non-callable routing/discovery consumers (skills, custom commands, aliases, health, conflict resolution); remove only duplicated callable/identity facts proven to have no independent consumer.
 - Do not weaken generation guards, stable captured-handler semantics, structured errors, or unknown-outcome behavior.
-- Run Rust commands serially; before each Cargo command on line 2, inspect `/proc/meminfo` MemAvailable and wait if below 4 GiB. On macOS use the platform-equivalent available-memory check and record the observed value.
+- The canonical registry stays the **sole** handler store for builtin/markdown/MCP: no second handler map, no test-only/dead-write adapter. `BuiltinRegistryRouter` is a live production execution path (its `invoke` → `execute_tool`), not a placeholder.
+- Do not add a `ToolSource` variant to distinguish main-builtin from markdown-skill; both register `source=Builtin`. Enforce the core-builtin name-collision guard fail-closed (see Task 2 Step 3).
+- Run Rust commands serially; before each Cargo command on line 2, inspect available memory and wait if below 4 GiB (record the observed value; use the macOS platform-equivalent check).
 - Before every commit, inspect the staged tree and run `git diff --cached --check`; do not stage unrelated user changes.
 
 ## Review Focus
 
-- Duplicate or stale registration handle after replace/dispose: test that an old handle cannot remove the replacement and that a second dispose is inert (Task 2).
+- Duplicate or stale registration handle after replace/dispose: test that an old handle cannot remove the replacement and that a second dispose is inert (Task 2/4).
+- `MarkdownSkillRegistryOwner` install/replace: test generation-safe replacement, stale-handle no-op, core-builtin name-collision fail-closed, and removal → resolve invisible (Task 2).
+- `BuiltinRegistryRouter` late-bound context: test that a router registered at boot still resolves the current workspace/session context written into `BuiltinToolRegistry` after registration, without re-registration (Task 2).
+- Run-loop single-snapshot projection: test that the visible set matches the prior three-source construction (allowlist narrowing, slash-skill scope, MCP face, `defer_mcp_tools` promotion) with no second handler map and no dead-write adapter (Task 2).
 - ToolCatalog projection removed while a legitimate slash-command/health/skill consumer remains: test catalog routing and health behavior after callable convergence (Task 3).
 - Legacy or malformed call identity, missing current descriptor, and descriptor revision/fingerprint drift: test each remains VerifyOnly and produces no handler invocation (Task 4).
 - A blocked or sanitized call without a trustworthy effective-input marker: test that it cannot become replay-eligible; preserve the current marker semantics without adding a producer to `src/harness/` (Task 4).
@@ -40,9 +45,13 @@
 | Area | Files | Responsibility in this plan |
 |---|---|---|
 | Canonical descriptor and callable registry | `src/tools/descriptor.rs`, `src/tools/registry.rs`, `src/tools/service.rs` | Keep descriptor identity and handler pairing canonical; remove temporary revision-1 descriptor fabrication only after all consumers have an explicit canonical source. |
-| Per-run execution and source adapters | `src/tools/runtime.rs`, `src/tools/traits.rs`, `src/tools/server/`, `src/tools/markdown_skill/`, `src/tools/adapters/registry_adapter.rs`, `src/tools/adapters/mcp_adapter.rs`, `src/tools/handlers/builtin.rs`, `src/tools/handlers/registration.rs`, `src/mcp/tool_bridge.rs`, `src/executor/builtin_registry/` | Route real Tool callables — main builtin, the markdown-skill `AlephToolDyn` surface, and MCP — through the canonical registry, with compatibility adapters at existing runtime boundaries and owner scopes for dynamic sources. |
+| Main-builtin router | `src/tools/handlers/builtin.rs` | Add `BuiltinRegistryRouter` (thin `ToolHandler` over `Arc<dyn ToolRegistry>`); keep existing `BuiltinHandler` (over `Arc<dyn AlephToolDyn>`) for markdown-skill and capability builtins. |
+| Markdown-skill owner | `src/tools/server/mod.rs`, `src/tools/markdown_skill/`, `src/gateway/handlers/markdown_skills.rs` | Add `MarkdownSkillRegistryOwner`; wire install (`markdown_skills.rs`) and hot-reload (`start/mod.rs` `SkillWatcher`) to `registry.replace` + scope track/dispose; `AlephToolServer` stays the CLI-subprocess tool store. |
+| Startup wiring | `src/bin/aleph-server/commands/start/mod.rs` | Boot-register main builtins into `tool_registry_phase2` (`start/mod.rs:224`); construct and thread `MarkdownSkillRegistryOwner` into the install handler and `SkillWatcher`. |
+| Per-run execution surface | `src/executor/tool_registry.rs`, `src/executor/builtin_registry/registry/struct_def.rs` | `ToolRegistry::{get_tool,execute_tool}` remains the only main-builtin execution surface; `BuiltinToolRegistry` keeps late-bound Arc/OnceCell context; no longer double-projected via `RegistryToolAdapter`. |
+| Run-loop projection | `src/gateway/execution_engine/run_loop/inner.rs`, `src/tools/adapters/registry_adapter.rs`, `src/tools/adapters/mcp_adapter.rs`, `src/mcp/tool_bridge.rs` | Replace `build_registry_from_tools` + `join_mcp_tools` + `join_markdown_skills` with one `entries_snapshot()` projection via the generalized `McpRegistryTool::from_registry_entry`; remove `RegistryToolAdapter` from the builtin projection path. |
 | Read-only boundary (not modified this phase) | `src/extension/lifecycle.rs` | Plugin stays on its `ToolCatalog`/extension-manager bypass; do not route Plugin through the canonical registry. |
-| Catalog projections | `src/tool_metadata/registry/`, `src/tool_metadata/types/unified/`, `src/tools/service.rs`, `src/tools/adapters/registry_adapter.rs` | Keep catalog-specific fields and non-callable rows while deriving Tool-owned schema/source/safety fields from descriptor projection helpers. |
+| Catalog projections | `src/tool_metadata/registry/`, `src/tool_metadata/types/unified/`, `src/tools/service.rs`, `src/tools/scoped/mod.rs`, `src/tools/adapters/registry_adapter.rs` | Keep catalog-specific fields and non-callable rows; `ScopedToolService::metadata_schema` projects from canonical descriptors; delete `to_metadata_form` after migration. |
 | Lifecycle and errors | `src/tools/registration_scope.rs`, `src/extension/effects/scope.rs`, `src/tools/service.rs`, `src/tools/error_kind.rs` | Reuse existing disposers and reports; align structured error mapping without creating a second lifecycle framework. |
 | Durable identity and classification | `src/session/events.rs`, `src/session/reduction.rs`, `src/session/replay.rs`, `src/session/boundary_repair.rs`, `src/gateway/resume_coordinator.rs`, `src/harness/deps.rs`, `src/orchestrator/harness_bridge/` | Verify current identity/lookup/classification wiring and make only the minimum non-harness correction required to keep classification fail-closed. |
 | Tests and references | colocated Rust unit tests, `tests/resume_coordinator_integration.rs`, `tests/plugin_lifecycle_roundtrip.rs`, `docs/reference/FEATURE_LOCATOR.md`, optionally `docs/reference/TOOL_SYSTEM.md` and `docs/reference/ARCHITECTURE.md` | Pin source convergence and projection behavior, then document only verified implementation facts. |
@@ -51,23 +60,35 @@
 
 - Existing descriptor constructor: `ToolCapabilityDescriptor::from_definition(definition: &ToolDefinition, revision: u64) -> ToolCapabilityDescriptor`.
 - Existing identity lookup: `ToolDescriptorLookup::tool_call_identity(&self, name: &str) -> Option<ToolCallIdentity>`; `ToolHandlerRegistry` implements it.
-- Existing registry entry points: `ToolHandlerRegistry::register(&self, descriptor: ToolCapabilityDescriptor, handler: Arc<dyn ToolHandler>) -> Result<RegistrationHandle, ToolError>`; `replace` has the same arguments/result; `resolve(&self, name: &str) -> Option<Arc<dyn ToolHandler>>`; `descriptor(&self, name: &str) -> Option<Arc<ToolCapabilityDescriptor>>`; `snapshot_state(&self) -> RegistrySnapshot`.
+- Existing registry entry points: `ToolHandlerRegistry::register(&self, descriptor: ToolCapabilityDescriptor, handler: Arc<dyn ToolHandler>) -> Result<RegistrationHandle, ToolError>`; `replace` has the same arguments/result; `resolve(&self, name: &str) -> Option<Arc<dyn ToolHandler>>`; `descriptor(&self, name: &str) -> Option<Arc<ToolCapabilityDescriptor>>`; `entries_snapshot(&self) -> HashMap<String, RegistryEntry>`; `unregister(&self, handle: &RegistrationHandle)`; `snapshot_state(&self) -> RegistrySnapshot`.
 - Existing owner scope: `ToolRegistrationScope::track(&mut self, handle: RegistrationHandle)` and `async fn dispose(self) -> ToolDisposeReport`.
+- Existing executor surface: `ToolRegistry::get_tool(&self, name: &str) -> Option<&UnifiedTool>` and `ToolRegistry::execute_tool(&self, tool_name: &str, arguments: Value) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>>` (`src/executor/tool_registry.rs`).
+- **New** `BuiltinRegistryRouter` (`src/tools/handlers/builtin.rs`): `ToolHandler` holding `{ name: String, inner: Arc<dyn ToolRegistry> }`; `definition(&self) -> ToolDefinition` derived from `inner.get_tool(&self.name)` (reusing the `UnifiedTool -> ToolDefinition` projection `RegistryToolAdapter` currently uses, so model-visible schema is byte-identical); `invoke(&self, input: Value) -> Result<ToolOutput, ToolError>` delegating to `inner.execute_tool(&self.name, input).await`.
+- **New** `MarkdownSkillRegistryOwner` (`src/tools/server/mod.rs` or `src/tools/markdown_skill/`): holds `Arc<ToolHandlerRegistry>` + `ToolRegistrationScope` + per-name `HashMap<String, RegistrationHandle>`; `install(name, Arc<dyn AlephToolDyn>)` = `BuiltinHandler` wrap → `from_definition` → `registry.replace` → dispose prior handle + track new handle (+ core-builtin collision fail-closed); `remove(name)` = `registry.unregister`; `dispose(self)` = `ToolRegistrationScope::dispose` (reverse-order, idempotent).
+- Existing handler→LoopTool adapter: `McpRegistryTool::from_registry_entry(handler: Arc<dyn ToolHandler>, descriptor: &ToolCapabilityDescriptor)` — generalize to wrap any canonical entry (builtin/markdown/MCP), not only MCP.
 - Existing recovery boundary: `repairs_for_with_policy(reduction: &RunReduction, degrade: Option<&DegradeNote>, lookup: Option<&dyn ToolDescriptorLookup>) -> Vec<SessionEvent>`; `repair_boundary_with_policy(store: &dyn SessionEventStore, session: &SessionId, reduction: &RunReduction, degrade: Option<&DegradeNote>, lookup: Option<&dyn ToolDescriptorLookup>) -> Result<RepairReport, SessionError>`.
 - Existing Tool catalog is not a callable registry: preserve its route/query/state/health APIs while ensuring ToolHandlerRegistry remains the sole handler lookup.
 - Any new adapter constructor or projection helper must be named and typed in the task that introduces it before a later task consumes it. Do not invent a generic `Capability` API.
+
+## Task Dependencies
+
+- Task 1 (census gate) is a prerequisite for Task 2 (its five baseline tests must pass and the callable/non-callable decision recorded before any implementation).
+- Task 2 (boot-register builtins + markdown owner + single-snapshot projection) is a hard prerequisite for Task 3 (descriptor projection migration): `ScopedToolService::metadata_schema` can only migrate off `to_metadata_form` once loop-side definitions are canonical-descriptor projections and `to_metadata_form` has no live caller.
+- Task 2 is a hard prerequisite for Task 4 (lifecycle/recovery): generation-safe replace, stale-handle no-op, owner dispose, and the single-snapshot lag behavior are pinned in Task 2 and verified in Task 4.
+- Task 5 (docs) depends on Tasks 2–4 (line anchors must be recorded after implementation, not from the pre-change census).
+- Task 6 (final verification) depends on all preceding tasks.
 
 ## Task 1: Revalidate Source Census and Lock the Vertical-Slice Boundary
 
 **Files:**
 - Read: `src/tools/descriptor.rs`, `src/tools/registry.rs`, `src/tools/registration_scope.rs`, `src/tools/service.rs`
 - Read: `src/tools/runtime.rs`, `src/tools/traits.rs`, `src/tools/server/`, `src/tools/adapters/registry_adapter.rs`, `src/tools/adapters/mcp_adapter.rs`, `src/tools/handlers/mod.rs`, `src/tools/handlers/builtin.rs`, `src/tools/handlers/registration.rs`, `src/mcp/tool_bridge.rs`
-- Read: `src/extension/lifecycle.rs`, `src/executor/builtin_registry/`, `src/tool_metadata/registry/`, `src/session/boundary_repair.rs`, `src/gateway/resume_coordinator.rs`, `src/harness/deps.rs`, `src/orchestrator/harness_bridge/`
+- Read: `src/extension/lifecycle.rs`, `src/executor/builtin_registry/`, `src/executor/tool_registry.rs`, `src/tool_metadata/registry/`, `src/session/boundary_repair.rs`, `src/gateway/resume_coordinator.rs`, `src/gateway/execution_engine/run_loop/inner.rs`, `src/bin/aleph-server/commands/start/mod.rs`, `src/harness/deps.rs`, `src/orchestrator/harness_bridge/`
 - Test: existing colocated tests plus `tests/plugin_lifecycle_roundtrip.rs`
 
 - [ ] **Step 1: Record current registered and callable source paths**
 
-  Trace builtin, Plugin, and MCP from construction through model-visible projection and final invocation. In particular record which builtins and markdown-skill `AlephToolDyn` entries are possible to wrap as `ToolHandler` (via the existing `BuiltinHandler`), which Plugin tools have executable handlers versus catalog-only rows, and whether catalog entries carry command-only data that cannot be reconstructed from `ToolCapabilityDescriptor`.
+  Trace builtin, Plugin, and MCP from construction through model-visible projection and final invocation. In particular record which builtins and markdown-skill `AlephToolDyn` entries are possible to wrap as `ToolHandler` (via the existing `BuiltinHandler`), whether the main-builtin execution context is late-bound (inside `BuiltinToolRegistry` Arc/OnceCell handles), which Plugin tools have executable handlers versus catalog-only rows, and whether catalog entries carry command-only data that cannot be reconstructed from `ToolCapabilityDescriptor`.
 
 - [ ] **Step 2: Verify current tests and repository status without changing files**
 
@@ -77,53 +98,62 @@
 
 - [ ] **Step 3: Gate the implementation scope on the census**
 
-  Confirm that the in-scope callable sources — main builtin and the markdown-skill `AlephToolDyn` surface, alongside MCP — have a callable implementation compatible with `ToolHandler`, or identify the exact source that is catalog-only / non-callable. Plugin is out of scope for the canonical registry this phase: do not synthesize a `ToolHandler` from `UnifiedTool` metadata, keep its existing catalog/extension-manager bypass, and treat its convergence as a deferred ExtensionHandler spec. If a builtin or skill family has no actual handler to register, narrow that source claim and stop for a spec amendment before implementation.
+  Confirm that the in-scope callable sources — main builtin (wrappable via `BuiltinRegistryRouter` over `ToolRegistry`) and the markdown-skill `AlephToolDyn` surface (wrappable via `BuiltinHandler`), alongside MCP — have a callable implementation compatible with `ToolHandler`, or identify the exact source that is catalog-only / non-callable. Plugin is out of scope for the canonical registry this phase: do not synthesize a `ToolHandler` from `UnifiedTool` metadata, keep its existing catalog/extension-manager bypass, and treat its convergence as a deferred ExtensionHandler spec. If a builtin or skill family has no actual handler to register, narrow that source claim and stop for a spec amendment before implementation.
 
 - [ ] **Step 4: Record the census gate before implementation**
 
   Write the exact callable/non-callable source decision into the executor's task notes. If the approved scope must change because a promised builtin/skill source turns out catalog-only, stop before Task 2 and request a spec amendment; do not create a product-code or empty census commit. If the boundary is unchanged, proceed with the verified file list and test names from Steps 1-3.
 
-## Task 2: Route Callable Tool Registration Through the Descriptor Registry
+## Task 2: Boot-Register Main Builtins and Markdown Skills; Collapse the Run-Loop Projection
 
-> **Prerequisite:** complete Task 1 Step 2's five baseline tests before any implementation — `cargo test --lib tools::registry`, `cargo test --lib tools::handlers::registration`, `cargo test --lib mcp::tool_bridge`, `cargo test --lib session::boundary_repair`, and `cargo test --test plugin_lifecycle_roundtrip` — and record pass/fail for each (including `tools::registry` if it already passes).
+> **Prerequisite:** complete Task 1 Step 2's five baseline tests before any implementation — `cargo test --lib tools::registry`, `cargo test --lib tools::handlers::registration`, `cargo test --lib mcp::tool_bridge`, `cargo test --lib session::boundary_repair`, and `cargo test --test plugin_lifecycle_roundtrip` — and record pass/fail for each.
 
 **Files:**
-- Modify: `src/tools/handlers/builtin.rs`, `src/tools/handlers/registration.rs`, `src/tools/adapters/registry_adapter.rs`, `src/mcp/tool_bridge.rs`
-- Modify only after Task 1 proves a callable path: the relevant `src/executor/builtin_registry/` construction boundary and the markdown-skill `AlephToolDyn` adapter boundary (`src/tools/server/`, `src/tools/markdown_skill/`)
+- Modify: `src/tools/handlers/builtin.rs` (add `BuiltinRegistryRouter`), `src/executor/tool_registry.rs` (trait already has `get_tool`/`execute_tool`; no change unless a signature gap is proven), `src/bin/aleph-server/commands/start/mod.rs` (boot-register builtins + construct/thread `MarkdownSkillRegistryOwner`)
+- Modify: `src/tools/server/mod.rs` and/or `src/tools/markdown_skill/` (add `MarkdownSkillRegistryOwner`), `src/gateway/handlers/markdown_skills.rs` (install via owner)
+- Modify: `src/gateway/execution_engine/run_loop/inner.rs` (single-snapshot projection), `src/tools/adapters/registry_adapter.rs` (remove builtin `RegistryToolAdapter` projection; generalize `McpRegistryTool::from_registry_entry`), `src/tools/adapters/mcp_adapter.rs`/`src/mcp/tool_bridge.rs` (join path)
 - Not modified this phase: `src/extension/lifecycle.rs` (Plugin remains on its catalog/extension-manager bypass)
-- Test: `src/tools/registry.rs`, `src/tools/handlers/registration.rs`, `src/mcp/tool_bridge.rs`, `tests/plugin_lifecycle_roundtrip.rs`
+- Test: `src/tools/registry.rs`, `src/tools/handlers/builtin.rs`, `src/tools/server/`, `src/gateway/execution_engine/run_loop/`, `src/mcp/tool_bridge.rs`, `tests/plugin_lifecycle_roundtrip.rs`
 
 **Interfaces:**
 - Consume `ToolHandler::definition(&self) -> ToolDefinition` and `ToolHandler::invoke(&self, input: Value) -> Result<ToolOutput, ToolError>`.
-- Consume `ToolHandlerRegistry::{register,replace,resolve,descriptor,snapshot_state}` and `ToolRegistrationScope::{track,dispose}` as listed above.
-- Produce no second handler map. Existing `LoopToolRegistry` may receive adapters only from an explicitly snapshotted canonical registry or from a separately documented temporary compatibility source that has no canonical handler yet.
+- Consume `ToolRegistry::{get_tool,execute_tool}` and `ToolHandlerRegistry::{register,replace,resolve,descriptor,entries_snapshot,unregister}` plus `ToolRegistrationScope::{track,dispose}` as listed in Interfaces.
+- Produce no second handler map. `BuiltinRegistryRouter` is the live execution path for main builtins; `McpRegistryTool::from_registry_entry` is the only handler→LoopTool adapter for the projection.
 
 - [ ] **Step 1: Add failing source-convergence tests**
 
-  Add tests proving: (a) every callable MCP Tool is resolved by `ToolHandlerRegistry`; (b) each builtin and markdown-skill `AlephToolDyn` entry in the selected census slice has descriptor and handler from the same generation; (c) Plugin tools remain on the catalog/extension-manager bypass and are not misrepresented as callable Tool capabilities; (d) non-callable ToolCatalog rows remain discoverable as commands but are not misrepresented as callable Tool capabilities.
+  Add tests proving: (a) every callable MCP Tool is resolved by `ToolHandlerRegistry`; (b) every main builtin registered at boot is resolved by `ToolHandlerRegistry` with a `BuiltinRegistryRouter` handler whose `invoke` delegates to `ToolRegistry::execute_tool`; (c) every markdown-skill install/hot-reload writes a `source=Builtin` entry into the canonical registry with descriptor and handler from the same generation; (d) Plugin tools remain on the catalog/extension-manager bypass and are not misrepresented as callable Tool capabilities; (e) non-callable ToolCatalog rows remain discoverable as commands but are not misrepresented as callable Tool capabilities.
 
 - [ ] **Step 2: Run the focused tests and confirm the uncovered paths fail**
 
   Run: `cargo test --lib tools::handlers::registration` and `cargo test --test plugin_lifecycle_roundtrip`.
   Expected: new convergence assertions fail only for the source paths not yet connected; existing MCP behavior remains intact.
 
-- [ ] **Step 3: Add source adapters at construction boundaries**
+- [ ] **Step 3: Add `BuiltinRegistryRouter` and boot-register main builtins**
 
-  For each callable source confirmed in Task 1 — main builtin and markdown-skill `AlephToolDyn` (wrapped via `BuiltinHandler`), plus MCP — create its `ToolCapabilityDescriptor` from the handler's `ToolDefinition`, register descriptor and handler together, and track the returned generation-guarded handle in that source's existing owner scope. Do not register a metadata-only catalog row (including Plugin rows) as a callable handler.
+  Implement `BuiltinRegistryRouter` (definition from `inner.get_tool(&name)` projection; invoke via `inner.execute_tool`). In `start/mod.rs`, after `tool_registry_phase2 = Arc::new(ToolHandlerRegistry::new())` (`start/mod.rs:224`), register each main builtin with a descriptor built from `ToolCapabilityDescriptor::from_definition` (source=Builtin, replay=Unsafe, idempotent from `is_idempotent_builtin_name`, max_duration from `resolve_tool_budget_ms`), and track the returned handles in a boot-level owner scope. Late-bound context remains inside `BuiltinToolRegistry`; the router captures only `Arc<dyn ToolRegistry>`.
 
-- [ ] **Step 4: Preserve stable replace and invocation semantics**
+- [ ] **Step 4: Add `MarkdownSkillRegistryOwner` and wire install/hot-reload/removal**
 
-  Add a replace test asserting the captured old `Arc<dyn ToolHandler>` remains callable for an already-started invocation while a subsequent `resolve` returns the replacement descriptor/handler generation. Assert stale handles cannot unregister the replacement.
+  Implement `MarkdownSkillRegistryOwner` holding `Arc<ToolHandlerRegistry>` + `ToolRegistrationScope` + per-name handle map. Wire it into the markdown-skill install handler (`markdown_skills.rs:392`) and the `SkillWatcher` callback (`start/mod.rs:2702`): wrap `MarkdownCliTool` in `BuiltinHandler`, `from_definition` the descriptor, `registry.replace` (generation-safe), dispose the prior handle, track the new one. Reject a markdown skill whose name collides with a boot-registered core builtin (fail-closed structured conflict error) — never silently shadow. Removal (`SkillWatcher` delete) → `registry.unregister`. Shutdown → `ToolRegistrationScope::dispose` (no async Drop). Keep `AlephToolServer::replace_tool` for the CLI-subprocess store.
 
-- [ ] **Step 5: Run source adapter tests**
+- [ ] **Step 5: Collapse the run-loop projection to one canonical snapshot**
 
-  Run: `cargo test --lib tools::registry`, `cargo test --lib tools::handlers::registration`, `cargo test --lib mcp::tool_bridge`, and `cargo test --test plugin_lifecycle_roundtrip`.
-  Expected: PASS; all registered callable sources in the Task 1 boundary (builtin, markdown-skill `AlephToolDyn`, MCP) use the canonical registry; Plugin remains on its bypass; no new harness logic.
+  Replace `build_registry_from_tools(self.tool_registry.clone(), &allowed_tools)` + `join_mcp_tools` + `join_markdown_skills` in `run_loop/inner.rs` with a single projection over `tool_registry_phase2.entries_snapshot()`: filter each entry with the uniform predicate `agent.is_tool_allowed(name) && slash_skill_scope::admits(...)` (MCP source additionally `mcp_handler_admitted`), wrap via `McpRegistryTool::from_registry_entry`. Delete `build_registry_from_tools` and `join_markdown_skills`; remove `RegistryToolAdapter` from the builtin path (no dead-write adapter). Confirm the visible set matches the prior three-source construction (allowlist narrowing, slash-skill scope, MCP face, `defer_mcp_tools` promotion).
 
-- [ ] **Step 6: Commit the source convergence**
+- [ ] **Step 6: Preserve stable replace and invocation semantics**
+
+  Add tests asserting: captured old `Arc<dyn ToolHandler>` remains callable for an already-started invocation while a subsequent `resolve` returns the replacement generation; stale handles cannot unregister the replacement; a boot-registered `BuiltinRegistryRouter` resolves the workspace/session context written into `BuiltinToolRegistry` after registration; markdown owner replace is generation-safe and core-name collision is fail-closed.
+
+- [ ] **Step 7: Run source adapter tests**
+
+  Run: `cargo test --lib tools::registry`, `cargo test --lib tools::handlers::builtin`, `cargo test --lib tools::handlers::registration`, `cargo test --lib mcp::tool_bridge`, `cargo test --lib tools::server`, and `cargo test --test plugin_lifecycle_roundtrip`.
+  Expected: PASS; all registered callable sources in the Task 1 boundary (builtin via router, markdown-skill via owner, MCP) use the canonical registry; Plugin remains on its bypass; no new harness logic.
+
+- [ ] **Step 8: Commit the source convergence**
 
 ```bash
-git add src/tools/handlers/builtin.rs src/tools/handlers/registration.rs src/tools/adapters/registry_adapter.rs src/mcp/tool_bridge.rs src/executor/builtin_registry src/tools/server src/tools/markdown_skill tests/plugin_lifecycle_roundtrip.rs
+git add src/tools/handlers/builtin.rs src/executor/tool_registry.rs src/executor/builtin_registry src/bin/aleph-server/commands/start/mod.rs src/tools/server src/tools/markdown_skill src/gateway/handlers/markdown_skills.rs src/gateway/execution_engine/run_loop src/tools/adapters/registry_adapter.rs src/tools/adapters/mcp_adapter.rs src/mcp/tool_bridge.rs tests/plugin_lifecycle_roundtrip.rs
  git diff --cached --check
 git commit -m "refactor: route tool callables through capability registry"
 ```
@@ -133,14 +163,14 @@ Stage only paths actually changed; omit absent/unmodified paths.
 ## Task 3: Make Existing Tool Projections Consume Descriptor-Owned Fields
 
 **Files:**
-- Modify: `src/tools/descriptor.rs`, `src/tools/service.rs`, `src/tools/adapters/registry_adapter.rs`, `src/mcp/tool_bridge.rs`
+- Modify: `src/tools/descriptor.rs`, `src/tools/service.rs`, `src/tools/scoped/mod.rs`, `src/tools/adapters/registry_adapter.rs`, `src/mcp/tool_bridge.rs`
 - Modify catalog projection only as needed: `src/tool_metadata/types/unified/`, `src/tool_metadata/registry/`, `src/tools/handlers/registration.rs`
 - Test: descriptor projection tests, `metadata_form_tests`, MCP registration/bridge tests, model-visible tool schema tests
 
 **Interfaces:**
 - Consume `ToolCapabilityDescriptor::{to_metadata_definition,to_unified_tool}` and `ToolDefinition::from_descriptor(&ToolCapabilityDescriptor) -> ToolDefinition`.
 - Keep command-only fields such as aliases, routing capabilities, UI metadata, health and conflict-resolution state owned by ToolCatalog; descriptor projection owns Tool identity/schema/source and descriptor-backed safety/replay fields.
-- Remove `to_metadata_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::ToolDefinition]>` only after every caller has an explicit descriptor-backed or command-only conversion path; do not preserve revision `1` as a fabricated identity.
+- Remove `to_metadata_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::ToolDefinition]>` (`src/tools/service.rs:420`) only after its sole live caller `ScopedToolService::metadata_schema` (`src/tools/scoped/mod.rs:645`) is migrated to canonical descriptor projection; do not preserve revision `1` as a fabricated identity.
 
 - [ ] **Step 1: Inventory all `to_metadata_form` and hand-built Tool projections**
 
@@ -152,11 +182,11 @@ Stage only paths actually changed; omit absent/unmodified paths.
 
 - [ ] **Step 3: Route projection through descriptor helpers**
 
-  Replace duplicated mapping only for descriptor-backed Tool entries. Preserve any catalog-specific metadata in its current owning subsystem and do not invent a descriptor field for unrelated routing/UI data.
+  Replace duplicated mapping only for descriptor-backed Tool entries. After Task 2, loop-side definitions are canonical-descriptor projections, so `ScopedToolService::metadata_schema` projects from the entry's descriptor (or `ToolCapabilityDescriptor::to_metadata_definition()`) instead of `to_metadata_form`. Preserve any catalog-specific metadata in its current owning subsystem and do not invent a descriptor field for unrelated routing/UI data.
 
 - [ ] **Step 4: Remove temporary revision-1 descriptor fabrication**
 
-  Delete `to_metadata_form` and its tests only when `rg` confirms there are no production callers — which requires builtin canonicalization and migration of every caller, including `ScopedToolService`'s metadata projection — and replace tests with assertions against the new canonical projection path. `to_metadata_form` is a live production path (fabricating revision-1 descriptors for loop-side `ToolDefinition`s); until every caller has a canonical source, keep its conversion explicitly compatibility-only and do not claim its identity is canonical.
+  Delete `to_metadata_form` and its tests only when `rg` confirms no production callers remain (builtin canonicalization + `ScopedToolService` migration must both land first), and replace tests with assertions against the new canonical projection path. Until then `to_metadata_form` is compatibility-only and must not be claimed as canonical identity.
 
 - [ ] **Step 5: Run projection and catalog tests**
 
@@ -166,7 +196,7 @@ Stage only paths actually changed; omit absent/unmodified paths.
 - [ ] **Step 6: Commit the projection convergence**
 
 ```bash
-git add src/tools/descriptor.rs src/tools/service.rs src/tools/adapters/registry_adapter.rs src/mcp/tool_bridge.rs src/tool_metadata
+git add src/tools/descriptor.rs src/tools/service.rs src/tools/scoped/mod.rs src/tools/adapters/registry_adapter.rs src/mcp/tool_bridge.rs src/tool_metadata
  git diff --cached --check
 git commit -m "refactor: project tool views from capability descriptors"
 ```
@@ -185,7 +215,7 @@ Stage only paths actually changed; omit unmodified paths.
 
 - [ ] **Step 1: Add or identify tests for lifecycle boundary cases**
 
-  Pin reverse-order dispose, disposer failure reporting, idempotent disposal, stale-generation handle no-op after replacement, close rejecting new registration/resolve, and an in-flight captured handler remaining stable. Reuse existing tests where they already prove the contract.
+  Pin reverse-order dispose, disposer failure reporting, idempotent disposal, stale-generation handle no-op after replacement, close rejecting new registration/resolve, an in-flight captured handler remaining stable, and the `MarkdownSkillRegistryOwner` removal → resolve invisible + core-name collision fail-closed. Reuse existing tests where they already prove the contract.
 
 - [ ] **Step 2: Add classification-only recovery tests**
 
@@ -226,7 +256,7 @@ Stage only paths actually changed; omit unmodified paths.
 
 - [ ] **Step 2: Update FEATURE_LOCATOR with verified ownership and limits**
 
-  Document descriptor and registry entry points; `LoopToolRegistry` as runtime consumer/index; ToolRegistrationScope owner/dispose report; descriptor projections into MCP and model-visible ToolDefinition/catalog; discover versus invoke; default Unsafe and current descriptor classification; unknown outcome fail-closed semantics; and the not-yet-unified Skill/Agent/Plugin/ACP/Resource/Task/Subscription surfaces.
+  Document descriptor and registry entry points; `LoopToolRegistry` as request-scoped visible projection; `BuiltinRegistryRouter` over `ToolRegistry::execute_tool`; `MarkdownSkillRegistryOwner` install/replace/dispose report; descriptor projections into MCP and model-visible ToolDefinition/catalog; discover versus invoke; default Unsafe and current descriptor classification; unknown outcome fail-closed semantics; and the not-yet-unified Skill/Agent/Plugin/ACP/Resource/Task/Subscription surfaces.
 
 - [ ] **Step 3: Update secondary references only for contradictions**
 
@@ -265,7 +295,7 @@ Stage only documentation files actually changed.
 
 - [ ] **Step 3: Verify architectural boundaries and stale paths**
 
-  Search production source for handler registrations not backed by `ToolHandlerRegistry` (excluding the documented Plugin catalog/extension-manager bypass); search for production `to_metadata_form` or hard-coded temporary descriptor revisions; inspect all new `src/harness/` diffs (expected none unless a pre-approved field-plumbing defect was proven); verify no Phase 2B execution API was added or newly called. Keep ToolCatalog command/skill/health/Plugin consumers intact.
+  Search production source for handler registrations not backed by `ToolHandlerRegistry` (excluding the documented Plugin catalog/extension-manager bypass); search for production `to_metadata_form`, `build_registry_from_tools`, `join_markdown_skills`, and `RegistryToolAdapter` builtin projections (expected removed or demoted with reason); inspect all new `src/harness/` diffs (expected none unless a pre-approved field-plumbing defect was proven); verify no Phase 2B execution API was added or newly called. Keep ToolCatalog command/skill/health/Plugin consumers intact.
 
 - [ ] **Step 4: Review the exact staged tree**
 
@@ -280,11 +310,13 @@ Confirm only intended files are staged, commit the final verified changes with `
 
 - [ ] **Step 5: Report delivery and non-goals**
 
-  Summarize source paths converged (builtin, markdown-skill `AlephToolDyn`, MCP), the Plugin bypass retained, compatibility catalog responsibilities retained, tests/gates run, commits, and explicitly list deferred work: Plugin ExtensionHandler convergence, universal Capability kinds, durable Safe Replay execution, ownership tree, approval/hook memo migration, and ACP agent server.
+  Summarize source paths converged (builtin via `BuiltinRegistryRouter`, markdown-skill via `MarkdownSkillRegistryOwner`, MCP), the Plugin bypass retained, compatibility catalog responsibilities retained, tests/gates run, commits, and explicitly list deferred work: Plugin ExtensionHandler convergence, universal Capability kinds, durable Safe Replay execution, ownership tree, approval/hook memo migration, `ToolSource::MarkdownSkill` provenance, and ACP agent server.
 
 ## Spec Coverage Self-Check
 
 - Single Tool descriptor/handler identity, sources, resolve, replacement, removal, and projection: Tasks 2-3.
+- Main-builtin process-level router + late-bound context + request allowlist projection from one canonical snapshot: Task 2.
+- Markdown-skill install/hot-reload canonical path + generation-safe replace + owner lifecycle (no async Drop): Task 2.
 - Existing owner scope, reverse-order disposal, failure reports, and in-flight behavior: Task 4 (and source-owner adapters in Task 2).
 - Durable identity plus current descriptor classification, unknown outcome, and VerifyOnly boundary: Task 4.
 - Discover/invoke distinction and structured error preservation: Tasks 2 and 4.
@@ -295,4 +327,4 @@ Confirm only intended files are staged, commit the final verified changes with `
 
 ## Executor Handoff Notes
 
-The source census found MCP already registers descriptor/handler pairs in `ToolHandlerRegistry` and tracks catalog projection cleanup through `ToolRegistrationScope`; preserve this behavior rather than reimplementing it. `unregister_mcp_tools` is compatibility/emergency cleanup because name/source sweeping can remove a replacement; normal teardown must remain handle/scope-based. Main builtin and the markdown-skill `AlephToolDyn` surface are callable and can be wrapped via the existing `BuiltinHandler` (path proven by `CapabilityHandler`/`set_capability`); they are the canonical-registry candidates this phase. The current production Plugin path is catalog-only and `ToolHandler`'s extension implementation was removed; Plugin is out of scope — do not manufacture callable Plugin handlers from catalog metadata, keep its `ToolCatalog`/extension-manager bypass, and defer convergence to a separate ExtensionHandler spec. `to_metadata_form` currently fabricates temporary revision-1 descriptors and is a removal candidate, but delete it only after all production consumers are traced and migrated (builtin canonicalization must land first). Current recovery has descriptor-aware classification; production `repair_boundary` still passes `lookup = None`, so classification-only lookup wiring is the permitted recovery change this phase. `ToolCallEffectiveInput` exists in the current codebase; its Phase 2B production semantics are not a Phase 3 replay-execution authorization.
+The source census found MCP already registers descriptor/handler pairs in `ToolHandlerRegistry` and tracks catalog projection cleanup through `ToolRegistrationScope`; preserve this behavior rather than reimplementing it. `unregister_mcp_tools` is compatibility/emergency cleanup because name/source sweeping can remove a replacement; normal teardown must remain handle/scope-based. Main builtins are callable but NOT canonical today: their execution context is late-bound inside `BuiltinToolRegistry`'s Arc/OnceCell handles, so they must register at boot through a process-level `BuiltinRegistryRouter` over `Arc<dyn ToolRegistry>` — the router captures no per-request context; `definition()` derives from `inner.get_tool(&name)` and `invoke()` delegates to `inner.execute_tool`. The markdown-skill surface is callable via `BuiltinHandler` but lives in a `static Lazy<AlephToolServer>` (`markdown_skills.rs:27`) with no generation/scope/registry: add `MarkdownSkillRegistryOwner` and wire install (`markdown_skills.rs:392`) + hot-reload (`start/mod.rs:2702`) to `registry.replace` + scope track/dispose, removal to `unregister`, shutdown to `dispose` (no async Drop). The run-loop currently builds three sources (`build_registry_from_tools` + `join_mcp_tools` + `join_markdown_skills`); collapse to one `entries_snapshot()` projection via `McpRegistryTool::from_registry_entry` and delete the other two. `to_metadata_form` currently fabricates temporary revision-1 descriptors and is a removal candidate, but delete it only after `ScopedToolService::metadata_schema` is migrated (builtin canonicalization must land first). Current recovery has descriptor-aware classification; production `repair_boundary` still passes `lookup = None`, so classification-only lookup wiring is the permitted recovery change this phase. `ToolCallEffectiveInput` exists in the current codebase; its Phase 2B production semantics are not a Phase 3 replay-execution authorization.
