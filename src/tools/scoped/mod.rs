@@ -61,7 +61,7 @@ use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tool_metadata::ToolHealthCache;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
-use crate::tools::service::{to_metadata_form, ToolDefinition, ToolError, ToolService, ToolSource};
+use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
 
 // =============================================================================
 // ScopedToolService
@@ -642,7 +642,15 @@ impl ToolService for ScopedToolService {
         // metadata-form conversion. Cached output reflects the rewrite,
         // so subsequent O(1) hits don't re-pay the cost.
         self.apply_definition_rewriters(&mut defs);
-        let schema = to_metadata_form(&defs);
+        // Direct descriptor-field projection. No `ToolCapabilityDescriptor` is
+        // available here: `self.inner` is a `LoopToolRegistry` of trait objects
+        // carrying only name/description/schema/flags, so we project the fields
+        // we have rather than fabricating a revision-1 descriptor.
+        let schema: Arc<[crate::tool_metadata::ToolDefinition]> = defs
+            .iter()
+            .map(ToolDefinition::to_metadata_definition)
+            .collect::<Vec<_>>()
+            .into();
         self.schema_cache
             .store(Arc::new(Some((gen_now, Arc::clone(&schema)))));
         schema

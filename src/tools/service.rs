@@ -265,6 +265,32 @@ impl ToolDefinition {
             },
         }
     }
+
+    /// Project descriptor-owned fields straight to the provider metadata
+    /// shape, WITHOUT fabricating a descriptor.
+    ///
+    /// The loop-side [`ToolDefinition`] carries the same fields the canonical
+    /// descriptor owns — name, description, input schema, source, and
+    /// requires-confirmation — but no revision. Round-tripping through a
+    /// synthetic revision-1 [`ToolCapabilityDescriptor`] (as `to_metadata_form`
+    /// once did) manufactures replay identity that never existed. Map the
+    /// fields directly instead.
+    #[must_use]
+    pub fn to_metadata_definition(&self) -> crate::tool_metadata::ToolDefinition {
+        let category = match &self.source {
+            ToolSource::Builtin => crate::tool_metadata::ToolCategory::Builtin,
+            ToolSource::Mcp { .. } => crate::tool_metadata::ToolCategory::Mcp,
+            ToolSource::Extension { .. } => crate::tool_metadata::ToolCategory::Custom,
+        };
+        crate::tool_metadata::ToolDefinition {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            parameters: self.input_schema.clone(),
+            requires_confirmation: self.metadata.requires_approval,
+            category,
+            strict: false,
+        }
+    }
 }
 
 #[async_trait]
@@ -413,16 +439,17 @@ pub trait ToolService: Send + Sync + 'static {
     }
 }
 
-/// Convert loop-side definitions to the provider metadata shape by projecting
-/// descriptor-owned fields. Runtime tools outside the ToolHandlerRegistry are
-/// adapted to temporary revision-1 descriptors at this boundary.
+/// Compatibility wrapper around [`ToolDefinition::to_metadata_definition`].
+///
+/// Previously this fabricated a revision-1 [`ToolCapabilityDescriptor`] per
+/// definition and projected through it — a lie, because loop-side definitions
+/// carry no revision and revision 1 is not canonical. The projection is now
+/// direct. Kept only because `src/harness/tests/tools_surface.rs` imports it;
+/// new callers should use [`ToolDefinition::to_metadata_definition`] directly.
 #[must_use]
 pub fn to_metadata_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::ToolDefinition]> {
     defs.iter()
-        .map(|def| {
-            crate::tools::descriptor::ToolCapabilityDescriptor::from_definition(def, 1)
-                .to_metadata_definition()
-        })
+        .map(ToolDefinition::to_metadata_definition)
         .collect::<Vec<_>>()
         .into()
 }
@@ -481,6 +508,40 @@ mod metadata_form_tests {
         let out = to_metadata_form(&inputs);
         let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn to_metadata_definition_maps_without_fabricated_descriptor() {
+        let mut def = loop_def("direct");
+        def.source = ToolSource::Extension {
+            plugin_id: "p".into(),
+        };
+        def.metadata.requires_approval = true;
+        let projected = def.to_metadata_definition();
+        assert_eq!(projected.name, "direct");
+        assert_eq!(projected.parameters, json!({"type": "object"}));
+        assert!(projected.requires_confirmation);
+        assert!(matches!(projected.category, ToolCategory::Custom));
+        assert!(!projected.strict);
+    }
+
+    #[test]
+    fn to_metadata_form_agrees_with_direct_projection() {
+        let defs = vec![loop_def("a"), loop_def("b")];
+        let via_form = to_metadata_form(&defs);
+        let direct: Vec<_> = defs
+            .iter()
+            .map(ToolDefinition::to_metadata_definition)
+            .collect();
+        assert_eq!(via_form.len(), direct.len());
+        for (left, right) in via_form.iter().zip(direct.iter()) {
+            assert_eq!(left.name, right.name);
+            assert_eq!(left.description, right.description);
+            assert_eq!(left.parameters, right.parameters);
+            assert_eq!(left.requires_confirmation, right.requires_confirmation);
+            assert_eq!(left.category, right.category);
+            assert_eq!(left.strict, right.strict);
+        }
     }
 }
 
