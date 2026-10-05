@@ -1,12 +1,22 @@
 # Capability Phase 2B — Restricted Safe Tool Replay
 
-> Status: design review required; Phase 2B is not implementation-ready until the claim, input, snapshot, and per-call crash-budget contracts below are accepted.
+> Status: design review required for **full** Safe replay execution; an **inert-restricted replay preparation** slice (S0–S5) is wired on `feature/capability-phase2-durable` (commits `3490103d4`, `7d3bf4a5a`) and remains VerifyOnly until the post-guardrail durable effective-input marker described in §4.3 lands.
 >
-> Date: 2026-10-04
+> Date: 2026-10-04 (spec body), 2026-10-05 (status note added)
 >
 > Parent: `docs/superpowers/specs/2026-10-04-capability-phase2-durable-tool-design.md`
 >
 > 本规格定义 Phase 2B 的保守边界：受限、可审计的 at-least-once replay。它不承诺 exactly-once，也不把 `ReplayDecision::AutoReplayEligible` 当作外部副作用授权。
+
+## 0. Current status (inert-restricted slice, 2026-10-05)
+
+- Shipped: `replay_contract_fingerprint` cross-restart identity; durable claim fence + unanswered-call outcome precondition; atomic `ToolHandlerRegistry::snapshot_state()`; private non-`Copy` `ReplayPermit` whose registry-derived handler/descriptor/closed-state come from a single immutable snapshot (`src/session/replay.rs`); the original `call_id`, `tool_name`, `turn_id`, `effective_input`, and stored `ToolCallIdentity` are not registry-derived inputs; bridge `ReplayAdapter` (`src/orchestrator/harness_bridge/replay_adapter.rs`); `ResumeCoordinator::replay_dangling_calls` prepare→claim→invoke→commit→fresh reduction→VerifyOnly ordering on the interrupted-run branch; `src/bin/aleph-server/commands/start/mod.rs` adapter wiring; `NoEffect` post-claim active-cursor leak fix (`7d3bf4a5a`).
+- **Production is VerifyOnly.** `ToolCallRequested` is emitted before guardrail in `src/harness/agent/act.rs:484-509` (serial) / `:821-833` (parallel); `ResumeCoordinator::replay_dangling_calls` keeps `effective_input = None`; the `Option + 强制 Refused on None` gate forces every dangling call to the existing unknown-outcome verification path. **No handler is invoked and no `ToolResult`/`ToolError` is appended through this seam in production today.**
+- Restricted at-least-once semantics preserved: original request count, effect invocation count, durable receipt count are three independent numbers; no exactly-once claim; duplicate-effect tolerance is the Safe registration owner's obligation.
+- Delegated `repair_and_close_abandoned` (team/cron/heartbeat abandonment) remains VerifyOnly with no replay adapter and no permit capability.
+- Deferred: `SessionEvent::ToolCallEffectiveInput { turn_id, call_id, input, at }` after guardrail + dedup/cache; `release_replay_claim` store operation; new cursor state — together these unlock actual replay execution through this seam.
+- Verification: focused replay 102/102, happy-path 1/1, adapter 8/8, session seam 2/2; `cargo check -p alephcore --all-targets` and `cargo check --bin aleph-server` green; full `cargo clippy --all-targets` retains 4 baseline `mcp_face` errors (predate this slice); full `cargo test` is blocked by a missing `binaries/aleph-server-aarch64-apple-darwin` artifact (environment, not code).
+- This §0 is a status snapshot only; §1–§9 below remain the design contract that the future marker must satisfy before full Safe replay execution is accepted.
 
 ## 1. Goal
 
@@ -173,7 +183,7 @@ Before implementation is accepted:
 
 1. Cross-restart test: identical Safe descriptor and implementation token across fresh registry instances remains eligible; a reset local revision alone cannot authorize a changed contract.
 2. Contract-change test: changing input schema, source identity, replay policy, or implementation token becomes VerifyOnly even if local revisions repeat.
-3. Snapshot test: all permit inputs come from one immutable state; replacement/close after permit creation cannot swap the invoked handler.
+3. Snapshot test: registry-derived permit inputs (handler, descriptor, closed status, state generation) come from one immutable state; replacement/close after permit creation cannot swap the invoked handler.
 4. Input-equivalence test: pre-sanitize requests and blocked calls are VerifyOnly; only durable effective input may be replayed.
 5. Claim test: competing coordinators cannot both acquire the expected-head recovery claim or append an outcome for the same unanswered call.
 6. Outcome test: a successful recovery executor may issue one outcome attempt under the claim, but crash/concurrent-writer conditions may produce zero or duplicate receipts; this is not exactly-once.
