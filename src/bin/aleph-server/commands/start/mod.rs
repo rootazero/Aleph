@@ -3917,6 +3917,26 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             );
         }
     }
+    // Tear down the markdown-skill owner right after the builtin scope, still
+    // before the bash reaper and any later registry-touching teardown. The
+    // owner static is configured at boot (set_markdown_skill_registry), so the
+    // scope it holds must be disposed here rather than dropped earlier.
+    // `take_shutdown` runs inside the owner lock (std Mutex) so the take is
+    // atomic with respect to any in-flight install/remove; the guard is
+    // dropped at the semicolon, so no lock is held across the `dispose().await`
+    // below.
+    let markdown_scope = alephcore::tools::markdown_skill::markdown_skill_registry_owner()
+        .lock()
+        .unwrap()
+        .take_shutdown();
+    let markdown_report = markdown_scope.dispose().await;
+    if !markdown_report.all_ok() {
+        tracing::warn!(
+            owner = %markdown_report.owner,
+            failures = ?markdown_report.failures().collect::<Vec<_>>(),
+            "failed to dispose markdown skill registry scope"
+        );
+    }
     // Reap detached background `bash` jobs before the rest of teardown. This
     // has to be an explicit call: `tokio::process::Child::kill_on_drop` is
     // best-effort once the runtime itself is being torn down, so a

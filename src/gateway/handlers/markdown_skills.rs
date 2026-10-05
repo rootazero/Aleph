@@ -354,7 +354,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
     // came back as "No skills found in <path>" — the same sentence a genuinely
     // empty directory produces. "I could not parse what is there" is not
     // "there is nothing there", and the author needs the difference to fix it.
-    let report = load_skills_from_dir(load_path.clone()).await;
+    let mut report = load_skills_from_dir(load_path.clone()).await;
 
     if report.tools.is_empty() {
         let message = if report.errors.is_empty() {
@@ -375,14 +375,12 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
     let mut paths = SKILL_PATHS.write().await;
     let mut loaded_skills = Vec::new();
 
-    // Computed before the loop consumes `report.tools`: a partially-failed
-    // install must not report as a clean success either. The RPC result names
-    // what did not make it, so the caller can say so instead of the model
-    // discovering later that a skill it was told about does not exist.
-    let failed_count = report.errors.len();
-    let failure_summary = report.failure_summary();
-
-    for tool in report.tools {
+    // `failed_count` / `failure_summary` are computed *after* the loop below
+    // rather than before it: a tool the owner rejects is appended to the same
+    // structured failure list the loader populated, so a partially-failed
+    // install never reports as a clean success and the caller sees every tool
+    // that did not make it.
+    for tool in std::mem::take(&mut report.tools) {
         let tool_name = tool.spec.name.clone();
         let skill_info = MarkdownSkillInfo {
             source_path: Some(load_path.to_string_lossy().to_string()),
@@ -399,11 +397,19 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
             .unwrap()
             .install_or_replace(tool_for_owner)
         {
+            // Fail closed: a tool the owner rejected must not reach the
+            // `AlephToolServer` store, the reload path map, or the success
+            // list — otherwise the caller is told a skill exists that the
+            // canonical registry will never resolve.
             warn!(
                 error = %e,
                 name = %tool_name,
                 "markdown_skill registry owner install_or_replace failed (RPC install)"
             );
+            report
+                .errors
+                .push((PathBuf::from(tool_name.as_str()), anyhow::anyhow!(e)));
+            continue;
         }
 
         let update_info = server.replace_tool(tool).await;
@@ -417,6 +423,9 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
         paths.insert(tool_name, load_path.clone());
         loaded_skills.push(skill_info);
     }
+
+    let failed_count = report.errors.len();
+    let failure_summary = report.failure_summary();
 
     JsonRpcResponse::success(
         request.id,

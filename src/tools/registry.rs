@@ -140,6 +140,11 @@ impl RegistryShared {
 /// handle registered; once replaced or unregistered it reports `false` and
 /// leaves the newer state untouched. Repeated calls after a successful dispose
 /// return `false` and emit no further event.
+// `Clone` is deliberate: a clone still refers to the same `(name, revision)`
+// generation and `dispose` is idempotent, so multiple clones (e.g. one held
+// by a `ToolRegistrationScope` for teardown, one held by an owner's map for
+// replacement bookkeeping) can never double-dispose a newer registration.
+#[derive(Clone)]
 pub struct RegistrationHandle {
     shared: Weak<RegistryShared>,
     name: String,

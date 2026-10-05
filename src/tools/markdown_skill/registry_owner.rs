@@ -42,19 +42,38 @@ use crate::tools::handlers::ToolHandler;
 use crate::tools::registry::{RegistrationHandle, ToolHandlerRegistry};
 use crate::tools::service::ToolError;
 use crate::tools::AlephToolDyn;
+use crate::tools::ToolRegistrationScope;
+
+/// Owner label reported by the scope's [`ToolDisposeReport`] at teardown.
+const SCOPE_OWNER: &str = "capability:markdown-skills";
 
 /// The single writer for markdown-skill-owned slots in the capability
 /// registry.
 ///
-/// Holds an [`Arc`] to the live [`ToolHandlerRegistry`] and a per-name
-/// [`RegistrationHandle`] for every slot this owner installed. The
+/// Holds an [`Arc`] to the live [`ToolHandlerRegistry`], a per-name
+/// [`RegistrationHandle`] for every slot this owner installed, and a
+/// [`ToolRegistrationScope`] that tracks a disposer for *every* handle it ever
+/// issued (including superseded generations). The
 /// `Arc<ToolHandlerRegistry>` is `None` until the gateway installs one via
 /// [`Self::set_registry`] (typically during bootstrap); every install /
 /// replace / remove operation requires the registry to be configured first.
-#[derive(Default)]
 pub struct MarkdownSkillRegistryOwner {
     registry: Option<Arc<ToolHandlerRegistry>>,
     handles: HashMap<String, RegistrationHandle>,
+    /// Ordered disposers for every handle issued. Teardown consumes this
+    /// scope (see [`Self::take_shutdown`]) so the registry is drained in
+    /// reverse registration order without consulting the handle map.
+    scope: ToolRegistrationScope,
+}
+
+impl Default for MarkdownSkillRegistryOwner {
+    fn default() -> Self {
+        Self {
+            registry: None,
+            handles: HashMap::new(),
+            scope: ToolRegistrationScope::new(SCOPE_OWNER),
+        }
+    }
 }
 
 impl MarkdownSkillRegistryOwner {
@@ -147,6 +166,14 @@ impl MarkdownSkillRegistryOwner {
             registry.register(descriptor, handler)?
         };
 
+        // Track the handle in the scope *before* the map insert: the scope
+        // must hold a disposer for every generation, including the one this
+        // replacement supersedes, so teardown can drain the registry in
+        // reverse registration order. The clone shares the same
+        // generation guard, so a disposer for a superseded handle is a
+        // harmless no-op when it finally runs.
+        self.scope.track(new_handle.clone());
+
         // Insert BEFORE disposing the old handle: if `owned_before` was true,
         // the registry has already advanced past the old handle's revision,
         // and the old `dispose()` is a guaranteed no-op. The new handle is
@@ -177,21 +204,17 @@ impl MarkdownSkillRegistryOwner {
 
     /// Tear down every slot this owner installed and drop the registry link.
     ///
-    /// Returns the number of handles that were disposed (or attempted; the
-    /// underlying `dispose` is idempotent, so a handle that was already
-    /// disposed by a stale-generation replacement still counts towards the
-    /// loop's bookkeeping). After `shutdown` the owner is back to its
-    /// default state: no registry, no handles, ready for a fresh
-    /// `set_registry` if the caller wants to reuse the value.
-    pub fn shutdown(&mut self) -> usize {
-        let drained: Vec<RegistrationHandle> =
-            std::mem::take(&mut self.handles).into_values().collect();
-        let count = drained.len();
-        for handle in drained {
-            let _ = handle.dispose();
-        }
+    /// Consumes the tracked [`ToolRegistrationScope`] and returns it, leaving
+    /// the owner back at its default state (no registry, no handles, a fresh
+    /// empty scope). The caller drives `scope.dispose().await` — outside the
+    /// owner lock — to actually run the disposers and inspect the resulting
+    /// [`ToolDisposeReport`]. Because `dispose` is generation-guarded and
+    /// idempotent, a stale handle left by an earlier replacement is a
+    /// harmless no-op. Repeated calls return an empty scope (idempotent).
+    pub fn take_shutdown(&mut self) -> ToolRegistrationScope {
+        self.handles.clear();
         self.registry = None;
-        count
+        std::mem::replace(&mut self.scope, ToolRegistrationScope::new(SCOPE_OWNER))
     }
 }
 
@@ -471,8 +494,8 @@ mod tests {
         assert!(!owner.remove("delta"), "second remove must report no-op");
     }
 
-    #[test]
-    fn shutdown_disposes_every_handle_and_drops_registry_link() {
+    #[tokio::test]
+    async fn take_shutdown_disposes_every_handle_and_drops_registry_link() {
         let registry = fresh_registry();
         let mut owner = MarkdownSkillRegistryOwner::new();
         owner.set_registry(Arc::clone(&registry));
@@ -486,10 +509,16 @@ mod tests {
         assert_eq!(owner.len(), 2);
         let rev_before = registry.revision();
 
-        let disposed = owner.shutdown();
-        assert_eq!(disposed, 2, "shutdown must report the count it disposed");
+        let scope = owner.take_shutdown();
+        assert_eq!(scope.len(), 2, "scope must track every installed handle");
+        let report = scope.dispose().await;
+        assert!(
+            report.all_ok(),
+            "every tracked disposer must succeed: {:?}",
+            report.failures().collect::<Vec<_>>()
+        );
         assert!(owner.is_empty());
-        assert!(!owner.is_configured(), "shutdown must drop the registry link");
+        assert!(!owner.is_configured(), "take_shutdown must drop the registry link");
         assert_eq!(
             registry.revision(),
             rev_before + 2,
@@ -497,6 +526,43 @@ mod tests {
         );
         assert!(registry.resolve("a").is_none());
         assert!(registry.resolve("b").is_none());
+    }
+
+    #[tokio::test]
+    async fn scope_tracks_stale_generations_and_take_shutdown_is_idempotent() {
+        let registry = fresh_registry();
+        let mut owner = MarkdownSkillRegistryOwner::new();
+        owner.set_registry(Arc::clone(&registry));
+
+        owner
+            .install_or_replace(FakeTool::boxed("z"))
+            .expect("install z");
+        owner
+            .install_or_replace(FakeTool::boxed("z"))
+            .expect("replace z");
+
+        // The scope must retain BOTH the superseded and current generation;
+        // reverse-order disposal leaves the entry gone and reports no errors
+        // (the stale disposer is a harmless no-op, not a failure).
+        let scope = owner.take_shutdown();
+        assert_eq!(scope.len(), 2, "scope must retain the superseded generation");
+        let report = scope.dispose().await;
+        assert!(
+            report.all_ok(),
+            "stale disposer must be a no-op, not an error: {:?}",
+            report.failures().collect::<Vec<_>>()
+        );
+        assert!(
+            registry.resolve("z").is_none(),
+            "the current generation must be disposed"
+        );
+
+        // A second shutdown is a clean no-op: no handles, no registry, empty
+        // scope.
+        let scope2 = owner.take_shutdown();
+        assert!(scope2.is_empty());
+        let report2 = scope2.dispose().await;
+        assert!(report2.all_ok());
     }
 
     #[test]

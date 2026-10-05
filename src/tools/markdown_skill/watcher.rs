@@ -16,6 +16,7 @@ use tracing::{debug, error, info, warn};
 use crate::error::{AlephError, Result};
 
 use super::loader::SkillLoader;
+use super::registry_owner::markdown_skill_registry_owner;
 use super::tool_adapter::MarkdownCliTool;
 
 /// Hot reload event
@@ -198,9 +199,33 @@ impl SkillWatcher {
                 }
                 SkillEvent::Deleted { path } => {
                     info!(path = %path.display(), "Skill deleted");
-                    // For deletion, we would need to track and unregister the tool
-                    // This requires ToolServer API extension
-                    warn!("Skill deletion hot-reload not yet fully implemented");
+                    // Unregister the deleted skill from the canonical registry via
+                    // the owner's generation-guarded handle. `AlephToolServer` has
+                    // no remove API, so the legacy CLI subprocess store retains a
+                    // stale reader entry until its next replace — a known
+                    // limitation of the old server reader, not a silent success.
+                    match skill_name_from_path(&path) {
+                        Some(name) => {
+                            let removed = markdown_skill_registry_owner()
+                                .lock()
+                                .unwrap()
+                                .remove(&name);
+                            if removed {
+                                info!(name = %name, "Unregistered deleted markdown skill");
+                            } else {
+                                warn!(
+                                    name = %name,
+                                    "markdown skill deleted but no registry entry is owned for it; nothing to unregister"
+                                );
+                            }
+                        }
+                        None => {
+                            warn!(
+                                path = %path.display(),
+                                "deleted skill file could not be mapped to a skill name; skipping unregister"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -242,6 +267,29 @@ impl SkillWatcher {
     }
 }
 
+/// Map a skill file path to the skill's registry name.
+///
+/// - `*.skill.md` (case-insensitive suffix) → the file stem, e.g.
+///   `github-pr.skill.md` → `github-pr`.
+/// - `SKILL.md` (case-insensitive) → the parent directory name, because a
+///   bundle directory is the skill's identity.
+/// - Anything else → `None` (not a skill file this watcher tracks).
+fn skill_name_from_path(path: &Path) -> Option<String> {
+    let file_name = path.file_name()?.to_str()?;
+    if file_name.eq_ignore_ascii_case("SKILL.md") {
+        return path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(str::to_string);
+    }
+    if file_name.to_lowercase().ends_with(".skill.md") {
+        let stem_len = file_name.len().saturating_sub(".skill.md".len());
+        return Some(file_name[..stem_len].to_string());
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,6 +306,28 @@ mod tests {
         )));
         assert!(!SkillWatcher::is_skill_file(Path::new("README.md")));
         assert!(!SkillWatcher::is_skill_file(Path::new("skill.txt")));
+    }
+
+    #[test]
+    fn test_skill_name_from_path() {
+        assert_eq!(
+            skill_name_from_path(Path::new("/skills/github-pr.skill.md")).as_deref(),
+            Some("github-pr")
+        );
+        assert_eq!(
+            skill_name_from_path(Path::new("/skills/foo.skill.md")).as_deref(),
+            Some("foo")
+        );
+        assert_eq!(
+            skill_name_from_path(Path::new("/skills/SKILL.md")).as_deref(),
+            Some("skills")
+        );
+        assert_eq!(
+            skill_name_from_path(Path::new("/skills/subdir/SKILL.md")).as_deref(),
+            Some("subdir")
+        );
+        assert_eq!(skill_name_from_path(Path::new("README.md")), None);
+        assert_eq!(skill_name_from_path(Path::new("/skills/notes.txt")), None);
     }
 
     #[tokio::test]
