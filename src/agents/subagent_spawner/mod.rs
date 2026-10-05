@@ -911,6 +911,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             });
 
         let deps = HarnessDeps {
+            tool_descriptor_lookup: None,
             session: base.session.clone(),
             tools: scoped_tools,
             llm,

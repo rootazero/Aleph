@@ -1418,6 +1418,7 @@ mod tests {
 
     fn tool_req(tid: TurnId) -> SessionEvent {
         SessionEvent::ToolCallRequested {
+            identity: None,
             turn_id: tid,
             call_id: "c1".into(),
             name: "bash_exec".into(),

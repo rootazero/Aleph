@@ -825,6 +825,7 @@ mod crashed_attempt_tests {
                 },
                 assistant("read the spec, starting the edit"),
                 SessionEvent::ToolCallRequested {
+                    identity: None,
                     turn_id: TurnId::new_v4(),
                     call_id: "c1".into(),
                     name: "file_write".into(),

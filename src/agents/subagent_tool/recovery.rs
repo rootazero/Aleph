@@ -1352,6 +1352,7 @@ mod tests {
                 seqed(
                     2,
                     SessionEvent::ToolCallRequested {
+                        identity: None,
                         turn_id: TurnId::new_v4(),
                         call_id: "c1".into(),
                         name: "bash_exec".into(),
@@ -1438,6 +1439,7 @@ mod tests {
                 .emit_event(
                     &child_id,
                     SessionEvent::ToolCallRequested {
+                        identity: None,
                         turn_id: parent_turn,
                         call_id: call.into(),
                         name: "file_read".into(),
@@ -1478,6 +1480,7 @@ mod tests {
             .emit_event(
                 &child_id,
                 SessionEvent::ToolCallRequested {
+                    identity: None,
                     turn_id: own_turn,
                     call_id: "c1".into(),
                     name: "bash_exec".into(),
@@ -1541,6 +1544,7 @@ mod tests {
             seq: 7,
             provenance: crate::session::reduction::DanglingProvenance::EarlierRun,
             denied,
+            identity: None,
             parked: None,
         }
     }

@@ -1789,6 +1789,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Route-mode cloud escalation reuses the shared ApprovalGate; its
             // channel requester is late-bound below at `set_requester`.
             Some(approval_gate.clone()),
+            // The MCP `tool_registry_phase2` is the registry the live agent
+            // loop resolves tool names against, so it is the only lookup whose
+            // generation can back a durable `ToolCallRequested.identity`.
+            Some(tool_registry_phase2.clone()),
         )
         .await
         {
@@ -3099,6 +3103,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // is visibly running (the run registry broadcasts that) yet emits
             // nothing and hands out no run_id, so no UI can follow or stop it.
             let bus_for_resume = event_bus.clone();
+            // The MCP tool registry backs the resume pass's replay preparer
+            // (§Phase 2B S4). Cloned before the spawn: the adapter needs its
+            // own retained `Arc`, and this closure moves every capture.
+            let tool_registry_for_replay = tool_registry_phase2.clone();
             tokio::spawn(async move {
                 let rr = reconciler.reconcile_candidates().await;
                 tracing::info!(
@@ -3129,7 +3137,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         registry,
                         sessions_for_resume,
                         bus_for_resume,
-                    );
+                    )
+                    .with_replay_preparer(std::sync::Arc::new(
+                        alephcore::orchestrator::harness_bridge::replay_adapter::ReplayAdapter::new(
+                            tool_registry_for_replay,
+                        ),
+                    ));
                     let coordinator = std::sync::Arc::new(match state_db_for_resume {
                         Some(db) => coordinator.with_state_database(db),
                         None => coordinator,

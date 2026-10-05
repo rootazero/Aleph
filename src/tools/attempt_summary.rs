@@ -246,6 +246,7 @@ mod tests {
 
     fn tcr(call_id: &str, name: &str) -> SessionEventRecord {
         mk(SessionEvent::ToolCallRequested {
+            identity: None,
             turn_id: uuid::Uuid::nil(),
             call_id: call_id.to_string(),
             name: name.to_string(),

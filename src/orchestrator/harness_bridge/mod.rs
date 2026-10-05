@@ -46,6 +46,7 @@ mod prompt_build;
 mod runner_impl;
 
 pub mod context_estimate;
+pub mod replay_adapter;
 
 #[cfg(test)]
 mod tests;
@@ -79,6 +80,13 @@ pub struct AgentHarnessRunner {
     pub agent_registry: Arc<AgentRegistry>,
     pub session_service: Arc<dyn SessionService>,
     pub tool_service: Arc<dyn ToolService>,
+    /// Read-only call-time descriptor identity lookup, forwarded into
+    /// `HarnessDeps.tool_descriptor_lookup` on every `run()` so
+    /// `ToolCallRequested` can stamp the same registry generation that
+    /// resolved the handler. `None` (tests / boot without the MCP registry)
+    /// leaves the durable `identity` field unset.
+    pub tool_descriptor_lookup:
+        Option<Arc<dyn crate::tools::descriptor::ToolDescriptorLookup>>,
     /// Live default-provider resolver. Each `pick_llm` call asks the handle
     /// for the current default so UI-driven `set_default` takes effect on the
     /// next turn (Step 5 hot-reload). Replaces the boot-time `Arc<dyn AiProvider>`

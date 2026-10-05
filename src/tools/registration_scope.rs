@@ -221,6 +221,7 @@ mod tests {
             concurrent_safe: false,
             max_duration_ms: None,
             revision: 0,
+            implementation_contract: None,
         }
     }
 

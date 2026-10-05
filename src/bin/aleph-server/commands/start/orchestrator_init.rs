@@ -128,6 +128,11 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     escalation_approval: Option<
         Arc<dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester>,
     >,
+    // Call-time descriptor identity lookup for `ToolCallRequested` stamping.
+    // Wired from the MCP `tool_registry_phase2` — the only registry whose
+    // tool-name space the live agent loop resolves against. `None` (tests /
+    // no MCP bridge) leaves the durable identity field unset.
+    tool_descriptor_lookup: Option<Arc<dyn alephcore::tools::descriptor::ToolDescriptorLookup>>,
 ) -> anyhow::Result<Arc<Orchestrator>> {
     // Install the process-wide UI locale from the same `[general] language`
     // key that already drives the gateway's system messages and the model's
@@ -416,6 +421,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         agent_registry: agent_registry.clone(),
         session_service: session_service.clone(),
         tool_service,
+        tool_descriptor_lookup,
         default_provider,
         named_providers,
         verifier_chain,

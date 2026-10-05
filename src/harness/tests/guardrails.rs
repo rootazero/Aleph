@@ -318,6 +318,7 @@ fn make_deps(
     registry: GuardrailRegistry,
 ) -> HarnessDeps {
     HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools: Arc::new(EmptyTools),
         llm: provider,
@@ -713,6 +714,7 @@ fn make_deps_with_tools(
     registry: GuardrailRegistry,
 ) -> HarnessDeps {
     HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools,
         llm: provider,
@@ -1169,6 +1171,7 @@ fn make_parallel_deps(
     registry: GuardrailRegistry,
 ) -> HarnessDeps {
     HarnessDeps {
+        tool_descriptor_lookup: None,
         session,
         tools,
         llm: provider,

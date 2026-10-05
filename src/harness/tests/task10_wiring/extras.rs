@@ -101,6 +101,7 @@ async fn split_session_directive_continues_run_in_child_session() {
     let registrar = OkRegistrar::new();
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -188,6 +189,7 @@ async fn split_session_survives_a_failed_epoch_registration() {
     ));
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -290,6 +292,7 @@ async fn split_session_failsoft_on_a_refused_batch_compacts_and_continues() {
 
     let registrar = OkRegistrar::new();
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -581,6 +584,7 @@ async fn max_iterations_cap_fires_grace_turn_for_terminal_text() {
     // 2 tool-call turns, then text — the grace turn is provider call #3.
     let provider = CapGraceProvider::new(2);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -645,6 +649,7 @@ async fn the_grace_turn_records_its_thinking_beside_its_text() {
     let provider = CapGraceProvider::with_grace_thinking(2, "Out of steps; summarize.");
     let (sink, recorded) = crate::harness::tests::stability::RecordingTraceSink::new();
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -716,6 +721,7 @@ async fn boundary_grace_turn_failsoft_on_llm_error() {
     // 1 tool-call turn exhausts the cap → the grace turn is provider call #2, which fails.
     let provider = CapGraceRobustnessProvider::new(1, GraceCallOutcome::Fail);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -781,6 +787,7 @@ async fn empty_response_retries_then_recovers() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
     let provider = EmptyThenTextProvider::new(1); // 1 empty, then text
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -830,6 +837,7 @@ async fn empty_response_exhausted_sets_terminate_reason() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
     let provider = EmptyThenTextProvider::new(99); // never recovers
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -889,6 +897,7 @@ async fn tool_memo_does_not_span_turns() {
     let provider = CapGraceProvider::new(2);
     let tools = CountingTools::new();
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: tools.clone(),
         llm: provider.clone(),
@@ -939,6 +948,7 @@ async fn boundary_grace_turn_times_out_instead_of_hanging() {
     // 1 tool-call turn exhausts the cap → the grace turn is provider call #2, which hangs.
     let provider = CapGraceRobustnessProvider::new(1, GraceCallOutcome::Hang);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -1011,6 +1021,7 @@ async fn compact_to_fit_turn_keeps_token_breakdown_in_lockstep() {
     });
     let budget = ContextBudget::new(&tiny_budget_config(10, 0.40, 0.50));
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider as Arc<dyn AiProvider>,
@@ -1096,6 +1107,7 @@ async fn stop_hook_halt_terminates_loop_with_dedicated_reason() {
     );
 
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -1257,6 +1269,7 @@ async fn max_output_tokens_recovery_eventually_returns_clean_text() {
     // (RECOVERY_LIMIT=3 allows up to 3 retries).
     let provider = MaxTokensThenTextProvider::new(2);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -1339,6 +1352,7 @@ async fn max_output_tokens_recovery_exhausted_sets_dedicated_terminate_reason() 
     // gives up and reports MaxOutputTokensExhausted.
     let provider = MaxTokensThenTextProvider::new(10);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),
@@ -1471,6 +1485,7 @@ async fn max_output_tokens_mid_run_does_not_stain_terminate_reason() {
     // call 5 (turn 2) returns clean text.
     let provider = MaxTokensToolCallThenTextProvider::new(4);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(NoopTools),
         llm: provider.clone(),

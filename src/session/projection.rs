@@ -246,6 +246,7 @@ mod tests {
         assert_eq!(r.text, "hi");
 
         let call = SessionEvent::ToolCallRequested {
+            identity: None,
             turn_id: tid,
             call_id: "c1".into(),
             name: "bash_exec".into(),

@@ -623,6 +623,7 @@ mod tests {
                 at: now_ms(),
             }),
             mk_record(SessionEvent::ToolCallRequested {
+                identity: None,
                 turn_id: turn,
                 call_id: "c1".into(),
                 name: "web_fetch".into(),
@@ -773,6 +774,7 @@ mod tests {
                 at: now_ms(),
             }),
             mk_record(SessionEvent::ToolCallRequested {
+                identity: None,
                 turn_id: turn,
                 call_id: "kept_id".into(),
                 name: "tool_a".into(),
@@ -1116,6 +1118,7 @@ mod tests {
         for i in 0..3 {
             let cid = format!("call_{i}");
             events.push(mk_record(SessionEvent::ToolCallRequested {
+                identity: None,
                 turn_id: turn,
                 call_id: cid.clone(),
                 name: "search".into(),
@@ -1179,6 +1182,7 @@ mod tests {
         for i in 0..2 {
             let cid = format!("call_{i}");
             events.push(mk_record(SessionEvent::ToolCallRequested {
+                identity: None,
                 turn_id: turn,
                 call_id: cid.clone(),
                 name: "search".into(),
@@ -1290,6 +1294,7 @@ mod tests {
             }),
             // No AssistantMessage for this call anywhere in the log.
             mk_record(SessionEvent::ToolCallRequested {
+                identity: None,
                 turn_id: turn,
                 call_id: "lost1".into(),
                 name: "web_fetch".into(),

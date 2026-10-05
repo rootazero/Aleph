@@ -247,6 +247,7 @@ fn turn_started_event() -> SessionEvent {
 async fn think_with_no_tool_use_returns_done() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(EmptyTools),
         llm: FixedProvider::text_only("hi"),
@@ -318,6 +319,7 @@ async fn a_think_turn_with_thinking_emits_one_reasoning_record() {
         },
     });
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(EmptyTools),
         llm: provider,
@@ -391,6 +393,7 @@ async fn an_empty_thinking_block_emits_no_reasoning_event() {
         },
     });
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(EmptyTools),
         llm: provider,
@@ -453,6 +456,7 @@ async fn a_tool_only_turn_with_thinking_still_records_its_reasoning() {
         },
     });
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(EmptyTools),
         llm: provider,
@@ -512,6 +516,7 @@ async fn a_tool_only_turn_with_thinking_still_records_its_reasoning() {
 async fn think_llm_error_maps_to_harness_llm() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(EmptyTools),
         llm: Arc::new(ErrProvider),
@@ -555,6 +560,7 @@ async fn think_llm_error_maps_to_harness_llm() {
 async fn primary_transient_error_without_fallback_still_propagates() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(EmptyTools),
         llm: Arc::new(ErrProvider),
@@ -642,6 +648,7 @@ async fn callback_fires_on_delta_and_tool_call() {
     // Turn with one tool_call: expect one on_delta("calling…") + on_tool_call_start("echo").
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(OkTool),
         llm: FixedProvider::with_tool_call("calling…", "echo"),
@@ -711,6 +718,7 @@ async fn run_returns_cancelled_when_token_is_pre_cancelled() {
 
     let session = MockSession::new(vec![turn_started_event(), user_message_event("hi")]);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(EmptyTools),
         llm: Arc::new(PanicProvider),
@@ -783,6 +791,7 @@ async fn think_tool_use_after_act_returns_continue() {
 
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
         session: session.clone(),
         tools: Arc::new(OkOnceTool),
         llm: FixedProvider::with_tool_call("calling…", "echo"),

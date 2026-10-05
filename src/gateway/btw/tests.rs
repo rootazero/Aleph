@@ -223,6 +223,7 @@ mod seeding {
             session,
             id,
             SessionEvent::ToolCallRequested {
+                identity: None,
                 turn_id,
                 call_id: call_id.to_string(),
                 name: "bash".to_string(),

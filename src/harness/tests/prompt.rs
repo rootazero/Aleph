@@ -55,6 +55,7 @@ fn assistant_with_tool_use(tool_id: &str, tool_name: &str) -> SessionEventRecord
 
 fn tool_call_requested(tool_id: &str, tool_name: &str) -> SessionEventRecord {
     record(SessionEvent::ToolCallRequested {
+        identity: None,
         turn_id: Uuid::nil(),
         call_id: tool_id.to_string(),
         name: tool_name.to_string(),

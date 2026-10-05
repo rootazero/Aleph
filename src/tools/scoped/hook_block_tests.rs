@@ -207,6 +207,7 @@ fn failures(errors: &[String]) -> Vec<SessionEventRecord> {
         events.push(record(
             seq + 1,
             SessionEvent::ToolCallRequested {
+                identity: None,
                 turn_id: uuid::Uuid::nil(),
                 call_id: call_id.clone(),
                 name: "file_read".to_string(),
