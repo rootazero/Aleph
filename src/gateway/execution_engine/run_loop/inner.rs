@@ -831,9 +831,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         &visible_mcp_servers(visibility.clone(), extension_manager.clone()),
                         &mut allowed_names,
                         |name| {
-                            self.tool_registry
-                                .get_tool(name)
-                                .and_then(|tool| tool.max_result_tokens)
+                            self.tool_registry.get_tool(name).and_then(|tool| {
+                                matches!(
+                                    &tool.source,
+                                    crate::tool_metadata::ToolSource::Native
+                                        | crate::tool_metadata::ToolSource::Builtin
+                                )
+                                .then_some(tool.max_result_tokens)
+                                .flatten()
+                            })
                         },
                     );
                     if !joined.is_empty() {
@@ -853,7 +859,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         self.tool_registry.clone(),
                         &allowed_tools,
                     );
-                    allowed_names = allowed_tools.iter().map(|tool| tool.name.clone()).collect();
+                    let _ = super::super::markdown_skill_tools::join_markdown_skills(
+                        &mut loop_registry_inner,
+                        |name| {
+                            agent.is_tool_allowed(name)
+                                && super::super::slash_skill_scope::admits(
+                                    slash_skill_scope.as_ref(),
+                                    name,
+                                )
+                        },
+                        &mut allowed_names,
+                    )
+                    .await;
                     std::collections::BTreeSet::new()
                 }
             };
