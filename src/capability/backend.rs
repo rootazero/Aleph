@@ -49,6 +49,30 @@ impl ToolBackendAdapter {
         }
         true
     }
+
+    /// `(descriptors, revision)` from ONE registry generation.
+    ///
+    /// Both halves come from a single `snapshot_state()` load, so a caller can
+    /// never pair descriptors from generation N with a revision from N+1.
+    /// `describe`/`subscribe` build their `CapabilitySnapshot` from THIS — never
+    /// `enumerate` + a separate `revision()` read (two loads can tear).
+    #[must_use]
+    pub fn snapshot_capabilities(&self, scope: &Scope) -> (Vec<CapabilityDescriptor>, u64) {
+        let snap = self.registry.snapshot_state();
+        let capabilities = snap
+            .entries()
+            .values()
+            .map(|entry| {
+                let mut descriptor = to_descriptor(entry.descriptor.as_ref());
+                // The registry descriptor is identity-level; the facade binds
+                // the returned descriptor to the requested visibility scope.
+                descriptor.visibility = scope.visibility.clone();
+                descriptor
+            })
+            .filter(|d| Self::in_scope(&d.id, scope))
+            .collect();
+        (capabilities, snap.revision())
+    }
 }
 
 impl CapabilityBackend for ToolBackendAdapter {
