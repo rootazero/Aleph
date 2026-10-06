@@ -275,6 +275,23 @@ impl OwnershipTree {
         inner.bindings.get(&key).map(|_| ())
     }
 
+    /// Read the current owner generation of one `(CapabilityId, VisibilityScope)`
+    /// binding without mutating it.
+    ///
+    /// Returns `None` when no such binding exists. Never bumps the nonce, never
+    /// touches claims, never registers a binding. Generation is per-binding
+    /// (`(CapabilityId, VisibilityScope)`-level), NOT a global registry revision.
+    #[must_use]
+    pub fn generation(
+        &self,
+        capability: &CapabilityId,
+        visibility: &VisibilityScope,
+    ) -> Option<OwnerGeneration> {
+        let inner = self.inner.lock().expect("ownership mutex poisoned");
+        let key = Self::key(capability, visibility);
+        inner.bindings.get(&key).map(|binding| binding.generation)
+    }
+
     pub fn claim(
         &self,
         capability: &CapabilityId,
@@ -605,5 +622,70 @@ mod tests {
             !tree2.dispose(LifetimeScope::Run),
             "second dispose is a no-op"
         );
+    }
+
+    #[test]
+    fn generation_reads_binding_and_tracks_bump() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("foo");
+        let vis = full_vis();
+        assert_eq!(tree.generation(&cap, &vis), None);
+        tree.register(
+            cap.clone(),
+            OwnerRef::Task(TaskId("t1".into())),
+            LifetimeScope::Task,
+            vis.clone(),
+        )
+        .expect("register succeeds");
+        assert_eq!(tree.generation(&cap, &vis), Some(OwnerGeneration(0)));
+        let bumped = tree.bump(LifetimeScope::Task);
+        assert_eq!(bumped, OwnerGeneration(1));
+        assert_eq!(tree.generation(&cap, &vis), Some(OwnerGeneration(1)));
+    }
+
+    #[test]
+    fn generation_is_none_after_revoke_or_dispose() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("foo");
+        let vis = full_vis();
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Task,
+            vis.clone(),
+        )
+        .expect("register succeeds");
+        assert_eq!(tree.generation(&cap, &vis), Some(OwnerGeneration(0)));
+        assert!(tree.revoke(&cap));
+        assert_eq!(tree.generation(&cap, &vis), None);
+
+        let cap2 = cap_id("bar");
+        tree.register(
+            cap2.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Task,
+            vis.clone(),
+        )
+        .expect("register succeeds");
+        assert!(tree.dispose(LifetimeScope::Task));
+        assert_eq!(tree.generation(&cap2, &vis), None);
+    }
+
+    #[test]
+    fn generation_does_not_mutate() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("foo");
+        let vis = full_vis();
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register succeeds");
+        let before = tree.generation(&cap, &vis);
+        let again = tree.generation(&cap, &vis);
+        assert_eq!(before, again);
+        assert_eq!(tree.resolve(&cap, &vis), Some(()));
     }
 }
