@@ -4,6 +4,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::tools::descriptor::ToolCallIdentity;
 
+/// Wire-safe owner identity for durable capability claims.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum OwnerRefWire {
+    Runtime,
+    Session(String),
+    Run(String),
+    Task(String),
+}
+
+/// Wire-safe terminal state for a durable capability claim.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimStateWire {
+    Active,
+    Unknown,
+}
+
 pub type Timestamp = i64; // unix milliseconds
 pub type EventSeq = u64;
 pub type TurnId = uuid::Uuid;
@@ -684,6 +702,32 @@ pub enum SessionEvent {
         recoverable: bool,
         at: Timestamp,
     },
+    /// Durable assertion that a capability effect claim was acquired.
+    EffectClaimClaimed {
+        request_id: String,
+        fence: u64,
+        owner: OwnerRefWire,
+        at: Timestamp,
+    },
+    /// Durable terminal receipt for a capability effect claim.
+    EffectClaimTerminal {
+        request_id: String,
+        fence: u64,
+        state: ClaimStateWire,
+        at: Timestamp,
+    },
+    /// Durable approval memo associated with a capability request.
+    ApprovalMemo {
+        request_id: String,
+        memo: String,
+        at: Timestamp,
+    },
+    /// Durable hook memo associated with a capability request.
+    HookMemo {
+        request_id: String,
+        memo: String,
+        at: Timestamp,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -760,7 +804,11 @@ pub const fn durability_of(event: &SessionEvent) -> Durability {
         | SessionEvent::CompactionPerformed { .. }
         | SessionEvent::FoldRecorded { .. }
         | SessionEvent::SessionForked { .. }
-        | SessionEvent::Error { .. } => Durability::Normal,
+        | SessionEvent::Error { .. }
+        | SessionEvent::EffectClaimClaimed { .. }
+        | SessionEvent::EffectClaimTerminal { .. }
+        | SessionEvent::ApprovalMemo { .. }
+        | SessionEvent::HookMemo { .. } => Durability::Normal,
     }
 }
 
@@ -1021,6 +1069,40 @@ pub(crate) mod fixtures {
                     at: 0,
                 },
             ),
+            (
+                "EffectClaimClaimed",
+                SessionEvent::EffectClaimClaimed {
+                    request_id: "req".into(),
+                    fence: 1,
+                    owner: OwnerRefWire::Runtime,
+                    at: 0,
+                },
+            ),
+            (
+                "EffectClaimTerminal",
+                SessionEvent::EffectClaimTerminal {
+                    request_id: "req".into(),
+                    fence: 1,
+                    state: ClaimStateWire::Active,
+                    at: 0,
+                },
+            ),
+            (
+                "ApprovalMemo",
+                SessionEvent::ApprovalMemo {
+                    request_id: "req".into(),
+                    memo: "approved".into(),
+                    at: 0,
+                },
+            ),
+            (
+                "HookMemo",
+                SessionEvent::HookMemo {
+                    request_id: "req".into(),
+                    memo: "hooked".into(),
+                    at: 0,
+                },
+            ),
         ]
     }
 }
@@ -1029,6 +1111,24 @@ pub(crate) mod fixtures {
 mod tests {
     use super::*;
     use crate::tools::descriptor::ReplayPolicy;
+
+    #[test]
+    fn durable_capability_events_round_trip_and_are_normal() {
+        for (_, event) in fixtures::sample_of_every_kind()
+            .into_iter()
+            .filter(|(name, _)| {
+                matches!(
+                    *name,
+                    "EffectClaimClaimed" | "EffectClaimTerminal" | "ApprovalMemo" | "HookMemo"
+                )
+            })
+        {
+            let json = serde_json::to_string(&event).unwrap();
+            let parsed: SessionEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, event);
+            assert_eq!(durability_of(&parsed), Durability::Normal);
+        }
+    }
 
     #[test]
     fn session_forked_event_round_trips_through_json() {
