@@ -11,7 +11,7 @@
 use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityRevision, ProjectionMetadata,
 };
-use crate::capability::ownership::OwnerGeneration;
+use crate::capability::ownership::{OwnerGeneration, VisibilityScope};
 
 /// A scope selecting which capabilities a facade operation targets.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -20,12 +20,17 @@ pub struct Scope {
     pub kind: Option<CapabilityKind>,
     /// Restrict to a namespace prefix; `None` = all namespaces.
     pub namespace: Option<String>,
+    /// The visibility envelope to describe/project/subscribe under.
+    /// `VisibilityScope::default()` = unrestricted.
+    pub visibility: VisibilityScope,
 }
 
 /// A reference by which a single capability is resolved into a lease.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reference {
     pub id: CapabilityId,
+    /// The visibility envelope to resolve the id under.
+    pub visibility: VisibilityScope,
 }
 
 /// A monotonic subscription position.
@@ -55,6 +60,24 @@ pub struct CapabilitySnapshot {
 pub struct BackendLease {
     pub descriptor: CapabilityDescriptor,
     pub owner_generation: OwnerGeneration,
+}
+
+/// Closed error set for `Zahir::resolve` / `Zahir::validate_lease`.
+///
+/// `StaleOwner` is NOT a resolve-time error: a freshly minted lease carries the
+/// generation read at resolve time, so it can never be stale at construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveError {
+    /// Lookup miss, binding missing (and not revoked), descriptor freshness
+    /// mismatch, or any unclassifiable failure — fail-closed.
+    Unknown,
+    /// The caller's `Reference.visibility` has no binding for the id (resolve-only).
+    NotVisible,
+    /// The binding has been revoked.
+    Revoked,
+    /// The lease's `owner_generation` lags the current per-binding generation
+    /// (validate-only).
+    StaleOwner,
 }
 
 /// A single capability change delivered to a subscriber.
@@ -214,14 +237,16 @@ pub struct Projection {
 
 /// The read/query face of the capability layer.
 ///
-/// [`Zahir::resolve`] returns a [`BackendLease`], never a live handler: the
-/// lease names its owner generation so a consumer can fail closed the moment
-/// that generation advances. [`Zahir::subscribe`] returns a
-/// [`CapabilityChangeStream`] whose cursor resync semantics are fixed in
-/// Task 4.
+/// [`Zahir::resolve`] returns `Result<`[`BackendLease`]`, `[`ResolveError`]`>`,
+/// never a live handler: the lease names its owner generation so a consumer can
+/// fail closed the moment that generation advances, re-checked at use time via
+/// [`Zahir::validate_lease`]. [`Zahir::subscribe`] returns a
+/// [`CapabilityChangeStream`] whose cursor resync semantics are fixed in the
+/// subscription state machine.
 pub trait Zahir {
     fn describe(&self, scope: Scope) -> CapabilitySnapshot;
-    fn resolve(&self, reference: Reference) -> BackendLease;
+    fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError>;
+    fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError>;
     fn subscribe(&self, scope: Scope, cursor: Cursor) -> CapabilityChangeStream;
     fn project(&self, target: TransportTarget, scope: Scope) -> Projection;
 }
@@ -360,5 +385,46 @@ mod tests {
         assert_eq!(stream.committed_cursor, Cursor(10));
         assert_eq!(stream.changes.len(), 1);
         assert!(matches!(stream.changes[0], CapabilityChange::Invalidated));
+    }
+
+    #[test]
+    fn scope_defaults_to_unrestricted_visibility() {
+        let scope = Scope::default();
+        assert_eq!(scope.kind, None);
+        assert_eq!(scope.namespace, None);
+        assert_eq!(scope.visibility, VisibilityScope::default());
+    }
+
+    #[test]
+    fn reference_carries_its_visibility() {
+        let id = cap_id("ns", "name");
+        let visibility = VisibilityScope {
+            workspace: Some("w".to_string()),
+            ..VisibilityScope::default()
+        };
+        let reference = Reference {
+            id: id.clone(),
+            visibility: visibility.clone(),
+        };
+        assert_eq!(reference.id, id);
+        assert_eq!(reference.visibility, visibility);
+    }
+
+    #[test]
+    fn resolve_error_is_a_closed_set_of_distinct_variants() {
+        let variants = [
+            ResolveError::Unknown,
+            ResolveError::NotVisible,
+            ResolveError::Revoked,
+            ResolveError::StaleOwner,
+        ];
+        // Closed set: every variant compares equal only to itself, and cloning
+        // preserves identity.
+        for (i, a) in variants.iter().enumerate() {
+            assert_eq!(a.clone(), *a);
+            for (j, b) in variants.iter().enumerate() {
+                assert_eq!(a == b, i == j, "variants {i} and {j} must differ");
+            }
+        }
     }
 }
