@@ -2082,7 +2082,11 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::RunFinished { .. }
         | SessionEvent::ResumeAttempted { .. }
         | SessionEvent::CompactionPerformed { .. }
-        | SessionEvent::FoldRecorded { .. } => None,
+        | SessionEvent::FoldRecorded { .. }
+        | SessionEvent::EffectClaimClaimed { .. }
+        | SessionEvent::EffectClaimTerminal { .. }
+        | SessionEvent::ApprovalMemo { .. }
+        | SessionEvent::HookMemo { .. } => None,
     }
 }
 
@@ -2130,6 +2134,10 @@ pub(crate) const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::FoldRecorded { .. } => "fold_recorded",
         SessionEvent::SessionForked { .. } => "session_forked",
         SessionEvent::Error { .. } => "error",
+        SessionEvent::EffectClaimClaimed { .. } => "effect_claim_claimed",
+        SessionEvent::EffectClaimTerminal { .. } => "effect_claim_terminal",
+        SessionEvent::ApprovalMemo { .. } => "approval_memo",
+        SessionEvent::HookMemo { .. } => "hook_memo",
     }
 }
 

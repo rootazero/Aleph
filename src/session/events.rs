@@ -1125,7 +1125,10 @@ mod tests {
         {
             let json = serde_json::to_string(&event).unwrap();
             let parsed: SessionEvent = serde_json::from_str(&json).unwrap();
-            assert_eq!(parsed, event);
+            assert_eq!(
+                serde_json::to_string(&parsed).unwrap(),
+                serde_json::to_string(&event).unwrap()
+            );
             assert_eq!(durability_of(&parsed), Durability::Normal);
         }
     }
