@@ -98,6 +98,24 @@ impl ZahirFacade {
             ),
         }
     }
+
+    /// Whether a registry-sourced capability change is visible under
+    /// `scope.visibility`.
+    ///
+    /// Mirrors `describe`'s binding filter: a change passes only when its id
+    /// has a binding under the requested visibility. `Invalidated` is
+    /// scope-wide (carries no id) and always passes, though
+    /// `map_registry_change` never produces it — the drain only ever asks
+    /// about per-tool changes.
+    fn change_in_scope(&self, change: &CapabilityChange, scope: &Scope) -> bool {
+        let id = match change {
+            CapabilityChange::Registered { id, .. }
+            | CapabilityChange::Replaced { id, .. }
+            | CapabilityChange::Unregistered { id, .. } => id,
+            CapabilityChange::Invalidated => return true,
+        };
+        self.tree.generation(id, &scope.visibility).is_some()
+    }
 }
 
 impl Zahir for ZahirFacade {
@@ -158,7 +176,7 @@ impl Zahir for ZahirFacade {
         }
     }
 
-    fn subscribe(&self, scope: Scope, cursor: Cursor) -> CapabilityChangeStream {
+    fn subscribe(&self, scope: Scope, _cursor: Cursor) -> CapabilityChangeStream {
         // ① subscribe BEFORE snapshot: the receiver exists before the snapshot
         // is read, so the synchronous drain never misses an event that lands in
         // the window between snapshot load and drain.
@@ -166,19 +184,21 @@ impl Zahir for ZahirFacade {
         let snapshot = self.describe(scope.clone());
         // `cursor` is a dedup/filter hint only — this synchronous pure-value
         // API has no durable history and never claims offline recovery.
-        // `from_snapshot` anchors `committed_cursor` at the snapshot revision,
-        // so a cursor ahead of the snapshot fails closed to the snapshot cursor.
+        // `from_snapshot` anchors `committed_cursor` at the snapshot revision
+        // and `append` rejects cursors <= committed_cursor, so events already
+        // reflected in the snapshot are dropped regardless of the caller hint.
+        // A caller cursor ahead of the snapshot cannot be honored and fails
+        // closed to the snapshot cursor — events after the snapshot are never
+        // silently dropped.
         let mut stream = CapabilityChangeStream::from_snapshot(snapshot);
-        // Non-durable filter floor: drop events at or below the caller cursor.
-        let mut floor = cursor.0;
         loop {
             match receiver.try_recv() {
                 Ok(change) => {
                     let (cursor, change) = self.map_registry_change(change);
-                    if cursor.0 > floor {
-                        floor = cursor.0;
-                        // `append` rejects cursors <= committed_cursor, so events
-                        // already reflected in the snapshot are dropped.
+                    // The registry broadcasts changes for ANY tool; honor
+                    // Scope.visibility so an invisible tool is never leaked to
+                    // the subscriber.
+                    if self.change_in_scope(&change, &scope) {
                         let _ = stream.append(cursor, change);
                     }
                 }
@@ -465,5 +485,53 @@ mod tests {
         // Fail-closed: clamped to the snapshot cursor (1), never fakes 99.
         assert_eq!(stream.committed_cursor, Cursor(1));
         assert!(stream.changes.is_empty());
+    }
+
+    #[test]
+    fn subscribe_change_filter_honors_visibility_binding() {
+        let (host, _reg, tree) = host_parts(&["a"]);
+        let id_a = tool_id("a");
+        let id_b = tool_id("b");
+        let ws = VisibilityScope {
+            workspace: Some("w".to_string()),
+            ..VisibilityScope::default()
+        };
+        let ws_scope = Scope {
+            kind: None,
+            namespace: None,
+            visibility: ws.clone(),
+        };
+
+        // Reconcile creates the DEFAULT binding for "a" only ("b" is not in
+        // the registry), so under default visibility "a" is visible and "b" is
+        // not.
+        host.reconcile_registry_bindings();
+        let reg_a = CapabilityChange::Registered {
+            id: id_a.clone(),
+            revision: CapabilityRevision(1),
+        };
+        let reg_b = CapabilityChange::Registered {
+            id: id_b.clone(),
+            revision: CapabilityRevision(1),
+        };
+        assert!(host.change_in_scope(&reg_a, &scope_all()));
+        assert!(!host.change_in_scope(&reg_b, &scope_all()));
+
+        // A custom visibility with no binding sees neither tool.
+        assert!(!host.change_in_scope(&reg_a, &ws_scope));
+
+        // Bind "a" under the workspace visibility → visible; "b" stays hidden.
+        tree.register(
+            id_a.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            ws.clone(),
+        )
+        .expect("register a under ws");
+        assert!(host.change_in_scope(&reg_a, &ws_scope));
+        assert!(!host.change_in_scope(&reg_b, &ws_scope));
+
+        // Scope-wide `Invalidated` carries no id and always passes.
+        assert!(host.change_in_scope(&CapabilityChange::Invalidated, &ws_scope));
     }
 }
