@@ -30,14 +30,24 @@ fn owner_name(owner: &OwnerRefWire) -> String {
 /// receipt are deliberately ignored; the adapter does not replay effects.
 pub fn effect_claim_event_from_session(event: &SessionEvent) -> Option<EffectClaimEvent> {
     match event {
-        SessionEvent::EffectClaimClaimed { request_id, fence, owner, .. } => Some(EffectClaimEvent {
-            request_id: request_id.clone(), owner: owner_name(owner), owner_generation: 1,
+        SessionEvent::EffectClaimPrepared { request_id, owner, owner_generation, fence, .. } => Some(EffectClaimEvent {
+            request_id: request_id.clone(), owner: owner_name(owner), owner_generation: *owner_generation,
+            fence: *fence, state: EffectClaimState::Prepared,
+        }),
+        SessionEvent::EffectClaimClaimed { request_id, fence, owner, owner_generation, .. } => Some(EffectClaimEvent {
+            request_id: request_id.clone(), owner: owner_name(owner), owner_generation: *owner_generation,
             fence: *fence, state: EffectClaimState::Claimed,
         }),
-        SessionEvent::EffectClaimTerminal { request_id, fence, state, .. } => Some(EffectClaimEvent {
-            request_id: request_id.clone(), owner: String::new(), owner_generation: 0,
+        SessionEvent::EffectClaimInvoking { request_id, fence, owner, owner_generation, .. } => Some(EffectClaimEvent {
+            request_id: request_id.clone(), owner: owner_name(owner), owner_generation: *owner_generation,
+            fence: *fence, state: EffectClaimState::Invoking,
+        }),
+        SessionEvent::EffectClaimTerminal { request_id, fence, owner, owner_generation, state, .. } => Some(EffectClaimEvent {
+            request_id: request_id.clone(), owner: owner_name(owner), owner_generation: *owner_generation,
             fence: *fence, state: match state {
+                ClaimStateWire::Prepared => EffectClaimState::Prepared,
                 ClaimStateWire::Active => EffectClaimState::Claimed,
+                ClaimStateWire::Invoking => EffectClaimState::Invoking,
                 ClaimStateWire::Succeeded => EffectClaimState::Succeeded,
                 ClaimStateWire::Failed => EffectClaimState::Failed,
                 ClaimStateWire::Unknown => EffectClaimState::Unknown,

@@ -18,7 +18,9 @@ pub enum OwnerRefWire {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaimStateWire {
+    Prepared,
     Active,
+    Invoking,
     Succeeded,
     Failed,
     Unknown,
@@ -704,16 +706,35 @@ pub enum SessionEvent {
         recoverable: bool,
         at: Timestamp,
     },
+    /// Durable assertion that a capability effect claim was prepared.
+    EffectClaimPrepared {
+        request_id: String,
+        owner: OwnerRefWire,
+        owner_generation: u64,
+        fence: u64,
+        at: Timestamp,
+    },
     /// Durable assertion that a capability effect claim was acquired.
     EffectClaimClaimed {
         request_id: String,
-        fence: u64,
         owner: OwnerRefWire,
+        owner_generation: u64,
+        fence: u64,
+        at: Timestamp,
+    },
+    /// Durable assertion that a capability effect claim is being invoked.
+    EffectClaimInvoking {
+        request_id: String,
+        owner: OwnerRefWire,
+        owner_generation: u64,
+        fence: u64,
         at: Timestamp,
     },
     /// Durable terminal receipt for a capability effect claim.
     EffectClaimTerminal {
         request_id: String,
+        owner: OwnerRefWire,
+        owner_generation: u64,
         fence: u64,
         state: ClaimStateWire,
         at: Timestamp,
@@ -807,7 +828,9 @@ pub const fn durability_of(event: &SessionEvent) -> Durability {
         | SessionEvent::FoldRecorded { .. }
         | SessionEvent::SessionForked { .. }
         | SessionEvent::Error { .. }
+        | SessionEvent::EffectClaimPrepared { .. }
         | SessionEvent::EffectClaimClaimed { .. }
+        | SessionEvent::EffectClaimInvoking { .. }
         | SessionEvent::EffectClaimTerminal { .. }
         | SessionEvent::ApprovalMemo { .. }
         | SessionEvent::HookMemo { .. } => Durability::Normal,
@@ -1073,10 +1096,32 @@ pub(crate) mod fixtures {
             ),
             (
                 "EffectClaimClaimed",
+                "EffectClaimPrepared",
+                SessionEvent::EffectClaimPrepared {
+                    request_id: "req".into(),
+                    owner: OwnerRefWire::Runtime,
+                    owner_generation: 1,
+                    fence: 1,
+                    at: 0,
+                },
+            ),
+            (
+                "EffectClaimClaimed",
                 SessionEvent::EffectClaimClaimed {
                     request_id: "req".into(),
                     fence: 1,
                     owner: OwnerRefWire::Runtime,
+                    owner_generation: 1,
+                    at: 0,
+                },
+            ),
+            (
+                "EffectClaimInvoking",
+                SessionEvent::EffectClaimInvoking {
+                    request_id: "req".into(),
+                    owner: OwnerRefWire::Runtime,
+                    owner_generation: 1,
+                    fence: 1,
                     at: 0,
                 },
             ),
@@ -1085,6 +1130,8 @@ pub(crate) mod fixtures {
                 SessionEvent::EffectClaimTerminal {
                     request_id: "req".into(),
                     fence: 1,
+                    owner: OwnerRefWire::Runtime,
+                    owner_generation: 1,
                     state: ClaimStateWire::Succeeded,
                     at: 0,
                 },
@@ -1121,7 +1168,12 @@ mod tests {
             .filter(|(name, _)| {
                 matches!(
                     *name,
-                    "EffectClaimClaimed" | "EffectClaimTerminal" | "ApprovalMemo" | "HookMemo"
+                    "EffectClaimPrepared"
+                        | "EffectClaimClaimed"
+                        | "EffectClaimInvoking"
+                        | "EffectClaimTerminal"
+                        | "ApprovalMemo"
+                        | "HookMemo"
                 )
             })
         {
