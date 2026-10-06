@@ -501,7 +501,7 @@ pub(crate) fn install_test_session_service() -> Arc<InProcessActorSessionService
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::events::{MessageContent, RunOutcome, TurnTrigger};
+    use crate::session::events::{ApprovalSource, MessageContent, RunOutcome, TurnTrigger};
     use crate::session::store::{migrate_add_session_events, SqliteEventStore};
 
     async fn test_store() -> Arc<dyn SessionEventStore> {
@@ -555,6 +555,86 @@ mod tests {
             run_id: run_id.to_string(),
             outcome: RunOutcome::Completed,
             at: now_ms(),
+        }
+    }
+
+    /// Pin the atomic batch boundary on which the capability gate relies:
+    /// an approval decision (`ToolCallApproved`) and its associated memo
+    /// (`ApprovalMemo`) MUST land as a single contiguous commit, in that
+    /// order, with no intervening seq from a separate `emit_event` call
+    /// or actor pass. If a future refactor splits them into two top-level
+    /// emits, this test fails by returning non-contiguous seqs, which the
+    /// real replay path would then observe as a memo attached to a
+    /// different call (or no call) than the decision that owns it.
+    #[tokio::test]
+    async fn approval_memo_batch_is_one_contiguous_commit() {
+        let svc = fresh_service().await;
+        let id = sample_id("approval-memo");
+        let tid = uuid::Uuid::new_v4();
+        let call_id = "call-001".to_string();
+        let request_id = "req-001".to_string();
+
+        let decision = SessionEvent::ToolCallApproved {
+            turn_id: tid,
+            call_id: call_id.clone(),
+            by: ApprovalSource::User,
+            at: now_ms(),
+        };
+        let memo = SessionEvent::ApprovalMemo {
+            request_id: request_id.clone(),
+            memo: "user typed: yes".to_string(),
+            at: now_ms(),
+        };
+
+        let seqs = svc
+            .emit_batch(&id, vec![decision, memo], None)
+            .await
+            .unwrap();
+
+        // (1) Returned seqs are contiguous — exactly one slot apart. This
+        // is the proof that the pair went through ONE `EmitBatch` arm of
+        // the actor and NOT two back-to-back `emit_event` calls, which a
+        // future regression could plausibly introduce as a "simplification".
+        assert_eq!(seqs.len(), 2, "decision + memo must produce 2 seqs");
+        assert_eq!(
+            seqs[1].checked_sub(seqs[0]),
+            Some(1),
+            "decision and memo seqs must be contiguous (got {:?})",
+            seqs
+        );
+
+        // (2) `get_events` returns both records in the SAME ORDER they
+        // were submitted — the memo follows the decision in the durable
+        // log. A reader that walks the log to assemble "(decision, memo)"
+        // pairs relies on this invariant.
+        let events = svc.get_events(&id, None, None).await.unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(
+            matches!(events[0].event, SessionEvent::ToolCallApproved { .. }),
+            "first record must be the decision (got {:?})",
+            events[0].event
+        );
+        assert!(
+            matches!(events[1].event, SessionEvent::ApprovalMemo { .. }),
+            "second record must be the memo (got {:?})",
+            events[1].event
+        );
+
+        // (3) Carry the field signatures forward as fixtures so an
+        // accidental enum-variant rename or field-type drift breaks HERE
+        // instead of decoding silently elsewhere. The destructure also
+        // re-checks the round-trip equality of what we wrote.
+        if let SessionEvent::ToolCallApproved { call_id: c, by, .. } = &events[0].event {
+            assert_eq!(c, &call_id);
+            assert_eq!(*by, ApprovalSource::User);
+        } else {
+            panic!("decision destructure failed");
+        }
+        if let SessionEvent::ApprovalMemo { request_id: r, memo: m, .. } = &events[1].event {
+            assert_eq!(r, &request_id);
+            assert_eq!(m, "user typed: yes");
+        } else {
+            panic!("memo destructure failed");
         }
     }
 
