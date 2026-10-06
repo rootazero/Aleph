@@ -11,7 +11,8 @@ use crate::capability::descriptor::{
 };
 use crate::capability::facade::Scope;
 use crate::capability::ownership::{LifetimeScope, OwnerGeneration, OwnerRef, VisibilityScope};
-use crate::tools::descriptor::ToolCapabilityDescriptor;
+use crate::tools::descriptor::{canonicalize_json, ToolCapabilityDescriptor};
+use sha2::{Digest, Sha256};
 
 /// Namespace under which the tool backend registers its capabilities.
 pub const TOOL_NAMESPACE: &str = "aleph/tools";
@@ -90,6 +91,12 @@ impl CapabilityBackend for ToolBackendAdapter {
 
 /// Fold a tool descriptor into the kind-agnostic [`CapabilityDescriptor`].
 fn to_descriptor(tool: &ToolCapabilityDescriptor) -> CapabilityDescriptor {
+    let mut schema_bytes = Vec::new();
+    canonicalize_json(&tool.input_schema, &mut schema_bytes);
+    let digest = Sha256::digest(&schema_bytes);
+    let mut fingerprint = [0u8; 32];
+    fingerprint.copy_from_slice(&digest);
+
     CapabilityDescriptor {
         id: CapabilityId {
             namespace: TOOL_NAMESPACE.to_string(),
@@ -98,9 +105,7 @@ fn to_descriptor(tool: &ToolCapabilityDescriptor) -> CapabilityDescriptor {
         kind: CapabilityKind::Tool,
         schema: SchemaRef {
             version: tool.schema_version,
-            // Fingerprinting is computed by the describe/projection path;
-            // Task 1 only establishes the type and leaves the digest uncomputed.
-            fingerprint: [0u8; 32],
+            fingerprint,
         },
         revision: CapabilityRevision(tool.revision),
         owner_generation: OwnerGeneration(0),
@@ -199,5 +204,40 @@ mod tests {
             })
             .unwrap();
         assert_eq!(backend.generation(), d.owner_generation);
+    }
+
+    #[test]
+    fn to_descriptor_fingerprint_is_canonical_and_stable() {
+        let a = ToolCapabilityDescriptor::from_definition(
+            &ToolDefinition {
+                name: "fp".to_string(),
+                description: "fp".to_string(),
+                input_schema: serde_json::from_str(
+                    r#"{"type":"object","properties":{"b":{"type":"string"},"a":{"type":"number"}}}"#,
+                )
+                .unwrap(),
+                source: ToolSource::Builtin,
+                metadata: ToolDefinitionMetadata::default(),
+            },
+            0,
+        );
+        let b = ToolCapabilityDescriptor::from_definition(
+            &ToolDefinition {
+                name: "fp".to_string(),
+                description: "fp".to_string(),
+                input_schema: serde_json::from_str(
+                    r#"{"type":"object","properties":{"a":{"type":"number"},"b":{"type":"string"}}}"#,
+                )
+                .unwrap(),
+                source: ToolSource::Builtin,
+                metadata: ToolDefinitionMetadata::default(),
+            },
+            0,
+        );
+        let da = to_descriptor(&a);
+        let db = to_descriptor(&b);
+        // Same schema, different key order → same fingerprint.
+        assert_eq!(da.schema.fingerprint, db.schema.fingerprint);
+        assert_ne!(da.schema.fingerprint, [0u8; 32]);
     }
 }
