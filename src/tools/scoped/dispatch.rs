@@ -4,7 +4,7 @@
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::extension::hooks::{budget_hook_contexts, HookContext, PermissionDecision};
+use crate::extension::hooks::{budget_hook_contexts, HookContext, HookExecutor, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant, GrantScope};
@@ -222,7 +222,8 @@ impl ScopedToolService {
             .hook_executor
             .as_ref()
             .filter(|e| e.has_hooks_for(HookEvent::PermissionDenied))
-            .map(|e| (e.clone(), input.clone()));
+            .and_then(|_| self.hook_executor_for_memo("permission_denied"))
+            .map(|executor| (executor, input.clone()));
         let mut capture: Option<Value> = None;
         let result = self.execute_gated(name, input, cancel, &mut capture).await;
         if let (
@@ -1357,9 +1358,9 @@ impl ScopedToolService {
         input: Value,
         already_authorized: bool,
     ) -> Result<(Value, Vec<String>), ToolError> {
-        let executor = match self.hook_executor.as_ref() {
-            Some(e) if e.hook_count() > 0 => e.clone(),
-            _ => return Ok((input, Vec::new())),
+        let executor = match self.hook_executor_for_memo("before_tool_call") {
+            Some(executor) => executor,
+            None => return Ok((input, Vec::new())),
         };
 
         let ctx = self.build_hook_context(name, &input, None, None);
@@ -1504,9 +1505,9 @@ impl ScopedToolService {
         result: &mut Result<ToolOutput, ToolError>,
         pre_contexts: Vec<String>,
     ) {
-        let executor = match self.hook_executor.as_ref() {
-            Some(e) if e.hook_count() > 0 => e.clone(),
-            _ => {
+        let executor = match self.hook_executor_for_memo("after_tool_call") {
+            Some(executor) => executor,
+            None => {
                 if !pre_contexts.is_empty() {
                     if let Ok(output) = result {
                         let bounded =
@@ -1569,6 +1570,27 @@ impl ScopedToolService {
                     .await;
             }
         }
+    }
+
+    /// A per-call `HookExecutor` clone with a production memo sink attached,
+    /// recording this call's hook outcomes into the ambient session log under
+    /// `phase`. Clones the shared executor so the sink never leaks back into
+    /// the service's long-lived executor.
+    fn hook_executor_for_memo(&self, phase: &'static str) -> Option<Arc<HookExecutor>> {
+        let base = self
+            .hook_executor
+            .as_ref()
+            .filter(|e| e.hook_count() > 0)?;
+        let session = self
+            .turn_context
+            .as_ref()
+            .map(|c| c.session_key.clone())
+            .unwrap_or_else(|| {
+                crate::routing::session_key::SessionKey::main(self.hook_session_id.clone())
+            });
+        Some(Arc::new(
+            (**base).clone().with_session_memo_sink(session, phase),
+        ))
     }
 
     fn build_hook_context(

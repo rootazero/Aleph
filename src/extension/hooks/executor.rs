@@ -11,6 +11,11 @@ use super::{
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
 use crate::extension::visibility::ScopeKey;
 use crate::extension::ExtensionError;
+use crate::session::{
+    call_log::emit_for_ambient_call,
+    events::{now_ms, SessionEvent},
+    service::SessionId,
+};
 use crate::sync_primitives::Arc;
 use crate::utils::no_window::NoWindow;
 use std::collections::HashMap;
@@ -406,6 +411,46 @@ pub trait HookMemoSink: Send + Sync {
     async fn record(&self, event: HookEvent, capability: Option<&str>, outcome: &str);
 }
 
+/// Production memo sink: records each hook execution outcome into the session
+/// call log as a durable [`SessionEvent::HookMemo`], attributed to the ambient
+/// capability call. Each dispatch clones the shared executor and attaches a
+/// phase-tagged sink so the memo records *which* phase (`permission_denied` /
+/// `before_tool_call` / `after_tool_call`) fired the hook, without mutating the
+/// service's long-lived executor.
+pub struct SessionHookMemoSink {
+    session: SessionId,
+    phase: String,
+}
+
+#[async_trait]
+impl HookMemoSink for SessionHookMemoSink {
+    async fn record(&self, event: HookEvent, capability: Option<&str>, outcome: &str) {
+        // Owned copies up front: the emit closure is `move` and outlives this
+        // call's borrows, so capture values, not references.
+        let phase = self.phase.clone();
+        let event_str = format!("{event:?}");
+        let capability = capability.map(str::to_string);
+        let outcome = outcome.to_string();
+        emit_for_ambient_call(
+            &self.session,
+            "hook",
+            "hook memo",
+            move |_, call_id| SessionEvent::HookMemo {
+                request_id: call_id,
+                memo: serde_json::json!({
+                    "phase": phase,
+                    "event": event_str,
+                    "capability": capability,
+                    "outcome": outcome,
+                })
+                .to_string(),
+                at: now_ms(),
+            },
+        )
+        .await;
+    }
+}
+
 /// Hook executor - runs hook actions based on events
 #[derive(Clone)]
 pub struct HookExecutor {
@@ -442,6 +487,16 @@ impl HookExecutor {
     pub fn with_memo_sink(mut self, sink: Arc<dyn HookMemoSink>) -> Self {
         self.memo_sink = Some(sink);
         self
+    }
+
+    /// Attach a production memo sink that records hook outcomes into the
+    /// session call log under `phase`.
+    #[must_use]
+    pub fn with_session_memo_sink(self, session: SessionId, phase: impl Into<String>) -> Self {
+        self.with_memo_sink(Arc::new(SessionHookMemoSink {
+            session,
+            phase: phase.into(),
+        }))
     }
 
     /// Set the command timeout

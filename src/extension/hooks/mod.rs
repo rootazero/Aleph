@@ -66,7 +66,9 @@ pub use consent::{
     SKILL_INLINE_EVENT, USER_SKILL_OWNER,
 };
 pub(crate) use executor::{bounded_env_value, read_capped, MAX_HOOK_OUTPUT_BYTES};
-pub use executor::{command_hook_invocation, CommandHookInvocation, HookExecutor};
+pub use executor::{
+    command_hook_invocation, CommandHookInvocation, HookExecutor, HookMemoSink, SessionHookMemoSink,
+};
 pub(crate) use matcher::{matcher_notice, warn_on_matcher};
 pub use output_budget::{budget_hook_contexts, join_messages};
 pub use session_facts::{current_transcript_source, with_transcript_source, TranscriptSource};
