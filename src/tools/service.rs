@@ -446,6 +446,9 @@ pub trait ToolService: Send + Sync + 'static {
 /// carry no revision and revision 1 is not canonical. The projection is now
 /// direct. Kept only because `src/harness/tests/tools_surface.rs` imports it;
 /// new callers should use [`ToolDefinition::to_metadata_definition`] directly.
+///
+/// This is a pure compatibility projection and does not provide canonical
+/// capability identity, authorization, or registry state.
 #[must_use]
 pub fn to_metadata_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::ToolDefinition]> {
     defs.iter()
