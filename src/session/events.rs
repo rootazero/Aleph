@@ -19,6 +19,8 @@ pub enum OwnerRefWire {
 #[serde(rename_all = "snake_case")]
 pub enum ClaimStateWire {
     Active,
+    Succeeded,
+    Failed,
     Unknown,
 }
 
@@ -1083,7 +1085,7 @@ pub(crate) mod fixtures {
                 SessionEvent::EffectClaimTerminal {
                     request_id: "req".into(),
                     fence: 1,
-                    state: ClaimStateWire::Active,
+                    state: ClaimStateWire::Succeeded,
                     at: 0,
                 },
             ),
