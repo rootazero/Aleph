@@ -1,5 +1,6 @@
 //! `HookExecutor` implementation — action dispatch and execution logic
 
+use async_trait::async_trait;
 use super::matcher::{compile_matcher, matcher_verdict, CompiledMatcher, MatcherVerdict};
 use super::session_facts::SessionFacts;
 use super::{
@@ -399,6 +400,12 @@ fn describe_action(action: &HookAction) -> String {
     )
 }
 
+/// Sink for recording hook execution outcomes in the memo boundary.
+#[async_trait]
+pub trait HookMemoSink: Send + Sync {
+    async fn record(&self, event: HookEvent, capability: Option<&str>, outcome: &str);
+}
+
 /// Hook executor - runs hook actions based on events
 #[derive(Clone)]
 pub struct HookExecutor {
@@ -413,6 +420,7 @@ pub struct HookExecutor {
     /// commands are skipped (fail-safe) and recorded as `pending`. `None`
     /// disables the gate entirely (the default, so tests run commands freely).
     consent: Option<Arc<ShellHookConsent>>,
+    memo_sink: Option<Arc<dyn HookMemoSink>>,
 }
 
 impl HookExecutor {
@@ -425,7 +433,15 @@ impl HookExecutor {
             command_timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
             regex_cache,
             consent: None,
+            memo_sink: None,
         }
+    }
+
+    /// Attach a memo sink for hook execution outcomes.
+    #[must_use]
+    pub fn with_memo_sink(mut self, sink: Arc<dyn HookMemoSink>) -> Self {
+        self.memo_sink = Some(sink);
+        self
     }
 
     /// Set the command timeout
@@ -1169,6 +1185,9 @@ impl HookExecutor {
                                     &mut accumulated,
                                 );
                                 if accumulated.blocked || accumulated.denied {
+                                    if let Some(sink) = &self.memo_sink {
+                                        sink.record(event, Some(&hook.plugin_name), "blocked").await;
+                                    }
                                     return Ok((current_context, accumulated));
                                 }
                             }
@@ -1186,6 +1205,9 @@ impl HookExecutor {
                                     &mut accumulated,
                                 );
                                 if accumulated.blocked || accumulated.denied {
+                                    if let Some(sink) = &self.memo_sink {
+                                        sink.record(event, Some(&hook.plugin_name), "blocked").await;
+                                    }
                                     return Ok((current_context, accumulated));
                                 }
                             }
@@ -1217,6 +1239,9 @@ impl HookExecutor {
                         accumulated.blocked = true;
                         accumulated.block_reason = Some(format!("Interceptor hook failed: {e}"));
                         accumulated.action_failed = true;
+                        if let Some(sink) = &self.memo_sink {
+                            sink.record(event, Some(&hook.plugin_name), "error").await;
+                        }
                         return Ok((current_context, accumulated));
                     }
                 }
@@ -1231,6 +1256,10 @@ impl HookExecutor {
             // (`jq -r '.tool_input…'`). Updating only `arguments` (the old
             // behaviour) silently handed downstream interceptors the ORIGINAL
             // input on stdin.
+            if let Some(sink) = &self.memo_sink {
+                sink.record(event, Some(&hook.plugin_name), "completed").await;
+            }
+
             if let Some(ref updated) = accumulated.updated_input {
                 let rewritten = updated.to_string();
                 current_context.arguments = Some(rewritten.clone());
@@ -1384,6 +1413,9 @@ impl HookExecutor {
                             // observer kind: exit 2 is logged, never applied.
                             // `scratch` is dropped — observers cannot modify.
                             if let HookAction::Command { .. } = action {
+                                if let Some(sink) = &self.memo_sink {
+                                    sink.record(event, Some(&hook.plugin_name), "completed").await;
+                                }
                                 let mut scratch = super::HookResult::default();
                                 super::derive_decision(
                                     ar.exit_code,
@@ -1394,10 +1426,15 @@ impl HookExecutor {
                                 );
                             }
                         }
-                        Err(e) => warn!(
-                            "Observer hook action from plugin '{}' failed: {}",
-                            hook.plugin_name, e
-                        ),
+                        Err(e) => {
+                            if let Some(sink) = &self.memo_sink {
+                                sink.record(event, Some(&hook.plugin_name), "error").await;
+                            }
+                            warn!(
+                                "Observer hook action from plugin '{}' failed: {}",
+                                hook.plugin_name, e
+                            )
+                        }
                     }
                 }
             })
