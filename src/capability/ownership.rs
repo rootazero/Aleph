@@ -9,6 +9,10 @@
 //! an ownership engine that does not exist yet.
 
 use crate::acp::manager::SessionKey;
+use crate::capability::descriptor::CapabilityId;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
 /// Monotonic owner generation counter.
 ///
@@ -115,4 +119,457 @@ pub struct EffectClaim {
     pub request_id: String,
     pub fence: FencingToken,
     pub owner: OwnerRef,
+}
+
+// =============================================================================
+// Task 2 (Gate B): OwnershipTree behaviour — bump / revoke / dispose.
+// =============================================================================
+//
+// The pure types above were Task 1's deliverable. Task 2 layers a five-deep
+// tree (Runtime → Session → Run → Task → EffectClaim) on top, with these
+// orthogonal axes:
+//
+//   * LifetimeScope  — the RAII axis: how long an owner binding lives.
+//   * VisibilityScope — the ACL axis: who can see the binding.
+//
+// `bump` raises the owner nonce once and rewrites the generation of every binding
+// at `scope` and below; every active EffectClaim attached to an affected
+// binding is reclassified `Unknown`. `revoke` / `dispose` are irreversible —
+// once flipped they cannot be undone, and any subsequent `resolve` / `claim`
+// is rejected.
+
+/// Lifetime ordering: Runtime is the outermost / longest-lived container;
+/// Task is innermost / shortest-lived; External sits outside the process model.
+///
+/// `bump(scope)` rewrites the generation of every binding whose `lifetime` is
+/// at-or-below `scope` in this order, so a child binding's recorded
+/// generation is older than its parent's and any claim made against it is
+/// `Unknown`.
+impl PartialOrd for LifetimeScope {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for LifetimeScope {
+    fn cmp(&self, other: &Self) -> Ordering {
+        rank(*self).cmp(&rank(*other))
+    }
+}
+
+fn rank(scope: LifetimeScope) -> u8 {
+    match scope {
+        LifetimeScope::External => 0,
+        LifetimeScope::Task => 1,
+        LifetimeScope::Run => 2,
+        LifetimeScope::Session => 3,
+        LifetimeScope::Runtime => 4,
+    }
+}
+
+/// Observable state of an `EffectClaim`.
+///
+/// `Active` means the binding the claim was made against is live, not revoked,
+/// not disposed, and has not been re-issued since the claim. `Unknown` covers
+/// every reason a claim may stop being authoritative: revoked id, disposed
+/// lifetime, parent-bump invalidation, or no such claim exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimState {
+    Active,
+    Unknown,
+}
+
+/// Why `register` refused to install a binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegisterError {
+    /// The id has been revoked in this tree; new bindings for it are refused
+    /// permanently.
+    Revoked,
+    /// The requested lifetime has been disposed; new bindings at it (or below)
+    /// are refused permanently.
+    Disposed,
+}
+
+// =============================================================================
+// Task 2 (Gate B): OwnershipTree behaviour — bump / revoke / dispose.
+// =============================================================================
+//
+// The pure types above were Task 1's deliverable. Task 2 layers a five-deep
+// tree (Runtime → Session → Run → Task → EffectClaim) on top, with these
+// orthogonal axes:
+//
+//   * LifetimeScope  — the RAII axis: how long an owner binding lives.
+//   * VisibilityScope — the ACL axis: who can see the binding.
+//
+// `bump` raises the owner nonce once and rewrites the generation of every
+// binding at `scope` and below; every active EffectClaim attached to an
+// affected binding is reclassified `Unknown`. `revoke` / `dispose` are
+// irreversible — once flipped they cannot be undone, and any subsequent
+// `resolve` / `claim` is rejected.
+//
+// The actual `OwnershipTree` impl is appended at the end of this file so the
+// tests below it can name its API; see the search marker
+// `impl OwnershipTree {` for the entry point.
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BindingKey {
+    capability: CapabilityId,
+    visibility: String,
+}
+
+#[derive(Debug)]
+struct Binding {
+    owner: OwnerRef,
+    lifetime: LifetimeScope,
+    visibility: VisibilityScope,
+    generation: OwnerGeneration,
+    claims: HashSet<FencingToken>,
+}
+
+#[derive(Debug)]
+struct OwnershipInner {
+    nonce: u64,
+    revoked: HashSet<CapabilityId>,
+    disposed: HashSet<LifetimeScope>,
+    bindings: HashMap<BindingKey, Binding>,
+}
+
+#[derive(Debug)]
+pub struct OwnershipTree {
+    inner: Mutex<OwnershipInner>,
+}
+
+impl OwnershipTree {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(OwnershipInner {
+                nonce: 0,
+                revoked: HashSet::new(),
+                disposed: HashSet::new(),
+                bindings: HashMap::new(),
+            }),
+        }
+    }
+
+    fn key(capability: &CapabilityId, visibility: &VisibilityScope) -> BindingKey {
+        BindingKey {
+            capability: capability.clone(),
+            visibility: format!("{visibility:?}"),
+        }
+    }
+
+    fn lifetime_disposed(inner: &OwnershipInner, lifetime: LifetimeScope) -> bool {
+        inner.disposed.iter().any(|scope| rank(lifetime) <= rank(*scope))
+    }
+
+    pub fn register(
+        &self,
+        capability: CapabilityId,
+        owner: OwnerRef,
+        lifetime: LifetimeScope,
+        visibility: VisibilityScope,
+    ) -> Result<(), RegisterError> {
+        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        if inner.revoked.contains(&capability) {
+            return Err(RegisterError::Revoked);
+        }
+        if Self::lifetime_disposed(&inner, lifetime) {
+            return Err(RegisterError::Disposed);
+        }
+        let key = Self::key(&capability, &visibility);
+        let generation = OwnerGeneration(inner.nonce);
+        inner.bindings.insert(
+            key,
+            Binding {
+                owner,
+                lifetime,
+                visibility,
+                generation,
+                claims: HashSet::new(),
+            },
+        );
+        Ok(())
+    }
+
+    pub fn resolve(&self, capability: &CapabilityId, visibility: &VisibilityScope) -> Option<()> {
+        let inner = self.inner.lock().expect("ownership mutex poisoned");
+        let key = Self::key(capability, visibility);
+        inner.bindings.get(&key).map(|_| ())
+    }
+
+    pub fn claim(
+        &self,
+        capability: &CapabilityId,
+        visibility: &VisibilityScope,
+        owner: OwnerRef,
+        request_id: String,
+    ) -> Option<EffectClaim> {
+        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        if inner.revoked.contains(capability) {
+            return None;
+        }
+        let key = Self::key(capability, visibility);
+        let lifetime = inner.bindings.get(&key)?.lifetime;
+        if Self::lifetime_disposed(&inner, lifetime) {
+            return None;
+        }
+        if inner.bindings.get(&key)?.owner != owner {
+            return None;
+        }
+        inner.nonce = inner.nonce.checked_add(1)?;
+        let fence = FencingToken::new(inner.nonce);
+        inner.bindings.get_mut(&key)?.claims.insert(fence);
+        Some(EffectClaim { request_id, fence, owner })
+    }
+
+    pub fn claim_state(
+        &self,
+        claim: &EffectClaim,
+        capability: &CapabilityId,
+        visibility: &VisibilityScope,
+    ) -> ClaimState {
+        let inner = self.inner.lock().expect("ownership mutex poisoned");
+        let Some(binding) = inner.bindings.get(&Self::key(capability, visibility)) else {
+            return ClaimState::Unknown;
+        };
+        if inner.revoked.contains(capability)
+            || Self::lifetime_disposed(&inner, binding.lifetime)
+            || binding.owner != claim.owner
+            || !binding.claims.contains(&claim.fence)
+        {
+            ClaimState::Unknown
+        } else {
+            ClaimState::Active
+        }
+    }
+
+    pub fn is_revoked(&self, capability: &CapabilityId) -> bool {
+        self.inner.lock().expect("ownership mutex poisoned").revoked.contains(capability)
+    }
+
+    pub fn is_disposed(&self, scope: LifetimeScope) -> bool {
+        self.inner.lock().expect("ownership mutex poisoned").disposed.contains(&scope)
+    }
+
+    pub fn bump(&self, scope: LifetimeScope) -> OwnerGeneration {
+        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        inner.nonce = inner.nonce.saturating_add(1);
+        let generation = OwnerGeneration(inner.nonce);
+        for binding in inner.bindings.values_mut() {
+            if rank(binding.lifetime) <= rank(scope) {
+                binding.generation = generation;
+                binding.claims.clear();
+            }
+        }
+        generation
+    }
+
+    pub fn revoke(&self, capability: &CapabilityId) -> bool {
+        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        let before = inner.bindings.len();
+        inner.bindings.retain(|key, _| &key.capability != capability);
+        inner.revoked.insert(capability.clone());
+        before != inner.bindings.len()
+    }
+
+    pub fn dispose(&self, scope: LifetimeScope) -> bool {
+        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        let before = inner.bindings.len();
+        inner.bindings.retain(|_, binding| rank(binding.lifetime) > rank(scope));
+        inner.disposed.insert(scope);
+        before != inner.bindings.len()
+    }
+}
+
+impl Default for OwnershipTree {
+    fn default() -> Self { Self::new() }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Behaviour tests for `OwnershipTree`.
+    //!
+    //! The three tests pinned by Gate B:
+    //!
+    //! 1. `bump_invalidates_child_claims` — bumping a parent scope rewrites
+    //!    the generation of every child binding, and any claim made against
+    //!    such a binding transitions to `Unknown`.
+    //! 2. `same_id_two_scopes_coexist` — the same `CapabilityId` may be
+    //!    registered under two distinct `VisibilityScope`s; both resolve
+    //!    independently.
+    //! 3. `revoke_and_dispose_are_irreversible` — revoke disposes of every
+    //!    binding for an id, makes its active claims `Unknown`, and refuses
+    //!    subsequent claims; dispose wipes a lifetime and everything below it.
+
+    use super::*;
+
+    fn cap_id(name: &str) -> CapabilityId {
+        CapabilityId {
+            namespace: "aleph/test".to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    fn full_vis() -> VisibilityScope {
+        VisibilityScope::default()
+    }
+
+    fn restricted_vis(workspace: &str) -> VisibilityScope {
+        VisibilityScope {
+            workspace: Some(workspace.to_string()),
+            ..VisibilityScope::default()
+        }
+    }
+
+    #[test]
+    fn bump_invalidates_child_claims() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("foo");
+        let vis = full_vis();
+        tree.register(
+            cap.clone(),
+            OwnerRef::Task(TaskId("t1".into())),
+            LifetimeScope::Task,
+            vis.clone(),
+        )
+        .expect("register succeeds");
+        let claim = tree
+            .claim(
+                &cap,
+                &vis,
+                OwnerRef::Task(TaskId("t1".into())),
+                "r1".to_string(),
+            )
+            .expect("claim succeeds");
+        assert_eq!(
+            tree.claim_state(&claim, &cap, &vis),
+            ClaimState::Active,
+            "freshly-minted claim is Active"
+        );
+
+        let new_gen = tree.bump(LifetimeScope::Session);
+        assert!(
+            new_gen.0 > 0,
+            "bump returns the monotonic generation it just minted"
+        );
+
+        assert_eq!(
+            tree.claim_state(&claim, &cap, &vis),
+            ClaimState::Unknown,
+            "bump(Session) invalidates the Task-bounded child binding"
+        );
+    }
+
+    #[test]
+    fn same_id_two_scopes_coexist() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("foo");
+        let vis_a = restricted_vis("ws-a");
+        let vis_b = restricted_vis("ws-b");
+
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis_a.clone(),
+        )
+        .expect("register under vis_a");
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis_b.clone(),
+        )
+        .expect("register under vis_b");
+
+        assert!(
+            tree.resolve(&cap, &vis_a).is_some(),
+            "vis_a binding resolves"
+        );
+        assert!(
+            tree.resolve(&cap, &vis_b).is_some(),
+            "vis_b binding resolves"
+        );
+    }
+
+    #[test]
+    fn revoke_and_dispose_are_irreversible() {
+        // ── revoke path ───────────────────────────────────────────────────
+        let tree = OwnershipTree::new();
+        let cap = cap_id("foo");
+        let vis = full_vis();
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register");
+        let claim = tree
+            .claim(&cap, &vis, OwnerRef::Runtime, "r1".to_string())
+            .expect("claim");
+
+        assert!(tree.revoke(&cap), "first revoke actually removes the binding");
+        assert!(
+            tree.resolve(&cap, &vis).is_none(),
+            "resolve returns None after revoke"
+        );
+        assert_eq!(
+            tree.claim_state(&claim, &cap, &vis),
+            ClaimState::Unknown,
+            "active claim transitions to Unknown on revoke"
+        );
+        assert!(
+            tree.is_revoked(&cap),
+            "id is marked revoked (irreversible)"
+        );
+
+        // Second revoke: still unsuccessful at removing (nothing left to drop),
+        // and the irreversibility is preserved.
+        assert!(
+            !tree.revoke(&cap),
+            "second revoke is a no-op on the bindings"
+        );
+        assert!(
+            tree.is_revoked(&cap),
+            "id stays revoked after a second revoke"
+        );
+
+        // New claim after revoke is rejected.
+        assert!(
+            tree.claim(&cap, &vis, OwnerRef::Runtime, "r2".to_string())
+                .is_none(),
+            "no new claim against a revoked id"
+        );
+
+        // ── dispose path ──────────────────────────────────────────────────
+        let tree2 = OwnershipTree::new();
+        tree2
+            .register(
+                cap.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Run,
+                vis.clone(),
+            )
+            .expect("register on tree2");
+
+        assert!(
+            tree2.dispose(LifetimeScope::Run),
+            "first dispose actually releases bindings"
+        );
+        assert!(
+            tree2.is_disposed(LifetimeScope::Run),
+            "scope is marked disposed (irreversible)"
+        );
+        assert!(
+            tree2.claim(&cap, &vis, OwnerRef::Runtime, "r3".to_string())
+                .is_none(),
+            "no new claim against a disposed scope"
+        );
+        assert!(
+            !tree2.dispose(LifetimeScope::Run),
+            "second dispose is a no-op"
+        );
+    }
 }
