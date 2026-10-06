@@ -190,27 +190,6 @@ pub enum RegisterError {
     Disposed,
 }
 
-// =============================================================================
-// Task 2 (Gate B): OwnershipTree behaviour — bump / revoke / dispose.
-// =============================================================================
-//
-// The pure types above were Task 1's deliverable. Task 2 layers a five-deep
-// tree (Runtime → Session → Run → Task → EffectClaim) on top, with these
-// orthogonal axes:
-//
-//   * LifetimeScope  — the RAII axis: how long an owner binding lives.
-//   * VisibilityScope — the ACL axis: who can see the binding.
-//
-// `bump` raises the owner nonce once and rewrites the generation of every
-// binding at `scope` and below; every active EffectClaim attached to an
-// affected binding is reclassified `Unknown`. `revoke` / `dispose` are
-// irreversible — once flipped they cannot be undone, and any subsequent
-// `resolve` / `claim` is rejected.
-//
-// The actual `OwnershipTree` impl is appended at the end of this file so the
-// tests below it can name its API; see the search marker
-// `impl OwnershipTree {` for the entry point.
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BindingKey {
     capability: CapabilityId,
@@ -221,9 +200,8 @@ struct BindingKey {
 struct Binding {
     owner: OwnerRef,
     lifetime: LifetimeScope,
-    visibility: VisibilityScope,
     generation: OwnerGeneration,
-    claims: HashSet<FencingToken>,
+    claims: HashMap<FencingToken, (OwnerGeneration, OwnerRef)>,
 }
 
 #[derive(Debug)]
@@ -284,9 +262,8 @@ impl OwnershipTree {
             Binding {
                 owner,
                 lifetime,
-                visibility,
                 generation,
-                claims: HashSet::new(),
+                claims: HashMap::new(),
             },
         );
         Ok(())
@@ -319,7 +296,10 @@ impl OwnershipTree {
         }
         inner.nonce = inner.nonce.checked_add(1)?;
         let fence = FencingToken::new(inner.nonce);
-        inner.bindings.get_mut(&key)?.claims.insert(fence);
+        let binding = inner.bindings.get_mut(&key)?;
+        binding
+            .claims
+            .insert(fence, (binding.generation, binding.owner.clone()));
         Some(EffectClaim { request_id, fence, owner })
     }
 
@@ -335,8 +315,12 @@ impl OwnershipTree {
         };
         if inner.revoked.contains(capability)
             || Self::lifetime_disposed(&inner, binding.lifetime)
-            || binding.owner != claim.owner
-            || !binding.claims.contains(&claim.fence)
+            || binding
+                .claims
+                .get(&claim.fence)
+                .is_none_or(|(generation, owner)| {
+                    *generation != binding.generation || *owner != claim.owner
+                })
         {
             ClaimState::Unknown
         } else {
@@ -491,6 +475,56 @@ mod tests {
             tree.resolve(&cap, &vis_b).is_some(),
             "vis_b binding resolves"
         );
+    }
+
+    #[test]
+    fn register_after_revoke_is_rejected() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("revoke");
+        let vis = full_vis();
+        tree.register(cap.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis.clone())
+            .expect("register");
+        tree.revoke(&cap);
+        assert_eq!(
+            tree.register(cap, OwnerRef::Runtime, LifetimeScope::Runtime, vis),
+            Err(RegisterError::Revoked)
+        );
+    }
+
+    #[test]
+    fn register_after_dispose_is_rejected() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("dispose");
+        let vis = full_vis();
+        tree.dispose(LifetimeScope::Run);
+        assert_eq!(
+            tree.register(cap, OwnerRef::Runtime, LifetimeScope::Run, vis),
+            Err(RegisterError::Disposed)
+        );
+    }
+
+    #[test]
+    fn bump_task_does_not_affect_parent_claim() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("parent");
+        let vis = full_vis();
+        tree.register(cap.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis.clone())
+            .expect("register");
+        let claim = tree.claim(&cap, &vis, OwnerRef::Runtime, "parent".into()).expect("claim");
+        tree.bump(LifetimeScope::Task);
+        assert_eq!(tree.claim_state(&claim, &cap, &vis), ClaimState::Active);
+    }
+
+    #[test]
+    fn bump_runtime_invalidates_child_claim() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("child");
+        let vis = full_vis();
+        tree.register(cap.clone(), OwnerRef::Task(TaskId("t".into())), LifetimeScope::Task, vis.clone())
+            .expect("register");
+        let claim = tree.claim(&cap, &vis, OwnerRef::Task(TaskId("t".into())), "child".into()).expect("claim");
+        tree.bump(LifetimeScope::Runtime);
+        assert_eq!(tree.claim_state(&claim, &cap, &vis), ClaimState::Unknown);
     }
 
     #[test]
