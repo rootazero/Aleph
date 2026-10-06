@@ -1095,7 +1095,6 @@ pub(crate) mod fixtures {
                 },
             ),
             (
-                "EffectClaimClaimed",
                 "EffectClaimPrepared",
                 SessionEvent::EffectClaimPrepared {
                     request_id: "req".into(),
