@@ -161,6 +161,12 @@
 
 > `mattpocock-skills` plugin（`/to-issues` `/triage` `/to-prd` `/diagnose` `/tdd` `/grill-with-docs` `/code-review` 等）不随本仓库分发，详情见上。
 
+## 🧩 Capability Phase 4 入口
+
+- `src/capability/{descriptor,facade,backend,ownership,effect_claim}.rs`：9 类 `CapabilityKind` 契约、Zahir 只读 facade、Tool 唯一完整 backend、Runtime→Session→Run→Task ownership 与 effect claim reducer。
+- 恢复相关 committed source 是 `src/session/store.rs` / `SessionService::emit_batch`；`StateDatabase`、ACP JSON、MCP 类型/工具视图是 projection-only，`GlobalBus` 是 notification-only。
+- `to_metadata_form` 仍是旧 Tool compatibility wrapper；automatic Safe Replay、external-effect exactly-once、universal durable scheduler、完整 ACP server gate、其余 kind backend 和 concrete facade/backend wiring 均 deferred。详情见 [FEATURE_LOCATOR §3.5d](docs/reference/FEATURE_LOCATOR.md)。
+
 ---
 
-*Last updated: 2026-10-04*
+*Last updated: 2026-10-06*

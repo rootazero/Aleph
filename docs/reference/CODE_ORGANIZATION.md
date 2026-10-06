@@ -408,4 +408,8 @@ Reclassified as declared leftovers (see §6): `start/mod.rs` (4067), `extension/
 
 ---
 
-*Last updated: 2026-09-22 (Round 1 split: handler.rs / workflow_tool.rs / session_projector.rs + 4 new declared leftovers). See git log for change history.*
+## Capability Phase 4 module boundary
+
+`src/capability/{descriptor,facade,backend,ownership,effect_claim}.rs` is the Zahir contract layer. `ToolBackendAdapter` wraps the existing Tool registry; deferred kinds do not receive placeholder registries. Recovery facts remain in `src/session/{store,events,call_log,replay}.rs`; `StateDatabase`, ACP JSON, MCP views, and `GlobalBus` are explicitly projection or notification surfaces. Keep the facade out of `src/harness/` and preserve `src/tools/service.rs::to_metadata_form` as a compatibility wrapper.
+
+*Last updated: 2026-10-06 (Capability Phase 4 boundary record).*

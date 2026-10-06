@@ -528,3 +528,10 @@ golden JSON Schema fixture validated in CI. See
 |------|--------|--------|
 | 2026-02-09 | Initial document with Context and Newtype patterns | Architecture Team |
 | 2026-04-25 | Add JSON-RPC Bridge Pattern (Stage 6 desktop bridge) | Architecture Team |
+| 2026-10-06 | Add Zahir projection-only, fail-closed lease, and effect-claim boundary | Architecture Team |
+
+## Capability Phase 4 boundary patterns
+
+- **Projection-only surfaces:** ACP JSON, `StateDatabase`, and MCP/tool list views format committed or live state; they do not authorize, recover, or register capabilities. `GlobalBus` is notification-only.
+- **Fail-closed lease:** `BackendLease.owner_generation` must be checked against the owning domain before use. A stale owner or revision cannot be made visible by a projection.
+- **Effect sandwich:** durable claim state is recorded before an external effect and its outcome after the effect. `src/capability/effect_claim.rs` closes malformed or unknown recovery paths as `Unknown`; `src/session/replay.rs::ReplayPermit` remains a separate, explicitly gated replay permission.
