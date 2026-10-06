@@ -52,6 +52,7 @@ pub mod spend;
 pub mod subagent_tree;
 pub mod subscription;
 pub mod team_topic;
+pub mod terminal;
 pub mod terminate;
 pub mod tool_permissions;
 pub mod trace_presentation;
