@@ -303,12 +303,27 @@ impl McpFace {
             return Err(UnknownTool(name.to_string()));
         }
         let svc = self.tool_service(caller, session).await;
+        // §6.2 — every production dispatch into the scoped gate is scoped by a
+        // per-call identity, so the gate's park / decision / memo rows land
+        // under this session's own key instead of being dropped for a missing
+        // identity (session isolation). An MCP `tools/call` has no model turn
+        // and no `call.id`, so the face mints one fresh turn id and one fresh
+        // call id per call — the same per-future scoping the harness Act phase
+        // uses (`with_call_identity`), keyed under the session the service was
+        // built for in `tool_service`.
+        let identity = crate::approval::CallIdentity {
+            turn_id: uuid::Uuid::new_v4(),
+            call_id: uuid::Uuid::new_v4().to_string(),
+        };
         let outcome = crate::gateway::caller_identity::with_caller_identity(
             Some(caller.role.to_string()),
             caller.user.clone(),
             caller.is_local,
             None,
-            svc.execute_with_cancel(name, arguments, CancellationToken::new()),
+            crate::approval::with_call_identity(
+                Some(identity),
+                svc.execute_with_cancel(name, arguments, CancellationToken::new()),
+            ),
         )
         .await;
         match outcome {
