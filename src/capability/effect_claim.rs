@@ -82,6 +82,9 @@ pub fn reconcile_effect_claim(events: &[EffectClaimEvent]) -> EffectClaimReconci
             (_, EffectClaimState::Claimed) if current == EffectClaimState::Prepared => current = EffectClaimState::Claimed,
             (_, EffectClaimState::Invoking) if current == EffectClaimState::Claimed => current = EffectClaimState::Invoking,
             (_, state @ (EffectClaimState::Succeeded | EffectClaimState::Failed)) if current == EffectClaimState::Invoking => { current = state; terminal = Some(state); }
+            // spec §7.5: dispose / revoke / unobservable external effect may land in
+            // Unknown from any active (non-terminal) state; Unknown is terminal.
+            (_, EffectClaimState::Unknown) if matches!(current, EffectClaimState::Prepared | EffectClaimState::Claimed | EffectClaimState::Invoking) => { current = EffectClaimState::Unknown; terminal = Some(EffectClaimState::Unknown); }
             _ => return unknown(),
         }
     }
@@ -91,6 +94,7 @@ pub fn reconcile_effect_claim(events: &[EffectClaimEvent]) -> EffectClaimReconci
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::events::{ClaimStateWire, OwnerRefWire, SessionEvent};
     fn event(state: EffectClaimState) -> EffectClaimEvent { EffectClaimEvent { request_id: "r".into(), owner: "o".into(), owner_generation: 1, fence: 1, state } }
     #[test] fn legal_chain() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Claimed),event(EffectClaimState::Invoking),event(EffectClaimState::Succeeded)]).terminal, EffectClaimState::Succeeded); }
     #[test] fn no_claimed_invoking() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Invoking)]).terminal, EffectClaimState::Unknown); }
@@ -99,4 +103,36 @@ mod tests {
     #[test] fn identity_mismatch_is_unknown() { let mut changed=event(EffectClaimState::Claimed); changed.owner="other".into(); assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),changed]).terminal, EffectClaimState::Unknown); }
     #[test] fn missing_memo_is_fail_closed() { assert_eq!(reconcile_effect_claim(&[]).terminal, EffectClaimState::Unknown); assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Unknown)]).terminal, EffectClaimState::Unknown); }
     #[test] fn failed_claim_is_not_replayed() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Claimed),event(EffectClaimState::Invoking),event(EffectClaimState::Failed)]).terminal, EffectClaimState::Failed); }
+
+    // spec §7.5 active→Unknown closures (three legal paths).
+    #[test] fn prepared_to_unknown() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Unknown)]).terminal, EffectClaimState::Unknown); }
+    #[test] fn claimed_to_unknown() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Claimed),event(EffectClaimState::Unknown)]).terminal, EffectClaimState::Unknown); }
+    #[test] fn invoking_to_unknown() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Claimed),event(EffectClaimState::Invoking),event(EffectClaimState::Unknown)]).terminal, EffectClaimState::Unknown); }
+
+    // Unknown is terminal: any event after a terminal state fails closed.
+    #[test] fn event_after_unknown_is_unknown() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Unknown),event(EffectClaimState::Claimed)]).terminal, EffectClaimState::Unknown); }
+    #[test] fn duplicate_terminal_is_unknown() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Claimed),event(EffectClaimState::Invoking),event(EffectClaimState::Succeeded),event(EffectClaimState::Succeeded)]).terminal, EffectClaimState::Unknown); }
+    #[test] fn terminal_after_succeeded_is_unknown() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Claimed),event(EffectClaimState::Invoking),event(EffectClaimState::Succeeded),event(EffectClaimState::Unknown)]).terminal, EffectClaimState::Unknown); }
+
+    fn ev(request_id: &str, owner: &str, gen: u64, fence: u64, state: EffectClaimState) -> EffectClaimEvent {
+        EffectClaimEvent { request_id: request_id.into(), owner: owner.into(), owner_generation: gen, fence, state }
+    }
+    #[test] fn empty_or_zero_identity_fail_closed() {
+        assert_eq!(reconcile_effect_claim(&[ev("", "o", 1, 1, EffectClaimState::Prepared)]).terminal, EffectClaimState::Unknown);
+        assert_eq!(reconcile_effect_claim(&[ev("r", "", 1, 1, EffectClaimState::Prepared)]).terminal, EffectClaimState::Unknown);
+        assert_eq!(reconcile_effect_claim(&[ev("r", "o", 0, 1, EffectClaimState::Prepared)]).terminal, EffectClaimState::Unknown);
+        assert_eq!(reconcile_effect_claim(&[ev("r", "o", 1, 0, EffectClaimState::Prepared)]).terminal, EffectClaimState::Unknown);
+    }
+    #[test] fn zero_fence_on_later_event_fail_closed() { assert_eq!(reconcile_effect_claim(&[ev("r","o",1,1,EffectClaimState::Prepared),ev("r","o",1,0,EffectClaimState::Claimed)]).terminal, EffectClaimState::Unknown); }
+
+    // Adapter path: EffectClaimTerminal{state: Unknown} maps to terminal Unknown.
+    #[test] fn session_terminal_unknown_maps_to_unknown() {
+        let events = vec![
+            SessionEvent::EffectClaimPrepared { request_id: "r".into(), owner: OwnerRefWire::Runtime, owner_generation: 1, fence: 1, at: 0 },
+            SessionEvent::EffectClaimTerminal { request_id: "r".into(), owner: OwnerRefWire::Runtime, owner_generation: 1, fence: 1, state: ClaimStateWire::Unknown, at: 1 },
+        ];
+        let rec = reconcile_session_events(&events);
+        assert_eq!(rec.request_id, "r");
+        assert_eq!(rec.terminal, EffectClaimState::Unknown);
+    }
 }
