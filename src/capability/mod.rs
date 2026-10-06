@@ -44,6 +44,11 @@
 use crate::sync_primitives::Arc;
 use std::sync::OnceLock;
 
+pub mod backend;
+pub mod descriptor;
+pub mod facade;
+pub mod ownership;
+
 /// The membership rule that decides what belongs in this module's roster.
 #[cfg(test)]
 pub(crate) mod census;
