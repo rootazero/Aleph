@@ -10,7 +10,7 @@ use crate::capability::descriptor::{
     SchemaRef,
 };
 use crate::capability::facade::Scope;
-use crate::capability::ownership::{LifetimeScope, OwnerGeneration, OwnerRef, VisibilityScope};
+use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
 use crate::tools::descriptor::{canonicalize_json, ToolCapabilityDescriptor};
 use sha2::{Digest, Sha256};
 
@@ -19,14 +19,13 @@ pub const TOOL_NAMESPACE: &str = "aleph/tools";
 
 /// The storage/query contract every capability registry implements.
 ///
-/// `lookup` resolves one capability by id; `enumerate` lists a scope;
-/// `generation` reports the current owner generation. Only the Tool backend is
-/// implemented this phase ([`ToolBackendAdapter`]); the other eight kinds are
-/// deferred and non-invocable — no backend implements them and none is mounted.
+/// `lookup` resolves one capability by id; `enumerate` lists a scope. Only the
+/// Tool backend is implemented this phase ([`ToolBackendAdapter`]); the other
+/// eight kinds are deferred and non-invocable — no backend implements them and
+/// none is mounted.
 pub trait CapabilityBackend: Send + Sync {
     fn lookup(&self, id: &CapabilityId) -> Option<CapabilityDescriptor>;
     fn enumerate(&self, scope: &Scope) -> Vec<CapabilityDescriptor>;
-    fn generation(&self) -> OwnerGeneration;
 }
 
 /// The one live backend: adapts [`crate::tools::registry::ToolHandlerRegistry`]
@@ -71,22 +70,6 @@ impl CapabilityBackend for ToolBackendAdapter {
             .collect()
     }
 
-    fn generation(&self) -> OwnerGeneration {
-        // `OwnerGeneration` is the owner-layer's monotonic counter, distinct
-        // from the tool registry's own revision (which tracks tool-registration
-        // mutations). They MUST NOT be aliased: a registry bump (a tool
-        // re-registration) does not invalidate owner-held leases, only an
-        // owner-side bump does. Until Task 2 introduces the real
-        // `OwnershipTree` to drive this counter, return a stable `0` so it
-        // matches the `owner_generation: OwnerGeneration(0)` field every
-        // descriptor produced by `to_descriptor` carries — anything else
-        // would make the current descriptor appear already-stale at
-        // construction time, before the owner layer even exists.
-        //
-        // Task 2 (OwnershipTree) replaces this constant with a read from the
-        // ownership engine's monotonic nonce.
-        OwnerGeneration(0)
-    }
 }
 
 /// Fold a tool descriptor into the kind-agnostic [`CapabilityDescriptor`].
@@ -108,7 +91,6 @@ fn to_descriptor(tool: &ToolCapabilityDescriptor) -> CapabilityDescriptor {
             fingerprint,
         },
         revision: CapabilityRevision(tool.revision),
-        owner_generation: OwnerGeneration(0),
         lifetime: LifetimeScope::Runtime,
         visibility: VisibilityScope::default(),
         owner: OwnerRef::Runtime,
@@ -177,33 +159,6 @@ mod tests {
             .unwrap();
         assert_eq!(d.kind, CapabilityKind::Tool);
         assert_eq!(d.revision.0, 1);
-    }
-
-    #[test]
-    fn generation_matches_descriptor_owner_generation() {
-        // The backend's current owner generation must equal the
-        // `owner_generation` stamped on every descriptor it produces.
-        // Otherwise any consumer that holds a `BackendLease` from
-        // `Zahir::resolve` and checks it against `backend.generation()` would
-        // see a phantom invalidation the instant the lease is created — a
-        // fail-closed-by-design contract broken at the source.
-        //
-        // This assertion is the reason `generation()` and `to_descriptor()`
-        // both return `OwnerGeneration(0)`: they are decoupled from the
-        // registry's own revision (a tool-mutation counter, not an
-        // owner-issuance counter), and pinned to a stable `0` until Task 2
-        // introduces the real `OwnershipTree` to drive both.
-        let reg = ToolHandlerRegistry::new();
-        let desc = ToolCapabilityDescriptor::from_definition(&fake_def("hello"), 0);
-        reg.register(desc, Arc::new(fake_handler("hello"))).unwrap();
-        let backend = ToolBackendAdapter { registry: reg };
-        let d = backend
-            .lookup(&CapabilityId {
-                namespace: "aleph/tools".into(),
-                name: "hello".into(),
-            })
-            .unwrap();
-        assert_eq!(backend.generation(), d.owner_generation);
     }
 
     #[test]
