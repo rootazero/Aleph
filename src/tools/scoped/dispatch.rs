@@ -1302,6 +1302,24 @@ impl ScopedToolService {
             },
         )
         .await;
+
+        // Normal memo append, at-least-once: this deliberately uses the same
+        // ambient identity resolver, but is not an exactly-once batch with
+        // the decision event and is not deduplicated across restarts.
+        crate::session::call_log::emit_for_ambient_call(
+            &turn.session_key,
+            name,
+            "approval memo",
+            |_, call_id| SessionEvent::ApprovalMemo {
+                request_id: call_id,
+                memo: match rule {
+                    Some(rule) => format!("{} [gate: {rule}] (fingerprint: {fingerprint})", decision.detail()),
+                    None => format!("{} (fingerprint: {fingerprint})", decision.detail()),
+                },
+                at: now_ms(),
+            },
+        )
+        .await;
     }
 
     /// §6.1 — the park is a fact BEFORE the park. Same anchor as the
