@@ -1278,45 +1278,39 @@ impl ScopedToolService {
         })
         .await;
 
-        // The identity-ledger record above still lands whatever happens here
-        // — this is the *session* copy of the same decision, and the one
-        // writer says why when it cannot land it (missing service, missing
-        // ambient identity, refused append).
-        crate::session::call_log::emit_for_ambient_call(
+        // Persist the decision and its memo atomically under one ambient
+        // identity resolution. A failed batch is logged by the one writer and
+        // is never retried through a non-atomic fallback.
+        let approval_source = decision.approval_source();
+        let denial_reason = decision.denial_reason().map(str::to_owned);
+        let memo = match rule {
+            Some(rule) => format!("{} [gate: {rule}] (fingerprint: {fingerprint})", decision.detail()),
+            None => format!("{} (fingerprint: {fingerprint})", decision.detail()),
+        };
+        crate::session::call_log::emit_approval_decision_batch(
             &turn.session_key,
             name,
-            "approval decision",
-            |turn_id, call_id| match decision.denial_reason() {
-                Some(reason) => SessionEvent::ToolCallDenied {
-                    turn_id,
-                    call_id,
-                    reason: reason.to_string(),
+            move |turn_id, call_id| {
+                let event = match denial_reason {
+                    Some(reason) => SessionEvent::ToolCallDenied {
+                        turn_id,
+                        call_id: call_id.clone(),
+                        reason,
+                        at: now_ms(),
+                    },
+                    None => SessionEvent::ToolCallApproved {
+                        turn_id,
+                        call_id: call_id.clone(),
+                        by: approval_source,
+                        at: now_ms(),
+                    },
+                };
+                let memo = SessionEvent::ApprovalMemo {
+                    request_id: call_id,
+                    memo,
                     at: now_ms(),
-                },
-                None => SessionEvent::ToolCallApproved {
-                    turn_id,
-                    call_id,
-                    by: decision.approval_source(),
-                    at: now_ms(),
-                },
-            },
-        )
-        .await;
-
-        // Normal memo append, at-least-once: this deliberately uses the same
-        // ambient identity resolver, but is not an exactly-once batch with
-        // the decision event and is not deduplicated across restarts.
-        crate::session::call_log::emit_for_ambient_call(
-            &turn.session_key,
-            name,
-            "approval memo",
-            |_, call_id| SessionEvent::ApprovalMemo {
-                request_id: call_id,
-                memo: match rule {
-                    Some(rule) => format!("{} [gate: {rule}] (fingerprint: {fingerprint})", decision.detail()),
-                    None => format!("{} (fingerprint: {fingerprint})", decision.detail()),
-                },
-                at: now_ms(),
+                };
+                (event, memo)
             },
         )
         .await;

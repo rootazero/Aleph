@@ -42,6 +42,44 @@ static DROPPED_FOR_MISSING_IDENTITY: AtomicU64 = AtomicU64::new(0);
 /// `site` and `what` are log context only — the event carries no tool name
 /// (the dispatch it pairs with owns it). `site` is the tool name where the
 /// caller knows it and the parking function's path where it does not.
+pub async fn emit_approval_decision_batch<F>(
+    session: &SessionId,
+    site: &str,
+    make: F,
+) where
+    F: FnOnce(TurnId, String) -> (SessionEvent, SessionEvent),
+{
+    let Some(svc) = global_session_service() else {
+        tracing::warn!(
+            site = %site,
+            session = %session,
+            "session/service capability absent; approval decision batch not persisted — see `al doctor`"
+        );
+        return;
+    };
+    let Some(CallIdentity { turn_id, call_id }) = current_call_identity() else {
+        let dropped = DROPPED_FOR_MISSING_IDENTITY.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::warn!(
+            site = %site,
+            dropped_so_far = dropped,
+            "no ambient call identity at the approval decision gate; not persisted — every production dispatch is scoped by the harness Act phase (spec §6.2)"
+        );
+        return;
+    };
+    let logged_call_id = call_id.clone();
+    let (decision, memo) = make(turn_id, call_id);
+    if let Err(e) = svc.emit_batch(session, vec![decision, memo], None).await {
+        tracing::warn!(
+            site = %site,
+            session = %session,
+            turn_id = %turn_id,
+            call_id = %logged_call_id,
+            error = ?e,
+            "failed to persist approval decision batch to the session log"
+        );
+    }
+}
+
 pub async fn emit_for_ambient_call(
     session: &SessionId,
     site: &str,
