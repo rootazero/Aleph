@@ -171,6 +171,84 @@ fn the_shipped_schema_addresses_the_model_and_not_the_maintainer() {
     }
 }
 
+#[test]
+fn the_shipped_schema_preserves_each_terminal_action_semantics() {
+    let schema = TerminalTool.definition().parameters;
+    let actions = schema["$defs"]["TerminalAction"]["oneOf"]
+        .as_array()
+        .expect("documented actions retain per-action schema descriptions");
+    let action = |name: &str| {
+        actions
+            .iter()
+            .find(|variant| variant["const"] == name)
+            .and_then(|variant| variant["description"].as_str())
+            .unwrap_or_else(|| panic!("missing schema description for action {name}"))
+            .to_lowercase()
+    };
+    let list = action("list");
+    assert!(
+        list.contains("spawn") && list.contains("epoch") && list.contains("cd"),
+        "{list}"
+    );
+    let status = action("status");
+    assert!(status.contains("runtime.agents.list"), "{status}");
+    let wait = action("wait");
+    assert!(
+        wait.contains("block") && wait.contains("timeout") && wait.contains("gone"),
+        "{wait}"
+    );
+    let explain = action("explain");
+    assert!(
+        explain.contains("manifest") && explain.contains("version") && explain.contains("screen"),
+        "{explain}"
+    );
+
+    let description = TerminalTool::DESCRIPTION.to_lowercase();
+    for term in [
+        "disabled in policy",
+        "polling",
+        "wrong detection",
+        "idle agent",
+    ] {
+        assert!(
+            description.contains(term),
+            "tool description missing {term}: {description}"
+        );
+    }
+}
+
+#[test]
+fn the_shipped_schema_explains_terminal_arguments_to_the_model() {
+    let schema = TerminalTool.definition().parameters;
+    let args = if schema["$defs"]["TerminalArgs"].is_object() {
+        &schema["$defs"]["TerminalArgs"]
+    } else {
+        &schema
+    };
+    let session_id = args["properties"]["session_id"]["description"]
+        .as_str()
+        .expect("session_id has a model-facing description")
+        .to_lowercase();
+    let until = args["properties"]["until"]["description"]
+        .as_str()
+        .expect("until has a model-facing description")
+        .to_lowercase();
+    let timeout = args["properties"]["timeout_ms"]["description"]
+        .as_str()
+        .expect("timeout_ms has a model-facing description")
+        .to_lowercase();
+    assert!(session_id.contains("required") && session_id.contains("session_id"));
+    assert!(until.contains("blocked") && until.contains("idle"));
+    assert!(timeout.contains("60000") && timeout.contains("150000"));
+    let descriptions = shipped_descriptions(&schema).join(" ").to_lowercase();
+    for term in ["working", "blocked", "idle", "unknown", "default"] {
+        assert!(
+            descriptions.contains(term),
+            "schema is missing state/default term {term}"
+        );
+    }
+}
+
 /// No `TurnContext` at all reads as operator (cron/A2A/internal
 /// convention) — a caller with a scoped, non-operator role is refused.
 ///
@@ -502,6 +580,25 @@ async fn a_loopback_operator_is_not_an_actor_less_caller() {
 
 // ── wait ──────────────────────────────────────────────────────────────
 
+struct WaitSession(String);
+
+impl WaitSession {
+    fn new() -> Self {
+        Self(
+            pty::manager()
+                .spawn(&pty::SpawnOptions::default())
+                .expect("spawn live wait fixture")
+                .session_id,
+        )
+    }
+}
+
+impl Drop for WaitSession {
+    fn drop(&mut self) {
+        let _ = pty::manager().close(&self.0);
+    }
+}
+
 /// An isolated table plus a screen, so a wait test never races the
 /// process-global sampler.
 fn sample_state(
@@ -543,19 +640,21 @@ async fn wait_returns_when_the_state_enters_the_until_set() {
     use aleph_protocol::runtime::RuntimeAgentState;
     use std::sync::Arc;
 
+    let session = WaitSession::new();
     let table = Arc::new(crate::gateway::runtime::RuntimeAgents::default());
     // A shell is not an agent, so this row starts at `unknown`.
-    sample_state(&table, "s-wait", "zsh", b"");
+    sample_state(&table, &session.0, "zsh", b"");
 
     let writer = Arc::clone(&table);
+    let id = session.0.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-        sample_state(&writer, "s-wait", "grok", OSC_PROGRESS_WORKING);
+        sample_state(&writer, &id, "grok", OSC_PROGRESS_WORKING);
     });
 
     let outcome = wait_for_state(
         &table,
-        "s-wait",
+        &session.0,
         &[RuntimeAgentState::Working],
         std::time::Duration::from_secs(5),
     )
@@ -577,12 +676,13 @@ async fn wait_returns_when_the_state_enters_the_until_set() {
 async fn wait_times_out_with_the_current_entry() {
     use aleph_protocol::runtime::RuntimeAgentState;
 
+    let session = WaitSession::new();
     let table = crate::gateway::runtime::RuntimeAgents::default();
-    sample_state(&table, "s-timeout", "grok", OSC_PROGRESS_WORKING);
+    sample_state(&table, &session.0, "grok", OSC_PROGRESS_WORKING);
 
     let outcome = wait_for_state(
         &table,
-        "s-timeout",
+        &session.0,
         &[RuntimeAgentState::Blocked],
         std::time::Duration::from_millis(60),
     )
@@ -591,7 +691,7 @@ async fn wait_times_out_with_the_current_entry() {
     match outcome {
         WaitOutcome::Timeout(Some(entry)) => {
             assert_eq!(entry.state, RuntimeAgentState::Working);
-            assert_eq!(entry.session_id, "s-timeout");
+            assert_eq!(entry.session_id, session.0);
         }
         other => {
             panic!("a window that closes with nothing reached is a timeout, got {other:?}")
@@ -800,10 +900,10 @@ async fn wait_refuses_an_empty_until_instead_of_stalling() {
     else {
         panic!("an empty `until` is a plain refusal, not a tombstone");
     };
-    assert!(
-        message.contains("at least one state"),
-        "the refusal must be the empty-`until` one and not the ownership gate's, or this \
-         guard passes with the behaviour deleted: {message}"
+    assert_eq!(
+        message,
+        "wait requires at least one state in `until` (blocked / idle / working / unknown); omit it for [blocked, idle]",
+        "the adapter must preserve the old byte-identical empty-`until` message"
     );
 }
 
@@ -840,7 +940,7 @@ fn explain_names_the_matched_rule_and_manifest_version() {
         aleph_protocol::runtime::RuntimeAgentState::Working
     );
     assert_eq!(out.agent.as_deref(), Some("grok"));
-    assert_eq!(out.source, Some("bundled"));
+    assert_eq!(out.source.as_deref(), Some("bundled"));
     assert_eq!(
         out.manifest_version,
         agent_detect::manifest_version(
@@ -971,6 +1071,26 @@ async fn explain_reads_the_live_session_screen() {
 /// oracle unless it refuses exactly as `read` does.
 #[test]
 #[serial_test::parallel(pty_global_manager)]
+fn a_closed_session_read_preserves_the_old_error_text() {
+    let id = pty::manager()
+        .spawn(&pty::SpawnOptions {
+            created_by: Some("u-owner".to_string()),
+            ..Default::default()
+        })
+        .expect("spawn")
+        .session_id;
+    pty::manager().close(&id).expect("close");
+
+    let result = read_session(Some(&id), Some("u-owner"));
+    assert_eq!(
+        result,
+        Err(TerminalRefusal::Message(pty::no_such_session(&id))),
+        "closed-session read must not expose the service ToolError display prefix"
+    );
+}
+
+#[test]
+#[serial_test::parallel(pty_global_manager)]
 fn explain_of_someone_elses_session_is_refused_like_unknown() {
     use crate::gateway::pty::SpawnOptions;
 
@@ -1020,13 +1140,9 @@ async fn a_tombstoned_terminal_answers_its_owner_and_nobody_else() {
     j::disable_for_test();
     j::init_and_reconcile_with_probe(tmp.path().to_path_buf(), &|_, _| j::Liveness::StillRunning);
 
-    let report = match owned_session_id(Some("t-1"), Some("alice"), "read") {
-        Err(TerminalRefusal::LostWithRestart(r)) => {
-            assert!(r.text.contains("pid 777"), "{}", r.text);
-            r
-        }
-        o => panic!("{o:?}"),
-    };
+    let job = j::lookup_pty("t-1").expect("journal retains the interrupted PTY");
+    let report = j::tombstone_report(&job).expect("interrupted PTY has a tombstone");
+    assert!(report.text.contains("pid 777"), "{}", report.text);
     // The face itself, as the owner: the arm of `call()` that renders the
     // report, not only the resolver behind it.
     let out = crate::gateway::caller_identity::CALLER_USER
@@ -1068,19 +1184,45 @@ async fn a_tombstoned_terminal_answers_its_owner_and_nobody_else() {
         "{}",
         out.message
     );
-    assert!(
-        matches!(
-            owned_session_id(Some("t-1"), Some("bob"), "read"),
-            Err(TerminalRefusal::Message(m)) if m == pty::no_such_session("t-1")
-        ),
+    let bob = crate::gateway::caller_identity::CALLER_USER
+        .scope(
+            Some("bob".to_string()),
+            TerminalTool.call(TerminalArgs {
+                action: TerminalAction::Read,
+                session_id: Some("t-1".to_string()),
+                until: None,
+                timeout_ms: None,
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!bob.success);
+    assert_eq!(bob.message, pty::no_such_session("t-1"));
+    assert!(bob.data.is_none() && !bob.lost_with_restart);
+    assert_eq!(
+        bob.message,
+        pty::no_such_session("t-1"),
         "a stranger must read the tombstoned id as one that never existed"
     );
-    assert!(
-        matches!(
-            owned_session_id(Some("t-1"), None, "read"),
-            Err(TerminalRefusal::Message(_))
-        ),
-        "actor-less sees nothing"
+    let actorless = crate::gateway::caller_identity::CALLER_USER
+        .scope(
+            None,
+            TerminalTool.call(TerminalArgs {
+                action: TerminalAction::Read,
+                session_id: Some("t-1".to_string()),
+                until: None,
+                timeout_ms: None,
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!actorless.success);
+    assert_eq!(actorless.message, pty::no_such_session("t-1"));
+    assert!(actorless.data.is_none() && !actorless.lost_with_restart);
+    assert_eq!(
+        actorless.message,
+        pty::no_such_session("t-1"),
+        "actorless sees nothing"
     );
     let out = serde_json::to_value(TerminalOutput {
         success: false,
