@@ -542,24 +542,27 @@ const OSC_PROGRESS_WORKING: &[u8] = b"\x1b]9;4;1;-1\x07";
 /// alone is, by that registry's account, a terminal that has already ended.
 /// The guard exists so a failing assert cannot leak a live shell into the
 /// rest of this test binary; it is a test utility, not a production method.
+/// Each tagged test supplies the manager explicitly, keeping singleton access
+/// inside its test body where the global-manager census can attribute it.
 struct RealPty {
+    manager: &'static pty::PtyManager,
     id: String,
 }
 
 impl RealPty {
-    fn spawn() -> Self {
-        let id = pty::manager()
+    fn spawn(manager: &'static pty::PtyManager) -> Self {
+        let id = manager
             .spawn(&crate::gateway::pty::SpawnOptions::default())
             .expect("spawn")
             .session_id;
-        Self { id }
+        Self { manager, id }
     }
 }
 
 impl Drop for RealPty {
     fn drop(&mut self) {
         // `Err` when the test already closed it: nothing left to do.
-        let _ = pty::manager().close(&self.id);
+        let _ = self.manager.close(&self.id);
     }
 }
 
@@ -573,7 +576,7 @@ async fn wait_returns_when_the_state_enters_the_until_set() {
     use std::sync::Arc;
 
     // A registered PTY: the row below describes a terminal that is still open.
-    let live = RealPty::spawn();
+    let live = RealPty::spawn(pty::manager());
     let live_id = live.id.clone();
     let table = Arc::new(crate::gateway::runtime::RuntimeAgents::default());
     // A shell is not an agent, so this row starts at `unknown`.
@@ -587,6 +590,7 @@ async fn wait_returns_when_the_state_enters_the_until_set() {
     });
 
     let outcome = wait_for_state(
+        pty::manager(),
         &table,
         &live_id,
         &[RuntimeAgentState::Working],
@@ -612,11 +616,12 @@ async fn wait_times_out_with_the_current_entry() {
 
     // A registered PTY: a timeout is only the right answer for a terminal
     // that is still open.
-    let live = RealPty::spawn();
+    let live = RealPty::spawn(pty::manager());
     let table = crate::gateway::runtime::RuntimeAgents::default();
     sample_state(&table, &live.id, "grok", OSC_PROGRESS_WORKING);
 
     let outcome = wait_for_state(
+        pty::manager(),
         &table,
         &live.id,
         &[RuntimeAgentState::Blocked],
@@ -658,6 +663,7 @@ async fn wait_reports_gone_when_the_session_is_removed() {
     });
 
     let outcome = wait_for_state(
+        pty::manager(),
         &table,
         "s-gone",
         &[RuntimeAgentState::Blocked],
@@ -690,6 +696,7 @@ async fn wait_on_a_live_session_with_no_row_yet_keeps_waiting() {
     // sampled for it.
     let table = crate::gateway::runtime::RuntimeAgents::default();
     let outcome = wait_for_state(
+        pty::manager(),
         &table,
         &live,
         &[RuntimeAgentState::Blocked],
@@ -748,7 +755,14 @@ async fn wait_reports_gone_when_an_unsampled_session_exits() {
 
     let window = std::time::Duration::from_secs(5);
     let started = std::time::Instant::now();
-    let outcome = wait_for_state(&table, &id, &[RuntimeAgentState::Blocked], window).await;
+    let outcome = wait_for_state(
+        pty::manager(),
+        &table,
+        &id,
+        &[RuntimeAgentState::Blocked],
+        window,
+    )
+    .await;
     let elapsed = started.elapsed();
 
     assert_eq!(outcome, WaitOutcome::Gone);
@@ -787,7 +801,7 @@ async fn wait_reports_gone_when_an_unsampled_session_exits() {
 async fn wait_does_not_report_reached_for_a_removed_pty_with_a_stale_agent_row() {
     use aleph_protocol::runtime::RuntimeAgentState;
 
-    let pty = RealPty::spawn();
+    let pty = RealPty::spawn(pty::manager());
     let table = crate::gateway::runtime::RuntimeAgents::default();
     sample_state(&table, &pty.id, "grok", b"\x1b]0;Action Required\x07");
 
@@ -815,6 +829,7 @@ async fn wait_does_not_report_reached_for_a_removed_pty_with_a_stale_agent_row()
     );
 
     let outcome = wait_for_state(
+        pty::manager(),
         &table,
         &pty.id,
         &[RuntimeAgentState::Blocked],

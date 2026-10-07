@@ -294,12 +294,13 @@ use crate::gateway::pty::runtime::{
 
 #[cfg(test)]
 async fn wait_for_state(
+    manager: &pty::PtyManager,
     table: &crate::gateway::runtime::RuntimeAgents,
     session_id: &str,
     until: &[aleph_protocol::runtime::RuntimeAgentState],
     window: std::time::Duration,
 ) -> WaitOutcome {
-    TerminalRuntime::new(pty::manager(), table)
+    TerminalRuntime::new(manager, table)
         .wait_for_state(session_id, until, window, &CancellationToken::new())
         .await
         .expect("legacy wait helper uses a never-cancelled token")
