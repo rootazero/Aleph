@@ -417,6 +417,7 @@ if [ "$STAGE" = "real" ] || [ "$STAGE" = "panel" ] || [ "$STAGE" = "tui" ]; then
   # `copilot`, `cursor-agent`, `kiro-cli`), so a hand list would be wrong on
   # the day it was written (判据 §1).
   TRIED=""
+  WANT="${QA_REAL_AGENT_NAME:-}"
   export QA_REAL_AGENT="" QA_REAL_AGENT_NAME="" QA_REAL_NPX=""
   # If the derivation itself breaks, the loop below reads nothing and the
   # stage skips with an empty "tried" list — which looks exactly like "no
@@ -438,7 +439,6 @@ if [ "$STAGE" = "real" ] || [ "$STAGE" = "panel" ] || [ "$STAGE" = "tui" ]; then
   # cannot fake. `QA_REAL_AGENT_NAME` preset in the environment overrides
   # the pick entirely.
   FOUND_SCRIPT="" FOUND_SCRIPT_NAME="" FOUND_ANY="" FOUND_ANY_NAME=""
-  WANT="${QA_REAL_AGENT_NAME:-}"
   while IFS="$(printf '\t')" read -r label exe; do
     [ -n "$exe" ] || continue
     [ -z "$WANT" ] || [ "$WANT" = "$label" ] || continue
