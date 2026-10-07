@@ -2547,8 +2547,8 @@ mod tests {
     /// `TerminalArgs`'s schema says `action` is one of a fixed set of strings
     /// (three when this entry was written, five since task D); it
     /// cannot say WHICH sessions `list`/`status` return (this server's
-    /// runtime scopes them by caller identity via `terminal_admits`, a
-    /// filter with no argument to attach a description to) or that a
+    /// runtime scopes them by caller identity via `TerminalRuntime` and
+    /// `ObservationCaller`, a filter with no argument to attach a description to) or that a
     /// disabled `[policies.terminal]` kill switch makes every action answer
     /// "no sessions" without saying "the feature is off" (there is no
     /// `enabled` parameter on this tool for a schema description to sit on
@@ -2562,8 +2562,8 @@ mod tests {
     /// finding rather than recognising the feature is turned off.
     /// (3) The consumers are shipped and dispatched: `list_sessions`,
     /// `status`, `read_session` and (since task D) `wait_for_session` /
-    /// `explain_session` each apply `terminal_admits` /
-    /// `owner_record_admits` before returning data (`terminal.rs`), the
+    /// `explain_session` each apply `TerminalRuntime`'s shared ownership
+    /// admission before returning data (`terminal.rs`), the
     /// `[policies.terminal] enabled = false` kill switch really does call
     /// `PtyManager::close_all()` (`config/types/policies/terminal.rs`), and
     /// the "no write verb" half is pinned by a falsifiable test

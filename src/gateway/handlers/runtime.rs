@@ -20,10 +20,11 @@
 //! The per-row ownership filter below is the SAME predicate `pty.attach` /
 //! `pty.input` / `pty.resize` / `pty.close` use in their own
 //! `require_owned` — [`crate::gateway::pty::PtyManager::owner_of`] +
-//! [`crate::gateway::pty::SessionOwner::admits`] — copied, not re-derived,
-//! so the two lists of the same underlying sessions cannot silently
-//! disagree about who sees which row (判据 §9).
+//! [`crate::gateway::pty::SessionOwner::admits`] — evaluated by the shared
+//! terminal runtime, not re-derived at each observation boundary.
 
+use crate::gateway::pty::runtime::{ObservationCaller, TerminalRuntime};
+#[cfg(test)]
 use aleph_protocol::runtime::RuntimeAgentsListResponse;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
@@ -36,16 +37,11 @@ use crate::gateway::pty;
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     let id = request.id.clone();
     let actor = crate::gateway::visibility::ambient_actor();
-    let agents = crate::gateway::runtime::agents()
-        .snapshot()
-        .into_iter()
-        .filter(|entry| {
-            pty::manager()
-                .owner_of(&entry.session_id)
-                .admits(actor.as_deref())
-        })
-        .collect();
-    let body = RuntimeAgentsListResponse { agents };
+    let body = TerminalRuntime::new(pty::manager(), crate::gateway::runtime::agents()).status(
+        ObservationCaller::Gateway {
+            actor: actor.as_deref(),
+        },
+    );
     match serde_json::to_value(&body) {
         Ok(v) => JsonRpcResponse::success(id, v),
         // A failure to encode the server's OWN response type is never the

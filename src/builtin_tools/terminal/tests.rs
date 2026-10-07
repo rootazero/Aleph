@@ -534,6 +534,35 @@ fn sample_state(
 /// honouring without anything going red.
 const OSC_PROGRESS_WORKING: &[u8] = b"\x1b]9;4;1;-1\x07";
 
+/// A real PTY in the process-global registry, closed on drop.
+///
+/// The wait verdicts consult `pty::manager()` to tell a live session from an
+/// ended one, so a fixture that wants a row to count as "the terminal is
+/// still there" must hold a registered session — an id invented for the table
+/// alone is, by that registry's account, a terminal that has already ended.
+/// The guard exists so a failing assert cannot leak a live shell into the
+/// rest of this test binary; it is a test utility, not a production method.
+struct RealPty {
+    id: String,
+}
+
+impl RealPty {
+    fn spawn() -> Self {
+        let id = pty::manager()
+            .spawn(&crate::gateway::pty::SpawnOptions::default())
+            .expect("spawn")
+            .session_id;
+        Self { id }
+    }
+}
+
+impl Drop for RealPty {
+    fn drop(&mut self) {
+        // `Err` when the test already closed it: nothing left to do.
+        let _ = pty::manager().close(&self.id);
+    }
+}
+
 /// The wake-up edge: a state that arrives AFTER the wait started must end
 /// it. Starting in `unknown` and waiting for `working` means an
 /// implementation that answered from the first read alone cannot pass.
@@ -543,19 +572,23 @@ async fn wait_returns_when_the_state_enters_the_until_set() {
     use aleph_protocol::runtime::RuntimeAgentState;
     use std::sync::Arc;
 
+    // A registered PTY: the row below describes a terminal that is still open.
+    let live = RealPty::spawn();
+    let live_id = live.id.clone();
     let table = Arc::new(crate::gateway::runtime::RuntimeAgents::default());
     // A shell is not an agent, so this row starts at `unknown`.
-    sample_state(&table, "s-wait", "zsh", b"");
+    sample_state(&table, &live_id, "zsh", b"");
 
     let writer = Arc::clone(&table);
+    let writer_id = live_id.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-        sample_state(&writer, "s-wait", "grok", OSC_PROGRESS_WORKING);
+        sample_state(&writer, &writer_id, "grok", OSC_PROGRESS_WORKING);
     });
 
     let outcome = wait_for_state(
         &table,
-        "s-wait",
+        &live_id,
         &[RuntimeAgentState::Working],
         std::time::Duration::from_secs(5),
     )
@@ -577,12 +610,15 @@ async fn wait_returns_when_the_state_enters_the_until_set() {
 async fn wait_times_out_with_the_current_entry() {
     use aleph_protocol::runtime::RuntimeAgentState;
 
+    // A registered PTY: a timeout is only the right answer for a terminal
+    // that is still open.
+    let live = RealPty::spawn();
     let table = crate::gateway::runtime::RuntimeAgents::default();
-    sample_state(&table, "s-timeout", "grok", OSC_PROGRESS_WORKING);
+    sample_state(&table, &live.id, "grok", OSC_PROGRESS_WORKING);
 
     let outcome = wait_for_state(
         &table,
-        "s-timeout",
+        &live.id,
         &[RuntimeAgentState::Blocked],
         std::time::Duration::from_millis(60),
     )
@@ -591,7 +627,7 @@ async fn wait_times_out_with_the_current_entry() {
     match outcome {
         WaitOutcome::Timeout(Some(entry)) => {
             assert_eq!(entry.state, RuntimeAgentState::Working);
-            assert_eq!(entry.session_id, "s-timeout");
+            assert_eq!(entry.session_id, live.id);
         }
         other => {
             panic!("a window that closes with nothing reached is a timeout, got {other:?}")
@@ -725,6 +761,76 @@ async fn wait_reports_gone_when_an_unsampled_session_exits() {
     );
 }
 
+/// RED for the A2 lifecycle defect: a stale agent row must not outlive the
+/// terminal it describes.
+///
+/// `RuntimeAgents` rows are written by the sampler and dropped by a separate
+/// `remove` call, so there is a window — and, for a table that is not the one
+/// the flush loop feeds, no bound at all — in which the table still holds a
+/// `Blocked` row for a PTY the registry no longer has. `wait_verdict` reads
+/// the row first and consults the registry only when there is no row, so it
+/// answers `reached` for a terminal that has ended: a caller is told "it is
+/// waiting for you" about a shell that no longer exists.
+///
+/// The session is a REAL spawn (registry membership is the fact under test,
+/// so it cannot be faked), the row is sampled through the real engine from a
+/// grok title the manifest classifies `blocked`, and the PTY is then closed
+/// through the manager — the same registry removal the reader thread performs
+/// on child exit, plus a kill so the shell does not outlive the test. The
+/// table is an isolated instance, so the stale row is exactly what the wait
+/// sees.
+///
+/// Breaks caught: any `wait_for_state` that lets a table row answer for a
+/// session the PTY registry no longer holds. After the fix this is `Gone`.
+#[tokio::test(flavor = "multi_thread")]
+#[serial_test::parallel(pty_global_manager)]
+async fn wait_does_not_report_reached_for_a_removed_pty_with_a_stale_agent_row() {
+    use aleph_protocol::runtime::RuntimeAgentState;
+
+    let pty = RealPty::spawn();
+    let table = crate::gateway::runtime::RuntimeAgents::default();
+    sample_state(&table, &pty.id, "grok", b"\x1b]0;Action Required\x07");
+
+    // Fixture preconditions, so a red below is the defect and not a fixture
+    // that never produced the row or never removed the session.
+    let row = table.entry(&pty.id).expect("the sampler wrote a row");
+    assert_eq!(
+        row.state,
+        RuntimeAgentState::Blocked,
+        "fixture: grok's `Action Required` title must classify as blocked"
+    );
+    assert!(
+        session_is_registered(&pty.id),
+        "fixture: the PTY is registered before it is removed"
+    );
+
+    pty::manager().close(&pty.id).expect("close the live PTY");
+    assert!(
+        !session_is_registered(&pty.id),
+        "fixture: the PTY is out of the registry"
+    );
+    assert!(
+        table.entry(&pty.id).is_some(),
+        "fixture: the table still holds the stale row — that is the whole setup"
+    );
+
+    let outcome = wait_for_state(
+        &table,
+        &pty.id,
+        &[RuntimeAgentState::Blocked],
+        std::time::Duration::from_millis(200),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        WaitOutcome::Gone,
+        "a terminal the PTY registry no longer holds has ended, whatever a stale \
+         agent row still says — `reached` here tells a caller a dead shell is \
+         waiting for them"
+    );
+}
+
 /// The clamp, and the reason there is one. `600_000` is the brief's own
 /// over-ask; the assertion below it is the one that matters — the ceiling
 /// is checked against `bash_exec`'s budget constant, not against a second
@@ -840,7 +946,7 @@ fn explain_names_the_matched_rule_and_manifest_version() {
         aleph_protocol::runtime::RuntimeAgentState::Working
     );
     assert_eq!(out.agent.as_deref(), Some("grok"));
-    assert_eq!(out.source, Some("bundled"));
+    assert_eq!(out.source.as_deref(), Some("bundled"));
     assert_eq!(
         out.manifest_version,
         agent_detect::manifest_version(
