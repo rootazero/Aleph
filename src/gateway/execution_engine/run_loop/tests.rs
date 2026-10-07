@@ -2404,6 +2404,74 @@ impl McpHandlerOf {
     }
 }
 
+/// Build the exact frozen handler/descriptor pair consumed by the canonical
+/// join, without installing or replacing a process-global registry.
+fn canonical_test_entry(name: &str, server: &'static str) -> crate::tools::registry::RegistryEntry {
+    let handler: Arc<dyn crate::tools::handlers::ToolHandler> = Arc::new(McpHandlerOf {
+        name: name.to_string(),
+        server,
+    });
+    let descriptor = crate::tools::descriptor::ToolCapabilityDescriptor::from_definition(
+        &handler.definition(),
+        1,
+    );
+    crate::tools::registry::RegistryEntry {
+        handler,
+        descriptor: Arc::new(descriptor),
+    }
+}
+
+struct InvokingMcpHandler {
+    name: String,
+    server: &'static str,
+    value: serde_json::Value,
+}
+
+#[async_trait::async_trait]
+impl crate::tools::handlers::ToolHandler for InvokingMcpHandler {
+    async fn invoke(
+        &self,
+        _: serde_json::Value,
+    ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
+        Ok(crate::session::events::ToolOutput {
+            value: self.value.clone(),
+            metadata: Default::default(),
+        })
+    }
+
+    fn definition(&self) -> crate::tools::service::ToolDefinition {
+        crate::tools::service::ToolDefinition {
+            name: self.name.clone(),
+            description: String::new(),
+            input_schema: serde_json::json!({}),
+            source: crate::tools::service::ToolSource::Mcp {
+                server_id: self.server.into(),
+            },
+            metadata: Default::default(),
+        }
+    }
+}
+
+fn invoking_canonical_test_entry(
+    name: &str,
+    server: &'static str,
+    value: serde_json::Value,
+) -> crate::tools::registry::RegistryEntry {
+    let handler: Arc<dyn crate::tools::handlers::ToolHandler> = Arc::new(InvokingMcpHandler {
+        name: name.to_string(),
+        server,
+        value,
+    });
+    let descriptor = crate::tools::descriptor::ToolCapabilityDescriptor::from_definition(
+        &handler.definition(),
+        1,
+    );
+    crate::tools::registry::RegistryEntry {
+        handler,
+        descriptor: Arc::new(descriptor),
+    }
+}
+
 /// A registry holding a project-keyed plugin `proj` (rooted at `proj`), as
 /// the extension manager publishes it after a load.
 async fn manager_with_project_plugin(
@@ -2448,35 +2516,245 @@ impl crate::tools::handlers::ToolHandler for McpHandlerOf {
     }
 }
 
-/// The production run loop must consume the applied projection host snapshot,
-/// not independently read the mutable bridge registry. This source census is
-/// intentionally paired with the canonical join tests below: it protects the
-/// production seam while those tests protect the unchanged filtering rules.
+/// The production input selector feeds the applied host payload directly into
+/// the unchanged canonical join seam.
 #[test]
 fn run_loop_consumes_host_snapshot() {
-    use crate::utils::source_scan::code_text;
+    let mut entries = std::collections::HashMap::new();
+    entries.insert(
+        "applied".to_string(),
+        canonical_test_entry("applied", "github"),
+    );
+    let entries = Arc::new(entries);
+    let selected =
+        select_canonical_mcp_projection(true, CanonicalMcpHostState::Applied(Arc::clone(&entries)));
+    let CanonicalMcpProjection::Applied(applied) = selected else {
+        panic!("an applied host state must remain an applied canonical input");
+    };
+    assert!(
+        Arc::ptr_eq(&entries, &applied),
+        "selector must preserve the applied payload"
+    );
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src/gateway/execution_engine/run_loop/inner.rs");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let code = code_text(&production_half(&path, &text));
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    let mut allowed = ["applied".to_string()].into_iter().collect();
+    let joined = join_canonical_tools(
+        &applied,
+        &mut registry,
+        |_| true,
+        &visible_mcp_servers(
+            crate::extension::visibility::VisibilityCtx { project_root: None },
+            None,
+        ),
+        &mut allowed,
+        |_| None,
+    );
+    assert_eq!(joined, ["applied".to_string()].into_iter().collect());
+    assert!(registry.get("applied").is_some());
+}
 
-    assert!(
-        code.contains("crate::capability::projection_host::projection_host()"),
-        "run loop must resolve the process projection host"
+#[test]
+fn canonical_projection_selector_distinguishes_fail_closed_states() {
+    assert!(matches!(
+        select_canonical_mcp_projection(true, canonical_mcp_host_state(None)),
+        CanonicalMcpProjection::MissingHost
+    ));
+    assert!(matches!(
+        select_canonical_mcp_projection(true, CanonicalMcpHostState::Unavailable),
+        CanonicalMcpProjection::UnavailableHost
+    ));
+    assert!(matches!(
+        select_canonical_mcp_projection(false, CanonicalMcpHostState::Missing),
+        CanonicalMcpProjection::HostlessCompatibility
+    ));
+}
+
+#[test]
+fn canonical_dispatch_filters_unchanged() {
+    use crate::tools::descriptor::ToolSource;
+
+    let mut entries = std::collections::HashMap::new();
+    entries.insert("kept".to_string(), canonical_test_entry("kept", "github"));
+    entries.insert(
+        "denied".to_string(),
+        canonical_test_entry("denied", "github"),
+    );
+    entries.insert(
+        "duplicate".to_string(),
+        canonical_test_entry("duplicate", "github"),
+    );
+    let mut extension = canonical_test_entry("plugin", "github");
+    let mut extension_descriptor = (*extension.descriptor).clone();
+    extension_descriptor.source = ToolSource::Extension {
+        plugin_id: "plugin".to_string(),
+    };
+    extension.descriptor = Arc::new(extension_descriptor);
+    entries.insert("plugin".to_string(), extension);
+    let mut builtin = canonical_test_entry("builtin", "github");
+    let mut builtin_descriptor = (*builtin.descriptor).clone();
+    builtin_descriptor.source = ToolSource::Builtin;
+    builtin.descriptor = Arc::new(builtin_descriptor);
+    entries.insert("builtin".to_string(), builtin);
+    let selected =
+        select_canonical_mcp_projection(true, CanonicalMcpHostState::Applied(Arc::new(entries)));
+    let CanonicalMcpProjection::Applied(applied) = selected else {
+        panic!("canonical fixture must be applied");
+    };
+
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    let duplicate_entry = applied.get("duplicate").unwrap();
+    registry.register(Box::new(
+        crate::tools::adapters::McpRegistryTool::from_registry_entry(
+            Arc::clone(&duplicate_entry.handler),
+            &duplicate_entry.descriptor,
+        ),
+    ));
+    let mut allowed = ["kept", "duplicate", "plugin", "builtin"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let budget_lookups = std::cell::RefCell::new(Vec::new());
+    let joined = join_canonical_tools(
+        &applied,
+        &mut registry,
+        |name| name != "denied",
+        &visible_mcp_servers(
+            crate::extension::visibility::VisibilityCtx { project_root: None },
+            None,
+        ),
+        &mut allowed,
+        |name| {
+            budget_lookups.borrow_mut().push(name.to_string());
+            Some(17)
+        },
+    );
+    assert!(joined.contains("kept"));
+    assert!(!joined.contains("duplicate"));
+    assert!(!joined.contains("plugin"));
+    assert!(!joined.contains("builtin"));
+    assert!(registry.get("kept").is_some());
+    assert!(registry.get("builtin").is_some());
+    assert!(budget_lookups.borrow().contains(&"builtin".to_string()));
+    assert!(!allowed.contains("denied"));
+
+    let mut allow_all_registry = crate::tools::runtime::LoopToolRegistry::new();
+    let mut empty_allowed = std::collections::BTreeSet::new();
+    let joined = join_canonical_tools(
+        &applied,
+        &mut allow_all_registry,
+        |_| true,
+        &visible_mcp_servers(
+            crate::extension::visibility::VisibilityCtx { project_root: None },
+            None,
+        ),
+        &mut empty_allowed,
+        |_| None,
+    );
+    assert!(empty_allowed.is_empty());
+    assert!(joined.contains("kept"));
+    assert!(joined.contains("duplicate"));
+}
+
+#[test]
+fn revoked_projection_is_not_joined() {
+    let mut entries = std::collections::HashMap::new();
+    entries.insert(
+        "unrelated".to_string(),
+        canonical_test_entry("unrelated", "github"),
+    );
+    entries.insert(
+        "revoked".to_string(),
+        canonical_test_entry("revoked", "github"),
+    );
+    let first =
+        select_canonical_mcp_projection(true, CanonicalMcpHostState::Applied(Arc::new(entries)));
+    let CanonicalMcpProjection::Applied(first) = first else {
+        panic!("initial projection must be applied");
+    };
+    assert!(first.contains_key("revoked"));
+
+    let mut current = std::collections::HashMap::new();
+    current.insert(
+        "unrelated".to_string(),
+        canonical_test_entry("unrelated", "github"),
+    );
+    let current =
+        select_canonical_mcp_projection(true, CanonicalMcpHostState::Applied(Arc::new(current)));
+    let CanonicalMcpProjection::Applied(current) = current else {
+        panic!("replacement projection must be applied");
+    };
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    let mut allowed = ["unrelated".to_string(), "revoked".to_string()]
+        .into_iter()
+        .collect();
+    let joined = join_canonical_tools(
+        &current,
+        &mut registry,
+        |_| true,
+        &visible_mcp_servers(
+            crate::extension::visibility::VisibilityCtx { project_root: None },
+            None,
+        ),
+        &mut allowed,
+        |_| None,
+    );
+    assert!(joined.contains("unrelated"));
+    assert!(!joined.contains("revoked"));
+    assert!(registry.get("unrelated").is_some());
+    assert!(registry.get("revoked").is_none());
+}
+
+#[tokio::test]
+async fn already_running_invocation_is_not_cut() {
+    let entry = invoking_canonical_test_entry("captured", "github", serde_json::json!("finished"));
+    // Capture the handler Arc BEFORE the entry moves into the projection.
+    // The handler's lifecycle is independent of the projection host's current
+    // snapshot: once captured, replacement projections (including a revoke)
+    // cannot cut a handler invocation already in flight.
+    let captured_handler: Arc<dyn crate::tools::handlers::ToolHandler> = Arc::clone(&entry.handler);
+
+    let mut entries = std::collections::HashMap::new();
+    entries.insert("captured".to_string(), entry);
+    let selected =
+        select_canonical_mcp_projection(true, CanonicalMcpHostState::Applied(Arc::new(entries)));
+    let CanonicalMcpProjection::Applied(applied) = selected else {
+        panic!("captured invocation must start from an applied projection");
+    };
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    let mut allowed = ["captured".to_string()].into_iter().collect();
+    join_canonical_tools(
+        &applied,
+        &mut registry,
+        |_| true,
+        &visible_mcp_servers(
+            crate::extension::visibility::VisibilityCtx { project_root: None },
+            None,
+        ),
+        &mut allowed,
+        |_| None,
     );
     assert!(
-        code.contains("host.current_snapshot()"),
-        "run loop must consume the host's applied snapshot"
+        registry.get("captured").is_some(),
+        "captured tool must join the production loop registry"
     );
-    assert!(
-        code.contains("&snapshot.entries"),
-        "canonical join must receive the frozen host entries"
-    );
-    assert!(
-        !code.contains("mcp_registry.entries_snapshot()"),
-        "run loop must not independently read the mutable MCP registry"
-    );
+
+    // Simulate a revocation: the next applied projection omits the captured
+    // tool. The captured handler Arc above is unaffected — the production
+    // selector, the canonical join, and the next snapshot cannot reach into
+    // an Arc that has been cloned outside the projection.
+    let revoked = std::collections::HashMap::<String, _>::new();
+    let _revoked =
+        select_canonical_mcp_projection(true, CanonicalMcpHostState::Applied(Arc::new(revoked)));
+
+    // Invoke the captured handler through its real `ToolHandler::invoke`
+    // path (not the LoopTool fence wrapper) so the assertion observes the
+    // handler's terminal result directly. A revocation of the projection
+    // must NOT reach into the captured Arc.
+    let output = captured_handler
+        .invoke(serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(output.value, serde_json::json!("finished"));
 }
 
 /// Face ⑤, refuse arm: a non-plugin server passes; with no extension

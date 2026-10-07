@@ -817,12 +817,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 allowed_tools.iter().map(|tool| tool.name.clone()).collect();
 
             let mcp_tool_names = match super::super::tool_service_builder::mcp_tool_registry() {
-                Some(_) => match crate::capability::projection_host::projection_host()
-                    .and_then(|host| host.current_snapshot())
-                {
-                    Some(snapshot) => {
+                Some(_) => match select_canonical_mcp_projection(
+                    true,
+                    canonical_mcp_host_state(
+                        crate::capability::projection_host::projection_host()
+                            .map(|host| host.as_ref()),
+                    ),
+                ) {
+                    CanonicalMcpProjection::Applied(entries) => {
                         let joined = join_canonical_tools(
-                            &snapshot.entries,
+                            &entries,
                             &mut loop_registry_inner,
                             |name| {
                                 agent.is_tool_allowed(name)
@@ -854,14 +858,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         }
                         joined
                     }
-                    None => {
-                        // Production boot installs the host and waits for an
-                        // applied snapshot before admitting consumers. A missing
-                        // or failed-closed host therefore exposes no MCP tools;
-                        // never rebuild a second authority from the raw registry.
+                    CanonicalMcpProjection::MissingHost => {
+                        // Production boot installs the host before admitting
+                        // consumers. A missing host is a wiring failure, not
+                        // permission to rebuild a second authority.
+                        warn!(run_id = run_id, "capability projection host missing");
+                        std::collections::BTreeSet::new()
+                    }
+                    CanonicalMcpProjection::UnavailableHost => {
+                        // Before readiness, or after close/invalidation, the
+                        // installed host is fail-closed and exposes no tools.
                         warn!(run_id = run_id, "capability projection host unavailable");
                         std::collections::BTreeSet::new()
                     }
+                    CanonicalMcpProjection::HostlessCompatibility => unreachable!(
+                        "a present canonical registry cannot select hostless compatibility"
+                    ),
                 },
                 None => {
                     // The canonical MCP slot is absent in alternate entry points
@@ -1793,6 +1805,57 @@ fn publish_artifact_invalidation(
 ) {
     let Some(bus) = event_bus else { return };
     crate::gateway::event_emitter::artifact_ping::publish_artifact_ping_on(bus, session_key);
+}
+
+/// State observed from the installed projection host before canonical joining.
+/// The production selector keeps missing installation distinct from an installed
+/// host that is not ready or has failed closed; neither state may fall through to
+/// hostless/plugin compatibility.
+pub(super) enum CanonicalMcpHostState {
+    Missing,
+    Unavailable,
+    Applied(
+        std::sync::Arc<std::collections::HashMap<String, crate::tools::registry::RegistryEntry>>,
+    ),
+}
+
+/// The selected canonical input for one run-loop request.
+pub(super) enum CanonicalMcpProjection {
+    HostlessCompatibility,
+    MissingHost,
+    UnavailableHost,
+    Applied(
+        std::sync::Arc<std::collections::HashMap<String, crate::tools::registry::RegistryEntry>>,
+    ),
+}
+
+/// Read the actual applied state from the installed projection host.
+pub(super) fn canonical_mcp_host_state(
+    host: Option<&crate::capability::projection_host::ProjectionHost>,
+) -> CanonicalMcpHostState {
+    let Some(host) = host else {
+        return CanonicalMcpHostState::Missing;
+    };
+    host.current_snapshot()
+        .map(|snapshot| CanonicalMcpHostState::Applied(snapshot.entries))
+        .unwrap_or(CanonicalMcpHostState::Unavailable)
+}
+
+/// Select the canonical input without changing the canonical join itself.
+/// This pure seam lets tests exercise applied, missing, and unavailable states
+/// without resetting the install-once process slots.
+pub(super) fn select_canonical_mcp_projection(
+    canonical_registry_present: bool,
+    host_state: CanonicalMcpHostState,
+) -> CanonicalMcpProjection {
+    if !canonical_registry_present {
+        return CanonicalMcpProjection::HostlessCompatibility;
+    }
+    match host_state {
+        CanonicalMcpHostState::Missing => CanonicalMcpProjection::MissingHost,
+        CanonicalMcpHostState::Unavailable => CanonicalMcpProjection::UnavailableHost,
+        CanonicalMcpHostState::Applied(entries) => CanonicalMcpProjection::Applied(entries),
+    }
 }
 
 /// Project the one canonical capability snapshot into the request's loop
