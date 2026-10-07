@@ -34,27 +34,39 @@ fn tool_id(name: &str) -> CapabilityId {
     }
 }
 
-/// One frozen projection of the live registry entries, owner generations, and
-/// registry state — derived from a SINGLE [`RegistrySnapshot`] load plus one
-/// bulk owner observation, so the three halves can never disagree about which
-/// generation they came from.
+/// One projection of the live registry entries, owner generations, and
+/// registry state. It is TWO internally coherent cuts, NOT one atomic
+/// generation:
+///
+/// * the **registry cut** (`entries` + `registry_cursor` + `registry_closed`)
+///   comes from a SINGLE [`RegistrySnapshot`] load, so those three can never
+///   disagree about the registry generation;
+/// * the **owner cut** (`owner_generations`) comes from a SINGLE
+///   [`OwnershipTree`] mutex acquisition, so it can never mix owner
+///   generations across ids.
+///
+/// The two cuts are independent authority domains: a registry mutation landing
+/// between the registry load and the owner read is NOT excluded. Callers that
+/// need cross-authority ordering must use the subscribe-before-snapshot path,
+/// not this type.
 ///
 /// `entries` and `owner_generations` share identical id membership: an entry is
 /// exposed iff its id still has a live ownership binding under `scope`'s
 /// visibility (a revoked/disposed id has no binding and is therefore absent from
-/// both). `registry_cursor` is the registry revision the entries were frozen
-/// from; `registry_closed` is the close flag captured from the same frozen state.
+/// both).
 #[derive(Clone)]
 pub(crate) struct FacadeEntriesSnapshot {
-    /// Registry entries in scope, keyed by tool name. Each entry's `handler`
-    /// and `descriptor` `Arc`s are frozen at the snapshot generation.
-    pub(crate) entries: HashMap<String, RegistryEntry>,
-    /// The registry revision the `entries` were frozen from.
+    /// Registry entries in scope, keyed by tool name, SHARED behind an [`Arc`]
+    /// so cloning a snapshot is cheap. Each entry's `handler` and `descriptor`
+    /// `Arc`s are frozen at the registry snapshot generation.
+    pub(crate) entries: Arc<HashMap<String, RegistryEntry>>,
+    /// The registry revision the `entries` were frozen from (registry cut).
     pub(crate) registry_cursor: Cursor,
-    /// The registry close flag captured from the same frozen state.
+    /// The registry close flag captured from the same frozen state (registry cut).
     pub(crate) registry_closed: bool,
     /// Owner generation for every id in `entries` (identical membership), read
-    /// under ONE mutex so a concurrent `bump` cannot mix generations.
+    /// under ONE mutex so a concurrent `bump` cannot mix generations (owner
+    /// cut). Per-binding generations, NOT a registry revision.
     pub(crate) owner_generations: HashMap<CapabilityId, OwnerGeneration>,
 }
 
@@ -106,15 +118,21 @@ impl ZahirFacade {
     }
 
     /// Project the live registry entries, owner generations, and registry state
-    /// into one frozen [`FacadeEntriesSnapshot`], reconciling ownership bindings
-    /// from the SAME frozen entries.
+    /// into one [`FacadeEntriesSnapshot`], reconciling ownership bindings from
+    /// the SAME frozen entries.
     ///
-    /// Exactly ONE [`RegistrySnapshot`] is loaded and exactly ONE bulk owner
-    /// observation is taken. `entries` membership equals `owner_generations`
-    /// membership: an entry is exposed iff its id has a live ownership binding
-    /// under `scope.visibility` (revoked/disposed ids are therefore absent). The
-    /// kind/namespace filter is the SAME [`ToolBackendAdapter::in_scope`]
-    /// predicate the backend uses — no second predicate, no authority counter.
+    /// Exactly ONE [`RegistrySnapshot`] is loaded (yielding the internally
+    /// coherent registry cut: `entries` + `registry_cursor` + `registry_closed`)
+    /// and exactly ONE bulk owner observation is taken under ONE mutex (yielding
+    /// the internally coherent owner cut: `owner_generations`). The two cuts are
+    /// separate authority domains and are NOT jointly atomic; see
+    /// [`FacadeEntriesSnapshot`].
+    ///
+    /// `entries` membership equals `owner_generations` membership: an entry is
+    /// exposed iff its id has a live ownership binding under `scope.visibility`
+    /// (revoked/disposed ids are therefore absent). The kind/namespace filter is
+    /// the SAME [`ToolBackendAdapter::in_scope`] predicate the backend uses — no
+    /// second predicate, no authority counter.
     #[must_use]
     pub(crate) fn snapshot_entries_in_scope(&self, scope: &Scope) -> FacadeEntriesSnapshot {
         let snap = self.adapter.registry.snapshot_state();
@@ -137,13 +155,16 @@ impl ZahirFacade {
         // binding set, so revoked/disposed ids are omitted.
         let owner_generations = self.tree.generations_for(in_scope_ids, &scope.visibility);
 
-        // Entries share identical id membership with the owner map.
-        let entries = snap
-            .entries()
-            .iter()
-            .filter(|(name, _)| owner_generations.contains_key(&tool_id(name)))
-            .map(|(name, entry)| (name.clone(), entry.clone()))
-            .collect();
+        // Build the filtered registry cut ONCE and SHARE it behind an `Arc`:
+        // entries share identical id membership with the owner map, and
+        // cloning a snapshot is cheap.
+        let entries: Arc<HashMap<String, RegistryEntry>> = Arc::new(
+            snap.entries()
+                .iter()
+                .filter(|(name, _)| owner_generations.contains_key(&tool_id(name)))
+                .map(|(name, entry)| (name.clone(), entry.clone()))
+                .collect(),
+        );
 
         FacadeEntriesSnapshot {
             entries,
@@ -924,5 +945,27 @@ mod tests {
         let new = host.snapshot_entries_in_scope(&scope_all());
         assert_eq!(new.entries["a"].descriptor.input_schema, def.input_schema);
         assert!(!new.entries.contains_key("b"));
+    }
+
+    #[test]
+    fn snapshot_entries_field_is_shared_arc_and_clone_shares() {
+        let (host, _reg, _tree) = host_parts(&["a", "b"]);
+        let snap = host.snapshot_entries_in_scope(&scope_all());
+
+        // Compile-time contract: `entries` is a SHARED map
+        // (`Arc<HashMap<..>>`), not an owned `HashMap`. If the field ever
+        // reverts to an owned map, this binding fails to type-check (semantic
+        // API RED) before any runtime assertion runs — the crate contract is
+        // the `Arc` type itself.
+        let entries_ref: &Arc<HashMap<String, RegistryEntry>> = &snap.entries;
+        assert_eq!(entries_ref.len(), 2);
+
+        // Runtime contract: `Clone` shares the SAME allocation
+        // (pointer-equal `Arc`), not a deep copy of the entries map.
+        let cloned = snap.clone();
+        assert!(Arc::ptr_eq(&snap.entries, &cloned.entries));
+        assert_eq!(snap.registry_cursor, cloned.registry_cursor);
+        assert_eq!(snap.registry_closed, cloned.registry_closed);
+        assert_eq!(snap.owner_generations, cloned.owner_generations);
     }
 }
