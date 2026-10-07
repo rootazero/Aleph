@@ -817,44 +817,56 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 allowed_tools.iter().map(|tool| tool.name.clone()).collect();
 
             let mcp_tool_names = match super::super::tool_service_builder::mcp_tool_registry() {
-                Some(mcp_registry) => {
-                    let joined = join_canonical_tools(
-                        &mcp_registry.entries_snapshot(),
-                        &mut loop_registry_inner,
-                        |name| {
-                            agent.is_tool_allowed(name)
-                                && super::super::slash_skill_scope::admits(
-                                    slash_skill_scope.as_ref(),
-                                    name,
-                                )
-                        },
-                        &visible_mcp_servers(visibility.clone(), extension_manager.clone()),
-                        &mut allowed_names,
-                        |name| {
-                            self.tool_registry.get_tool(name).and_then(|tool| {
-                                matches!(
-                                    &tool.source,
-                                    crate::tool_metadata::ToolSource::Native
-                                        | crate::tool_metadata::ToolSource::Builtin
-                                )
-                                .then_some(tool.max_result_tokens)
-                                .flatten()
-                            })
-                        },
-                    );
-                    if !joined.is_empty() {
-                        info!(
-                            run_id = run_id,
-                            count = joined.len(),
-                            "canonical capability snapshot projected"
+                Some(_) => match crate::capability::projection_host::projection_host()
+                    .and_then(|host| host.current_snapshot())
+                {
+                    Some(snapshot) => {
+                        let joined = join_canonical_tools(
+                            &snapshot.entries,
+                            &mut loop_registry_inner,
+                            |name| {
+                                agent.is_tool_allowed(name)
+                                    && super::super::slash_skill_scope::admits(
+                                        slash_skill_scope.as_ref(),
+                                        name,
+                                    )
+                            },
+                            &visible_mcp_servers(visibility.clone(), extension_manager.clone()),
+                            &mut allowed_names,
+                            |name| {
+                                self.tool_registry.get_tool(name).and_then(|tool| {
+                                    matches!(
+                                        &tool.source,
+                                        crate::tool_metadata::ToolSource::Native
+                                            | crate::tool_metadata::ToolSource::Builtin
+                                    )
+                                    .then_some(tool.max_result_tokens)
+                                    .flatten()
+                                })
+                            },
                         );
+                        if !joined.is_empty() {
+                            info!(
+                                run_id = run_id,
+                                count = joined.len(),
+                                "canonical capability snapshot projected"
+                            );
+                        }
+                        joined
                     }
-                    joined
-                }
+                    None => {
+                        // Production boot installs the host and waits for an
+                        // applied snapshot before admitting consumers. A missing
+                        // or failed-closed host therefore exposes no MCP tools;
+                        // never rebuild a second authority from the raw registry.
+                        warn!(run_id = run_id, "capability projection host unavailable");
+                        std::collections::BTreeSet::new()
+                    }
+                },
                 None => {
-                    // The canonical slot is installed during production boot. If
-                    // an alternate entry point omits it, retain the old executor
-                    // projection explicitly instead of silently exposing no tools.
+                    // The canonical MCP slot is absent in alternate entry points
+                    // and unit tests. Retain the existing executor/markdown
+                    // compatibility projection explicitly for those callers.
                     loop_registry_inner = crate::tools::adapters::build_registry_from_tools(
                         self.tool_registry.clone(),
                         &allowed_tools,

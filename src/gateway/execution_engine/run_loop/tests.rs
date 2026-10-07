@@ -2448,6 +2448,37 @@ impl crate::tools::handlers::ToolHandler for McpHandlerOf {
     }
 }
 
+/// The production run loop must consume the applied projection host snapshot,
+/// not independently read the mutable bridge registry. This source census is
+/// intentionally paired with the canonical join tests below: it protects the
+/// production seam while those tests protect the unchanged filtering rules.
+#[test]
+fn run_loop_consumes_host_snapshot() {
+    use crate::utils::source_scan::code_text;
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/gateway/execution_engine/run_loop/inner.rs");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let code = code_text(&production_half(&path, &text));
+
+    assert!(
+        code.contains("crate::capability::projection_host::projection_host()"),
+        "run loop must resolve the process projection host"
+    );
+    assert!(
+        code.contains("host.current_snapshot()"),
+        "run loop must consume the host's applied snapshot"
+    );
+    assert!(
+        code.contains("&snapshot.entries"),
+        "canonical join must receive the frozen host entries"
+    );
+    assert!(
+        !code.contains("mcp_registry.entries_snapshot()"),
+        "run loop must not independently read the mutable MCP registry"
+    );
+}
+
 /// Face ⑤, refuse arm: a non-plugin server passes; with no extension
 /// manager an owned server is refused (fail-closed).
 #[test]
