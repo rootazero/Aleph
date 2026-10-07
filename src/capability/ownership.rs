@@ -385,6 +385,33 @@ impl OwnershipTree {
         inner.bindings.get(&key).map(|binding| binding.generation)
     }
 
+    /// Read the current owner generation of many `(CapabilityId, VisibilityScope)`
+    /// bindings under ONE mutex, without mutating them.
+    ///
+    /// Returns a map keyed by id containing only ids that have a binding under
+    /// `visibility`; ids without a binding are omitted. Semantics are identical
+    /// to [`Self::generation`] per-id, but the whole observation holds a single
+    /// lock so a concurrent `bump` cannot mix generations across ids. No
+    /// authority counters or mutation.
+    #[must_use]
+    pub(crate) fn generations_for(
+        &self,
+        capabilities: impl IntoIterator<Item = CapabilityId>,
+        visibility: &VisibilityScope,
+    ) -> HashMap<CapabilityId, OwnerGeneration> {
+        let inner = self.inner.lock().expect("ownership mutex poisoned");
+        capabilities
+            .into_iter()
+            .filter_map(|capability| {
+                let key = Self::key(&capability, visibility);
+                inner
+                    .bindings
+                    .get(&key)
+                    .map(|binding| (capability, binding.generation))
+            })
+            .collect()
+    }
+
     pub fn claim(
         &self,
         capability: &CapabilityId,
@@ -800,6 +827,69 @@ mod tests {
         let again = tree.generation(&cap, &vis);
         assert_eq!(before, again);
         assert_eq!(tree.resolve(&cap, &vis), Some(()));
+    }
+
+    #[test]
+    fn generations_for_holds_one_mutex_across_concurrent_bump() {
+        use std::sync::{mpsc, Arc};
+        use std::thread;
+
+        let tree = Arc::new(OwnershipTree::new());
+        let vis = full_vis();
+        // A sizable id set makes a mixed-generation observation likely if the
+        // helper locked per-id instead of once for the whole map.
+        let ids: Vec<CapabilityId> = (0..64).map(|i| cap_id(&format!("bulk{i}"))).collect();
+        for id in &ids {
+            tree.register(
+                id.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                vis.clone(),
+            )
+            .expect("register");
+        }
+
+        // The bumper advances the owner nonce in a tight loop while main
+        // observes with `generations_for`. The single-mutex property holds for
+        // EVERY interleaving, so the "no mixed generations" assertion below
+        // can never flake — the test is deterministic, not sleep-only.
+        let bumper_tree = Arc::clone(&tree);
+        let (start_tx, start_rx) = mpsc::channel();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let bumper = thread::spawn(move || {
+            start_rx.recv().expect("start");
+            loop {
+                bumper_tree.bump(LifetimeScope::Runtime);
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+            }
+        });
+
+        start_tx.send(()).expect("go");
+        let mut saw_advanced = false;
+        for _ in 0..1_000_000 {
+            let gens = tree.generations_for(ids.iter().cloned(), &vis);
+            assert_eq!(gens.len(), ids.len(), "every id retains a binding");
+            let mut gens_sorted: Vec<OwnerGeneration> = gens.values().copied().collect();
+            gens_sorted.sort();
+            gens_sorted.dedup();
+            assert_eq!(
+                gens_sorted.len(),
+                1,
+                "bulk observation must never mix generations across a bump"
+            );
+            if gens.values().next() != Some(&OwnerGeneration(0)) {
+                saw_advanced = true;
+                break;
+            }
+        }
+        stop_tx.send(()).expect("stop");
+        bumper.join().expect("bumper joins");
+        assert!(
+            saw_advanced,
+            "bumper advanced the generation while observed"
+        );
     }
 
     #[test]
@@ -1579,7 +1669,7 @@ mod tests {
 
     #[test]
     fn revoke_after_dispose_emits_event() {
-        // Regression: dispose releases a binding (Bumped event seen),
+        // Regression: dispose releases a binding (Disposed event seen),
         // then revoke on the disposed scope's id must still emit a
         // Revoked event for the tombstone, even though the binding was
         // already gone. The returned bool is binding-removal-only.

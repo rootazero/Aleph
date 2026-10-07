@@ -18,9 +18,12 @@ use crate::capability::facade::{
     BackendLease, CapabilityChange, CapabilityChangeStream, CapabilitySnapshot, Cursor, Projection,
     Reference, ResolveError, Scope, TransportTarget, Zahir,
 };
-use crate::capability::ownership::{LifetimeScope, OwnerRef, OwnershipTree, VisibilityScope};
+use crate::capability::ownership::{
+    LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, VisibilityScope,
+};
 use crate::sync_primitives::Arc;
-use crate::tools::registry::{RegistryChange, ToolHandlerRegistry};
+use crate::tools::registry::{RegistryChange, RegistryEntry, RegistrySnapshot, ToolHandlerRegistry};
+use std::collections::HashMap;
 use tokio::sync::broadcast::{self, error::TryRecvError};
 
 /// Fold a bare tool name into the tool-namespaced [`CapabilityId`].
@@ -29,6 +32,30 @@ fn tool_id(name: &str) -> CapabilityId {
         namespace: TOOL_NAMESPACE.to_string(),
         name: name.to_string(),
     }
+}
+
+/// One frozen projection of the live registry entries, owner generations, and
+/// registry state — derived from a SINGLE [`RegistrySnapshot`] load plus one
+/// bulk owner observation, so the three halves can never disagree about which
+/// generation they came from.
+///
+/// `entries` and `owner_generations` share identical id membership: an entry is
+/// exposed iff its id still has a live ownership binding under `scope`'s
+/// visibility (a revoked/disposed id has no binding and is therefore absent from
+/// both). `registry_cursor` is the registry revision the entries were frozen
+/// from; `registry_closed` is the close flag captured from the same frozen state.
+#[derive(Clone)]
+pub(crate) struct FacadeEntriesSnapshot {
+    /// Registry entries in scope, keyed by tool name. Each entry's `handler`
+    /// and `descriptor` `Arc`s are frozen at the snapshot generation.
+    pub(crate) entries: HashMap<String, RegistryEntry>,
+    /// The registry revision the `entries` were frozen from.
+    pub(crate) registry_cursor: Cursor,
+    /// The registry close flag captured from the same frozen state.
+    pub(crate) registry_closed: bool,
+    /// Owner generation for every id in `entries` (identical membership), read
+    /// under ONE mutex so a concurrent `bump` cannot mix generations.
+    pub(crate) owner_generations: HashMap<CapabilityId, OwnerGeneration>,
 }
 
 /// The one live [`Zahir`] implementation.
@@ -61,12 +88,68 @@ impl ZahirFacade {
     /// id makes `tree.register_if_absent` return `Err` — treated as a no-op.
     pub fn reconcile_registry_bindings(&self) {
         let snap = self.adapter.registry.snapshot_state();
+        self.reconcile_snapshot(&snap);
+    }
+
+    /// Reconcile ownership bindings from ONE frozen registry snapshot's
+    /// entries. Shared by `reconcile_registry_bindings` and
+    /// `snapshot_entries_in_scope` so both reconcile from the SAME frozen
+    /// entries rather than two independent loads.
+    fn reconcile_snapshot(&self, snap: &RegistrySnapshot) {
         for name in snap.entries().keys() {
             let id = tool_id(name);
             let visibility = VisibilityScope::default();
             let _ = self
                 .tree
                 .register_if_absent(id, OwnerRef::Runtime, LifetimeScope::Runtime, visibility);
+        }
+    }
+
+    /// Project the live registry entries, owner generations, and registry state
+    /// into one frozen [`FacadeEntriesSnapshot`], reconciling ownership bindings
+    /// from the SAME frozen entries.
+    ///
+    /// Exactly ONE [`RegistrySnapshot`] is loaded and exactly ONE bulk owner
+    /// observation is taken. `entries` membership equals `owner_generations`
+    /// membership: an entry is exposed iff its id has a live ownership binding
+    /// under `scope.visibility` (revoked/disposed ids are therefore absent). The
+    /// kind/namespace filter is the SAME [`ToolBackendAdapter::in_scope`]
+    /// predicate the backend uses — no second predicate, no authority counter.
+    #[must_use]
+    pub(crate) fn snapshot_entries_in_scope(&self, scope: &Scope) -> FacadeEntriesSnapshot {
+        let snap = self.adapter.registry.snapshot_state();
+        self.reconcile_snapshot(&snap);
+
+        let registry_cursor = Cursor(snap.revision());
+        let registry_closed = snap.is_closed();
+
+        // Candidate ids: registry entries passing the shared kind/namespace
+        // filter (`in_scope` does NOT check visibility — the owner map below
+        // supplies that half).
+        let in_scope_ids: Vec<CapabilityId> = snap
+            .entries()
+            .keys()
+            .map(|name| tool_id(name))
+            .filter(|id| ToolBackendAdapter::in_scope(id, scope))
+            .collect();
+
+        // ONE bulk owner observation under ONE mutex. Membership is the live
+        // binding set, so revoked/disposed ids are omitted.
+        let owner_generations = self.tree.generations_for(in_scope_ids, &scope.visibility);
+
+        // Entries share identical id membership with the owner map.
+        let entries = snap
+            .entries()
+            .iter()
+            .filter(|(name, _)| owner_generations.contains_key(&tool_id(name)))
+            .map(|(name, entry)| (name.clone(), entry.clone()))
+            .collect();
+
+        FacadeEntriesSnapshot {
+            entries,
+            registry_cursor,
+            registry_closed,
+            owner_generations,
         }
     }
 
@@ -658,5 +741,188 @@ mod tests {
         assert!(tree
             .claim(&id, &vis, OwnerRef::Runtime, "r3".to_string())
             .is_none());
+    }
+
+    #[test]
+    fn snapshot_entry_handler_and_descriptor_share_revision() {
+        let (host, reg, _tree) = host_parts(&["a", "b"]);
+        let snap = host.snapshot_entries_in_scope(&scope_all());
+        // Two registered tools → registry revision 2.
+        assert_eq!(snap.registry_cursor, Cursor(2));
+        assert_eq!(snap.entries.len(), 2);
+        assert_eq!(snap.owner_generations.len(), 2);
+        for (name, entry) in snap.entries.iter() {
+            // The frozen descriptor is never ahead of the snapshot cursor.
+            assert!(entry.descriptor.revision <= snap.registry_cursor.0);
+            // The handler definition matches the frozen descriptor it shares
+            // a registry generation with.
+            assert_eq!(entry.handler.definition().name, entry.descriptor.name);
+            assert_eq!(
+                entry.handler.definition().input_schema,
+                entry.descriptor.input_schema
+            );
+            // Entries and owner map share identical id membership.
+            assert!(snap.owner_generations.contains_key(&tool_id(name)));
+        }
+
+        // Replace "a" with a changed schema: a freshly obtained snapshot
+        // changes atomically (cursor advances, handler + descriptor move on).
+        let mut def = fake_def("a");
+        def.input_schema = json!({"type": "object", "properties": {"x": {"type": "string"}}});
+        reg.replace(
+            ToolCapabilityDescriptor::from_definition(&def, 0),
+            Arc::new(FakeHandler { definition: def.clone() }),
+        )
+        .expect("replace a");
+        let snap2 = host.snapshot_entries_in_scope(&scope_all());
+        assert_eq!(snap2.registry_cursor, Cursor(3));
+        let a = snap2.entries.get("a").expect("a present");
+        assert_eq!(a.handler.definition().input_schema, def.input_schema);
+        assert_eq!(a.descriptor.input_schema, def.input_schema);
+
+        // Unregister "b": a freshly obtained snapshot drops it atomically.
+        assert!(reg.unregister("b").is_some());
+        let snap3 = host.snapshot_entries_in_scope(&scope_all());
+        assert_eq!(snap3.registry_cursor, Cursor(4));
+        assert!(snap3.entries.contains_key("a"));
+        assert!(!snap3.entries.contains_key("b"));
+        assert_eq!(snap3.owner_generations.len(), 1);
+    }
+
+    #[test]
+    fn snapshot_entries_in_scope_filters_revoked_without_second_predicate() {
+        let (host, _reg, tree) = host_parts(&["a", "b"]);
+        host.reconcile_registry_bindings();
+        let id_a = tool_id("a");
+        let id_b = tool_id("b");
+        // Revoke only "a"; the reconcile must not resurrect the tombstone.
+        assert!(tree.revoke(&id_a));
+
+        let snap = host.snapshot_entries_in_scope(&scope_all());
+        assert!(!snap.entries.contains_key("a"), "revoked id is excluded");
+        assert!(snap.entries.contains_key("b"), "live id is preserved");
+        assert!(!snap.owner_generations.contains_key(&id_a));
+        assert!(snap.owner_generations.contains_key(&id_b));
+    }
+
+    #[test]
+    fn snapshot_entries_in_scope_keeps_registry_and_owner_domains_separate() {
+        let (host, _reg, tree) = host_parts(&["a", "b"]);
+        let before = host.snapshot_entries_in_scope(&scope_all());
+        assert_eq!(before.registry_cursor, Cursor(2));
+        assert_eq!(
+            before.owner_generations.get(&tool_id("a")),
+            Some(&OwnerGeneration(0))
+        );
+        assert_eq!(
+            before.owner_generations.get(&tool_id("b")),
+            Some(&OwnerGeneration(0))
+        );
+
+        // Bump ownership WITHOUT any registry mutation.
+        tree.bump(LifetimeScope::Runtime);
+        let after = host.snapshot_entries_in_scope(&scope_all());
+
+        // Registry cursor unchanged: no registry mutation happened.
+        assert_eq!(after.registry_cursor, Cursor(2));
+        // Owner generations were recomputed and advanced.
+        assert_eq!(
+            after.owner_generations.get(&tool_id("a")),
+            Some(&OwnerGeneration(1))
+        );
+        assert_eq!(
+            after.owner_generations.get(&tool_id("b")),
+            Some(&OwnerGeneration(1))
+        );
+        assert_eq!(after.entries.len(), 2);
+    }
+
+    #[test]
+    fn snapshot_captures_registry_closed() {
+        let (host, reg, _tree) = host_parts(&["a"]);
+        assert!(!host.snapshot_entries_in_scope(&scope_all()).registry_closed);
+        reg.close();
+        assert!(host.snapshot_entries_in_scope(&scope_all()).registry_closed);
+    }
+
+    #[test]
+    fn snapshot_entries_in_scope_honors_kind_namespace_visibility() {
+        use crate::capability::descriptor::CapabilityKind;
+        let (host, _reg, _tree) = host_parts(&["a", "b"]);
+
+        // Non-Tool kind → no entries.
+        let skill_scope = Scope {
+            kind: Some(CapabilityKind::Skill),
+            namespace: None,
+            visibility: VisibilityScope::default(),
+        };
+        assert!(host
+            .snapshot_entries_in_scope(&skill_scope)
+            .entries
+            .is_empty());
+
+        // Foreign namespace → no entries.
+        let foreign = Scope {
+            kind: None,
+            namespace: Some("aleph/skills".to_string()),
+            visibility: VisibilityScope::default(),
+        };
+        assert!(host
+            .snapshot_entries_in_scope(&foreign)
+            .entries
+            .is_empty());
+
+        // Custom visibility with no bindings → owner map empty, so entries
+        // empty (identical membership).
+        let ws = VisibilityScope {
+            workspace: Some("w".to_string()),
+            ..VisibilityScope::default()
+        };
+        let ws_scope = Scope {
+            kind: None,
+            namespace: None,
+            visibility: ws,
+        };
+        assert!(host
+            .snapshot_entries_in_scope(&ws_scope)
+            .entries
+            .is_empty());
+
+        // Default visibility → both present.
+        assert_eq!(
+            host.snapshot_entries_in_scope(&scope_all()).entries.len(),
+            2
+        );
+    }
+
+    #[test]
+    fn held_snapshot_is_immutable_across_replace_and_unregister() {
+        let (host, reg, _tree) = host_parts(&["a", "b"]);
+        let old = host.snapshot_entries_in_scope(&scope_all());
+        let old_cursor = old.registry_cursor;
+        let old_schema = old.entries["a"].descriptor.input_schema.clone();
+        let old_gen = old.owner_generations.get(&tool_id("a")).copied();
+
+        // Replace "a" with a changed schema and unregister "b": the OLD
+        // snapshot must stay frozen (its `Arc`s point at the old generation).
+        let mut def = fake_def("a");
+        def.input_schema =
+            json!({"type": "object", "properties": {"y": {"type": "number"}}});
+        reg.replace(
+            ToolCapabilityDescriptor::from_definition(&def, 0),
+            Arc::new(FakeHandler { definition: def.clone() }),
+        )
+        .expect("replace a");
+        assert!(reg.unregister("b").is_some());
+
+        assert_eq!(old.registry_cursor, old_cursor);
+        assert_eq!(old.entries["a"].descriptor.input_schema, old_schema);
+        assert_eq!(old.owner_generations.get(&tool_id("a")).copied(), old_gen);
+        assert!(old.entries.contains_key("b"), "old snapshot still has b");
+
+        // The new snapshot reflects the replacement + unregister.
+        let new = host.snapshot_entries_in_scope(&scope_all());
+        assert_eq!(new.entries["a"].descriptor.input_schema, def.input_schema);
+        assert!(!new.entries.contains_key("b"));
     }
 }
