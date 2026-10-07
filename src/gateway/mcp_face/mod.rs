@@ -303,12 +303,19 @@ impl McpFace {
             return Err(UnknownTool(name.to_string()));
         }
         let svc = self.tool_service(caller, session).await;
-        let outcome = crate::gateway::caller_identity::with_caller_identity(
-            Some(caller.role.to_string()),
-            caller.user.clone(),
-            caller.is_local,
-            None,
-            svc.execute_with_cancel(name, arguments, CancellationToken::new()),
+        let call_identity = crate::approval::CallIdentity {
+            turn_id: uuid::Uuid::nil(),
+            call_id: format!("mcp:{}:{}", session.id, uuid::Uuid::new_v4()),
+        };
+        let outcome = crate::approval::with_call_identity(
+            Some(call_identity),
+            crate::gateway::caller_identity::with_caller_identity(
+                Some(caller.role.to_string()),
+                caller.user.clone(),
+                caller.is_local,
+                None,
+                svc.execute_with_cancel(name, arguments, CancellationToken::new()),
+            ),
         )
         .await;
         match outcome {

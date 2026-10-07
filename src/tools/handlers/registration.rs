@@ -681,9 +681,11 @@ mod tests {
                 .any(|entry| entry.name == "replacement"),
             "stale scope must not remove the replacement's catalog projection"
         );
-        assert!(
-            Arc::ptr_eq(&live.unwrap(), &replacement),
-            "resolve still returns the replacement handler"
+        let live = live.expect("replacement remains registered");
+        assert_eq!(
+            live.definition().name,
+            replacement.definition().name,
+            "resolve still returns the replacement capability"
         );
     }
 

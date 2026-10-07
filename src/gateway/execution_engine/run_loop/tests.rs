@@ -2574,11 +2574,13 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
     for (ctx, in_project) in [(elsewhere, false), (here, true)] {
         let mut registry = crate::tools::runtime::LoopToolRegistry::new();
         let mut allowed: std::collections::BTreeSet<String> = ["file_read".to_string()].into();
+        let visible = visible_mcp_servers(ctx, Some(Arc::clone(&manager)));
+        registry.bind_canonical_registry(bridged.clone(), visible.clone());
         let joined = join_canonical_tools(
             &bridged.entries_snapshot(),
             &mut registry,
             |_| true,
-            &visible_mcp_servers(ctx, Some(Arc::clone(&manager))),
+            &visible,
             &mut allowed,
             |_| None,
         );
@@ -2600,15 +2602,17 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
         }
 
         fake.forget_asked();
-        let listed = registry
-            .get(RESOURCE_LIST_TOOL)
-            .unwrap()
-            .execute(serde_json::json!({}), CancellationToken::new())
-            .await;
-        assert!(
-            matches!(listed, crate::tools::runtime::ToolResult::Success { .. }),
-            "the joined lister runs: {listed:?}"
-        );
+        use crate::tools::service::ToolService;
+        let service = crate::tools::scoped::ScopedToolService::new(Arc::new(registry), allowed);
+        let listed = crate::approval::with_call_identity(
+            Some(crate::approval::CallIdentity {
+                turn_id: crate::session::events::TurnId::nil(),
+                call_id: "join-resource-list".into(),
+            }),
+            service.execute(RESOURCE_LIST_TOOL, serde_json::json!({})),
+        )
+        .await;
+        assert!(listed.is_ok(), "the joined lister runs: {listed:?}");
         let asked = fake.asked();
         assert!(
             asked.iter().any(|id| id == "github"),

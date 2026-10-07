@@ -28,6 +28,13 @@ pub trait ToolHandler: Send + Sync + 'static {
     async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError>;
     fn definition(&self) -> ToolDefinition;
 
+    /// Claim for the actual implementation and input, not its registry name.
+    /// `Shared` also admits reads through Plan/side-question gates, so neither
+    /// a builtin-looking name nor concurrency metadata alone is sufficient.
+    fn concurrency_claim(&self, _input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        crate::tools::concurrency::ConcurrencyClaim::global()
+    }
+
     /// This handler bound to the MCP servers one run may see, for a handler
     /// whose behaviour depends on that set. Only the MCP bridge's capability
     /// builtins answer `Some` (they enumerate or resolve servers at call

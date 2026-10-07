@@ -50,6 +50,7 @@ pub struct McpRegistryTool {
     max_result_tokens: Option<usize>,
     builtin_dispatch: bool,
     handler: Arc<dyn ToolHandler>,
+    descriptor: crate::tools::descriptor::ToolCapabilityDescriptor,
 }
 
 impl McpRegistryTool {
@@ -87,6 +88,7 @@ impl McpRegistryTool {
             max_result_tokens,
             builtin_dispatch: matches!(&descriptor.source, ToolSource::Builtin),
             handler,
+            descriptor: descriptor.clone(),
         }
     }
 }
@@ -146,6 +148,10 @@ impl LoopTool for McpRegistryTool {
         self.max_duration_ms
     }
 
+    fn capability_descriptor(&self) -> Option<&crate::tools::descriptor::ToolCapabilityDescriptor> {
+        Some(&self.descriptor)
+    }
+
     fn usage_origin(&self) -> Option<crate::tools::usage::UsageOrigin<'_>> {
         // `server_id` is empty for the capability-gated builtins that share the
         // bridge registry (`mcp_read_resource`, `mcp_get_prompt`, `mcp_login`)
@@ -156,41 +162,54 @@ impl LoopTool for McpRegistryTool {
     }
 
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
-        // MCP tool calls are JSON-RPC roundtrips. On cancel, dropping the
-        // inner future closes our end; the server may still be mid-work but
-        // the harness gets a fast error path.
-        let outcome = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => {
-                return ToolResult::Error {
-                    error: format!("mcp tool {} cancelled", self.name),
-                    retryable: false,
-                };
-            }
-            r = self.handler.invoke(input) => r,
-        };
-        match outcome {
-            Ok(output) => {
-                let output = if self.handler.fences_output() {
-                    let source = ContentSource::McpTool {
-                        server: self.server_id.clone(),
-                        tool: self.name.clone(),
-                    };
-                    fence_mcp_result(output.value, &source)
-                } else {
-                    output.value
-                };
-                ToolResult::Success { output }
-            }
+        match invoke_handler(&self.handler, &self.descriptor, input, cancel).await {
+            Ok(output) => ToolResult::Success {
+                output: output.value,
+            },
             // Handler errors are already redacted (`redact_mcp_error`) and
             // classified; carry the retry signal through so the one-shot
             // backoff layer can respin Timeout/Transport on idempotent tools.
             Err(e) => ToolResult::Error {
-                retryable: e.is_retryable(),
+                // Preserve the adapter's historical cancellation contract:
+                // cancellation is terminal for this LoopTool face even though
+                // the shared ToolError taxonomy marks it transient elsewhere.
+                retryable: e.is_retryable()
+                    && !matches!(e, crate::tools::service::ToolError::Cancelled { .. }),
                 error: e.to_string(),
             },
         }
     }
+}
+
+/// Shared captured-handler execution: cancellation, fencing and structured
+/// errors stay identical when Scoped dispatch bypasses a stale projection.
+pub(crate) async fn invoke_handler(
+    handler: &Arc<dyn ToolHandler>,
+    descriptor: &crate::tools::descriptor::ToolCapabilityDescriptor,
+    input: Value,
+    cancel: CancellationToken,
+) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
+    let mut output = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            return Err(crate::tools::service::ToolError::Cancelled { name: descriptor.name.clone() });
+        }
+        result = handler.invoke(input) => result?,
+    };
+    if handler.fences_output() {
+        let server = match &descriptor.source {
+            ToolSource::Mcp { server_id } => server_id.clone(),
+            _ => String::new(),
+        };
+        output.value = fence_mcp_result(
+            output.value,
+            &ContentSource::McpTool {
+                server,
+                tool: descriptor.name.clone(),
+            },
+        );
+    }
+    Ok(output)
 }
 
 /// Fence an MCP tool result for the model **without flattening it**.

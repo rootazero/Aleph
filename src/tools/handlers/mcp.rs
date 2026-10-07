@@ -166,6 +166,17 @@ impl ToolHandler for McpHandler {
         }
     }
 
+    fn concurrency_claim(&self, _input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        // with_flags binds these to this MCP tool's own annotations. Retry
+        // safety alone is not read-only, and concurrency safety alone must not
+        // become authorization to bypass Plan/side-question gates.
+        if self.metadata.idempotent && self.metadata.concurrent_safe {
+            crate::tools::concurrency::ConcurrencyClaim::Shared
+        } else {
+            crate::tools::concurrency::ConcurrencyClaim::global()
+        }
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.qualified_name(),
@@ -352,6 +363,28 @@ mod tests {
         .with_flags(false, false, true);
         assert!(destructive.definition().metadata.requires_approval);
         assert!(!destructive.definition().metadata.concurrent_safe);
+    }
+
+    #[test]
+    fn shared_claim_requires_both_intrinsic_flags() {
+        use crate::tools::concurrency::ConcurrencyClaim;
+        for (idempotent, read_only) in [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let handler = McpHandler::new(
+                Arc::new(McpClient::new()),
+                "svr".into(),
+                "claim_fixture".into(),
+                "d".into(),
+                json!({}),
+            )
+            .with_flags(idempotent, read_only, false);
+            let expected = if idempotent && read_only {
+                ConcurrencyClaim::Shared
+            } else {
+                ConcurrencyClaim::global()
+            };
+            assert_eq!(handler.concurrency_claim(&json!({})), expected);
+        }
     }
 
     #[test]

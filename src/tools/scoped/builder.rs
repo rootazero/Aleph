@@ -27,6 +27,8 @@ impl ScopedToolService {
     #[must_use]
     pub fn new(inner: Arc<LoopToolRegistry>, allowed: BTreeSet<String>) -> Self {
         Self {
+            canonical_registry: inner.canonical_registry(),
+            visible_mcp_servers: inner.visible_mcp_servers(),
             inner,
             allowed,
             subagent_tool: None,
@@ -256,6 +258,14 @@ impl ScopedToolService {
     /// [`ExecTier::rule_for`]: crate::config::types::policies::ExecTier::rule_for
     /// [`PLAN_REACHABLE_TOOLS`]: crate::config::types::policies::PLAN_REACHABLE_TOOLS
     pub(super) fn permission_for(&self, name: &str) -> crate::extension::PermissionAction {
+        self.permission_for_descriptor(name, None)
+    }
+
+    pub(super) fn permission_for_descriptor(
+        &self,
+        name: &str,
+        descriptor: Option<&crate::tools::descriptor::ToolCapabilityDescriptor>,
+    ) -> crate::extension::PermissionAction {
         use crate::extension::PermissionAction;
 
         if self.is_side_question()
@@ -266,7 +276,7 @@ impl ScopedToolService {
         crate::config::types::policies::effective_permission(
             self.tool_permissions.as_ref(),
             self.effective_exec_tier(),
-            self.tool_facts(name),
+            self.tool_facts_for_descriptor(name, descriptor),
         )
     }
 
@@ -338,6 +348,14 @@ impl ScopedToolService {
     /// rather than by a table of plan-denied names, so it cannot drift from
     /// whatever `ExecTier::Plan::rule_for` actually does.
     pub(super) fn denied_only_by_plan(&self, name: &str) -> bool {
+        self.denied_only_by_plan_for_descriptor(name, None)
+    }
+
+    pub(super) fn denied_only_by_plan_for_descriptor(
+        &self,
+        name: &str,
+        descriptor: Option<&crate::tools::descriptor::ToolCapabilityDescriptor>,
+    ) -> bool {
         use crate::config::types::policies::{effective_permission, ExecTier};
         use crate::extension::PermissionAction;
 
@@ -360,7 +378,7 @@ impl ScopedToolService {
             .and_then(|t| t.plan_gate.as_ref())
             .map_or_else(ExecTier::default, |g| g.restore_to());
 
-        let facts = self.tool_facts(name);
+        let facts = self.tool_facts_for_descriptor(name, descriptor);
         let perms = self.tool_permissions.as_ref();
         effective_permission(perms, Some(ExecTier::Plan), facts) == PermissionAction::Deny
             && effective_permission(perms, Some(restore), facts) != PermissionAction::Deny
@@ -398,13 +416,34 @@ impl ScopedToolService {
         &self,
         name: &'a str,
     ) -> crate::config::types::policies::ToolFacts<'a> {
-        crate::config::types::policies::ToolFacts::for_tool(
-            name,
-            Some(crate::config::types::policies::DeclaredFacts {
-                idempotent: self.inner.is_idempotent(name),
-                requires_confirmation: self.inner.requires_confirmation(name),
-            }),
-        )
+        self.tool_facts_for_descriptor(name, None)
+    }
+
+    pub(super) fn tool_facts_for_descriptor<'a>(
+        &self,
+        name: &'a str,
+        descriptor: Option<&crate::tools::descriptor::ToolCapabilityDescriptor>,
+    ) -> crate::config::types::policies::ToolFacts<'a> {
+        match descriptor {
+            Some(d) => crate::config::types::policies::ToolFacts::from_declared(
+                name,
+                // A captured canonical descriptor is the live capability
+                // contract. Do not OR in the builtin name table here: that
+                // would let a replacement inherit the old name's read-only
+                // answer after it explicitly declares itself mutating.
+                crate::config::types::policies::DeclaredFacts {
+                    idempotent: d.idempotent,
+                    requires_confirmation: d.requires_confirmation,
+                },
+            ),
+            None => crate::config::types::policies::ToolFacts::for_tool(
+                name,
+                Some(crate::config::types::policies::DeclaredFacts {
+                    idempotent: self.inner.is_idempotent(name),
+                    requires_confirmation: self.inner.requires_confirmation(name),
+                }),
+            ),
+        }
     }
 
     /// `true` when this *call*'s arguments trip the tier's destructive-argument

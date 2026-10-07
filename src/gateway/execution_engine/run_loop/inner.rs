@@ -818,6 +818,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             let mcp_tool_names = match super::super::tool_service_builder::mcp_tool_registry() {
                 Some(mcp_registry) => {
+                    let visible =
+                        visible_mcp_servers(visibility.clone(), extension_manager.clone());
+                    // Both services below receive this same Arc through the
+                    // shared projection; Scoped::new retains it, not a global
+                    // re-lookup or a second callable map.
+                    loop_registry_inner
+                        .bind_canonical_registry(mcp_registry.clone(), visible.clone());
                     let joined = join_canonical_tools(
                         &mcp_registry.entries_snapshot(),
                         &mut loop_registry_inner,
@@ -828,7 +835,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                     name,
                                 )
                         },
-                        &visible_mcp_servers(visibility.clone(), extension_manager.clone()),
+                        &visible,
                         &mut allowed_names,
                         |name| {
                             self.tool_registry.get_tool(name).and_then(|tool| {
@@ -852,26 +859,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     joined
                 }
                 None => {
-                    // The canonical slot is installed during production boot. If
-                    // an alternate entry point omits it, retain the old executor
-                    // projection explicitly instead of silently exposing no tools.
-                    loop_registry_inner = crate::tools::adapters::build_registry_from_tools(
-                        self.tool_registry.clone(),
-                        &allowed_tools,
-                    );
-                    let _ = super::super::markdown_skill_tools::join_markdown_skills(
-                        &mut loop_registry_inner,
-                        |name| {
-                            agent.is_tool_allowed(name)
-                                && super::super::slash_skill_scope::admits(
-                                    slash_skill_scope.as_ref(),
-                                    name,
-                                )
-                        },
-                        &mut allowed_names,
-                    )
-                    .await;
-                    std::collections::BTreeSet::new()
+                    // Never resurrect old Builtin/markdown/MCP projections when
+                    // the canonical authority is missing, even on alternate
+                    // production entry points. Fixtures construct Scoped directly.
+                    return Err(ExecutionError::Failed(
+                        "canonical capability registry is not installed; tool dispatch refused"
+                            .into(),
+                    ));
                 }
             };
 
@@ -906,7 +900,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         .into_iter()
                         .map(|d| (d.name, d.parameters))
                         .collect();
-                loop_registry_inner.register(Box::new(
+                loop_registry_inner.register_request_local(Box::new(
                     crate::tools::schema_lookup::SchemaLookupTool::new(std::sync::Arc::new(
                         schema_snapshot,
                     )),
@@ -961,7 +955,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         schema: d.parameters,
                     })
                     .collect();
-                loop_registry_inner.register(Box::new(
+                loop_registry_inner.register_request_local(Box::new(
                     crate::tools::tool_search::ToolSearchTool::new(docs, deferred.clone()),
                 ));
                 if !allowed_names.is_empty() {
