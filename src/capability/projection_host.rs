@@ -39,7 +39,7 @@ use crate::sync_primitives::Arc;
 use crate::tools::registry::{RegistryChange, RegistryEntry, ToolHandlerRegistry};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, Weak};
 use tokio::sync::{broadcast, Notify};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -175,6 +175,19 @@ impl ConsumerState {
         self.closed.load(Ordering::SeqCst)
     }
 
+    /// Close this receipt endpoint and explicitly discard pending external
+    /// delivery. The default consumer does not use this path: its captured
+    /// queue is drained by the real applier before it joins.
+    fn close_and_discard(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .items
+            .clear();
+        self.wake.notify_waiters();
+    }
+
     fn try_pop(&self) -> Option<ProjectionEvent> {
         self.queue
             .lock()
@@ -253,7 +266,42 @@ struct ConsumerMap {
     by_id: HashMap<u64, Arc<ConsumerState>>,
 }
 
-/// Shared host state, owned by [`ProjectionHost`] and the two long-lived tasks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectionShutdownOutcome {
+    /// Whether the source worker joined without a panic or cancellation.
+    pub source_joined: bool,
+    /// Whether the default applier joined without a panic or cancellation.
+    pub applier_joined: bool,
+    /// Whether the source worker returned a `JoinError`.
+    pub source_failed: bool,
+    /// Whether the default applier returned a `JoinError`.
+    pub applier_failed: bool,
+}
+
+struct CompletionState {
+    started: bool,
+    outcome: Option<ProjectionShutdownOutcome>,
+}
+
+#[cfg(test)]
+struct ApplierTestGate {
+    entered: Notify,
+    release: Notify,
+    hold: AtomicBool,
+}
+
+#[cfg(test)]
+impl ApplierTestGate {
+    fn new() -> Self {
+        Self {
+            entered: Notify::new(),
+            release: Notify::new(),
+            hold: AtomicBool::new(false),
+        }
+    }
+}
+
+/// Shared host state, owned by [`ProjectionHost`] and the explicit lifecycle boundary.
 struct HostInner {
     facade: Arc<ZahirFacade>,
     registry: ToolHandlerRegistry,
@@ -280,12 +328,16 @@ struct HostInner {
     /// No production diagnostic or public control surface.
     readiness: Notify,
     cancel: CancellationToken,
-    /// Task-control scaffolding for Task4's cancellation-safe completion /
-    /// drain proof. The source worker owns `source_task`; the default applier
-    /// owns `applier_task`. Both are `tokio::task::JoinHandle<()>`s stored in
-    /// the host so `close_and_await` can await them in teardown order.
+    /// Explicit host-local close state. It is independent of both authority
+    /// close bits: closing this projection never closes a shared authority.
+    closed: AtomicBool,
+    /// Task-control for the cancellation-safe shared completion boundary.
     source_task: Mutex<Option<JoinHandle<()>>>,
     applier_task: Mutex<Option<JoinHandle<()>>>,
+    completion: Mutex<CompletionState>,
+    completion_notify: Notify,
+    #[cfg(test)]
+    applier_test_gate: ApplierTestGate,
 }
 
 /// The live, long-lived projection of the two authority sources.
@@ -331,8 +383,16 @@ impl ProjectionHost {
             }),
             readiness: Notify::new(),
             cancel: CancellationToken::new(),
+            closed: AtomicBool::new(false),
             source_task: Mutex::new(None),
             applier_task: Mutex::new(None),
+            completion: Mutex::new(CompletionState {
+                started: false,
+                outcome: None,
+            }),
+            completion_notify: Notify::new(),
+            #[cfg(test)]
+            applier_test_gate: ApplierTestGate::new(),
         });
 
         let host = Arc::new(ProjectionHost {
@@ -343,10 +403,16 @@ impl ProjectionHost {
         // the registry close signal; the applier drains the default consumer
         // queue into run-loop-readable applied state. JoinHandles are retained
         // for `close_and_await` (Task4 completes the drain proof).
-        let source = tokio::spawn(source_worker(Arc::clone(&inner), registry_rx, ownership_rx));
+        let source = tokio::spawn(source_worker(
+            Arc::downgrade(&inner),
+            inner.cancel.clone(),
+            registry_rx,
+            ownership_rx,
+        ));
         let applier = tokio::spawn(applier_worker(
             Arc::clone(&default_consumer),
-            Arc::clone(&inner),
+            Arc::downgrade(&inner),
+            inner.cancel.clone(),
         ));
         *inner.source_task.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
         *inner.applier_task.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applier);
@@ -361,7 +427,7 @@ impl ProjectionHost {
     #[must_use]
     pub fn current_snapshot(&self) -> Option<HostSnapshot> {
         // Fail closed on an installed-but-closed source.
-        if self.inner.registry.is_closed() {
+        if self.inner.closed.load(Ordering::SeqCst) || self.inner.registry.is_closed() {
             return None;
         }
         let applied = self.inner.applied.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -378,19 +444,22 @@ impl ProjectionHost {
     #[must_use]
     pub fn attach(&self, scope: Scope) -> ProjectionHandle {
         let _publish = self.inner.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let snapshot = build_snapshot(&self.inner, &scope);
         let consumer = Arc::new(ConsumerState::new(scope, DEFAULT_PENDING_CAPACITY));
-        consumer.enqueue_snapshot(snapshot);
-
-        let mut map = self
-            .inner
-            .consumers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let id = map.next_id;
-        map.next_id += 1;
-        map.by_id.insert(id, Arc::clone(&consumer));
-        drop(map);
+        let mut id = 0;
+        if !self.inner.closed.load(Ordering::SeqCst) {
+            let snapshot = build_snapshot(&self.inner, &consumer.scope);
+            consumer.enqueue_snapshot(snapshot);
+            let mut map = self
+                .inner
+                .consumers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            id = map.next_id;
+            map.next_id += 1;
+            map.by_id.insert(id, Arc::clone(&consumer));
+        } else {
+            consumer.close_and_discard();
+        }
         drop(_publish);
 
         ProjectionHandle {
@@ -401,44 +470,30 @@ impl ProjectionHost {
         }
     }
 
-    /// Close the host and await the background tasks.
+    /// Close the host and await the one shared, cancellation-safe teardown.
     ///
-    /// Order: publish registry closure (the source worker's registered
-    /// `close_signal` waiter wakes it to deliver the final closed projection),
-    /// await the source worker, then await the applier (which drains the final
-    /// closed snapshot). This is the single teardown entry point; the
-    /// cancellation-safe completion/drain PROOF is Task4.
-    pub async fn close_and_await(self: Arc<Self>) {
-        // Publish the closed bit; the source worker observes it via
-        // `close_signal` and delivers the final closed snapshot before exiting.
-        self.inner.registry.close();
-
-        if let Some(handle) = self
-            .inner
-            .source_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            let _ = handle.await;
+    /// Local close is linearized under `publish`, stops source intake, and
+    /// closes attached receipt queues without closing either shared authority.
+    /// A separately authority-driven registry close still wakes the source
+    /// worker and follows the same completion boundary. The teardown task owns
+    /// both real worker joins, so dropping one waiter cannot detach them.
+    pub async fn close_and_await(self: Arc<Self>) -> ProjectionShutdownOutcome {
+        start_shutdown(&self.inner);
+        loop {
+            let notified = self.inner.completion_notify.notified();
+            tokio::pin!(notified);
+            if let Some(outcome) = self
+                .inner
+                .completion
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .outcome
+                .clone()
+            {
+                return outcome;
+            }
+            notified.await;
         }
-
-        // Fallback: ensure the default consumer is closed so the applier can
-        // finish even if the source worker already exited (e.g. cancellation).
-        self.inner.default_consumer.mark_closed();
-
-        if let Some(handle) = self
-            .inner
-            .applier_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            let _ = handle.await;
-        }
-
-        // Belt-and-braces for any straggler.
-        self.inner.cancel.cancel();
     }
 }
 
@@ -476,9 +531,9 @@ impl ProjectionHandle {
         self.consumer.mark_closed();
     }
 
-    /// Close this subscriber and remove it from the host fan-out map, so its
-    /// independent bounded queue can be dropped and future fan-outs skip it.
-    /// Delivery-drain completion proof is Task4.
+    /// Close this subscriber and remove it from the host fan-out map. There is
+    /// no per-handle delivery task: the handle owns only a receipt queue, so
+    /// close linearizes removal and explicitly discards that queue.
     pub async fn close(self) {
         self.consumer.mark_closed();
         let _publish = self.host.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -488,6 +543,112 @@ impl ProjectionHandle {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         map.by_id.remove(&self.id);
+        self.consumer.close_and_discard();
+    }
+}
+
+impl Drop for ProjectionHandle {
+    fn drop(&mut self) {
+        self.consumer.mark_closed();
+        if self.id == 0 {
+            self.consumer.close_and_discard();
+            return;
+        }
+        let _publish = self.host.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut map = self
+            .host
+            .consumers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        map.by_id.remove(&self.id);
+        self.consumer.close_and_discard();
+    }
+}
+
+impl Drop for ProjectionHost {
+    fn drop(&mut self) {
+        request_local_close(&self.inner);
+        // Drop cannot await, but when it occurs on a Tokio runtime it can
+        // still install the same owned teardown boundary. Outside a runtime
+        // the cancellation request remains valid and the weak workers exit;
+        // a later explicit close waiter can perform the joins.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            start_shutdown(&self.inner);
+        }
+    }
+}
+
+/// Request host-local shutdown at the publish linearization point. Attached
+/// receipt queues are explicitly discarded; the default queue is retained so
+/// the real applier can finish the event it already captured.
+fn request_local_close(inner: &Arc<HostInner>) {
+    let _publish = inner.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !inner.closed.swap(true, Ordering::SeqCst) {
+        let consumers = inner
+            .consumers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for consumer in consumers.by_id.values() {
+            consumer.close_and_discard();
+        }
+        inner.default_consumer.mark_closed();
+    }
+    drop(_publish);
+    inner.cancel.cancel();
+}
+
+/// Start the one explicit host teardown task. It owns both real worker joins;
+/// close callers only observe the shared completion state and cannot detach
+/// the joins by being cancelled.
+fn start_shutdown(inner: &Arc<HostInner>) {
+    request_local_close(inner);
+    let should_spawn = {
+        let mut state = inner
+            .completion
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.started {
+            false
+        } else {
+            state.started = true;
+            true
+        }
+    };
+    if should_spawn {
+        let owned = Arc::clone(inner);
+        tokio::spawn(async move {
+            let source_task = owned
+                .source_task
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            let source_failed = match source_task {
+                Some(task) => task.await.is_err(),
+                None => false,
+            };
+            owned.default_consumer.mark_closed();
+            let applier_task = owned
+                .applier_task
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            let applier_failed = match applier_task {
+                Some(task) => task.await.is_err(),
+                None => false,
+            };
+            let outcome = ProjectionShutdownOutcome {
+                source_joined: !source_failed,
+                applier_joined: !applier_failed,
+                source_failed,
+                applier_failed,
+            };
+            owned
+                .completion
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .outcome = Some(outcome);
+            owned.completion_notify.notify_waiters();
+        });
     }
 }
 
@@ -506,52 +667,72 @@ fn build_snapshot(inner: &HostInner, scope: &Scope) -> HostSnapshot {
 ///   snapshot, registry cursor untouched);
 /// * close → deliver a final closed snapshot and terminate.
 async fn source_worker(
-    inner: Arc<HostInner>,
+    inner: Weak<HostInner>,
+    cancel: CancellationToken,
     mut registry_rx: broadcast::Receiver<RegistryChange>,
     mut ownership_rx: broadcast::Receiver<OwnershipChange>,
 ) {
-    // Register the close waiter BEFORE reading the closed bit (register-then-
-    // check). A `Notified` future captures the notify generation AT CREATION
-    // and observes later changes when polled, so creation before the closed
-    // check is sufficient: close() publishes the bit then `notify_waiters()`,
-    // and this already-registered waiter observes that generation change.
-    let close_signal = inner.registry.close_signal();
+    let Some(initial_inner) = inner.upgrade() else { return };
+    let close_signal = initial_inner.registry.close_signal();
+    let already_closed = initial_inner.registry.is_closed();
+    drop(initial_inner);
     let notified = close_signal.notified();
     tokio::pin!(notified);
-    if inner.registry.is_closed() {
-        deliver_close(&inner);
+    if already_closed {
+        if let Some(inner) = inner.upgrade() {
+            deliver_close(&inner);
+        }
         return;
     }
 
     loop {
         tokio::select! {
             biased;
-            _ = inner.cancel.cancelled() => {
-                // Teardown without a close projection; Task4 owns the drain proof.
-                return;
-            }
+            _ = cancel.cancelled() => return,
             _ = &mut notified => {
-                deliver_close(&inner);
+                if let Some(inner) = inner.upgrade() {
+                    deliver_close(&inner);
+                }
                 return;
             }
             res = registry_rx.recv() => {
                 match res {
-                    Ok(change) => process_registry_change(&inner, change),
-                    Err(broadcast::error::RecvError::Lagged(_)) => invalidate_all(&inner),
+                    Ok(change) => {
+                        if let Some(inner) = inner.upgrade() {
+                            process_registry_change(&inner, change);
+                        } else {
+                            return;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if let Some(inner) = inner.upgrade() {
+                            invalidate_all(&inner);
+                        } else {
+                            return;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Closed) => {
-                        // The sender dropped: treat as a closed source.
-                        deliver_close(&inner);
+                        if let Some(inner) = inner.upgrade() {
+                            deliver_close(&inner);
+                        }
                         return;
                     }
                 }
             }
             res = ownership_rx.recv() => {
                 match res {
-                    Ok(_change) => invalidate_all(&inner),
-                    Err(broadcast::error::RecvError::Lagged(_)) => invalidate_all(&inner),
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if let Some(inner) = inner.upgrade() {
+                            invalidate_all(&inner);
+                        } else {
+                            return;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Closed) => {
-                        // The host holds the ownership tree, so its sender
-                        // outlives this worker; unreachable in practice.
+                        if let Some(inner) = inner.upgrade() {
+                            deliver_close(&inner);
+                        }
+                        return;
                     }
                 }
             }
@@ -563,6 +744,9 @@ async fn source_worker(
 fn process_registry_change(inner: &HostInner, change: RegistryChange) {
     let (cursor, cap_change) = inner.facade.map_registry_change(change);
     let _publish = inner.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if inner.closed.load(Ordering::SeqCst) {
+        return;
+    }
 
     // Default consumer: apply a fresh snapshot so run-loop-readable state stays
     // current (the applier drains this queue into `applied`).
@@ -589,6 +773,9 @@ fn process_registry_change(inner: &HostInner, change: RegistryChange) {
 /// registry cursor is NOT advanced — only the registry advances it.
 fn invalidate_all(inner: &HostInner) {
     let _publish = inner.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if inner.closed.load(Ordering::SeqCst) {
+        return;
+    }
 
     if !inner.default_consumer.is_closed() {
         let snapshot = build_snapshot(inner, &inner.default_consumer.scope);
@@ -610,6 +797,9 @@ fn invalidate_all(inner: &HostInner) {
 /// Deliver the terminal close projection to every consumer and mark each closed.
 fn deliver_close(inner: &HostInner) {
     let _publish = inner.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if inner.closed.swap(true, Ordering::SeqCst) {
+        return;
+    }
 
     if !inner.default_consumer.is_closed() {
         let snapshot = build_snapshot(inner, &inner.default_consumer.scope);
@@ -632,11 +822,25 @@ fn deliver_close(inner: &HostInner) {
 /// each snapshot into `applied` (run-loop-readable state). `Change` is
 /// meaningless for a snapshot-only consumer and ignored; `Invalidated` clears
 /// the applied snapshot until its replacement arrives.
-async fn applier_worker(default: Arc<ConsumerState>, inner: Arc<HostInner>) {
+async fn applier_worker(
+    default: Arc<ConsumerState>,
+    inner: Weak<HostInner>,
+    cancel: CancellationToken,
+) {
     loop {
         if let Some(event) = default.try_pop() {
+            let Some(inner) = inner.upgrade() else { return };
             match event {
                 ProjectionEvent::Snapshot(snapshot) => {
+                    #[cfg(test)]
+                    if inner.applier_test_gate.hold.load(Ordering::SeqCst) {
+                        inner.applier_test_gate.entered.notify_waiters();
+                        let released = inner.applier_test_gate.release.notified();
+                        tokio::pin!(released);
+                        while inner.applier_test_gate.hold.load(Ordering::SeqCst) {
+                            released.as_mut().await;
+                        }
+                    }
                     {
                         let mut applied = inner
                             .applied
@@ -666,18 +870,17 @@ async fn applier_worker(default: Arc<ConsumerState>, inner: Arc<HostInner>) {
             }
             continue;
         }
+        let Some(inner) = inner.upgrade() else { return };
         if default.is_closed() {
             let mut applied =
                 inner.applied.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             applied.closed = true;
             return;
         }
-        if inner.cancel.is_cancelled() {
-            return;
-        }
+        drop(inner);
         tokio::select! {
             biased;
-            _ = inner.cancel.cancelled() => return,
+            _ = cancel.cancelled() => return,
             _ = default.wake.notified() => {}
         }
     }
@@ -1400,5 +1603,166 @@ mod tests {
             "owner invalidation must not advance the registry cursor"
         );
         assert!(replacement.entries.is_empty(), "revoked id must be absent");
+    }
+
+    #[tokio::test]
+    async fn cancel_awaits_inflight_completion() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let _ = await_snapshot_where(&host, |s| s.entries.contains_key("a")).await;
+
+        host.inner.applier_test_gate.hold.store(true, Ordering::SeqCst);
+        let entered = host.inner.applier_test_gate.entered.notified();
+        tokio::pin!(entered);
+        reg.register(desc("b"), fake("b")).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), &mut entered)
+            .await
+            .expect("real default applier did not enter the barrier");
+
+        start_shutdown(&host.inner);
+        assert!(
+            host.inner
+                .completion
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .outcome
+                .is_none(),
+            "shutdown cannot report completion while captured delivery is held"
+        );
+
+        host.inner.applier_test_gate.hold.store(false, Ordering::SeqCst);
+        host.inner.applier_test_gate.release.notify_waiters();
+        let outcome = host.clone().close_and_await().await;
+        assert_eq!(outcome, ProjectionShutdownOutcome {
+            source_joined: true,
+            applier_joined: true,
+            source_failed: false,
+            applier_failed: false,
+        });
+        assert!(host.current_snapshot().is_none());
+    }
+
+    #[tokio::test]
+    async fn idle_close_wakeup_joins_both_workers() {
+        let reg = ToolHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let _ = await_snapshot_where(&host, |s| s.registry_cursor == Cursor(0)).await;
+
+        reg.close();
+        let outcome = host.clone().close_and_await().await;
+        assert_eq!(outcome.source_joined, true);
+        assert_eq!(outcome.applier_joined, true);
+        assert!(!outcome.source_failed && !outcome.applier_failed);
+    }
+
+    #[tokio::test]
+    async fn post_close_mutation_is_not_delivered() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let mut handle = host.attach(Scope::default());
+        assert!(matches!(recv_bounded(&mut handle).await, ProjectionEvent::Snapshot(_)));
+
+        let outcome = host.clone().close_and_await().await;
+        assert!(outcome.source_joined && outcome.applier_joined);
+        reg.register(desc("after"), fake("after")).unwrap();
+        tree.bump(LifetimeScope::Runtime);
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), handle.recv())
+            .await
+            .expect("closed handle did not terminate")
+            .is_some();
+        assert!(!received, "post-close authority mutations reached the handle");
+        assert!(reg.revision() >= 2, "host-local close must not close the registry");
+    }
+
+    #[tokio::test]
+    async fn dropping_last_host_requests_teardown() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let mut handle = host.attach(Scope::default());
+        assert!(matches!(recv_bounded(&mut handle).await, ProjectionEvent::Snapshot(_)));
+
+        drop(host);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), handle.recv())
+                .await
+                .expect("dropped host did not close the receipt")
+                .is_none()
+        );
+        assert!(!reg.is_closed(), "dropping a host must not close the registry");
+    }
+
+    #[tokio::test]
+    async fn registry_close_is_not_false_quiescence() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let mut handle = host.attach(Scope::default());
+        assert!(matches!(recv_bounded(&mut handle).await, ProjectionEvent::Snapshot(_)));
+
+        // Keep the authority sender alive: registry close is a bit + wakeup,
+        // not broadcast sender closure and not itself host quiescence.
+        reg.close();
+        let outcome = host.clone().close_and_await().await;
+        assert_eq!(outcome.source_joined, true);
+        assert_eq!(outcome.applier_joined, true);
+        assert!(host.current_snapshot().is_none());
+        assert!(tokio::time::timeout(std::time::Duration::from_secs(1), handle.recv())
+            .await
+            .expect("closed receipt did not terminate")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn concurrent_close_is_idempotent() {
+        let reg = ToolHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg, Arc::clone(&tree));
+        let first = tokio::spawn(Arc::clone(&host).close_and_await());
+        let second = tokio::spawn(Arc::clone(&host).close_and_await());
+        let first = first.await.unwrap();
+        let second = second.await.unwrap();
+        assert_eq!(first, second);
+        assert!(first.source_joined && first.applier_joined);
+    }
+
+    #[tokio::test]
+    async fn cancelled_first_waiter_does_not_detach_teardown() {
+        let reg = ToolHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg, Arc::clone(&tree));
+        start_shutdown(&host.inner);
+        let first = tokio::spawn(Arc::clone(&host).close_and_await());
+        first.abort();
+
+        let outcome = host.close_and_await().await;
+        assert!(outcome.source_joined && outcome.applier_joined);
+        assert!(!outcome.source_failed && !outcome.applier_failed);
+    }
+
+    #[tokio::test]
+    async fn already_running_invocation_is_not_cut() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let mut handle = host.attach(Scope::default());
+        let snapshot = match recv_bounded(&mut handle).await {
+            ProjectionEvent::Snapshot(snapshot) => snapshot,
+            other => panic!("expected initial snapshot, got {other:?}"),
+        };
+        let captured = snapshot.entries.get("a").unwrap().handler.clone();
+        assert!(tree.revoke(&tool_id("a")));
+
+        let output = captured.invoke(serde_json::json!({})).await.unwrap();
+        assert_eq!(output.value["tool"], "a");
     }
 }
