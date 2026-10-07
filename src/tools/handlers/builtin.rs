@@ -163,12 +163,10 @@ impl ToolHandler for BuiltinRegistryRouter {
             // them to `ToolError::ValidationFailed` so the harness reports
             // them as fixable schema errors with the tool-supplied prose,
             // rather than opaque `Execution` failures.
-            Err(crate::error::AlephError::Validation(cause)) => {
-                Err(ToolError::ValidationFailed {
-                    name: self.name.clone(),
-                    cause,
-                })
-            }
+            Err(crate::error::AlephError::Validation(cause)) => Err(ToolError::ValidationFailed {
+                name: self.name.clone(),
+                cause,
+            }),
             Err(e) => Err(ToolError::Execution {
                 name: self.name.clone(),
                 cause: e.to_string(),
@@ -254,9 +252,9 @@ impl ToolHandler for BuiltinRegistryRouter {
                     requires_approval: true,
                     tags: Vec::new(),
                     idempotent: false,
-                    max_duration_ms: Some(
-                        crate::tools::budget::resolve_tool_budget_ms(&self.name, None),
-                    ),
+                    max_duration_ms: Some(crate::tools::budget::resolve_tool_budget_ms(
+                        &self.name, None,
+                    )),
                     concurrent_safe: false,
                 },
             },
@@ -309,8 +307,10 @@ pub async fn register_builtin_routers(
         ) {
             continue;
         }
-        let handler: Arc<dyn ToolHandler> =
-            Arc::new(BuiltinRegistryRouter::new(name.clone(), Arc::clone(&tool_registry)));
+        let handler: Arc<dyn ToolHandler> = Arc::new(BuiltinRegistryRouter::new(
+            name.clone(),
+            Arc::clone(&tool_registry),
+        ));
         let descriptor = ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
         match registry.register(descriptor, handler) {
             Ok(handle) => scope.track(handle),
@@ -508,9 +508,9 @@ mod builtin_handler_tests {
         {
             let value = self.results.get(tool_name).cloned();
             let name = tool_name.to_string();
-            Box::pin(async move {
-                value.ok_or_else(|| crate::error::AlephError::tool_not_found(&name))
-            })
+            Box::pin(
+                async move { value.ok_or_else(|| crate::error::AlephError::tool_not_found(&name)) },
+            )
         }
     }
 
@@ -581,7 +581,10 @@ mod builtin_handler_tests {
             .invoke(serde_json::json!({}))
             .await
             .expect("invoke should succeed");
-        assert_eq!(output.value, sentinel, "invoke must forward to execute_tool");
+        assert_eq!(
+            output.value, sentinel,
+            "invoke must forward to execute_tool"
+        );
     }
 
     /// A duplicate partway through the batch rolls back every earlier

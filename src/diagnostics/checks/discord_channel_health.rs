@@ -213,11 +213,7 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
                 CHECK_ID,
                 Severity::Warning,
                 "Discord channel config is misconfigured",
-                format!(
-                    "{} invariant(s) failed: {}",
-                    tags.len(),
-                    details.join("; "),
-                ),
+                format!("{} invariant(s) failed: {}", tags.len(), details.join("; "),),
             )
             .with_fix_hint(
                 "Edit the discord section of the config: provide a real bot \
@@ -267,9 +263,8 @@ async fn probe(path: &std::path::Path) -> DiscordVerdict {
         .get("channels")
         .and_then(|c| c.as_array())
         .and_then(|arr| {
-            arr.iter().find(|entry| {
-                entry.get("channel_type").and_then(|t| t.as_str()) == Some("discord")
-            })
+            arr.iter()
+                .find(|entry| entry.get("channel_type").and_then(|t| t.as_str()) == Some("discord"))
         })
         .and_then(|entry| entry.get("config"));
     let Some(section) = discord_section else {
@@ -359,16 +354,15 @@ mod tests {
 
     #[test]
     fn misconfigured_lists_each_problem() {
-        let verdict = DiscordVerdict::Misconfigured(vec![
-            "intents_misaligned",
-            "application_id_missing",
-        ]);
+        let verdict =
+            DiscordVerdict::Misconfigured(vec!["intents_misaligned", "application_id_missing"]);
         let f = findings_for(&verdict);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].severity, Severity::Warning);
         assert!(f[0].has_tag(TAG_DISCORD_MISCONFIGURED));
         assert!(
-            f[0].detail.contains("guild_messages is on but message_content is off"),
+            f[0].detail
+                .contains("guild_messages is on but message_content is off"),
             "detail: {}",
             f[0].detail
         );

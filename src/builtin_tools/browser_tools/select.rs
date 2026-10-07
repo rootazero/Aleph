@@ -59,7 +59,8 @@ impl BrowserSelectTool {
 #[async_trait]
 impl AlephTool for BrowserSelectTool {
     const NAME: &'static str = "browser_select";
-    const DESCRIPTION: &'static str = "Select an option from a dropdown/select element, addressed by the ref_id a \
+    const DESCRIPTION: &'static str =
+        "Select an option from a dropdown/select element, addressed by the ref_id a \
          browser_snapshot reported for it";
     type Args = BrowserSelectArgs;
     type Output = BrowserSelectOutput;

@@ -27,12 +27,10 @@ mod common;
 use serial_test::serial;
 
 use alephcore::gateway::interfaces::discord::security::{
-    audit_label_for_outcome, record_discord_approval_blocked,
-    record_discord_approval_requested, record_discord_approval_resolved,
+    audit_label_for_outcome, record_discord_approval_blocked, record_discord_approval_requested,
+    record_discord_approval_resolved,
 };
-use alephcore::security::audit::{
-    AuditEventType, AuditSeverity, SecurityAuditLog,
-};
+use alephcore::security::audit::{AuditEventType, AuditSeverity, SecurityAuditLog};
 
 /// `label_for_outcome` is the *only* way the exec manager should map
 /// `ApprovalOutcome` to an audit verb — pinning it here makes a rename
@@ -41,7 +39,10 @@ use alephcore::security::audit::{
 #[test]
 fn audit_label_table_is_stable() {
     assert_eq!(audit_label_for_outcome("approved"), "allow_once");
-    assert_eq!(audit_label_for_outcome("approved_for_session"), "allow_session");
+    assert_eq!(
+        audit_label_for_outcome("approved_for_session"),
+        "allow_session"
+    );
     assert_eq!(audit_label_for_outcome("approved_always"), "allow_always");
     assert_eq!(audit_label_for_outcome("denied"), "deny");
     assert_eq!(audit_label_for_outcome("timeout"), "timeout");
@@ -68,12 +69,7 @@ async fn end_to_end_three_hooks_emit_expected_event_types() {
         "test audit log already installed — serial_test isolation broken?"
     );
 
-    record_discord_approval_requested(
-        Some("user-1".into()),
-        Some("sess-1".into()),
-        "!ping",
-    )
-    .await;
+    record_discord_approval_requested(Some("user-1".into()), Some("sess-1".into()), "!ping").await;
     record_discord_approval_resolved(
         Some("user-1".into()),
         Some("sess-1".into()),
@@ -107,11 +103,7 @@ async fn end_to_end_three_hooks_emit_expected_event_types() {
     assert!(e3.detail.contains("!rm_rf"));
 
     // No fourth entry should arrive: every hook fired exactly once.
-    let extra = tokio::time::timeout(
-        std::time::Duration::from_millis(50),
-        rx.recv(),
-    )
-    .await;
+    let extra = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
     assert!(
         extra.is_err(),
         "an unexpected fourth entry arrived: {extra:?}"
@@ -146,25 +138,13 @@ async fn hooks_do_not_panic_without_a_global_log() {
     let (_local_log, mut local_rx) = SecurityAuditLog::new(8);
 
     record_discord_approval_requested(Some("u".into()), Some("s".into()), "!ping").await;
-    record_discord_approval_resolved(
-        Some("u".into()),
-        Some("s".into()),
-        "allow_once",
-        "!ping",
-    )
-    .await;
+    record_discord_approval_resolved(Some("u".into()), Some("s".into()), "allow_once", "!ping")
+        .await;
     record_discord_approval_blocked(Some("u".into()), Some("s".into()), "rate_limited", "!ping")
         .await;
 
     // Whatever the global state, our local log must be empty — these
     // hooks target `global()`, never a parameter.
-    let extra = tokio::time::timeout(
-        std::time::Duration::from_millis(50),
-        local_rx.recv(),
-    )
-    .await;
-    assert!(
-        extra.is_err(),
-        "hooks targeted a non-global log: {extra:?}"
-    );
+    let extra = tokio::time::timeout(std::time::Duration::from_millis(50), local_rx.recv()).await;
+    assert!(extra.is_err(), "hooks targeted a non-global log: {extra:?}");
 }

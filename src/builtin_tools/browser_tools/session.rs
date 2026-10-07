@@ -301,7 +301,8 @@ impl AlephTool for BrowserSessionTool {
     // hand-written copy would be a second author for it. The action serves the
     // table; `BrowserError::UnsupportedByEngine` names the gap and its remedy
     // at the moment a model actually trips over one.
-    const DESCRIPTION: &'static str = "Save or restore a browser login session (cookies + localStorage) by name, \
+    const DESCRIPTION: &'static str =
+        "Save or restore a browser login session (cookies + localStorage) by name, \
          so a logged-in state can be reused without re-authenticating \
          — managed or cdp profiles only (e.g. profile='default'). \
          action='capabilities' lists what each browser engine supports and which \

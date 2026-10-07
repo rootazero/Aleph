@@ -160,7 +160,9 @@ const EXPIRY_SKEW: Duration = Duration::from_secs(60);
 /// Without this, dropping a `JoinHandle` would merely detach the task — the
 /// fixed-port listener would stay bound across every subsequent login
 /// attempt and bind would fail.
-struct ServerAbortOnDrop(tokio::task::JoinHandle<std::result::Result<(), crate::error::AlephError>>);
+struct ServerAbortOnDrop(
+    tokio::task::JoinHandle<std::result::Result<(), crate::error::AlephError>>,
+);
 
 impl Drop for ServerAbortOnDrop {
     fn drop(&mut self) {

@@ -1297,9 +1297,9 @@ pub fn create_tool_boxed(
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
         | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
         | "browser_exec" | "browser_console" | "browser_hover" | "browser_scroll"
-        | "browser_pdf" | "browser_record" | "browser_qa" | "browser_network" | "browser_dialog"
-        | "browser_drag" | "browser_upload" | "browser_resize" | "browser_emulate"
-        | "browser_cookies" | "browser_session" | "browser_profile" => None,
+        | "browser_pdf" | "browser_record" | "browser_qa" | "browser_network"
+        | "browser_dialog" | "browser_drag" | "browser_upload" | "browser_resize"
+        | "browser_emulate" | "browser_cookies" | "browser_session" | "browser_profile" => None,
         // Skill management tools — always available
         // Phase 2: share the process-wide initialized SkillSystem so
         // skill_status/install/manage see the same registry as the gateway.
@@ -3039,7 +3039,7 @@ mod tests {
     /// the +30 Windows gap recorded above is carried forward unchanged. As
     /// the 2026-09-20 entry already established, this ledger forbids deriving
     /// a ceiling by addition.
-///
+    ///
     /// 2026-09-28 (C2 browser_record tool): 116_072 -> 116_150 B, RE-MEASURED
     /// with this ceiling floored to `1` on Linux (96_554 catalog + 16_613
     /// registry-only + 1_039 injected + 1_944 bridge); the only red test was

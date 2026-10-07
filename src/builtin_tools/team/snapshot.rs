@@ -15,11 +15,11 @@ use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
-use crate::teams::TeamStore;
 use crate::teams::snapshots::{
-    CreateSnapshotOutput, RestoreDiff, SnapshotMeta, SqliteSnapshotStore, TeamSnapshotPayload,
-    capture_snapshot, restore_snapshot,
+    capture_snapshot, restore_snapshot, CreateSnapshotOutput, RestoreDiff, SnapshotMeta,
+    SqliteSnapshotStore, TeamSnapshotPayload,
 };
+use crate::teams::TeamStore;
 use crate::tools::AlephTool;
 
 // =============================================================================

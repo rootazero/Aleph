@@ -126,20 +126,15 @@ impl ProtocolRegistry {
         }
 
         // 2. Fall back to built-in protocols
-        read_recover(&self.builtin)
-            .get(name)
-            .map(|factory| {
-                let client = crate::providers::protocols::http_client::build_provider_http_client();
-                factory(client)
-            })
+        read_recover(&self.builtin).get(name).map(|factory| {
+            let client = crate::providers::protocols::http_client::build_provider_http_client();
+            factory(client)
+        })
     }
 
     /// List all available protocol names
     pub fn list_protocols(&self) -> Vec<String> {
-        let mut protocols: Vec<String> = read_recover(&self.builtin)
-            .keys()
-            .cloned()
-            .collect();
+        let mut protocols: Vec<String> = read_recover(&self.builtin).keys().cloned().collect();
         protocols.extend(read_recover(&self.dynamic).keys().cloned());
         protocols.sort();
         protocols

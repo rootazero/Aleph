@@ -954,7 +954,7 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
 mod escape_scope_tests {
     use super::DesktopTool;
     use crate::routing::session_key::SessionKey;
-    use crate::tools::turn_context::{TURN_CONTEXT, TurnContext};
+    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
 
     fn turn(run_id: &str) -> TurnContext {
         TurnContext {

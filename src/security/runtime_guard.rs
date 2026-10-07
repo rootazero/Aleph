@@ -346,8 +346,8 @@ impl RuntimeSecurityGuard {
             )
         {
             return Ok(GuardResult::Blocked {
-                reason:
-                    "Leak detector found sensitive data in resolved outbound content".to_string(),
+                reason: "Leak detector found sensitive data in resolved outbound content"
+                    .to_string(),
             });
         }
 

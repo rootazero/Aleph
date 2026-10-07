@@ -40,7 +40,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use aleph_protocol::desktop_bridge::methods::ax::{AxElement, DEFAULT_MAX_NODES, QueryTreeParams};
+use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryTreeParams, DEFAULT_MAX_NODES};
 
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -327,7 +327,8 @@ impl DesktopSom {
 #[async_trait]
 impl AlephTool for DesktopSom {
     const NAME: &'static str = "desktop_som";
-    const DESCRIPTION: &'static str = "Capture the screen with every clickable element outlined and numbered — a visual \
+    const DESCRIPTION: &'static str =
+        "Capture the screen with every clickable element outlined and numbered — a visual \
          Set-of-Marks for reliable GUI grounding. Returns the annotated image plus an \
          `elements` array where each entry has the on-image `index`, its accessibility \
          `role`/`name`, and a ready-to-use `center` [x, y]. Decide which numbered element \

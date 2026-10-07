@@ -154,10 +154,7 @@ fn kind_from_head(lower: &str) -> Option<ToolErrorKind> {
         ("invalid tool descriptor for ", ToolErrorKind::Validation),
         ("descriptor mismatch for tool ", ToolErrorKind::Validation),
         ("registry closed: ", ToolErrorKind::Execution),
-        (
-            "unknown registration revision ",
-            ToolErrorKind::Execution,
-        ),
+        ("unknown registration revision ", ToolErrorKind::Execution),
     ];
     if let Some((_, kind)) = HEADS.iter().find(|(head, _)| lower.starts_with(head)) {
         return Some(*kind);

@@ -120,8 +120,7 @@ impl OperatorApprovalRequester {
         ApprovalResponse {
             outcome: ApprovalOutcome::Denied,
             deny_reason: Some(
-                "approval notification could not be delivered to the operator surface"
-                    .to_string(),
+                "approval notification could not be delivered to the operator surface".to_string(),
             ),
         }
     }

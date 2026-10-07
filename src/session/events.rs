@@ -371,9 +371,7 @@ impl RunEnvelopeSnapshot {
 /// enum: the decoder, not the enum, absorbs the unknown value. A legacy row
 /// with no `identity` key at all is `None` via `#[serde(default)]` and never
 /// reaches this function.
-fn deserialize_call_identity<'de, D>(
-    deserializer: D,
-) -> Result<Option<ToolCallIdentity>, D::Error>
+fn deserialize_call_identity<'de, D>(deserializer: D) -> Result<Option<ToolCallIdentity>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -1080,7 +1078,10 @@ mod tests {
             at: 1_700_000_000_000,
         };
         let json = serde_json::to_string(&ev).unwrap();
-        assert!(json.contains("\"type\":\"tool_call_effective_input\""), "{json}");
+        assert!(
+            json.contains("\"type\":\"tool_call_effective_input\""),
+            "{json}"
+        );
         let back: SessionEvent = serde_json::from_str(&json).unwrap();
         match &back {
             SessionEvent::ToolCallEffectiveInput {

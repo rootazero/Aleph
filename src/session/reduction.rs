@@ -173,7 +173,9 @@ impl LogContradiction {
             Self::ClockAnomaly { .. } => "session-log-clock-anomaly",
             Self::ResumeWithoutTarget { .. } => "session-log-resume-without-target",
             Self::ParkedWithoutRequest { .. } => "session-log-parked-without-request",
-            Self::EffectiveInputWithoutRequest { .. } => "session-log-effective-input-without-request",
+            Self::EffectiveInputWithoutRequest { .. } => {
+                "session-log-effective-input-without-request"
+            }
             Self::ConflictingEffectiveInput { .. } => "session-log-conflicting-effective-input",
             Self::UndecodableRecord { .. } => "session-log-undecodable-record",
         }
@@ -1115,7 +1117,11 @@ mod tests {
         }
     }
 
-    fn effective_input_marker(turn_id: TurnId, call: &str, input: serde_json::Value) -> SessionEvent {
+    fn effective_input_marker(
+        turn_id: TurnId,
+        call: &str,
+        input: serde_json::Value,
+    ) -> SessionEvent {
         SessionEvent::ToolCallEffectiveInput {
             turn_id,
             call_id: call.to_string(),
@@ -1158,19 +1164,13 @@ mod tests {
             rec(2, requested_with_turn(turn, "c1")),
             rec(
                 3,
-                effective_input_marker(
-                    TurnId::new_v4(),
-                    "c1",
-                    serde_json::json!({ "cmd": "ls" }),
-                ),
+                effective_input_marker(TurnId::new_v4(), "c1", serde_json::json!({ "cmd": "ls" })),
             ),
         ];
         let reduction = reduce_run(&events).expect("legal log");
         assert_eq!(reduction.dangling.len(), 1);
         assert_eq!(reduction.dangling[0].effective_input, None);
-        assert!(tags(&reduction)
-            .iter()
-            .any(|t| *t == "session-log-effective-input-without-request"));
+        assert!(tags(&reduction).contains(&"session-log-effective-input-without-request"));
     }
 
     /// Two markers carrying different inputs for one dispatch make the true
@@ -1182,15 +1182,19 @@ mod tests {
         let events = vec![
             rec(1, started("r1")),
             rec(2, requested_with_turn(turn, "c1")),
-            rec(3, effective_input_marker(turn, "c1", serde_json::json!("a"))),
-            rec(4, effective_input_marker(turn, "c1", serde_json::json!("b"))),
+            rec(
+                3,
+                effective_input_marker(turn, "c1", serde_json::json!("a")),
+            ),
+            rec(
+                4,
+                effective_input_marker(turn, "c1", serde_json::json!("b")),
+            ),
         ];
         let reduction = reduce_run(&events).expect("legal log");
         assert_eq!(reduction.dangling.len(), 1);
         assert_eq!(reduction.dangling[0].effective_input, None);
-        assert!(tags(&reduction)
-            .iter()
-            .any(|t| *t == "session-log-conflicting-effective-input"));
+        assert!(tags(&reduction).contains(&"session-log-conflicting-effective-input"));
     }
 
     /// An identical repeated marker is idempotent: no conflict is raised and
@@ -1201,8 +1205,14 @@ mod tests {
         let events = vec![
             rec(1, started("r1")),
             rec(2, requested_with_turn(turn, "c1")),
-            rec(3, effective_input_marker(turn, "c1", serde_json::json!("a"))),
-            rec(4, effective_input_marker(turn, "c1", serde_json::json!("a"))),
+            rec(
+                3,
+                effective_input_marker(turn, "c1", serde_json::json!("a")),
+            ),
+            rec(
+                4,
+                effective_input_marker(turn, "c1", serde_json::json!("a")),
+            ),
         ];
         let reduction = reduce_run(&events).expect("legal log");
         assert_eq!(reduction.dangling.len(), 1);
@@ -1232,7 +1242,10 @@ mod tests {
             rec(1, started("r1")),
             rec(2, requested_with_turn(turn, "c1")),
             rec(3, result),
-            rec(4, effective_input_marker(turn, "c1", serde_json::json!("late"))),
+            rec(
+                4,
+                effective_input_marker(turn, "c1", serde_json::json!("late")),
+            ),
         ];
         let reduction = reduce_run(&events).expect("legal log");
         assert!(reduction.dangling.is_empty());
@@ -1251,8 +1264,8 @@ mod tests {
             replay_contract_fingerprint: None,
         };
         let events = vec![
-            rec(1, started("r1"),),
-            rec(2, requested_with_identity("c1", snapshot),),
+            rec(1, started("r1")),
+            rec(2, requested_with_identity("c1", snapshot)),
         ];
         let reduction = reduce_run(&events).expect("legal log");
         assert_eq!(reduction.dangling.len(), 1);
@@ -1261,7 +1274,7 @@ mod tests {
         assert_eq!(retained.revision, 7);
         assert_eq!(retained.replay_policy, ReplayPolicy::Safe);
 
-        let legacy = vec![rec(1, started("r1"),), rec(2, requested("c1"),)];
+        let legacy = vec![rec(1, started("r1")), rec(2, requested("c1"))];
         let legacy_reduction = reduce_run(&legacy).expect("legal log");
         assert!(legacy_reduction.dangling[0].identity.is_none());
     }

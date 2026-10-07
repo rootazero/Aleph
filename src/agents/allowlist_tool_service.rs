@@ -104,7 +104,8 @@ impl ToolService for AllowlistToolService {
             self.recovery_tools(),
             crate::identity::as_actor(
                 &self.agent_def.id,
-                self.inner.execute_with_cancel_effective(name, input, cancel),
+                self.inner
+                    .execute_with_cancel_effective(name, input, cancel),
             ),
         )
         .await

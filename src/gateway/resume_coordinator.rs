@@ -1994,13 +1994,7 @@ impl ResumeCoordinator {
             let event = permit.invoke(claim_token.clone()).await;
             match self
                 .event_store
-                .commit_replay_outcome(
-                    session_id,
-                    &req.call_id,
-                    &claim_token,
-                    &event,
-                    now_ms(),
-                )
+                .commit_replay_outcome(session_id, &req.call_id, &claim_token, &event, now_ms())
                 .await
             {
                 Ok(ReplayOutcomeResult::Committed { .. }) => report.replayed += 1,
@@ -3936,7 +3930,9 @@ mod tests {
         use crate::gateway::event_bus::GatewayEventBus;
         use crate::gateway::event_emitter::EventEmitter;
         use crate::gateway::execution_engine::{ExecutionError, RunStatus};
-        use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
         use crate::gateway::session_store::SessionStore;
         use crate::session::replay::{ReplayInvoker, ReplayPermit};
         use crate::session::store::{migrate_add_session_events, SqliteEventStore};
@@ -4037,7 +4033,10 @@ mod tests {
                 at + 1,
             ),
         ] {
-            store.append(&sid, seq, &event, created_at_ms).await.unwrap();
+            store
+                .append(&sid, seq, &event, created_at_ms)
+                .await
+                .unwrap();
         }
 
         let reduction = reduce_run(&store.load_all_events(&sid).await.unwrap()).unwrap();
@@ -4073,8 +4072,14 @@ mod tests {
             .replay_dangling_calls(&sid, reduction, &mut report)
             .await;
 
-        assert_eq!(report.replayed, 1, "the committed Executed outcome must be counted");
-        assert!(fired.load(Ordering::SeqCst), "the fake handler must have run");
+        assert_eq!(
+            report.replayed, 1,
+            "the committed Executed outcome must be counted"
+        );
+        assert!(
+            fired.load(Ordering::SeqCst),
+            "the fake handler must have run"
+        );
         assert!(
             next.dangling.is_empty(),
             "re-reduce must see the committed outcome and drop the dangling call"
@@ -4093,7 +4098,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(results, ["dangling-1"], "exactly one replay outcome committed");
+        assert_eq!(
+            results,
+            ["dangling-1"],
+            "exactly one replay outcome committed"
+        );
         assert!(
             all.iter()
                 .all(|r| !matches!(r.event, SessionEvent::ToolError { .. })),

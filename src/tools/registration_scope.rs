@@ -171,9 +171,7 @@ mod tests {
     };
     use crate::tools::handlers::ToolHandler;
     use crate::tools::registry::{RegistryChange, ToolHandlerRegistry};
-    use crate::tools::service::{
-        ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource,
-    };
+    use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
     use async_trait::async_trait;
     use serde_json::Value;
     use std::sync::Arc;
@@ -225,7 +223,9 @@ mod tests {
         }
     }
 
-    fn drain_unregistered(rx: &mut tokio::sync::broadcast::Receiver<RegistryChange>) -> Vec<String> {
+    fn drain_unregistered(
+        rx: &mut tokio::sync::broadcast::Receiver<RegistryChange>,
+    ) -> Vec<String> {
         let mut names = Vec::new();
         while let Ok(change) = rx.try_recv() {
             if let RegistryChange::Unregistered { name, .. } = change {
@@ -251,7 +251,11 @@ mod tests {
         assert!(report.all_ok(), "{report:?}");
         assert_eq!(report.owner, "mcp:server-1");
         assert_eq!(
-            report.steps.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
+            report
+                .steps
+                .iter()
+                .map(|(s, _)| s.as_str())
+                .collect::<Vec<_>>(),
             vec!["c", "b", "a"],
             "reverse of registration order"
         );
@@ -313,14 +317,22 @@ mod tests {
         assert!(!report.all_ok());
         assert_eq!(report.owner, "mcp:server-2");
         assert_eq!(
-            report.steps.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
+            report
+                .steps
+                .iter()
+                .map(|(s, _)| s.as_str())
+                .collect::<Vec<_>>(),
             vec!["panic", "keep2", "boom", "keep1"],
             "reverse order preserved even across failures"
         );
         let failures: Vec<_> = report.failures().collect();
         assert_eq!(failures.len(), 2, "{report:?}");
-        assert!(failures.iter().any(|(s, e)| *s == "boom" && e.contains("channel closed")));
-        assert!(failures.iter().any(|(s, e)| *s == "panic" && e.contains("sync boom")));
+        assert!(failures
+            .iter()
+            .any(|(s, e)| *s == "boom" && e.contains("channel closed")));
+        assert!(failures
+            .iter()
+            .any(|(s, e)| *s == "panic" && e.contains("sync boom")));
         assert!(
             reg.resolve("keep1").is_none() && reg.resolve("keep2").is_none(),
             "real registrations still cleaned up despite failures"

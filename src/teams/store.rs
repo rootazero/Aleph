@@ -620,9 +620,8 @@ impl TeamStore for SqliteTeamStore {
         let now = now_epoch();
         let kind_str = input.kind.as_str();
 
-        conn
-            .execute(
-                r#"
+        conn.execute(
+            r#"
             INSERT INTO team_members (
                 team_id, agent_id, role, joined_at,
                 kind, acp_harness_id, acp_cwd, acp_session_name
@@ -635,18 +634,18 @@ impl TeamStore for SqliteTeamStore {
                 acp_cwd = excluded.acp_cwd,
                 acp_session_name = excluded.acp_session_name
             "#,
-                params![
-                    input.team_id,
-                    input.agent_id,
-                    input.role,
-                    now,
-                    kind_str,
-                    input.acp_harness_id,
-                    input.acp_cwd,
-                    input.acp_session_name,
-                ],
-            )
-            .map_err(db_err)?;
+            params![
+                input.team_id,
+                input.agent_id,
+                input.role,
+                now,
+                kind_str,
+                input.acp_harness_id,
+                input.acp_cwd,
+                input.acp_session_name,
+            ],
+        )
+        .map_err(db_err)?;
 
         drop(conn);
 

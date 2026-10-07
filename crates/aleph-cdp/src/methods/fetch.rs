@@ -39,8 +39,12 @@ pub fn request_paused(params: &Value) -> Result<RequestPaused> {
 
 /// Arm interception with a single catch-all pattern (see module doc).
 pub async fn enable(conn: &CdpConnection, session: Option<&SessionId>) -> Result<()> {
-    conn.call(session, "Fetch.enable", json!({ "patterns": [{ "urlPattern": "*" }] }))
-        .await?;
+    conn.call(
+        session,
+        "Fetch.enable",
+        json!({ "patterns": [{ "urlPattern": "*" }] }),
+    )
+    .await?;
     Ok(())
 }
 
@@ -57,8 +61,12 @@ pub async fn continue_request(
     session: Option<&SessionId>,
     request_id: &str,
 ) -> Result<()> {
-    conn.call(session, "Fetch.continueRequest", json!({ "requestId": request_id }))
-        .await?;
+    conn.call(
+        session,
+        "Fetch.continueRequest",
+        json!({ "requestId": request_id }),
+    )
+    .await?;
     Ok(())
 }
 

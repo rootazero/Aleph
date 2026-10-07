@@ -78,7 +78,8 @@ impl BrowserFillFormTool {
 #[async_trait]
 impl AlephTool for BrowserFillFormTool {
     const NAME: &'static str = "browser_fill_form";
-    const DESCRIPTION: &'static str = "Fill multiple form fields at once; address each field by the ref_id a \
+    const DESCRIPTION: &'static str =
+        "Fill multiple form fields at once; address each field by the ref_id a \
          browser_snapshot reported for it";
     type Args = BrowserFillFormArgs;
     type Output = BrowserFillFormOutput;

@@ -53,8 +53,11 @@ fn sorted_topology(
     let mut edges = store.list_edges(agent_id)?;
     nodes.sort_by(|a, b| (a.kind.as_str(), a.id.as_str()).cmp(&(b.kind.as_str(), b.id.as_str())));
     edges.sort_by(|a, b| {
-        (a.from_id.as_str(), a.to_id.as_str(), a.kind.as_str())
-            .cmp(&(b.from_id.as_str(), b.to_id.as_str(), b.kind.as_str()))
+        (a.from_id.as_str(), a.to_id.as_str(), a.kind.as_str()).cmp(&(
+            b.from_id.as_str(),
+            b.to_id.as_str(),
+            b.kind.as_str(),
+        ))
     });
     Ok((nodes, edges))
 }

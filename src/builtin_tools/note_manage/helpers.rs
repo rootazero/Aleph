@@ -6,10 +6,10 @@
 //! persist?).
 
 use crate::error::{AlephError, Result};
-use crate::memory::notes::{CATEGORY_DIRS, KnowledgeNote, canonicalize_category};
+use crate::memory::notes::{canonicalize_category, KnowledgeNote, CATEGORY_DIRS};
 
-use super::NoteManageTool;
 use super::args::{NoteManageArgs, NoteRelationArg};
+use super::NoteManageTool;
 
 impl NoteManageTool {
     /// Default agent ID (used when `args.agent_id` is absent). Must match the

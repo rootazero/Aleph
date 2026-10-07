@@ -165,15 +165,14 @@ pub use browser_tools::{
     BrowserOpenOutput, BrowserOpenTool, BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool,
     BrowserPressKeyArgs, BrowserPressKeyOutput, BrowserPressKeyTool, BrowserProfileArgs,
     BrowserProfileOutput, BrowserProfileTool, BrowserQaArgs, BrowserQaOutput, BrowserQaTool,
-    BrowserRecordArgs, BrowserRecordOutput,
-    BrowserRecordTool, BrowserResizeArgs, BrowserResizeOutput, BrowserResizeTool,
-    BrowserScreenshotArgs, BrowserScreenshotOutput, BrowserScreenshotTool, BrowserScrollArgs,
-    BrowserScrollOutput, BrowserScrollTool, BrowserSelectArgs, BrowserSelectOutput,
-    BrowserSelectTool, BrowserSessionArgs, BrowserSessionOutput, BrowserSessionTool,
-    BrowserSnapshotArgs, BrowserSnapshotOutput, BrowserSnapshotTool, BrowserTabsArgs,
-    BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs, BrowserTypeOutput, BrowserTypeTool,
-    BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool, BrowserWaitForArgs,
-    BrowserWaitForOutput, BrowserWaitForTool,
+    BrowserRecordArgs, BrowserRecordOutput, BrowserRecordTool, BrowserResizeArgs,
+    BrowserResizeOutput, BrowserResizeTool, BrowserScreenshotArgs, BrowserScreenshotOutput,
+    BrowserScreenshotTool, BrowserScrollArgs, BrowserScrollOutput, BrowserScrollTool,
+    BrowserSelectArgs, BrowserSelectOutput, BrowserSelectTool, BrowserSessionArgs,
+    BrowserSessionOutput, BrowserSessionTool, BrowserSnapshotArgs, BrowserSnapshotOutput,
+    BrowserSnapshotTool, BrowserTabsArgs, BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs,
+    BrowserTypeOutput, BrowserTypeTool, BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool,
+    BrowserWaitForArgs, BrowserWaitForOutput, BrowserWaitForTool,
 };
 pub use canvas::{CanvasTool, CanvasToolAction, CanvasToolArgs};
 pub use channel_directory::{

@@ -9,8 +9,8 @@ use tracing::debug;
 use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
-use crate::teams::TeamStore;
 use crate::teams::events::{EventLogStore, TeamEvent};
+use crate::teams::TeamStore;
 use crate::tools::AlephTool;
 // UTF-8 safe truncation by character count, no marker — digest lines are
 // reassembled downstream, so a stray ellipsis would leak into the payload.
@@ -126,7 +126,8 @@ fn format_event(event: &TeamEvent) -> String {
 #[async_trait]
 impl AlephTool for TeamDigestTool {
     const NAME: &'static str = "team_digest";
-    const DESCRIPTION: &'static str = "Generate a summary of recent team activity for the specified time period. \
+    const DESCRIPTION: &'static str =
+        "Generate a summary of recent team activity for the specified time period. \
         Returns raw event data for you to synthesize into a digest.";
 
     type Args = TeamDigestArgs;

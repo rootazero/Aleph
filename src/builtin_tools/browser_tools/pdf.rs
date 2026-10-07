@@ -53,7 +53,8 @@ impl AlephTool for BrowserPdfTool {
     // naming the driver that serves it. A description that promised PDF
     // unconditionally cost the model a turn to discover its profile could not
     // print. `browser_emulate` states its own split the same way.
-    const DESCRIPTION: &'static str = "Print the current browser page to a PDF file at the given output path \
+    const DESCRIPTION: &'static str =
+        "Print the current browser page to a PDF file at the given output path \
          — managed or cdp profiles only (e.g. profile='default')";
     type Args = BrowserPdfArgs;
     type Output = BrowserPdfOutput;

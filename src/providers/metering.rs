@@ -960,8 +960,7 @@ mod tests {
         let policy = crate::config::types::policies::SpendPolicy::default();
         let principal = crate::spend::Principal::User("u-zero-token-test".to_string());
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let period_start_ms =
-            crate::spend::period::period_start_ms(now_ms, policy.period);
+        let period_start_ms = crate::spend::period::period_start_ms(now_ms, policy.period);
 
         // All token components zero + a provider/model whose price table
         // entry produces CostStatus::Complete. pricing.rs picks "fake" as a
@@ -1021,8 +1020,7 @@ mod tests {
         let policy = crate::config::types::policies::SpendPolicy::default();
         let principal = crate::spend::Principal::User("u-zero-unpriced-test".to_string());
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let period_start_ms =
-            crate::spend::period::period_start_ms(now_ms, policy.period);
+        let period_start_ms = crate::spend::period::period_start_ms(now_ms, policy.period);
 
         let usage = TokenUsage {
             input_tokens: 0,

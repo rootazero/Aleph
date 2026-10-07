@@ -25,13 +25,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use aleph_protocol::desktop_bridge::methods::ax::{AxElement, DEFAULT_MAX_NODES, QueryTreeParams};
+use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryTreeParams, DEFAULT_MAX_NODES};
 
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-use super::interactable::{INTERACTABLE_ROLES, affordance_fields, safe_value};
+use super::interactable::{affordance_fields, safe_value, INTERACTABLE_ROLES};
 use super::types::DesktopOutput;
 
 const SEARCH_MAX_DEPTH: u32 = 32;
@@ -80,7 +80,8 @@ impl DesktopGuiLocate {
 #[async_trait]
 impl AlephTool for DesktopGuiLocate {
     const NAME: &'static str = "desktop_gui_locate";
-    const DESCRIPTION: &'static str = "Resolve a human-readable on-screen target (e.g. \"Send\", \"Login button\", \
+    const DESCRIPTION: &'static str =
+        "Resolve a human-readable on-screen target (e.g. \"Send\", \"Login button\", \
          \"OK\") into pixel coordinates ready to feed into the `desktop` tool's \
          `click`/`double_click`/`hover` actions. Two-stage: (1) accessibility \
          tree fuzzy match on `title`/`value` of interactable roles — fast, \

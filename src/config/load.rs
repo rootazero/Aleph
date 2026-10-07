@@ -428,8 +428,8 @@ impl Config {
         else {
             return;
         };
-        let Ok(overrides) = toml::Value::Table(ssrf_table.clone())
-            .try_into::<SecuritySsrfOverrides>()
+        let Ok(overrides) =
+            toml::Value::Table(ssrf_table.clone()).try_into::<SecuritySsrfOverrides>()
         else {
             return;
         };

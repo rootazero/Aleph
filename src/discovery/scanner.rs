@@ -4,7 +4,7 @@
 
 use super::paths::{
     agents_home_dir, aleph_home_dir, claude_home_dir, find_dir_upward, find_git_root,
-    AGENT_FILE, AGENTS_HOME_DIR, ALEPH_HOME_DIR, CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR,
+    AGENTS_HOME_DIR, AGENT_FILE, ALEPH_HOME_DIR, CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR,
     PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE, SKILL_FILE,
 };
 use super::types::{
@@ -160,7 +160,7 @@ impl DirectoryScanner {
             ));
         }
 
-// 3-5. Project-level `.agents/`, `.claude/`, `.aleph/` directories
+        // 3-5. Project-level `.agents/`, `.claude/`, `.aleph/` directories
         // (upward traversal). Same shape — find dirs upward, skip the one
         // that is the matching global so it is not double-counted with the
         // global entry added above, push the rest as project scopes with

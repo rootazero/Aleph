@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxElement, DEFAULT_MAX_NODES, QueryByRoleParams, QueryFocusedParams, QueryTreeParams,
-    clamp_max_nodes,
+    clamp_max_nodes, AxElement, QueryByRoleParams, QueryFocusedParams, QueryTreeParams,
+    DEFAULT_MAX_NODES,
 };
 
 use crate::error::Result;
@@ -132,7 +132,8 @@ impl AlephTool for DesktopAxQueryFocused {
     // `no_ax_capability_output()` — a runtime signal, which is the better home
     // for it anyway (R9).
     const NAME: &'static str = "desktop_ax_query_focused";
-    const DESCRIPTION: &'static str = "Return the UI element currently holding keyboard focus via the OS accessibility API. \
+    const DESCRIPTION: &'static str =
+        "Return the UI element currently holding keyboard focus via the OS accessibility API. \
          Response contains an `element` field (null if no focused element). The element carries \
          its own affordances: `actions` (the exact AX action names it supports — pass one \
          verbatim to `ax_action` instead of guessing), `enabled:false` when greyed out, \
@@ -193,7 +194,8 @@ impl AlephTool for DesktopAxQueryTree {
     // `no_ax_capability_output()` — a runtime signal, which is the better home
     // for it anyway (R9).
     const NAME: &'static str = "desktop_ax_query_tree";
-    const DESCRIPTION: &'static str = "Return the AX element tree for a process (the frontmost app if `pid` is omitted). \
+    const DESCRIPTION: &'static str =
+        "Return the AX element tree for a process (the frontmost app if `pid` is omitted). \
          Bounded by `max_depth` (default 6). Response contains an `element` field \
          with nested `children`; pure layout wrappers (AXGroup/AXUnknown carrying no \
          label, value, actions or affordance flags) are flattened away — their children \
@@ -284,7 +286,8 @@ impl AlephTool for DesktopAxQueryByRole {
     // `no_ax_capability_output()` — a runtime signal, which is the better home
     // for it anyway (R9).
     const NAME: &'static str = "desktop_ax_query_by_role";
-    const DESCRIPTION: &'static str = "Collect all AX elements whose role matches `role` (e.g. \"AXButton\") in a process. \
+    const DESCRIPTION: &'static str =
+        "Collect all AX elements whose role matches `role` (e.g. \"AXButton\") in a process. \
          If `pid` is omitted, the frontmost application is queried. Response contains an \
          `elements` array; each element carries its own `actions` (the exact AX action names it \
          supports — pass one verbatim to `ax_action` instead of guessing), plus `enabled` \
@@ -466,7 +469,8 @@ impl DesktopAxSnapshot {
 #[async_trait]
 impl AlephTool for DesktopAxSnapshot {
     const NAME: &'static str = "desktop_ax_snapshot";
-    const DESCRIPTION: &'static str = "Snapshot an application's interactable UI as a flat, indexed element list — the \
+    const DESCRIPTION: &'static str =
+        "Snapshot an application's interactable UI as a flat, indexed element list — the \
          reliable way to drive a GUI. Each element carries its accessibility `role`, a \
          `name`/`value`, a pre-computed `center` [x, y], and a `token` for the \
          `desktop` tool's `element` argument — prefer it over raw coordinates, \

@@ -113,7 +113,8 @@ impl SessionDecompressTool {
 #[async_trait]
 impl AlephTool for SessionDecompressTool {
     const NAME: &'static str = "session_decompress";
-    const DESCRIPTION: &'static str = "Verbatim-restore a folded (compacted) span of THIS session. After session_compact, the \
+    const DESCRIPTION: &'static str =
+        "Verbatim-restore a folded (compacted) span of THIS session. After session_compact, the \
          folded turns live on as a summary; this tool brings back the exact original events of \
          one fold — pass fold_id, or omit it to restore the most recent fold. Long folds page: \
          max_tokens bounds one page, and a truncated result carries next_from_seq to continue \
@@ -343,8 +344,8 @@ fn render_line(seq: EventSeq, event: &SessionEvent) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::events::{Durability, MessageContent, Retire, ToolOutput, now_ms};
-    use crate::session::store::{SqliteEventStore, migrate_add_session_events};
+    use crate::session::events::{now_ms, Durability, MessageContent, Retire, ToolOutput};
+    use crate::session::store::{migrate_add_session_events, SqliteEventStore};
     use crate::sync_primitives::Arc;
 
     fn test_store() -> Arc<SqliteEventStore> {

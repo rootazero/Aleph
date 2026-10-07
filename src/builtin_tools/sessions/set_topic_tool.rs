@@ -49,7 +49,8 @@ impl SessionSetTopicTool {
 #[async_trait]
 impl AlephTool for SessionSetTopicTool {
     const NAME: &'static str = "session_rename";
-    const DESCRIPTION: &'static str = "Rename the current session's topic/title. Use when the user \
+    const DESCRIPTION: &'static str =
+        "Rename the current session's topic/title. Use when the user \
          asks to change, rename, or set the conversation title or topic.";
 
     type Args = SessionSetTopicArgs;
