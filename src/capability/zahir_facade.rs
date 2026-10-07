@@ -13,9 +13,7 @@
 //! pretending it delivered every event.
 
 use crate::capability::backend::{CapabilityBackend, ToolBackendAdapter, TOOL_NAMESPACE};
-use crate::capability::descriptor::{
-    CapabilityId, CapabilityRevision, ProjectionMetadata,
-};
+use crate::capability::descriptor::{CapabilityId, CapabilityRevision, ProjectionMetadata};
 use crate::capability::facade::{
     BackendLease, CapabilityChange, CapabilityChangeStream, CapabilitySnapshot, Cursor, Projection,
     Reference, ResolveError, Scope, TransportTarget, Zahir,
@@ -65,7 +63,9 @@ impl ZahirFacade {
             let id = tool_id(name);
             let visibility = VisibilityScope::default();
             if self.tree.resolve(&id, &visibility).is_none() {
-                let _ = self.tree.register(id, OwnerRef::Runtime, LifetimeScope::Runtime, visibility);
+                let _ =
+                    self.tree
+                        .register(id, OwnerRef::Runtime, LifetimeScope::Runtime, visibility);
             }
         }
     }
@@ -134,7 +134,10 @@ impl Zahir for ZahirFacade {
 
     fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError> {
         self.reconcile_registry_bindings();
-        let mut descriptor = self.adapter.lookup(&reference.id).ok_or(ResolveError::Unknown)?;
+        let mut descriptor = self
+            .adapter
+            .lookup(&reference.id)
+            .ok_or(ResolveError::Unknown)?;
         // The registry descriptor is identity-level; the facade binds the
         // resolved descriptor to the reference's visibility so `validate_lease`
         // checks against the same binding key (custom visibility never falls
@@ -152,14 +155,19 @@ impl Zahir for ZahirFacade {
 
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError> {
         // ① binding location — the lease's own visibility selects the binding.
-        match self.tree.generation(&lease.descriptor.id, &lease.descriptor.visibility) {
+        match self
+            .tree
+            .generation(&lease.descriptor.id, &lease.descriptor.visibility)
+        {
             Some(current) => {
                 // ② owner generation — a stale lease must fail closed.
                 if current != lease.owner_generation {
                     return Err(ResolveError::StaleOwner);
                 }
             }
-            None if self.tree.is_revoked(&lease.descriptor.id) => return Err(ResolveError::Revoked),
+            None if self.tree.is_revoked(&lease.descriptor.id) => {
+                return Err(ResolveError::Revoked)
+            }
             None => return Err(ResolveError::Unknown),
         }
         // ③ descriptor freshness — the current descriptor must still match the
@@ -221,11 +229,7 @@ impl Zahir for ZahirFacade {
         Projection {
             target,
             metadata: ProjectionMetadata::default(),
-            capabilities: snapshot
-                .capabilities
-                .iter()
-                .map(|d| d.id.clone())
-                .collect(),
+            capabilities: snapshot.capabilities.iter().map(|d| d.id.clone()).collect(),
         }
     }
 }
@@ -233,9 +237,9 @@ impl Zahir for ZahirFacade {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::ownership::{LifetimeScope, OwnerGeneration, OwnerRef, VisibilityScope};
     use crate::session::events::ToolOutput;
     use crate::tools::descriptor::ToolCapabilityDescriptor;
-    use crate::capability::ownership::{OwnerGeneration, OwnerRef, LifetimeScope, VisibilityScope};
     use crate::tools::handlers::ToolHandler;
     use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
     use async_trait::async_trait;
