@@ -1622,7 +1622,7 @@ mod tests {
         {
             let map = host.inner.consumers.lock().unwrap();
             assert!(
-                map.by_id.get(&closed_id).is_none(),
+                !map.by_id.contains_key(&closed_id),
                 "close must remove the consumer from the fan-out map"
             );
         }
@@ -1845,8 +1845,8 @@ mod tests {
 
         reg.close();
         let outcome = host.clone().close_and_await().await;
-        assert_eq!(outcome.source_joined, true);
-        assert_eq!(outcome.applier_joined, true);
+        assert!(outcome.source_joined);
+        assert!(outcome.applier_joined);
         assert!(!outcome.source_failed && !outcome.applier_failed);
     }
 
@@ -1904,8 +1904,8 @@ mod tests {
         // not broadcast sender closure and not itself host quiescence.
         reg.close();
         let outcome = host.clone().close_and_await().await;
-        assert_eq!(outcome.source_joined, true);
-        assert_eq!(outcome.applier_joined, true);
+        assert!(outcome.source_joined);
+        assert!(outcome.applier_joined);
         assert!(host.current_snapshot().is_none());
         assert!(tokio::time::timeout(std::time::Duration::from_secs(1), handle.recv())
             .await

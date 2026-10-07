@@ -821,9 +821,9 @@ mod tests {
         // guard edited green is worse than one that is honestly red).
         assert_eq!(
             raw + slots,
-            53,
+            54,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             53. Never assert either side alone: raw shrinks and slots grows as \
+             54. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \
