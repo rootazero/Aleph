@@ -133,7 +133,7 @@ impl std::fmt::Debug for ProjectionEvent {
 /// `try_send` on a full channel only drops the NEWEST item and cannot remove
 /// the stale backlog. Overflow therefore atomically clears the stale PENDING
 /// backlog and enqueues `Invalidated` + a fresh `Snapshot` (or a fresh
-/// `Snapshot` alone, for the snapshot-only default consumer).
+/// `Snapshot`.
 struct QueueState {
     items: VecDeque<ProjectionEvent>,
     last_cursor: Cursor,
@@ -183,12 +183,13 @@ impl ConsumerState {
             .pop_front()
     }
 
-    /// Enqueue a full snapshot. A snapshot is self-contained, so on overflow
-    /// the stale backlog is dropped and only the fresh snapshot remains.
+    /// Enqueue a full snapshot. On overflow, atomically replace the stale
+    /// backlog with `Invalidated` + the fresh replacement `Snapshot`.
     fn enqueue_snapshot(&self, snapshot: HostSnapshot) {
         let mut q = self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if q.items.len() >= self.capacity {
             q.items.clear();
+            q.items.push_back(ProjectionEvent::Invalidated);
         }
         q.items.push_back(ProjectionEvent::Snapshot(snapshot.clone()));
         q.last_cursor = snapshot.registry_cursor;
@@ -584,9 +585,8 @@ fn process_registry_change(inner: &HostInner, change: RegistryChange) {
     }
 }
 
-/// Invalidate every consumer: enqueue `Invalidated` + a fresh snapshot (or a
-/// fresh snapshot alone for the snapshot-only default consumer). The registry
-/// cursor is NOT advanced — only the registry advances it.
+/// Invalidate every consumer: enqueue `Invalidated` + a fresh snapshot. The
+/// registry cursor is NOT advanced — only the registry advances it.
 fn invalidate_all(inner: &HostInner) {
     let _publish = inner.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 
@@ -629,8 +629,9 @@ fn deliver_close(inner: &HostInner) {
 }
 
 /// Default delivery applier: drains the default consumer's queue and APPLIES
-/// each snapshot into `applied` (run-loop-readable state). `Change` /
-/// `Invalidated` are meaningless for a snapshot-only consumer and ignored.
+/// each snapshot into `applied` (run-loop-readable state). `Change` is
+/// meaningless for a snapshot-only consumer and ignored; `Invalidated` clears
+/// the applied snapshot until its replacement arrives.
 async fn applier_worker(default: Arc<ConsumerState>, inner: Arc<HostInner>) {
     loop {
         if let Some(event) = default.try_pop() {
@@ -856,6 +857,92 @@ mod tests {
             q.items[2],
             ProjectionEvent::Snapshot(_)
         ), "replacement Snapshot must follow Invalidated");
+    }
+
+    /// RED (round2): ordinary default-consumer overflow on a registry change
+    /// must atomically replace the stale pending backlog with `Invalidated` +
+    /// a fresh replacement `Snapshot` (the SAME all-consumer invalidation
+    /// contract `invalidate_all` already uses), never a bare `Snapshot` that
+    /// silently drops the gap. Drives the REAL fan-out (`process_registry_change`)
+    /// with no await, so on the current-thread runtime neither the source
+    /// worker nor the default applier has polled; 64 registrations fill the
+    /// default queue past its 64-slot bound (all under the 256-slot broadcast
+    /// ring, so no lag confound). Then the REAL applier drains and applies the
+    /// replacement (no direct applied assignment).
+    #[tokio::test]
+    async fn default_overflow_replaces_backlog_with_invalidated_pair() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("base"), fake("base")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+
+        // Synchronous batch: register 64 tools and drive the real fan-out
+        // directly (the same `process_registry_change` the source worker
+        // invokes). No await => the default applier has not drained yet, so
+        // the queue accumulates exactly one snapshot per registration.
+        for i in 0..64 {
+            let name = format!("t{i}");
+            let description = format!("v{i}");
+            reg.register(
+                desc_labeled(&name, &description),
+                fake_labeled(&name, &description),
+            )
+            .unwrap();
+            process_registry_change(
+                &host.inner,
+                RegistryChange::Registered {
+                    name,
+                    revision: (i + 2) as u64,
+                    source: ToolSource::Builtin,
+                },
+            );
+        }
+
+        // The default queue must now hold EXACTLY the mandated pair: the stale
+        // pending backlog was atomically cleared, then `Invalidated` + the
+        // fresh replacement `Snapshot` (not a bare `Snapshot`).
+        let replacement = {
+            let q = host
+                .inner
+                .default_consumer
+                .queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert_eq!(
+                q.items.len(),
+                2,
+                "overflow must clear the stale backlog and enqueue Invalidated + Snapshot"
+            );
+            assert!(
+                matches!(q.items[0], ProjectionEvent::Invalidated),
+                "overflow must lead with Invalidated"
+            );
+            match &q.items[1] {
+                ProjectionEvent::Snapshot(s) => s.clone(),
+                other => panic!("expected replacement snapshot, got {other:?}"),
+            }
+        };
+
+        // The replacement reflects the CURRENT registry state: base + t0..t63
+        // (65 entries) at the current cursor 65, with the just-registered t63
+        // handler + descriptor frozen at ONE registry revision.
+        assert_eq!(replacement.entries.len(), 65);
+        assert_eq!(replacement.registry_cursor, Cursor(65));
+        let entry = replacement.entries.get("t63").expect("t63 must be present");
+        assert_eq!(entry.handler.definition().description, "v63", "current replacement handler");
+        assert_eq!(entry.descriptor.description, "v63", "current replacement descriptor");
+        assert_eq!(entry.descriptor.revision, 65, "current replacement revision");
+
+        // Let the REAL applier drain and apply the replacement (no direct
+        // applied assignment). The source worker's re-processing of the 64
+        // broadcasts also lands on the same final registry state (65 @
+        // Cursor 65), so the final applied payload is deterministic.
+        let applied = await_snapshot_where(&host, |s| s.entries.contains_key("t63")).await;
+        assert_eq!(applied.entries.len(), 65);
+        assert_eq!(applied.registry_cursor, Cursor(65));
+        let entry = applied.entries.get("t63").expect("t63 must be applied");
+        assert_eq!(entry.handler.definition().description, "v63", "applied handler");
+        assert_eq!(entry.descriptor.description, "v63", "applied descriptor");
     }
 
     #[tokio::test]
