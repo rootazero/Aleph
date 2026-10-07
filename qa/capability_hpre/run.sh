@@ -75,15 +75,8 @@ kill "$GEN_PID" 2>/dev/null || true
 wait "$GEN_PID" 2>/dev/null || true
 [ -f "$CONFIG" ] || { cat "$QA_ROOT/generate.log"; echo "SETUP_RESULT: FAIL no config"; exit 1; }
 "$PYTHON" "$PATCH" "$CONFIG" --gateway-port "$GATEWAY_PORT" --mock-port "$MOCK_PORT" || exit 1
-# MCP mutation RPC is the existing public registry surface; leave it available
-# to the real gateway handler even though no supplemental admin surface exists.
-"$PYTHON" - "$CONFIG" <<'PY'
-from pathlib import Path
-p = Path(__import__('sys').argv[1])
-s = p.read_text()
-s = s.replace('mcp_enabled = false', 'mcp_enabled = true')
-p.write_text(s)
-PY
+# MCP mutation RPC and manager actor are wired unconditionally; no per-run
+# toggle is needed.
 
 "$PYTHON" "$BUSY/mock_anthropic.py" "$MOCK_PORT" /etc/hostname single-shot "" "$REQUEST_LOG" >"$QA_ROOT/mock.log" 2>&1 &
 MOCK_PID=$!
