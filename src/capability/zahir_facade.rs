@@ -177,7 +177,7 @@ impl ZahirFacade {
     /// Map a registry mutation event onto the facade's capability change
     /// vocabulary. The `source` field is deliberately dropped — the capability
     /// change carries only `(id, revision)`.
-    fn map_registry_change(&self, change: RegistryChange) -> (Cursor, CapabilityChange) {
+    pub(super) fn map_registry_change(&self, change: RegistryChange) -> (Cursor, CapabilityChange) {
         match change {
             RegistryChange::Registered { name, revision, .. } => (
                 Cursor(revision),
@@ -212,7 +212,7 @@ impl ZahirFacade {
     /// `Invalidated` is scope-wide (carries no id) and always passes, though
     /// `map_registry_change` never produces it — the drain only ever asks
     /// about per-tool changes.
-    fn change_in_scope(&self, change: &CapabilityChange, scope: &Scope) -> bool {
+    pub(super) fn change_in_scope(&self, change: &CapabilityChange, scope: &Scope) -> bool {
         let id = match change {
             CapabilityChange::Registered { id, .. }
             | CapabilityChange::Replaced { id, .. }
