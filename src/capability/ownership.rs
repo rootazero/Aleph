@@ -467,30 +467,32 @@ impl OwnershipTree {
         let mut inner = self.inner.lock().expect("ownership mutex poisoned");
         let before = inner.bindings.len();
         inner.bindings.retain(|key, _| &key.capability != capability);
-        inner.revoked.insert(capability.clone());
-        let did_transition = before != inner.bindings.len();
-        if did_transition {
-            // Emit only when the existing method reports a real state
-            // transition (a binding was actually removed).
+        let new_tombstone = inner.revoked.insert(capability.clone());
+        let bindings_removed = before != inner.bindings.len();
+        if new_tombstone || bindings_removed {
+            // Emit on a real state transition: a binding was removed, or a
+            // fresh tombstone was inserted (unknown-id revoke). A duplicate
+            // revoke on an already-tombstoned id emits nothing.
             let _ = inner.changes.send(OwnershipChange::Revoked {
                 capability: capability.clone(),
             });
         }
-        did_transition
+        bindings_removed
     }
 
     pub fn dispose(&self, scope: LifetimeScope) -> bool {
         let mut inner = self.inner.lock().expect("ownership mutex poisoned");
         let before = inner.bindings.len();
         inner.bindings.retain(|_, binding| rank(binding.lifetime) > rank(scope));
-        inner.disposed.insert(scope);
-        let did_dispose = before != inner.bindings.len();
-        if did_dispose {
-            // Emit only when the existing method reports a real disposal
-            // (a binding was actually released).
+        let new_tombstone = inner.disposed.insert(scope);
+        let bindings_released = before != inner.bindings.len();
+        if new_tombstone || bindings_released {
+            // Emit on a real state transition: a binding was released, or a
+            // fresh tombstone was inserted (empty-scope dispose). A duplicate
+            // dispose on an already-tombstoned scope emits nothing.
             let _ = inner.changes.send(OwnershipChange::Disposed { scope });
         }
-        did_dispose
+        bindings_released
     }
 }
 
@@ -1067,15 +1069,26 @@ mod tests {
     // `OwnershipTree::subscribe_changes`. They are the RED phase of TDD:
     // before implementation, the type names referenced here do not exist.
 
+    /// Wait up to `timeout` for the next event on `rx`. Panics on lag, close,
+    /// or timeout. The bounded spin exists so a regression that stops
+    /// emitting cannot hang the test forever; it does not give the producer
+    /// any timing leniency beyond what `yield_now` already affords.
     fn wait_for_change(
         rx: &mut tokio::sync::broadcast::Receiver<OwnershipChange>,
+        timeout: std::time::Duration,
     ) -> OwnershipChange {
-        use std::thread;
+        use std::time::Instant;
         use tokio::sync::broadcast::error::TryRecvError;
+        let deadline = Instant::now() + timeout;
         loop {
             match rx.try_recv() {
                 Ok(c) => return c,
-                Err(TryRecvError::Empty) => thread::yield_now(),
+                Err(TryRecvError::Empty) => {
+                    if Instant::now() >= deadline {
+                        panic!("wait_for_change: no event within {timeout:?}")
+                    }
+                    std::thread::yield_now();
+                }
                 Err(TryRecvError::Lagged(_)) => {
                     panic!("observer lagged behind broadcast")
                 }
@@ -1086,8 +1099,58 @@ mod tests {
         }
     }
 
+    /// Wait up to `timeout` for the absence of any event on `rx`. Panics on
+    /// lag, close, or receipt of an event. Symmetric counterpart to
+    /// [`wait_for_change`].
+    fn assert_no_change(
+        rx: &mut tokio::sync::broadcast::Receiver<OwnershipChange>,
+        timeout: std::time::Duration,
+    ) {
+        use std::time::Instant;
+        use tokio::sync::broadcast::error::TryRecvError;
+        let deadline = Instant::now() + timeout;
+        loop {
+            match rx.try_recv() {
+                Ok(c) => panic!("assert_no_change: unexpected event {c:?} within {timeout:?}"),
+                Err(TryRecvError::Empty) => {
+                    if Instant::now() >= deadline {
+                        return;
+                    }
+                    std::thread::yield_now();
+                }
+                Err(TryRecvError::Lagged(_)) => {
+                    panic!("observer lagged behind broadcast")
+                }
+                Err(TryRecvError::Closed) => {
+                    panic!("broadcast closed unexpectedly")
+                }
+            }
+        }
+    }
+
+    /// Standard bounded wait used by the tests below. The five-second budget
+    /// is far above what the in-process broadcast needs in practice; its only
+    /// job is to turn a regression-induced hang into a test failure with a
+    /// readable message.
+    const TEST_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Short bounded wait for the no-event assertion. The producer is a single
+    /// in-process `send`, so a duplicate / no-op call must surface silence
+    /// almost immediately.
+    const TEST_QUIET: std::time::Duration = std::time::Duration::from_millis(150);
+
     #[test]
-    fn ownership_changes_emit_inside_mutation_lock() {
+    fn ownership_changes_observe_committed_state() {
+        // This test proves the observable contract: a subscriber that
+        // receives an `OwnershipChange` event therefore observes the
+        // post-mutation state on its next lock acquisition. It does NOT
+        // attempt to prove the `send` happens inside the same critical
+        // section that performed the mutation — that property is
+        // established by static inspection of the implementation
+        // (mutation, then `send`, both inside one `Mutex` guard). The
+        // observer's only role here is to read the post-event state
+        // through the same lock and confirm it matches what the event
+        // payload asserts.
         use std::sync::{mpsc, Arc};
 
         let tree = Arc::new(OwnershipTree::new());
@@ -1118,11 +1181,11 @@ mod tests {
         let (tx, rx_chan) =
             mpsc::channel::<(OwnershipChange, Option<OwnerGeneration>, Option<OwnerGeneration>)>();
         let observer = std::thread::spawn(move || {
-            let change = wait_for_change(&mut rx);
-            // After the event is delivered, read the protected state from
-            // a fresh lock acquisition. Because `send` completes inside the
-            // same critical section that performed the mutation, the
-            // post-lock state must reflect what the event claims.
+            let change = wait_for_change(&mut rx, TEST_WAIT);
+            // Read the protected state from a fresh lock acquisition
+            // AFTER the event is delivered. If the event implies
+            // post-mutation visibility, this state must match the event
+            // payload.
             let gen_a = tree_obs.generation(&cap_a_obs, &vis_obs);
             let gen_b = tree_obs.generation(&cap_b_obs, &vis_obs);
             tx.send((change, gen_a, gen_b)).expect("send to main");
@@ -1130,8 +1193,9 @@ mod tests {
 
         let new_gen = tree.bump(LifetimeScope::Runtime);
 
-        let (change, observed_gen_a, observed_gen_b) =
-            rx_chan.recv().expect("observer delivers observation");
+        let (change, observed_gen_a, observed_gen_b) = rx_chan
+            .recv_timeout(TEST_WAIT)
+            .expect("observer delivers observation within TEST_WAIT");
         observer.join().expect("observer joins");
 
         match change {
@@ -1145,14 +1209,12 @@ mod tests {
                     "event reports the scope bumped"
                 );
                 assert_eq!(
-                    observed_gen_a,
-                    Some(new_gen),
-                    "subscriber observes post-bump generation for cap_a (proves send-after-mutation)"
+                    observed_gen_a, Some(new_gen),
+                    "observer sees cap_a at the generation the event claims"
                 );
                 assert_eq!(
-                    observed_gen_b,
-                    Some(new_gen),
-                    "subscriber observes post-bump generation for cap_b"
+                    observed_gen_b, Some(new_gen),
+                    "observer sees cap_b at the generation the event claims"
                 );
             }
             other => panic!("expected OwnershipChange::Bumped, got {other:?}"),
@@ -1165,7 +1227,7 @@ mod tests {
         let vis_obs2 = vis.clone();
         let (tx2, rx_chan2) = mpsc::channel::<(OwnershipChange, bool, bool)>();
         let observer2 = std::thread::spawn(move || {
-            let change = wait_for_change(&mut rx2);
+            let change = wait_for_change(&mut rx2, TEST_WAIT);
             let resolved = tree_obs2.resolve(&cap_a_obs2, &vis_obs2).is_some();
             let revoked = tree_obs2.is_revoked(&cap_a_obs2);
             tx2.send((change, resolved, revoked)).expect("send to main");
@@ -1173,11 +1235,12 @@ mod tests {
 
         assert!(
             tree.revoke(&cap_a),
-            "revoke returns true on a real state transition"
+            "revoke returns true on a real binding removal"
         );
 
-        let (change2, resolved_after, revoked_after) =
-            rx_chan2.recv().expect("observer delivers observation");
+        let (change2, resolved_after, revoked_after) = rx_chan2
+            .recv_timeout(TEST_WAIT)
+            .expect("observer delivers observation within TEST_WAIT");
         observer2.join().expect("observer joins");
 
         match change2 {
@@ -1188,11 +1251,11 @@ mod tests {
                 );
                 assert!(
                     !resolved_after,
-                    "subscriber observes cap_a binding gone after event"
+                    "observer sees cap_a binding gone after event"
                 );
                 assert!(
                     revoked_after,
-                    "subscriber observes cap_a marked revoked after event"
+                    "observer sees cap_a marked revoked after event"
                 );
             }
             other => panic!("expected OwnershipChange::Revoked, got {other:?}"),
@@ -1203,17 +1266,19 @@ mod tests {
         let tree_obs3 = Arc::clone(&tree);
         let (tx3, rx_chan3) = mpsc::channel::<(OwnershipChange, bool)>();
         let observer3 = std::thread::spawn(move || {
-            let change = wait_for_change(&mut rx3);
+            let change = wait_for_change(&mut rx3, TEST_WAIT);
             let disposed = tree_obs3.is_disposed(LifetimeScope::Task);
             tx3.send((change, disposed)).expect("send to main");
         });
 
         assert!(
             tree.dispose(LifetimeScope::Task),
-            "dispose returns true on a real disposal"
+            "dispose returns true on a real binding release"
         );
 
-        let (change3, disposed_after) = rx_chan3.recv().expect("observer delivers observation");
+        let (change3, disposed_after) = rx_chan3
+            .recv_timeout(TEST_WAIT)
+            .expect("observer delivers observation within TEST_WAIT");
         observer3.join().expect("observer joins");
 
         match change3 {
@@ -1224,7 +1289,7 @@ mod tests {
                 );
                 assert!(
                     disposed_after,
-                    "subscriber observes Task marked disposed after event"
+                    "observer sees Task marked disposed after event"
                 );
             }
             other => panic!("expected OwnershipChange::Disposed, got {other:?}"),
@@ -1261,16 +1326,12 @@ mod tests {
             tree.revoke(&cap_alpha),
             "first revoke of alpha returns true"
         );
-        let change1 = wait_for_change(&mut rx);
+        let change1 = wait_for_change(&mut rx, TEST_WAIT);
         match change1 {
             OwnershipChange::Revoked { capability } => {
                 assert_eq!(
                     capability, cap_alpha,
-                    "revoke event names the exact capability id"
-                );
-                assert_eq!(
-                    capability, cap_alpha,
-                    "the revoked id is exactly the one passed to revoke()"
+                    "revoke event names the exact capability id passed in"
                 );
             }
             other => panic!("expected Revoked(alpha), got {other:?}"),
@@ -1285,17 +1346,12 @@ mod tests {
             tree.dispose(LifetimeScope::Task),
             "first dispose of Task returns true"
         );
-        let change2 = wait_for_change(&mut rx);
+        let change2 = wait_for_change(&mut rx, TEST_WAIT);
         match change2 {
             OwnershipChange::Disposed { scope } => {
                 assert_eq!(
                     scope, LifetimeScope::Task,
-                    "dispose event names the exact lifetime scope"
-                );
-                assert_ne!(
-                    scope,
-                    LifetimeScope::Runtime,
-                    "the disposed scope is exactly Task, not Runtime"
+                    "dispose event names the exact lifetime scope passed in"
                 );
             }
             other => panic!("expected Disposed(Task), got {other:?}"),
@@ -1307,7 +1363,7 @@ mod tests {
 
         // Bump: the event carries the bumped generation and the scope bumped.
         let new_gen = tree.bump(LifetimeScope::Runtime);
-        let change3 = wait_for_change(&mut rx);
+        let change3 = wait_for_change(&mut rx, TEST_WAIT);
         match change3 {
             OwnershipChange::Bumped { generation, scope } => {
                 assert_eq!(
@@ -1324,7 +1380,20 @@ mod tests {
     }
 
     #[test]
-    fn ownership_notification_does_not_change_generation_or_session_seq() {
+    fn ownership_subscription_does_not_change_generation() {
+        // Observable contract: subscribing to `subscribe_changes()` is a
+        // pure observation. It MUST NOT mutate the generation nonce. The
+        // event payload a subscriber receives must carry the generation
+        // another (fresh-lock) reader sees after the event.
+        //
+        // The previous name (`_generation_or_session_seq`) implied a
+        // session-fixture check that does not exist in this file. The
+        // "session" half of that claim is established by static structural
+        // decoupling, not by an in-test fixture: this module owns its own
+        // `tokio::sync::broadcast::Sender<OwnershipChange>` channel and
+        // does not import, reference, or construct any session event
+        // store, global bus, or approval authority. The authority is
+        // disconnected from the session layer by construction.
         let tree = OwnershipTree::new();
         let cap = cap_id("foo");
         let vis = full_vis();
@@ -1388,11 +1457,176 @@ mod tests {
             Some(new_gen),
             "bump emitted the generation it claimed; subscription never side-effected"
         );
+    }
 
-        // The 'no session event appended' half is verified by static
-        // inspection: the `OwnershipChange` broadcast sender lives entirely
-        // inside `OwnershipTree` and does not route through any session
-        // event store, global bus, or approval authority. The authority is
-        // disconnected from the session layer by construction.
+    #[test]
+    fn revoke_unknown_id_emits_event_and_rejects_registration() {
+        // Tombstone-only transition: revoking an id that has no binding is
+        // still a state change (the id enters the `revoked` set), and that
+        // change MUST be observable. A second revoke on the same id is a
+        // no-op (the tombstone already exists, no binding to drop) and
+        // MUST emit nothing. Registering the same id after revocation is
+        // rejected because the authority has already tombstoned it.
+        let tree = OwnershipTree::new();
+        let cap = cap_id("ghost");
+        let vis = full_vis();
+
+        let mut rx = tree.subscribe_changes();
+
+        // 1. Unknown-id revoke returns false (no bindings removed) but
+        //    emits one event because a fresh tombstone was inserted.
+        assert!(
+            !tree.revoke(&cap),
+            "revoke of an unknown id returns false (binding-removal-only contract)"
+        );
+        let change = wait_for_change(&mut rx, TEST_WAIT);
+        match change {
+            OwnershipChange::Revoked { capability } => {
+                assert_eq!(
+                    capability, cap,
+                    "event identifies the unknown id we tombstoned"
+                );
+            }
+            other => panic!("expected Revoked, got {other:?}"),
+        }
+
+        // 2. Duplicate revoke: tombstone already present, no bindings to
+        //    drop -> emit nothing.
+        assert!(
+            !tree.revoke(&cap),
+            "duplicate revoke of an already-tombstoned id returns false"
+        );
+        assert_no_change(&mut rx, TEST_QUIET);
+
+        // 3. Registration of the tombstoned id is refused: the authority
+        //    remembers the revoke forever.
+        let reg_err = tree
+            .register(
+                cap.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                vis.clone(),
+            )
+            .expect_err("register after revoke must be rejected");
+        assert!(
+            matches!(reg_err, RegisterError::Revoked),
+            "register error is Revoked, got {reg_err:?}"
+        );
+    }
+
+    #[test]
+    fn dispose_empty_scope_emits_event_and_rejects_registration() {
+        // Tombstone-only transition: disposing a scope that holds no
+        // bindings is still a state change (the scope enters `disposed`),
+        // and that change MUST be observable. A second dispose on the same
+        // scope is a no-op and MUST emit nothing. Registering into the
+        // disposed scope is rejected.
+        let tree = OwnershipTree::new();
+        let cap = cap_id("alpha");
+        let vis = full_vis();
+        // Register a binding into Runtime so the tree is non-empty, then
+        // dispose Session (which holds no bindings).
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register");
+
+        let mut rx = tree.subscribe_changes();
+
+        // 1. Dispose on an empty scope returns false (no bindings released)
+        //    but emits one event because a fresh tombstone was inserted.
+        assert!(
+            !tree.dispose(LifetimeScope::Session),
+            "dispose of an empty scope returns false (binding-release-only contract)"
+        );
+        let change = wait_for_change(&mut rx, TEST_WAIT);
+        match change {
+            OwnershipChange::Disposed { scope } => {
+                assert_eq!(
+                    scope, LifetimeScope::Session,
+                    "event identifies the empty scope we tombstoned"
+                );
+            }
+            other => panic!("expected Disposed, got {other:?}"),
+        }
+
+        // 2. Duplicate dispose: tombstone already present, no bindings to
+        //    release -> emit nothing.
+        assert!(
+            !tree.dispose(LifetimeScope::Session),
+            "duplicate dispose of an already-tombstoned scope returns false"
+        );
+        assert_no_change(&mut rx, TEST_QUIET);
+
+        // 3. Registration into the disposed scope is refused: the
+        //    authority remembers the dispose forever.
+        let reg_err = tree
+            .register(
+                cap_id("beta"),
+                OwnerRef::Runtime,
+                LifetimeScope::Session,
+                vis.clone(),
+            )
+            .expect_err("register into disposed scope must be rejected");
+        assert!(
+            matches!(reg_err, RegisterError::Disposed),
+            "register error is Disposed, got {reg_err:?}"
+        );
+    }
+
+    #[test]
+    fn revoke_after_dispose_emits_event() {
+        // Regression: dispose releases a binding (Bumped event seen),
+        // then revoke on the disposed scope's id must still emit a
+        // Revoked event for the tombstone, even though the binding was
+        // already gone. The returned bool is binding-removal-only.
+        let tree = OwnershipTree::new();
+        let cap = cap_id("doomed");
+        let vis = full_vis();
+        tree.register(
+            cap.clone(),
+            OwnerRef::Task(TaskId("t".into())),
+            LifetimeScope::Task,
+            vis.clone(),
+        )
+        .expect("register");
+
+        let mut rx = tree.subscribe_changes();
+
+        // Dispose Task: drops the binding AND tombstones the scope.
+        assert!(
+            tree.dispose(LifetimeScope::Task),
+            "dispose of Task returns true (binding released)"
+        );
+        let change1 = wait_for_change(&mut rx, TEST_WAIT);
+        match change1 {
+            OwnershipChange::Disposed { scope } => {
+                assert_eq!(scope, LifetimeScope::Task);
+            }
+            other => panic!("expected Disposed(Task), got {other:?}"),
+        }
+
+        // Revoke the id whose binding was already released by the
+        // dispose. Binding count is unchanged -> returns false; the
+        // tombstone is fresh -> emits one Revoked event.
+        assert!(
+            !tree.revoke(&cap),
+            "revoke after dispose returns false (binding already gone)"
+        );
+        let change2 = wait_for_change(&mut rx, TEST_WAIT);
+        match change2 {
+            OwnershipChange::Revoked { capability } => {
+                assert_eq!(
+                    capability, cap,
+                    "revoke after dispose emits a Revoked event for the id"
+                );
+            }
+            other => panic!("expected Revoked after dispose, got {other:?}"),
+        }
+        // And no further event follows.
+        assert_no_change(&mut rx, TEST_QUIET);
     }
 }
