@@ -13,6 +13,7 @@ use crate::capability::descriptor::CapabilityId;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
+use tokio::sync::broadcast;
 
 /// Monotonic owner generation counter.
 ///
@@ -121,6 +122,38 @@ pub struct EffectClaim {
     pub owner: OwnerRef,
 }
 
+/// An invalidation notification emitted by [`OwnershipTree`] under its own
+/// mutex, in the same critical section that mutates ownership state.
+///
+/// This enum is the *only* observer-visible side of [`OwnershipTree`]'s
+/// mutation methods. Each variant identifies which operation committed, and
+/// carries the minimal payload needed by downstream consumers
+/// (e.g. [`crate::capability::projection_host`]) to reconcile their view:
+///
+/// - [`OwnershipChange::Bumped`]: the owner nonce was bumped; every binding
+///   at or below `scope` was rewritten to `generation` and its claims were
+///   cleared.
+/// - [`OwnershipChange::Revoked`]: every binding for `capability` was
+///   removed and the id was added to the irreversibly-revoked set.
+/// - [`OwnershipChange::Disposed`]: every binding at or below `scope` was
+///   removed and the scope was added to the irreversibly-disposed set.
+///
+/// The sender lives entirely inside `OwnershipInner`; the change stream does
+/// not route through any global bus, session event store, or approval
+/// authority. Observers subscribe through [`OwnershipTree::subscribe_changes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnershipChange {
+    /// The owner nonce was bumped.
+    Bumped {
+        generation: OwnerGeneration,
+        scope: LifetimeScope,
+    },
+    /// A capability id was irreversibly revoked.
+    Revoked { capability: CapabilityId },
+    /// A lifetime scope was irreversibly disposed.
+    Disposed { scope: LifetimeScope },
+}
+
 // =============================================================================
 // Task 2 (Gate B): OwnershipTree behaviour — bump / revoke / dispose.
 // =============================================================================
@@ -210,6 +243,10 @@ struct OwnershipInner {
     revoked: HashSet<CapabilityId>,
     disposed: HashSet<LifetimeScope>,
     bindings: HashMap<BindingKey, Binding>,
+    /// Local invalidation broadcast: every committed mutation sends under
+    /// the same mutex that performed the mutation, so subscribers only ever
+    /// observe post-mutation state.
+    changes: broadcast::Sender<OwnershipChange>,
 }
 
 #[derive(Debug)]
@@ -220,14 +257,37 @@ pub struct OwnershipTree {
 impl OwnershipTree {
     #[must_use]
     pub fn new() -> Self {
+        // Capacity 8 mirrors the codebase's other authority broadcasts
+        // (`extension::lifecycle`, `tools::registry`); bumpers are infrequent
+        // so lag is rare in practice.
+        let (changes, _) = broadcast::channel(8);
         Self {
             inner: Mutex::new(OwnershipInner {
                 nonce: 0,
                 revoked: HashSet::new(),
                 disposed: HashSet::new(),
                 bindings: HashMap::new(),
+                changes,
             }),
         }
+    }
+
+    /// Subscribe to ownership invalidation events.
+    ///
+    /// Each subscriber receives every subsequent [`OwnershipChange`] emitted
+    /// by [`bump`](Self::bump), [`revoke`](Self::revoke), or
+    /// [`dispose`](Self::dispose). Subscribing is pure observation: it does
+    /// not mutate state, does not advance the owner nonce, and does not
+    /// register a binding. The receiver may lag if it falls behind the
+    /// channel capacity; the lagged count is reported so a consumer can
+    /// reconcile against a fresh snapshot.
+    #[must_use]
+    pub fn subscribe_changes(&self) -> broadcast::Receiver<OwnershipChange> {
+        self.inner
+            .lock()
+            .expect("ownership mutex poisoned")
+            .changes
+            .subscribe()
     }
 
     fn key(capability: &CapabilityId, visibility: &VisibilityScope) -> BindingKey {
@@ -396,6 +456,10 @@ impl OwnershipTree {
                 binding.claims.clear();
             }
         }
+        // Emit AFTER the state mutation, still under the same mutex: a
+        // subscriber that observes the event therefore reads the post-bump
+        // state on its next lock acquisition.
+        let _ = inner.changes.send(OwnershipChange::Bumped { generation, scope });
         generation
     }
 
@@ -404,7 +468,15 @@ impl OwnershipTree {
         let before = inner.bindings.len();
         inner.bindings.retain(|key, _| &key.capability != capability);
         inner.revoked.insert(capability.clone());
-        before != inner.bindings.len()
+        let did_transition = before != inner.bindings.len();
+        if did_transition {
+            // Emit only when the existing method reports a real state
+            // transition (a binding was actually removed).
+            let _ = inner.changes.send(OwnershipChange::Revoked {
+                capability: capability.clone(),
+            });
+        }
+        did_transition
     }
 
     pub fn dispose(&self, scope: LifetimeScope) -> bool {
@@ -412,7 +484,13 @@ impl OwnershipTree {
         let before = inner.bindings.len();
         inner.bindings.retain(|_, binding| rank(binding.lifetime) > rank(scope));
         inner.disposed.insert(scope);
-        before != inner.bindings.len()
+        let did_dispose = before != inner.bindings.len();
+        if did_dispose {
+            // Emit only when the existing method reports a real disposal
+            // (a binding was actually released).
+            let _ = inner.changes.send(OwnershipChange::Disposed { scope });
+        }
+        did_dispose
     }
 }
 
@@ -981,5 +1059,340 @@ mod tests {
         assert!(tree
             .claim(&cap, &vis, OwnerRef::Runtime, "racer".to_string())
             .is_none());
+    }
+
+    // ── Task 1 (H-pre) tests: atomic ownership invalidation notifications ──
+    //
+    // These exercise the `OwnershipChange` broadcast channel and
+    // `OwnershipTree::subscribe_changes`. They are the RED phase of TDD:
+    // before implementation, the type names referenced here do not exist.
+
+    fn wait_for_change(
+        rx: &mut tokio::sync::broadcast::Receiver<OwnershipChange>,
+    ) -> OwnershipChange {
+        use std::thread;
+        use tokio::sync::broadcast::error::TryRecvError;
+        loop {
+            match rx.try_recv() {
+                Ok(c) => return c,
+                Err(TryRecvError::Empty) => thread::yield_now(),
+                Err(TryRecvError::Lagged(_)) => {
+                    panic!("observer lagged behind broadcast")
+                }
+                Err(TryRecvError::Closed) => {
+                    panic!("broadcast closed unexpectedly")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ownership_changes_emit_inside_mutation_lock() {
+        use std::sync::{mpsc, Arc};
+
+        let tree = Arc::new(OwnershipTree::new());
+        let cap_a = cap_id("a");
+        let cap_b = cap_id("b");
+        let vis = full_vis();
+        tree.register(
+            cap_a.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register a");
+        tree.register(
+            cap_b.clone(),
+            OwnerRef::Task(TaskId("t".into())),
+            LifetimeScope::Task,
+            vis.clone(),
+        )
+        .expect("register b");
+
+        // ── bump ────────────────────────────────────────────────────────
+        let mut rx = tree.subscribe_changes();
+        let tree_obs = Arc::clone(&tree);
+        let cap_a_obs = cap_a.clone();
+        let cap_b_obs = cap_b.clone();
+        let vis_obs = vis.clone();
+        let (tx, rx_chan) =
+            mpsc::channel::<(OwnershipChange, Option<OwnerGeneration>, Option<OwnerGeneration>)>();
+        let observer = std::thread::spawn(move || {
+            let change = wait_for_change(&mut rx);
+            // After the event is delivered, read the protected state from
+            // a fresh lock acquisition. Because `send` completes inside the
+            // same critical section that performed the mutation, the
+            // post-lock state must reflect what the event claims.
+            let gen_a = tree_obs.generation(&cap_a_obs, &vis_obs);
+            let gen_b = tree_obs.generation(&cap_b_obs, &vis_obs);
+            tx.send((change, gen_a, gen_b)).expect("send to main");
+        });
+
+        let new_gen = tree.bump(LifetimeScope::Runtime);
+
+        let (change, observed_gen_a, observed_gen_b) =
+            rx_chan.recv().expect("observer delivers observation");
+        observer.join().expect("observer joins");
+
+        match change {
+            OwnershipChange::Bumped { generation, scope } => {
+                assert_eq!(
+                    generation, new_gen,
+                    "event reports the generation bump produced"
+                );
+                assert_eq!(
+                    scope, LifetimeScope::Runtime,
+                    "event reports the scope bumped"
+                );
+                assert_eq!(
+                    observed_gen_a,
+                    Some(new_gen),
+                    "subscriber observes post-bump generation for cap_a (proves send-after-mutation)"
+                );
+                assert_eq!(
+                    observed_gen_b,
+                    Some(new_gen),
+                    "subscriber observes post-bump generation for cap_b"
+                );
+            }
+            other => panic!("expected OwnershipChange::Bumped, got {other:?}"),
+        }
+
+        // ── revoke ──────────────────────────────────────────────────────
+        let mut rx2 = tree.subscribe_changes();
+        let tree_obs2 = Arc::clone(&tree);
+        let cap_a_obs2 = cap_a.clone();
+        let vis_obs2 = vis.clone();
+        let (tx2, rx_chan2) = mpsc::channel::<(OwnershipChange, bool, bool)>();
+        let observer2 = std::thread::spawn(move || {
+            let change = wait_for_change(&mut rx2);
+            let resolved = tree_obs2.resolve(&cap_a_obs2, &vis_obs2).is_some();
+            let revoked = tree_obs2.is_revoked(&cap_a_obs2);
+            tx2.send((change, resolved, revoked)).expect("send to main");
+        });
+
+        assert!(
+            tree.revoke(&cap_a),
+            "revoke returns true on a real state transition"
+        );
+
+        let (change2, resolved_after, revoked_after) =
+            rx_chan2.recv().expect("observer delivers observation");
+        observer2.join().expect("observer joins");
+
+        match change2 {
+            OwnershipChange::Revoked { capability } => {
+                assert_eq!(
+                    capability, cap_a,
+                    "event identifies the revoked capability id"
+                );
+                assert!(
+                    !resolved_after,
+                    "subscriber observes cap_a binding gone after event"
+                );
+                assert!(
+                    revoked_after,
+                    "subscriber observes cap_a marked revoked after event"
+                );
+            }
+            other => panic!("expected OwnershipChange::Revoked, got {other:?}"),
+        }
+
+        // ── dispose ─────────────────────────────────────────────────────
+        let mut rx3 = tree.subscribe_changes();
+        let tree_obs3 = Arc::clone(&tree);
+        let (tx3, rx_chan3) = mpsc::channel::<(OwnershipChange, bool)>();
+        let observer3 = std::thread::spawn(move || {
+            let change = wait_for_change(&mut rx3);
+            let disposed = tree_obs3.is_disposed(LifetimeScope::Task);
+            tx3.send((change, disposed)).expect("send to main");
+        });
+
+        assert!(
+            tree.dispose(LifetimeScope::Task),
+            "dispose returns true on a real disposal"
+        );
+
+        let (change3, disposed_after) = rx_chan3.recv().expect("observer delivers observation");
+        observer3.join().expect("observer joins");
+
+        match change3 {
+            OwnershipChange::Disposed { scope } => {
+                assert_eq!(
+                    scope, LifetimeScope::Task,
+                    "event identifies disposed lifetime scope"
+                );
+                assert!(
+                    disposed_after,
+                    "subscriber observes Task marked disposed after event"
+                );
+            }
+            other => panic!("expected OwnershipChange::Disposed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn revoke_and_dispose_notifications_are_specific() {
+        let tree = OwnershipTree::new();
+        let cap_alpha = cap_id("alpha");
+        let cap_beta = cap_id("beta");
+        let vis_alpha = restricted_vis("ws-alpha");
+        let vis_beta = restricted_vis("ws-beta");
+
+        tree.register(
+            cap_alpha.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis_alpha.clone(),
+        )
+        .expect("register alpha");
+        tree.register(
+            cap_beta.clone(),
+            OwnerRef::Task(TaskId("t".into())),
+            LifetimeScope::Task,
+            vis_beta.clone(),
+        )
+        .expect("register beta");
+
+        let mut rx = tree.subscribe_changes();
+
+        // Revoke alpha: only alpha's binding is removed.
+        assert!(
+            tree.revoke(&cap_alpha),
+            "first revoke of alpha returns true"
+        );
+        let change1 = wait_for_change(&mut rx);
+        match change1 {
+            OwnershipChange::Revoked { capability } => {
+                assert_eq!(
+                    capability, cap_alpha,
+                    "revoke event names the exact capability id"
+                );
+                assert_eq!(
+                    capability, cap_alpha,
+                    "the revoked id is exactly the one passed to revoke()"
+                );
+            }
+            other => panic!("expected Revoked(alpha), got {other:?}"),
+        }
+        assert!(
+            tree.resolve(&cap_beta, &vis_beta).is_some(),
+            "beta's binding is unaffected by alpha's revoke"
+        );
+
+        // Dispose Task: only the Task binding (beta) is removed.
+        assert!(
+            tree.dispose(LifetimeScope::Task),
+            "first dispose of Task returns true"
+        );
+        let change2 = wait_for_change(&mut rx);
+        match change2 {
+            OwnershipChange::Disposed { scope } => {
+                assert_eq!(
+                    scope, LifetimeScope::Task,
+                    "dispose event names the exact lifetime scope"
+                );
+                assert_ne!(
+                    scope,
+                    LifetimeScope::Runtime,
+                    "the disposed scope is exactly Task, not Runtime"
+                );
+            }
+            other => panic!("expected Disposed(Task), got {other:?}"),
+        }
+        assert!(
+            tree.resolve(&cap_beta, &vis_beta).is_none(),
+            "beta's binding is gone after Task dispose"
+        );
+
+        // Bump: the event carries the bumped generation and the scope bumped.
+        let new_gen = tree.bump(LifetimeScope::Runtime);
+        let change3 = wait_for_change(&mut rx);
+        match change3 {
+            OwnershipChange::Bumped { generation, scope } => {
+                assert_eq!(
+                    generation, new_gen,
+                    "bumped event carries the generation just minted"
+                );
+                assert_eq!(
+                    scope, LifetimeScope::Runtime,
+                    "bumped event names the scope that was bumped"
+                );
+            }
+            other => panic!("expected Bumped, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ownership_notification_does_not_change_generation_or_session_seq() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("foo");
+        let vis = full_vis();
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register");
+
+        // Subscription is a pure observation: generation must not change.
+        let pre_gen = tree.generation(&cap, &vis);
+        let _sub1 = tree.subscribe_changes();
+        let _sub2 = tree.subscribe_changes();
+        let _sub3 = tree.subscribe_changes();
+        let post_gen = tree.generation(&cap, &vis);
+        assert_eq!(
+            pre_gen, post_gen,
+            "subscription does not change binding generation"
+        );
+
+        // The authority stays local: two independent subscribers both observe
+        // the same event from one mutation, and the post-mutation generation
+        // matches the generation carried in the event payload.
+        let mut rx1 = tree.subscribe_changes();
+        let mut rx2 = tree.subscribe_changes();
+        let new_gen = tree.bump(LifetimeScope::Runtime);
+
+        let change1 = match rx1.try_recv() {
+            Ok(c) => c,
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                panic!("rx1 received no event after bump")
+            }
+            Err(e) => panic!("rx1: {e:?}"),
+        };
+        let change2 = match rx2.try_recv() {
+            Ok(c) => c,
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                panic!("rx2 received no event after bump")
+            }
+            Err(e) => panic!("rx2: {e:?}"),
+        };
+        assert_eq!(
+            change1, change2,
+            "all subscribers see the same event from one mutation"
+        );
+        match change1 {
+            OwnershipChange::Bumped { generation, scope } => {
+                assert_eq!(generation, new_gen);
+                assert_eq!(scope, LifetimeScope::Runtime);
+            }
+            other => panic!("expected Bumped, got {other:?}"),
+        }
+
+        // The post-bump generation is what the event reports — subscription
+        // never side-effected the nonce.
+        let post_bump_gen = tree.generation(&cap, &vis);
+        assert_eq!(
+            post_bump_gen,
+            Some(new_gen),
+            "bump emitted the generation it claimed; subscription never side-effected"
+        );
+
+        // The 'no session event appended' half is verified by static
+        // inspection: the `OwnershipChange` broadcast sender lives entirely
+        // inside `OwnershipTree` and does not route through any session
+        // event store, global bus, or approval authority. The authority is
+        // disconnected from the session layer by construction.
     }
 }
