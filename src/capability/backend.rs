@@ -36,7 +36,12 @@ pub struct ToolBackendAdapter {
 
 impl ToolBackendAdapter {
     /// Whether `id` falls inside `scope`'s kind / namespace restrictions.
-    fn in_scope(id: &CapabilityId, scope: &Scope) -> bool {
+    ///
+    /// `pub(super)` so the capability sibling module (`zahir_facade`) shares
+    /// THIS predicate when filtering registry change events — one definition of
+    /// "in scope" for both `enumerate`/`snapshot_capabilities` and the
+    /// subscribe drain.
+    pub(super) fn in_scope(id: &CapabilityId, scope: &Scope) -> bool {
         if let Some(kind) = scope.kind {
             if kind != CapabilityKind::Tool {
                 return false;

@@ -21,7 +21,7 @@ use crate::capability::facade::{
 use crate::capability::ownership::{LifetimeScope, OwnerRef, OwnershipTree, VisibilityScope};
 use crate::sync_primitives::Arc;
 use crate::tools::registry::{RegistryChange, ToolHandlerRegistry};
-use tokio::sync::broadcast::error::TryRecvError;
+use tokio::sync::broadcast::{self, error::TryRecvError};
 
 /// Fold a bare tool name into the tool-namespaced [`CapabilityId`].
 fn tool_id(name: &str) -> CapabilityId {
@@ -99,12 +99,13 @@ impl ZahirFacade {
         }
     }
 
-    /// Whether a registry-sourced capability change is visible under
-    /// `scope.visibility`.
+    /// Whether a registry-sourced capability change is visible under `scope`.
     ///
-    /// Mirrors `describe`'s binding filter: a change passes only when its id
-    /// has a binding under the requested visibility. `Invalidated` is
-    /// scope-wide (carries no id) and always passes, though
+    /// Applies the SAME kind / namespace predicate the backend uses for
+    /// `enumerate` / `snapshot_capabilities` (`ToolBackendAdapter::in_scope`)
+    /// BEFORE the `OwnershipTree` visibility binding, so a change for a
+    /// non-Tool kind or a foreign namespace is invisible everywhere.
+    /// `Invalidated` is scope-wide (carries no id) and always passes, though
     /// `map_registry_change` never produces it — the drain only ever asks
     /// about per-tool changes.
     fn change_in_scope(&self, change: &CapabilityChange, scope: &Scope) -> bool {
@@ -114,7 +115,49 @@ impl ZahirFacade {
             | CapabilityChange::Unregistered { id, .. } => id,
             CapabilityChange::Invalidated => return true,
         };
+        if !ToolBackendAdapter::in_scope(id, scope) {
+            return false;
+        }
         self.tree.generation(id, &scope.visibility).is_some()
+    }
+
+    /// Drain a live registry broadcast into a pure [`CapabilityChangeStream`],
+    /// applying the same scope predicate as `describe`.
+    ///
+    /// Shared by `subscribe` (fresh receiver) and the lag test (a receiver
+    /// taken BEFORE the snapshot so its 256-slot ring overflows). The receiver
+    /// is the actual [`tokio::sync::broadcast::Receiver`]`<`[`RegistryChange`]`>`
+    /// — never a test double — so the `Lagged` branch is exercised against the
+    /// real registry broadcast.
+    fn drain_registry(
+        &self,
+        scope: &Scope,
+        snapshot: CapabilitySnapshot,
+        mut receiver: broadcast::Receiver<RegistryChange>,
+    ) -> CapabilityChangeStream {
+        let mut stream = CapabilityChangeStream::from_snapshot(snapshot);
+        loop {
+            match receiver.try_recv() {
+                Ok(change) => {
+                    let (cursor, change) = self.map_registry_change(change);
+                    // The registry broadcasts changes for ANY tool; honor the
+                    // shared kind / namespace + visibility predicate so an
+                    // out-of-scope tool is never leaked to the subscriber.
+                    if self.change_in_scope(&change, scope) {
+                        let _ = stream.append(cursor, change);
+                    }
+                }
+                Err(TryRecvError::Lagged(_)) => {
+                    // Lag: rebuild from a fresh snapshot and mark the stream
+                    // invalidated — never fake per-event delivery.
+                    let fresh = self.describe(scope.clone());
+                    let _ = stream.invalidate_and_resync(fresh, Vec::new());
+                    break;
+                }
+                Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
+            }
+        }
+        stream
     }
 }
 
@@ -188,39 +231,16 @@ impl Zahir for ZahirFacade {
         // ① subscribe BEFORE snapshot: the receiver exists before the snapshot
         // is read, so the synchronous drain never misses an event that lands in
         // the window between snapshot load and drain.
-        let mut receiver = self.adapter.registry.subscribe();
+        let receiver = self.adapter.registry.subscribe();
         let snapshot = self.describe(scope.clone());
-        // `cursor` is a dedup/filter hint only — this synchronous pure-value
-        // API has no durable history and never claims offline recovery.
-        // `from_snapshot` anchors `committed_cursor` at the snapshot revision
-        // and `append` rejects cursors <= committed_cursor, so events already
-        // reflected in the snapshot are dropped regardless of the caller hint.
-        // A caller cursor ahead of the snapshot cannot be honored and fails
-        // closed to the snapshot cursor — events after the snapshot are never
-        // silently dropped.
-        let mut stream = CapabilityChangeStream::from_snapshot(snapshot);
-        loop {
-            match receiver.try_recv() {
-                Ok(change) => {
-                    let (cursor, change) = self.map_registry_change(change);
-                    // The registry broadcasts changes for ANY tool; honor
-                    // Scope.visibility so an invisible tool is never leaked to
-                    // the subscriber.
-                    if self.change_in_scope(&change, &scope) {
-                        let _ = stream.append(cursor, change);
-                    }
-                }
-                Err(TryRecvError::Lagged(_)) => {
-                    // Lag: rebuild from a fresh snapshot and mark the stream
-                    // invalidated — never fake per-event delivery.
-                    let fresh = self.describe(scope.clone());
-                    let _ = stream.invalidate_and_resync(fresh, Vec::new());
-                    break;
-                }
-                Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
-            }
-        }
-        stream
+        // The caller `cursor` is IGNORED: this synchronous snapshot-anchored
+        // API has no replay, so there is nothing to resume from. `from_snapshot`
+        // anchors `committed_cursor` at the snapshot revision and `append`
+        // rejects cursors <= committed_cursor, so events already reflected in
+        // the snapshot are dropped, and a caller cursor ahead of the snapshot
+        // fails closed to the snapshot cursor — events after the snapshot are
+        // never silently dropped.
+        self.drain_registry(&scope, snapshot, receiver)
     }
 
     fn project(&self, target: TransportTarget, scope: Scope) -> Projection {
@@ -537,5 +557,68 @@ mod tests {
 
         // Scope-wide `Invalidated` carries no id and always passes.
         assert!(host.change_in_scope(&CapabilityChange::Invalidated, &ws_scope));
+    }
+
+    #[test]
+    fn change_in_scope_filters_wrong_kind_and_wrong_namespace() {
+        let (host, _reg, _tree) = host_parts(&["a"]);
+        host.reconcile_registry_bindings();
+        let change = CapabilityChange::Registered {
+            id: tool_id("a"),
+            revision: CapabilityRevision(1),
+        };
+
+        // A non-Tool kind scope never admits a Tool change.
+        let skill_scope = Scope {
+            kind: Some(crate::capability::descriptor::CapabilityKind::Skill),
+            namespace: None,
+            visibility: VisibilityScope::default(),
+        };
+        assert!(!host.change_in_scope(&change, &skill_scope));
+
+        // A foreign namespace scope never admits a Tool change.
+        let foreign_ns_scope = Scope {
+            kind: None,
+            namespace: Some("aleph/skills".to_string()),
+            visibility: VisibilityScope::default(),
+        };
+        assert!(!host.change_in_scope(&change, &foreign_ns_scope));
+
+        // Control: the unfiltered scope still admits it.
+        assert!(host.change_in_scope(&change, &scope_all()));
+    }
+
+    #[test]
+    fn subscribe_lagged_resyncs_to_fresh_snapshot() {
+        let (host, reg, _tree) = host_parts(&["a"]);
+        // ① Receiver BEFORE snapshot, exactly like `subscribe`. The receiver is
+        // never drained, so the 256-slot ring overflows during the mutation
+        // storm below and the next `try_recv` observes `Lagged`.
+        let receiver = reg.subscribe();
+        let snapshot = host.describe(scope_all());
+
+        // ② >256 valid registry mutations: each `register` sends one broadcast
+        // event (revision increments), overflowing the undrained receiver.
+        for i in 0..300 {
+            let name = format!("overflow_{i}");
+            reg.register(
+                ToolCapabilityDescriptor::from_definition(&fake_def(&name), 0),
+                Arc::new(fake_handler(&name)),
+            )
+            .expect("register overflow tool");
+        }
+
+        // ③ Drain through the SAME production helper the subscribe path uses.
+        let stream = host.drain_registry(&scope_all(), snapshot, receiver);
+
+        // ④ Exactly one scope-wide invalidation, never a fake per-event replay.
+        assert_eq!(stream.changes.len(), 1);
+        assert!(matches!(&stream.changes[0], CapabilityChange::Invalidated));
+
+        // ⑤ Fresh snapshot cursor and contents reflect the ACTUAL latest
+        // registry: 1 original + 300 overflow tools = 301, cursor = revision.
+        let latest_revision = reg.snapshot_state().revision();
+        assert_eq!(stream.committed_cursor, Cursor(latest_revision));
+        assert_eq!(host.describe(scope_all()).capabilities.len(), 301);
     }
 }
