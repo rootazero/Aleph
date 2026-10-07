@@ -53,20 +53,20 @@ impl ZahirFacade {
     /// has none (and is not revoked/disposed). Called at the top of
     /// `describe`/`resolve` (`subscribe`/`project` reach it via `describe`).
     ///
-    /// Existing bindings are skipped (their generation is preserved), and
-    /// `unregister` does NOT revoke a binding, so a later re-register of the
-    /// same name resolves again. A revoked/disposed id makes `tree.register`
-    /// return `Err` — treated as a no-op.
+    /// Registration is atomic insert-if-absent: the observe and the insert
+    /// happen under one lock, so a binding or claim minted by another caller
+    /// between observe and insert is preserved (its owner, generation, and
+    /// active claims survive). `unregister` does NOT revoke a binding, so a
+    /// later re-register of the same name resolves again. A revoked/disposed
+    /// id makes `tree.register_if_absent` return `Err` — treated as a no-op.
     pub fn reconcile_registry_bindings(&self) {
         let snap = self.adapter.registry.snapshot_state();
         for name in snap.entries().keys() {
             let id = tool_id(name);
             let visibility = VisibilityScope::default();
-            if self.tree.resolve(&id, &visibility).is_none() {
-                let _ =
-                    self.tree
-                        .register(id, OwnerRef::Runtime, LifetimeScope::Runtime, visibility);
-            }
+            let _ = self
+                .tree
+                .register_if_absent(id, OwnerRef::Runtime, LifetimeScope::Runtime, visibility);
         }
     }
 
@@ -257,7 +257,9 @@ impl Zahir for ZahirFacade {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::ownership::{LifetimeScope, OwnerGeneration, OwnerRef, VisibilityScope};
+    use crate::capability::ownership::{
+        ClaimState, LifetimeScope, OwnerGeneration, OwnerRef, TaskId, VisibilityScope,
+    };
     use crate::session::events::ToolOutput;
     use crate::tools::descriptor::ToolCapabilityDescriptor;
     use crate::tools::handlers::ToolHandler;
@@ -620,5 +622,41 @@ mod tests {
         let latest_revision = reg.snapshot_state().revision();
         assert_eq!(stream.committed_cursor, Cursor(latest_revision));
         assert_eq!(host.describe(scope_all()).capabilities.len(), 301);
+    }
+
+    #[test]
+    fn reconcile_preserves_incumbent_task_owner_and_claim() {
+        let (host, _reg, tree) = host_parts(&["a"]);
+        let id = tool_id("a");
+        let vis = VisibilityScope::default();
+
+        // An incumbent Task owner holds the binding with a live claim before
+        // any facade reconcile runs.
+        let incumbent = OwnerRef::Task(TaskId("worker".into()));
+        tree.register(
+            id.clone(),
+            incumbent.clone(),
+            LifetimeScope::Task,
+            vis.clone(),
+        )
+        .expect("register incumbent");
+        let claim = tree
+            .claim(&id, &vis, incumbent.clone(), "r1".to_string())
+            .expect("claim incumbent");
+
+        // Reconcile is insert-if-absent: it must not clobber the Task owner,
+        // its generation, or its live claim — even when called repeatedly.
+        host.reconcile_registry_bindings();
+        host.reconcile_registry_bindings();
+
+        assert_eq!(tree.generation(&id, &vis), Some(OwnerGeneration(0)));
+        assert_eq!(tree.claim_state(&claim, &id, &vis), ClaimState::Active);
+        // The incumbent can still claim; the Runtime reconcile owner cannot.
+        assert!(tree
+            .claim(&id, &vis, incumbent, "r2".to_string())
+            .is_some());
+        assert!(tree
+            .claim(&id, &vis, OwnerRef::Runtime, "r3".to_string())
+            .is_none());
     }
 }

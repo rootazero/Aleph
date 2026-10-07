@@ -241,6 +241,22 @@ impl OwnershipTree {
         inner.disposed.iter().any(|scope| rank(lifetime) <= rank(*scope))
     }
 
+    /// Shared authority for the two refusal gates: a revoked id or a disposed
+    /// lifetime is refused identically by `register` and `register_if_absent`.
+    fn guard(
+        inner: &OwnershipInner,
+        capability: &CapabilityId,
+        lifetime: LifetimeScope,
+    ) -> Result<(), RegisterError> {
+        if inner.revoked.contains(capability) {
+            return Err(RegisterError::Revoked);
+        }
+        if Self::lifetime_disposed(inner, lifetime) {
+            return Err(RegisterError::Disposed);
+        }
+        Ok(())
+    }
+
     pub fn register(
         &self,
         capability: CapabilityId,
@@ -249,12 +265,7 @@ impl OwnershipTree {
         visibility: VisibilityScope,
     ) -> Result<(), RegisterError> {
         let mut inner = self.inner.lock().expect("ownership mutex poisoned");
-        if inner.revoked.contains(&capability) {
-            return Err(RegisterError::Revoked);
-        }
-        if Self::lifetime_disposed(&inner, lifetime) {
-            return Err(RegisterError::Disposed);
-        }
+        Self::guard(&inner, &capability, lifetime)?;
         let key = Self::key(&capability, &visibility);
         let generation = OwnerGeneration(inner.nonce);
         inner.bindings.insert(
@@ -266,6 +277,28 @@ impl OwnershipTree {
                 claims: HashMap::new(),
             },
         );
+        Ok(())
+    }
+
+    /// Insert a binding only when none exists for the `(capability, visibility)`
+    /// key, preserving any incumbent's owner / lifetime / generation / claims.
+    pub(crate) fn register_if_absent(
+        &self,
+        capability: CapabilityId,
+        owner: OwnerRef,
+        lifetime: LifetimeScope,
+        visibility: VisibilityScope,
+    ) -> Result<(), RegisterError> {
+        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        Self::guard(&inner, &capability, lifetime)?;
+        let key = Self::key(&capability, &visibility);
+        let generation = OwnerGeneration(inner.nonce);
+        inner.bindings.entry(key).or_insert_with(|| Binding {
+            owner,
+            lifetime,
+            generation,
+            claims: HashMap::new(),
+        });
         Ok(())
     }
 
@@ -687,5 +720,266 @@ mod tests {
         let again = tree.generation(&cap, &vis);
         assert_eq!(before, again);
         assert_eq!(tree.resolve(&cap, &vis), Some(()));
+    }
+
+    #[test]
+    fn register_if_absent_creates_missing_binding() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("absent");
+        let vis = full_vis();
+        assert_eq!(
+            tree.register_if_absent(
+                cap.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                vis.clone(),
+            ),
+            Ok(())
+        );
+        // A newly-inserted binding is usable: it resolves and reads gen 0.
+        assert_eq!(tree.resolve(&cap, &vis), Some(()));
+        assert_eq!(tree.generation(&cap, &vis), Some(OwnerGeneration(0)));
+        // The inserted owner is usable: claiming as Runtime succeeds.
+        assert!(tree
+            .claim(&cap, &vis, OwnerRef::Runtime, "r".to_string())
+            .is_some());
+    }
+
+    #[test]
+    fn register_if_absent_preserves_incumbent_owner_generation_claim_lifetime() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("incumbent");
+        let vis = full_vis();
+        let incumbent = OwnerRef::Task(TaskId("t1".into()));
+        tree.register(
+            cap.clone(),
+            incumbent.clone(),
+            LifetimeScope::Task,
+            vis.clone(),
+        )
+        .expect("register incumbent");
+        // `claim` bumps the nonce to 1 but leaves the binding generation at 0.
+        let claim = tree
+            .claim(&cap, &vis, incumbent.clone(), "r1".to_string())
+            .expect("claim succeeds");
+        assert_eq!(tree.generation(&cap, &vis), Some(OwnerGeneration(0)));
+
+        // Re-insert-if-absent with a different owner/lifetime must be a no-op.
+        assert_eq!(
+            tree.register_if_absent(
+                cap.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                vis.clone(),
+            ),
+            Ok(())
+        );
+
+        // Generation preserved as 0, NOT reset to the bumped nonce (1).
+        assert_eq!(tree.generation(&cap, &vis), Some(OwnerGeneration(0)));
+        // Active claim preserved.
+        assert_eq!(tree.claim_state(&claim, &cap, &vis), ClaimState::Active);
+        // Incumbent owner preserved: Task can still claim, Runtime cannot.
+        assert!(tree
+            .claim(&cap, &vis, incumbent, "r2".to_string())
+            .is_some());
+        assert!(tree
+            .claim(&cap, &vis, OwnerRef::Runtime, "r3".to_string())
+            .is_none());
+        // Lifetime preserved as Task: dispose(Run) removes a Task binding
+        // (rank 1 <= 2). A clobbering replace to Runtime (rank 4) would survive.
+        assert!(tree.dispose(LifetimeScope::Run));
+        assert_eq!(tree.generation(&cap, &vis), None);
+    }
+
+    #[test]
+    fn register_if_absent_rejects_revoked_and_disposed_without_resurrecting() {
+        // Revoked: refused, and no binding is resurrected.
+        let tree = OwnershipTree::new();
+        let cap = cap_id("revoked");
+        let vis = full_vis();
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register");
+        assert!(tree.revoke(&cap));
+        assert_eq!(
+            tree.register_if_absent(
+                cap.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                vis.clone(),
+            ),
+            Err(RegisterError::Revoked)
+        );
+        assert!(tree.is_revoked(&cap));
+        assert_eq!(tree.resolve(&cap, &vis), None);
+
+        // Disposed: refused for the disposed scope (and below).
+        let tree2 = OwnershipTree::new();
+        let cap2 = cap_id("disposed");
+        let vis2 = full_vis();
+        tree2.dispose(LifetimeScope::Run);
+        assert_eq!(
+            tree2.register_if_absent(
+                cap2.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Run,
+                vis2.clone(),
+            ),
+            Err(RegisterError::Disposed)
+        );
+        assert!(tree2.is_disposed(LifetimeScope::Run));
+        assert_eq!(tree2.resolve(&cap2, &vis2), None);
+    }
+
+    #[test]
+    fn register_if_absent_inserts_independently_per_visibility() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("samecap");
+        let vis_a = restricted_vis("ws-a");
+        let vis_b = restricted_vis("ws-b");
+
+        assert_eq!(
+            tree.register_if_absent(
+                cap.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                vis_a.clone(),
+            ),
+            Ok(())
+        );
+        // Same capability under a different visibility is a distinct key: it
+        // inserts independently.
+        assert_eq!(
+            tree.register_if_absent(
+                cap.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                vis_b.clone(),
+            ),
+            Ok(())
+        );
+        assert!(tree.resolve(&cap, &vis_a).is_some());
+        assert!(tree.resolve(&cap, &vis_b).is_some());
+
+        // Re-insert under vis_a is a no-op and leaves both generations intact.
+        assert_eq!(
+            tree.register_if_absent(
+                cap.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                vis_a.clone(),
+            ),
+            Ok(())
+        );
+        assert_eq!(tree.generation(&cap, &vis_a), Some(OwnerGeneration(0)));
+        assert_eq!(tree.generation(&cap, &vis_b), Some(OwnerGeneration(0)));
+    }
+
+    #[test]
+    fn register_replaces_owner_and_invalidates_old_claim() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("replace");
+        let vis = full_vis();
+        let old_owner = OwnerRef::Task(TaskId("old".into()));
+        tree.register(
+            cap.clone(),
+            old_owner.clone(),
+            LifetimeScope::Task,
+            vis.clone(),
+        )
+        .expect("register old owner");
+        let old_claim = tree
+            .claim(&cap, &vis, old_owner.clone(), "old-claim".to_string())
+            .expect("claim old owner");
+
+        // Explicit `register` still REPLACES: the new owner takes over.
+        let new_owner = OwnerRef::Runtime;
+        tree.register(
+            cap.clone(),
+            new_owner.clone(),
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register new owner");
+
+        // Old owner can no longer claim; the new owner can.
+        assert!(tree.claim(&cap, &vis, old_owner, "x".to_string()).is_none());
+        assert!(tree
+            .claim(&cap, &vis, new_owner.clone(), "new-claim".to_string())
+            .is_some());
+        // The old claim is invalidated by replacement (claims were reset).
+        assert_eq!(
+            tree.claim_state(&old_claim, &cap, &vis),
+            ClaimState::Unknown
+        );
+    }
+
+    #[test]
+    fn register_if_absent_is_atomic_under_stale_resolve_observation() {
+        use std::sync::{mpsc, Arc};
+        use std::thread;
+
+        let tree = Arc::new(OwnershipTree::new());
+        let cap = cap_id("race");
+        let vis = full_vis();
+        let incumbent = OwnerRef::Task(TaskId("worker".into()));
+
+        // Main observes the binding absent BEFORE the worker registers it —
+        // the stale observation the old resolve-then-register path acts on.
+        assert!(tree.resolve(&cap, &vis).is_none());
+
+        let worker_tree = Arc::clone(&tree);
+        let worker_cap = cap.clone();
+        let worker_vis = vis.clone();
+        let worker_owner = incumbent.clone();
+        let (tx, rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            worker_tree
+                .register(
+                    worker_cap.clone(),
+                    worker_owner.clone(),
+                    LifetimeScope::Task,
+                    worker_vis.clone(),
+                )
+                .expect("worker registers incumbent");
+            let claim = worker_tree
+                .claim(
+                    &worker_cap,
+                    &worker_vis,
+                    worker_owner,
+                    "worker-claim".to_string(),
+                )
+                .expect("worker claims");
+            tx.send(claim).expect("worker signals main");
+        });
+
+        // Main acts on its stale observation only after the incumbent + claim
+        // are observable.
+        let claim = rx.recv().expect("receive worker claim");
+        worker.join().expect("worker joins");
+
+        // Atomic insert-if-absent must not clobber the incumbent.
+        assert_eq!(
+            tree.register_if_absent(
+                cap.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                vis.clone(),
+            ),
+            Ok(())
+        );
+
+        assert_eq!(tree.claim_state(&claim, &cap, &vis), ClaimState::Active);
+        assert!(tree
+            .claim(&cap, &vis, incumbent, "post".to_string())
+            .is_some());
+        assert!(tree
+            .claim(&cap, &vis, OwnerRef::Runtime, "racer".to_string())
+            .is_none());
     }
 }
