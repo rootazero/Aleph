@@ -129,8 +129,9 @@ struct RegistryShared {
     /// future BEFORE reading the `closed` bit (register-then-check):
     ///
     /// * close-before-check — the bit is already set, read it directly;
-    /// * check-then-close-before-wait — `notify_waiters` stores a permit, so
-    ///   the already-registered future resolves instead of sleeping forever;
+    /// * check-then-close-before-wait — a `Notified` future captures the
+    ///   notify generation AT CREATION and observes later changes when polled,
+    ///   so the already-registered future resolves instead of sleeping forever;
     /// * multi-waiter — `notify_waiters` (not `notify_one`) wakes every
     ///   registered observer, none is starved.
     close_signal: Arc<Notify>,
@@ -533,9 +534,10 @@ impl ToolHandlerRegistry {
         });
         // Publish the closed bit first (the rcu swap above), then wake every
         // registered close waiter. `notify_waiters` is used so multiple
-        // concurrent observers are all released; it stores a permit so an
-        // observer that checked `is_closed()` before the swap and is about to
-        // await its already-registered future still wakes.
+        // concurrent observers are all released; a `Notified` future captures
+        // the notify generation AT CREATION and observes later changes when
+        // polled, so an observer that checked `is_closed()` before the swap
+        // and is about to await its already-registered future still wakes.
         self.shared.close_signal.notify_waiters();
     }
 
@@ -1087,13 +1089,17 @@ mod tests {
         let signal = reg.close_signal();
         assert!(!reg.is_closed());
 
+        // Explicit readiness handshake (not a yield-based guess): the waiter
+        // creates its `notified()` future BEFORE signalling readiness, so the
+        // test's close() is guaranteed to happen after registration.
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let reg2 = reg.clone();
         let wake = tokio::spawn(async move {
             let n = signal.notified();
+            let _ = ready_tx.send(());
             n.await;
         });
-        // Yield once so the waiter future is registered before close().
-        tokio::task::yield_now().await;
+        ready_rx.await.expect("waiter must signal registration");
         reg2.close();
 
         tokio::time::timeout(std::time::Duration::from_secs(5), wake)
@@ -1105,8 +1111,8 @@ mod tests {
 
     /// Register-then-check ordering: a waiter that registers its `notified()`
     /// future BEFORE reading `is_closed()` never loses the wake, even when
-    /// `close()` lands between the check and the await (the stored permit
-    /// resolves the already-registered future).
+    /// `close()` lands between the check and the await — the `Notified` future
+    /// captured the generation at creation and observes the later change.
     #[tokio::test]
     async fn close_signal_register_before_check_loses_no_wake() {
         let reg = ToolHandlerRegistry::new();
@@ -1123,7 +1129,7 @@ mod tests {
         reg.close();
         tokio::time::timeout(std::time::Duration::from_secs(5), &mut notified)
             .await
-            .expect("registered-before-check waiter must observe the stored permit");
+            .expect("registered-before-check waiter must observe the generation change");
         assert!(reg.is_closed());
     }
 
@@ -1133,16 +1139,24 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         let signal = reg.close_signal();
 
+        // Explicit readiness handshake: each waiter creates its `notified()`
+        // future BEFORE signalling readiness, so close() happens only after
+        // every waiter has registered (no yield-based guess).
+        let (ready_tx, mut ready_rx) = tokio::sync::mpsc::channel(8);
         let waiters: Vec<_> = (0..8)
             .map(|_| {
                 let s = Arc::clone(&signal);
+                let ready_tx = ready_tx.clone();
                 tokio::spawn(async move {
                     let n = s.notified();
+                    let _ = ready_tx.send(()).await;
                     n.await;
                 })
             })
             .collect();
-        tokio::task::yield_now().await;
+        for _ in 0..8 {
+            ready_rx.recv().await.expect("every waiter must register");
+        }
         reg.close();
 
         for w in waiters {

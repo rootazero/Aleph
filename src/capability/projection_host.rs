@@ -272,6 +272,12 @@ struct HostInner {
     consumers: Mutex<ConsumerMap>,
     default_consumer: Arc<ConsumerState>,
     applied: Mutex<AppliedState>,
+    /// Private notification-only readiness seam: notified by the default
+    /// applier whenever it mutates `applied` (first apply, replacement apply,
+    /// invalidated clear). Tests (and Task5's future boot gate) await this to
+    /// observe ACTUAL delivery rather than a fabricated publisher-state seed.
+    /// No production diagnostic or public control surface.
+    readiness: Notify,
     cancel: CancellationToken,
     /// Task-control scaffolding for Task4's cancellation-safe completion /
     /// drain proof. The source worker owns `source_task`; the default applier
@@ -302,6 +308,11 @@ impl ProjectionHost {
         let default_scope = Scope::default();
         let initial = HostSnapshot::from_facade(facade.snapshot_entries_in_scope(&default_scope));
         let default_consumer = Arc::new(ConsumerState::new(default_scope, DEFAULT_PENDING_CAPACITY));
+        // Enqueue the initial snapshot into the DEFAULT delivery queue BEFORE
+        // the source/applier tasks spawn, so the REAL default applier applies
+        // it (Ruling16). `applied` starts `None`; no publisher state may
+        // masquerade as delivered.
+        default_consumer.enqueue_snapshot(initial);
 
         let inner = Arc::new(HostInner {
             facade,
@@ -314,9 +325,10 @@ impl ProjectionHost {
             }),
             default_consumer: Arc::clone(&default_consumer),
             applied: Mutex::new(AppliedState {
-                snapshot: Some(initial),
+                snapshot: None,
                 closed: false,
             }),
+            readiness: Notify::new(),
             cancel: CancellationToken::new(),
             source_task: Mutex::new(None),
             applier_task: Mutex::new(None),
@@ -498,8 +510,10 @@ async fn source_worker(
     mut ownership_rx: broadcast::Receiver<OwnershipChange>,
 ) {
     // Register the close waiter BEFORE reading the closed bit (register-then-
-    // check): close() publishes the bit then notify_waiters, so a waiter that
-    // registers first can never lose the wake.
+    // check). A `Notified` future captures the notify generation AT CREATION
+    // and observes later changes when polled, so creation before the closed
+    // check is sufficient: close() publishes the bit then `notify_waiters()`,
+    // and this already-registered waiter observes that generation change.
     let close_signal = inner.registry.close_signal();
     let notified = close_signal.notified();
     tokio::pin!(notified);
@@ -578,7 +592,9 @@ fn invalidate_all(inner: &HostInner) {
 
     if !inner.default_consumer.is_closed() {
         let snapshot = build_snapshot(inner, &inner.default_consumer.scope);
-        inner.default_consumer.enqueue_snapshot(snapshot);
+        // The DEFAULT consumer uses the SAME Invalidated + replacement Snapshot
+        // semantics as attached consumers (not a bare Snapshot).
+        inner.default_consumer.enqueue_invalidation(snapshot);
     }
 
     let consumers = inner.consumers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -620,14 +636,32 @@ async fn applier_worker(default: Arc<ConsumerState>, inner: Arc<HostInner>) {
         if let Some(event) = default.try_pop() {
             match event {
                 ProjectionEvent::Snapshot(snapshot) => {
-                    let mut applied =
-                        inner.applied.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    applied.snapshot = Some(snapshot.clone());
-                    if snapshot.registry_closed {
-                        applied.closed = true;
+                    {
+                        let mut applied = inner
+                            .applied
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        applied.snapshot = Some(snapshot.clone());
+                        if snapshot.registry_closed {
+                            applied.closed = true;
+                        }
                     }
+                    inner.readiness.notify_one();
                 }
-                ProjectionEvent::Change(_) | ProjectionEvent::Invalidated => {}
+                ProjectionEvent::Invalidated => {
+                    // Fail closed: clear the applied snapshot so a stale lease
+                    // is never served between invalidation and its replacement
+                    // Snapshot.
+                    {
+                        let mut applied = inner
+                            .applied
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        applied.snapshot = None;
+                    }
+                    inner.readiness.notify_one();
+                }
+                ProjectionEvent::Change(_) => {}
             }
             continue;
         }
@@ -663,6 +697,7 @@ mod tests {
 
     struct FakeHandler {
         name: String,
+        description: String,
         source: ToolSource,
         idempotent: bool,
     }
@@ -678,7 +713,7 @@ mod tests {
         fn definition(&self) -> ToolDefinition {
             ToolDefinition {
                 name: self.name.clone(),
-                description: String::new(),
+                description: self.description.clone(),
                 input_schema: serde_json::json!({}),
                 source: self.source.clone(),
                 metadata: ToolDefinitionMetadata {
@@ -690,19 +725,31 @@ mod tests {
     }
 
     fn fake(name: &str) -> Arc<dyn ToolHandler> {
+        fake_labeled(name, "")
+    }
+
+    /// A handler whose `description` (part of its `definition`) distinguishes
+    /// one generation from another, so a test can prove handler + descriptor
+    /// are frozen at ONE registry revision.
+    fn fake_labeled(name: &str, description: &str) -> Arc<dyn ToolHandler> {
         Arc::new(FakeHandler {
             name: name.into(),
+            description: description.into(),
             source: ToolSource::Builtin,
             idempotent: false,
         })
     }
 
     fn desc(name: &str) -> ToolCapabilityDescriptor {
+        desc_labeled(name, "")
+    }
+
+    fn desc_labeled(name: &str, description: &str) -> ToolCapabilityDescriptor {
         ToolCapabilityDescriptor {
             name: name.into(),
             kind: ToolKind::Tool,
             schema_version: SCHEMA_VERSION,
-            description: String::new(),
+            description: description.into(),
             input_schema: serde_json::json!({}),
             source: ToolSource::Builtin,
             replay_policy: ReplayPolicy::Unsafe,
@@ -730,6 +777,87 @@ mod tests {
             .expect("stream closed unexpectedly")
     }
 
+    /// Deterministically await until `current_snapshot()` satisfies `pred`,
+    /// registering the private readiness `Notified` (re-checking the predicate
+    /// after registration) — no sleep and no yield-based ordering guess.
+    async fn await_snapshot_where(
+        host: &ProjectionHost,
+        pred: impl Fn(&HostSnapshot) -> bool,
+    ) -> HostSnapshot {
+        loop {
+            if let Some(snap) = host.current_snapshot() {
+                if pred(&snap) {
+                    return snap;
+                }
+            }
+            let ready = host.inner.readiness.notified();
+            tokio::pin!(ready);
+            if let Some(snap) = host.current_snapshot() {
+                if pred(&snap) {
+                    return snap;
+                }
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(10), &mut ready)
+                .await
+                .expect("applier made no progress toward the awaited snapshot");
+        }
+    }
+
+    /// RED (Ruling16): mount must NOT seed the publisher's own snapshot as
+    /// already-applied. Before the default applier has run, `current_snapshot()`
+    /// is `None` (fail-closed), never the initial snapshot masquerading as
+    /// delivered state.
+    #[tokio::test]
+    async fn default_mount_does_not_fabricate_applied_snapshot() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+
+        // No await has happened, so the default applier cannot have run yet.
+        assert!(
+            host.current_snapshot().is_none(),
+            "mount must not present the publisher's own snapshot as delivered"
+        );
+    }
+
+    /// RED (default replacement): the DEFAULT consumer must receive the same
+    /// `Invalidated` + replacement `Snapshot` pair as attached consumers on
+    /// invalidation — never a bare `Snapshot`.
+    #[tokio::test]
+    async fn default_invalidation_enqueues_invalidated_pair() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+
+        // invalidate_all runs synchronously (no await), so the spawned applier
+        // task has not polled and cannot drain the default queue.
+        invalidate_all(&host.inner);
+
+        let q = host
+            .inner
+            .default_consumer
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // After mount the queue held [Snapshot(initial)]; invalidate_all must
+        // have appended the mandated Invalidated + replacement Snapshot pair.
+        assert_eq!(
+            q.items.len(),
+            3,
+            "default queue must be [initial Snapshot, Invalidated, replacement Snapshot]"
+        );
+        assert!(matches!(
+            q.items[1],
+            ProjectionEvent::Invalidated
+        ), "Invalidated must precede the replacement Snapshot");
+        assert!(matches!(
+            q.items[2],
+            ProjectionEvent::Snapshot(_)
+        ), "replacement Snapshot must follow Invalidated");
+    }
+
     #[tokio::test]
     async fn attach_receives_initial_snapshot_then_post_subscribe_change() {
         let reg = ToolHandlerRegistry::new();
@@ -738,16 +866,22 @@ mod tests {
         let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
         let mut handle = host.attach(Scope::default());
 
+        // Mutate AFTER attach has linearized (the initial snapshot is already
+        // enqueued) but BEFORE the first recv — the initial snapshot must cut
+        // BEFORE this mutation, and the mutation must still be delivered (no
+        // hole).
+        reg.register(desc("b"), fake("b")).unwrap();
+
         match recv_bounded(&mut handle).await {
             ProjectionEvent::Snapshot(snap) => {
-                assert_eq!(snap.entries.len(), 1);
+                assert_eq!(snap.entries.len(), 1, "initial cut predates the mutation");
                 assert!(snap.entries.contains_key("a"));
+                assert!(!snap.entries.contains_key("b"), "mutation must not leak into the initial cut");
                 assert_eq!(snap.registry_cursor, Cursor(1));
             }
             other => panic!("expected initial snapshot, got {other:?}"),
         }
 
-        reg.register(desc("b"), fake("b")).unwrap();
         match recv_bounded(&mut handle).await {
             ProjectionEvent::Change(CapabilityChange::Registered { id, revision }) => {
                 assert_eq!(id.name, "b");
@@ -760,7 +894,7 @@ mod tests {
     #[tokio::test]
     async fn attach_snapshot_is_handler_descriptor_atomic() {
         let reg = ToolHandlerRegistry::new();
-        reg.register(desc("a"), fake("a")).unwrap();
+        reg.register(desc_labeled("a", "v1"), fake_labeled("a", "v1")).unwrap();
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
 
@@ -770,20 +904,32 @@ mod tests {
             other => panic!("expected snapshot, got {other:?}"),
         };
         let e1 = snap1.entries.get("a").unwrap();
-        assert_eq!(e1.descriptor.revision, 1, "handler+descriptor from one generation");
-        assert_eq!(e1.handler.definition().name, "a");
+        assert_eq!(e1.descriptor.revision, 1);
+        assert_eq!(e1.handler.definition().description, "v1", "original handler");
+        assert_eq!(e1.descriptor.description, "v1", "original descriptor");
 
-        // Replace advances the registry revision to 2.
-        reg.replace(desc("a"), fake("a")).unwrap();
+        // Replace with a DISTINGUISHABLE handler+descriptor (same name "a").
+        reg.replace(desc_labeled("a", "v2"), fake_labeled("a", "v2")).unwrap();
 
         let mut h2 = host.attach(Scope::default());
         let snap2 = match recv_bounded(&mut h2).await {
             ProjectionEvent::Snapshot(snap) => snap,
             other => panic!("expected snapshot, got {other:?}"),
         };
-        assert_eq!(snap2.entries.get("a").unwrap().descriptor.revision, 2);
-        // The first handle's frozen snapshot is untouched by the later replace.
+        let e2 = snap2.entries.get("a").unwrap();
+        assert_eq!(e2.descriptor.revision, 2);
+        assert_eq!(e2.handler.definition().description, "v2", "replacement handler");
+        assert_eq!(e2.descriptor.description, "v2", "replacement descriptor");
+
+        // Negative control: each snapshot freezes handler AND descriptor at ONE
+        // generation. A mixed pair (v1 handler + rev 2 descriptor, or vice
+        // versa) would fail these consistency assertions.
         assert_eq!(snap1.entries.get("a").unwrap().descriptor.revision, 1);
+        assert_eq!(snap1.entries.get("a").unwrap().handler.definition().description, "v1");
+        assert_eq!(snap1.entries.get("a").unwrap().descriptor.description, "v1");
+        assert_eq!(snap2.entries.get("a").unwrap().descriptor.revision, 2);
+        assert_eq!(snap2.entries.get("a").unwrap().handler.definition().description, "v2");
+        assert_eq!(snap2.entries.get("a").unwrap().descriptor.description, "v2");
     }
 
     #[tokio::test]
@@ -990,7 +1136,10 @@ mod tests {
 
         // Register 70 tools; `fast` drains each change, `slow` never does, so
         // `slow` overflows while `fast` keeps a small queue and never sees
-        // Invalidated.
+        // Invalidated. After each fast receipt we acquire the `publish` mutex:
+        // the source worker holds it across its whole fan-out, so acquiring it
+        // proves the slow consumer's enqueue for THIS registration completed
+        // before the next registration (an exact, not probabilistic, cut).
         let mut fast_changes = 0usize;
         for i in 0..70 {
             reg.register(desc(&format!("t{i}")), fake(&format!("t{i}")))
@@ -1001,9 +1150,17 @@ mod tests {
                 }
                 other => panic!("fast consumer must keep receiving changes, got {other:?}"),
             }
+            // Explicit publish-boundary ack: fan-out for registration i is done.
+            drop(
+                host.inner
+                    .publish
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
         }
 
-        // The slow consumer overflowed and its backlog was replaced.
+        // The slow consumer overflowed at registration 65 (the 65th Change
+        // would exceed capacity 64) and its backlog was atomically replaced.
         match recv_bounded(&mut slow).await {
             ProjectionEvent::Invalidated => {}
             other => panic!("slow consumer must overflow to Invalidated, got {other:?}"),
@@ -1012,14 +1169,19 @@ mod tests {
             ProjectionEvent::Snapshot(snap) => snap,
             other => panic!("expected replacement snapshot, got {other:?}"),
         };
-        assert!(!snap.entries.is_empty() && snap.entries.len() < 70);
-        let mut slow_remaining = snap.entries.len();
+        // Exact cut: 65 registrations had completed when the 65th overflowed.
+        assert_eq!(snap.entries.len(), 65, "replacement snapshot is the cut at registration 65");
+        assert_eq!(snap.registry_cursor, Cursor(65));
+
+        // The remaining 5 registrations (66..=70) arrive as deltas.
+        let mut slow_remaining = 65usize;
         while slow_remaining < 70 {
             match recv_bounded(&mut slow).await {
                 ProjectionEvent::Change(CapabilityChange::Registered { .. }) => slow_remaining += 1,
                 other => panic!("expected registered delta for slow consumer, got {other:?}"),
             }
         }
+        assert_eq!(slow_remaining, 70, "slow consumer reconstructs full membership via deltas");
 
         assert_eq!(fast_changes, 70, "the fast consumer must receive every change");
     }
@@ -1054,21 +1216,102 @@ mod tests {
         }
     }
 
-    /// A host whose installed source is closed must fail closed: no stale
+    /// The DEFAULT applier — not a seeded publisher state — delivers the
+    /// initial snapshot (Ruling16), and a closed source fails closed: no stale
     /// entries are returned even though the registry still holds its last
     /// snapshot's entries.
     #[tokio::test]
-    async fn current_snapshot_fails_closed_on_closed_source() {
+    async fn initial_delivery_via_real_applier_and_fails_closed() {
         let reg = ToolHandlerRegistry::new();
         reg.register(desc("a"), fake("a")).unwrap();
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
 
-        assert!(host.current_snapshot().is_some());
+        // Deterministic readiness: the REAL applier applies the enqueued
+        // initial snapshot (no publisher-state seed).
+        let snap = await_snapshot_where(&host, |s| s.entries.contains_key("a")).await;
+        assert_eq!(snap.entries.len(), 1);
+        assert_eq!(snap.registry_cursor, Cursor(1));
 
         // Close the source and give the applier a chance to observe it.
         host.clone().close_and_await().await;
 
         assert!(host.current_snapshot().is_none(), "closed source must fail closed");
+    }
+
+    /// The applier clears the applied snapshot on `Invalidated` (fail-closed)
+    /// rather than ignoring it: a stale lease must never be served between
+    /// invalidation and its replacement snapshot. A bare Invalidated (no
+    /// replacement) is the only way to observe the clear, because the
+    /// production path pairs Invalidated + replacement Snapshot in one atomic
+    /// enqueue the applier drains back-to-back.
+    #[tokio::test]
+    async fn applier_clears_applied_on_invalidated() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+
+        // Initial applied via the real applier.
+        let snap = await_snapshot_where(&host, |s| s.entries.contains_key("a")).await;
+        assert_eq!(snap.registry_cursor, Cursor(1));
+
+        // Enqueue a BARE Invalidated (no replacement snapshot) directly into
+        // the default delivery queue.
+        {
+            let mut q = host
+                .inner
+                .default_consumer
+                .queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            q.items.push_back(ProjectionEvent::Invalidated);
+        }
+        host.inner.default_consumer.wake.notify_one();
+
+        // Deterministically await the applier observing the Invalidated.
+        loop {
+            if host.current_snapshot().is_none() {
+                break;
+            }
+            let ready = host.inner.readiness.notified();
+            tokio::pin!(ready);
+            if host.current_snapshot().is_none() {
+                break;
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(10), &mut ready)
+                .await
+                .expect("applier must clear applied on Invalidated");
+        }
+        assert!(
+            host.current_snapshot().is_none(),
+            "Invalidated must clear the applied snapshot (fail-closed)"
+        );
+    }
+
+    /// The DEFAULT consumer's owner-invalidation path goes through the real
+    /// queue AND the real applier: after `revoke`, the applied state is the
+    /// replacement snapshot without the revoked id (not publisher state, not an
+    /// attached handle's queue).
+    #[tokio::test]
+    async fn default_owner_invalidation_replaces_applied_state() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+
+        let initial = await_snapshot_where(&host, |s| s.entries.contains_key("a")).await;
+        assert_eq!(initial.registry_cursor, Cursor(1));
+
+        // Real ownership invalidation (not a registry mutation).
+        assert!(tree.revoke(&tool_id("a")), "revoke must be a real transition");
+
+        // Await the replacement snapshot applied by the real applier.
+        let replacement = await_snapshot_where(&host, |s| !s.entries.contains_key("a")).await;
+        assert_eq!(
+            replacement.registry_cursor, Cursor(1),
+            "owner invalidation must not advance the registry cursor"
+        );
+        assert!(replacement.entries.is_empty(), "revoked id must be absent");
     }
 }
