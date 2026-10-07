@@ -535,7 +535,6 @@ impl ProjectionHandle {
     /// no per-handle delivery task: the handle owns only a receipt queue, so
     /// close linearizes removal and explicitly discards that queue.
     pub async fn close(self) {
-        self.consumer.mark_closed();
         let _publish = self.host.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut map = self
             .host
@@ -549,7 +548,6 @@ impl ProjectionHandle {
 
 impl Drop for ProjectionHandle {
     fn drop(&mut self) {
-        self.consumer.mark_closed();
         if self.id == 0 {
             self.consumer.close_and_discard();
             return;
@@ -1504,6 +1502,151 @@ mod tests {
             }
             other => panic!("h2 must be unaffected by h1's close, got {other:?}"),
         }
+    }
+
+    /// Handle-local `close`: the handle owns only a receipt queue (no per-
+    /// handle spawned delivery task), so `close` removes the consumer from the
+    /// host fan-out map AND explicitly discards its pending queue via
+    /// `close_and_discard`. `ProjectionHandle::close(self)` consumes the
+    /// handle (so `recv` after `close` is not callable by design); the
+    /// documented contract is verified by inspecting the host fan-out map:
+    /// after `close`, the consumer is gone, and post-close registry
+    /// mutations do not reach any other handle (the still-attached handle
+    /// keeps receiving). The pending `queued` event sitting in the
+    /// consumer's queue immediately before `close` is what
+    /// `close_and_discard` discards — not a per-handle worker that
+    /// drains it asynchronously.
+    #[tokio::test]
+    async fn handle_close_discards_pending_isolated_to_receipt() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let mut keep = host.attach(Scope::default());
+        let mut closed = host.attach(Scope::default());
+
+        // Drain initial snapshots from both attached handles.
+        match recv_bounded(&mut keep).await {
+            ProjectionEvent::Snapshot(_) => {}
+            other => panic!("expected initial snapshot for keep, got {other:?}"),
+        }
+        match recv_bounded(&mut closed).await {
+            ProjectionEvent::Snapshot(_) => {}
+            other => panic!("expected initial snapshot for closed, got {other:?}"),
+        }
+
+        // Drive a change so a pending event sits in `closed`'s queue.
+        reg.register(desc("queued"), fake("queued")).unwrap();
+        // `keep` drains its queued change so the source-worker fan-out is
+        // done (and the pending event for `closed` is enqueued) before we
+        // exercise handle-local close.
+        match recv_bounded(&mut keep).await {
+            ProjectionEvent::Change(CapabilityChange::Registered { id, .. }) => {
+                assert_eq!(id.name, "queued");
+            }
+            other => panic!("keep must drain its queued change, got {other:?}"),
+        }
+
+        // The fan-out map contains the `closed` consumer with the next
+        // attach id; verify a pending event is sitting in its queue before
+        // close (this is what `close_and_discard` must drop).
+        let closed_id = {
+            let map = host.inner.consumers.lock().unwrap();
+            *map.by_id.keys().max().expect("closed consumer must be in map")
+        };
+        {
+            let map = host.inner.consumers.lock().unwrap();
+            let consumer = map.by_id.get(&closed_id).expect("closed consumer present");
+            assert_eq!(
+                consumer.queue.lock().unwrap().items.len(),
+                1,
+                "queued event must be pending in closed's receipt queue"
+            );
+        }
+
+        // Handle-local close: removes the consumer from the fan-out map AND
+        // discards the pending `queued` event the source worker enqueued.
+        closed.close().await;
+
+        // After close, the consumer is no longer in the fan-out map (no
+        // per-handle delivery task ever carried the discarded event).
+        {
+            let map = host.inner.consumers.lock().unwrap();
+            assert!(
+                map.by_id.get(&closed_id).is_none(),
+                "close must remove the consumer from the fan-out map"
+            );
+        }
+
+        // Mutate the registry: `keep` is still attached and still on the
+        // fan-out map, so it must observe the new event. The closed
+        // consumer is gone, so the source worker's fan-out skips it.
+        reg.register(desc("after"), fake("after")).unwrap();
+        match recv_bounded(&mut keep).await {
+            ProjectionEvent::Change(CapabilityChange::Registered { id, .. }) => {
+                assert_eq!(id.name, "after");
+            }
+            other => panic!("keep must receive the post-close mutation, got {other:?}"),
+        }
+    }
+
+    /// Handle-local `cancel`: `cancel` only marks the receipt endpoint
+    /// closed; the source worker observes `is_closed()` and skips enqueueing
+    /// to it on subsequent fan-out, so `recv` returns `None` once the queue
+    /// is drained. The other attached handle must keep receiving the
+    /// post-cancel mutation. This test does NOT exercise a per-handle
+    /// delivery task (none exists); the bounded wait proves the documented
+    /// drain-then-None contract.
+    #[tokio::test]
+    async fn handle_cancel_drains_then_none_keeps_other_alive() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let mut keep = host.attach(Scope::default());
+        let mut canceled = host.attach(Scope::default());
+
+        // Drain initial snapshots from both attached handles.
+        match recv_bounded(&mut keep).await {
+            ProjectionEvent::Snapshot(_) => {}
+            other => panic!("expected initial snapshot for keep, got {other:?}"),
+        }
+        match recv_bounded(&mut canceled).await {
+            ProjectionEvent::Snapshot(_) => {}
+            other => panic!("expected initial snapshot for canceled, got {other:?}"),
+        }
+
+        // Cancel one handle directly (host is still alive, no host close).
+        canceled.cancel();
+
+        // The canceled handle's queue is empty at this point (initial
+        // snapshot already drained), so its `recv` must terminate with
+        // `None` once the source worker observes the closed flag.
+        let canceled_after = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            canceled.recv(),
+        )
+        .await
+        .expect("canceled handle did not terminate");
+        assert!(canceled_after.is_none(), "canceled handle must return None, got {canceled_after:?}");
+
+        // Mutate the registry: the source worker's fan-out must skip the
+        // closed consumer, but the other handle must still receive the
+        // mutation.
+        reg.register(desc("after"), fake("after")).unwrap();
+        match recv_bounded(&mut keep).await {
+            ProjectionEvent::Change(CapabilityChange::Registered { id, .. }) => {
+                assert_eq!(id.name, "after");
+            }
+            other => panic!("keep must receive the post-cancel mutation, got {other:?}"),
+        }
+        let canceled_still = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            canceled.recv(),
+        )
+        .await
+        .expect("canceled handle still terminated after mutation");
+        assert!(canceled_still.is_none(), "canceled handle must remain None after registry mutation");
     }
 
     /// The DEFAULT applier — not a seeded publisher state — delivers the
