@@ -28,6 +28,7 @@ use aleph_protocol::runtime::RuntimeAgentsListResponse;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::gateway::pty;
+use crate::gateway::pty::runtime::{ObservationCaller, TerminalRuntime};
 
 /// `runtime.agents.list` — the caller's own agent-panel rows, in the order
 /// [`crate::gateway::runtime::RuntimeAgents::snapshot`] returns them (by
@@ -36,16 +37,9 @@ use crate::gateway::pty;
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     let id = request.id.clone();
     let actor = crate::gateway::visibility::ambient_actor();
-    let agents = crate::gateway::runtime::agents()
-        .snapshot()
-        .into_iter()
-        .filter(|entry| {
-            pty::manager()
-                .owner_of(&entry.session_id)
-                .admits(actor.as_deref())
-        })
-        .collect();
-    let body = RuntimeAgentsListResponse { agents };
+    let caller = ObservationCaller::Gateway { actor };
+    let runtime = TerminalRuntime::new(pty::manager(), crate::gateway::runtime::agents());
+    let body: RuntimeAgentsListResponse = runtime.status(&caller);
     match serde_json::to_value(&body) {
         Ok(v) => JsonRpcResponse::success(id, v),
         // A failure to encode the server's OWN response type is never the

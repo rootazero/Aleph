@@ -425,11 +425,15 @@ Python，而这台主机上没装解释器。**Windows 恰好是前台探测没�
 
 ---
 
-### 3.3 工具面等待（`src/builtin_tools/terminal.rs`）
+### 3.3 借用运行时与工具面等待 / Borrowed observation runtime
+
+A2 将观察实现迁至 `src/gateway/pty/runtime.rs::TerminalRuntime<'a>`，只借用已有 `PtyManager` 与 `RuntimeAgents`，不新增 session store、sampler、时钟或 callable registry。`src/builtin_tools/terminal.rs` 保留 operator gate、schema、旧工具 envelope 与 `lost_with_restart` 墓碑 adapter；`src/gateway/handlers/runtime.rs` 将 Gateway caller 显式传给同一 runtime。`pty.*` RPC 接线仍待 A4，A2 不开放写入或实现 A3 approval proof。 / A2 shares observation over the existing stores; RPC capability dispatch and approval proofs are deferred.
+
+`wait` 先订阅已有 generation watch，再判定；取消使用 `CancellationToken`，不轮询 screen、不跨 await 持锁。已关闭 PTY 优先返回 `gone`，即使退出结算尚未删掉旧 agent row；这不代表进程已回收。真实 close + stale row 回归在 `closed_pty_wins_over_a_stale_matching_agent_row`。 / An absent PTY wins over a stale row, without claiming process settlement.
 
 | 常量 | 值 | 所有者 | 说明 |
 |---|---|---|---|
-| `WAIT_DEFAULT_TIMEOUT_MS` | 60 000 | `src/builtin_tools/terminal.rs` | 与 `bash_exec` 的 `process_action: "wait"` 同值同理由 |
+| `WAIT_DEFAULT_TIMEOUT_MS` | 60 000 | `src/gateway/pty/runtime.rs` | 与 `bash_exec` 的 `process_action: "wait"` 同值同理由 |
 | `WAIT_MAX_TIMEOUT_MS` | 150 000 | 同上 | **派生自** `bash_exec` 的 `WAIT_MAX_TIMEOUT_SECS`（170 s）所受的同一个约束：阻塞调用必须在 harness 的 180 s 前台工具预算内返回（R10，别去扩预算）。守卫 `the_wait_ceiling_stays_under_the_foreground_tool_budget` 钉的是**那个常量**，不是这个数字的第二份拷贝 |
 | `WAIT_DEFAULT_UNTIL` | `[blocked, idle]` | 同上 | 「告诉我它什么时候需要我」；`working`/`unknown` 合法但从不是那句话的意思 |
 | `EXPLAIN_SCREEN_TAIL_LINES` | 12 | 同上 | 只是回显给人看的窗口。**引擎吃的是整屏**，与采样器一致 |
@@ -452,9 +456,9 @@ Python，而这台主机上没装解释器。**Windows 恰好是前台探测没�
 | 子系统开关 | `[policies.terminal] enabled` | `src/config/types/policies/terminal.rs::TerminalConfig`；执行点 `src/gateway/handlers/pty.rs::handle_spawn`（每次 spawn 读新值）；关掉会杀掉在飞会话（`live_apply` 的 `"policies.terminal"` 臂调 `PtyManager::close_all`） |
 | spawn 目录 | 工作区根内 | `src/gateway/pty/jail.rs::resolve_spawn_cwd`。**只管起点**——终端里的 `cd` 不受约束，别把它当隔离引用 |
 
-**归属过滤在这个文件里只有一个谓词**：`src/builtin_tools/terminal.rs::terminal_admits`。
-`list` 直接拿它比 `SessionInfo::created_by`；`read` / `wait` / `explain` 经 `owner_record_admits` +
-`PtyManager::owner_of` 走同一个函数体，所以五张镜头不可能对「哪些行你能看」悄悄给出不同答案。
+**归属推导集中于** `src/gateway/pty/runtime.rs::ObservationCaller` 与 `caller_admits`：`list` 比对 live `SessionInfo::created_by`，`status` 比对 manager owner record，`attach/read/wait/explain` 经 `TerminalRuntime::owned`。Tool 墓碑 adapter 也复用该推导，不另造权限源。 / All observation faces share caller-aware admission.
+
+**两种 caller 不可混同**：Gateway 无 actor 保留旧 `SessionOwner::admits(None)` 行为（包括 `Unknown` owner 的残留 agent row）；Tool 无 actor 只允许已知 unowned session，`Unknown` 必须拒绝。有 actor 的两面均只允许精确 owner。守卫 `tool_without_actor_does_not_inherit_gateway_admission`、`alice_and_bob_ownership_reaches_every_observation_face` 及 runtime 的 orphan-row 回归。 / Actorless Gateway and Tool intentionally have different admission; no silent widening.
 
 **零身份臂（spec D7）是刻意收窄的**：`actor == None` 时只放行 `created_by == None` 的会话，
 而**生产上每一次 spawn 都盖 actor**（loopback 的 operator 解析出 `Some(OWNER_USER_ID)`——
@@ -478,7 +482,7 @@ Python，而这台主机上没装解释器。**Windows 恰好是前台探测没�
 （把 `check_operator_gate` 已经算出的 `approved_by_operator_gate` 传下来），那条缝还不存在。
 **别用「删掉内联检查」来修它**：审批卡的文案今天写着 "…which changes Aleph's own configuration"，
 对一个只读工具是假的，删掉内联检查等于让一张贴错标签的卡真的授出一次别人终端屏幕的读取。
-全文在 `src/builtin_tools/terminal.rs` 的模块 doc 与 `src/gateway/method_authz.rs` 的 `terminal` 条目。
+A2 保留这两道闸；call-bound approval proof 属于尚未实施的 A3，不能把 caller role 改成 operator 来替代证明。参见 `src/gateway/method_authz.rs` 的 `terminal` 条目。 / A2 preserves both gates; A3 must bind approval to the call rather than elevate the ambient role.
 
 ---
 
@@ -507,6 +511,11 @@ Python，而这台主机上没装解释器。**Windows 恰好是前台探测没�
   - `cwd` —— live cwd，来源顺序见 §2 第 5 步。
 - `terminal{wait}` 的载荷直接用 `RuntimeAgentEntry`，所以等待者拿回的行与 `status`、
   `runtime.agents.list` 是**同一种拼法**（判据 §10）。
+
+`shared/protocol/src/terminal.rs`
+- `TerminalReadResponse` / `TerminalWaitResponse` / `TerminalExplainResponse` 由 Core 的 borrowed runtime 实际构造并序列化；不是展示用 DTO。旧工具 envelope 和 `lost_with_restart` 仍由 adapter 保留。 / Typed payload producers retain the legacy outer envelope.
+- `TerminalSessionParams` / `TerminalWaitParams` 保留省略、空集合和原 timeout；默认值、空集合拒绝与 clamping 的唯一执行点仍在 Core。 / Wire params do not implement execution policy.
+- `actual_core_producers_preserve_the_legacy_wire` 钉实际 read/wait/explain producer；`explain_wire_uses_real_newlines_and_keeps_the_last_twelve_lines` 钉多行 tail 与真实换行。quiet、caller ownership、取消与 watch 唤醒均有 `src/gateway/pty/runtime.rs` 效果测试；fixture 不能替代这些证据。
 
 ---
 
