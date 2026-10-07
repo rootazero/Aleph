@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 use crate::cli::Args;
 
+use alephcore::capability::ownership::OwnershipTree;
+use alephcore::capability::projection_host::{ProjectionHost, ProjectionShutdownOutcome};
 use alephcore::executor::BuiltinToolRegistry;
 use alephcore::gateway::pairing_store::SqlitePairingStore;
 use alephcore::gateway::router::AgentRouter;
@@ -235,7 +237,37 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // owner is configured against the live registry, not a separate one.
     alephcore::tools::markdown_skill::set_markdown_skill_registry(tool_registry_phase2.clone());
 
-    // First production consumer of `ToolHandlerRegistry::subscribe`. Logs every
+    // Mount the live projection on the canonical registry authority. The
+    // ownership tree is the single runtime owner authority shared by the
+    // facade and host; no request-local or second registry is created.
+    let ownership_tree = Arc::new(OwnershipTree::new());
+    let projection_host = ProjectionHost::mount(
+        (*tool_registry_phase2).clone(),
+        Arc::clone(&ownership_tree),
+    );
+    alephcore::capability::projection_host::set_projection_host(Arc::clone(&projection_host));
+    if !projection_host.wait_until_ready().await {
+        return Err("projection host closed before startup readiness".into());
+    }
+
+    // The host is retained in a process slot (see `projection_host_slot()`)
+    // so it survives every early `?` in the post-mount bootstrap body that
+    // drops this local binding. We do NOT wrap the ~3700-line post-mount
+    // body in a drain macro: doing so honestly would require every fallible
+    // post-mount call to opt in, and silently skipping any one would invert
+    // "all exits drain" into "no exit drains". The honest accounting is
+    // therefore:
+    //
+    // * the orderly AND fatal `run_until_shutdown` funnel below explicitly
+    //   awaits `close_and_await` before any registry-owning scope is
+    //   disposed, so the real production path drains;
+    // * an early `?` before `run_until_shutdown` returns leaves the host
+    //   Arc alive in the slot but the source/applier workers may keep
+    //   running until process exit; this is a known gap to escalate to the
+    //   controller rather than a universal drain framework (per
+    //   task-5-boot-drain-preflight.md).
+
+    // First production consumer of `ToolHandlerRegistry::subscribe`.  Logs every
     // MCP-driven register/unregister so operators can see exactly when
     // remote tools enter or leave the LLM's surface. The channel has a
     // 256-slot ring buffer; slow logger backlog is dropped (Lagged), not
@@ -3901,6 +3933,32 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let shutdown_rx = setup_graceful_shutdown(args);
     let run_result = server.run_until_shutdown(shutdown_rx).await;
+    // Close the projection host before any registry-owning scope is disposed.
+    // This funnel is reached by both the orderly shutdown (`shutdown_rx`
+    // fired) and the fatal `run_until_shutdown` error path, so closing here
+    // is the single explicit drain boundary the controller preflight calls
+    // for. The outcome is reported (worker join failures are warn-logged
+    // rather than propagated), so a non-quiescent close does not silently
+    // become `Ok` and the rest of the existing common teardown still runs.
+    match Arc::clone(&projection_host).close_and_await().await {
+        ProjectionShutdownOutcome {
+            source_joined: true,
+            applier_joined: true,
+            ..
+        } => {
+            tracing::debug!("projection host drained before registry-scope dispose");
+        }
+        outcome => {
+            tracing::warn!(
+                source_joined = outcome.source_joined,
+                applier_joined = outcome.applier_joined,
+                source_failed = outcome.source_failed,
+                applier_failed = outcome.applier_failed,
+                "projection host did not quiesce before registry-scope dispose; \
+                 continuing teardown so other shared resources still drain"
+            );
+        }
+    }
     // Dispose the builtin router scope first so it runs before the bash reaper
     // and any other registry-touching teardown. Taking rather than borrowing
     // moves ownership out of the `Option` so a second dispose is impossible.
@@ -4335,5 +4393,96 @@ mod tests {
             .filter_map(|seg| seg.split('"').next())
             .map(|suffix| format!("users.{suffix}"))
             .collect()
+    }
+    /// Task5 H-pre wiring census. The projection host is the live consumer
+    /// of the canonical `ToolHandlerRegistry` and the production requests
+    /// must read the SAME registry the MCP bridge writes. The mount must
+    /// therefore happen AFTER `set_mcp_tool_registry`, on the same Arc, and
+    /// must await the real applied default-snapshot readiness before the
+    /// bootstrap admits any consumer — a publisher-side `enqueue_snapshot`
+    /// masquerading as delivery would silently boot a request loop that
+    /// reads the registry's OWN state rather than a host-applied cut.
+    #[test]
+    fn boot_mounts_projection_host_from_canonical_registry_and_awaits_readiness() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::production_prefix(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] split matched nothing — this test would be \
+             reading its own source"
+        );
+        let production = alephcore::utils::source_scan::code_text(&production);
+
+        for call in [
+            "ProjectionHost::mount(",
+            "set_projection_host(",
+            "wait_until_ready(",
+        ] {
+            assert!(
+                production.contains(call),
+                "start/mod.rs must contain a production call to {call} — \
+                 without it the projection host is not the runtime consumer \
+                 of the canonical registry, and run-loop reads of the host \
+                 either never see MCP-bridged tools or read raw publisher state"
+            );
+        }
+
+        // Ordering: the mount must follow the canonical registry install,
+        // so the registry the host subscribes to is the same one
+        // `set_mcp_tool_registry` just exposed to the run loop.
+        let install_at = production
+            .find("set_mcp_tool_registry(")
+            .expect("set_mcp_tool_registry call must exist (sibling census)");
+        let mount_at = production
+            .find("ProjectionHost::mount(")
+            .expect("ProjectionHost::mount call must exist (asserted above)");
+        assert!(
+            mount_at > install_at,
+            "ProjectionHost::mount must be installed AFTER set_mcp_tool_registry — \
+             mounting on a different registry gives the run loop and the host \
+             two authorities, which is the duplicate-authority shape Task5 \
+             explicitly forbids"
+        );
+    }
+
+    /// Task5 shutdown census. The host must be closed BEFORE
+    /// `builtin_registration_scope.take()` runs, because the scope's
+    /// dispose drops the registry-owning scope and any host worker still
+    /// iterating would race it. The same funnel is reached by both the
+    /// orderly shutdown and a fatal `run_until_shutdown` error, so a
+    /// single placement there is sufficient. The host is retained in a
+    /// process slot so a missing close does not crash, but it would leak
+    /// the worker tasks for the rest of the process — this guard exists
+    /// so that silent removal of the close call shows up red.
+    #[test]
+    fn boot_closes_projection_host_before_registry_scope_dispose() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::production_prefix(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] split matched nothing"
+        );
+        let production = alephcore::utils::source_scan::code_text(&production);
+
+        let close_at = production
+            .find("close_and_await(")
+            .expect(
+                "start/mod.rs must call close_and_await in production — \
+                 the host retains its Arc in a process slot, so without \
+                 an explicit close the orderly/fatal shutdown funnel leaks \
+                 the source and applier workers for the rest of the process",
+            );
+        let scope_take_at = production
+            .find("builtin_registration_scope.take()")
+            .expect(
+                "builtin_registration_scope.take() must exist in production — \
+                 the sibling builtin-scope dispose census depends on it",
+            );
+        assert!(
+            close_at < scope_take_at,
+            "close_and_await must run BEFORE builtin_registration_scope.take() — \
+             the scope's dispose drops registry-owning state, and a host \
+             worker still iterating under it would race the disposal"
+        );
     }
 }

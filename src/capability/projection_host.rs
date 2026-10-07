@@ -33,6 +33,7 @@
 
 use crate::capability::descriptor::CapabilityId;
 use crate::capability::facade::{CapabilityChange, Cursor, Scope};
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::capability::ownership::{OwnerGeneration, OwnershipChange, OwnershipTree};
 use crate::capability::zahir_facade::{FacadeEntriesSnapshot, ZahirFacade};
 use crate::sync_primitives::Arc;
@@ -55,6 +56,29 @@ pub const DEFAULT_PENDING_CAPACITY: usize = 64;
 /// events; a capacity of `1` cannot represent a valid invalidation and is
 /// rejected (debug-asserted in [`ConsumerState::new`]).
 pub const MIN_PENDING_CAPACITY: usize = 2;
+
+/// Process-wide projection host installed by the real server bootstrap.
+///
+/// The slot retains the host beyond the local startup binding so every
+/// post-mount exit still has one explicit lifecycle owner. It is intentionally
+/// install-once, matching the process lifetime of the server registry.
+static PROJECTION_HOST: CapabilitySlot<Arc<ProjectionHost>> =
+    CapabilitySlot::new("capability/projection-host", MissingSemantics::FailsClosed);
+
+/// Install the process-wide projection host. Called once by server startup.
+pub fn set_projection_host(host: Arc<ProjectionHost>) {
+    let _ = PROJECTION_HOST.install(host);
+}
+
+/// Return the installed projection host, if startup mounted one.
+pub fn projection_host() -> Option<&'static Arc<ProjectionHost>> {
+    PROJECTION_HOST.get()
+}
+
+/// Type-erased view for the process capability roster.
+pub(crate) const fn projection_host_slot() -> &'static dyn SlotStatus {
+    &PROJECTION_HOST
+}
 
 /// One projected cut of the live authorities.
 ///
@@ -418,6 +442,31 @@ impl ProjectionHost {
         *inner.applier_task.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applier);
 
         host
+    }
+
+    /// Wait until the default consumer has actually applied a snapshot.
+    ///
+    /// This observes the same applied state used by `current_snapshot`, never
+    /// the publisher's initial snapshot. `false` means the host or its source
+    /// closed before a usable applied snapshot existed.
+    pub async fn wait_until_ready(&self) -> bool {
+        loop {
+            if self.current_snapshot().is_some() {
+                return true;
+            }
+            if self.inner.closed.load(Ordering::SeqCst) || self.inner.registry.is_closed() {
+                return false;
+            }
+            let notified = self.inner.readiness.notified();
+            tokio::pin!(notified);
+            if self.current_snapshot().is_some() {
+                return true;
+            }
+            if self.inner.closed.load(Ordering::SeqCst) || self.inner.registry.is_closed() {
+                return false;
+            }
+            notified.await;
+        }
     }
 
     /// The run-loop-readable applied snapshot, or `None` when the projection
