@@ -1,6 +1,6 @@
 # Capability Phase 4 H-pre：生产挂载与持续订阅设计
 
-- **状态 / Status:** Design approved conversationally; written-spec review pending
+- **状态 / Status:** Written spec approved by user; implementation-plan review and execution-method selection pending
 - **基点 / Baseline:** `947e1895130bfc84abca7f1dd7733b07e30519fb`
 - **范围 / Scope:** Gate H-pre only; Gate H ACP inbound server and Gate I implementation are excluded
 - **工作树 / Worktree:** `/Volumes/TBU4/Workspace/Aleph-capability-phase4-follow-up`
@@ -27,7 +27,7 @@ This minislice mounts the existing library-only capability host into the real Al
 
 - 唯一生产 `ToolHandlerRegistry` 创建点：`src/bin/aleph-server/commands/start/mod.rs:224`。
 - 同一 registry 被安装到 MCP tool service slot（`start/mod.rs:229`）与 markdown-skill registry（`start/mod.rs:236`），并传给 MCP bridge。
-- run-loop 在 `src/gateway/run_loop/inner.rs:819-820` 读取 registry snapshot，随后在 `inner.rs:1791` 加入 canonical tools；当前是每请求 snapshot，不是长生命周期 subscriber。
+- run-loop 在 `src/gateway/execution_engine/run_loop/inner.rs:819-820` 读取 registry snapshot，随后在 `inner.rs:1791` 加入 canonical tools；当前是每请求 snapshot，不是长生命周期 subscriber。
 - metadata 最终出口位于 `src/tools/scoped/mod.rs:566`。
 - 当前唯一生产 `ToolHandlerRegistry::subscribe()` 消费者为 `start/mod.rs:244-269` 的 boot log loop。它是诊断 tap，不是 capability delivery。
 
@@ -106,7 +106,7 @@ No sleep-based proof is valid. The proof must observe the actual task/receiver c
 
 ## 4. 真实 consumer 选择 / Real consumer selection
 
-首个 consumer 必须是现有 production projection，而不是 logger、unit test 或 GlobalBus tap。已核验的最窄 surface 是 `run_loop/inner.rs:819-820` 到 `inner.rs:1791`；但是它目前是每请求 snapshot，因此不能直接冒充 long-lived subscriber。
+首个 consumer 必须是现有 production projection，而不是 logger、unit test 或 GlobalBus tap。已核验的最窄 surface 是 `src/gateway/execution_engine/run_loop/inner.rs:819-820` 到 `src/gateway/execution_engine/run_loop/inner.rs:1791`；但是它目前是每请求 snapshot，因此不能直接冒充 long-lived subscriber。
 
 The first consumer must be an existing production projection, not a logger, unit test, or GlobalBus tap. The narrowest observed surface is the run-loop snapshot-to-canonical-tools path, but it is request-scoped and cannot itself be presented as a long-lived subscription.
 
