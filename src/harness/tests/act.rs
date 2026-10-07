@@ -18,7 +18,9 @@ use crate::session::events::{
     now_ms, EventSeq, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, TurnTrigger,
 };
 use crate::session::service::{SessionError, SessionHandle, SessionId, SessionService};
-use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity, ToolDescriptorLookup, SCHEMA_VERSION};
+use crate::tools::descriptor::{
+    ReplayPolicy, ToolCallIdentity, ToolDescriptorLookup, SCHEMA_VERSION,
+};
 use crate::tools::result_processing::RecoveryTools;
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 

@@ -224,9 +224,8 @@ impl StateDatabase {
                     let seq: i64 = row.get(1)?;
                     // Negative seq would mean a corrupt page; surface it
                     // rather than silently clamping to 0.
-                    let seq_u64 = u64::try_from(seq).map_err(|_| {
-                        rusqlite::Error::IntegralValueOutOfRange(1, seq)
-                    })?;
+                    let seq_u64 = u64::try_from(seq)
+                        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, seq))?;
                     Ok((fact_id, seq_u64))
                 })
                 .map_err(|e| AlephError::other(format!("Failed to list fact_ids: {e}")))?;

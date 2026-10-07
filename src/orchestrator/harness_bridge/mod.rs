@@ -85,8 +85,7 @@ pub struct AgentHarnessRunner {
     /// `ToolCallRequested` can stamp the same registry generation that
     /// resolved the handler. `None` (tests / boot without the MCP registry)
     /// leaves the durable `identity` field unset.
-    pub tool_descriptor_lookup:
-        Option<Arc<dyn crate::tools::descriptor::ToolDescriptorLookup>>,
+    pub tool_descriptor_lookup: Option<Arc<dyn crate::tools::descriptor::ToolDescriptorLookup>>,
     /// Live default-provider resolver. Each `pick_llm` call asks the handle
     /// for the current default so UI-driven `set_default` takes effect on the
     /// next turn (Step 5 hot-reload). Replaces the boot-time `Arc<dyn AiProvider>`

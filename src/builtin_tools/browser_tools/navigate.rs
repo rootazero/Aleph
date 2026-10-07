@@ -308,12 +308,10 @@ mod tests {
         // For a URL the SSRF floor allows, the policy is still what decides —
         // and it short-circuits before any browser work runs.
         assert!(!result.success);
-        assert!(
-            result
-                .message
-                .unwrap()
-                .contains("denied by approval policy")
-        );
+        assert!(result
+            .message
+            .unwrap()
+            .contains("denied by approval policy"));
     }
 
     /// An SSRF-refused URL must be refused BEFORE the approval policy is

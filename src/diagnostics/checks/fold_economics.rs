@@ -169,11 +169,13 @@ impl FoldEconomicsCheck {
             ));
         }
         if rollup.verdicts.len() > NAMED_LIMIT {
-            lines.push(format!("… and {} more", rollup.verdicts.len() - NAMED_LIMIT));
+            lines.push(format!(
+                "… and {} more",
+                rollup.verdicts.len() - NAMED_LIMIT
+            ));
         }
         if rollup.prompt_tokens > 0 {
-            let share =
-                100.0 * rollup.compactor_tokens as f64 / rollup.prompt_tokens as f64;
+            let share = 100.0 * rollup.compactor_tokens as f64 / rollup.prompt_tokens as f64;
             lines.push(format!(
                 "compactor self-cost {} tok = {share:.1}% of {} prompt tok (health line \
                  ≤{COMPACTION_COST_HEALTH_PCT:.0}%)",
@@ -575,7 +577,10 @@ mod tests {
         let check = FoldEconomicsCheck::new(dir.path().to_path_buf());
         let findings = check.run(Posture::Inspect).await;
         assert_eq!(findings.len(), 1, "one finding expected: {findings:?}");
-        assert!(!findings[0].is_problem(), "absent dbs must not warn: {findings:?}");
+        assert!(
+            !findings[0].is_problem(),
+            "absent dbs must not warn: {findings:?}"
+        );
         assert_eq!(findings[0].title, "No session database yet");
     }
 

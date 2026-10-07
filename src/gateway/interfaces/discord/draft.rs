@@ -318,8 +318,7 @@ fn find_split_index(text: &str, cap: usize) -> Option<usize> {
 
     // 1. Code-fence boundary: find the last `\n\n``` ` or `\n``` ` within
     //    the cap. We never split inside a fenced code block.
-    let fence = last_index_of(text, "\n```", cap)
-        .or_else(|| last_index_of(text, "```\n", cap));
+    let fence = last_index_of(text, "\n```", cap).or_else(|| last_index_of(text, "```\n", cap));
     if let Some(idx) = fence {
         return Some(idx + 1);
     }
@@ -357,7 +356,9 @@ fn last_index_of(text: &str, needle: &str, cap: usize) -> Option<usize> {
     let search_end = cap.min(text.len());
     let window_start = search_end.saturating_sub(needle.len() + 64);
     let window = &text[window_start..search_end];
-    window.rfind(needle).map(|i| window_start + i + needle.len())
+    window
+        .rfind(needle)
+        .map(|i| window_start + i + needle.len())
 }
 
 /// State of the in-progress reply edit loop. See module docs for the
@@ -521,11 +522,12 @@ pub enum DraftError {
 impl std::fmt::Display for DraftError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotEditing => f.write_str("draft stream is in Pending state — call begin_editing first"),
-            Self::Overflows { chars, cap } => write!(
-                f,
-                "draft text is {chars} chars, exceeds cap of {cap}"
-            ),
+            Self::NotEditing => {
+                f.write_str("draft stream is in Pending state — call begin_editing first")
+            }
+            Self::Overflows { chars, cap } => {
+                write!(f, "draft text is {chars} chars, exceeds cap of {cap}")
+            }
             Self::AlreadyFinalized => f.write_str("draft stream is already finalized"),
         }
     }
@@ -552,7 +554,11 @@ mod tests {
         let c = DraftChunker::new(50, "..", "..");
         let text = "alpha alpha alpha.\n\nbeta beta beta.\n\ngamma gamma gamma.";
         let out = c.chunk(text);
-        assert!(out.len() >= 2, "expected at least 2 chunks, got {}", out.len());
+        assert!(
+            out.len() >= 2,
+            "expected at least 2 chunks, got {}",
+            out.len()
+        );
         // Each chunk must be ≤ cap + marker.
         for chunk in &out {
             assert!(chunk.text.chars().count() <= 50);
@@ -566,11 +572,7 @@ mod tests {
         // All chunks together reassemble to the input (markers are suffixes).
         let reassembled_no_markers: String = out
             .iter()
-            .map(|c| {
-                c.text
-                    .trim_end_matches("..")
-                    .to_string()
-            })
+            .map(|c| c.text.trim_end_matches("..").to_string())
             .collect::<Vec<_>>()
             .join("\n\n");
         assert!(reassembled_no_markers.starts_with("alpha"));
@@ -583,7 +585,11 @@ mod tests {
         let body = "x".repeat(120);
         let out = c.chunk(&body);
         for chunk in &out {
-            assert!(chunk.text.chars().count() <= 60, "chunk too long: {:?}", chunk.text);
+            assert!(
+                chunk.text.chars().count() <= 60,
+                "chunk too long: {:?}",
+                chunk.text
+            );
         }
     }
 

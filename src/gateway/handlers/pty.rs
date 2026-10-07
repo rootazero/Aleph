@@ -38,7 +38,6 @@ use tokio::sync::RwLock;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use crate::config::Config;
-use crate::gateway::pty::runtime::{ObservationCaller, TerminalRuntime};
 use crate::gateway::pty::{self, SpawnOptions};
 use crate::sync_primitives::Arc;
 
@@ -382,11 +381,14 @@ pub async fn handle_close(request: JsonRpcRequest) -> JsonRpcResponse {
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     let id = request.id.clone();
     let actor = crate::gateway::visibility::ambient_actor();
-    let body = TerminalRuntime::new(pty::manager(), crate::gateway::runtime::agents()).list(
-        ObservationCaller::Gateway {
-            actor: actor.as_deref(),
-        },
-    );
+    let body = aleph_protocol::pty::PtyListResponse {
+        sessions: pty::manager()
+            .list()
+            .iter()
+            .filter(|s| pty::owner_admits(s.created_by.as_deref(), actor.as_deref()))
+            .map(aleph_protocol::pty::PtySessionInfo::from)
+            .collect(),
+    };
     // Same encode-or-report shape as `handle_spawn` and `handle_attach`: a
     // handler must return a response, not panic (P7).
     match serde_json::to_value(&body) {

@@ -356,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn a_steer_cuts_the_watch_short() {
         use crate::routing::session_key::SessionKey;
-        use crate::tools::turn_context::{TURN_CONTEXT, TurnContext};
+        use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
 
         // Cycles forever, so only the timeout or the steer can end this.
         let screen = ScriptedScreen::new(vec![FRAME_A, FRAME_B, FRAME_A, FRAME_B]);
@@ -406,7 +406,7 @@ mod tests {
     #[tokio::test]
     async fn a_steer_on_another_session_does_not_cut_the_watch_short() {
         use crate::routing::session_key::SessionKey;
-        use crate::tools::turn_context::{TURN_CONTEXT, TurnContext};
+        use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
 
         let screen = ScriptedScreen::new(vec![FRAME_A, FRAME_B, FRAME_A, FRAME_B]);
         let mine = SessionKey::peer("main", "wait-visual-scope-mine");

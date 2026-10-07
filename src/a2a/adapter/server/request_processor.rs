@@ -242,12 +242,8 @@ impl A2ARequestProcessor {
             .and_then(|v| v.as_str())
             .map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
 
-        if let Err(e) = apply_inline_push_config(
-            &self.state.notification,
-            &request.params,
-            &task_id,
-        )
-        .await
+        if let Err(e) =
+            apply_inline_push_config(&self.state.notification, &request.params, &task_id).await
         {
             return JsonRpcResponse::from_a2a_error(request.id, &e);
         }

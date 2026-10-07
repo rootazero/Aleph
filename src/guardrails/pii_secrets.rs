@@ -383,7 +383,14 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
         // E0515 (returning value referencing local variable).
         let mut nodes: u32 = 0;
         let resolved = match self
-            .scan_tool_args_at_depth(args, resolver_ref, &mut warnings, &mut sources, 0, &mut nodes)
+            .scan_tool_args_at_depth(
+                args,
+                resolver_ref,
+                &mut warnings,
+                &mut sources,
+                0,
+                &mut nodes,
+            )
             .await
         {
             Ok(v) => v,

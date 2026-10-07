@@ -55,7 +55,8 @@ impl ReplayPreparer for ReplayAdapter {
             || current.replay_policy != ReplayPolicy::Safe
             || stored.schema_version != current.schema_version
             || stored.replay_contract_fingerprint != current.replay_contract_fingerprint
-            || stored.replay_contract_fingerprint.is_none() // both Some + equal
+            || stored.replay_contract_fingerprint.is_none()
+        // both Some + equal
         {
             return ReplayPrepare::Refused;
         }

@@ -258,7 +258,8 @@ impl BrowserNetworkTool {
 #[async_trait]
 impl AlephTool for BrowserNetworkTool {
     const NAME: &'static str = "browser_network";
-    const DESCRIPTION: &'static str = "Read the current page's network request log (action=log, default), or manage mock routes \
+    const DESCRIPTION: &'static str =
+        "Read the current page's network request log (action=log, default), or manage mock routes \
          intercepting its requests: mock_add (url_contains; kind=mock|abort; scope=tab|profile), \
          mock_list, mock_remove (rule_id), mock_clear (scope required). Mock routes need a \
          driver=\"cdp\" profile.";

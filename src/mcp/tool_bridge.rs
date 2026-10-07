@@ -421,9 +421,13 @@ async fn reconcile_capability_tools(
             // with no way to discover) or dangles a discovery tool over
             // nothing. The template-list tool rides the same gate (see
             // `RESOURCE_TEMPLATE_LIST_TOOL`).
-            set_capability(registry, handle, &mut scopes.resource, RESOURCE_LIST_TOOL, |s| {
-                Arc::new(McpListResourcesTool::new(s))
-            });
+            set_capability(
+                registry,
+                handle,
+                &mut scopes.resource,
+                RESOURCE_LIST_TOOL,
+                |s| Arc::new(McpListResourcesTool::new(s)),
+            );
             set_capability(
                 registry,
                 handle,
@@ -442,9 +446,13 @@ async fn reconcile_capability_tools(
     }
     if want_prompt != *prompt_live {
         if want_prompt {
-            set_capability(registry, handle, &mut scopes.prompt, PROMPT_LIST_TOOL, |s| {
-                Arc::new(McpListPromptsTool::new(s))
-            });
+            set_capability(
+                registry,
+                handle,
+                &mut scopes.prompt,
+                PROMPT_LIST_TOOL,
+                |s| Arc::new(McpListPromptsTool::new(s)),
+            );
             *prompt_live = set_capability(registry, handle, &mut scopes.prompt, PROMPT_TOOL, |s| {
                 Arc::new(McpGetPromptTool::new(s))
             });
@@ -1056,8 +1064,7 @@ mod tests {
             "replacement".to_string(),
             serde_json::json!({"type": "object"}),
         ));
-        let descriptor =
-            ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0);
+        let descriptor = ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0);
         registry
             .replace(descriptor, Arc::clone(&replacement))
             .expect("replace succeeds");

@@ -33,13 +33,9 @@ impl AgentHarnessRunner {
         provider: &dyn AiProvider,
     ) -> Option<u32> {
         let cfg = self.context_budget_config.as_ref()?;
-        let history_tokens = Self::project_history_tokens(
-            self.session_service.as_ref(),
-            session_id,
-            provider,
-            cfg,
-        )
-        .await?;
+        let history_tokens =
+            Self::project_history_tokens(self.session_service.as_ref(), session_id, provider, cfg)
+                .await?;
         let ceiling = (cfg.token_budget as f64 * cfg.warning_threshold).max(0.0) as usize;
         let available = ceiling.saturating_sub(history_tokens);
         Some(available.min(u32::MAX as usize) as u32)
@@ -81,13 +77,9 @@ impl AgentHarnessRunner {
         if remind_at == 0 {
             return None;
         }
-        let history_tokens = Self::project_history_tokens(
-            self.session_service.as_ref(),
-            session_id,
-            provider,
-            cfg,
-        )
-        .await?;
+        let history_tokens =
+            Self::project_history_tokens(self.session_service.as_ref(), session_id, provider, cfg)
+                .await?;
         if history_tokens < remind_at {
             return None;
         }

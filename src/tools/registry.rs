@@ -474,7 +474,6 @@ impl ToolHandlerRegistry {
         }
     }
 
-
     /// Frozen handler+descriptor view from one registry generation. Consumers
     /// that project callable tools should prefer this over pairing
     /// `snapshot()` and `descriptor_snapshot()` independently.
@@ -589,7 +588,7 @@ fn mismatch_reason(descriptor: &ToolCapabilityDescriptor, definition: &ToolDefin
 mod tests {
     use super::*;
     use crate::session::events::ToolOutput;
-    use crate::tools::descriptor::{ReplayPolicy, SCHEMA_VERSION, ToolKind};
+    use crate::tools::descriptor::{ReplayPolicy, ToolKind, SCHEMA_VERSION};
     use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolSource};
     use async_trait::async_trait;
     use serde_json::Value;
@@ -695,7 +694,8 @@ mod tests {
     #[test]
     fn tool_call_identity_defaults_to_unsafe_policy() {
         let reg = ToolHandlerRegistry::new();
-        reg.register(desc("plain"), fake("plain")).expect("register");
+        reg.register(desc("plain"), fake("plain"))
+            .expect("register");
         assert_eq!(
             ToolDescriptorLookup::tool_call_identity(&reg, "plain")
                 .unwrap()
@@ -738,7 +738,10 @@ mod tests {
         reg.replace(next, fake("t")).expect("replace");
 
         let identity = ToolDescriptorLookup::tool_call_identity(&reg, "t").unwrap();
-        assert_eq!(identity.revision, 2, "identity must track the new generation");
+        assert_eq!(
+            identity.revision, 2,
+            "identity must track the new generation"
+        );
         assert_eq!(identity.replay_policy, ReplayPolicy::Safe);
     }
 

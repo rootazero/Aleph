@@ -648,12 +648,30 @@ mod tests {
         ("src/gateway/handlers/users.rs", "users.update"),
         ("src/gateway/handlers/users.rs", "users.update"),
         ("src/gateway/handlers/users.rs", "users.update"),
-        ("src/gateway/interfaces/discord/commands.rs", "discord.command.dispatch"),
-        ("src/gateway/interfaces/discord/draft.rs", "discord.draft.chunk"),
-        ("src/gateway/interfaces/discord/reconnect.rs", "discord.reconnect.backoff"),
-        ("src/gateway/interfaces/discord/reconnect.rs", "discord.reconnect.cooldown"),
-        ("src/gateway/interfaces/discord/reconnect.rs", "discord.reconnect.proceed"),
-        ("src/gateway/interfaces/discord/reconnect.rs", "discord.reconnect.zombie_detected"),
+        (
+            "src/gateway/interfaces/discord/commands.rs",
+            "discord.command.dispatch",
+        ),
+        (
+            "src/gateway/interfaces/discord/draft.rs",
+            "discord.draft.chunk",
+        ),
+        (
+            "src/gateway/interfaces/discord/reconnect.rs",
+            "discord.reconnect.backoff",
+        ),
+        (
+            "src/gateway/interfaces/discord/reconnect.rs",
+            "discord.reconnect.cooldown",
+        ),
+        (
+            "src/gateway/interfaces/discord/reconnect.rs",
+            "discord.reconnect.proceed",
+        ),
+        (
+            "src/gateway/interfaces/discord/reconnect.rs",
+            "discord.reconnect.zombie_detected",
+        ),
         (
             "src/gateway/interfaces/discord/security/audit_hooks.rs",
             "discord.command.approval.requested",

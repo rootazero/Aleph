@@ -183,7 +183,8 @@ fn describe_condition(condition: &WaitCondition) -> String {
 #[async_trait]
 impl AlephTool for BrowserWaitForTool {
     const NAME: &'static str = "browser_wait_for";
-    const DESCRIPTION: &'static str = "Wait for a condition on the page (useful after navigation or actions): text appearing \
+    const DESCRIPTION: &'static str =
+        "Wait for a condition on the page (useful after navigation or actions): text appearing \
          or disappearing, a CSS selector matching an element, the URL containing a substring, \
          or a fixed delay in milliseconds. \
          Set exactly one of text / text_gone / selector / url_contains / time_ms.";

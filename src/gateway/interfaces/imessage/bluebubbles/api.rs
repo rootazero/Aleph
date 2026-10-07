@@ -347,11 +347,7 @@ impl BlueBubblesApi {
     ///
     /// `icon_data_url` is a `data:` URL (RFC 2397) carrying the image payload,
     /// matching `Channel::set_group_icon`'s public contract.
-    pub async fn set_chat_icon(
-        &self,
-        chat_guid: &str,
-        icon_data_url: &str,
-    ) -> Result<(), BbError> {
+    pub async fn set_chat_icon(&self, chat_guid: &str, icon_data_url: &str) -> Result<(), BbError> {
         let (mime, bytes) = crate::gateway::data_url::decode(icon_data_url)
             .map_err(|e| BbError::BadResponse(format!("icon data URL: {e}")))?;
         let filename = mime_to_filename(&mime);
@@ -610,11 +606,10 @@ mod tests {
         // other BlueBubbles method that takes a chat guid) byte-serializes
         // the chat guid before interpolating it into the path. Mirror that
         // here so the assertion names the right shape.
-        let encoded: String = url::form_urlencoded::byte_serialize(
-            "iMessage;-;+15555550100".as_bytes(),
-        )
-        .collect::<String>()
-        .replace('+', "%20");
+        let encoded: String =
+            url::form_urlencoded::byte_serialize("iMessage;-;+15555550100".as_bytes())
+                .collect::<String>()
+                .replace('+', "%20");
         assert_eq!(
             api.api_url(&format!("/api/v1/chat/{encoded}/icon")),
             "http://h:1/api/v1/chat/iMessage%3B-%3B%2B15555550100/icon?password=pw"

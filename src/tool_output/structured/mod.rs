@@ -28,11 +28,11 @@
 
 use std::borrow::Cow;
 
+mod crush;
 mod diff;
 mod json;
 mod log;
 mod search;
-mod crush;
 
 /// Recognized structured content types worth a tailored reducer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -559,7 +559,9 @@ mod tests {
             s.push_str(&format!("test case_{i} ... ok\n"));
         }
         for k in 0..12 {
-            s.push_str(&format!("test suite::integration::checks::validation::fail_{k} ... FAILED\n"));
+            s.push_str(&format!(
+                "test suite::integration::checks::validation::fail_{k} ... FAILED\n"
+            ));
         }
         s.push_str("test result: FAILED. 12 failed; 200 passed\n");
 

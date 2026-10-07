@@ -17,8 +17,7 @@ use crate::a2a::domain::{AgentCard, UpdateEvent};
 use crate::a2a::port::authenticator::{A2AAuthContext, A2AAuthPrincipal};
 
 use super::request_processor::{
-    apply_inline_push_config, A2ARequestProcessor, A2AServerState, JsonRpcRequest,
-    JsonRpcResponse,
+    apply_inline_push_config, A2ARequestProcessor, A2AServerState, JsonRpcRequest, JsonRpcResponse,
 };
 
 /// Build the axum router for A2A endpoints.

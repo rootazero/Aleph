@@ -1314,14 +1314,11 @@ impl LoopTool for SubagentTool {
         // 2. Resolve agent definition (per-run project overlay first).
         let project_root = crate::projects::current_project_root();
         let project_root_ref = project_root.as_deref();
-        let agent_def = match self.resolve_agent_or_error(
-            args.agent_type.as_deref(),
-            "",
-            project_root_ref,
-        ) {
-            Ok(def) => def,
-            Err(err) => return err,
-        };
+        let agent_def =
+            match self.resolve_agent_or_error(args.agent_type.as_deref(), "", project_root_ref) {
+                Ok(def) => def,
+                Err(err) => return err,
+            };
 
         // 3. Check nesting depth
         let child_chain = match self.tools.chain.child() {
@@ -1989,8 +1986,6 @@ fn unknown_request_id(request_id: &str) -> ToolResult {
         retryable: false,
     }
 }
-
-
 
 /// Render a finished background sub-agent as a JSON object. `ok_status` is
 /// the `status` string for a success (`completed` / `already_completed`);

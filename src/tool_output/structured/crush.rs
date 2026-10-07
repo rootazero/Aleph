@@ -18,7 +18,14 @@ const HEADER_RESERVE: usize = 64;
 
 /// Summary hints promoted above noise in a crushed log: a bounded count of
 /// passes/skips means the line is load-bearing orientation, not chatter.
-const SUMMARY_HINTS: [&str; 6] = ["passed", "test result", "finished", "completed", "assertions", "skipped"];
+const SUMMARY_HINTS: [&str; 6] = [
+    "passed",
+    "test result",
+    "finished",
+    "completed",
+    "assertions",
+    "skipped",
+];
 
 /// Crush `text` to fit `budget_tokens`, or decline.
 ///
@@ -65,7 +72,12 @@ pub(crate) fn crush_within(text: &str, kind: ContentKind, budget_tokens: usize) 
         _ => {}
     }
 
-    let body = crush_body(&lines, kind, &profile, allowance.saturating_sub(HEADER_RESERVE))?;
+    let body = crush_body(
+        &lines,
+        kind,
+        &profile,
+        allowance.saturating_sub(HEADER_RESERVE),
+    )?;
     let total = lines.len();
     let kept = kept_line_count(&body);
     let reduction = Reduction {
@@ -94,7 +106,12 @@ pub(super) fn kept_line_count(body: &str) -> usize {
 /// — whose omission markers the estimate cannot predict — and drops the
 /// lowest-priority picked line until the true render fits. `picked` is a
 /// score-descending stack, so trimming is O(dropped) pops, not rescans.
-fn crush_body(lines: &[&str], kind: ContentKind, profile: &Profile, budget: usize) -> Option<String> {
+fn crush_body(
+    lines: &[&str],
+    kind: ContentKind,
+    profile: &Profile,
+    budget: usize,
+) -> Option<String> {
     let total = lines.len();
     let anchors = anchor_indices(lines);
     let scores: Vec<u8> = lines
@@ -210,7 +227,9 @@ fn anchor_indices(lines: &[&str]) -> Vec<usize> {
 /// log's noise — is not promoted by the digit alone.
 fn crush_is_summary(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
-    SUMMARY_HINTS.iter().any(|hint| contains_ignore_ascii_case(&lower, hint))
+    SUMMARY_HINTS
+        .iter()
+        .any(|hint| contains_ignore_ascii_case(&lower, hint))
         && line.chars().any(|c| c.is_ascii_digit())
 }
 
@@ -255,7 +274,11 @@ fn crush_is_match_line(line: &str) -> bool {
 
 /// Estimated per-line cost: the clamped render width plus one for the newline.
 fn line_cost(line: &str, max_chars: usize) -> usize {
-    line.chars().take(max_chars).map(|c| c.len_utf8()).sum::<usize>() + 1
+    line.chars()
+        .take(max_chars)
+        .map(|c| c.len_utf8())
+        .sum::<usize>()
+        + 1
 }
 
 #[cfg(test)]
@@ -268,7 +291,9 @@ mod tests {
     /// under which crushing may engage; the signal lines stay short so they
     /// all fit the crush budget.
     fn failing_test_log(failures: usize, ok: usize) -> String {
-        let mut s = String::from("$ cargo test --workspace --all-targets --all-features --release --no-fail-fast\n");
+        let mut s = String::from(
+            "$ cargo test --workspace --all-targets --all-features --release --no-fail-fast\n",
+        );
         s.push_str("   Compiling alephcore v0.1.0 (D:\\Workspace\\Aleph\\context-fabric-line2)\n");
         s.push_str("    Finished test profile [unoptimized + debuginfo] in 12.34s\n");
         s.push_str("     Running unittests src/lib.rs (target\\debug\\deps\\alephcore-0123456789abcdef.exe)\n");
@@ -319,8 +344,14 @@ mod tests {
             body.contains("panicked at src/lib.rs:42"),
             "the panic location must survive:\n{body}"
         );
-        assert!(body.contains("test result: FAILED"), "the summary must survive");
-        assert!(!body.contains("Compiling dep-"), "build noise must be dropped");
+        assert!(
+            body.contains("test result: FAILED"),
+            "the summary must survive"
+        );
+        assert!(
+            !body.contains("Compiling dep-"),
+            "build noise must be dropped"
+        );
         assert!(body.contains("lines omitted"), "omissions must be marked");
     }
 
@@ -338,9 +369,9 @@ mod tests {
         s.push_str("src/net.rs:88:    ERROR connection refused, retrying\n");
         s.push_str("rg: 321 matches across 41 files\n");
         const BUDGET: usize = 200; // allowance = 500 chars
-        // The crush gate is "the lossless reducer's artifact must exceed the
-        // allowance" — surface both numbers so a gate miss reads as data, not
-        // as a mystery `None`.
+                                   // The crush gate is "the lossless reducer's artifact must exceed the
+                                   // allowance" — surface both numbers so a gate miss reads as data, not
+                                   // as a mystery `None`.
         let profile = Profile::for_token_budget(BUDGET);
         let lines: Vec<&str> = s.lines().collect();
         let reduced = super::super::search::reduce_search(&lines, &profile)
@@ -373,7 +404,9 @@ mod tests {
     fn crush_diff_returns_none() {
         let mut d = String::from("diff --git a/x.rs b/x.rs\n");
         for i in 0..60 {
-            d.push_str(&format!("@@ -{i},3 +{i},3 @@\n-old line {i}\n+new line {i}\n context\n"));
+            d.push_str(&format!(
+                "@@ -{i},3 +{i},3 @@\n-old line {i}\n+new line {i}\n context\n"
+            ));
         }
         assert!(
             crush_within(&d, ContentKind::Diff, 200).is_none(),
@@ -438,7 +471,10 @@ mod tests {
         const BUDGET: usize = 190; // allowance = 475 chars
         let body = crush_within(&s, ContentKind::Log, BUDGET).expect("must crush");
         let warns = body.matches("warning: unused variable").count();
-        assert!(warns <= 1, "the burst collapses to one representative, got {warns}:\n{body}");
+        assert!(
+            warns <= 1,
+            "the burst collapses to one representative, got {warns}:\n{body}"
+        );
         assert!(body.contains("error[E000]"), "the first error survives");
     }
 

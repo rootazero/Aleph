@@ -150,13 +150,9 @@ where
             let lock = acquire_or_held(data_dir)?;
             local(&lock)
         }
-        CommandPolicy::LockOrIpc { route, method } => lock_or_ipc_dispatch::<L, T>(
-            data_dir,
-            route,
-            method,
-            ipc_body,
-            local,
-        ),
+        CommandPolicy::LockOrIpc { route, method } => {
+            lock_or_ipc_dispatch::<L, T>(data_dir, route, method, ipc_body, local)
+        }
     }
 }
 
@@ -188,9 +184,8 @@ where
             if e.downcast_ref::<LockHeldError>().is_none() {
                 return Err(e);
             }
-            match crate::cli::ipc_client::forward_to_server::<T>(
-                data_dir, method, route, ipc_body,
-            ) {
+            match crate::cli::ipc_client::forward_to_server::<T>(data_dir, method, route, ipc_body)
+            {
                 Ok(out) => Ok(out),
                 Err(fwd_err) => match acquire_or_held(data_dir) {
                     Ok(lock) => local(&lock),

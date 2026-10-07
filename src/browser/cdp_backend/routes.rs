@@ -1881,9 +1881,7 @@ mod tests {
             .expect_err("obscura refuses before the wire");
         match err {
             BrowserError::UnsupportedByEngine {
-                verb,
-                supported_by,
-                ..
+                verb, supported_by, ..
             } => {
                 assert_eq!(verb, "route_add");
                 assert_eq!(supported_by, Some(Engine::Chromium));

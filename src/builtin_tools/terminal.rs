@@ -1,46 +1,36 @@
-//! `TerminalTool` — read-only view of the terminal sessions the caller owns.
+//! Read-only terminal observation tool.
 //!
-//! Five actions, no write verb. Observations delegate to
-//! [`TerminalRuntime`]; this boundary retains schema, operator gating, the
-//! output envelope and the execution-journal restart adapter.
-//!
-//! The RPC/event faces are operator-only too. The inline check MUST remain:
-//! `ScopedToolService` approval does not re-stamp `TurnContext::caller_role`,
-//! so an approved member call is still refused today. The decided fix is a
-//! per-call approval seam, not deleting this check. `tools.invoke` has no
-//! `TurnContext` and relies on its own dispatch operator gate.
-//!
-//! Identified callers see only exact-owner sessions. An actorless tool admits
-//! only known-unowned sessions, unlike the unrestricted actorless gateway.
-//! Unknown ownership is denied on the tool face. Addressed refusals say
-//! `no such session` to avoid an ownership oracle. The journal adapter may
-//! instead return `lost_with_restart`, only to the admitted recorded owner.
+//! Observation itself lives in the borrowed `gateway::pty::runtime` adapter.
+//! This module keeps only the tool schema, operator gate, envelope, and the
+//! journal-specific compatibility adapter for `lost_with_restart`.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio_util::sync::CancellationToken;
 
 use super::{notify_tool_result, notify_tool_start};
 use crate::error::Result;
 use crate::gateway::pty;
-use crate::gateway::pty::runtime::{ObservationCaller, TerminalRuntime};
+#[cfg(test)]
+use crate::gateway::pty::runtime::WaitOutcome;
+use crate::gateway::pty::runtime::{self, ObservationCaller, TerminalRuntime};
 use crate::tools::AlephTool;
+use tokio_util::sync::CancellationToken;
 
 /// `terminal`'s five read-only actions. There is no write verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalAction {
     /// List the caller's own PTY sessions: `session_id`, `shell`, `cwd`
-    /// (where the shell was SPAWNED — empty when it inherited the
-    /// server's, and not updated by a later `cd`), `created_at` (epoch
-    /// seconds) and `closed`.
+    /// (where the shell was spawned; empty when it inherited the server's
+    /// directory, and not updated by a later `cd`), `created_at` (epoch
+    /// seconds), and `closed`.
     List,
     /// Read one session's current visible screen (no scrollback). Requires
     /// `session_id`.
     Read,
-    /// Report each of the caller's sessions' detected agent state — the
-    /// same table `runtime.agents.list` serves.
+    /// Report each of the caller's sessions' detected agent state — the same
+    /// table `runtime.agents.list` serves.
     Status,
     /// Block until one session's agent state enters `until`, then return it.
     /// Requires `session_id`. Answers `timeout` with the current entry at
@@ -56,36 +46,31 @@ pub enum TerminalAction {
 pub struct TerminalArgs {
     /// What to do.
     pub action: TerminalAction,
-    /// Required for `read` / `wait` / `explain`: the PTY session id (from
-    /// `list`'s output). Ignored for `list` / `status`.
+    /// Required for `read`, `wait`, and `explain`: the PTY `session_id` from `list`. Ignored for `list` and `status`.
     #[serde(default)]
     pub session_id: Option<String>,
     /// `wait` only: the states that end the wait. Defaults to
-    /// `["blocked", "idle"]` — the two that mean "it wants you now".
+    /// `[blocked, idle]` — the two that mean "it wants you now".
     #[serde(default)]
     pub until: Option<Vec<aleph_protocol::runtime::RuntimeAgentState>>,
     /// `wait` only: how long to block, in milliseconds. Defaults to 60000 and
-    /// is CLAMPED to 150000, never refused — a blocking call has to return
-    /// inside this harness's foreground tool budget.
+    /// is clamped to 150000, never refused — a blocking call has to return
+    /// inside this tool's foreground budget.
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }
 
-/// The unchanged outer envelope for all actions, including restart refusals.
 #[derive(Debug, Clone, Serialize)]
 pub struct TerminalOutput {
     pub success: bool,
     pub message: String,
     pub data: Option<serde_json::Value>,
-    /// True only for a session a previous server process owned. Skipped when
-    /// false so ordinary envelopes keep their existing shape.
     #[serde(skip_serializing_if = "is_false")]
     pub lost_with_restart: bool,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_false(b: &bool) -> bool {
-    !*b
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,14 +80,22 @@ enum TerminalRefusal {
 }
 
 impl From<String> for TerminalRefusal {
-    fn from(m: String) -> Self {
-        Self::Message(m)
+    fn from(message: String) -> Self {
+        Self::Message(message)
     }
 }
 
-/// Absent role reads as operator, matching the other inline cross-cutting gates.
 fn caller_is_operator() -> bool {
     crate::tools::turn_context::current_turn_context().is_none_or(|ctx| ctx.caller_is_operator())
+}
+
+fn refusal_from_error(error: crate::tools::service::ToolError) -> TerminalRefusal {
+    let message = match error {
+        crate::tools::service::ToolError::Execution { cause, .. }
+        | crate::tools::service::ToolError::ValidationFailed { cause, .. } => cause,
+        other => other.to_string(),
+    };
+    TerminalRefusal::Message(message)
 }
 
 #[derive(Clone, Default)]
@@ -111,15 +104,7 @@ pub struct TerminalTool;
 #[async_trait]
 impl AlephTool for TerminalTool {
     const NAME: &'static str = "terminal";
-    const DESCRIPTION: &'static str = "Read-only view of the terminal sessions you own on this \
-        server; empty when the embedded terminal is disabled in policy. Lists sessions, reads \
-        the current visible screen, and reports each agent's detected state (working / blocked \
-        / idle / unknown). It cannot type into a terminal or run commands — a human does that. \
-        `wait` blocks until one session reaches a state instead of polling `status`, and \
-        answers `timeout` with the current entry rather than a guess. `explain` says WHY a \
-        state was reported — which manifest rule matched, over which screen text and terminal \
-        title — which is the only way to tell a wrong detection from an idle agent.";
-
+    const DESCRIPTION: &'static str = "Read-only view of the terminal sessions you own on this server; empty when the embedded terminal is disabled in policy. It lists sessions, reads the current visible screen, and reports each agent's detected state (working / blocked / idle / unknown). It cannot type into a terminal or run commands — a human does that. `wait` blocks until one session reaches a state instead of polling `status`, and answers `timeout` with the current entry rather than a guess. `explain` says why a state was reported — which manifest rule matched, over which screen text and terminal title — which is the only way to tell a wrong detection from a truly idle agent.";
     type Args = TerminalArgs;
     type Output = TerminalOutput;
 
@@ -134,11 +119,7 @@ impl AlephTool for TerminalTool {
         notify_tool_start(Self::NAME, action_label);
 
         if !caller_is_operator() {
-            // Approval does not re-stamp the role today. Keep the inline gate.
-            let message = "terminal requires operator; refused. An operator approving this \
-                call's own escalation card does not currently lift this refusal — nothing \
-                re-stamps the caller's role after approval."
-                .to_string();
+            let message = "terminal requires operator; refused. An operator approving this call's own escalation card does not currently lift this refusal — nothing re-stamps the caller's role after approval.".to_owned();
             notify_tool_result(Self::NAME, &message, false);
             return Ok(TerminalOutput {
                 success: false,
@@ -149,21 +130,30 @@ impl AlephTool for TerminalTool {
         }
 
         let actor = crate::gateway::visibility::ambient_actor();
+        let caller = ObservationCaller::Tool {
+            actor: actor.clone(),
+        };
+        let runtime = TerminalRuntime::new(pty::manager(), crate::gateway::runtime::agents());
         let result = match args.action {
-            TerminalAction::List => list_sessions(actor.as_deref()).map_err(TerminalRefusal::from),
-            TerminalAction::Status => status(actor.as_deref()).map_err(TerminalRefusal::from),
-            TerminalAction::Read => read_session(args.session_id.as_deref(), actor.as_deref()),
+            TerminalAction::List => serde_json::to_value(runtime.list(&caller))
+                .map_err(|error| TerminalRefusal::Message(format!("encode failed: {error}"))),
+            TerminalAction::Status => serde_json::to_value(runtime.status(&caller))
+                .map_err(|error| TerminalRefusal::Message(format!("encode failed: {error}"))),
+            TerminalAction::Read => {
+                read_session_with(&runtime, &caller, args.session_id.as_deref())
+            }
             TerminalAction::Wait => {
-                wait_for_session(
+                wait_for_session_with(
+                    &runtime,
+                    &caller,
                     args.session_id.as_deref(),
                     args.until.as_deref(),
                     args.timeout_ms,
-                    actor.as_deref(),
                 )
                 .await
             }
             TerminalAction::Explain => {
-                explain_session(args.session_id.as_deref(), actor.as_deref())
+                explain_session_with(&runtime, &caller, args.session_id.as_deref())
             }
         };
 
@@ -172,7 +162,7 @@ impl AlephTool for TerminalTool {
                 notify_tool_result(Self::NAME, action_label, true);
                 Ok(TerminalOutput {
                     success: true,
-                    message: action_label.to_string(),
+                    message: action_label.to_owned(),
                     data: Some(data),
                     lost_with_restart: false,
                 })
@@ -187,9 +177,9 @@ impl AlephTool for TerminalTool {
                 })
             }
             Err(TerminalRefusal::LostWithRestart(report)) => {
-                let out = lost_with_restart_output(report);
-                notify_tool_result(Self::NAME, &out.message, false);
-                Ok(out)
+                let output = lost_with_restart_output(report);
+                notify_tool_result(Self::NAME, &output.message, false);
+                Ok(output)
             }
         }
     }
@@ -210,87 +200,178 @@ fn lost_with_restart_output(
     }
 }
 
-fn runtime() -> TerminalRuntime<'static> {
-    TerminalRuntime::new(pty::manager(), crate::gateway::runtime::agents())
+fn to_json<T: Serialize>(value: T) -> std::result::Result<serde_json::Value, TerminalRefusal> {
+    serde_json::to_value(value)
+        .map_err(|error| TerminalRefusal::Message(format!("encode failed: {error}")))
 }
 
-// Boundary adapters only: every observation constructs the shared DTO in runtime.
-fn list_sessions(actor: Option<&str>) -> std::result::Result<serde_json::Value, String> {
-    serde_json::to_value(runtime().list(ObservationCaller::Tool { actor }))
-        .map_err(|e| format!("encode failed: {e}"))
-}
-
-fn status(actor: Option<&str>) -> std::result::Result<serde_json::Value, String> {
-    serde_json::to_value(runtime().status(ObservationCaller::Tool { actor }))
-        .map_err(|e| format!("encode failed: {e}"))
-}
-
-fn read_session(
-    session_id: Option<&str>,
-    actor: Option<&str>,
-) -> std::result::Result<serde_json::Value, TerminalRefusal> {
-    let session_id = owned_session_id(session_id, actor, "read")?;
-    let body = runtime().read(session_id, ObservationCaller::Tool { actor })?;
-    serde_json::to_value(body).map_err(|e| format!("encode failed: {e}").into())
-}
-
-/// Keep argument errors and the tool-specific journal adapter outside runtime.
-fn owned_session_id<'a>(
+/// Resolve only the adapter-specific tombstone path. Live-session ownership
+/// is admitted exactly once by `TerminalRuntime`; doing it here as well would
+/// make the tool face carry a second copy of that predicate.
+fn session_id_or_tombstone<'a>(
     session_id: Option<&'a str>,
     actor: Option<&str>,
     action: &str,
 ) -> std::result::Result<&'a str, TerminalRefusal> {
-    let session_id = session_id
+    let id = session_id
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| format!("{action} requires `session_id`"))?;
-    let caller = ObservationCaller::Tool { actor };
-    if runtime().require_owned(session_id, caller).is_ok() {
-        return Ok(session_id);
-    }
-    if let Some(job) = crate::builtin_tools::process_journal::lookup_pty(session_id) {
-        if caller.admits(&pty::SessionOwner::Known(Some(job.record.owner.clone()))) {
-            if let Some(report) = crate::builtin_tools::process_journal::tombstone_report(&job) {
-                return Err(TerminalRefusal::LostWithRestart(report));
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| TerminalRefusal::Message(format!("{action} requires `session_id`")))?;
+    if matches!(pty::manager().owner_of(id), pty::SessionOwner::Unknown) {
+        if let Some(job) = crate::builtin_tools::process_journal::lookup_pty(id) {
+            if runtime::terminal_admits(Some(job.record.owner.as_str()), actor) {
+                if let Some(report) = crate::builtin_tools::process_journal::tombstone_report(&job)
+                {
+                    return Err(TerminalRefusal::LostWithRestart(report));
+                }
             }
         }
     }
-    Err(TerminalRefusal::Message(pty::no_such_session(session_id)))
+    Ok(id)
 }
 
+fn read_session_with(
+    runtime: &TerminalRuntime<'_>,
+    caller: &ObservationCaller,
+    session_id: Option<&str>,
+) -> std::result::Result<serde_json::Value, TerminalRefusal> {
+    let id = session_id_or_tombstone(session_id, caller_actor(caller), "read")?;
+    runtime
+        .read(caller, id)
+        .map(to_json)
+        .map_err(refusal_from_error)?
+}
+
+async fn wait_for_session_with(
+    runtime: &TerminalRuntime<'_>,
+    caller: &ObservationCaller,
+    session_id: Option<&str>,
+    until: Option<&[aleph_protocol::runtime::RuntimeAgentState]>,
+    timeout_ms: Option<u64>,
+) -> std::result::Result<serde_json::Value, TerminalRefusal> {
+    let id = session_id_or_tombstone(session_id, caller_actor(caller), "wait")?;
+    let params = aleph_protocol::terminal::TerminalWaitParams {
+        session_id: id.to_owned(),
+        until: until.map(<[_]>::to_vec),
+        timeout_ms,
+    };
+    runtime
+        .wait(caller, &params, CancellationToken::new())
+        .await
+        .map(to_json)
+        .map_err(refusal_from_error)?
+}
+
+fn explain_session_with(
+    runtime: &TerminalRuntime<'_>,
+    caller: &ObservationCaller,
+    session_id: Option<&str>,
+) -> std::result::Result<serde_json::Value, TerminalRefusal> {
+    let id = session_id_or_tombstone(session_id, caller_actor(caller), "explain")?;
+    runtime
+        .explain(caller, id)
+        .map(to_json)
+        .map_err(refusal_from_error)?
+}
+
+fn caller_actor(caller: &ObservationCaller) -> Option<&str> {
+    match caller {
+        ObservationCaller::Gateway { actor } | ObservationCaller::Tool { actor } => {
+            actor.as_deref()
+        }
+    }
+}
+
+// Compatibility adapters for the existing terminal tests and the old tool
+// face. They delegate all observation and waiting to the borrowed runtime.
+#[cfg(test)]
+fn list_sessions(
+    manager: &pty::PtyManager,
+    actor: Option<&str>,
+) -> std::result::Result<serde_json::Value, String> {
+    to_json(
+        TerminalRuntime::new(manager, crate::gateway::runtime::agents()).list(
+            &ObservationCaller::Tool {
+                actor: actor.map(str::to_owned),
+            },
+        ),
+    )
+    .map_err(|error| match error {
+        TerminalRefusal::Message(message) => message,
+        TerminalRefusal::LostWithRestart(report) => report.text,
+    })
+}
+
+#[cfg(test)]
+fn status(
+    manager: &pty::PtyManager,
+    actor: Option<&str>,
+) -> std::result::Result<serde_json::Value, String> {
+    to_json(
+        TerminalRuntime::new(manager, crate::gateway::runtime::agents()).status(
+            &ObservationCaller::Tool {
+                actor: actor.map(str::to_owned),
+            },
+        ),
+    )
+    .map_err(|error| match error {
+        TerminalRefusal::Message(message) => message,
+        TerminalRefusal::LostWithRestart(report) => report.text,
+    })
+}
+
+#[cfg(test)]
+fn read_session(
+    manager: &pty::PtyManager,
+    session_id: Option<&str>,
+    actor: Option<&str>,
+) -> std::result::Result<serde_json::Value, TerminalRefusal> {
+    let caller = ObservationCaller::Tool {
+        actor: actor.map(str::to_owned),
+    };
+    read_session_with(
+        &TerminalRuntime::new(manager, crate::gateway::runtime::agents()),
+        &caller,
+        session_id,
+    )
+}
+
+#[cfg(test)]
 async fn wait_for_session(
+    manager: &pty::PtyManager,
     session_id: Option<&str>,
     until: Option<&[aleph_protocol::runtime::RuntimeAgentState]>,
     timeout_ms: Option<u64>,
     actor: Option<&str>,
 ) -> std::result::Result<serde_json::Value, TerminalRefusal> {
-    let session_id = owned_session_id(session_id, actor, "wait")?;
-    let body = runtime()
-        .wait(
-            session_id,
-            ObservationCaller::Tool { actor },
-            until,
-            timeout_ms,
-            &CancellationToken::new(),
-        )
-        .await?;
-    serde_json::to_value(body).map_err(|e| format!("encode failed: {e}").into())
+    let caller = ObservationCaller::Tool {
+        actor: actor.map(str::to_owned),
+    };
+    wait_for_session_with(
+        &TerminalRuntime::new(manager, crate::gateway::runtime::agents()),
+        &caller,
+        session_id,
+        until,
+        timeout_ms,
+    )
+    .await
 }
 
+#[cfg(test)]
 fn explain_session(
+    manager: &pty::PtyManager,
     session_id: Option<&str>,
     actor: Option<&str>,
 ) -> std::result::Result<serde_json::Value, TerminalRefusal> {
-    let session_id = owned_session_id(session_id, actor, "explain")?;
-    let body = runtime().explain(session_id, ObservationCaller::Tool { actor })?;
-    serde_json::to_value(body).map_err(|e| format!("encode failed: {e}").into())
+    let caller = ObservationCaller::Tool {
+        actor: actor.map(str::to_owned),
+    };
+    explain_session_with(
+        &TerminalRuntime::new(manager, crate::gateway::runtime::agents()),
+        &caller,
+        session_id,
+    )
 }
-
-// Legacy tests exercise the same implementation with a never-cancelled token.
-#[cfg(test)]
-use crate::gateway::pty::runtime::{
-    explain_detection, wait_window, WaitOutcome, WAIT_DEFAULT_TIMEOUT_MS, WAIT_MAX_TIMEOUT_MS,
-};
 
 #[cfg(test)]
 async fn wait_for_state(
@@ -300,15 +381,35 @@ async fn wait_for_state(
     until: &[aleph_protocol::runtime::RuntimeAgentState],
     window: std::time::Duration,
 ) -> WaitOutcome {
-    TerminalRuntime::new(manager, table)
-        .wait_for_state(session_id, until, window, &CancellationToken::new())
-        .await
-        .expect("legacy wait helper uses a never-cancelled token")
+    runtime::wait_for_state(
+        manager,
+        table,
+        session_id,
+        until,
+        window,
+        CancellationToken::new(),
+    )
+    .await
+    .expect("uncancelled compatibility wait")
 }
 
 #[cfg(test)]
-fn session_is_registered(session_id: &str) -> bool {
-    runtime().session_is_registered(session_id)
+const WAIT_DEFAULT_TIMEOUT_MS: u64 = 60_000;
+#[cfg(test)]
+const WAIT_MAX_TIMEOUT_MS: u64 = 150_000;
+#[cfg(test)]
+fn wait_window(requested: Option<u64>) -> std::time::Duration {
+    runtime::wait_window(requested)
+}
+
+#[cfg(test)]
+fn explain_detection(
+    session_id: &str,
+    agent: Option<agent_detect::Agent>,
+    sampled: Option<&aleph_protocol::runtime::RuntimeAgentEntry>,
+    screen: &crate::gateway::pty::manager::DetectionInputs,
+) -> aleph_protocol::terminal::TerminalExplainResponse {
+    runtime::explain_response(session_id, agent, sampled, screen)
 }
 
 #[cfg(test)]

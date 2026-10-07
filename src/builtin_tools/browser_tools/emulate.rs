@@ -108,7 +108,8 @@ fn emulate_approval_target(options: &EmulateOptions) -> String {
 #[async_trait]
 impl AlephTool for BrowserEmulateTool {
     const NAME: &'static str = "browser_emulate";
-    const DESCRIPTION: &'static str = "Emulate environment overrides on the active tab. On a cdp profile (the default) \
+    const DESCRIPTION: &'static str =
+        "Emulate environment overrides on the active tab. On a cdp profile (the default) \
          every override reaches the engine except network_condition: obscura has no such \
          method, so that one needs chromium or an existing-session profile, which serve \
          all six";
@@ -395,8 +396,8 @@ mod tests {
     #[test]
     fn the_description_excepts_exactly_the_axes_the_default_engine_refuses() {
         use crate::browser::cdp_backend::EMULATE_AXIS_METHODS;
+        use crate::browser::engine::capability::{t0_key, T0_SUPPORT_MATRIX};
         use crate::browser::engine::Engine;
-        use crate::browser::engine::capability::{T0_SUPPORT_MATRIX, t0_key};
 
         let matrix: serde_json::Value =
             serde_json::from_str(T0_SUPPORT_MATRIX).expect("t0-support-matrix.json is valid JSON");

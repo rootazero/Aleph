@@ -238,7 +238,10 @@ impl A2AClient {
         session_id: Option<&str>,
     ) -> A2AResult<A2ATask> {
         let result = self
-            .rpc_call("message/send", build_message_params(task_id, message, session_id))
+            .rpc_call(
+                "message/send",
+                build_message_params(task_id, message, session_id),
+            )
             .await?;
         serde_json::from_value(result).map_err(|e| A2AError::ParseError(e.to_string()))
     }

@@ -37,9 +37,7 @@ pub enum GroupDecision {
     Silenced,
     /// Recent activity in this conversation; rate-limit. The duration
     /// is "wait at least this long before trying again".
-    RateLimited {
-        retry_after: Duration,
-    },
+    RateLimited { retry_after: Duration },
     /// Not allowlisted (channel or DM policy violated) — drop without
     /// surfacing an error. Audit trail should record the reason.
     Ignored,

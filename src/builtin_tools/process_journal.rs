@@ -1447,15 +1447,17 @@ pub(crate) fn record_pty_settled(
 }
 
 /// Look up a PTY session's row by its uuid. **Unscoped**: unlike [`lookup`],
-/// this returns the row whoever asks. Ownership is applied by each live
-/// observation boundary through `TerminalRuntime` / `ObservationCaller`; this
-/// journal lookup is deliberately only a recovery adapter. A caller that
-/// does not apply the shared admission before rendering a row is a leak; there
-/// is no bash-style fallback here to catch it.
+/// this returns the row whoever asks, because the terminal faces already
+/// hold their own ownership predicate (`pty::owner_admits` over
+/// `PtyManager::owner_of`) and apply it to the row's `owner` themselves —
+/// the same test, in the one place each face already runs it. A caller that
+/// does not apply one is a leak; there is no bash-style fallback here to
+/// catch it.
 ///
-/// The terminal tool's `owned_session_id` applies the shared `ObservationCaller`
-/// check before consulting this adapter, and renders an admitted row through
-/// [`tombstone_report`] — so
+/// Readers: `builtin_tools::terminal::owned_session_id` (under
+/// `terminal_admits`) and `gateway::handlers::pty::require_owned` (under
+/// `pty::owner_admits`), each only after the live manager answered
+/// `Unknown`, and each rendering the row through [`tombstone_report`] — so
 /// a `Settled` row (the shell exited, was closed, or never spawned — see
 /// [`Verdict::Exited`]) is still "no such session" on both.
 #[must_use]

@@ -147,13 +147,11 @@ async fn test_desktop_approval_ask_returns_prompt() {
     args.y = Some(300.0);
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(
-        output
-            .message
-            .as_deref()
-            .unwrap()
-            .contains("Approval required")
-    );
+    assert!(output
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("Approval required"));
     let data = output.data.unwrap();
     assert_eq!(data["approval_required"], true);
 }
@@ -225,13 +223,11 @@ async fn test_desktop_reports_missing_platform_capability() {
     let args = make_args("screenshot");
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(
-        output
-            .message
-            .as_deref()
-            .unwrap()
-            .contains("not configured")
-    );
+    assert!(output
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("not configured"));
 }
 
 #[cfg(target_os = "macos")]
@@ -242,13 +238,11 @@ async fn test_desktop_reports_legacy_snapshot_as_unsupported() {
     let args = make_args("snapshot");
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(
-        output
-            .message
-            .as_deref()
-            .unwrap()
-            .contains("is not supported on this platform")
-    );
+    assert!(output
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("is not supported on this platform"));
 }
 
 #[tokio::test]
@@ -277,13 +271,11 @@ async fn test_hard_block_allows_ordinary_text() {
     args.text = Some("Hello from the assistant".to_string());
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(
-        output
-            .message
-            .as_deref()
-            .unwrap()
-            .contains("not configured")
-    );
+    assert!(output
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("not configured"));
 }
 
 #[tokio::test]
@@ -312,13 +304,11 @@ async fn test_hard_block_allows_ordinary_clipboard_write() {
     args.text = Some("a normal snippet to copy".to_string());
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(
-        output
-            .message
-            .as_deref()
-            .unwrap()
-            .contains("not configured")
-    );
+    assert!(output
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("not configured"));
 }
 
 #[tokio::test]
@@ -466,7 +456,7 @@ impl ApprovalPolicy for CapturingPolicy {
 #[tokio::test]
 async fn approval_request_carries_agent_id_from_turn_context() {
     use crate::routing::session_key::SessionKey;
-    use crate::tools::turn_context::{TURN_CONTEXT, TurnContext};
+    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
 
     // End-to-end: a desktop tool call inside a scoped turn must hand the
     // approval policy a non-blank agent_id and audit context.
@@ -761,10 +751,10 @@ mod e2e_normalized {
         // drag end:   midpoint of (800,800)-(900,900) = (850,850)
         //   pixel: (850/1000)*2000=1700, (850/1000)*1000=850
         let drag = platform.screen.last_drag.lock().unwrap().unwrap();
-        assert!((drag.0.0 - 300.0).abs() < 0.001, "drag sx={}", drag.0.0);
-        assert!((drag.0.1 - 150.0).abs() < 0.001, "drag sy={}", drag.0.1);
-        assert!((drag.1.0 - 1700.0).abs() < 0.001, "drag ex={}", drag.1.0);
-        assert!((drag.1.1 - 850.0).abs() < 0.001, "drag ey={}", drag.1.1);
+        assert!((drag.0 .0 - 300.0).abs() < 0.001, "drag sx={}", drag.0 .0);
+        assert!((drag.0 .1 - 150.0).abs() < 0.001, "drag sy={}", drag.0 .1);
+        assert!((drag.1 .0 - 1700.0).abs() < 0.001, "drag ex={}", drag.1 .0);
+        assert!((drag.1 .1 - 850.0).abs() < 0.001, "drag ey={}", drag.1 .1);
 
         // type passes through unchanged
         let typed = platform.screen.last_typed.lock().unwrap().clone().unwrap();
@@ -1751,7 +1741,7 @@ mod secure_value_never_reaches_the_model {
 /// in Terminal used to take synthetic keystrokes and report `{"typed": true}`.
 /// It must stay fail-open for everything it cannot judge.
 mod type_text_focus_gate {
-    use crate::builtin_tools::desktop::focus_gate::{Gate, evaluate};
+    use crate::builtin_tools::desktop::focus_gate::{evaluate, Gate};
     use aleph_protocol::desktop_bridge::methods::ax::AxElement;
 
     fn el(role: &str) -> AxElement {

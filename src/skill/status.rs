@@ -134,12 +134,8 @@ impl SkillStatusEntry {
             SkillSource::Bundled => "Official".to_string(),
             SkillSource::Global => "Aleph".to_string(),
             SkillSource::Workspace => "Workspace".to_string(),
-            SkillSource::Compat(crate::domain::skill::CompatRoot::Claude) => {
-                "Claude".to_string()
-            }
-            SkillSource::Compat(crate::domain::skill::CompatRoot::Agents) => {
-                "Agents".to_string()
-            }
+            SkillSource::Compat(crate::domain::skill::CompatRoot::Claude) => "Claude".to_string(),
+            SkillSource::Compat(crate::domain::skill::CompatRoot::Agents) => "Agents".to_string(),
             SkillSource::Plugin(id) => format!("Plugin: {}", id.as_str()),
         };
 

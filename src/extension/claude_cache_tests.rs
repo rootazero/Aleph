@@ -133,7 +133,9 @@ async fn a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home
     );
     assert!(!cc.enabled);
     assert_eq!(
-        std::path::Path::new(&cc.path).canonicalize().unwrap_or_default(),
+        std::path::Path::new(&cc.path)
+            .canonicalize()
+            .unwrap_or_default(),
         root.canonicalize().unwrap_or_default(),
         "the registry should record the path it walked, not a normalized copy"
     );

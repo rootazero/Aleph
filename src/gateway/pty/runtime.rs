@@ -1,40 +1,208 @@
-//! Shared read-only terminal observations. No second sampler or process lifecycle.
+//! Borrowed terminal observation over the existing PTY and agent stores.
+//!
+//! This module is deliberately a borrowed adapter: it owns no session registry,
+//! agent table, clock, or sampler. The gateway and tool faces provide their
+//! caller kind explicitly, so actorless admission cannot accidentally widen
+//! when one face is routed through another.
 
 use std::time::Duration;
 
-use aleph_protocol::pty::{PtyAttachResponse, PtyListResponse, PtySessionInfo};
+use aleph_protocol::pty::{PtyAttachResponse, PtyListResponse};
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState, RuntimeAgentsListResponse};
 use aleph_protocol::terminal::{
     TerminalExplainInputs, TerminalExplainResponse, TerminalExplainRule, TerminalReadResponse,
-    TerminalWaitOutcome, TerminalWaitResponse,
+    TerminalWaitOutcome, TerminalWaitParams, TerminalWaitResponse,
 };
 use tokio_util::sync::CancellationToken;
 
-use super::{no_such_session, PtyManager, SessionOwner};
 use crate::gateway::runtime::RuntimeAgents;
+use crate::tools::service::ToolError;
 
-/// Gateway identity absence means unrestricted; tool identity absence does not.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum ObservationCaller<'a> {
-    Gateway { actor: Option<&'a str> },
-    Tool { actor: Option<&'a str> },
+use super::{owner_admits, PtyManager, SessionOwner};
+
+const WAIT_DEFAULT_TIMEOUT_MS: u64 = 60_000;
+const WAIT_MAX_TIMEOUT_MS: u64 = 150_000;
+const EXPLAIN_SCREEN_TAIL_LINES: usize = 12;
+const WAIT_DEFAULT_UNTIL: [RuntimeAgentState; 2] =
+    [RuntimeAgentState::Blocked, RuntimeAgentState::Idle];
+
+/// The face that supplied an observation request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ObservationCaller {
+    Gateway { actor: Option<String> },
+    Tool { actor: Option<String> },
 }
 
-impl ObservationCaller<'_> {
-    pub(crate) fn admits(self, owner: &SessionOwner) -> bool {
+impl ObservationCaller {
+    /// Gateway's actorless RPC remains the existing unrestricted gateway
+    /// admission; the tool's actorless path is intentionally fail-closed to
+    /// sessions with no recorded owner.
+    fn admits(&self, created_by: Option<&str>) -> bool {
         match self {
-            Self::Gateway { actor } => owner.admits(actor),
-            Self::Tool { actor: None } => matches!(owner, SessionOwner::Known(None)),
-            Self::Tool { actor: Some(actor) } => owner.admits(Some(actor)),
+            Self::Gateway { actor } => owner_admits(created_by, actor.as_deref()),
+            Self::Tool { actor: None } => created_by.is_none(),
+            Self::Tool { actor: Some(actor) } => owner_admits(created_by, Some(actor)),
         }
     }
 }
 
-pub(crate) const WAIT_DEFAULT_TIMEOUT_MS: u64 = 60_000;
-pub(crate) const WAIT_MAX_TIMEOUT_MS: u64 = 150_000;
-const WAIT_DEFAULT_UNTIL: [RuntimeAgentState; 2] =
-    [RuntimeAgentState::Blocked, RuntimeAgentState::Idle];
-const EXPLAIN_SCREEN_TAIL_LINES: usize = 12;
+pub(crate) fn caller_admits(caller: &ObservationCaller, owner: &SessionOwner) -> bool {
+    match owner {
+        SessionOwner::Known(created_by) => caller.admits(created_by.as_deref()),
+        SessionOwner::Unknown => matches!(caller, ObservationCaller::Gateway { actor: None }),
+    }
+}
+
+pub(crate) fn terminal_admits(created_by: Option<&str>, actor: Option<&str>) -> bool {
+    ObservationCaller::Tool {
+        actor: actor.map(str::to_owned),
+    }
+    .admits(created_by)
+}
+
+/// Borrowed runtime over an existing PTY manager and agent table.
+pub(crate) struct TerminalRuntime<'a> {
+    pty: &'a PtyManager,
+    agents: &'a RuntimeAgents,
+}
+
+fn execution(cause: String) -> ToolError {
+    ToolError::Execution {
+        name: "terminal".to_owned(),
+        cause,
+    }
+}
+
+impl<'a> TerminalRuntime<'a> {
+    pub(crate) fn new(pty: &'a PtyManager, agents: &'a RuntimeAgents) -> Self {
+        Self { pty, agents }
+    }
+
+    fn owned(&self, caller: &ObservationCaller, session_id: &str) -> Result<(), ToolError> {
+        if session_id.trim().is_empty() || !caller_admits(caller, &self.pty.owner_of(session_id)) {
+            return Err(execution(super::no_such_session(session_id)));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn list(&self, caller: &ObservationCaller) -> PtyListResponse {
+        PtyListResponse {
+            sessions: self
+                .pty
+                .list()
+                .into_iter()
+                .filter(|session| caller.admits(session.created_by.as_deref()))
+                .map(|session| aleph_protocol::pty::PtySessionInfo::from(&session))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn status(&self, caller: &ObservationCaller) -> RuntimeAgentsListResponse {
+        RuntimeAgentsListResponse {
+            agents: self
+                .agents
+                .snapshot()
+                .into_iter()
+                .filter(|entry| caller_admits(caller, &self.pty.owner_of(&entry.session_id)))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn attach(
+        &self,
+        caller: &ObservationCaller,
+        session_id: &str,
+    ) -> Result<PtyAttachResponse, ToolError> {
+        self.owned(caller, session_id)?;
+        self.pty.attach_snapshot(session_id).map_err(execution)
+    }
+
+    pub(crate) fn read(
+        &self,
+        caller: &ObservationCaller,
+        session_id: &str,
+    ) -> Result<TerminalReadResponse, ToolError> {
+        self.owned(caller, session_id)?;
+        self.pty
+            .visible_text(session_id)
+            .map(|text| TerminalReadResponse {
+                session_id: session_id.to_owned(),
+                text,
+            })
+            .map_err(execution)
+    }
+
+    pub(crate) async fn wait(
+        &self,
+        caller: &ObservationCaller,
+        params: &TerminalWaitParams,
+        cancel: CancellationToken,
+    ) -> Result<TerminalWaitResponse, ToolError> {
+        self.owned(caller, &params.session_id)?;
+        let until = match params.until.as_deref() {
+            Some([]) => return Err(ToolError::ValidationFailed {
+                name: "terminal".to_owned(),
+                cause: "wait requires at least one state in `until` (blocked / idle / working / unknown); omit it for [blocked, idle]".to_owned(),
+            }),
+            Some(states) => states,
+            None => &WAIT_DEFAULT_UNTIL,
+        };
+        let outcome = wait_for_state(
+            self.pty,
+            self.agents,
+            &params.session_id,
+            until,
+            wait_window(params.timeout_ms),
+            cancel,
+        )
+        .await?;
+        Ok(TerminalWaitResponse {
+            session_id: params.session_id.clone(),
+            outcome: outcome.wire_outcome(),
+            agent: outcome.agent(),
+        })
+    }
+
+    pub(crate) fn explain(
+        &self,
+        caller: &ObservationCaller,
+        session_id: &str,
+    ) -> Result<TerminalExplainResponse, ToolError> {
+        self.owned(caller, session_id)?;
+        let screen = self.pty.detection_inputs(session_id).map_err(execution)?;
+        Ok(explain_response(
+            session_id,
+            self.agents.detected_agent(session_id),
+            self.agents.entry(session_id).as_ref(),
+            &screen,
+        ))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum WaitOutcome {
+    Reached(RuntimeAgentEntry),
+    Timeout(Option<RuntimeAgentEntry>),
+    Gone,
+}
+
+impl WaitOutcome {
+    fn wire_outcome(&self) -> TerminalWaitOutcome {
+        match self {
+            Self::Reached(_) => TerminalWaitOutcome::Reached,
+            Self::Timeout(_) => TerminalWaitOutcome::Timeout,
+            Self::Gone => TerminalWaitOutcome::Gone,
+        }
+    }
+
+    fn agent(&self) -> Option<RuntimeAgentEntry> {
+        match self {
+            Self::Reached(entry) => Some(entry.clone()),
+            Self::Timeout(entry) => entry.clone(),
+            Self::Gone => None,
+        }
+    }
+}
 
 pub(crate) fn wait_window(requested: Option<u64>) -> Duration {
     Duration::from_millis(
@@ -44,195 +212,58 @@ pub(crate) fn wait_window(requested: Option<u64>) -> Duration {
     )
 }
 
-fn wait_states(until: Option<&[RuntimeAgentState]>) -> Result<&[RuntimeAgentState], String> {
-    match until {
-        Some([]) => Err("wait requires at least one state in `until` \
-            (blocked / idle / working / unknown); omit it for [blocked, idle]"
-            .to_string()),
-        Some(states) => Ok(states),
-        None => Ok(&WAIT_DEFAULT_UNTIL),
+fn wait_verdict(
+    pty: &PtyManager,
+    agents: &RuntimeAgents,
+    session_id: &str,
+    until: &[RuntimeAgentState],
+) -> Option<WaitOutcome> {
+    let registered = pty.list().iter().any(|s| s.session_id == session_id);
+    if !registered {
+        return Some(WaitOutcome::Gone);
+    }
+    match agents.entry(session_id) {
+        Some(entry) if until.contains(&entry.state) => Some(WaitOutcome::Reached(entry)),
+        Some(_) | None => None,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum WaitOutcome {
-    Reached(RuntimeAgentEntry),
-    Timeout(Option<RuntimeAgentEntry>),
-    Gone,
-}
-
-impl WaitOutcome {
-    fn into_response(self, session_id: &str) -> TerminalWaitResponse {
-        let (outcome, agent) = match self {
-            Self::Reached(entry) => (TerminalWaitOutcome::Reached, Some(entry)),
-            Self::Timeout(entry) => (TerminalWaitOutcome::Timeout, entry),
-            Self::Gone => (TerminalWaitOutcome::Gone, None),
-        };
-        TerminalWaitResponse {
-            session_id: session_id.to_owned(),
-            outcome,
-            agent,
+pub(crate) async fn wait_for_state(
+    pty: &PtyManager,
+    agents: &RuntimeAgents,
+    session_id: &str,
+    until: &[RuntimeAgentState],
+    window: Duration,
+    cancel: CancellationToken,
+) -> Result<WaitOutcome, ToolError> {
+    let mut changes = agents.subscribe();
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(ToolError::Cancelled {
+                name: "terminal".to_owned(),
+            });
         }
-    }
-}
-
-/// An internal cancellation error, not a fourth wire outcome or agent state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct WaitCancelled;
-
-/// Borrows the existing registry and agent table; owns no runtime state.
-pub(crate) struct TerminalRuntime<'a> {
-    manager: &'a PtyManager,
-    agents: &'a RuntimeAgents,
-}
-
-impl<'a> TerminalRuntime<'a> {
-    pub(crate) fn new(manager: &'a PtyManager, agents: &'a RuntimeAgents) -> Self {
-        Self { manager, agents }
-    }
-
-    pub(crate) fn require_owned(
-        &self,
-        session_id: &str,
-        caller: ObservationCaller<'_>,
-    ) -> Result<(), String> {
-        if caller.admits(&self.manager.owner_of(session_id)) {
-            Ok(())
-        } else {
-            Err(no_such_session(session_id))
+        if let Some(outcome) = wait_verdict(pty, agents, session_id, until) {
+            return Ok(outcome);
         }
-    }
-
-    pub(crate) fn list(&self, caller: ObservationCaller<'_>) -> PtyListResponse {
-        PtyListResponse {
-            sessions: self
-                .manager
-                .list()
-                .iter()
-                .filter(|session| caller.admits(&SessionOwner::Known(session.created_by.clone())))
-                .map(PtySessionInfo::from)
-                .collect(),
-        }
-    }
-
-    pub(crate) fn status(&self, caller: ObservationCaller<'_>) -> RuntimeAgentsListResponse {
-        RuntimeAgentsListResponse {
-            agents: self
-                .agents
-                .snapshot()
-                .into_iter()
-                .filter(|entry| caller.admits(&self.manager.owner_of(&entry.session_id)))
-                .collect(),
-        }
-    }
-
-    pub(crate) fn read(
-        &self,
-        session_id: &str,
-        caller: ObservationCaller<'_>,
-    ) -> Result<TerminalReadResponse, String> {
-        self.require_owned(session_id, caller)?;
-        Ok(TerminalReadResponse {
-            session_id: session_id.to_owned(),
-            text: self.manager.visible_text(session_id)?,
-        })
-    }
-
-    // Authorisation seam only; the production attach RPC stays unchanged in A2.
-    #[allow(dead_code)]
-    pub(crate) fn attach(
-        &self,
-        session_id: &str,
-        caller: ObservationCaller<'_>,
-    ) -> Result<PtyAttachResponse, String> {
-        self.require_owned(session_id, caller)?;
-        self.manager.attach_snapshot(session_id)
-    }
-
-    pub(crate) fn explain(
-        &self,
-        session_id: &str,
-        caller: ObservationCaller<'_>,
-    ) -> Result<TerminalExplainResponse, String> {
-        self.require_owned(session_id, caller)?;
-        let screen = self.manager.detection_inputs(session_id)?;
-        Ok(explain_detection(
-            session_id,
-            self.agents.detected_agent(session_id),
-            self.agents.entry(session_id).as_ref(),
-            &screen,
-        ))
-    }
-
-    pub(crate) async fn wait(
-        &self,
-        session_id: &str,
-        caller: ObservationCaller<'_>,
-        until: Option<&[RuntimeAgentState]>,
-        timeout_ms: Option<u64>,
-        cancel: &CancellationToken,
-    ) -> Result<TerminalWaitResponse, String> {
-        self.require_owned(session_id, caller)?;
-        let states = wait_states(until)?;
-        self.wait_for_state(session_id, states, wait_window(timeout_ms), cancel)
-            .await
-            .map(|outcome| outcome.into_response(session_id))
-            .map_err(|_| "terminal wait cancelled".to_string())
-    }
-
-    pub(crate) fn session_is_registered(&self, session_id: &str) -> bool {
-        self.manager
-            .list()
-            .iter()
-            .any(|session| session.session_id == session_id)
-    }
-
-    /// Registry absence outranks EVERY agent row, including a matching stale row.
-    fn wait_verdict(&self, session_id: &str, until: &[RuntimeAgentState]) -> Option<WaitOutcome> {
-        if !self.session_is_registered(session_id) {
-            return Some(WaitOutcome::Gone);
-        }
-        match self.agents.entry(session_id) {
-            Some(entry) if until.contains(&entry.state) => Some(WaitOutcome::Reached(entry)),
-            _ => None,
-        }
-    }
-
-    /// Subscribe before reading, never hold a registry/table lock across an await.
-    /// The existing generation watch is the only clock; no screen busy polling.
-    pub(crate) async fn wait_for_state(
-        &self,
-        session_id: &str,
-        until: &[RuntimeAgentState],
-        window: Duration,
-        cancel: &CancellationToken,
-    ) -> Result<WaitOutcome, WaitCancelled> {
-        let mut changes = self.agents.subscribe();
-        let deadline = tokio::time::Instant::now() + window;
-        loop {
-            if cancel.is_cancelled() {
-                return Err(WaitCancelled);
-            }
-            if let Some(outcome) = self.wait_verdict(session_id, until) {
-                return Ok(outcome);
-            }
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => return Err(WaitCancelled),
-                changed = tokio::time::timeout_at(deadline, changes.changed()) => {
-                    if !matches!(changed, Ok(Ok(()))) {
-                        // Use the same registry-first verdict at the deadline, too.
-                        return Ok(self.wait_verdict(session_id, until)
-                            .unwrap_or_else(|| WaitOutcome::Timeout(self.agents.entry(session_id))));
-                    }
+        tokio::select! {
+            _ = cancel.cancelled() => return Err(ToolError::Cancelled { name: "terminal".to_owned() }),
+            changed = changes.changed() => {
+                if changed.is_err() {
+                    return Ok(wait_verdict(pty, agents, session_id, until)
+                        .unwrap_or_else(|| WaitOutcome::Timeout(agents.entry(session_id))));
                 }
             }
+            _ = tokio::time::sleep_until(deadline) => {
+                return Ok(wait_verdict(pty, agents, session_id, until)
+                    .unwrap_or_else(|| WaitOutcome::Timeout(agents.entry(session_id))));
+            }
         }
     }
 }
 
-/// Raw screen explanation, not the sampler's damped state. Quiet time is not Idle.
-pub(crate) fn explain_detection(
+pub(crate) fn explain_response(
     session_id: &str,
     agent: Option<agent_detect::Agent>,
     sampled: Option<&RuntimeAgentEntry>,
@@ -252,12 +283,10 @@ pub(crate) fn explain_detection(
             source: None,
             manifest_version: None,
             reason: Some(match sampled {
-                None => "this session has no row in the agent table yet — nothing has been \
-                         sampled, which is not the same as nothing running"
-                    .to_string(),
+                None => "this session has no row in the agent table yet — nothing has been sampled, which is not the same as nothing running".to_owned(),
                 Some(entry) => format!(
                     "the foreground program ({}) is not an agent the bundled manifests know",
-                    entry.program.as_deref().unwrap_or("not probed"),
+                    entry.program.as_deref().unwrap_or("not probed")
                 ),
             }),
             inputs,
@@ -305,47 +334,50 @@ fn screen_tail(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::pty::{screen::Screen, SpawnOptions};
-    use crate::gateway::runtime::SampleInput;
+    use crate::gateway::pty::{manager, screen::Screen, SpawnOptions};
+    use crate::gateway::runtime::{RuntimeAgents, SampleInput};
+    use crate::tools::service::ToolError;
+    use aleph_protocol::runtime::RuntimeAgentState;
+    use aleph_protocol::terminal::{
+        TerminalExplainResponse, TerminalReadResponse, TerminalWaitParams,
+    };
     use std::future::Future;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
     use std::task::{Context, Poll, Wake, Waker};
+    use tokio_util::sync::CancellationToken;
 
-    // Keep singleton access in test bodies so the global-manager census can
-    // attribute it. The guard closes only its own PTY, even after a panic.
-    struct RealPty<'a> {
-        manager: &'a PtyManager,
-        id: String,
-    }
-
-    impl<'a> RealPty<'a> {
-        fn spawn(manager: &'a PtyManager, owner: Option<&str>) -> Self {
-            let id = manager
-                .spawn(&SpawnOptions {
-                    created_by: owner.map(str::to_owned),
-                    ..Default::default()
-                })
-                .expect("spawn fixture")
-                .session_id;
-            Self { manager, id }
+    struct Session<'a>(String, &'a PtyManager);
+    impl<'a> Session<'a> {
+        fn new(manager: &'a PtyManager, owner: Option<&str>) -> Self {
+            Self(
+                manager
+                    .spawn(&SpawnOptions {
+                        created_by: owner.map(str::to_owned),
+                        ..Default::default()
+                    })
+                    .expect("spawn")
+                    .session_id,
+                manager,
+            )
         }
     }
-
-    impl Drop for RealPty<'_> {
+    impl Drop for Session<'_> {
         fn drop(&mut self) {
-            let _ = self.manager.close(&self.id);
+            let _ = self.1.close(&self.0);
         }
     }
 
-    // Same real sampling path and grok OSC signal as the existing wait tests;
-    // the table is isolated from the process-global flush loop.
-    fn sample_working(agents: &RuntimeAgents, session_id: &str) -> RuntimeAgentEntry {
+    fn sample(table: &RuntimeAgents, id: &str, working: bool) {
         let mut screen = Screen::new(4, 40);
-        screen.feed(b"\x1b]9;4;1;-1\x07");
-        agents.sample(SampleInput {
-            session_id,
-            shell: "grok",
+        if working {
+            screen.feed(b"\x1b]9;4;1;-1\x07");
+        }
+        table.sample(SampleInput {
+            session_id: id,
+            shell: if working { "grok" } else { "zsh" },
             program: None,
             argv: &[],
             cwd: "",
@@ -354,229 +386,441 @@ mod tests {
             frame_produced: true,
             now: 0,
         });
-        let entry = agents.entry(session_id).expect("sampled row");
-        assert_eq!(entry.state, RuntimeAgentState::Working, "fixture state");
-        entry
+    }
+
+    fn assert_hidden<T: std::fmt::Debug>(result: Result<T, ToolError>, id: &str) {
+        match result.expect_err("must not disclose another owner's session") {
+            ToolError::Execution { cause, .. } => {
+                assert_eq!(cause, super::super::no_such_session(id))
+            }
+            other => panic!("unexpected refusal: {other:?}"),
+        }
+    }
+
+    fn params(id: &str, timeout: u64) -> TerminalWaitParams {
+        TerminalWaitParams {
+            session_id: id.to_owned(),
+            until: None,
+            timeout_ms: Some(timeout),
+        }
+    }
+
+    #[test]
+    fn explain_wire_uses_real_newlines_and_keeps_the_last_twelve_lines() {
+        let text = (1..=14)
+            .map(|line| format!("line-{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let screen = super::super::manager::DetectionInputs {
+            text,
+            title: String::new(),
+            osc_progress: String::new(),
+        };
+        let response = explain_response("s-tail", None, None, &screen);
+        let wire = serde_json::to_value(response).expect("explain response serializes");
+        let tail = wire["inputs"]["screen_tail"]
+            .as_str()
+            .expect("screen tail is a string");
+        assert_eq!(
+            tail,
+            (3..=14)
+                .map(|line| format!("line-{line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        assert!(
+            tail.contains('\n'),
+            "wire tail must contain actual newlines"
+        );
+        assert!(
+            !tail.contains("\\n"),
+            "wire tail must not contain a literal backslash-n"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial(pty_global_manager)]
+    fn gateway_actorless_preserves_unknown_owner_admission() {
+        let manager = manager();
+        let table = RuntimeAgents::default();
+        let orphan = "orphan-without-pty";
+        sample(&table, orphan, false);
+        let runtime = TerminalRuntime::new(manager, &table);
+
+        let gateway = runtime.status(&ObservationCaller::Gateway { actor: None });
+        assert!(gateway
+            .agents
+            .iter()
+            .any(|entry| entry.session_id == orphan));
+        let identified = runtime.status(&ObservationCaller::Gateway {
+            actor: Some("alice".to_owned()),
+        });
+        assert!(!identified
+            .agents
+            .iter()
+            .any(|entry| entry.session_id == orphan));
+        let tool = runtime.status(&ObservationCaller::Tool { actor: None });
+        assert!(!tool.agents.iter().any(|entry| entry.session_id == orphan));
+        let identified_tool = runtime.status(&ObservationCaller::Tool {
+            actor: Some("alice".to_owned()),
+        });
+        assert!(!identified_tool
+            .agents
+            .iter()
+            .any(|entry| entry.session_id == orphan));
+        table.remove(orphan);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn tool_without_actor_does_not_inherit_gateway_admission() {
+        let manager = manager();
+        let owned = Session::new(manager, Some("alice"));
+        let unowned = Session::new(manager, None);
+        let table = RuntimeAgents::default();
+        for id in [&owned.0, &unowned.0] {
+            sample(&table, id, false);
+        }
+        let runtime = TerminalRuntime::new(manager, &table);
+        let tool = ObservationCaller::Tool { actor: None };
+        let gateway = ObservationCaller::Gateway { actor: None };
+        for caller in [&tool, &gateway] {
+            let ids: Vec<_> = runtime
+                .list(caller)
+                .sessions
+                .into_iter()
+                .map(|s| s.session_id)
+                .collect();
+            let status: Vec<_> = runtime
+                .status(caller)
+                .agents
+                .into_iter()
+                .map(|s| s.session_id)
+                .collect();
+            assert!(ids.contains(&unowned.0));
+            assert!(status.contains(&unowned.0));
+            assert_eq!(
+                ids.contains(&owned.0),
+                matches!(caller, ObservationCaller::Gateway { .. })
+            );
+            assert_eq!(
+                status.contains(&owned.0),
+                matches!(caller, ObservationCaller::Gateway { .. })
+            );
+            assert!(runtime.attach(caller, &unowned.0).is_ok());
+            assert!(runtime.read(caller, &unowned.0).is_ok());
+            assert!(runtime.explain(caller, &unowned.0).is_ok());
+            assert_eq!(
+                runtime
+                    .wait(caller, &params(&unowned.0, 0), CancellationToken::new())
+                    .await
+                    .unwrap()
+                    .outcome,
+                TerminalWaitOutcome::Timeout
+            );
+        }
+        assert_hidden(runtime.attach(&tool, &owned.0), &owned.0);
+        assert_hidden(runtime.read(&tool, &owned.0), &owned.0);
+        assert_hidden(runtime.explain(&tool, &owned.0), &owned.0);
+        assert_hidden(
+            runtime
+                .wait(&tool, &params(&owned.0, 0), CancellationToken::new())
+                .await,
+            &owned.0,
+        );
+        assert!(runtime.attach(&gateway, &owned.0).is_ok());
+        assert!(runtime.read(&gateway, &owned.0).is_ok());
+        assert!(runtime.explain(&gateway, &owned.0).is_ok());
+        assert!(runtime
+            .wait(&gateway, &params(&owned.0, 0), CancellationToken::new())
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn alice_and_bob_ownership_reaches_every_observation_face() {
+        let manager = manager();
+        let alice = Session::new(manager, Some("alice"));
+        let bob = Session::new(manager, Some("bob"));
+        let table = RuntimeAgents::default();
+        sample(&table, &alice.0, false);
+        sample(&table, &bob.0, false);
+        let runtime = TerminalRuntime::new(manager, &table);
+        for (actor, own, other) in [("alice", &alice.0, &bob.0), ("bob", &bob.0, &alice.0)] {
+            for caller in [
+                ObservationCaller::Tool {
+                    actor: Some(actor.into()),
+                },
+                ObservationCaller::Gateway {
+                    actor: Some(actor.into()),
+                },
+            ] {
+                let ids: Vec<_> = runtime
+                    .list(&caller)
+                    .sessions
+                    .into_iter()
+                    .map(|s| s.session_id)
+                    .collect();
+                assert!(ids.contains(own));
+                assert!(!ids.contains(other));
+                assert_eq!(
+                    runtime
+                        .status(&caller)
+                        .agents
+                        .iter()
+                        .map(|s| &s.session_id)
+                        .collect::<Vec<_>>(),
+                    vec![own]
+                );
+                assert!(runtime.attach(&caller, own).is_ok());
+                assert!(runtime.read(&caller, own).is_ok());
+                assert!(runtime.explain(&caller, own).is_ok());
+                assert!(runtime
+                    .wait(&caller, &params(own, 0), CancellationToken::new())
+                    .await
+                    .is_ok());
+                for id in [other.as_str(), "never-existed"] {
+                    assert_hidden(runtime.attach(&caller, id), id);
+                    assert_hidden(runtime.read(&caller, id), id);
+                    assert_hidden(runtime.explain(&caller, id), id);
+                    assert_hidden(
+                        runtime
+                            .wait(&caller, &params(id, 0), CancellationToken::new())
+                            .await,
+                        id,
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn omitted_until_reaches_blocked_and_idle_through_the_borrowed_runtime() {
+        let manager = manager();
+        let blocked = Session::new(manager, Some("alice"));
+        let idle = Session::new(manager, Some("alice"));
+        let table = RuntimeAgents::default();
+        let mut blocked_screen = Screen::new(4, 40);
+        blocked_screen.feed(b"\x1b]0;Action Required\x07");
+        let mut idle_screen = Screen::new(4, 40);
+        idle_screen.feed(b"\x1b]9;4;0;0\x07");
+        for (session, screen) in [(&blocked, &blocked_screen), (&idle, &idle_screen)] {
+            table.sample(SampleInput {
+                session_id: &session.0,
+                shell: "grok",
+                program: None,
+                argv: &[],
+                cwd: "",
+                screen,
+                process_exited: false,
+                frame_produced: true,
+                now: 0,
+            });
+        }
+        let runtime = TerminalRuntime::new(manager, &table);
+        let caller = ObservationCaller::Tool {
+            actor: Some("alice".into()),
+        };
+        for (session, expected) in [
+            (&blocked, RuntimeAgentState::Blocked),
+            (&idle, RuntimeAgentState::Idle),
+        ] {
+            let response = runtime
+                .wait(
+                    &caller,
+                    &TerminalWaitParams {
+                        session_id: session.0.clone(),
+                        until: None,
+                        timeout_ms: Some(0),
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .expect("omitted until should use the default set");
+            assert_eq!(response.outcome, TerminalWaitOutcome::Reached);
+            assert_eq!(
+                response.agent.expect("reached returns the row").state,
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn quiet_does_not_become_idle() {
+        let manager = manager();
+        let session = Session::new(manager, Some("alice"));
+        let table = RuntimeAgents::default();
+        sample(&table, &session.0, true);
+        table.mark_quiet(crate::gateway::runtime::QUIET_AFTER_MS);
+        let runtime = TerminalRuntime::new(manager, &table);
+        let caller = ObservationCaller::Tool {
+            actor: Some("alice".into()),
+        };
+        let entry = runtime.status(&caller).agents.pop().unwrap();
+        assert!(entry.quiet_since.is_some());
+        assert_eq!(entry.state, RuntimeAgentState::Working);
+        let response = runtime
+            .wait(&caller, &params(&session.0, 0), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(response.outcome, TerminalWaitOutcome::Timeout);
+        assert_eq!(response.agent.unwrap(), entry);
     }
 
     #[derive(Default)]
-    struct WakeCounter(AtomicUsize);
-
-    impl Wake for WakeCounter {
+    struct Wakes(AtomicUsize);
+    impl Wake for Wakes {
         fn wake(self: Arc<Self>) {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
-
         fn wake_by_ref(self: &Arc<Self>) {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
     }
 
-    #[test]
-    fn gateway_actorless_admits_owned_unowned_and_unknown() {
-        let caller = ObservationCaller::Gateway { actor: None };
-        assert!(caller.admits(&SessionOwner::Known(Some("alice".into()))));
-        assert!(caller.admits(&SessionOwner::Known(None)));
-        assert!(caller.admits(&SessionOwner::Unknown));
-    }
-
-    #[test]
-    fn tool_actorless_admits_only_known_unowned() {
-        let caller = ObservationCaller::Tool { actor: None };
-        assert!(!caller.admits(&SessionOwner::Known(Some("alice".into()))));
-        assert!(caller.admits(&SessionOwner::Known(None)));
-        assert!(!caller.admits(&SessionOwner::Unknown));
-    }
-
-    #[test]
-    fn identified_callers_admit_only_the_exact_owner() {
-        for caller in [
-            ObservationCaller::Gateway {
-                actor: Some("alice"),
-            },
-            ObservationCaller::Tool {
-                actor: Some("alice"),
-            },
-        ] {
-            assert!(caller.admits(&SessionOwner::Known(Some("alice".into()))));
-            for owner in [
-                SessionOwner::Known(Some("Alice".into())),
-                SessionOwner::Known(Some("alice-other".into())),
-                SessionOwner::Known(Some("bob".into())),
-                SessionOwner::Known(None),
-                SessionOwner::Unknown,
-            ] {
-                assert!(!caller.admits(&owner), "{caller:?} admitted {owner:?}");
-            }
-        }
-    }
-
-    #[test]
-    #[serial_test::parallel(pty_global_manager)]
-    fn shared_runtime_checks_the_registry_owner_and_hides_refusals() {
-        let manager = crate::gateway::pty::manager();
-        let live = RealPty::spawn(manager, Some("alice"));
-        let agents = RuntimeAgents::default();
-        let runtime = TerminalRuntime::new(manager, &agents);
-        for caller in [
-            ObservationCaller::Gateway {
-                actor: Some("alice"),
-            },
-            ObservationCaller::Tool {
-                actor: Some("alice"),
-            },
-            ObservationCaller::Gateway { actor: None },
-        ] {
-            assert_eq!(runtime.require_owned(&live.id, caller), Ok(()));
-        }
-        for caller in [
-            ObservationCaller::Gateway { actor: Some("bob") },
-            ObservationCaller::Tool { actor: Some("bob") },
-            ObservationCaller::Tool { actor: None },
-        ] {
-            assert_eq!(
-                runtime.require_owned(&live.id, caller),
-                Err(no_such_session(&live.id))
-            );
-        }
-        let missing = uuid::Uuid::new_v4().to_string();
-        for caller in [
-            ObservationCaller::Gateway {
-                actor: Some("alice"),
-            },
-            ObservationCaller::Tool {
-                actor: Some("alice"),
-            },
-            ObservationCaller::Tool { actor: None },
-        ] {
-            assert_eq!(
-                runtime.require_owned(&missing, caller),
-                Err(no_such_session(&missing))
-            );
-        }
-    }
-
-    #[test]
-    fn wait_rejects_empty_until_and_defaults_to_blocked_and_idle() {
-        assert_eq!(
-            wait_states(Some(&[])).unwrap_err(),
-            "wait requires at least one state in `until` \
-             (blocked / idle / working / unknown); omit it for [blocked, idle]"
-        );
-        assert_eq!(
-            wait_states(None).unwrap(),
-            &[RuntimeAgentState::Blocked, RuntimeAgentState::Idle]
-        );
-        let explicit = [RuntimeAgentState::Working, RuntimeAgentState::Unknown];
-        assert_eq!(wait_states(Some(&explicit)).unwrap(), &explicit);
-    }
-
-    #[test]
-    fn wait_window_defaults_clamps_and_preserves_zero() {
-        assert_eq!(wait_window(None), Duration::from_millis(60_000));
-        assert_eq!(wait_window(Some(0)), Duration::ZERO);
-        assert_eq!(wait_window(Some(17)), Duration::from_millis(17));
-        assert_eq!(wait_window(Some(150_000)), Duration::from_millis(150_000));
-        assert_eq!(wait_window(Some(u64::MAX)), Duration::from_millis(150_000));
-    }
-
-    #[tokio::test(start_paused = true)]
-    #[serial_test::parallel(pty_global_manager)]
-    async fn cancellation_wakes_a_pending_wait_without_periodic_polling() {
-        let manager = crate::gateway::pty::manager();
-        let live = RealPty::spawn(manager, None);
-        let agents = RuntimeAgents::default();
-        let entry = sample_working(&agents, &live.id);
-        let runtime = TerminalRuntime::new(manager, &agents);
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn cancellation_ends_wait_without_busy_polling_or_a_held_store_lock() {
+        let manager = manager();
+        let session = Session::new(manager, Some("alice"));
+        let table = RuntimeAgents::default();
+        let runtime = TerminalRuntime::new(manager, &table);
+        let caller = ObservationCaller::Tool {
+            actor: Some("alice".into()),
+        };
+        let params = params(&session.0, 60_000);
         let cancel = CancellationToken::new();
-        let wakes = Arc::new(WakeCounter::default());
-        let waker = Waker::from(Arc::clone(&wakes));
+        let mut wait = Box::pin(runtime.wait(&caller, &params, cancel.clone()));
+        let wakes = Arc::new(Wakes::default());
+        let waker = Waker::from(wakes.clone());
         let mut context = Context::from_waker(&waker);
-        let mut waiting = Box::pin(runtime.wait_for_state(
-            &live.id,
-            &[RuntimeAgentState::Blocked],
-            Duration::from_secs(60),
-            &cancel,
-        ));
-        assert_eq!(waiting.as_mut().poll(&mut context), Poll::Pending);
-        tokio::time::advance(Duration::from_secs(30)).await;
+        assert!(wait.as_mut().poll(&mut context).is_pending());
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert_eq!(
             wakes.0.load(Ordering::SeqCst),
             0,
-            "no table change or deadline: the waiter must not schedule polling"
+            "no self-wake or polling timer"
         );
-        assert_eq!(agents.entry(&live.id), Some(entry));
-        cancel.cancel();
+        let generation = table.generation();
+        sample(&table, &session.0, true); // Must not deadlock on a lock held across await.
+        assert!(table.generation() > generation);
         assert!(
             wakes.0.load(Ordering::SeqCst) > 0,
-            "cancel must wake the waiter"
+            "the existing generation watch wakes the waiter"
+        );
+        assert!(wait.as_mut().poll(&mut context).is_pending());
+        let builds = table.visible_text_builds();
+        cancel.cancel();
+        assert!(
+            matches!(wait.as_mut().poll(&mut context), Poll::Ready(Err(ToolError::Cancelled { name })) if name == "terminal")
         );
         assert_eq!(
-            waiting.as_mut().poll(&mut context),
-            Poll::Ready(Err(WaitCancelled))
+            table.visible_text_builds(),
+            builds,
+            "waiting never resamples the screen"
+        );
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert!(
+            matches!(runtime.wait(&caller, &params, cancelled).await, Err(ToolError::Cancelled { name }) if name == "terminal")
         );
     }
 
     #[tokio::test]
-    #[serial_test::parallel(pty_global_manager)]
-    async fn registry_removal_outranks_matching_and_nonmatching_stale_rows() {
-        let manager = crate::gateway::pty::manager();
-        let live = RealPty::spawn(manager, None);
-        let agents = RuntimeAgents::default();
-        let entry = sample_working(&agents, &live.id);
-        let runtime = TerminalRuntime::new(manager, &agents);
-        assert_eq!(
-            runtime.wait_verdict(&live.id, &[RuntimeAgentState::Working]),
-            Some(WaitOutcome::Reached(entry.clone()))
-        );
-        assert_eq!(
-            runtime.wait_verdict(&live.id, &[RuntimeAgentState::Blocked]),
-            None
-        );
-        manager.close(&live.id).expect("kill and remove fixture");
-        assert!(!runtime.session_is_registered(&live.id));
-        assert_eq!(agents.entry(&live.id), Some(entry));
-        let cancel = CancellationToken::new();
+    #[serial_test::serial(pty_global_manager)]
+    async fn closed_pty_wins_over_a_stale_matching_agent_row() {
+        let manager = manager();
+        let session = Session::new(manager, Some("alice"));
+        let table = RuntimeAgents::default();
+        sample(&table, &session.0, true);
+        manager.close(&session.0).expect("close the live PTY");
+
         for state in [RuntimeAgentState::Working, RuntimeAgentState::Blocked] {
-            assert_eq!(
-                runtime.wait_verdict(&live.id, &[state]),
-                Some(WaitOutcome::Gone)
-            );
-            assert_eq!(
-                runtime
-                    .wait_for_state(&live.id, &[state], Duration::ZERO, &cancel)
-                    .await,
-                Ok(WaitOutcome::Gone),
-                "registry absence must win even at the deadline for {state:?}"
-            );
+            let outcome = wait_for_state(
+                manager,
+                &table,
+                &session.0,
+                &[state],
+                Duration::ZERO,
+                CancellationToken::new(),
+            )
+            .await
+            .expect("uncancelled wait");
+            assert_eq!(outcome, WaitOutcome::Gone);
         }
+        table.remove(&session.0);
     }
 
-    #[test]
-    fn screen_tail_is_exactly_the_last_twelve_real_newline_lines() {
-        let text = "discard-1\ndiscard-2\ndiscard-3\nline-04\nline-05\n\n\
-                    line-07 literal\\n stays here\nline-08\nline-09\nline-10\n\
-                    line-11\nline-12\nline-13\nline-14\nline-15\n";
-        let tail = screen_tail(text);
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn actual_core_producers_preserve_the_legacy_wire() {
+        let manager = manager();
+        let session = Session::new(manager, Some("alice"));
+        let table = RuntimeAgents::default();
+        let runtime = TerminalRuntime::new(manager, &table);
+        let caller = ObservationCaller::Tool {
+            actor: Some("alice".into()),
+        };
+        let read = runtime.read(&caller, &session.0).unwrap();
+        let read_wire = serde_json::to_value(&read).unwrap();
         assert_eq!(
-            tail,
-            "line-04\nline-05\n\nline-07 literal\\n stays here\nline-08\nline-09\n\
-             line-10\nline-11\nline-12\nline-13\nline-14\nline-15"
+            read_wire,
+            serde_json::json!({"session_id":session.0,"text":read.text})
         );
-        assert_eq!(tail.lines().count(), 12);
-    }
-
-    #[test]
-    fn screen_tail_preserves_short_blank_and_unwrapped_lines() {
-        assert_eq!(screen_tail(""), "");
-        assert_eq!(screen_tail("one\n\ntwo\n"), "one\n\ntwo");
-        assert_eq!(screen_tail("one\r\ntwo\r\n"), "one\ntwo");
-        let long_line = "x".repeat(1_000);
-        assert_eq!(screen_tail(&long_line), long_line);
-        let twelve = (1..=12)
-            .map(|n| n.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(screen_tail(&twelve), twelve);
+        assert_eq!(
+            serde_json::from_value::<TerminalReadResponse>(read_wire).unwrap(),
+            read
+        );
+        let explain = runtime.explain(&caller, &session.0).unwrap();
+        let wire = serde_json::to_value(&explain).unwrap();
+        assert_eq!(wire["session_id"], session.0);
+        assert_eq!(wire["state"], "unknown");
+        for key in ["agent", "matched_rule", "source", "manifest_version"] {
+            assert!(wire[key].is_null());
+        }
+        assert!(wire["reason"].as_str().unwrap().contains("no row"));
+        assert_eq!(wire.as_object().unwrap().len(), 8);
+        assert_eq!(wire["inputs"].as_object().unwrap().len(), 3);
+        assert_eq!(
+            serde_json::from_value::<TerminalExplainResponse>(wire).unwrap(),
+            explain
+        );
+        sample(&table, &session.0, false);
+        let timeout = runtime
+            .wait(&caller, &params(&session.0, 0), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&timeout).unwrap(),
+            serde_json::json!({"session_id":session.0,"outcome":"timeout","agent":table.entry(&session.0)})
+        );
+        let reached = runtime
+            .wait(
+                &caller,
+                &TerminalWaitParams {
+                    until: Some(vec![RuntimeAgentState::Unknown]),
+                    ..params(&session.0, 0)
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&reached).unwrap(),
+            serde_json::json!({"session_id":session.0,"outcome":"reached","agent":table.entry(&session.0)})
+        );
+        manager.close(&session.0).unwrap();
+        table.remove(&session.0);
+        let gone = runtime
+            .wait(&caller, &params(&session.0, 0), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&gone).unwrap(),
+            serde_json::json!({"session_id":session.0,"outcome":"gone","agent":null})
+        );
     }
 }

@@ -59,7 +59,8 @@ impl BrowserTypeTool {
 #[async_trait]
 impl AlephTool for BrowserTypeTool {
     const NAME: &'static str = "browser_type";
-    const DESCRIPTION: &'static str = "Type text into an element on the page, addressed by the ref_id a browser_snapshot \
+    const DESCRIPTION: &'static str =
+        "Type text into an element on the page, addressed by the ref_id a browser_snapshot \
          reported for it";
     type Args = BrowserTypeArgs;
     type Output = BrowserTypeOutput;

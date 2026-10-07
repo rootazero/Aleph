@@ -1297,9 +1297,9 @@ pub fn create_tool_boxed(
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
         | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
         | "browser_exec" | "browser_console" | "browser_hover" | "browser_scroll"
-        | "browser_pdf" | "browser_record" | "browser_qa" | "browser_network" | "browser_dialog"
-        | "browser_drag" | "browser_upload" | "browser_resize" | "browser_emulate"
-        | "browser_cookies" | "browser_session" | "browser_profile" => None,
+        | "browser_pdf" | "browser_record" | "browser_qa" | "browser_network"
+        | "browser_dialog" | "browser_drag" | "browser_upload" | "browser_resize"
+        | "browser_emulate" | "browser_cookies" | "browser_session" | "browser_profile" => None,
         // Skill management tools — always available
         // Phase 2: share the process-wide initialized SkillSystem so
         // skill_status/install/manage see the same registry as the gateway.
@@ -2547,8 +2547,8 @@ mod tests {
     /// `TerminalArgs`'s schema says `action` is one of a fixed set of strings
     /// (three when this entry was written, five since task D); it
     /// cannot say WHICH sessions `list`/`status` return (this server's
-    /// runtime scopes them by caller identity via `TerminalRuntime` and
-    /// `ObservationCaller`, a filter with no argument to attach a description to) or that a
+    /// runtime scopes them by caller identity via `terminal_admits`, a
+    /// filter with no argument to attach a description to) or that a
     /// disabled `[policies.terminal]` kill switch makes every action answer
     /// "no sessions" without saying "the feature is off" (there is no
     /// `enabled` parameter on this tool for a schema description to sit on
@@ -2562,8 +2562,8 @@ mod tests {
     /// finding rather than recognising the feature is turned off.
     /// (3) The consumers are shipped and dispatched: `list_sessions`,
     /// `status`, `read_session` and (since task D) `wait_for_session` /
-    /// `explain_session` each apply `TerminalRuntime`'s shared ownership
-    /// admission before returning data (`terminal.rs`), the
+    /// `explain_session` each apply `terminal_admits` /
+    /// `owner_record_admits` before returning data (`terminal.rs`), the
     /// `[policies.terminal] enabled = false` kill switch really does call
     /// `PtyManager::close_all()` (`config/types/policies/terminal.rs`), and
     /// the "no write verb" half is pinned by a falsifiable test
@@ -3039,7 +3039,7 @@ mod tests {
     /// the +30 Windows gap recorded above is carried forward unchanged. As
     /// the 2026-09-20 entry already established, this ledger forbids deriving
     /// a ceiling by addition.
-///
+    ///
     /// 2026-09-28 (C2 browser_record tool): 116_072 -> 116_150 B, RE-MEASURED
     /// with this ceiling floored to `1` on Linux (96_554 catalog + 16_613
     /// registry-only + 1_039 injected + 1_944 bridge); the only red test was

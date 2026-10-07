@@ -699,9 +699,8 @@ impl ConfigPatcher {
 /// helper keeps the wording in lockstep so a future grep for
 /// "Failed to serialize config" lands every site.
 fn config_to_json(config: &Config) -> Result<serde_json::Value> {
-    serde_json::to_value(config).map_err(|e| {
-        AlephError::invalid_config(format!("Failed to serialize config to JSON: {e}"))
-    })
+    serde_json::to_value(config)
+        .map_err(|e| AlephError::invalid_config(format!("Failed to serialize config to JSON: {e}")))
 }
 
 /// Navigate a dot-separated path into a JSON value.

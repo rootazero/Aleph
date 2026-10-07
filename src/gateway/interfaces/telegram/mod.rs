@@ -930,8 +930,7 @@ impl Channel for TelegramChannel {
             ));
         }
 
-        let (chat_id, thread_id) =
-            delivery::parse_conversation_id(conversation_id.as_str())?;
+        let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str())?;
         let chat_id_i64 = chat_id.0;
 
         let instance = self
@@ -962,9 +961,10 @@ impl Channel for TelegramChannel {
         if allow_multiple {
             req = req.allows_multiple_answers(true);
         }
-        let msg = req.send().await.map_err(|e| {
-            ChannelError::SendFailed(format!("sendPoll failed: {e}"))
-        })?;
+        let msg = req
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("sendPoll failed: {e}")))?;
         Ok(MessageId::new(msg.id.0.to_string()))
     }
 
@@ -1106,11 +1106,12 @@ mod tests {
         let config = TelegramConfigV2 {
             accounts: vec![
                 crate::gateway::interfaces::telegram::config_v2::TelegramAccountConfig {
-                id: "default".to_string(),
-                bot_token: "123:ABC".to_string(),
-                token_fingerprint: None,
-                ..Default::default()
-            }],
+                    id: "default".to_string(),
+                    bot_token: "123:ABC".to_string(),
+                    token_fingerprint: None,
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         };
         let channel = TelegramChannel::new("telegram-test", config);

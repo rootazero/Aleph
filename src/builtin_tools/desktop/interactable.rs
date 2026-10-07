@@ -14,7 +14,7 @@
 //! unable to reach *any* of them, so the redaction lives at the single point
 //! all three go through rather than being re-remembered at each call site.
 
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 use aleph_protocol::desktop_bridge::methods::ax::AxElement;
 

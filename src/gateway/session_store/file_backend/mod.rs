@@ -981,7 +981,8 @@ impl SessionStore for FileSessionStore {
             .sum();
         let new_count = messages.len();
 
-        self.write_transcript_locked(&guard, &key_str, &messages).await?;
+        self.write_transcript_locked(&guard, &key_str, &messages)
+            .await?;
 
         if let Some(meta) = guard.existing_mut() {
             meta.message_count = new_count as i64;
@@ -1018,7 +1019,8 @@ impl SessionStore for FileSessionStore {
             return Ok(0);
         }
 
-        self.write_transcript_locked(&guard, &key_str, &kept).await?;
+        self.write_transcript_locked(&guard, &key_str, &kept)
+            .await?;
 
         if let Some(meta) = guard.existing_mut() {
             meta.message_count = kept.len() as i64;
@@ -1050,7 +1052,11 @@ impl SessionStore for FileSessionStore {
                 "Checkpoint {checkpoint_id} not found or empty"
             )));
         }
-        let mut meta = new_session_meta(new_key, checkpoint_messages.len() as i64, Some(key_str.clone()));
+        let mut meta = new_session_meta(
+            new_key,
+            checkpoint_messages.len() as i64,
+            Some(key_str.clone()),
+        );
         for msg in &checkpoint_messages {
             meta.total_tokens += msg.input_tokens + msg.output_tokens;
             meta.input_tokens += msg.input_tokens;
@@ -1092,7 +1098,7 @@ impl SessionStore for FileSessionStore {
                 "Checkpoint {checkpoint_id} not found or empty"
             )));
         }
-self.write_transcript_locked(&guard, &key_str, &checkpoint_messages)
+        self.write_transcript_locked(&guard, &key_str, &checkpoint_messages)
             .await?;
         let meta = guard
             .existing_mut()
@@ -1242,14 +1248,16 @@ self.write_transcript_locked(&guard, &key_str, &checkpoint_messages)
             // SessionMetadata so `list_sessions` (which deserializes the full
             // on-disk meta) surfaces it for the Panel to restore. `None` clears
             // the key (revert to the default agent workspace).
-            with_identity_meta(meta, |identity_meta| match project_root.map(str::trim).filter(|p| !p.is_empty()) {
-                Some(path) => {
-                    identity_meta
-                        .custom
-                        .insert("project_root".to_string(), serde_json::json!(path));
-                }
-                None => {
-                    identity_meta.custom.remove("project_root");
+            with_identity_meta(meta, |identity_meta| {
+                match project_root.map(str::trim).filter(|p| !p.is_empty()) {
+                    Some(path) => {
+                        identity_meta
+                            .custom
+                            .insert("project_root".to_string(), serde_json::json!(path));
+                    }
+                    None => {
+                        identity_meta.custom.remove("project_root");
+                    }
                 }
             });
             guard.commit().await?;
@@ -2809,7 +2817,11 @@ mod branch_checkpoint_attribution_tests {
                         .patch_session(
                             &key,
                             &SessionPatch {
-                                model: Some(if round % 2 == 0 { "a".into() } else { "b".into() }),
+                                model: Some(if round % 2 == 0 {
+                                    "a".into()
+                                } else {
+                                    "b".into()
+                                }),
                                 ..Default::default()
                             },
                         )

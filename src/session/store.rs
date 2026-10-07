@@ -452,8 +452,14 @@ pub struct EffectiveInputRecord {
 /// Result of the serialized per-call replay claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplayClaimResult {
-    Claimed { attempt: u32, claim_token: String },
-    HeadChanged { expected: EventSeq, found: EventSeq },
+    Claimed {
+        attempt: u32,
+        claim_token: String,
+    },
+    HeadChanged {
+        expected: EventSeq,
+        found: EventSeq,
+    },
     /// A retire/rewind landed after the caller read the head and generation.
     GenerationChanged {
         expected: RetireGeneration,
@@ -466,7 +472,10 @@ pub enum ReplayClaimResult {
         attempt: u32,
         lease_until_ms: i64,
     },
-    BudgetExhausted { attempts: u32, max_attempts: u32 },
+    BudgetExhausted {
+        attempts: u32,
+        max_attempts: u32,
+    },
 }
 
 /// Result of the unanswered-call precondition and outcome append.
@@ -490,7 +499,6 @@ pub enum ReplayReleaseResult {
     /// fail-closed — a stale token must never release a live claim.
     ClaimLost,
 }
-
 
 /// One row from [`SessionEventStore::load_events_with_retirement`]: the
 /// decoded event plus the two retirement facts the fold-restoration path
@@ -1050,7 +1058,10 @@ fn replay_effective_input(
     Ok(found)
 }
 
-fn replay_head(tx: &rusqlite::Transaction<'_>, session_key: &str) -> Result<EventSeq, SessionError> {
+fn replay_head(
+    tx: &rusqlite::Transaction<'_>,
+    session_key: &str,
+) -> Result<EventSeq, SessionError> {
     let max_seq: Option<i64> = tx
         .query_row(
             "SELECT MAX(seq) FROM session_events WHERE session_id = ?1",
@@ -1061,7 +1072,9 @@ fn replay_head(tx: &rusqlite::Transaction<'_>, session_key: &str) -> Result<Even
     match max_seq {
         Some(value) if value >= 0 => u64::try_from(value)
             .map_err(|_| SessionError::Storage(format!("stored seq {value} is invalid"))),
-        Some(value) => Err(SessionError::Storage(format!("stored seq {value} is negative"))),
+        Some(value) => Err(SessionError::Storage(format!(
+            "stored seq {value} is negative"
+        ))),
         None => Ok(0),
     }
 }
@@ -1306,67 +1319,71 @@ impl SessionEventStore for SqliteEventStore {
             )));
         }
         let mut conn = self.conn.lock().await;
-        Ok(with_synchronous_full(&mut conn, |conn| -> Result<ReplayClaimResult, SessionError> {
-            let tx = conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                .map_err(|e| SessionError::Storage(format!("replay claim BEGIN failed: {e}")))?;
-            let found_head = replay_head(&tx, &session_key)?;
-            if found_head != expected_head {
-                return Ok(ReplayClaimResult::HeadChanged {
-                    expected: expected_head,
-                    found: found_head,
-                });
-            }
-            let found_generation = replay_generation(&tx, &session_key)?;
-            if found_generation != expected_generation {
-                return Ok(ReplayClaimResult::GenerationChanged {
-                    expected: expected_generation,
-                    found: found_generation,
-                });
-            }
-            let (requested, outcomes) = replay_call_state(&tx, &session_key, call_id)?;
-            if requested != 1 || outcomes != 0 {
-                return Ok(ReplayClaimResult::NotDangling);
-            }
-            let now = crate::session::events::now_ms();
-            // A held, unexpired lease belongs to another worker: refuse
-            // without touching the cursor, so the holder's token still
-            // commits and its attempts survive.
-            let attempts = match replay_cursor(&tx, &session_key, call_id)? {
-                Some((attempts, state, lease_until))
-                    if state == REPLAY_STATE_ACTIVE && lease_until > now =>
-                {
-                    return Ok(ReplayClaimResult::LeaseHeld {
-                        attempt: attempts,
-                        lease_until_ms: lease_until,
+        Ok(with_synchronous_full(
+            &mut conn,
+            |conn| -> Result<ReplayClaimResult, SessionError> {
+                let tx = conn
+                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(|e| {
+                        SessionError::Storage(format!("replay claim BEGIN failed: {e}"))
+                    })?;
+                let found_head = replay_head(&tx, &session_key)?;
+                if found_head != expected_head {
+                    return Ok(ReplayClaimResult::HeadChanged {
+                        expected: expected_head,
+                        found: found_head,
                     });
                 }
-                Some((attempts, ..)) => attempts,
-                None => 0,
-            };
-            if attempts >= max_attempts {
-                return Ok(ReplayClaimResult::BudgetExhausted {
-                    attempts,
-                    max_attempts,
-                });
-            }
-            let next_attempt = attempts + 1;
-            let claim_token = uuid::Uuid::new_v4().to_string();
-            let claim_generation = i64::try_from(found_generation).map_err(|_| {
-                SessionError::Storage(format!(
-                    "retire generation {found_generation} exceeds i64::MAX"
-                ))
-            })?;
-            // Fail closed on a `lease_ms` large enough that `now + lease_ms`
-            // overflows i64: refuse before the INSERT so neither the cursor
-            // nor the attempt is written.
-            let lease_until = now.checked_add(lease_ms).ok_or_else(|| {
-                SessionError::Storage(format!(
-                    "replay claim lease_ms {lease_ms} overflows lease expiry from now {now}"
-                ))
-            })?;
-            tx.execute(
-                "INSERT INTO session_replay_cursors
+                let found_generation = replay_generation(&tx, &session_key)?;
+                if found_generation != expected_generation {
+                    return Ok(ReplayClaimResult::GenerationChanged {
+                        expected: expected_generation,
+                        found: found_generation,
+                    });
+                }
+                let (requested, outcomes) = replay_call_state(&tx, &session_key, call_id)?;
+                if requested != 1 || outcomes != 0 {
+                    return Ok(ReplayClaimResult::NotDangling);
+                }
+                let now = crate::session::events::now_ms();
+                // A held, unexpired lease belongs to another worker: refuse
+                // without touching the cursor, so the holder's token still
+                // commits and its attempts survive.
+                let attempts = match replay_cursor(&tx, &session_key, call_id)? {
+                    Some((attempts, state, lease_until))
+                        if state == REPLAY_STATE_ACTIVE && lease_until > now =>
+                    {
+                        return Ok(ReplayClaimResult::LeaseHeld {
+                            attempt: attempts,
+                            lease_until_ms: lease_until,
+                        });
+                    }
+                    Some((attempts, ..)) => attempts,
+                    None => 0,
+                };
+                if attempts >= max_attempts {
+                    return Ok(ReplayClaimResult::BudgetExhausted {
+                        attempts,
+                        max_attempts,
+                    });
+                }
+                let next_attempt = attempts + 1;
+                let claim_token = uuid::Uuid::new_v4().to_string();
+                let claim_generation = i64::try_from(found_generation).map_err(|_| {
+                    SessionError::Storage(format!(
+                        "retire generation {found_generation} exceeds i64::MAX"
+                    ))
+                })?;
+                // Fail closed on a `lease_ms` large enough that `now + lease_ms`
+                // overflows i64: refuse before the INSERT so neither the cursor
+                // nor the attempt is written.
+                let lease_until = now.checked_add(lease_ms).ok_or_else(|| {
+                    SessionError::Storage(format!(
+                        "replay claim lease_ms {lease_ms} overflows lease expiry from now {now}"
+                    ))
+                })?;
+                tx.execute(
+                    "INSERT INTO session_replay_cursors
                  (session_id, call_id, attempts, state, claim_token, lease_until, claim_generation)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(session_id, call_id) DO UPDATE SET
@@ -1375,24 +1392,26 @@ impl SessionEventStore for SqliteEventStore {
                    claim_token = excluded.claim_token,
                    lease_until = excluded.lease_until,
                    claim_generation = excluded.claim_generation",
-                params![
-                    session_key,
-                    call_id,
-                    i64::from(next_attempt),
-                    REPLAY_STATE_ACTIVE,
+                    params![
+                        session_key,
+                        call_id,
+                        i64::from(next_attempt),
+                        REPLAY_STATE_ACTIVE,
+                        claim_token,
+                        lease_until,
+                        claim_generation,
+                    ],
+                )
+                .map_err(|e| SessionError::Storage(e.to_string()))?;
+                tx.commit().map_err(|e| {
+                    SessionError::Storage(format!("replay claim COMMIT failed: {e}"))
+                })?;
+                Ok(ReplayClaimResult::Claimed {
+                    attempt: next_attempt,
                     claim_token,
-                    lease_until,
-                    claim_generation,
-                ],
-            )
-            .map_err(|e| SessionError::Storage(e.to_string()))?;
-            tx.commit()
-                .map_err(|e| SessionError::Storage(format!("replay claim COMMIT failed: {e}")))?;
-            Ok(ReplayClaimResult::Claimed {
-                attempt: next_attempt,
-                claim_token,
-            })
-        })??)
+                })
+            },
+        )??)
     }
 
     async fn commit_replay_outcome(
@@ -1428,90 +1447,95 @@ impl SessionEventStore for SqliteEventStore {
         };
         let session_key = session_id_to_string(session_id)?;
         let mut conn = self.conn.lock().await;
-        let result = with_synchronous_full(&mut conn, |conn| -> Result<ReplayOutcomeResult, SessionError> {
-            let tx = conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                .map_err(|e| SessionError::Storage(format!("replay outcome BEGIN failed: {e}")))?;
-            // An empty token is never a valid claim: rejecting it here closes
-            // the bypass where an answered cursor's cleared token ('') would
-            // otherwise equal a caller's empty string. The cursor must still
-            // be `active`, and its stored retire generation must match the
-            // current one — a retire/rewind landed after the claim invalidates
-            // the token even though the call may read dangling again.
-            if claim_token.is_empty() {
-                return Ok(ReplayOutcomeResult::ClaimLost);
-            }
-            let stored: Option<(String, String, i64)> = tx
-                .query_row(
-                    "SELECT claim_token, state, claim_generation
+        let result = with_synchronous_full(
+            &mut conn,
+            |conn| -> Result<ReplayOutcomeResult, SessionError> {
+                let tx = conn
+                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(|e| {
+                        SessionError::Storage(format!("replay outcome BEGIN failed: {e}"))
+                    })?;
+                // An empty token is never a valid claim: rejecting it here closes
+                // the bypass where an answered cursor's cleared token ('') would
+                // otherwise equal a caller's empty string. The cursor must still
+                // be `active`, and its stored retire generation must match the
+                // current one — a retire/rewind landed after the claim invalidates
+                // the token even though the call may read dangling again.
+                if claim_token.is_empty() {
+                    return Ok(ReplayOutcomeResult::ClaimLost);
+                }
+                let stored: Option<(String, String, i64)> = tx
+                    .query_row(
+                        "SELECT claim_token, state, claim_generation
                      FROM session_replay_cursors
                      WHERE session_id = ?1 AND call_id = ?2",
-                    params![session_key, call_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .optional()
-                .map_err(|e| SessionError::Storage(e.to_string()))?;
-            let Some((stored_token, state, claim_generation)) = stored else {
-                return Ok(ReplayOutcomeResult::ClaimLost);
-            };
-            if state != REPLAY_STATE_ACTIVE {
-                return Ok(ReplayOutcomeResult::ClaimLost);
-            }
-            if stored_token != claim_token {
-                return Ok(ReplayOutcomeResult::ClaimLost);
-            }
-            let current_generation = replay_generation(&tx, &session_key)?;
-            let current_generation_i64 = i64::try_from(current_generation).map_err(|_| {
-                SessionError::Storage(format!(
-                    "retire generation {current_generation} exceeds i64::MAX"
-                ))
-            })?;
-            if claim_generation != current_generation_i64 {
-                return Ok(ReplayOutcomeResult::ClaimLost);
-            }
-            let (requested, outcomes) = replay_call_state(&tx, &session_key, call_id)?;
-            if requested != 1 || outcomes != 0 {
-                return Ok(ReplayOutcomeResult::AlreadyAnswered);
-            }
-            let seq = replay_head(&tx, &session_key)?
-                .checked_add(1)
-                .ok_or_else(|| SessionError::Storage("seq overflow".into()))?;
-            let seq_i64 = i64::try_from(seq)
-                .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
-            tx.execute(
-                "INSERT INTO session_events
+                        params![session_key, call_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()
+                    .map_err(|e| SessionError::Storage(e.to_string()))?;
+                let Some((stored_token, state, claim_generation)) = stored else {
+                    return Ok(ReplayOutcomeResult::ClaimLost);
+                };
+                if state != REPLAY_STATE_ACTIVE {
+                    return Ok(ReplayOutcomeResult::ClaimLost);
+                }
+                if stored_token != claim_token {
+                    return Ok(ReplayOutcomeResult::ClaimLost);
+                }
+                let current_generation = replay_generation(&tx, &session_key)?;
+                let current_generation_i64 = i64::try_from(current_generation).map_err(|_| {
+                    SessionError::Storage(format!(
+                        "retire generation {current_generation} exceeds i64::MAX"
+                    ))
+                })?;
+                if claim_generation != current_generation_i64 {
+                    return Ok(ReplayOutcomeResult::ClaimLost);
+                }
+                let (requested, outcomes) = replay_call_state(&tx, &session_key, call_id)?;
+                if requested != 1 || outcomes != 0 {
+                    return Ok(ReplayOutcomeResult::AlreadyAnswered);
+                }
+                let seq = replay_head(&tx, &session_key)?
+                    .checked_add(1)
+                    .ok_or_else(|| SessionError::Storage("seq overflow".into()))?;
+                let seq_i64 = i64::try_from(seq)
+                    .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
+                tx.execute(
+                    "INSERT INTO session_events
                  (session_id, seq, turn_id, event_type, payload_json, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    session_key,
-                    seq_i64,
-                    row.turn_id,
-                    row.event_type,
-                    row.payload,
-                    row.created_at,
-                ],
-            )
-            .map_err(|e| SessionError::Storage(e.to_string()))?;
-            // Answer the cursor, KEEPING `attempts`: the budget is a durable
-            // count of replay tries for this call and must survive a rewind
-            // that makes the call dangling again. Clearing the token makes a
-            // repeat commit with the stale token read as ClaimLost.
-            let updated = tx
-                .execute(
-                    "UPDATE session_replay_cursors
-                     SET state = ?3, claim_token = '', lease_until = 0
-                     WHERE session_id = ?1 AND call_id = ?2 AND claim_token = ?4",
-                    params![session_key, call_id, REPLAY_STATE_ANSWERED, claim_token],
+                    params![
+                        session_key,
+                        seq_i64,
+                        row.turn_id,
+                        row.event_type,
+                        row.payload,
+                        row.created_at,
+                    ],
                 )
                 .map_err(|e| SessionError::Storage(e.to_string()))?;
-            if updated != 1 {
-                return Ok(ReplayOutcomeResult::ClaimLost);
-            }
-            tx.commit().map_err(|e| {
-                SessionError::Storage(format!("replay outcome COMMIT failed: {e}"))
-            })?;
-            Ok(ReplayOutcomeResult::Committed { seq })
-        })??;
+                // Answer the cursor, KEEPING `attempts`: the budget is a durable
+                // count of replay tries for this call and must survive a rewind
+                // that makes the call dangling again. Clearing the token makes a
+                // repeat commit with the stale token read as ClaimLost.
+                let updated = tx
+                    .execute(
+                        "UPDATE session_replay_cursors
+                     SET state = ?3, claim_token = '', lease_until = 0
+                     WHERE session_id = ?1 AND call_id = ?2 AND claim_token = ?4",
+                        params![session_key, call_id, REPLAY_STATE_ANSWERED, claim_token],
+                    )
+                    .map_err(|e| SessionError::Storage(e.to_string()))?;
+                if updated != 1 {
+                    return Ok(ReplayOutcomeResult::ClaimLost);
+                }
+                tx.commit().map_err(|e| {
+                    SessionError::Storage(format!("replay outcome COMMIT failed: {e}"))
+                })?;
+                Ok(ReplayOutcomeResult::Committed { seq })
+            },
+        )??;
         if let ReplayOutcomeResult::Committed { seq } = result {
             if let Some(body) = row.fts_body {
                 if let Err(e) = conn.execute(
@@ -1706,13 +1730,10 @@ impl SessionEventStore for SqliteEventStore {
         let mut conn = self.conn.lock().await;
         let tx = conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(|e| {
-                SessionError::Storage(format!("effective input BEGIN failed: {e}"))
-            })?;
+            .map_err(|e| SessionError::Storage(format!("effective input BEGIN failed: {e}")))?;
         let found = replay_effective_input(&tx, &session_key, call_id)?;
-        tx.commit().map_err(|e| {
-            SessionError::Storage(format!("effective input COMMIT failed: {e}"))
-        })?;
+        tx.commit()
+            .map_err(|e| SessionError::Storage(format!("effective input COMMIT failed: {e}")))?;
         Ok(found)
     }
 
@@ -2689,31 +2710,65 @@ mod tests {
         let sid = sample_session_id();
         let tid = uuid::Uuid::new_v4();
         let at = now_ms();
-        store.append(&sid, 1, &tool_requested(tid, "call-1", at), at).await.unwrap();
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+            .await
+            .unwrap();
         let head = store.load_head_seq(&sid).await.unwrap();
 
-        let first = store.claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
-        let ReplayClaimResult::Claimed { attempt, claim_token } = first else {
+        let first = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        let ReplayClaimResult::Claimed {
+            attempt,
+            claim_token,
+        } = first
+        else {
             panic!("expected first claim");
         };
         assert_eq!(attempt, 1);
 
-        let stale = store.claim_replay_call(&sid, head - 1, 0, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
+        let stale = store
+            .claim_replay_call(&sid, head - 1, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
         assert!(matches!(stale, ReplayClaimResult::HeadChanged { .. }));
 
         // A second claim while the first lease is held must NOT overwrite the
         // token: the lease is refused and the original token stays committable.
-        let second = store.claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
-        assert!(matches!(second, ReplayClaimResult::LeaseHeld { attempt: 1, .. }));
+        let second = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        assert!(matches!(
+            second,
+            ReplayClaimResult::LeaseHeld { attempt: 1, .. }
+        ));
 
         let result = SessionEvent::ToolResult {
             turn_id: tid,
             call_id: "call-1".into(),
-            output: ToolOutput { value: serde_json::json!({"ok": true}), metadata: Default::default() },
+            output: ToolOutput {
+                value: serde_json::json!({"ok": true}),
+                metadata: Default::default(),
+            },
             at: at + 1,
         };
-        assert!(matches!(store.commit_replay_outcome(&sid, "call-1", "wrong-token", &result, at + 1).await.unwrap(), ReplayOutcomeResult::ClaimLost));
-        assert!(matches!(store.commit_replay_outcome(&sid, "call-1", &claim_token, &result, at + 1).await.unwrap(), ReplayOutcomeResult::Committed { seq: 2 }));
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-1", "wrong-token", &result, at + 1)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::ClaimLost
+        ));
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-1", &claim_token, &result, at + 1)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::Committed { seq: 2 }
+        ));
     }
 
     #[tokio::test]
@@ -2722,18 +2777,44 @@ mod tests {
         let sid = sample_session_id();
         let tid = uuid::Uuid::new_v4();
         let at = now_ms();
-        store.append(&sid, 1, &tool_requested(tid, "call-2", at), at).await.unwrap();
-        let claim = store.claim_replay_call(&sid, 1, 0, "call-2", 1, REPLAY_LEASE_TTL_MS).await.unwrap();
-        let ReplayClaimResult::Claimed { claim_token, .. } = claim else { panic!("expected claim") };
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-2", at), at)
+            .await
+            .unwrap();
+        let claim = store
+            .claim_replay_call(&sid, 1, 0, "call-2", 1, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        let ReplayClaimResult::Claimed { claim_token, .. } = claim else {
+            panic!("expected claim")
+        };
         let result = SessionEvent::ToolError {
             turn_id: tid,
             call_id: "call-2".into(),
             error: "replay failed".into(),
             at: at + 1,
         };
-        assert!(matches!(store.commit_replay_outcome(&sid, "call-2", "wrong", &result, at + 1).await.unwrap(), ReplayOutcomeResult::ClaimLost));
-        assert!(matches!(store.commit_replay_outcome(&sid, "call-2", &claim_token, &result, at + 1).await.unwrap(), ReplayOutcomeResult::Committed { seq: 2 }));
-        assert!(matches!(store.commit_replay_outcome(&sid, "call-2", &claim_token, &result, at + 2).await.unwrap(), ReplayOutcomeResult::ClaimLost));
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-2", "wrong", &result, at + 1)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::ClaimLost
+        ));
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-2", &claim_token, &result, at + 1)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::Committed { seq: 2 }
+        ));
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-2", &claim_token, &result, at + 2)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::ClaimLost
+        ));
         assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 2);
     }
 
@@ -2754,28 +2835,55 @@ mod tests {
         let sid = sample_session_id();
         let tid = uuid::Uuid::new_v4();
         let at = now_ms();
-        store.append(&sid, 1, &tool_requested(tid, "call-1", at), at).await.unwrap();
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+            .await
+            .unwrap();
         let head = store.load_head_seq(&sid).await.unwrap();
 
-        let first = store.claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
+        let first = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
         let ReplayClaimResult::Claimed { attempt: a1, .. } = first else {
             panic!("expected first claim");
         };
         assert_eq!(a1, 1);
 
         // A held, unexpired lease refuses a second claim.
-        let held = store.claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
-        assert!(matches!(held, ReplayClaimResult::LeaseHeld { attempt: 1, .. }));
+        let held = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        assert!(matches!(
+            held,
+            ReplayClaimResult::LeaseHeld { attempt: 1, .. }
+        ));
 
         // Expire the lease; the next claim may take over with attempt 2.
         expire_lease(&store, "call-1").await;
-        let second = store.claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
-        assert!(matches!(second, ReplayClaimResult::Claimed { attempt: 2, .. }));
+        let second = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        assert!(matches!(
+            second,
+            ReplayClaimResult::Claimed { attempt: 2, .. }
+        ));
 
         // The budget is durable: after attempt 2 the cursor is exhausted.
         expire_lease(&store, "call-1").await;
-        let exhausted = store.claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
-        assert!(matches!(exhausted, ReplayClaimResult::BudgetExhausted { attempts: 2, max_attempts: 2 }));
+        let exhausted = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        assert!(matches!(
+            exhausted,
+            ReplayClaimResult::BudgetExhausted {
+                attempts: 2,
+                max_attempts: 2
+            }
+        ));
     }
 
     /// Regression: a lease below the enforced 300_000ms floor is refused
@@ -2826,7 +2934,10 @@ mod tests {
             .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
             .await
             .unwrap();
-        assert!(matches!(valid, ReplayClaimResult::Claimed { attempt: 1, .. }));
+        assert!(matches!(
+            valid,
+            ReplayClaimResult::Claimed { attempt: 1, .. }
+        ));
     }
 
     fn effective_input_marker(
@@ -2895,11 +3006,21 @@ mod tests {
             .await
             .unwrap();
         store
-            .append(&sid, 2, &effective_input_marker(tid, "call-1", serde_json::json!("a"), at + 1), at + 1)
+            .append(
+                &sid,
+                2,
+                &effective_input_marker(tid, "call-1", serde_json::json!("a"), at + 1),
+                at + 1,
+            )
             .await
             .unwrap();
         store
-            .append(&sid, 3, &effective_input_marker(tid, "call-1", serde_json::json!("b"), at + 2), at + 2)
+            .append(
+                &sid,
+                3,
+                &effective_input_marker(tid, "call-1", serde_json::json!("b"), at + 2),
+                at + 2,
+            )
             .await
             .unwrap();
 
@@ -2970,7 +3091,11 @@ mod tests {
             .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
             .await
             .unwrap();
-        let ReplayClaimResult::Claimed { attempt, claim_token } = first else {
+        let ReplayClaimResult::Claimed {
+            attempt,
+            claim_token,
+        } = first
+        else {
             panic!("expected first claim");
         };
         assert_eq!(attempt, 1);
@@ -2980,7 +3105,10 @@ mod tests {
             .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
             .await
             .unwrap();
-        assert!(matches!(held, ReplayClaimResult::LeaseHeld { attempt: 1, .. }));
+        assert!(matches!(
+            held,
+            ReplayClaimResult::LeaseHeld { attempt: 1, .. }
+        ));
 
         // Release the claim; the next claim is immediately available at attempt 1.
         assert!(matches!(
@@ -2994,7 +3122,10 @@ mod tests {
             .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
             .await
             .unwrap();
-        assert!(matches!(again, ReplayClaimResult::Claimed { attempt: 1, .. }));
+        assert!(matches!(
+            again,
+            ReplayClaimResult::Claimed { attempt: 1, .. }
+        ));
     }
 
     /// A stale or empty token never releases a live claim; the cursor stays
@@ -3039,7 +3170,10 @@ mod tests {
             .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
             .await
             .unwrap();
-        assert!(matches!(held, ReplayClaimResult::LeaseHeld { attempt: 1, .. }));
+        assert!(matches!(
+            held,
+            ReplayClaimResult::LeaseHeld { attempt: 1, .. }
+        ));
         let result = SessionEvent::ToolResult {
             turn_id: tid,
             call_id: "call-1".into(),
@@ -3172,7 +3306,10 @@ mod tests {
             .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
             .await
             .unwrap();
-        assert!(matches!(valid, ReplayClaimResult::Claimed { attempt: 1, .. }));
+        assert!(matches!(
+            valid,
+            ReplayClaimResult::Claimed { attempt: 1, .. }
+        ));
     }
 
     #[tokio::test]
@@ -3181,22 +3318,41 @@ mod tests {
         let sid = sample_session_id();
         let tid = uuid::Uuid::new_v4();
         let at = now_ms();
-        store.append(&sid, 1, &tool_requested(tid, "call-1", at), at).await.unwrap();
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+            .await
+            .unwrap();
         let result = SessionEvent::ToolResult {
             turn_id: tid,
             call_id: "call-1".into(),
-            output: ToolOutput { value: serde_json::json!({"ok": true}), metadata: Default::default() },
+            output: ToolOutput {
+                value: serde_json::json!({"ok": true}),
+                metadata: Default::default(),
+            },
             at: at + 1,
         };
 
         // First claim + answer consumes attempt 1.
         let head = store.load_head_seq(&sid).await.unwrap();
-        let claim = store.claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
-        let ReplayClaimResult::Claimed { claim_token, attempt } = claim else {
+        let claim = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        let ReplayClaimResult::Claimed {
+            claim_token,
+            attempt,
+        } = claim
+        else {
             panic!("expected claim");
         };
         assert_eq!(attempt, 1);
-        assert!(matches!(store.commit_replay_outcome(&sid, "call-1", &claim_token, &result, at + 1).await.unwrap(), ReplayOutcomeResult::Committed { seq: 2 }));
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-1", &claim_token, &result, at + 1)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::Committed { seq: 2 }
+        ));
 
         // Rewind the answer: the call is dangling again and the generation
         // bumps, but the head (MAX(seq)) is unchanged — the exact case the
@@ -3206,19 +3362,41 @@ mod tests {
 
         // Re-claim with the new generation: attempts resume at 2, not 1.
         let head = store.load_head_seq(&sid).await.unwrap();
-        let reclaim = store.claim_replay_call(&sid, head, 1, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
-        let ReplayClaimResult::Claimed { claim_token: token2, attempt: attempt2 } = reclaim else {
+        let reclaim = store
+            .claim_replay_call(&sid, head, 1, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        let ReplayClaimResult::Claimed {
+            claim_token: token2,
+            attempt: attempt2,
+        } = reclaim
+        else {
             panic!("expected reclaim");
         };
         assert_eq!(attempt2, 2);
-        assert!(matches!(store.commit_replay_outcome(&sid, "call-1", &token2, &result, at + 2).await.unwrap(), ReplayOutcomeResult::Committed { seq: 3 }));
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-1", &token2, &result, at + 2)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::Committed { seq: 3 }
+        ));
 
         // Rewind again and prove the budget survived both answers.
         assert_eq!(store.retire_from(&sid, 3).await.unwrap(), 1);
         assert_eq!(store.load_retire_generation(&sid).await.unwrap(), 2);
         let head = store.load_head_seq(&sid).await.unwrap();
-        let exhausted = store.claim_replay_call(&sid, head, 2, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
-        assert!(matches!(exhausted, ReplayClaimResult::BudgetExhausted { attempts: 2, max_attempts: 2 }));
+        let exhausted = store
+            .claim_replay_call(&sid, head, 2, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        assert!(matches!(
+            exhausted,
+            ReplayClaimResult::BudgetExhausted {
+                attempts: 2,
+                max_attempts: 2
+            }
+        ));
     }
 
     #[tokio::test]
@@ -3227,20 +3405,39 @@ mod tests {
         let sid = sample_session_id();
         let tid = uuid::Uuid::new_v4();
         let at = now_ms();
-        store.append(&sid, 1, &tool_requested(tid, "call-1", at), at).await.unwrap();
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+            .await
+            .unwrap();
 
         let head = store.load_head_seq(&sid).await.unwrap();
-        let claim = store.claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
+        let claim = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
         assert!(matches!(claim, ReplayClaimResult::Claimed { .. }));
 
         // Retire the dangling call itself. `MAX(seq)` still sees the row, so a
         // head-only claim would wrongly proceed; the generation catches it.
         assert_eq!(store.retire_from(&sid, 1).await.unwrap(), 1);
-        assert_eq!(store.load_head_seq(&sid).await.unwrap(), 1, "soft delete keeps MAX(seq)");
+        assert_eq!(
+            store.load_head_seq(&sid).await.unwrap(),
+            1,
+            "soft delete keeps MAX(seq)"
+        );
         assert_eq!(store.load_retire_generation(&sid).await.unwrap(), 1);
 
-        let stale_gen = store.claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
-        assert!(matches!(stale_gen, ReplayClaimResult::GenerationChanged { expected: 0, found: 1 }));
+        let stale_gen = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        assert!(matches!(
+            stale_gen,
+            ReplayClaimResult::GenerationChanged {
+                expected: 0,
+                found: 1
+            }
+        ));
     }
 
     /// Regression: after a commit answers a claim and the answer is then
@@ -3255,18 +3452,35 @@ mod tests {
         let sid = sample_session_id();
         let tid = uuid::Uuid::new_v4();
         let at = now_ms();
-        store.append(&sid, 1, &tool_requested(tid, "call-1", at), at).await.unwrap();
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+            .await
+            .unwrap();
         let result = SessionEvent::ToolResult {
             turn_id: tid,
             call_id: "call-1".into(),
-            output: ToolOutput { value: serde_json::json!({"ok": true}), metadata: Default::default() },
+            output: ToolOutput {
+                value: serde_json::json!({"ok": true}),
+                metadata: Default::default(),
+            },
             at: at + 1,
         };
 
         let head = store.load_head_seq(&sid).await.unwrap();
-        let claim = store.claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
-        let ReplayClaimResult::Claimed { claim_token, .. } = claim else { panic!("expected claim") };
-        assert!(matches!(store.commit_replay_outcome(&sid, "call-1", &claim_token, &result, at + 1).await.unwrap(), ReplayOutcomeResult::Committed { seq: 2 }));
+        let claim = store
+            .claim_replay_call(&sid, head, 0, "call-1", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        let ReplayClaimResult::Claimed { claim_token, .. } = claim else {
+            panic!("expected claim")
+        };
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-1", &claim_token, &result, at + 1)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::Committed { seq: 2 }
+        ));
 
         // Retire the answer: the call reads dangling again (request live,
         // outcome retired), but the cursor stays `answered` with a cleared token.
@@ -3274,10 +3488,22 @@ mod tests {
 
         // Empty token must not bypass the claim even though the stored token
         // is also empty and the call reads dangling.
-        assert!(matches!(store.commit_replay_outcome(&sid, "call-1", "", &result, at + 2).await.unwrap(), ReplayOutcomeResult::ClaimLost));
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-1", "", &result, at + 2)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::ClaimLost
+        ));
 
         // A stale real token on an `answered` cursor also fails closed.
-        assert!(matches!(store.commit_replay_outcome(&sid, "call-1", &claim_token, &result, at + 3).await.unwrap(), ReplayOutcomeResult::ClaimLost));
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-1", &claim_token, &result, at + 3)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::ClaimLost
+        ));
 
         // Nothing was appended: only the request survives; the answer stays retired.
         assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 1);
@@ -3292,18 +3518,32 @@ mod tests {
         let sid = sample_session_id();
         let tid = uuid::Uuid::new_v4();
         let at = now_ms();
-        store.append(&sid, 1, &tool_requested(tid, "call-1", at), at).await.unwrap();
-        store.append(&sid, 2, &tool_requested(tid, "call-2", at), at).await.unwrap();
+        store
+            .append(&sid, 1, &tool_requested(tid, "call-1", at), at)
+            .await
+            .unwrap();
+        store
+            .append(&sid, 2, &tool_requested(tid, "call-2", at), at)
+            .await
+            .unwrap();
         let result = SessionEvent::ToolResult {
             turn_id: tid,
             call_id: "call-2".into(),
-            output: ToolOutput { value: serde_json::json!({"ok": true}), metadata: Default::default() },
+            output: ToolOutput {
+                value: serde_json::json!({"ok": true}),
+                metadata: Default::default(),
+            },
             at: at + 1,
         };
 
         let head = store.load_head_seq(&sid).await.unwrap();
-        let claim = store.claim_replay_call(&sid, head, 0, "call-2", 2, REPLAY_LEASE_TTL_MS).await.unwrap();
-        let ReplayClaimResult::Claimed { claim_token, .. } = claim else { panic!("expected claim") };
+        let claim = store
+            .claim_replay_call(&sid, head, 0, "call-2", 2, REPLAY_LEASE_TTL_MS)
+            .await
+            .unwrap();
+        let ReplayClaimResult::Claimed { claim_token, .. } = claim else {
+            panic!("expected claim")
+        };
 
         // Retire only call-1 (seq 1): call-2 stays live and dangling, but the
         // generation bumps, invalidating the in-flight claim's generation.
@@ -3312,7 +3552,13 @@ mod tests {
 
         // The cursor is still active with a matching token, but its stored
         // generation is stale: the commit must fail closed and append nothing.
-        assert!(matches!(store.commit_replay_outcome(&sid, "call-2", &claim_token, &result, at + 1).await.unwrap(), ReplayOutcomeResult::ClaimLost));
+        assert!(matches!(
+            store
+                .commit_replay_outcome(&sid, "call-2", &claim_token, &result, at + 1)
+                .await
+                .unwrap(),
+            ReplayOutcomeResult::ClaimLost
+        ));
 
         // No outcome appended: call-2's request remains the last live event.
         assert_eq!(store.load_head_seq(&sid).await.unwrap(), 2);

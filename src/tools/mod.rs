@@ -107,7 +107,7 @@ pub mod service;
 pub mod turn_context;
 pub use scoped::{ScopedToolService, ToolDefinitionRewriter};
 
-pub use context::{ToolContext, ToolContextHandle, new_tool_context_handle};
+pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
 pub use descriptor::{
     DescriptorError, ImplementationContract, ReplayContractFingerprint, ReplayPolicy,
     ReplayPolicyLookup, ToolCallIdentity, ToolCapabilityDescriptor, ToolDescriptorLookup, ToolKind,

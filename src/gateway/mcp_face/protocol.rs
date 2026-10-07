@@ -55,6 +55,7 @@ pub fn requires_session(method: &str) -> bool {
 }
 
 /// What one message produced.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Outcome {
     /// A response to send. `new_session` is `Some` exactly when this was a

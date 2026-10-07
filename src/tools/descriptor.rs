@@ -137,8 +137,8 @@ impl ReplayContractFingerprint {
         {
             return Err("fingerprint digest must use lowercase hex".to_string());
         }
-        let bytes = hex::decode(hex_digest)
-            .map_err(|_| "fingerprint digest is not hex".to_string())?;
+        let bytes =
+            hex::decode(hex_digest).map_err(|_| "fingerprint digest is not hex".to_string())?;
         let mut digest = [0u8; REPLAY_CONTRACT_DIGEST_LEN];
         digest.copy_from_slice(&bytes);
         Ok(Self { version, digest })
@@ -402,7 +402,10 @@ impl ToolCapabilityDescriptor {
             return Err(DescriptorError::InvalidRevision(self.revision));
         }
         if self.replay_policy == ReplayPolicy::Safe
-            && self.implementation_contract.as_ref().is_none_or(|contract| !contract.is_valid())
+            && self
+                .implementation_contract
+                .as_ref()
+                .is_none_or(|contract| !contract.is_valid())
         {
             return Err(DescriptorError::SafeReplayRequiresImplementationContract {
                 name: self.name.clone(),
@@ -501,14 +504,10 @@ fn push_len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
 fn canonicalize_json(value: &serde_json::Value, out: &mut Vec<u8>) {
     match value {
         serde_json::Value::Null => out.extend_from_slice(b"null"),
-        serde_json::Value::Bool(value) => out.extend_from_slice(if *value {
-            b"true"
-        } else {
-            b"false"
-        }),
-        serde_json::Value::Number(value) => {
-            out.extend_from_slice(value.to_string().as_bytes())
+        serde_json::Value::Bool(value) => {
+            out.extend_from_slice(if *value { b"true" } else { b"false" })
         }
+        serde_json::Value::Number(value) => out.extend_from_slice(value.to_string().as_bytes()),
         serde_json::Value::String(value) => {
             out.extend_from_slice(&serde_json::to_vec(value).expect("JSON strings serialize"))
         }
@@ -652,7 +651,9 @@ mod tests {
     fn fingerprint_parser_rejects_unknown_version_and_noncanonical_hex() {
         let digest = "0a".repeat(REPLAY_CONTRACT_DIGEST_LEN * 2 / 2);
         assert!(ReplayContractFingerprint::parse(&format!("v2:{digest}")).is_err());
-        assert!(ReplayContractFingerprint::parse(&format!("v1:{}", digest.to_uppercase())).is_err());
+        assert!(
+            ReplayContractFingerprint::parse(&format!("v1:{}", digest.to_uppercase())).is_err()
+        );
     }
 
     #[test]

@@ -43,7 +43,7 @@ use tokio::process::Command;
 use crate::utils::no_window::NoWindow;
 
 use super::engine::Engine;
-use super::error::{BrowserError, engine_unavailable};
+use super::error::{engine_unavailable, BrowserError};
 use super::profile::{BrowserRuntimeConfig, BrowserType};
 
 /// How long the `--dry-run` probe may take.

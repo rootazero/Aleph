@@ -954,10 +954,8 @@ async fn execute_with_cancel_effective_is_none_when_hook_denies() {
         HookKind::Interceptor,
         "echo 'deny: hard policy stop'",
     );
-    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new()).with_hook_executor(
-        Arc::new(HookExecutor::new(vec![deny])),
-        "test-session",
-    );
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_hook_executor(Arc::new(HookExecutor::new(vec![deny])), "test-session");
 
     let (result, effective) = svc
         .execute_with_cancel_effective(

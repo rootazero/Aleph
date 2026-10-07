@@ -61,9 +61,7 @@ pub enum DataUrlError {
 /// the URL omits one) is `application/octet-stream`.
 pub fn decode(s: &str) -> Result<(String, Vec<u8>), DataUrlError> {
     const PREFIX: &str = "data:";
-    let rest = s
-        .strip_prefix(PREFIX)
-        .ok_or(DataUrlError::MissingPrefix)?;
+    let rest = s.strip_prefix(PREFIX).ok_or(DataUrlError::MissingPrefix)?;
     let (meta, payload) = rest.split_once(',').ok_or(DataUrlError::MissingComma)?;
 
     let mut mime = "application/octet-stream".to_string();

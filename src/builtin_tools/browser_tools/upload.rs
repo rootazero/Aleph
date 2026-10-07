@@ -63,7 +63,8 @@ impl BrowserUploadTool {
 #[async_trait]
 impl AlephTool for BrowserUploadTool {
     const NAME: &'static str = "browser_upload";
-    const DESCRIPTION: &'static str = "Attach one or more local files to a file input (provide ref_id from a snapshot for the \
+    const DESCRIPTION: &'static str =
+        "Attach one or more local files to a file input (provide ref_id from a snapshot for the \
          existing-session profile)";
     type Args = BrowserUploadArgs;
     type Output = BrowserUploadOutput;

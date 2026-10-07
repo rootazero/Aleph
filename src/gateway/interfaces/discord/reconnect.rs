@@ -391,10 +391,7 @@ impl ReconnectCoordinator {
     /// backoff counter resets and the cooldown stamp is recorded; on
     /// failure the backoff advances.
     pub fn plan(&self, is_success: bool) -> ReconnectDecision {
-        let mut backoff = self
-            .backoff
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut backoff = self.backoff.lock().unwrap_or_else(|e| e.into_inner());
         let decision = if is_success {
             backoff.reset();
             // Check cooldown BEFORE stamping so a fresh coordinator (no
@@ -419,7 +416,11 @@ impl ReconnectCoordinator {
         // see the retry timeline in the security audit trail.
         audit_reconnect_event(
             None,
-            if is_success { "reconnect_proceed" } else { "reconnect_backoff" },
+            if is_success {
+                "reconnect_proceed"
+            } else {
+                "reconnect_backoff"
+            },
             "discord",
             match &decision {
                 ReconnectDecision::Backoff { retry_after } => Some(*retry_after),
