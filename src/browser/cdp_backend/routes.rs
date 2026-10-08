@@ -9,9 +9,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use aleph_cdp::methods::fetch;
-use aleph_cdp::{CdpConnection, EventStream, SessionId};
+use aleph_cdp::{CdpConnection, SessionId};
 
 use crate::browser::error::BrowserError;
+use crate::browser::live::{FetchFeed, LiveProfileOwner};
 use crate::browser::network_policy::BrowserSsrfGuard;
 
 use super::{map_cdp_err, CdpBackend};
@@ -371,25 +372,22 @@ impl RouteRegistry {
 const ANSWER_FAILURE_LIMIT: u32 = 3;
 
 /// Per-tab consumer of `Fetch.requestPaused`: decide in strict order — SSRF
-/// first, rules second (spec §3) — and answer. `events` was subscribed by the
-/// caller BEFORE `Fetch.enable` was sent (a connection's broadcast starts at
-/// subscription, so subscribing inside the task would open a gap).
+/// first, rules second (spec §3) — and answer. `feed` is this tab's
+/// `Fetch.requestPaused` lane of the profile's one live owner, registered by
+/// the caller BEFORE `Fetch.enable` was sent (so an event caused by the enable
+/// finds its slot). The loop never subscribes to the raw event stream: the
+/// owner's dispatcher is the connection's single consumer.
 ///
 /// Exit paths, all clean: answers fail [`ANSWER_FAILURE_LIMIT`] times in a
-/// row, or the event stream closes. The FIRST is the real detector and covers
-/// both deaths named in Review Focus #2 — a dead session rejects every
-/// answer, and a dead ENGINE fails every answer too. The second is nominal,
-/// never observed in practice: the broadcast's sender lives in the
-/// connection's `Shared`, which this loop's own `conn` clone keeps alive, so
-/// `EventStream::next() == None` is unreachable here (recording.rs's
-/// `engine_gone` watch names the same fact from the other side — the close
-/// watch, not the event stream, is the only socket-death signal a subscriber
-/// can observe). Either way the
-/// registry entry is removed on the way out, so a later `ensure` re-arms
+/// row, or the feed closes (the owner dropped this tab's slot). The FIRST is
+/// the real detector and covers both deaths named in Review Focus #2 — a dead
+/// session rejects every answer, and a dead ENGINE fails every answer too.
+/// Either way the feed slot is released and the registry entry is removed on the way out, so a later `ensure` re-arms
 /// instead of mistaking a corpse for a running loop.
 async fn run_loop(
     conn: CdpConnection,
-    mut events: EventStream,
+    owner: Arc<LiveProfileOwner>,
+    mut feed: FetchFeed,
     session: SessionId,
     profile: String,
     tab_id: String,
@@ -398,11 +396,11 @@ async fn run_loop(
 ) {
     let mut last_lagged = 0u64;
     let mut answer_failures = 0u32;
-    while let Some(ev) = events.next().await {
-        let lagged = events.lagged();
+    while let Some(ev) = feed.rx.recv().await {
+        let lagged = feed.dropped.load(Ordering::Relaxed);
         if lagged > last_lagged {
             // Deliberate deviation from spec §3's "对积压 requestId 批量 continue
-            // 排干": a lagged broadcast has already dropped the event BODIES, so
+            // 排干": the owner's bounded feed dropped the event when full, so
             // the requestIds are unknowable and there is nothing to drain. The
             // honest behaviour is the audit trail; the dropped requests end on
             // the engine's own timeout.
@@ -413,9 +411,6 @@ async fn run_loop(
                  the engine's own timeout ends them"
             );
             last_lagged = lagged;
-        }
-        if ev.method != "Fetch.requestPaused" || ev.session.as_ref() != Some(&session) {
-            continue;
         }
         let paused = match fetch::request_paused(&ev.params) {
             Ok(p) => p,
@@ -537,6 +532,7 @@ async fn run_loop(
             break;
         }
     }
+    owner.unregister_fetch(&tab_id);
     registry.take_loop(&profile, &tab_id);
 }
 
@@ -575,13 +571,16 @@ impl CdpBackend {
             return Ok(());
         }
         let handle = self.handle().await?;
-        let events = handle.conn.events();
-        fetch::enable(&handle.conn, Some(session))
-            .await
-            .map_err(|e| map_cdp_err(self.engine(), "Fetch.enable", e))?;
+        let owner = handle.live_owner();
+        let feed = owner.register_fetch(tab_id, session);
+        if let Err(e) = fetch::enable(&handle.conn, Some(session)).await {
+            owner.unregister_fetch(tab_id);
+            return Err(map_cdp_err(self.engine(), "Fetch.enable", e));
+        }
         let task = tokio::spawn(run_loop(
             handle.conn.clone(),
-            events,
+            owner,
+            feed,
             session.clone(),
             profile.clone(),
             tab_id.to_string(),
@@ -619,6 +618,9 @@ impl CdpBackend {
             }
         }
         abort.abort();
+        if let Ok(handle) = self.handle().await {
+            handle.live_owner().unregister_fetch(tab_id);
+        }
     }
 
     /// `browser_network{action:"mock_add"}`: register the rule, then ARM
@@ -812,10 +814,21 @@ mod tests {
         registry: &Arc<RouteRegistry>,
         guard: Arc<crate::browser::network_policy::BrowserSsrfGuard>,
     ) -> tokio::task::JoinHandle<()> {
-        let events = conn.events();
+        // One owner per test connection, as in production: it takes the
+        // connection's event subscription here, before the test pushes events.
+        let resolver: crate::browser::live::SessionResolver =
+            Arc::new(|tab| Box::pin(async move { Err(BrowserError::TabNotFound(tab)) }));
+        let owner = LiveProfileOwner::new(
+            "p",
+            crate::browser::engine::Engine::Chromium,
+            conn.clone(),
+            resolver,
+        );
+        let feed = owner.register_fetch("t1", &SessionId("S1".to_string()));
         let handle = tokio::spawn(run_loop(
             conn.clone(),
-            events,
+            owner,
+            feed,
             SessionId("S1".to_string()),
             "p".to_string(),
             "t1".to_string(),
