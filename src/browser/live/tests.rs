@@ -14,7 +14,7 @@ use super::LiveProfileOwner;
 use crate::browser::engine::{Engine, EngineHandle, TabEntry};
 use crate::browser::error::BrowserError;
 
-fn binding(target: &str) -> BrowserTargetBinding {
+pub(super) fn binding(target: &str) -> BrowserTargetBinding {
     BrowserTargetBinding {
         profile: "p".to_string(),
         browser_session_id: "bs".to_string(),
@@ -26,7 +26,7 @@ fn binding(target: &str) -> BrowserTargetBinding {
 /// in its tab table; the owner is the one the production path hands out
 /// (`EngineHandle::live_owner`), so "one connection per profile" is asserted
 /// against the real construction, not a hand-built owner.
-async fn fixture() -> (FakeCdpServer, Arc<LiveProfileOwner>, Arc<EngineHandle>) {
+pub(super) async fn fixture() -> (FakeCdpServer, Arc<LiveProfileOwner>, Arc<EngineHandle>) {
     fixture_with(Responder::Reply(json!({}))).await
 }
 
@@ -796,4 +796,21 @@ async fn a_lagging_dispatcher_counts_what_it_missed() {
         "the dispatcher to report its lag",
     )
     .await;
+}
+
+#[tokio::test]
+async fn human_input_waits_on_the_mutation_gate_and_times_out_with_a_clear_error() {
+    use aleph_protocol::browser_live::HumanInputEvent;
+    let (_server, owner, _handle) = fixture().await;
+    // An in-flight agent/open mutation holds the global gate.
+    let held = owner.mutations.lock().await;
+    let err = owner
+        .dispatch_human_input("T1", HumanInputEvent::Text { text: "x".into() })
+        .await
+        .expect_err("human CDP must not run concurrently with a held mutation");
+    assert!(
+        err.to_string().contains("delayed over 250ms"),
+        "unexpected error: {err}"
+    );
+    drop(held);
 }

@@ -4,6 +4,7 @@
 //! to registered handlers.
 
 mod artifact_route;
+mod browser_viewer_route;
 mod byte_range;
 mod canvas_asset_route;
 pub mod connection;
@@ -466,6 +467,12 @@ pub struct GatewayServer {
     /// SPA fallback. The same `Arc` is process-global via
     /// `mcp_face::install_mcp_face` so lifecycle can broadcast through it.
     mcp_face: Option<Arc<crate::gateway::mcp_face::McpFace>>,
+    /// The browser viewer backend + its grant store. When absent the
+    /// `/viewer/browser/...` routes are not mounted rather than mounted open.
+    browser_viewer: Option<(
+        crate::browser::live::grant::ViewerGrantStore,
+        Arc<dyn crate::browser::live::viewer_backend::ViewerBackend>,
+    )>,
     /// See [`GatewaySharedState::node_registry`]. `build_router` clones this Arc
     /// into the shared state so both point at the same registry.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
@@ -535,6 +542,7 @@ impl GatewayServer {
             security_store: None,
             canvas_store: None,
             mcp_face: None,
+            browser_viewer: None,
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
@@ -597,6 +605,7 @@ impl GatewayServer {
             security_store: None,
             canvas_store: None,
             mcp_face: None,
+            browser_viewer: None,
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
@@ -727,6 +736,32 @@ impl GatewayServer {
     /// same `Arc` that `mcp_face::install_mcp_face` holds.
     pub fn set_mcp_face(&mut self, face: Arc<crate::gateway::mcp_face::McpFace>) {
         self.mcp_face = Some(face);
+    }
+
+    /// Install the browser viewer backend (mounts `/viewer/browser/...` in
+    /// `build_router`). Creates the grant store the route will use; pass the
+    /// backend that owns the browser's `LiveProfileOwner` handle. Without
+    /// this the routes are simply absent — a viewer capability flow cannot
+    /// half-exist.
+    #[allow(dead_code)] // consumed by the Task 6 boot wiring
+    pub(crate) fn set_browser_viewer_backend(
+        &mut self,
+        backend: Arc<dyn crate::browser::live::viewer_backend::ViewerBackend>,
+    ) {
+        self.browser_viewer = Some((
+            crate::browser::live::grant::ViewerGrantStore::default(),
+            backend,
+        ));
+    }
+
+    /// The grant store behind `/viewer/browser/...`, when the backend is
+    /// installed. The issuer-side RPC surface (grant mint/revoke) will take
+    /// this handle; the route's exchange/auth paths already use it.
+    #[allow(dead_code)] // consumed by the Task 6 issuer RPC surface
+    pub(crate) fn browser_viewer_grants(
+        &self,
+    ) -> Option<crate::browser::live::grant::ViewerGrantStore> {
+        self.browser_viewer.as_ref().map(|(store, _)| store.clone())
     }
 
     /// "Is an operator surface connected?" for the MCP face's attendance
@@ -957,6 +992,24 @@ impl GatewayServer {
 
         if let Some(canvas_assets) = canvas_assets {
             router = router.merge(canvas_assets);
+        }
+
+        // r4 capability-limited browser viewer (`/viewer/browser/...`). Its
+        // own transport / origin guards, like the artifact and canvas routes;
+        // mounted only when boot installed the backend (fail-closed: absent,
+        // never open).
+        if let Some((store, backend)) = &self.browser_viewer {
+            router = router.merge(browser_viewer_route::browser_viewer_routes(Arc::new(
+                browser_viewer_route::BrowserViewerRouteState::new(
+                    store.clone(),
+                    backend.clone(),
+                    shared.origin_policy.clone(),
+                    shared.trusted_proxy_enabled,
+                    shared.trusted_proxy_ips.clone(),
+                    shared.allow_insecure_remote,
+                    shared.tls_enabled,
+                ),
+            )));
         }
 
         // MCP server face (`/mcp`, spec §3.7). A real route so the SPA

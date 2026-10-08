@@ -15,8 +15,10 @@
 //! (after write) when its tap accepted the frame, otherwise by the owner.
 
 pub(crate) mod control;
+pub(crate) mod grant;
 pub(crate) mod session;
 pub mod stream_hub;
+pub(crate) mod viewer_backend;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -29,8 +31,8 @@ use aleph_cdp::methods::screencast::{self, ScreencastFormat};
 use aleph_cdp::methods::target;
 use aleph_cdp::{CdpConnection, CdpError, CdpEvent, SessionId, TargetId};
 use aleph_protocol::browser_live::{
-    BrowserLiveState, BrowserTargetBinding, Controller, InterventionEnd, ViewerBinding,
-    ViewportCssPx,
+    BrowserLiveState, BrowserTargetBinding, Controller, HumanInputEvent, InterventionEnd,
+    ViewerBinding, ViewportCssPx,
 };
 use control::{AgentPermit, InterventionSink, TargetControl};
 use tokio::sync::mpsc;
@@ -93,7 +95,8 @@ struct State {
     destroyed: std::collections::HashSet<String>,
     streams: HashMap<String, TargetStream>,
     fetch: HashMap<String, FetchSlot>,
-    // Closed controls stay as tombstones until this connection owner dies.
+    // Closed controls stay as tombstones (rejecting agent verbs on that target)
+    // until `bind_control` replaces one on a re-attach, or the owner dies.
     controls: HashMap<String, Arc<TargetControl>>,
 }
 
@@ -276,6 +279,7 @@ impl LiveProfileOwner {
     /// Install an internal control capability for an ALREADY attached exact
     /// target. No auth/grant is issued here. Epochs and browser-session identity
     /// come from this one owner, not a client or profile active-tab pointer.
+    #[allow(dead_code)] // consumed by the Task 6 boot wiring (LiveViewerBackend)
     pub(crate) async fn bind_control(
         &self,
         resource_id: &str,
@@ -296,6 +300,20 @@ impl LiveProfileOwner {
                 "live control binding does not name this browser owner".into(),
             ));
         }
+        // Controls are inserted only here, under `mutations`, and only ever go
+        // live -> dead. Probe liveness BEFORE taking the owner map lock (never
+        // lock a control while holding it); a dead control is a tombstone that
+        // a re-attach after `close_target` may replace, a live one may not.
+        let existing = self
+            .state()
+            .controls
+            .get(&binding.target.target_id)
+            .cloned();
+        if existing.is_some_and(|c| c.is_live()) {
+            return Err(BrowserError::ActionFailed(
+                "target already has a control binding; explicit revoke/rebind required".into(),
+            ));
+        }
         let mut st = self.state();
         if st.ended || st.destroyed.contains(&binding.target.target_id) {
             return Err(BrowserError::TabNotFound(binding.target.target_id));
@@ -305,11 +323,6 @@ impl LiveProfileOwner {
             .get(&binding.target.target_id)
             .filter(|s| s.attached)
             .ok_or_else(|| BrowserError::TabNotFound(binding.target.target_id.clone()))?;
-        if st.controls.contains_key(&binding.target.target_id) {
-            return Err(BrowserError::ActionFailed(
-                "target already has a control binding; explicit revoke/rebind required".into(),
-            ));
-        }
         let control = TargetControl::new(
             BrowserLiveState {
                 resource_id: resource_id.to_string(),
@@ -400,7 +413,6 @@ impl LiveProfileOwner {
     /// Bind a viewer to a target: ensures the target's one engine screencast.
     /// `browser_session_id` is carried by the binding but not validated here —
     /// that is the gateway's job (Task 3).
-    #[allow(dead_code)] // consumed by the Task 3 gateway
     pub(crate) async fn attach_target(
         self: &Arc<Self>,
         binding: BrowserTargetBinding,
@@ -435,7 +447,6 @@ impl LiveProfileOwner {
 
     /// Drop the viewer binding. Idempotent. A live recording keeps the engine
     /// screencast running; without one the screencast stops.
-    #[allow(dead_code)] // consumed by the Task 3 gateway
     pub(crate) async fn close_target(&self, target_id: &str) -> Result<(), BrowserError> {
         let _life = self.lifecycle.lock().await;
         self.end_controls(Some(target_id), InterventionEnd::TargetClosed);
@@ -466,7 +477,6 @@ impl LiveProfileOwner {
 
     /// Newest-frame receiver for an attached target. Dropping it detaches only
     /// this viewer.
-    #[allow(dead_code)] // consumed by the Task 3 gateway
     pub(crate) fn subscribe_latest(
         &self,
         target_id: &str,
@@ -475,6 +485,197 @@ impl LiveProfileOwner {
             Some(stream) if stream.attached => Ok(stream.hub.subscribe()),
             _ => Err(BrowserError::TabNotFound(target_id.to_string())),
         }
+    }
+
+    /// Dispatch one admitted human input event to a target. Lease, epoch, and
+    /// permission validation happen in `TargetControl::queue_input`/`dispatch`
+    /// BEFORE the transport reaches this; navigation URLs are SSRF-checked in
+    /// `viewer_backend` before that. This is the mechanical CDP mapping only —
+    /// the viewer transport itself never touches the connection (R1/R4).
+    ///
+    /// A human is not an agent, so this does NOT take an `AgentPermit` (the
+    /// control plane would rightly refuse one while a Human holds control).
+    /// It does take the owner's global `mutations` gate, bounded to 250ms like
+    /// `mutate`, so the resolver and CDP call never run concurrently with an
+    /// agent/open/global mutation on the same connection.
+    pub(crate) async fn dispatch_human_input(
+        &self,
+        target_id: &str,
+        event: HumanInputEvent,
+    ) -> Result<(), BrowserError> {
+        let _mutation = tokio::time::timeout(Duration::from_millis(250), self.mutations.lock())
+            .await
+            .map_err(|_| {
+                BrowserError::ActionFailed("browser mutation permit delayed over 250ms".into())
+            })?;
+        if self.state().ended || self.conn.closed().borrow().is_some() {
+            return Err(BrowserError::ActionFailed(
+                "browser live owner is closed".into(),
+            ));
+        }
+        self.dispatch_human_input_gated(target_id, event).await
+    }
+
+    /// CDP mapping; the caller holds the `mutations` gate.
+    async fn dispatch_human_input_gated(
+        &self,
+        target_id: &str,
+        event: HumanInputEvent,
+    ) -> Result<(), BrowserError> {
+        use aleph_cdp::methods::input::{
+            self, KeyEvent, KeyType, MouseButton, MouseEvent, MouseType,
+        };
+        use aleph_cdp::methods::page;
+        use aleph_protocol::browser_live::PointerButton;
+
+        let session = (self.resolver)(target_id.to_string()).await?;
+        let session = Some(&session);
+        let result = match event {
+            HumanInputEvent::PointerMove {
+                x_css_px,
+                y_css_px,
+                modifiers,
+            } => {
+                input::dispatch_mouse_event(
+                    &self.conn,
+                    session,
+                    &MouseEvent {
+                        r#type: MouseType::Moved,
+                        x: x_css_px,
+                        y: y_css_px,
+                        button: MouseButton::None,
+                        click_count: 0,
+                        modifiers: u32::from(modifiers),
+                        delta_x: 0.0,
+                        delta_y: 0.0,
+                    },
+                )
+                .await
+            }
+            HumanInputEvent::PointerDown {
+                x_css_px,
+                y_css_px,
+                button,
+                click_count,
+                modifiers,
+            } => {
+                let button = match button {
+                    PointerButton::Left => MouseButton::Left,
+                    PointerButton::Right => MouseButton::Right,
+                    PointerButton::Middle => MouseButton::Middle,
+                };
+                input::dispatch_mouse_event(
+                    &self.conn,
+                    session,
+                    &MouseEvent {
+                        r#type: MouseType::Pressed,
+                        x: x_css_px,
+                        y: y_css_px,
+                        button,
+                        click_count: u32::from(click_count),
+                        modifiers: u32::from(modifiers),
+                        delta_x: 0.0,
+                        delta_y: 0.0,
+                    },
+                )
+                .await
+            }
+            HumanInputEvent::PointerUp {
+                x_css_px,
+                y_css_px,
+                button,
+                click_count,
+                modifiers,
+            } => {
+                let button = match button {
+                    PointerButton::Left => MouseButton::Left,
+                    PointerButton::Right => MouseButton::Right,
+                    PointerButton::Middle => MouseButton::Middle,
+                };
+                input::dispatch_mouse_event(
+                    &self.conn,
+                    session,
+                    &MouseEvent {
+                        r#type: MouseType::Released,
+                        x: x_css_px,
+                        y: y_css_px,
+                        button,
+                        click_count: u32::from(click_count),
+                        modifiers: u32::from(modifiers),
+                        delta_x: 0.0,
+                        delta_y: 0.0,
+                    },
+                )
+                .await
+            }
+            HumanInputEvent::Wheel {
+                x_css_px,
+                y_css_px,
+                delta_x,
+                delta_y,
+                modifiers,
+            } => {
+                input::dispatch_mouse_event(
+                    &self.conn,
+                    session,
+                    &MouseEvent {
+                        r#type: MouseType::Wheel,
+                        x: x_css_px,
+                        y: y_css_px,
+                        button: MouseButton::None,
+                        click_count: 0,
+                        modifiers: u32::from(modifiers),
+                        delta_x,
+                        delta_y,
+                    },
+                )
+                .await
+            }
+            HumanInputEvent::KeyDown {
+                key,
+                code,
+                text,
+                modifiers,
+            } => {
+                input::dispatch_key_event(
+                    &self.conn,
+                    session,
+                    &KeyEvent {
+                        r#type: KeyType::KeyDown,
+                        key,
+                        code,
+                        text,
+                        windows_virtual_key_code: None,
+                        modifiers: u32::from(modifiers),
+                    },
+                )
+                .await
+            }
+            HumanInputEvent::KeyUp {
+                key,
+                code,
+                modifiers,
+            } => {
+                input::dispatch_key_event(
+                    &self.conn,
+                    session,
+                    &KeyEvent {
+                        r#type: KeyType::KeyUp,
+                        key,
+                        code,
+                        text: None,
+                        windows_virtual_key_code: None,
+                        modifiers: u32::from(modifiers),
+                    },
+                )
+                .await
+            }
+            HumanInputEvent::Text { text } => input::insert_text(&self.conn, session, &text).await,
+            HumanInputEvent::Navigate { url } => {
+                page::navigate(&self.conn, session, &url).await.map(|_| ())
+            }
+        };
+        result.map_err(|e| map_cdp_err(self.engine, "viewer input", e))
     }
 
     // ---- recording observer ----
