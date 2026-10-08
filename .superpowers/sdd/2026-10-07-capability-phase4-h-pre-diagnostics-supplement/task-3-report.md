@@ -130,3 +130,71 @@ This commit does NOT touch:
 - `Cargo.toml`
 - `qa/`, `docs/` (the 4 untracked `docs/superpowers/{plans,prompts}/*` files are not in the staged tree)
 - `.superpowers/` (gitignored; this report lives at the path above)
+
+## 11. Review fixes (post-commit, unstaged at time of writing)
+
+Controller review of commit `c6dba208f` flagged three Task-3 review issues. All fixes are minimal, scope-locked to the two `Task3` source files, and accompanied by tests that pin the contract.
+
+### Review findings
+
+1. **`dispatchable.rs:485` wrong `include_str!` path.** The new test `disabled_diagnostics_registration_is_guarded_by_constructor_optional` used `include_str!("../builder/constructor/mod.rs")` (an artifact of an earlier review pass that prepended `..`); the correct relative path from `src/executor/builtin_registry/dispatchable.rs` is `builder/constructor/mod.rs` (matches the pre-existing `include_str!` at line 82). **Fix**: drop the `..` prefix.
+2. **`dispatchable.rs` test `disabled_diagnostics_dispatch_arm_is_gated_by_diagnostics_control_some` was fragile.** The original body delimiter was `find("\"")` after a 4 KiB cap, which (a) mistook the closing quote of the arm's interior error-message string for the next arm's opening quote, truncating the asserted body to ~3 lines, and (b) the 4 KiB window would still be tight for future arm bodies. **Fix**: bound the arm body to the matching `}` of the `Box::pin(async move { ... })` block, using a new module-private brace-walker `find_matching_close(src, start) -> Option<usize>` (added at line 237) that respects nested braces and Rust string literals. The walker is intentionally generic; future arm-body tests can reuse it.
+3. **`dangerous_tools.rs` new test `gateway_allow_does_not_bypass_handler_local_three_part_gate` panicked on construction.** The test created `ProjectionHost` / `DiagnosticControl` outside any Tokio runtime context — both call `tokio::spawn` in their constructors — so the very first construction line panicked with "there is no reactor running" before any assertion could run. **Fix**: move the host + control construction and the pre/post-state reads inside `rt.block_on(async { ... })` blocks; the handler loop and post-state reads already were. The pattern matches `src/security/ssrf/fetch.rs::bypass_fetch_rejects_file_scheme` (sync `#[test]` + manual `Runtime` + `block_on`).
+
+### Exact test output (cargo-guard, serial)
+
+Run command: `python3 .superpowers/sdd/2026-10-07-capability-phase4-h-pre-runtime-mount/cargo-guard.py test --package alephcore --lib <filter> --no-fail-fast`
+
+`dispatchable` (after fix 1 + fix 2):
+```
+running 9 tests
+test executor::builtin_registry::dispatchable::tests::disabled_diagnostics_registration_is_guarded_by_constructor_optional ... ok
+test executor::builtin_registry::dispatchable::tests::the_scanner_strips_the_test_module_on_a_crlf_checkout ... ok
+test executor::builtin_registry::dispatchable::tests::the_scanner_ignores_comments_and_test_modules ... ok
+test executor::builtin_registry::dispatchable::tests::disabled_diagnostics_has_no_unconditional_catalog_definition ... ok
+test executor::builtin_registry::dispatchable::tests::disabled_diagnostics_dispatch_arm_is_gated_by_diagnostics_control_some ... ok
+test executor::builtin_registry::dispatchable::tests::the_census_sees_constructor_conditional_registration ... ok
+test executor::builtin_registry::dispatchable::tests::the_census_sees_both_registration_shapes ... ok
+test executor::builtin_registry::dispatchable::tests::enabled_diagnostics_is_in_census ... ok
+test executor::builtin_registry::dispatchable::tests::every_advertised_builtin_tool_is_dispatchable ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 20834 filtered out; finished in 0.03s
+CARGO_EXIT: 0
+```
+
+`dangerous_tools` (after fix 3):
+```
+running 12 tests
+test security::dangerous_tools::tests::category_prefix_is_caught ... ok
+test security::dangerous_tools::tests::allows_read_only_and_safe_tools ... ok
+test security::dangerous_tools::tests::diagnostics_is_not_a_gateway_surface_bypass ... ok
+test security::dangerous_tools::tests::flags_rce_and_mutation_and_control_plane ... ok
+test security::dangerous_tools::tests::gateway_surface_denies_dangerous_without_env ... ok
+test security::dangerous_tools::tests::gateway_surface_denies_argument_level_asks_it_cannot_card ... ok
+test security::dangerous_tools::tests::gateway_allow_does_not_bypass_handler_local_three_part_gate ... ok
+test security::dangerous_tools::tests::gateway_surface_denies_confirmation_gated_tools ... ok
+test security::dangerous_tools::tests::gateway_surface_denies_file_ops ... ok
+test security::dangerous_tools::tests::gateway_surface_respects_explicit_allow ... ok
+test security::dangerous_tools::tests::diagnostics_is_in_dangerous_tools_and_is_a_real_tool ... ok
+test security::dangerous_tools::tests::every_entry_names_a_real_tool ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 20831 filtered out; finished in 0.02s
+CARGO_EXIT: 0
+```
+
+### Test contract verification (per task brief §3)
+
+- `gateway_allow_does_not_bypass_handler_local_three_part_gate`: calls `execute_capability_projection_diagnostics` three times (`bump_runtime` / `dispose_runtime` / `close`); sets `ALEPH_GATEWAY_TOOLS_ALLOW=capability_projection_diagnostics` and asserts all three returns are `Err(DiagnosticToolError::Denied { reason })` with the reason naming one of `operator` / `loopback` / `connection`; asserts `tree.is_disposed(LifetimeScope::Runtime) == false` and `status_before.lifecycle == status_after.lifecycle` after the loop; env is restored by both a Drop guard (`RestoreEnv(prev)`) and an explicit `remove_var` at the end.
+- `disabled_diagnostics_registration_is_guarded_by_constructor_optional`: reads `builder/constructor/mod.rs`, locates the `if let Some(ref dc) = config.diagnostics_control` block by `find_matching_close`, scans for every `capability_projection_diagnostics` occurrence outside that block, and fails with the byte offsets if any are found.
+- `disabled_diagnostics_dispatch_arm_is_gated_by_diagnostics_control_some`: reads `registry/tool_registry_impl.rs`, locates the `"capability_projection_diagnostics" =>` arm, bounds the body to the matching `}` of the `Box::pin(async move { ... })` block, and asserts the body contains `self.diagnostics_control`, `ok_or_else`, and `"no DiagnosticControl configured"`. Robust to body length, multi-line strings, and interior braces.
+
+### Provider / MCP integration — cannot verify (Task4 / Task5)
+
+The new tests exercise the handler under a fresh `Runtime` + empty `ToolHandlerRegistry` + empty `OwnershipTree` and a constructed `DiagnosticControl` / `ProjectionHost`. The end-to-end paths below are intentionally **out of scope for Task 3** and were not exercised by this commit:
+
+- `ALEPH_CAPABILITY_DIAGNOSTICS=1` startup wiring that populates `BuiltinToolConfig::diagnostics_control` — **Task 4** owns the env → `Some(Arc::clone(&installed_diagnostic_control))` plumbing.
+- Provider-channel handoff (`tools/list` → `tools/invoke` over WS / stdio) — **Task 4** is the producer side of the field the dispatch arm reads.
+- MCP-server integration (the tool's wire schema under the MCP `tools/list` / `tools/call` surface) — **Task 5** owns the real-binary QA / MCP integration.
+- Live `close` timeout under load, cross-runtime / multi-process behavior — **Task 5+**.
+
+The brief's "do not modify that module" rule for `capability_projection_diagnostics::tests` was honored: no changes inside `src/builtin_tools/capability_projection_diagnostics.rs`. The new test in `dangerous_tools.rs` is a one-off black-box that constructs its own authority pair and never touches that module's existing `#[cfg(test)]` fixtures.

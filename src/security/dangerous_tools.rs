@@ -394,4 +394,171 @@ mod tests {
         assert!(is_denied_on_gateway_surface("agent_delete", &NO_ARGS));
         std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV);
     }
+
+    /// The gateway `ALEPH_GATEWAY_TOOLS_ALLOW=capability_projection_diagnostics`
+    /// override only lifts the surface-level deny. The handler-local strict
+    /// three-part ambient-identity check inside
+    /// `execute_capability_projection_diagnostics` is the SOLE authority on
+    /// top of the override — it reads `CALLER_ROLE` / `CALLER_IS_LOOPBACK` /
+    /// `CALLER_CONN_ID` from the ambient task-locals and refuses the call
+    /// BEFORE any `DiagnosticControl` method runs. A caller with no ambient
+    /// scoping (i.e. outside the WS dispatch loop's `process_request` scope)
+    /// must be denied for every mutating operation, with no host/tree
+    /// side-effect, even when the override is set.
+    ///
+    /// Pins the contract that `ALEPH_GATEWAY_TOOLS_ALLOW` cannot be used to
+    /// reach the diagnostics surface without the operator identity. Without
+    /// this test, a future "simplification" that moved the three-part check
+    /// into a config-tier predicate (and therefore behind the override) would
+    /// silently re-open the host/tree mutation surface to any `tools.invoke`
+    /// caller willing to set the env var.
+    ///
+    /// The control is built on an empty registry + empty tree (no
+    /// `FakeHandler` / `ToolCapabilityDescriptor` scaffolding needed):
+    /// `bump_runtime` mutates the tree's Runtime generation,
+    /// `dispose_runtime` flips `tree.is_disposed(LifetimeScope::Runtime)`,
+    /// `close` shuts the host. None require a registered tool, so the
+    /// existing `capability_projection_diagnostics::tests` scaffold stays
+    /// put and the brief's "do not modify that module" rule is honored.
+    #[test]
+    fn gateway_allow_does_not_bypass_handler_local_three_part_gate() {
+        use crate::builtin_tools::capability_projection_diagnostics::{
+            execute_capability_projection_diagnostics, parse_request, DiagnosticToolError,
+        };
+        use crate::capability::diagnostic_control::DiagnosticControl;
+        use crate::capability::ownership::{LifetimeScope, OwnershipTree};
+        use crate::capability::projection_host::ProjectionHost;
+        use crate::tools::registry::ToolHandlerRegistry;
+        use std::sync::Arc;
+
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Panic-safe env restore: captures the prior value (could be unset)
+        // and restores it on Drop, so a panic inside the test cannot leak
+        // the env var into any sibling test in this module.
+        let prev = std::env::var(GATEWAY_TOOLS_ALLOW_ENV).ok();
+        std::env::set_var(GATEWAY_TOOLS_ALLOW_ENV, "capability_projection_diagnostics");
+        struct RestoreEnv(Option<String>);
+        impl Drop for RestoreEnv {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(v) => std::env::set_var(GATEWAY_TOOLS_ALLOW_ENV, v),
+                    None => std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV),
+                }
+            }
+        }
+        let _restore = RestoreEnv(prev);
+
+        // Precondition: the override must unblock the surface-level deny —
+        // otherwise the test would prove the wrong thing (the Denied reply
+        // could come from the floor, not from the handler-local gate).
+        assert!(
+            !is_denied_on_gateway_surface("capability_projection_diagnostics", &NO_ARGS),
+            "precondition: ALEPH_GATEWAY_TOOLS_ALLOW=capability_projection_diagnostics \
+             must lift the gateway-surface deny; otherwise a Denied reply says \
+             nothing about the handler-local gate"
+        );
+
+        // Fresh authority pair: empty registry + empty tree. The host and
+        // control both `tokio::spawn` long-lived workers in their constructors,
+        // so the entire setup + handler-loop + post-state capture must run
+        // inside the runtime — building them outside `block_on` would panic
+        // with "there is no reactor running" before any assertion runs. Same
+        // pattern as `src/security/ssrf/fetch.rs::bypass_fetch_*` (sync
+        // `#[test]` + `Runtime::new` + `block_on`).
+        let tree = Arc::new(OwnershipTree::new());
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let (ctrl, status_before) = rt.block_on(async {
+            let reg = ToolHandlerRegistry::new();
+            let host = ProjectionHost::mount(reg, Arc::clone(&tree));
+            let ctrl = Arc::new(DiagnosticControl::new(host, Arc::clone(&tree)).unwrap());
+
+            // Capture pre-mutation state.
+            assert!(!tree.is_disposed(LifetimeScope::Runtime));
+            let status_before = ctrl.status().expect("status before unauthorized loop");
+            (ctrl, status_before)
+        });
+
+        // Run the mutating operations under no ambient scoping. Outside
+        // any `CALLER_ROLE` / `CALLER_IS_LOOPBACK` / `CALLER_CONN_ID` scope
+        // the three task-locals default to `None` / `false` / `None`, which
+        // the gate rejects at the very first fact (role != "operator").
+        let responses = rt.block_on(async {
+            let r1 = execute_capability_projection_diagnostics(
+                parse_request(json!({"operation": "bump_runtime"})).expect("parse bump"),
+                Arc::clone(&ctrl),
+            )
+            .await;
+            let r2 = execute_capability_projection_diagnostics(
+                parse_request(json!({"operation": "dispose_runtime"})).expect("parse dispose"),
+                Arc::clone(&ctrl),
+            )
+            .await;
+            let r3 = execute_capability_projection_diagnostics(
+                parse_request(json!({"operation": "close"})).expect("parse close"),
+                Arc::clone(&ctrl),
+            )
+            .await;
+            (r1, r2, r3)
+        });
+
+        // Every mutating call must be DENIED with the structured
+        // `DiagnosticToolError::Denied { reason }` variant, and the reason
+        // must name a missing fact (operator / loopback / connection). A
+        // bare `Ok(_)` here would mean the override reached past the
+        // handler-local gate.
+        for (label, res) in [
+            ("bump_runtime", &responses.0),
+            ("dispose_runtime", &responses.1),
+            ("close", &responses.2),
+        ] {
+            match res {
+                Err(DiagnosticToolError::Denied { reason }) => {
+                    let names_missing_fact = reason.contains("operator")
+                        || reason.contains("loopback")
+                        || reason.contains("connection");
+                    assert!(
+                        names_missing_fact,
+                        "{label} denied but reason does not name a missing fact: {reason}"
+                    );
+                }
+                Err(other) => panic!(
+                    "{label} must deny via DiagnosticToolError::Denied, got {other:?}"
+                ),
+                Ok(ok) => panic!(
+                    "{label} was admitted with no ambient identity (override only): {ok:?}"
+                ),
+            }
+        }
+
+        // No mutation: the ownership tree's Runtime scope is still alive,
+        // and the diagnostic status has not changed. A `dispose_runtime` or
+        // `close` that slipped through the gate would have flipped
+        // `tree.is_disposed(LifetimeScope::Runtime)` to `true`, or moved
+        // the host to `Closing` / `Closed`. Either would mean the override
+        // bypassed the gate. Both reads must run inside the runtime because
+        // they touch the spawned workers' shared state.
+        let (tree_still_alive, status_after) = rt.block_on(async {
+            (
+                !tree.is_disposed(LifetimeScope::Runtime),
+                ctrl.status().expect("status after unauthorized loop"),
+            )
+        });
+        assert!(
+            tree_still_alive,
+            "ownership tree's Runtime scope must NOT be disposed: the gate denied \
+             the call BEFORE any DiagnosticControl method ran"
+        );
+        assert_eq!(
+            status_before.lifecycle, status_after.lifecycle,
+            "host lifecycle must be unchanged after the unauthorized loop"
+        );
+
+        // Explicit removal as a belt-and-braces second restore. The Drop
+        // guard above handles the panic case; this makes the happy path
+        // obvious to a reader and matches the explicit-remove pattern of
+        // every other env-var test in this module.
+        std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV);
+    }
 }
