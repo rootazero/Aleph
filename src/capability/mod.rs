@@ -46,6 +46,7 @@ use std::sync::OnceLock;
 
 pub mod backend;
 pub mod descriptor;
+pub mod diagnostic_control;
 pub mod effect_claim;
 pub mod facade;
 pub mod ownership;

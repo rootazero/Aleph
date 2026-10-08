@@ -31,16 +31,21 @@
 //! * a closed host never delivers later mutations — `close` publishes the
 //!   closed bit and the source worker delivers a final closed snapshot.
 
+use crate::capability::backend::TOOL_NAMESPACE;
 use crate::capability::descriptor::CapabilityId;
+use crate::capability::diagnostic_control::{
+    DiagnosticError, DiagnosticLifecycle, DiagnosticStatus,
+};
 use crate::capability::facade::{CapabilityChange, Cursor, Scope};
-use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::capability::ownership::{OwnerGeneration, OwnershipChange, OwnershipTree};
 use crate::capability::zahir_facade::{FacadeEntriesSnapshot, ZahirFacade};
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 use crate::tools::registry::{RegistryChange, RegistryEntry, ToolHandlerRegistry};
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, Weak};
+use std::time::Duration;
 use tokio::sync::{broadcast, Notify};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -222,16 +227,21 @@ impl ConsumerState {
 
     /// Enqueue a full snapshot. On overflow, atomically replace the stale
     /// backlog with `Invalidated` + the fresh replacement `Snapshot`.
-    fn enqueue_snapshot(&self, snapshot: HostSnapshot) {
+    /// Returns `true` iff overflow fired and the backlog was cleared.
+    fn enqueue_snapshot(&self, snapshot: HostSnapshot) -> bool {
         let mut q = self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if q.items.len() >= self.capacity {
+        let backlog_cleared = if q.items.len() >= self.capacity {
             q.items.clear();
             q.items.push_back(ProjectionEvent::Invalidated);
-        }
+            true
+        } else {
+            false
+        };
         q.items.push_back(ProjectionEvent::Snapshot(snapshot.clone()));
         q.last_cursor = snapshot.registry_cursor;
         drop(q);
         self.wake.notify_one();
+        backlog_cleared
     }
 
     /// Enqueue an invalidation pair (`Invalidated` + replacement snapshot) as
@@ -307,6 +317,28 @@ struct CompletionState {
     outcome: Option<ProjectionShutdownOutcome>,
 }
 
+/// Diagnostic hold plane: which side of the host the hold gates.
+///
+/// * `SourceIntake` — pause the source worker (registry/ownership fan-out).
+///   The default applier continues so delivered state keeps moving.
+/// * `Delivery` — pause the default applier. The source continues so the
+///   pending depth can be observed to grow (and trigger overflow
+///   replacement).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticPlane {
+    SourceIntake,
+    Delivery,
+}
+
+/// Active diagnostic hold installed by `ProjectionHost::diagnostic_hold`.
+/// While installed, the worker for `plane` suspends event advancement
+/// until the release time elapses, an explicit `release()` runs, or the
+/// host is closed.
+struct DiagnosticHold {
+    plane: DiagnosticPlane,
+    release_at: tokio::time::Instant,
+}
+
 #[cfg(test)]
 struct ApplierTestGate {
     entered: Notify,
@@ -362,6 +394,19 @@ struct HostInner {
     completion_notify: Notify,
     #[cfg(test)]
     applier_test_gate: ApplierTestGate,
+    /// Active diagnostic hold. While `Some`, the worker for the corresponding
+    /// `plane` suspends event advancement until the hold clears (release time
+    /// elapses, `release()` runs, or the host closes).
+    diagnostic_hold: Mutex<Option<DiagnosticHold>>,
+    /// Notifies the held worker(s) when the hold releases (or expires).
+    diagnostic_hold_notify: Notify,
+    /// Total `Invalidated` enqueues on the default consumer (overflow
+    /// recovery). Counts both `enqueue_snapshot` overflow and explicit
+    /// `invalidate_all` invalidations on the default.
+    replacement_count: AtomicU64,
+    /// Total `Lagged` recvs observed by the source worker on either
+    /// registry or ownership channel.
+    lag_count: AtomicU64,
 }
 
 /// The live, long-lived projection of the two authority sources.
@@ -417,6 +462,10 @@ impl ProjectionHost {
             completion_notify: Notify::new(),
             #[cfg(test)]
             applier_test_gate: ApplierTestGate::new(),
+            diagnostic_hold: Mutex::new(None),
+            diagnostic_hold_notify: Notify::new(),
+            replacement_count: AtomicU64::new(0),
+            lag_count: AtomicU64::new(0),
         });
 
         let host = Arc::new(ProjectionHost {
@@ -427,6 +476,82 @@ impl ProjectionHost {
         // the registry close signal; the applier drains the default consumer
         // queue into run-loop-readable applied state. JoinHandles are retained
         // for `close_and_await` (Task4 completes the drain proof).
+        let source = tokio::spawn(source_worker(
+            Arc::downgrade(&inner),
+            inner.cancel.clone(),
+            registry_rx,
+            ownership_rx,
+        ));
+        let applier = tokio::spawn(applier_worker(
+            Arc::clone(&default_consumer),
+            Arc::downgrade(&inner),
+            inner.cancel.clone(),
+        ));
+        *inner.source_task.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
+        *inner.applier_task.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applier);
+
+        host
+    }
+
+    /// Mount the projection host with a custom default-consumer capacity.
+    /// Used by diagnostic tests that need a small pending queue to exercise
+    /// overflow replacement semantics. The capacity is clamped to
+    /// `MIN_PENDING_CAPACITY` because `Invalidated` + replacement `Snapshot`
+    /// must fit as one atomic pair.
+    #[must_use]
+    pub fn mount_with_capacity(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        capacity: usize,
+    ) -> Arc<Self> {
+        let facade = ZahirFacade::new(registry.clone(), Arc::clone(&tree));
+        let registry_rx = registry.subscribe();
+        let ownership_rx = tree.subscribe_changes();
+
+        let default_scope = Scope::default();
+        let initial = HostSnapshot::from_facade(facade.snapshot_entries_in_scope(&default_scope));
+        let default_consumer = Arc::new(ConsumerState::new(
+            default_scope,
+            capacity.max(MIN_PENDING_CAPACITY),
+        ));
+        default_consumer.enqueue_snapshot(initial);
+
+        let inner = Arc::new(HostInner {
+            facade,
+            registry: registry.clone(),
+            tree,
+            publish: Mutex::new(()),
+            consumers: Mutex::new(ConsumerMap {
+                next_id: 1,
+                by_id: HashMap::new(),
+            }),
+            default_consumer: Arc::clone(&default_consumer),
+            applied: Mutex::new(AppliedState {
+                snapshot: None,
+                closed: false,
+            }),
+            readiness: Notify::new(),
+            cancel: CancellationToken::new(),
+            closed: AtomicBool::new(false),
+            source_task: Mutex::new(None),
+            applier_task: Mutex::new(None),
+            completion: Mutex::new(CompletionState {
+                started: false,
+                outcome: None,
+            }),
+            completion_notify: Notify::new(),
+            #[cfg(test)]
+            applier_test_gate: ApplierTestGate::new(),
+            diagnostic_hold: Mutex::new(None),
+            diagnostic_hold_notify: Notify::new(),
+            replacement_count: AtomicU64::new(0),
+            lag_count: AtomicU64::new(0),
+        });
+
+        let host = Arc::new(ProjectionHost {
+            inner: Arc::clone(&inner),
+        });
+
         let source = tokio::spawn(source_worker(
             Arc::downgrade(&inner),
             inner.cancel.clone(),
@@ -486,6 +611,22 @@ impl ProjectionHost {
         applied.snapshot.clone()
     }
 
+    /// `true` once the host has been requested to close or has reached its
+    /// shared completion boundary. The diagnostic control uses this gate to
+    /// refuse further mutations on a closed host.
+    #[must_use]
+    pub fn is_closing(&self) -> bool {
+        if self.inner.closed.load(Ordering::Acquire) {
+            return true;
+        }
+        self.inner
+            .completion
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .outcome
+            .is_some()
+    }
+
     /// Attach a new subscriber with its own independent bounded queue, scoped
     /// by `scope`. The initial snapshot is enqueued FIRST, under the same
     /// `publish` boundary fan-out uses, so it is visible before any
@@ -542,6 +683,180 @@ impl ProjectionHost {
                 return outcome;
             }
             notified.await;
+        }
+    }
+
+    /// Read-only diagnostic snapshot of the host's current state. Never
+    /// mutates host state. The host-local `closed` bit drives `Closing` /
+    /// `Closed` lifecycle; the shared completion outcome drives `Closed` for
+    /// callers that awaited `close_and_await`.
+    #[must_use]
+    pub fn diagnostic_status(&self) -> DiagnosticStatus {
+        let completion = self
+            .inner
+            .completion
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let lifecycle = if completion.outcome.is_some() {
+            DiagnosticLifecycle::Closed
+        } else if self.inner.closed.load(Ordering::Acquire) || completion.started {
+            DiagnosticLifecycle::Closing
+        } else {
+            DiagnosticLifecycle::Active
+        };
+        drop(completion);
+
+        let applied = self
+            .inner
+            .applied
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let registry_cursor = applied
+            .snapshot
+            .as_ref()
+            .map(|s| s.registry_cursor)
+            .unwrap_or_default();
+        let applied_tool_ids: Vec<CapabilityId> = applied
+            .snapshot
+            .as_ref()
+            .map(|s| {
+                s.entries
+                    .keys()
+                    .map(|name| CapabilityId {
+                        namespace: TOOL_NAMESPACE.to_string(),
+                        name: name.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let applied_owner_generations = applied
+            .snapshot
+            .as_ref()
+            .map(|s| s.owner_generations.clone())
+            .unwrap_or_default();
+        drop(applied);
+
+        let q = self
+            .inner
+            .default_consumer
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pending_depth = q.items.len();
+        let pending_capacity = self.inner.default_consumer.capacity;
+        drop(q);
+
+        DiagnosticStatus {
+            lifecycle,
+            registry_cursor,
+            pending_depth,
+            pending_capacity,
+            replacement_count: self.inner.replacement_count.load(Ordering::Acquire),
+            lag_count: self.inner.lag_count.load(Ordering::Acquire),
+            applied_tool_ids,
+            applied_owner_generations,
+        }
+    }
+
+    /// Install a diagnostic hold for `duration` on the named plane. While
+    /// installed, the worker for that plane suspends event advancement until
+    /// the hold clears (release-time elapses, `release()` is called, or the
+    /// host closes). At most one hold may be active. Duration must be
+    /// `1..=5000 ms`.
+    pub async fn diagnostic_hold(
+        &self,
+        plane: DiagnosticPlane,
+        duration: Duration,
+    ) -> Result<(), DiagnosticError> {
+        if duration.is_zero() || duration > Duration::from_millis(5000) {
+            return Err(DiagnosticError::InvalidHoldDuration);
+        }
+        let release_at = tokio::time::Instant::now() + duration;
+        {
+            let mut guard = self
+                .inner
+                .diagnostic_hold
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if guard.is_some() {
+                return Err(DiagnosticError::HoldAlreadyActive);
+            }
+            *guard = Some(DiagnosticHold { plane, release_at });
+        }
+        self.inner.diagnostic_hold_notify.notify_waiters();
+
+        let sleep = tokio::time::sleep_until(release_at);
+        let notify = self.inner.diagnostic_hold_notify.notified();
+        tokio::pin!(notify);
+        tokio::select! {
+            _ = sleep => {}
+            _ = &mut notify => {}
+        }
+
+        // Clear the hold if it is still ours.
+        let cleared = {
+            let mut guard = self
+                .inner
+                .diagnostic_hold
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(h) = guard.as_ref() {
+                if h.plane == plane && h.release_at == release_at {
+                    *guard = None;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if cleared {
+            self.inner.diagnostic_hold_notify.notify_waiters();
+        }
+        Ok(())
+    }
+
+    /// Release any active diagnostic hold. No-op if no hold is active.
+    pub fn diagnostic_release(&self) {
+        let mut guard = self
+            .inner
+            .diagnostic_hold
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.is_some() {
+            *guard = None;
+            drop(guard);
+            self.inner.diagnostic_hold_notify.notify_waiters();
+        }
+    }
+
+    /// Request host-local close (releasing any active hold) and await the
+    /// shared completion boundary for up to 5000 ms. Returns
+    /// `CloseTimeout { elapsed_ms: 5000 }` on timeout.
+    pub async fn diagnostic_close(&self) -> Result<ProjectionShutdownOutcome, DiagnosticError> {
+        self.diagnostic_release();
+        start_shutdown(&self.inner);
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(5000);
+        loop {
+            {
+                let guard = self
+                    .inner
+                    .completion
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(outcome) = guard.outcome.clone() {
+                    return Ok(outcome);
+                }
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(DiagnosticError::CloseTimeout { elapsed_ms: 5000 });
+            }
+            let remaining = deadline - now;
+            let notify = self.inner.completion_notify.notified();
+            tokio::pin!(notify);
+            tokio::time::timeout(remaining, notify).await.ok();
         }
     }
 }
@@ -733,6 +1048,32 @@ async fn source_worker(
     }
 
     loop {
+        // Diagnostic hold: pause source intake if the SourceIntake plane is held.
+        if let Some(active) = inner.upgrade() {
+            let wait = {
+                let guard = active
+                    .diagnostic_hold
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard
+                    .as_ref()
+                    .filter(|h| h.plane == DiagnosticPlane::SourceIntake)
+                    .map(|h| h.release_at)
+            };
+            if let Some(release_at) = wait {
+                let now = tokio::time::Instant::now();
+                if release_at > now {
+                    let sleep = tokio::time::sleep_until(release_at);
+                    let notify = active.diagnostic_hold_notify.notified();
+                    tokio::pin!(notify);
+                    tokio::select! {
+                        _ = sleep => {}
+                        _ = &mut notify => {}
+                    }
+                    continue;
+                }
+            }
+        }
         tokio::select! {
             biased;
             _ = cancel.cancelled() => return,
@@ -753,6 +1094,7 @@ async fn source_worker(
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         if let Some(inner) = inner.upgrade() {
+                            inner.lag_count.fetch_add(1, Ordering::Relaxed);
                             invalidate_all(&inner);
                         } else {
                             return;
@@ -768,8 +1110,16 @@ async fn source_worker(
             }
             res = ownership_rx.recv() => {
                 match res {
-                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                    Ok(_) => {
                         if let Some(inner) = inner.upgrade() {
+                            invalidate_all(&inner);
+                        } else {
+                            return;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if let Some(inner) = inner.upgrade() {
+                            inner.lag_count.fetch_add(1, Ordering::Relaxed);
                             invalidate_all(&inner);
                         } else {
                             return;
@@ -799,7 +1149,9 @@ fn process_registry_change(inner: &HostInner, change: RegistryChange) {
     // current (the applier drains this queue into `applied`).
     if !inner.default_consumer.is_closed() {
         let snapshot = build_snapshot(inner, &inner.default_consumer.scope);
-        inner.default_consumer.enqueue_snapshot(snapshot);
+        if inner.default_consumer.enqueue_snapshot(snapshot) {
+            inner.replacement_count.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     // Non-default consumers: deliver the mapped change iff in scope AND newer
@@ -829,6 +1181,7 @@ fn invalidate_all(inner: &HostInner) {
         // The DEFAULT consumer uses the SAME Invalidated + replacement Snapshot
         // semantics as attached consumers (not a bare Snapshot).
         inner.default_consumer.enqueue_invalidation(snapshot);
+        inner.replacement_count.fetch_add(1, Ordering::Relaxed);
     }
 
     let consumers = inner.consumers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -875,6 +1228,32 @@ async fn applier_worker(
     cancel: CancellationToken,
 ) {
     loop {
+        // Diagnostic hold: pause delivery if the Delivery plane is held.
+        if let Some(active) = inner.upgrade() {
+            let wait = {
+                let guard = active
+                    .diagnostic_hold
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard
+                    .as_ref()
+                    .filter(|h| h.plane == DiagnosticPlane::Delivery)
+                    .map(|h| h.release_at)
+            };
+            if let Some(release_at) = wait {
+                let now = tokio::time::Instant::now();
+                if release_at > now {
+                    let sleep = tokio::time::sleep_until(release_at);
+                    let notify = active.diagnostic_hold_notify.notified();
+                    tokio::pin!(notify);
+                    tokio::select! {
+                        _ = sleep => {}
+                        _ = &mut notify => {}
+                    }
+                    continue;
+                }
+            }
+        }
         if let Some(event) = default.try_pop() {
             let Some(inner) = inner.upgrade() else { return };
             match event {
