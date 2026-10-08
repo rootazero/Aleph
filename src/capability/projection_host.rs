@@ -300,9 +300,49 @@ impl ConsumerState {
 /// consumer's queue is drained by a long-lived applier task that writes
 /// snapshots here — the publisher's own state is never presented AS the
 /// delivered state.
+///
+/// # Replacement receipts (observational only)
+///
+/// The four receipt fields below are populated by the REAL default applier
+/// (the long-lived task that drains the default consumer's queue) under the
+/// same lock that writes `snapshot`. They are pure read-only observation;
+/// no authority, dispatcher, resolver or session path ever consults them.
+/// `awaiting_replacement` is internal: it gates whether the next consumed
+/// `Snapshot` counts as a replacement (true) or as a normal apply (false).
+/// `close` / `closed` transitions MUST NOT touch these fields (no
+/// fabrication, no reset, no restore) so a `Closing` lifecycle never lies
+/// about previously consumed invalidations / replacements.
 struct AppliedState {
     snapshot: Option<HostSnapshot>,
     closed: bool,
+    /// Real default-applier `Invalidated` consumption count. Bumped once
+    /// per consumed `Invalidated` event (the default consumer's
+    /// `Invalidated` arm under the applied lock). Plain Snapshot applies
+    /// (initial mount, close snapshot) do NOT bump this counter.
+    applied_invalidation_count: u64,
+    /// Real default-applier replacement `Snapshot` consumption count.
+    /// Bumped once per consumed `Snapshot` that follows an
+    /// `Invalidated`-cleared slot (i.e. `awaiting_replacement == true` on
+    /// entry). Plain `Snapshot`s that are NOT replacement (initial mount,
+    /// close snapshot, and any direct `Snapshot` that races a non-
+    /// invalidated apply) MUST NOT bump this counter.
+    applied_replacement_count: u64,
+    /// Internal gate: `true` after consuming `Invalidated` (and clearing
+    /// `snapshot`); cleared on the very next consumed `Snapshot` after the
+    /// replacement receipt is recorded. `false` means a consumed `Snapshot`
+    /// is a normal apply and must NOT be treated as a replacement.
+    awaiting_replacement: bool,
+    /// Registry cursor of the most recent replacement snapshot the
+    /// default applier actually applied. `None` until the first consumed
+    /// `Invalidated` is followed by a replacement `Snapshot`. Stays put
+    /// across close / reset (no fabrication).
+    last_replacement_registry_cursor: Option<Cursor>,
+    /// Canon tool-id names (just the `name` half of the existing
+    /// `applied_tool_ids` shape — same vector shape that the host already
+    /// exposes, so no new namespace-keyed authority is introduced) carried
+    /// by the most recent applied replacement. Cleared / overwritten only
+    /// on the next replacement receipt; never on close.
+    last_replacement_tool_ids: Vec<String>,
 }
 
 /// Non-default consumers, keyed by attach id (the default consumer lives in
@@ -505,6 +545,11 @@ impl ProjectionHost {
             applied: Mutex::new(AppliedState {
                 snapshot: None,
                 closed: false,
+                applied_invalidation_count: 0,
+                applied_replacement_count: 0,
+                awaiting_replacement: false,
+                last_replacement_registry_cursor: None,
+                last_replacement_tool_ids: Vec::new(),
             }),
             readiness: Notify::new(),
             cancel: CancellationToken::new(),
@@ -593,6 +638,11 @@ impl ProjectionHost {
             applied: Mutex::new(AppliedState {
                 snapshot: None,
                 closed: false,
+                applied_invalidation_count: 0,
+                applied_replacement_count: 0,
+                awaiting_replacement: false,
+                last_replacement_registry_cursor: None,
+                last_replacement_tool_ids: Vec::new(),
             }),
             readiness: Notify::new(),
             cancel: CancellationToken::new(),
@@ -821,6 +871,14 @@ impl ProjectionHost {
             .as_ref()
             .map(|s| s.owner_generations.clone())
             .unwrap_or_default();
+        // Same lock cut as the snapshot above (Ruling16: no two-cut pairing).
+        // Receipts are populated by the REAL default applier; close/reset
+        // does NOT touch them, so a Closing / Closed lifecycle never lies
+        // about previously consumed invalidations / replacements.
+        let applied_invalidation_count = applied.applied_invalidation_count;
+        let applied_replacement_count = applied.applied_replacement_count;
+        let last_replacement_registry_cursor = applied.last_replacement_registry_cursor;
+        let last_replacement_tool_ids = applied.last_replacement_tool_ids.clone();
         drop(applied);
 
         let q = self
@@ -842,6 +900,10 @@ impl ProjectionHost {
             lag_count: self.inner.lag_count.load(Ordering::Acquire),
             applied_tool_ids,
             applied_owner_generations,
+            applied_invalidation_count,
+            applied_replacement_count,
+            last_replacement_registry_cursor,
+            last_replacement_tool_ids,
         }
     }
 
@@ -1459,6 +1521,23 @@ async fn applier_worker(
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         applied.snapshot = Some(snapshot.clone());
+                        // Replacement receipt (observational only):
+                        // write under the SAME lock as the snapshot install
+                        // so a status reader cannot pair an old cursor /
+                        // old tool-id set with the freshly applied snapshot
+                        // (Ruling16: no two-cut pairing). Only counts
+                        // Snapshots that follow a consumed Invalidated; a
+                        // plain initial-mount Snapshot or a direct apply
+                        // without a preceding Invalidated MUST NOT bump the
+                        // replacement counter.
+                        if applied.awaiting_replacement {
+                            applied.applied_replacement_count += 1;
+                            applied.last_replacement_registry_cursor =
+                                Some(snapshot.registry_cursor);
+                            applied.last_replacement_tool_ids =
+                                snapshot.entries.keys().cloned().collect();
+                            applied.awaiting_replacement = false;
+                        }
                         if snapshot.registry_closed {
                             applied.closed = true;
                         }
@@ -1475,6 +1554,15 @@ async fn applier_worker(
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         applied.snapshot = None;
+                        // Observational receipt under the SAME lock cut as
+                        // the snapshot clear, so the bumped counter / set
+                        // gate and the cleared snapshot are observed by a
+                        // status reader as one cut. `awaiting_replacement`
+                        // is internal — it does NOT leak through the wire;
+                        // it just gates whether the next consumed Snapshot
+                        // counts as a replacement.
+                        applied.applied_invalidation_count += 1;
+                        applied.awaiting_replacement = true;
                     }
                     inner.readiness.notify_one();
                 }
@@ -3034,5 +3122,125 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, DiagnosticError::Closed);
         assert_eq!(active_hold_plane(&host), None);
+    }
+
+    /// Deterministically await until `diagnostic_status()` satisfies `pred`,
+    /// registering the private readiness `Notified` (re-checking the predicate
+    /// after registration) -- no sleep and no yield-based ordering guess.
+    async fn await_status_where(
+        host: &ProjectionHost,
+        pred: impl Fn(&DiagnosticStatus) -> bool,
+    ) -> DiagnosticStatus {
+        loop {
+            let s = host.diagnostic_status();
+            if pred(&s) {
+                return s;
+            }
+            let ready = host.inner.readiness.notified();
+            tokio::pin!(ready);
+            let s = host.diagnostic_status();
+            if pred(&s) {
+                return s;
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(10), &mut ready)
+                .await
+                .expect("applier made no progress toward the awaited status");
+        }
+    }
+
+    /// RED: a plain initial-mount Snapshot is NOT a replacement (no preceding
+    /// `Invalidated` cleared the slot). After mount, the applier applies the
+    /// initial Snapshot with `awaiting_replacement == false`, so the receipt
+    /// counters MUST stay at zero and `last_replacement_*` MUST stay empty.
+    #[tokio::test]
+    async fn applied_replacement_count_starts_zero_after_mount() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let _ = await_snapshot_where(&host, |s| s.entries.contains_key("a")).await;
+
+        let status = host.diagnostic_status();
+        assert_eq!(status.applied_replacement_count, 0);
+        assert_eq!(status.applied_invalidation_count, 0);
+        assert_eq!(status.last_replacement_registry_cursor, None);
+        assert!(status.last_replacement_tool_ids.is_empty());
+    }
+
+    /// RED: a consumed `Invalidated` event with NO follow-up replacement
+    /// MUST bump `applied_invalidation_count` but MUST NOT touch the
+    /// replacement receipts (count, cursor, tool ids). The applied snapshot
+    /// is cleared (fail-closed contract).
+    #[tokio::test]
+    async fn bare_invalidated_bumps_invalidation_count_only() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let _ = await_snapshot_where(&host, |s| s.entries.contains_key("a")).await;
+        assert!(host.current_snapshot().is_some());
+
+        // Push JUST an `Invalidated` (no replacement Snapshot) onto the
+        // default consumer's queue and wake the applier. We bypass
+        // `invalidate_all` deliberately: that helper enqueues the mandated
+        // Invalidated + replacement Snapshot PAIR. This test isolates the
+        // bare-Invalidated branch of the applier.
+        {
+            let mut q = host
+                .inner
+                .default_consumer
+                .queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            q.items.push_back(ProjectionEvent::Invalidated);
+        }
+        host.inner.default_consumer.wake.notify_one();
+
+        let status = await_status_where(&host, |s| s.applied_invalidation_count > 0).await;
+        assert_eq!(status.applied_invalidation_count, 1);
+        assert_eq!(status.applied_replacement_count, 0);
+        assert_eq!(status.last_replacement_registry_cursor, None);
+        assert!(status.last_replacement_tool_ids.is_empty());
+        assert!(
+            host.current_snapshot().is_none(),
+            "bare Invalidated must clear applied snapshot (fail-closed)"
+        );
+    }
+
+    /// RED: an `Invalidated` + replacement `Snapshot` pair (the production
+    /// `invalidate_all` contract) MUST bump BOTH counters and record the
+    /// replacement snapshot's cursor + tool ids in the same lock cut. No
+    /// sleep: deterministic via the readiness notifier pattern. The cursor
+    /// is the one carried by the replacement snapshot; `invalidate_all`
+    /// does NOT advance the registry cursor (only a registry change does),
+    /// so the assertion checks the cursor is recorded verbatim, not that it
+    /// advanced.
+    #[tokio::test]
+    async fn invalidated_pair_bumps_both_counts_and_records_replacement() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let initial = await_snapshot_where(&host, |s| s.entries.contains_key("a")).await;
+        let initial_cursor = initial.registry_cursor;
+
+        // Production invalidation contract: appends Invalidated + a fresh
+        // replacement Snapshot (synchronously, before the applier drains).
+        invalidate_all(&host.inner);
+
+        let status = await_status_where(&host, |s| s.applied_replacement_count > 0).await;
+        assert_eq!(status.applied_invalidation_count, 1);
+        assert_eq!(status.applied_replacement_count, 1);
+        let cursor = status
+            .last_replacement_registry_cursor
+            .expect("replacement cursor must be set after pair");
+        assert_eq!(
+            cursor, initial_cursor,
+            "invalidate_all does NOT advance the registry cursor; the              recorded cursor is the one carried by the replacement snapshot"
+        );
+        assert!(
+            status.last_replacement_tool_ids.iter().any(|n| n == "a"),
+            "replacement must carry the registered tool name"
+        );
     }
 }

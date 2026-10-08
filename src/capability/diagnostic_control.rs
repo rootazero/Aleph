@@ -54,6 +54,17 @@ pub enum DiagnosticLifecycle {
 /// observed by the source worker. `applied_tool_ids` and
 /// `applied_owner_generations` come from the REAL applied snapshot, never
 /// the publisher's initial state.
+///
+/// The four `applied_*` / `last_replacement_*` receipt fields are populated
+/// by the REAL default applier under the same `applied` lock cut as the
+/// snapshot they describe. They are observational only -- no dispatcher,
+/// resolver or session path consults them. They are NOT durable (no
+/// recovery cursor, no journal, no replay), and a `Closing` / `Closed`
+/// lifecycle MUST NOT fabricate, reset or restore them. `replacement_count`
+/// here is the source-side enqueue counter (kept for backward
+/// compatibility); the applier-side counterpart is
+/// `applied_replacement_count` and reflects ONLY consumed replacement
+/// `Snapshot` events that followed a consumed `Invalidated`.
 #[derive(Debug, Clone)]
 pub struct DiagnosticStatus {
     pub lifecycle: DiagnosticLifecycle,
@@ -64,6 +75,14 @@ pub struct DiagnosticStatus {
     pub lag_count: u64,
     pub applied_tool_ids: Vec<CapabilityId>,
     pub applied_owner_generations: HashMap<CapabilityId, OwnerGeneration>,
+    /// Real default-applier Invalidated consumption count (observational).
+    pub applied_invalidation_count: u64,
+    /// Real default-applier consumed-replacement Snapshot count (observational).
+    pub applied_replacement_count: u64,
+    /// Registry cursor of the most recent applied replacement Snapshot (observational).
+    pub last_replacement_registry_cursor: Option<Cursor>,
+    /// Tool-id names of the most recent applied replacement Snapshot (observational).
+    pub last_replacement_tool_ids: Vec<String>,
 }
 
 /// Error returned by diagnostic control operations.

@@ -187,6 +187,15 @@ pub struct DiagnosticStatusReport {
     pub applied_tool_ids: Vec<String>,
     /// Sorted `(tool_name, generation)` pairs.
     pub applied_owner_generations: Vec<[String; 2]>,
+    /// Real default-applier `Invalidated` consumption count.
+    pub applied_invalidation_count: u64,
+    /// Real default-applier consumed-replacement `Snapshot` count.
+    pub applied_replacement_count: u64,
+    /// Registry cursor of the most recent applied replacement `Snapshot`.
+    pub last_replacement_registry_cursor: Option<u64>,
+    /// Tool-id names of the most recent applied replacement `Snapshot`,
+    /// sorted by name for wire stability.
+    pub last_replacement_tool_ids: Vec<String>,
 }
 
 impl From<DiagnosticStatus> for DiagnosticStatusReport {
@@ -199,6 +208,8 @@ impl From<DiagnosticStatus> for DiagnosticStatusReport {
             .map(|(k, v)| [k.name, v.0.to_string()])
             .collect();
         gens.sort_by(|a, b| a[0].cmp(&b[0]));
+        let mut last_replacement_tool_ids = s.last_replacement_tool_ids.clone();
+        last_replacement_tool_ids.sort();
         DiagnosticStatusReport {
             lifecycle: s.lifecycle.into(),
             registry_cursor: s.registry_cursor.0,
@@ -208,6 +219,10 @@ impl From<DiagnosticStatus> for DiagnosticStatusReport {
             lag_count: s.lag_count,
             applied_tool_ids: ids,
             applied_owner_generations: gens,
+            applied_invalidation_count: s.applied_invalidation_count,
+            applied_replacement_count: s.applied_replacement_count,
+            last_replacement_registry_cursor: s.last_replacement_registry_cursor.map(|c| c.0),
+            last_replacement_tool_ids,
         }
     }
 }
@@ -1182,5 +1197,41 @@ mod tests {
             after.applied_owner_generations
         );
         assert!(!tree.is_disposed(LifetimeScope::Runtime));
+    }
+
+    /// RED (wire): the four observational receipt fields added to the
+    /// `status` response MUST appear in the JSON form, in their canonical
+    /// snake_case wire names, with `last_replacement_tool_ids` sorted for
+    /// wire stability.
+    #[test]
+    fn status_report_carries_four_applied_receipt_wire_fields() {
+        use crate::capability::facade::Cursor;
+        use std::collections::HashMap;
+
+        let status = DiagnosticStatus {
+            lifecycle: DiagnosticLifecycle::Active,
+            registry_cursor: Cursor(42),
+            pending_depth: 0,
+            pending_capacity: 64,
+            replacement_count: 0,
+            lag_count: 0,
+            applied_tool_ids: Vec::new(),
+            applied_owner_generations: HashMap::new(),
+            applied_invalidation_count: 3,
+            applied_replacement_count: 2,
+            last_replacement_registry_cursor: Some(Cursor(99)),
+            last_replacement_tool_ids: vec!["b".to_string(), "a".to_string()],
+        };
+        let report: DiagnosticStatusReport = status.into();
+        let value = serde_json::to_value(&report).expect("status serialises");
+
+        assert_eq!(value["applied_invalidation_count"], json!(3));
+        assert_eq!(value["applied_replacement_count"], json!(2));
+        assert_eq!(value["last_replacement_registry_cursor"], json!(99));
+        assert_eq!(
+            value["last_replacement_tool_ids"],
+            json!(["a", "b"]),
+            "tool ids must be sorted on the wire"
+        );
     }
 }
