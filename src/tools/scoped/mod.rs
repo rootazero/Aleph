@@ -66,6 +66,19 @@ use crate::tool_metadata::ToolHealthCache;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
 use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
 
+/// Selects the representation produced after a tool has already crossed the
+/// normal admission and execution pipeline.
+///
+/// Model-facing calls keep the existing budgeted text representation. RPC
+/// callers need the structured value so a valid protocol envelope is not
+/// destroyed by a prompt-size budget before it reaches the transport.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ResultTransport {
+    #[default]
+    ModelContext,
+    StructuredRpc,
+}
+
 // =============================================================================
 // ScopedToolService
 // =============================================================================
@@ -112,6 +125,8 @@ pub struct ScopedToolService {
     /// disk and replaces them with a compact marker before they enter
     /// the conversation history.
     pub(super) result_store: Option<Arc<crate::tools::result_store::ToolResultStore>>,
+    /// Layer 2 representation for the transport consuming this service.
+    pub(super) result_transport: ResultTransport,
     pub(super) schema_cache: ArcSwap<Option<(u64, Arc<[crate::tool_metadata::ToolDefinition]>)>>,
     pub(super) cache_generation: std::sync::atomic::AtomicU64,
     /// Optional runtime health cache. When set, `list()` and

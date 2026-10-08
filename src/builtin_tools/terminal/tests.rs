@@ -1,4 +1,4 @@
-//! `TerminalTool`'s tests.
+//! Terminal observation capability tests.
 //!
 //! Split out of `terminal.rs` unchanged (review round 1): that file was
 //! 1,668 lines, of which ~900 were this module, against a 800-line project
@@ -15,83 +15,62 @@
 
 use super::*;
 
-/// Pull the accepted action strings out of a tool schema, whichever of
-/// the two shapes schemars emitted.
-///
-/// schemars 1.2 renders a fieldless enum as a flat `enum` array ONLY when
-/// no variant carries a doc comment; the moment one does — and every
-/// `TerminalAction` variant does, because the model reads them — it emits
-/// `oneOf` of `{const, description}` instead, to have somewhere to put
-/// the per-variant text. Both shapes mean the same thing to a provider,
-/// and which one ships is decided by something as innocent as deleting a
-/// `///` line, so the guard reads both rather than pinning the accident.
-///
-/// Panics rather than returning an empty list when it recognises neither:
-/// "I cannot find the actions" must not be answerable as "there are no
-/// write verbs" (判据 §8).
-fn declared_actions(schema: &serde_json::Value) -> Vec<String> {
-    let action = &schema["$defs"]["TerminalAction"];
-    if let Some(flat) = action["enum"].as_array() {
-        return flat
-            .iter()
-            .map(|v| v.as_str().expect("enum member is a string").to_string())
-            .collect();
-    }
-    if let Some(variants) = action["oneOf"].as_array() {
-        return variants
-            .iter()
-            .map(|v| {
-                v["const"]
-                    .as_str()
-                    .expect("oneOf member carries a const")
-                    .to_string()
-            })
-            .collect();
-    }
-    panic!(
-        "neither $defs.TerminalAction.enum nor .oneOf found; schema was {}",
-        serde_json::to_string_pretty(schema).unwrap_or_default()
-    );
+fn observation_definitions() -> Vec<crate::tools::service::ToolDefinition> {
+    let registry = crate::tools::ToolHandlerRegistry::new();
+    let mut scope = crate::tools::ToolRegistrationScope::new("test:terminal-schema");
+    capabilities::register_observation_capabilities(&registry, &mut scope).unwrap();
+    let mut definitions: Vec<_> = registry
+        .snapshot()
+        .values()
+        .map(|handler| handler.definition())
+        .collect();
+    definitions.sort_by(|a, b| a.name.cmp(&b.name));
+    definitions
 }
 
-/// 本期没有写入动词。多一个就是多一个授权面。
-///
-/// 2026-09-04 (task D): `wait` and `explain` join the list. Both are still
-/// reads — `wait` blocks on the agent table's change watch and returns a
-/// row, `explain` re-runs the detection engine over the screen — so the
-/// claim this test pins ("no write verb") is unchanged, and
-/// `the_description_says_it_is_read_only` stays true beside it. The
-/// EXPECTED list is spelled out rather than counted so adding a verb is a
-/// deliberate edit here and not a number that quietly grows.
-///
-/// Read out of `$defs`, not `properties.action`: schemars 1.2 emits a
-/// NAMED type as a `$ref`, so `properties.action` carries no action
-/// vocabulary at all and a guard reading it asserts against `Null`.
-/// That is the shape every sibling tool with an enum-typed argument
-/// already ships, and `schema_strictify` rewrites those refs explicitly.
-///
-/// Not to be "fixed" by forcing `#[schemars(inline)]` to match
-/// `moa_manage`'s flat schema: that tool hand-writes `impl JsonSchema`
-/// because `#[serde(tag = "action")]` puts a `oneOf` at the ROOT, which
-/// grammar-constrained endpoints cannot compile — they answer with EMPTY
-/// arguments. `TerminalArgs` is a plain struct; its root is already a
-/// flat object, so that hazard is not this tool's to carry, and inlining
-/// would make `terminal` the one tool shipping a shape its nine siblings
-/// do not.
+fn observation_definition(action: &str) -> crate::tools::service::ToolDefinition {
+    observation_definitions()
+        .into_iter()
+        .find(|def| def.name == format!("terminal_sessions_{action}"))
+        .unwrap()
+}
+
+async fn observe(
+    action: &str,
+    input: serde_json::Value,
+) -> Result<TerminalOutput, crate::tools::ToolError> {
+    let output =
+        capabilities::invoke_observation(&format!("terminal_sessions_{action}"), input).await?;
+    Ok(serde_json::from_value(output.value).expect("legacy terminal envelope"))
+}
+
+/// Every registered identity is read-only; adding any verb is deliberate.
 #[test]
 fn the_tool_exposes_no_write_verb() {
-    let def = TerminalTool.definition();
-    let actions = declared_actions(&def.parameters);
-    assert_eq!(actions, ["list", "read", "status", "wait", "explain"]);
+    let names: Vec<_> = observation_definitions()
+        .into_iter()
+        .map(|def| def.name)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "terminal_sessions_attach",
+            "terminal_sessions_explain",
+            "terminal_sessions_list",
+            "terminal_sessions_read",
+            "terminal_sessions_status",
+            "terminal_sessions_wait"
+        ]
+    );
 }
 
 /// DESCRIPTION 必须自己说清只读——这句话归这个工具所有，
 /// 不进 system prompt（R9 第二把尺）。不写，模型会反复试着发命令。
 #[test]
 fn the_description_says_it_is_read_only() {
-    assert!(TerminalTool::DESCRIPTION
-        .to_lowercase()
-        .contains("read-only"));
+    for definition in observation_definitions() {
+        assert!(definition.description.to_lowercase().contains("read-only"));
+    }
 }
 
 /// Every `description` string the model actually receives, in schema order,
@@ -134,15 +113,16 @@ fn shipped_descriptions(schema: &serde_json::Value) -> Vec<String> {
 /// R9: the schema this tool ships carries nothing addressed to whoever
 /// maintains it.
 ///
-/// `TerminalAction` and `TerminalArgs` derive `JsonSchema`, so every `///`
-/// line on them — and on every type they reference — becomes a `description`
-/// the model pays for on each turn that loads this tool. Three notes were
+/// The retired action/args types derived `JsonSchema`, so every `///`
+/// line on them — and on every type they referenced — became a `description`
+/// the model paid for on each turn. Canonical handlers now ship their schemas
+/// directly; this regression still walks the actual shipped descriptions. Three notes were
 /// riding along, each a note ABOUT THE CODE rather than a runtime fact the
 /// model cannot know:
 ///
 /// * `List`'s second paragraph, a rule about saying all five field names,
 ///   naming the test that pins them;
-/// * `TerminalAction`'s own doc, pointing at a Rust constant by path;
+/// * the retired action enum's own doc, pointing at a Rust constant by path;
 /// * `RuntimeAgentState`'s type doc in `shared/protocol`, which is entirely
 ///   an argument for why that enum derives `JsonSchema` at all — it reaches
 ///   the model through `until`, from a crate nobody editing this tool reads.
@@ -159,8 +139,15 @@ fn shipped_descriptions(schema: &serde_json::Value) -> Vec<String> {
 /// job. What this closes is the shape all three actual instances had.
 #[test]
 fn the_shipped_schema_addresses_the_model_and_not_the_maintainer() {
-    let def = TerminalTool.definition();
-    for description in shipped_descriptions(&def.parameters) {
+    // Schemas with no arguments (list/status) carry no descriptions, so the
+    // "found nothing" guard must hold over the whole shipped set instead.
+    let combined = serde_json::Value::Array(
+        observation_definitions()
+            .into_iter()
+            .map(|def| def.input_schema)
+            .collect(),
+    );
+    for description in shipped_descriptions(&combined) {
         assert!(
             !description.contains("::"),
             "a Rust path in a schema description means this sentence is \
@@ -173,18 +160,7 @@ fn the_shipped_schema_addresses_the_model_and_not_the_maintainer() {
 
 #[test]
 fn the_shipped_schema_preserves_each_terminal_action_semantics() {
-    let schema = TerminalTool.definition().parameters;
-    let actions = schema["$defs"]["TerminalAction"]["oneOf"]
-        .as_array()
-        .expect("documented actions retain per-action schema descriptions");
-    let action = |name: &str| {
-        actions
-            .iter()
-            .find(|variant| variant["const"] == name)
-            .and_then(|variant| variant["description"].as_str())
-            .unwrap_or_else(|| panic!("missing schema description for action {name}"))
-            .to_lowercase()
-    };
+    let action = |name: &str| observation_definition(name).description.to_lowercase();
     let list = action("list");
     assert!(
         list.contains("spawn") && list.contains("epoch") && list.contains("cd"),
@@ -203,7 +179,12 @@ fn the_shipped_schema_preserves_each_terminal_action_semantics() {
         "{explain}"
     );
 
-    let description = TerminalTool::DESCRIPTION.to_lowercase();
+    let description = observation_definitions()
+        .iter()
+        .map(|def| def.description.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
     for term in [
         "disabled in policy",
         "polling",
@@ -219,12 +200,8 @@ fn the_shipped_schema_preserves_each_terminal_action_semantics() {
 
 #[test]
 fn the_shipped_schema_explains_terminal_arguments_to_the_model() {
-    let schema = TerminalTool.definition().parameters;
-    let args = if schema["$defs"]["TerminalArgs"].is_object() {
-        &schema["$defs"]["TerminalArgs"]
-    } else {
-        &schema
-    };
+    let schema = observation_definition("wait").input_schema;
+    let args = &schema;
     let session_id = args["properties"]["session_id"]["description"]
         .as_str()
         .expect("session_id has a model-facing description")
@@ -262,15 +239,7 @@ fn the_shipped_schema_explains_terminal_arguments_to_the_model() {
 #[tokio::test]
 #[serial_test::parallel(pty_global_manager)]
 async fn no_turn_context_is_treated_as_operator() {
-    let out = TerminalTool
-        .call(TerminalArgs {
-            action: TerminalAction::List,
-            session_id: None,
-            until: None,
-            timeout_ms: None,
-        })
-        .await
-        .unwrap();
+    let out = observe("list", serde_json::json!({})).await.unwrap();
     assert!(out.success, "{}", out.message);
 }
 
@@ -294,23 +263,14 @@ async fn non_operator_caller_is_refused() {
         side_question: false,
     };
     let out = TURN_CONTEXT
-        .scope(ctx, async {
-            TerminalTool
-                .call(TerminalArgs {
-                    action: TerminalAction::List,
-                    session_id: None,
-                    until: None,
-                    timeout_ms: None,
-                })
-                .await
-        })
+        .scope(ctx, async { observe("list", serde_json::json!({})).await })
         .await
         .unwrap();
     assert!(!out.success);
     assert!(out.message.contains("operator"), "{}", out.message);
     // A refusal that still carried session data would be a gate that
     // reports "no" and means "yes" (task-11 review F10) — discarding
-    // the `data: None` in `TerminalTool::call`'s plain-refusal arms (the
+    // the `data: None` in `invoke_observation`'s plain-refusal arms (the
     // operator gate and `TerminalRefusal::Message`; the tombstone arm
     // deliberately carries data, and is pinned on its own) and keeping
     // only the label check would leave this test green.
@@ -320,15 +280,7 @@ async fn non_operator_caller_is_refused() {
 #[tokio::test]
 #[serial_test::parallel(pty_global_manager)]
 async fn read_without_session_id_is_refused_not_panicking() {
-    let out = TerminalTool
-        .call(TerminalArgs {
-            action: TerminalAction::Read,
-            session_id: None,
-            until: None,
-            timeout_ms: None,
-        })
-        .await
-        .unwrap();
+    let out = observe("read", serde_json::json!({})).await.unwrap();
     assert!(!out.success);
     assert!(out.message.contains("session_id"), "{}", out.message);
 }
@@ -339,13 +291,7 @@ async fn read_without_session_id_is_refused_not_panicking() {
 #[tokio::test]
 #[serial_test::parallel(pty_global_manager)]
 async fn read_of_unknown_session_is_no_such_session() {
-    let out = TerminalTool
-        .call(TerminalArgs {
-            action: TerminalAction::Read,
-            session_id: Some("does-not-exist".to_string()),
-            until: None,
-            timeout_ms: None,
-        })
+    let out = observe("read", serde_json::json!({"session_id": "does-not-exist"}))
         .await
         .unwrap();
     assert!(!out.success);
@@ -1167,12 +1113,7 @@ async fn a_tombstoned_terminal_answers_its_owner_and_nobody_else() {
     let out = crate::gateway::caller_identity::CALLER_USER
         .scope(
             Some("alice".to_string()),
-            TerminalTool.call(TerminalArgs {
-                action: TerminalAction::Read,
-                session_id: Some("t-1".to_string()),
-                until: None,
-                timeout_ms: None,
-            }),
+            observe("read", serde_json::json!({"session_id": "t-1"})),
         )
         .await
         .unwrap();
@@ -1206,12 +1147,7 @@ async fn a_tombstoned_terminal_answers_its_owner_and_nobody_else() {
     let bob = crate::gateway::caller_identity::CALLER_USER
         .scope(
             Some("bob".to_string()),
-            TerminalTool.call(TerminalArgs {
-                action: TerminalAction::Read,
-                session_id: Some("t-1".to_string()),
-                until: None,
-                timeout_ms: None,
-            }),
+            observe("read", serde_json::json!({"session_id": "t-1"})),
         )
         .await
         .unwrap();
@@ -1226,12 +1162,7 @@ async fn a_tombstoned_terminal_answers_its_owner_and_nobody_else() {
     let actorless = crate::gateway::caller_identity::CALLER_USER
         .scope(
             None,
-            TerminalTool.call(TerminalArgs {
-                action: TerminalAction::Read,
-                session_id: Some("t-1".to_string()),
-                until: None,
-                timeout_ms: None,
-            }),
+            observe("read", serde_json::json!({"session_id": "t-1"})),
         )
         .await
         .unwrap();
@@ -1288,4 +1219,232 @@ fn the_tombstone_envelope_carries_the_output_clause_in_its_message() {
             &serde_json::Value::Null
         )
     );
+}
+
+// ---------------------------------------------------------------------------
+// A4 RED — canonical terminal observation capabilities.
+//
+// All names carry the `terminal_capability_` prefix so one filter selects the
+// whole A4 set. Every test below fails to COMPILE today because
+// `terminal::capabilities` does not exist; GREEN converts `terminal.rs` into a
+// module directory exposing `capabilities` with:
+//
+//   pub fn normalize_terminal_compat_call(name: &str, input: Value)
+//       -> Result<(String, Value), ToolError>;
+//   pub fn register_observation_capabilities(
+//       registry: &ToolHandlerRegistry, scope: &mut ToolRegistrationScope)
+//       -> Result<(), ToolError>;
+//   pub(crate) fn require_operator_caller() -> Result<(), ToolError>;
+//   pub(crate) async fn invoke_observation(name: &str, input: Value)
+//       -> Result<ToolOutput, ToolError>;   // inline gate + dispatch, shared by all 6 handlers
+// ---------------------------------------------------------------------------
+
+const TERMINAL_CAPABILITY_CANONICAL: [&str; 6] = [
+    "terminal_sessions_list",
+    "terminal_sessions_read",
+    "terminal_sessions_status",
+    "terminal_sessions_wait",
+    "terminal_sessions_explain",
+    "terminal_sessions_attach",
+];
+
+fn terminal_capability_ctx(role: Option<&str>) -> crate::tools::turn_context::TurnContext {
+    use crate::routing::session_key::SessionKey;
+    crate::tools::turn_context::TurnContext {
+        session_key: SessionKey::Ephemeral {
+            agent_id: "main".to_string(),
+            ephemeral_id: "terminal-capability-test".to_string(),
+        },
+        run_id: String::new(),
+        channel_id: String::new(),
+        conversation_id: String::new(),
+        caller_role: role.map(str::to_owned),
+        channel_tool_permissions: None,
+        unattended: false,
+        plan_gate: None,
+        side_question: false,
+    }
+}
+
+#[test]
+fn terminal_capability_normalize_maps_each_read_action_to_its_canonical_name() {
+    use super::capabilities::normalize_terminal_compat_call;
+    use serde_json::json;
+
+    let cases = [
+        ("list", "terminal_sessions_list"),
+        ("read", "terminal_sessions_read"),
+        ("status", "terminal_sessions_status"),
+        ("wait", "terminal_sessions_wait"),
+        ("explain", "terminal_sessions_explain"),
+    ];
+    for (action, canonical) in cases {
+        let input = json!({
+            "action": action,
+            "session_id": "s1",
+            "until": "idle",
+            "timeout_ms": 5
+        });
+        let (name, out) = normalize_terminal_compat_call("terminal", input)
+            .unwrap_or_else(|e| panic!("action `{action}` must normalize: {e}"));
+        assert_eq!(name, canonical, "action `{action}`");
+        assert_eq!(
+            out,
+            json!({"session_id": "s1", "until": "idle", "timeout_ms": 5}),
+            "action `{action}`: only the `action` key is stripped; other args pass through"
+        );
+    }
+
+    // The documented minimal shape.
+    let (name, out) =
+        normalize_terminal_compat_call("terminal", json!({"action": "read", "session_id": "x"}))
+            .unwrap();
+    assert_eq!(name, "terminal_sessions_read");
+    assert_eq!(out, json!({"session_id": "x"}));
+}
+
+#[test]
+fn terminal_capability_normalize_rejects_unknown_missing_or_write_actions() {
+    use super::capabilities::normalize_terminal_compat_call;
+    use serde_json::json;
+
+    for bad in [
+        json!({"action": "spawn"}),
+        json!({"action": "input", "session_id": "x"}),
+        json!({"action": "attach", "session_id": "x"}),
+        json!({"action": ""}),
+        json!({"action": 7}),
+        json!({"session_id": "x"}),
+        json!("not an object"),
+    ] {
+        assert!(
+            normalize_terminal_compat_call("terminal", bad.clone()).is_err(),
+            "legacy `terminal` call {bad} must be refused, not guessed at"
+        );
+    }
+}
+
+#[test]
+fn terminal_capability_normalize_passes_canonical_and_foreign_names_through() {
+    use super::capabilities::normalize_terminal_compat_call;
+    use serde_json::json;
+
+    for name in
+        TERMINAL_CAPABILITY_CANONICAL
+            .iter()
+            .copied()
+            .chain(["file_read", "terminal_other", ""])
+    {
+        // Includes an `action` key: only the literal name `terminal` is
+        // rewritten; everything else is returned byte-identical.
+        let input = json!({"action": "read", "session_id": "x"});
+        let (out_name, out_input) = normalize_terminal_compat_call(name, input.clone()).unwrap();
+        assert_eq!(out_name, name);
+        assert_eq!(out_input, input, "`{name}` input must be untouched");
+    }
+}
+
+#[test]
+fn terminal_capability_register_observation_capabilities_registers_exactly_the_six() {
+    use super::capabilities::register_observation_capabilities;
+    use crate::tools::{ToolHandlerRegistry, ToolRegistrationScope};
+
+    let registry = ToolHandlerRegistry::new();
+    let mut scope = ToolRegistrationScope::new("capability:terminal-observation");
+    register_observation_capabilities(&registry, &mut scope).expect("registration succeeds");
+
+    let mut names: Vec<String> = registry.snapshot().keys().cloned().collect();
+    names.sort();
+    let mut want: Vec<String> = TERMINAL_CAPABILITY_CANONICAL
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    want.sort();
+    assert_eq!(names, want, "exactly the six canonical observation names");
+    assert_eq!(
+        scope.steps().len(),
+        6,
+        "every registration is scope-tracked"
+    );
+    assert!(
+        registry.resolve("terminal").is_none(),
+        "legacy `terminal` must not be registered as a second identity"
+    );
+    for name in TERMINAL_CAPABILITY_CANONICAL {
+        let entry = registry.resolve_entry(name).expect("registered");
+        assert_eq!(entry.descriptor.name, name);
+        assert_eq!(entry.handler.definition().name, name);
+    }
+}
+
+#[test]
+fn terminal_capability_require_operator_caller_mirrors_legacy_caller_is_operator() {
+    use super::capabilities::require_operator_caller;
+    use crate::tools::turn_context::TURN_CONTEXT;
+
+    // Absent TURN_CONTEXT is trusted (cron/internal/local daemon): legacy
+    // `caller_is_operator()` is `current_turn_context().is_none_or(..)`.
+    assert!(
+        require_operator_caller().is_ok(),
+        "absent context = trusted"
+    );
+
+    for (role, ok) in [
+        (None, true),
+        (Some("operator"), true),
+        (Some("member"), false),
+        (Some("guest"), false),
+    ] {
+        let got = TURN_CONTEXT.sync_scope(terminal_capability_ctx(role), require_operator_caller);
+        assert_eq!(got.is_ok(), ok, "caller_role {role:?}");
+    }
+}
+
+#[tokio::test]
+async fn terminal_capability_canonical_handlers_refuse_non_operator_callers() {
+    // `ToolHandlerRegistry` wraps handlers in `AdmissionHandler`, which refuses
+    // any direct `invoke` lacking a dispatch verdict *before* the inner handler
+    // runs — so the inline operator hard-refusal cannot be observed through the
+    // registry. Every registered handler's `invoke` therefore routes through ONE
+    // inner entrypoint, and that entrypoint is what is pinned here:
+    //
+    //   pub(crate) async fn invoke_observation(name: &str, input: Value)
+    //       -> Result<ToolOutput, ToolError>
+    //
+    // Its first act is the operator check — before parsing `input`, before
+    // touching the PTY manager — so a refusal never carries data. The refusal
+    // keeps the LEGACY envelope (an `Ok` value with `success: false`, the shape
+    // callers of the former `terminal` tool already parse), not an `Err`.
+    use super::capabilities::invoke_observation;
+    use super::TerminalOutput;
+    use crate::tools::turn_context::TURN_CONTEXT;
+    use serde_json::json;
+
+    const LEGACY_REFUSAL: &str = "terminal requires operator; refused. An operator approving this call's own escalation card does not currently lift this refusal — nothing re-stamps the caller's role after approval.";
+
+    for name in TERMINAL_CAPABILITY_CANONICAL {
+        for role in ["member", "guest"] {
+            let result = TURN_CONTEXT
+                .scope(terminal_capability_ctx(Some(role)), async {
+                    invoke_observation(name, json!({"session_id": "x"})).await
+                })
+                .await;
+            let output = result.unwrap_or_else(|e| {
+                panic!("`{name}`/{role}: refusal is an Ok legacy envelope, got Err({e:?})")
+            });
+            let envelope: TerminalOutput = serde_json::from_value(output.value.clone())
+                .unwrap_or_else(|e| panic!("`{name}`/{role}: not a TerminalOutput: {e}"));
+            assert!(!envelope.success, "`{name}`/{role}: must not succeed");
+            assert_eq!(envelope.message, LEGACY_REFUSAL, "`{name}`/{role}");
+            assert!(
+                envelope.data.is_none(),
+                "`{name}`/{role}: refusal carries no data"
+            );
+            assert!(!envelope.lost_with_restart, "`{name}`/{role}");
+            assert!(
+                output.value.get("lost_with_restart").is_none(),
+                "`{name}`/{role}: legacy wire shape omits a false lost_with_restart"
+            );
+        }
+    }
 }

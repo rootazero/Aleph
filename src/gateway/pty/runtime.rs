@@ -108,7 +108,6 @@ impl<'a> TerminalRuntime<'a> {
         }
     }
 
-    #[expect(dead_code, reason = "TerminalRuntime::attach is the A4 RPC seam")]
     pub(crate) fn attach(
         &self,
         caller: &ObservationCaller,

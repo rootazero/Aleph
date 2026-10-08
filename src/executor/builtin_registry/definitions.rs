@@ -55,7 +55,7 @@ use crate::builtin_tools::{
     DesktopCheckPermissions, DesktopGuiLocate, DesktopSom, DesktopTool, DoctorTool, FileEditTool,
     FileOpsTool, FileReadTool, FileWriteTool, FindTool, FlagUserCorrectionTool, GrepTool,
     ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, RememberTool,
-    SearchTool, SelectModelTool, SelfManageTool, TerminalTool, VaultStoreTool, WebFetchTool,
+    SearchTool, SelectModelTool, SelfManageTool, VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -241,17 +241,6 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "select_model",
         description: <crate::builtin_tools::select_model::SelectModelTool as crate::tools::AlephTool>::DESCRIPTION,
-        requires_config: false,
-    },
-    // Read-only agent panel, model-facing (herdr runtime port, phase 1, Task
-    // 11): a third lens over the same PTY sessions `pty.*`/`runtime.*` gate
-    // operator-only on both their faces — see `terminal.rs`'s module doc.
-    // Reads two process-global statics (`gateway::pty::manager()`,
-    // `gateway::runtime::agents()`), so `requires_config: false` like
-    // `select_model`/`doctor`.
-    BuiltinToolDefinition {
-        name: "terminal",
-        description: <crate::builtin_tools::terminal::TerminalTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -1110,7 +1099,6 @@ pub fn create_tool_boxed(
             Some(Box::new(tool))
         }
         "select_model" => Some(Box::new(SelectModelTool)),
-        "terminal" => Some(Box::new(TerminalTool)),
         "self_manage" => Some(Box::new(SelfManageTool::default())),
         "hooks_manage" => Some(Box::new(
             crate::builtin_tools::hooks_manage::HooksManageTool::new(),
@@ -1565,6 +1553,37 @@ const REG_INSERTED_NAMES: &[&str] = &["acp_session_control"];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn observation_descriptors() -> Vec<crate::tools::ToolCapabilityDescriptor> {
+        let registry = crate::tools::ToolHandlerRegistry::new();
+        let mut scope = crate::tools::ToolRegistrationScope::new("test:canonical-measurement");
+        crate::builtin_tools::terminal::capabilities::register_observation_capabilities(
+            &registry, &mut scope,
+        )
+        .unwrap();
+        registry
+            .descriptor_snapshot()
+            .values()
+            .map(|d| (**d).clone())
+            .collect()
+    }
+
+    /// A4 RED: legacy `terminal` has no executor descriptor or dispatch arm —
+    /// the canonical `terminal_sessions_*` capabilities are the only callable
+    /// identity (the legacy name is an ingress-only adapter).
+    #[test]
+    fn terminal_capability_legacy_terminal_is_not_a_builtin_definition() {
+        assert!(
+            !BUILTIN_TOOL_DEFINITIONS
+                .iter()
+                .any(|d| d.name == "terminal"),
+            "legacy `terminal` descriptor must be removed from BUILTIN_TOOL_DEFINITIONS"
+        );
+        assert!(
+            create_tool_boxed("terminal", None).is_none(),
+            "legacy `terminal` dispatch arm must be removed from create_tool_boxed"
+        );
+    }
 
     /// Every tool the per-request tool service injects is measured.
     ///
@@ -3087,7 +3106,20 @@ mod tests {
     /// more; (3) no other tool names the restore surface — `list_folds` is a
     /// runtime answer (session_decompress{action:"list"}), not catalog
     /// bytes.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 117_174;
+    ///
+    /// 2026-10-06 (terminal capability parity A4): 117_174 -> 117_865 B,
+    /// measured by this test's own failure line on Linux (96_901 catalog +
+    /// 16_613 registry-only + 1_039 injected + 1_944 bridge + 1_368
+    /// canonical). The legacy `terminal` catalog description (677 B) is gone;
+    /// six `terminal_sessions_*` canonical descriptions (1_368 B, now
+    /// measured through `observation_descriptors()` so the ratchet does not
+    /// go blind to them) replace it: +691 B. Three questions: (1) each verb's
+    /// existence, its `session_id` requirement and its read-only guarantee
+    /// are not inferable from a bare name — and `attach` is a verb the single
+    /// `terminal` tool never exposed; (2) per-field detail lives in the
+    /// schema, the descriptions carry the verb and the read-only contract
+    /// only; (3) no other tool names the terminal-observation surface.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 117_865;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3106,7 +3138,10 @@ mod tests {
             .iter()
             .map(|(_, desc, _)| desc.len())
             .sum();
-        let total = catalog + registry_only + injected + bridge;
+        let observations = observation_descriptors();
+        let canonical: usize = observations.iter().map(|d| d.description.len()).sum();
+        let total = catalog + registry_only + injected + bridge + canonical;
+        println!("description measurement: total={total}, canonical={canonical}");
 
         let mut largest: Vec<(&str, usize)> = BUILTIN_TOOL_DEFINITIONS
             .iter()
@@ -3133,7 +3168,7 @@ mod tests {
         assert!(
             total <= CATALOG_DESCRIPTION_CEILING_BYTES,
             "builtin tool descriptions total {total} B ({catalog} B catalog + {registry_only} B \
-             registry-only + {injected} B injected + {bridge} B bridge), over the ceiling of \
+             registry-only + {injected} B injected + {bridge} B bridge + {canonical} B canonical), over the ceiling of \
              {CATALOG_DESCRIPTION_CEILING_BYTES} B. These \
              bytes ship in every request that lists these tools. Largest: {largest:?}. Answer \
              the three questions documented on CATALOG_DESCRIPTION_CEILING_BYTES before \
@@ -3204,7 +3239,19 @@ mod tests {
     /// bought the ability to see these bytes; cutting argument prose is a
     /// separate judgement against the three questions, not a measurement
     /// change.
-    const NON_CATALOG_SCHEMA_CEILING_BYTES: usize = 8_834;
+    ///
+    /// 2026-10-06 (terminal capability parity A4): 8_834 -> 10_253 B,
+    /// measured by this test's own failure line. The six canonical
+    /// `terminal_sessions_*` handlers ship their input schemas directly (no
+    /// BUILTIN_TOOL_DEFINITIONS row owns their schemas; boot's
+    /// `tool_catalog_init.rs` derives the runtime catalog rows from the
+    /// canonical registry descriptors), and the ratchet now measures them via
+    /// `observation_descriptors()` (+1_419 B: `wait` 707, `read`/`explain`/
+    /// `attach` 196 each, `list`/`status` 62 each). Three questions: (1) the
+    /// `until` / `timeout_ms` semantics (defaults, clamp, never refused) are
+    /// runtime facts the model cannot infer; (2) argument prose is already
+    /// one sentence per field; (3) no other surface states them.
+    const NON_CATALOG_SCHEMA_CEILING_BYTES: usize = 10_253;
 
     #[test]
     fn non_catalog_tool_schema_bytes_ratchet() {
@@ -3213,7 +3260,14 @@ mod tests {
             .chain(BRIDGE_TOOL_DESCRIPTIONS.iter())
             .map(|(name, _, schema)| (*name, schema().to_string().len()))
             .collect();
+        let observations = observation_descriptors();
+        sizes.extend(
+            observations
+                .iter()
+                .map(|d| (d.name.as_str(), d.input_schema.to_string().len())),
+        );
         let total: usize = sizes.iter().map(|(_, len)| len).sum();
+        println!("non-catalog schema measurement: total={total}");
         sizes.sort_by_key(|(_, len)| std::cmp::Reverse(*len));
 
         assert!(
@@ -3844,6 +3898,9 @@ mod tests {
     /// is pinned by the dispatch census in `dispatchable.rs` plus the
     /// catalog/group/dispatch registrations the C2 Task 3 ledger lists.
     ///
+    /// 2026-10-06: 134 -> 133: retired legacy terminal has no executor row;
+    /// canonical observations are measured separately from their registry.
+    ///
     /// 2026-10-01: 133 -> 134 for `browser_qa` (C3) — class (b), same shape
     /// as `browser_record`: the schema registers through the same browser
     /// tool loop, and the production wiring is pinned by the same
@@ -3865,8 +3922,8 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 134,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 134 \
+            missing.len() <= 133,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 133 \
              recorded here, so `registry_schema_bytes_ratchet` does not bound them. Three ways in, \
              and they are not equally fine. (a) The tool ships with no parameters at all — free, \
              and fine. (b) It registers only once a dependency is live, so its schema is unmeasured \
@@ -3875,7 +3932,7 @@ mod tests {
              here does not call — the schema does ship in every deployment and this test simply \
              cannot see it, so the residue is this test's blind spot rather than a production gap. \
              Five tools are in (c) as of 2026-09-02; if yours is one, pin the production fact with \
-             its own wiring test (see `terminal_wiring_tests::terminal_registers_its_schema`) \
+             its own wiring test \
              before raising this number. Raise this pin deliberately: {missing:?}",
             missing.len()
         );

@@ -288,7 +288,7 @@ pub use strategy_manage::{StrategyAction, StrategyArgs, StrategyOutput, Strategy
 pub use system_tool::{SystemArgs, SystemOutput, SystemTool};
 pub use task_manage::*;
 pub use team::*;
-pub use terminal::{TerminalAction, TerminalArgs, TerminalOutput, TerminalTool};
+pub use terminal::TerminalOutput;
 pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreTool};
 pub use voice_tools::{
     LocalVoiceArgs, LocalVoiceOutput, LocalVoiceTool, VoiceModeSetArgs, VoiceModeSetOutput,

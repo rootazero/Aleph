@@ -427,7 +427,15 @@ Python，而这台主机上没装解释器。**Windows 恰好是前台探测没�
 
 ### 3.3 借用运行时与工具面等待 / Borrowed observation runtime
 
-A2 将观察实现迁至 `src/gateway/pty/runtime.rs::TerminalRuntime<'a>`，只借用已有 `PtyManager` 与 `RuntimeAgents`，不新增 session store、sampler、时钟或 callable registry。`src/builtin_tools/terminal.rs` 保留 operator gate、schema、旧工具 envelope 与 `lost_with_restart` 墓碑 adapter；`src/gateway/handlers/runtime.rs` 将 Gateway caller 显式传给同一 runtime。`pty.*` RPC 接线仍待 A4，A2 不开放写入或实现 A3 approval proof。 / A2 shares observation over the existing stores; RPC capability dispatch and approval proofs are deferred.
+A2 将观察实现迁至 `src/gateway/pty/runtime.rs::TerminalRuntime<'a>`，只借用已有 `PtyManager` 与 `RuntimeAgents`，不新增 session store、sampler 或时钟。A4 的 `src/builtin_tools/terminal/capabilities.rs` 注册六个 `terminal_sessions_*` canonical handlers，拥有 operator gate/schema，复用 `src/builtin_tools/terminal.rs` 的旧工具 envelope 与 `lost_with_restart` 墓碑 adapter；catalog 从 registry 派生。旧 `terminal {action}` 仅在 `tools.invoke` ingress 归一化后走带请求 caller role 与 call identity 的 scoped dispatch。`pty.attach` / `runtime.*` 直接传 `ObservationCaller::Gateway` 给同一 runtime，不投影为 Tool caller；A3 admission/proof 不变，A4 不开放写入。 / A4 wires six canonical read handlers and scoped RPC compatibility; Gateway RPCs retain their distinct caller semantics and A3 proof remains unchanged.
+
+**A4 `tools.invoke` 结构化返回（`ResultTransport::StructuredRpc`）/ Structured RPC result.** canonical `terminal_sessions_*` 经 `src/gateway/handlers/tools_invoke.rs::invoke_canonical` 走**每请求一个**的 `ScopedToolService`，并在该请求的 service 上显式 opt-in `with_structured_rpc_transport()`（`src/tools/scoped/builder.rs`；枚举在 `src/tools/scoped/mod.rs::ResultTransport`，默认 `ModelContext`）。该选择只随这一个请求的 service 存在，不是全局或 task-local。成功时 RPC 的 `result` 仍是**完整类型化 JSON**（`output.value`）；只有 `apply_layer_two` 里面向模型上下文的下游被旁路：model-ingress 清洗、result-token 预算、offload 落盘、文本 flatten、prompt tally 计费。大屏幕 envelope 因此不再被默认 4000-token 预算截成字符串（回归 `terminal_capability_rpc_preserves_large_structured_envelope`，`apply_layer_two` 侧见 `structured_rpc_transport_preserves_large_json_and_skips_prompt_tally`）。准入与执行不变：captured-entry / A3 proof 闸、operator gate 照旧在 `apply_layer_two` 之前执行；`apply_layer_two` 中先于旁路的 metadata hoist也照旧。**未新增 transport 层大小上限**——这是已知取舍：旁路预算后，一次 RPC 返回的体积只受 handler 自身 schema/屏幕尺寸约束。 / `tools.invoke` opts the one per-request `ScopedToolService` into `StructuredRpc`; the success value stays the full typed JSON, and only model-facing ingress cleaning, token budget, offload, flattening and prompt tally are bypassed. Admission/execution gates (captured entry, A3 proof, operator gate) and metadata hoists are unchanged. No transport-size cap was added.
+
+**A4 策略兼容（已实现）/ Policy compat (implemented).** 旧 `terminal` 条目在 agent 的 `allowed_tools` / `denied_tools` 里继续对**五个旧动作**（`list/read/status/wait/explain`，无论以旧名或 canonical 名调用）生效；`attach` 从无旧别名，`terminal` 的 deny/allow 既不拒绝也不准入它；deny 优先，canonical deny 压过 legacy allow，反之亦然。`src/gateway/handlers/tools_invoke.rs::is_tool_allowed_with_legacy_terminal_alias` 只对这五个 canonical 名创建请求级策略副本，再调用既有 `AgentDef::is_tool_allowed`；不修改配置、registry 或权限判据。对应 RED→GREEN 测试为 `terminal_capability_legacy_terminal_*` / `terminal_capability_canonical_deny_beats_legacy_allow`。 / Legacy `terminal` policy entries still govern the five legacy actions under either name, never `attach`, with deny-first semantics. The request-local compatibility helper reuses the existing allow/deny predicate.
+
+**Gateway 直连设计偏离（已获批）/ Approved deviation.** `pty.attach` / `runtime.*` 仍由 Gateway 直接调用 `TerminalRuntime`（`ObservationCaller::Gateway`），**没有**实现 `invoke_terminal_projection` 投影层。 / Gateway RPCs call `TerminalRuntime` directly; no `invoke_terminal_projection` exists.
+
+**A4 验证状态 / A4 verification.** Full Core baseline remains 20669 passed / 18 failed / 19 ignored, exit 101 (the unrelated red set is not reclassified here); the targeted A4 matrix, including protocol/panel terminal filters and the final `gateway::pty` rerun, passed. The existing clippy baseline blocker is `interfaces/cli/src/commands/open_cmd.rs:118`. A4 is committed; A5/A6/A7, B and C, full Core remediation, clippy remediation and real-machine QA remain future work. / The targeted A4 matrix passed; full parity is not claimed.
 
 `wait` 先订阅已有 generation watch，再判定；取消使用 `CancellationToken`，不轮询 screen、不跨 await 持锁。已关闭 PTY 优先返回 `gone`，即使退出结算尚未删掉旧 agent row；这不代表进程已回收。真实 close + stale row 回归在 `closed_pty_wins_over_a_stale_matching_agent_row`。 / An absent PTY wins over a stale row, without claiming process settlement.
 
@@ -452,7 +460,7 @@ A2 将观察实现迁至 `src/gateway/pty/runtime.rs::TerminalRuntime<'a>`，只
 |---|---|---|
 | RPC（`pty.*` / `runtime.*`） | operator-only | `src/gateway/method_admin.rs::ADMIN_PREFIXES` |
 | 事件（`pty.screen` / `pty.exit` / `runtime.agents.changed`） | operator-only | `src/gateway/event_scope.rs::default_rules` |
-| 工具（`terminal`） | operator-only **两道** | `src/gateway/method_authz.rs::OPERATOR_TOOLS` + `src/builtin_tools/terminal.rs::caller_is_operator` 内联 |
+| 工具（六个 `terminal_sessions_*`；`tools.invoke` 保留旧 `terminal {action}`） | operator-only **两道** | `src/gateway/method_authz.rs::OPERATOR_TOOLS` + `src/builtin_tools/terminal/capabilities.rs::require_operator_caller` 内联 |
 | 子系统开关 | `[policies.terminal] enabled` | `src/config/types/policies/terminal.rs::TerminalConfig`；执行点 `src/gateway/handlers/pty.rs::handle_spawn`（每次 spawn 读新值）；关掉会杀掉在飞会话（`live_apply` 的 `"policies.terminal"` 臂调 `PtyManager::close_all`） |
 | spawn 目录 | 工作区根内 | `src/gateway/pty/jail.rs::resolve_spawn_cwd`。**只管起点**——终端里的 `cd` 不受约束，别把它当隔离引用 |
 
@@ -482,7 +490,7 @@ A2 将观察实现迁至 `src/gateway/pty/runtime.rs::TerminalRuntime<'a>`，只
 （把 `check_operator_gate` 已经算出的 `approved_by_operator_gate` 传下来），那条缝还不存在。
 **别用「删掉内联检查」来修它**：审批卡的文案今天写着 "…which changes Aleph's own configuration"，
 对一个只读工具是假的，删掉内联检查等于让一张贴错标签的卡真的授出一次别人终端屏幕的读取。
-A2 保留这两道闸；call-bound approval proof 属于尚未实施的 A3，不能把 caller role 改成 operator 来替代证明。参见 `src/gateway/method_authz.rs` 的 `terminal` 条目。 / A2 preserves both gates; A3 must bind approval to the call rather than elevate the ambient role.
+A4 保留这两道闸与旧拒绝 envelope；既有 A3 call-bound approval proof 不会重盖 caller role，不能把 role 改成 operator 来替代证明。参见 `src/gateway/method_authz.rs` 的六个 canonical 条目与保留的 `terminal` 条目。 / A4 preserves both gates and the legacy refusal envelope; A3 proof does not elevate the ambient role.
 
 ---
 

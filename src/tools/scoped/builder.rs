@@ -38,6 +38,7 @@ impl ScopedToolService {
             config_approval_requester: None,
             turn_context: None,
             result_store: None,
+            result_transport: Default::default(),
             schema_cache: arc_swap::ArcSwap::from_pointee(None),
             cache_generation: std::sync::atomic::AtomicU64::new(0),
             health: None,
@@ -50,6 +51,16 @@ impl ScopedToolService {
             exec_tier: None,
             unattended: false,
         }
+    }
+
+    /// Request-owned opt-in: deliver Layer 2 results as the structured value
+    /// for an RPC transport instead of the budgeted model-context text.
+    /// Only the service built for that single request carries it; it is never
+    /// global or task-local.
+    #[must_use]
+    pub(crate) fn with_structured_rpc_transport(mut self) -> Self {
+        self.result_transport = super::ResultTransport::StructuredRpc;
+        self
     }
 
     /// Attach the merged tool permission policy (global → agent → channel,

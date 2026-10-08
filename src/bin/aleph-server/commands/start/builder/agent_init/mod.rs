@@ -173,6 +173,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // `canvas.*` RPC handlers hold (only that instance carries the event
     // bus). `None` when the canvas root could not be created at boot.
     canvas_store: Option<Arc<alephcore::canvas::CanvasStore>>,
+    // The canonical `ToolHandlerRegistry` (`tool_registry_phase2` in
+    // `start/mod.rs`). `tools.invoke` dispatches the canonical terminal
+    // observation capabilities through it; they are not executor-registry
+    // tools, so the raw `BuiltinToolRegistry` cannot answer for them.
+    canonical_tools: Arc<alephcore::tools::ToolHandlerRegistry>,
 ) -> alephcore::Result<AgentHandlersResult> {
     // Assigned in both the real-execution branch and the simulated branch
     // below; deferred init keeps the dead initial value out (and lets the
@@ -2063,6 +2068,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             &memory_ext_registry,
             daemon,
             tool_catalog.clone(),
+            canonical_tools,
         )
         .await,
     );

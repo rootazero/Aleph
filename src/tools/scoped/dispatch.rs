@@ -1867,6 +1867,17 @@ impl ScopedToolService {
         // nothing, so the success path stays byte-identical.
         super::artifact_harvest::annotate_media_failures(&mut out.value, &media_failures);
 
+        // An RPC caller consumes the structured value itself, not a prompt
+        // rendering of it. Model-ingress hygiene, the result-token budget,
+        // offload persistence and text flattening exist to protect a model's
+        // context window; applying them here would destroy a valid protocol
+        // envelope (and charge the session's prompt tally for output no model
+        // ever sees). Admission, execution and the metadata hoists above have
+        // already run identically for both transports.
+        if self.result_transport == super::ResultTransport::StructuredRpc {
+            return out;
+        }
+
         let explicit = self.inner.max_result_tokens_for(name);
         let budget = crate::tools::result_processing::resolve_result_budget(name, explicit);
 
@@ -2511,5 +2522,57 @@ mod tests {
             )
             .await;
         assert_eq!(tally_of(&session), None);
+    }
+
+    /// A request-owned StructuredRpc service returns the tool's value
+    /// untouched — no flatten, no truncation — and does not charge the
+    /// session's prompt tally for output no model receives.
+    #[tokio::test]
+    async fn structured_rpc_transport_preserves_large_json_and_skips_prompt_tally() {
+        let (turn, session) = tally_turn();
+        let svc = bare_service().with_structured_rpc_transport();
+        let big = "x".repeat(300 * 1024);
+        let value = serde_json::json!({"success": true, "data": {"blob": big, "n": [1, 2, 3]}});
+        let out = crate::tools::turn_context::TURN_CONTEXT
+            .scope(
+                turn,
+                svc.apply_layer_two(
+                    "terminal_sessions_read",
+                    ToolOutput {
+                        value: value.clone(),
+                        metadata: Default::default(),
+                    },
+                    soon(),
+                ),
+            )
+            .await;
+        assert_eq!(out.value, value);
+        assert_eq!(tally_of(&session), None, "RPC output must not be charged");
+    }
+
+    /// The metadata hoists run before the transport branch for both
+    /// transports: the presentation leaves `value` and lands in metadata.
+    #[tokio::test]
+    async fn structured_rpc_transport_keeps_metadata_hoists() {
+        let svc = bare_service().with_structured_rpc_transport();
+        let out = svc
+            .apply_layer_two(
+                "terminal_sessions_read",
+                ToolOutput {
+                    value: serde_json::json!({
+                        "ok": true,
+                        "_presentation": serde_json::to_value(
+                            aleph_protocol::Presentation::FileChanges { changes: vec![] }
+                        )
+                        .unwrap(),
+                    }),
+                    metadata: Default::default(),
+                },
+                soon(),
+            )
+            .await;
+        assert!(out.value.get("_presentation").is_none(), "{:?}", out.value);
+        assert!(out.metadata.presentation.is_some());
+        assert_eq!(out.value["ok"], true);
     }
 }
