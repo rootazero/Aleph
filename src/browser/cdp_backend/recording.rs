@@ -700,6 +700,11 @@ async fn run_recording(p: RunParams) {
         recording_id,
         started,
     } = p;
+    // The tap's private `_guard` cannot be named from here. The `..` pattern
+    // only moves the listed fields out, so the partially-moved `tap` (and the
+    // guard inside it) stays alive until `run_recording`'s scope ends on every
+    // exit path; there its `Drop` acks any frames still pending and marks the
+    // tap closed.
     let RecordingTap {
         frames,
         mut end,
@@ -1616,8 +1621,8 @@ mod tests {
         assert_eq!(
             acked,
             receipt.encoded_frames + receipt.dropped_frames,
-            "acks == encoded + dropped (buffered-at-kill frames are acked to nobody): \
-             {acked} acks, {receipt:?}"
+            "acks == encoded + dropped (buffered-at-kill frames are acked by the dropped \
+             RecordingTap's TapGuard, not by the registry): {acked} acks, {receipt:?}"
         );
     }
 

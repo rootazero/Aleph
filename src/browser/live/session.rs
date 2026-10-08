@@ -1,7 +1,8 @@
 //! Per-target stream state held by the profile owner.
 
+use std::collections::BTreeSet;
 use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use aleph_cdp::methods::screencast;
 use aleph_cdp::{CdpConnection, CdpError, SessionId};
@@ -27,15 +28,77 @@ pub(crate) enum EndReason {
 pub(crate) struct FrameAcker {
     conn: CdpConnection,
     session: SessionId,
+    /// Set on a recording's acker: the frames the owner handed to the tap and
+    /// nobody has acked yet.
+    pending: Option<SharedPending>,
 }
 
 impl FrameAcker {
     pub(crate) fn new(conn: CdpConnection, session: SessionId) -> Self {
-        Self { conn, session }
+        Self {
+            conn,
+            session,
+            pending: None,
+        }
+    }
+
+    fn for_tap(conn: CdpConnection, session: SessionId, pending: SharedPending) -> Self {
+        Self {
+            conn,
+            session,
+            pending: Some(pending),
+        }
     }
 
     pub(crate) async fn ack(&self, engine_ack_id: u64) -> Result<(), CdpError> {
+        if let Some(pending) = &self.pending {
+            lock_pending(pending).ids.remove(&engine_ack_id);
+        }
         screencast::screencast_frame_ack(&self.conn, Some(&self.session), engine_ack_id).await
+    }
+}
+
+/// Frames claimed by a recording tap and not yet acked. `closed` is set when
+/// the tap goes away: from then on the owner acks everything itself.
+#[derive(Default)]
+pub(crate) struct PendingAcks {
+    pub(crate) ids: BTreeSet<u64>,
+    pub(crate) closed: bool,
+}
+
+pub(crate) type SharedPending = Arc<Mutex<PendingAcks>>;
+
+pub(crate) fn lock_pending(pending: &SharedPending) -> MutexGuard<'_, PendingAcks> {
+    pending.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Dropped with the [`RecordingTap`]: every frame the tap claimed but never
+/// acked (queued, or taken and abandoned) is acked here, so a recorder that
+/// dies mid-flight cannot leave the engine waiting forever on its ack.
+pub(crate) struct TapGuard {
+    acker: FrameAcker,
+    pending: SharedPending,
+}
+
+impl Drop for TapGuard {
+    fn drop(&mut self) {
+        let ids = {
+            let mut pending = lock_pending(&self.pending);
+            pending.closed = true;
+            std::mem::take(&mut pending.ids)
+        };
+        if ids.is_empty() {
+            return;
+        }
+        // No runtime means the process is going down; the engine goes with it.
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let acker = self.acker.clone();
+            rt.spawn(async move {
+                for id in ids {
+                    let _ = acker.ack(id).await;
+                }
+            });
+        }
     }
 }
 
@@ -45,6 +108,7 @@ pub(crate) struct TapSlot {
     pub(crate) captured: Arc<AtomicU64>,
     pub(crate) dropped: Arc<AtomicU64>,
     pub(crate) end: watch::Sender<Option<EndReason>>,
+    pub(crate) pending: SharedPending,
 }
 
 /// Recorder-side half: what a recording consumes instead of subscribing to
@@ -55,6 +119,38 @@ pub(crate) struct RecordingTap {
     pub(crate) acker: FrameAcker,
     pub(crate) captured: Arc<AtomicU64>,
     pub(crate) dropped: Arc<AtomicU64>,
+    /// Acks whatever the recorder leaves unacked when this tap is dropped.
+    _guard: TapGuard,
+}
+
+impl RecordingTap {
+    /// Both halves of one tap.
+    pub(crate) fn pair(conn: &CdpConnection, session: &SessionId) -> (TapSlot, RecordingTap) {
+        let (tx, frames) = mpsc::channel(TAP_CAPACITY);
+        let (end_tx, end) = watch::channel(None);
+        let captured = Arc::new(AtomicU64::new(0));
+        let dropped = Arc::new(AtomicU64::new(0));
+        let pending = SharedPending::default();
+        let slot = TapSlot {
+            tx,
+            captured: captured.clone(),
+            dropped: dropped.clone(),
+            end: end_tx,
+            pending: pending.clone(),
+        };
+        let tap = RecordingTap {
+            frames,
+            end,
+            acker: FrameAcker::for_tap(conn.clone(), session.clone(), pending.clone()),
+            captured,
+            dropped,
+            _guard: TapGuard {
+                acker: FrameAcker::new(conn.clone(), session.clone()),
+                pending,
+            },
+        };
+        (slot, tap)
+    }
 }
 
 /// One target's live stream: one engine screencast, one epoch, one hub, and

@@ -385,8 +385,8 @@ const ANSWER_FAILURE_LIMIT: u32 = 3;
 /// Either way the feed slot is released and the registry entry is removed on the way out, so a later `ensure` re-arms
 /// instead of mistaking a corpse for a running loop.
 async fn run_loop(
-    conn: CdpConnection,
     owner: Arc<LiveProfileOwner>,
+    conn: CdpConnection,
     mut feed: FetchFeed,
     session: SessionId,
     profile: String,
@@ -394,6 +394,13 @@ async fn run_loop(
     registry: Arc<RouteRegistry>,
     ssrf: Arc<BrowserSsrfGuard>,
 ) {
+    // The `owner` Arc is the loop's lifetime anchor: `CdpBackend` is rebuilt
+    // per call, so the only thing keeping the dispatcher (and this feed's
+    // sender) alive across the navigation is this parameter. Drop it and
+    // `feed.rx` returns `None` on the next `recv`, the loop exits, and
+    // `routes.take_loop` clears the registry entry — so a later `ensure`
+    // re-arms instead of finding a corpse.
+    let _owner = owner;
     let mut last_lagged = 0u64;
     let mut answer_failures = 0u32;
     while let Some(ev) = feed.rx.recv().await {
@@ -532,7 +539,6 @@ async fn run_loop(
             break;
         }
     }
-    owner.unregister_fetch(&tab_id);
     registry.take_loop(&profile, &tab_id);
 }
 
@@ -572,14 +578,14 @@ impl CdpBackend {
         }
         let handle = self.handle().await?;
         let owner = handle.live_owner();
-        let feed = owner.register_fetch(tab_id, session);
+        let feed = owner.register_fetch(tab_id, session).await;
         if let Err(e) = fetch::enable(&handle.conn, Some(session)).await {
-            owner.unregister_fetch(tab_id);
+            // Dropping `feed` unhooks this attempt's slot.
             return Err(map_cdp_err(self.engine(), "Fetch.enable", e));
         }
         let task = tokio::spawn(run_loop(
+            owner.clone(),
             handle.conn.clone(),
-            owner,
             feed,
             session.clone(),
             profile.clone(),
@@ -601,6 +607,9 @@ impl CdpBackend {
     /// makes the disable moot, and the loop's own session-death exit covers
     /// the rest.
     pub(crate) async fn stop_intercept_loop_if_idle(&self, tab_id: &str) {
+        // Same lock as `ensure_intercept_loop`: a disarm must not interleave
+        // with a re-arm of the same tab (it would take the NEW loop's entry).
+        let _serial = self.routes.start_lock().await;
         let profile = self.profile_name();
         let tab_alive = match self.handle().await {
             Ok(handle) => handle.ensure_tab(tab_id).await.ok(),
@@ -617,10 +626,8 @@ impl CdpBackend {
                 let _ = fetch::disable(&handle.conn, Some(&session)).await;
             }
         }
+        // Aborting drops the loop's feed, which unhooks its (and only its) slot.
         abort.abort();
-        if let Ok(handle) = self.handle().await {
-            handle.live_owner().unregister_fetch(tab_id);
-        }
     }
 
     /// `browser_network{action:"mock_add"}`: register the rule, then ARM
@@ -809,7 +816,7 @@ mod tests {
 
     /// A live loop driving a real connection to `server`. The test owns the
     /// JoinHandle, so "the loop exited" is an awaitable fact, not a guess.
-    fn spawn_loop(
+    async fn spawn_loop(
         conn: &CdpConnection,
         registry: &Arc<RouteRegistry>,
         guard: Arc<crate::browser::network_policy::BrowserSsrfGuard>,
@@ -818,23 +825,31 @@ mod tests {
         // connection's event subscription here, before the test pushes events.
         let resolver: crate::browser::live::SessionResolver =
             Arc::new(|tab| Box::pin(async move { Err(BrowserError::TabNotFound(tab)) }));
-        let owner = LiveProfileOwner::new(
+        let owner = crate::browser::live::LiveProfileOwner::new(
             "p",
             crate::browser::engine::Engine::Chromium,
             conn.clone(),
             resolver,
         );
-        let feed = owner.register_fetch("t1", &SessionId("S1".to_string()));
-        let handle = tokio::spawn(run_loop(
-            conn.clone(),
-            owner,
-            feed,
-            SessionId("S1".to_string()),
-            "p".to_string(),
-            "t1".to_string(),
-            registry.clone(),
-            guard,
-        ));
+        let feed = owner
+            .register_fetch("t1", &SessionId("S1".to_string()))
+            .await;
+        let (reg, conn2) = (registry.clone(), conn.clone());
+        let handle = tokio::spawn(async move {
+            // Production keeps the owner alive through the EngineHandle; here
+            // the task does — by moving the Arc into `run_loop`.
+            run_loop(
+                owner,
+                conn2,
+                feed,
+                SessionId("S1".to_string()),
+                "p".to_string(),
+                "t1".to_string(),
+                reg,
+                guard,
+            )
+            .await;
+        });
         registry.register_loop("p", "t1", handle.abort_handle());
         handle
     }
@@ -1216,7 +1231,7 @@ mod tests {
         let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
         let conn = connect(&server).await;
         let registry = Arc::new(RouteRegistry::new());
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
 
         server.push_event(paused("r1", "http://93.184.216.34/api/x", "GET", "S1"));
         assert!(
@@ -1246,7 +1261,7 @@ mod tests {
                 None,
             )
             .expect("add");
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
 
         server.push_event(paused("r7", "http://93.184.216.34/api/users", "GET", "S1"));
         assert!(
@@ -1285,7 +1300,7 @@ mod tests {
                 None,
             )
             .expect("add");
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
 
         server.push_event(paused("r8", "http://93.184.216.34/ads.js", "GET", "S1"));
         assert!(
@@ -1317,7 +1332,7 @@ mod tests {
                 None,
             )
             .expect("add");
-        let task = spawn_loop(&conn, &registry, default_guard());
+        let task = spawn_loop(&conn, &registry, default_guard()).await;
 
         server.push_event(paused(
             "r9",
@@ -1361,7 +1376,7 @@ mod tests {
         .await;
         let conn = connect(&server).await;
         let registry = Arc::new(RouteRegistry::new());
-        let task = spawn_loop(&conn, &registry, default_guard());
+        let task = spawn_loop(&conn, &registry, default_guard()).await;
 
         server.push_event(paused("r1", "http://169.254.169.254/latest", "GET", "S1"));
         assert!(
@@ -1410,7 +1425,7 @@ mod tests {
                 None,
             )
             .expect("add");
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
         assert!(
             registry.list("p")[0].active,
             "a live loop means the rule reads active"
@@ -1454,7 +1469,7 @@ mod tests {
         );
         let conn = connect(&server).await;
         let registry = Arc::new(RouteRegistry::new());
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
 
         server.push_event(paused("orphan", "http://93.184.216.34/a", "GET", "S1"));
         assert!(
@@ -1504,7 +1519,7 @@ mod tests {
                 None,
             )
             .expect("add");
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
 
         server.push_event(paused("r5", "http://93.184.216.34/api/x", "GET", "S1"));
         assert!(
