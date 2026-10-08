@@ -229,7 +229,10 @@ impl ConsumerState {
     /// backlog with `Invalidated` + the fresh replacement `Snapshot`.
     /// Returns `true` iff overflow fired and the backlog was cleared.
     fn enqueue_snapshot(&self, snapshot: HostSnapshot) -> bool {
-        let mut q = self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut q = self
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let backlog_cleared = if q.items.len() >= self.capacity {
             q.items.clear();
             q.items.push_back(ProjectionEvent::Invalidated);
@@ -237,7 +240,8 @@ impl ConsumerState {
         } else {
             false
         };
-        q.items.push_back(ProjectionEvent::Snapshot(snapshot.clone()));
+        q.items
+            .push_back(ProjectionEvent::Snapshot(snapshot.clone()));
         q.last_cursor = snapshot.registry_cursor;
         drop(q);
         self.wake.notify_one();
@@ -248,12 +252,16 @@ impl ConsumerState {
     /// ONE atomic unit: the pair is guaranteed to fit together, clearing the
     /// stale backlog first when it would not.
     fn enqueue_invalidation(&self, snapshot: HostSnapshot) {
-        let mut q = self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut q = self
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if q.items.len() + 2 > self.capacity {
             q.items.clear();
         }
         q.items.push_back(ProjectionEvent::Invalidated);
-        q.items.push_back(ProjectionEvent::Snapshot(snapshot.clone()));
+        q.items
+            .push_back(ProjectionEvent::Snapshot(snapshot.clone()));
         q.last_cursor = snapshot.registry_cursor;
         drop(q);
         self.wake.notify_one();
@@ -266,14 +274,18 @@ impl ConsumerState {
     /// On overflow the backlog is cleared and replaced with `Invalidated` +
     /// a fresh snapshot.
     fn enqueue_change(&self, change: CapabilityChange, cursor: Cursor, replacement: HostSnapshot) {
-        let mut q = self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut q = self
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if cursor <= q.last_cursor {
             return;
         }
         if q.items.len() >= self.capacity {
             q.items.clear();
             q.items.push_back(ProjectionEvent::Invalidated);
-            q.items.push_back(ProjectionEvent::Snapshot(replacement.clone()));
+            q.items
+                .push_back(ProjectionEvent::Snapshot(replacement.clone()));
             q.last_cursor = replacement.registry_cursor;
         } else {
             q.items.push_back(ProjectionEvent::Change(change));
@@ -335,8 +347,34 @@ pub enum DiagnosticPlane {
 /// until the release time elapses, an explicit `release()` runs, or the
 /// host is closed.
 struct DiagnosticHold {
+    /// Per-host monotonic id; every clear is conditional on it so a stale
+    /// timer or holder can never clear a newer hold.
+    id: u64,
     plane: DiagnosticPlane,
     release_at: tokio::time::Instant,
+    /// Host-owned expiry alarm. It (not the caller's future) is responsible
+    /// for clearing the slot at `release_at`; aborted on explicit release.
+    timer: tokio::task::JoinHandle<()>,
+}
+
+/// The single hold slot plus its id allocator, guarded by one mutex so
+/// install / release / close / timer expiry form one state machine.
+#[derive(Default)]
+struct DiagnosticHoldState {
+    next_id: u64,
+    active: Option<DiagnosticHold>,
+}
+
+impl DiagnosticHoldState {
+    /// Clear the slot if (and only if) it still holds hold `id`.
+    fn clear_if(&mut self, id: u64) -> bool {
+        if self.active.as_ref().is_some_and(|h| h.id == id) {
+            self.active = None;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -361,7 +399,8 @@ impl ApplierTestGate {
 struct HostInner {
     facade: Arc<ZahirFacade>,
     registry: ToolHandlerRegistry,
-    #[allow(dead_code)] // held to keep the ownership sender alive for the worker
+    /// The owner authority this host is mounted on. Also exposed (by Arc
+    /// identity) so diagnostic control can refuse a second authority.
     tree: Arc<OwnershipTree>,
     /// ONE explicit sync boundary: serializes `attach`'s consumer-insert +
     /// initial snapshot with the source worker's per-event fan-out, so the
@@ -397,7 +436,7 @@ struct HostInner {
     /// Active diagnostic hold. While `Some`, the worker for the corresponding
     /// `plane` suspends event advancement until the hold clears (release time
     /// elapses, `release()` runs, or the host closes).
-    diagnostic_hold: Mutex<Option<DiagnosticHold>>,
+    diagnostic_hold: Mutex<DiagnosticHoldState>,
     /// Notifies the held worker(s) when the hold releases (or expires).
     diagnostic_hold_notify: Notify,
     /// Total `Invalidated` enqueues on the default consumer (overflow
@@ -429,7 +468,8 @@ impl ProjectionHost {
 
         let default_scope = Scope::default();
         let initial = HostSnapshot::from_facade(facade.snapshot_entries_in_scope(&default_scope));
-        let default_consumer = Arc::new(ConsumerState::new(default_scope, DEFAULT_PENDING_CAPACITY));
+        let default_consumer =
+            Arc::new(ConsumerState::new(default_scope, DEFAULT_PENDING_CAPACITY));
         // Enqueue the initial snapshot into the DEFAULT delivery queue BEFORE
         // the source/applier tasks spawn, so the REAL default applier applies
         // it (Ruling16). `applied` starts `None`; no publisher state may
@@ -462,7 +502,7 @@ impl ProjectionHost {
             completion_notify: Notify::new(),
             #[cfg(test)]
             applier_test_gate: ApplierTestGate::new(),
-            diagnostic_hold: Mutex::new(None),
+            diagnostic_hold: Mutex::new(DiagnosticHoldState::default()),
             diagnostic_hold_notify: Notify::new(),
             replacement_count: AtomicU64::new(0),
             lag_count: AtomicU64::new(0),
@@ -487,8 +527,14 @@ impl ProjectionHost {
             Arc::downgrade(&inner),
             inner.cancel.clone(),
         ));
-        *inner.source_task.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
-        *inner.applier_task.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applier);
+        *inner
+            .source_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
+        *inner
+            .applier_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applier);
 
         host
     }
@@ -542,7 +588,7 @@ impl ProjectionHost {
             completion_notify: Notify::new(),
             #[cfg(test)]
             applier_test_gate: ApplierTestGate::new(),
-            diagnostic_hold: Mutex::new(None),
+            diagnostic_hold: Mutex::new(DiagnosticHoldState::default()),
             diagnostic_hold_notify: Notify::new(),
             replacement_count: AtomicU64::new(0),
             lag_count: AtomicU64::new(0),
@@ -563,8 +609,14 @@ impl ProjectionHost {
             Arc::downgrade(&inner),
             inner.cancel.clone(),
         ));
-        *inner.source_task.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
-        *inner.applier_task.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applier);
+        *inner
+            .source_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
+        *inner
+            .applier_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applier);
 
         host
     }
@@ -604,11 +656,22 @@ impl ProjectionHost {
         if self.inner.closed.load(Ordering::SeqCst) || self.inner.registry.is_closed() {
             return None;
         }
-        let applied = self.inner.applied.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let applied = self
+            .inner
+            .applied
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if applied.closed {
             return None;
         }
         applied.snapshot.clone()
+    }
+
+    /// The exact owner tree this host was mounted on. Crate-visible so
+    /// diagnostic control can verify authority identity with `Arc::ptr_eq`.
+    #[must_use]
+    pub(crate) fn owner_tree(&self) -> &Arc<OwnershipTree> {
+        &self.inner.tree
     }
 
     /// `true` once the host has been requested to close or has reached its
@@ -633,7 +696,11 @@ impl ProjectionHost {
     /// post-attach change.
     #[must_use]
     pub fn attach(&self, scope: Scope) -> ProjectionHandle {
-        let _publish = self.inner.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _publish = self
+            .inner
+            .publish
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let consumer = Arc::new(ConsumerState::new(scope, DEFAULT_PENDING_CAPACITY));
         let mut id = 0;
         if !self.inner.closed.load(Ordering::SeqCst) {
@@ -771,62 +838,84 @@ impl ProjectionHost {
         if duration.is_zero() || duration > Duration::from_millis(5000) {
             return Err(DiagnosticError::InvalidHoldDuration);
         }
+        if self.is_closing() {
+            return Err(DiagnosticError::Closed);
+        }
         let release_at = tokio::time::Instant::now() + duration;
-        {
+        let id = {
             let mut guard = self
                 .inner
                 .diagnostic_hold
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if guard.is_some() {
+            if guard.active.is_some() {
                 return Err(DiagnosticError::HoldAlreadyActive);
             }
-            *guard = Some(DiagnosticHold { plane, release_at });
-        }
+            guard.next_id = guard.next_id.wrapping_add(1);
+            let id = guard.next_id;
+            // The host owns expiry: the alarm clears the slot even if the
+            // caller's future is dropped. It holds only a `Weak` so it never
+            // extends the host's lifetime, and clears only its own id. It is
+            // spawned under the slot lock, so it cannot observe the slot
+            // before this hold is installed.
+            let weak = Arc::downgrade(&self.inner);
+            let timer = tokio::spawn(async move {
+                tokio::time::sleep_until(release_at).await;
+                if let Some(inner) = weak.upgrade() {
+                    let cleared = inner
+                        .diagnostic_hold
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clear_if(id);
+                    if cleared {
+                        inner.diagnostic_hold_notify.notify_waiters();
+                    }
+                }
+            });
+            guard.active = Some(DiagnosticHold {
+                id,
+                plane,
+                release_at,
+                timer,
+            });
+            id
+        };
         self.inner.diagnostic_hold_notify.notify_waiters();
 
-        let sleep = tokio::time::sleep_until(release_at);
-        let notify = self.inner.diagnostic_hold_notify.notified();
-        tokio::pin!(notify);
-        tokio::select! {
-            _ = sleep => {}
-            _ = &mut notify => {}
-        }
-
-        // Clear the hold if it is still ours.
-        let cleared = {
-            let mut guard = self
+        // Wait until hold `id` no longer occupies the slot (timer expiry,
+        // release, or close). Dropping this future has no effect on the slot.
+        loop {
+            let notified = self.inner.diagnostic_hold_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let still_ours = self
                 .inner
                 .diagnostic_hold
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(h) = guard.as_ref() {
-                if h.plane == plane && h.release_at == release_at {
-                    *guard = None;
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .active
+                .as_ref()
+                .is_some_and(|h| h.id == id);
+            if !still_ours {
+                return Ok(());
             }
-        };
-        if cleared {
-            self.inner.diagnostic_hold_notify.notify_waiters();
+            notified.await;
         }
-        Ok(())
     }
 
     /// Release any active diagnostic hold. No-op if no hold is active.
     pub fn diagnostic_release(&self) {
-        let mut guard = self
+        let taken = self
             .inner
             .diagnostic_hold
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if guard.is_some() {
-            *guard = None;
-            drop(guard);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .active
+            .take();
+        if let Some(hold) = taken {
+            // The slot is already cleared under the lock; aborting the alarm
+            // only avoids a redundant wake (its id-guarded clear is a no-op).
+            hold.timer.abort();
             self.inner.diagnostic_hold_notify.notify_waiters();
         }
     }
@@ -839,6 +928,9 @@ impl ProjectionHost {
         start_shutdown(&self.inner);
         let deadline = tokio::time::Instant::now() + Duration::from_millis(5000);
         loop {
+            let notify = self.inner.completion_notify.notified();
+            tokio::pin!(notify);
+            notify.as_mut().enable();
             {
                 let guard = self
                     .inner
@@ -854,8 +946,6 @@ impl ProjectionHost {
                 return Err(DiagnosticError::CloseTimeout { elapsed_ms: 5000 });
             }
             let remaining = deadline - now;
-            let notify = self.inner.completion_notify.notified();
-            tokio::pin!(notify);
             tokio::time::timeout(remaining, notify).await.ok();
         }
     }
@@ -899,7 +989,11 @@ impl ProjectionHandle {
     /// no per-handle delivery task: the handle owns only a receipt queue, so
     /// close linearizes removal and explicitly discards that queue.
     pub async fn close(self) {
-        let _publish = self.host.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _publish = self
+            .host
+            .publish
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut map = self
             .host
             .consumers
@@ -916,7 +1010,11 @@ impl Drop for ProjectionHandle {
             self.consumer.close_and_discard();
             return;
         }
-        let _publish = self.host.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _publish = self
+            .host
+            .publish
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut map = self
             .host
             .consumers
@@ -943,8 +1041,54 @@ impl Drop for ProjectionHost {
 /// Request host-local shutdown at the publish linearization point. Attached
 /// receipt queues are explicitly discarded; the default queue is retained so
 /// the real applier can finish the event it already captured.
+/// Suspend the calling worker while a diagnostic hold is active on `plane`.
+/// Returns `true` if it waited (the caller re-checks from the loop top) and
+/// `false` when there is nothing to wait for. Cancellation always bypasses
+/// the hold so ordinary shutdown is never delayed by a diagnostic hold.
+async fn wait_diagnostic_hold(
+    inner: &Weak<HostInner>,
+    plane: DiagnosticPlane,
+    cancel: &CancellationToken,
+) -> bool {
+    if cancel.is_cancelled() {
+        return false;
+    }
+    let Some(active) = inner.upgrade() else {
+        return false;
+    };
+    // Arm the wakeup BEFORE reading the slot so a concurrent release/expiry
+    // between the read and the await cannot be lost.
+    let notify = active.diagnostic_hold_notify.notified();
+    tokio::pin!(notify);
+    notify.as_mut().enable();
+    let release_at = active
+        .diagnostic_hold
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .active
+        .as_ref()
+        .filter(|h| h.plane == plane)
+        .map(|h| h.release_at);
+    let Some(release_at) = release_at else {
+        return false;
+    };
+    if release_at <= tokio::time::Instant::now() {
+        return false;
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {}
+        _ = tokio::time::sleep_until(release_at) => {}
+        _ = &mut notify => {}
+    }
+    true
+}
+
 fn request_local_close(inner: &Arc<HostInner>) {
-    let _publish = inner.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner
+        .publish
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !inner.closed.swap(true, Ordering::SeqCst) {
         let consumers = inner
             .consumers
@@ -1034,7 +1178,9 @@ async fn source_worker(
     mut registry_rx: broadcast::Receiver<RegistryChange>,
     mut ownership_rx: broadcast::Receiver<OwnershipChange>,
 ) {
-    let Some(initial_inner) = inner.upgrade() else { return };
+    let Some(initial_inner) = inner.upgrade() else {
+        return;
+    };
     let close_signal = initial_inner.registry.close_signal();
     let already_closed = initial_inner.registry.is_closed();
     drop(initial_inner);
@@ -1049,30 +1195,8 @@ async fn source_worker(
 
     loop {
         // Diagnostic hold: pause source intake if the SourceIntake plane is held.
-        if let Some(active) = inner.upgrade() {
-            let wait = {
-                let guard = active
-                    .diagnostic_hold
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard
-                    .as_ref()
-                    .filter(|h| h.plane == DiagnosticPlane::SourceIntake)
-                    .map(|h| h.release_at)
-            };
-            if let Some(release_at) = wait {
-                let now = tokio::time::Instant::now();
-                if release_at > now {
-                    let sleep = tokio::time::sleep_until(release_at);
-                    let notify = active.diagnostic_hold_notify.notified();
-                    tokio::pin!(notify);
-                    tokio::select! {
-                        _ = sleep => {}
-                        _ = &mut notify => {}
-                    }
-                    continue;
-                }
-            }
+        if wait_diagnostic_hold(&inner, DiagnosticPlane::SourceIntake, &cancel).await {
+            continue;
         }
         tokio::select! {
             biased;
@@ -1140,7 +1264,10 @@ async fn source_worker(
 /// Fan out one registry change to every consumer.
 fn process_registry_change(inner: &HostInner, change: RegistryChange) {
     let (cursor, cap_change) = inner.facade.map_registry_change(change);
-    let _publish = inner.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner
+        .publish
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if inner.closed.load(Ordering::SeqCst) {
         return;
     }
@@ -1156,7 +1283,10 @@ fn process_registry_change(inner: &HostInner, change: RegistryChange) {
 
     // Non-default consumers: deliver the mapped change iff in scope AND newer
     // than the consumer's last cursor; overflow replaces the backlog.
-    let consumers = inner.consumers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let consumers = inner
+        .consumers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     for consumer in consumers.by_id.values() {
         if consumer.is_closed() {
             continue;
@@ -1171,7 +1301,10 @@ fn process_registry_change(inner: &HostInner, change: RegistryChange) {
 /// Invalidate every consumer: enqueue `Invalidated` + a fresh snapshot. The
 /// registry cursor is NOT advanced — only the registry advances it.
 fn invalidate_all(inner: &HostInner) {
-    let _publish = inner.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner
+        .publish
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if inner.closed.load(Ordering::SeqCst) {
         return;
     }
@@ -1184,7 +1317,10 @@ fn invalidate_all(inner: &HostInner) {
         inner.replacement_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    let consumers = inner.consumers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let consumers = inner
+        .consumers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     for consumer in consumers.by_id.values() {
         if consumer.is_closed() {
             continue;
@@ -1196,7 +1332,10 @@ fn invalidate_all(inner: &HostInner) {
 
 /// Deliver the terminal close projection to every consumer and mark each closed.
 fn deliver_close(inner: &HostInner) {
-    let _publish = inner.publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner
+        .publish
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if inner.closed.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -1207,7 +1346,10 @@ fn deliver_close(inner: &HostInner) {
         inner.default_consumer.mark_closed();
     }
 
-    let consumers = inner.consumers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let consumers = inner
+        .consumers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     for consumer in consumers.by_id.values() {
         if consumer.is_closed() {
             continue;
@@ -1229,30 +1371,8 @@ async fn applier_worker(
 ) {
     loop {
         // Diagnostic hold: pause delivery if the Delivery plane is held.
-        if let Some(active) = inner.upgrade() {
-            let wait = {
-                let guard = active
-                    .diagnostic_hold
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard
-                    .as_ref()
-                    .filter(|h| h.plane == DiagnosticPlane::Delivery)
-                    .map(|h| h.release_at)
-            };
-            if let Some(release_at) = wait {
-                let now = tokio::time::Instant::now();
-                if release_at > now {
-                    let sleep = tokio::time::sleep_until(release_at);
-                    let notify = active.diagnostic_hold_notify.notified();
-                    tokio::pin!(notify);
-                    tokio::select! {
-                        _ = sleep => {}
-                        _ = &mut notify => {}
-                    }
-                    continue;
-                }
-            }
+        if wait_diagnostic_hold(&inner, DiagnosticPlane::Delivery, &cancel).await {
+            continue;
         }
         if let Some(event) = default.try_pop() {
             let Some(inner) = inner.upgrade() else { return };
@@ -1298,8 +1418,10 @@ async fn applier_worker(
         }
         let Some(inner) = inner.upgrade() else { return };
         if default.is_closed() {
-            let mut applied =
-                inner.applied.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut applied = inner
+                .applied
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             applied.closed = true;
             return;
         }
@@ -1319,7 +1441,9 @@ mod tests {
     use crate::capability::descriptor::{CapabilityId, CapabilityRevision};
     use crate::capability::ownership::LifetimeScope;
     use crate::session::events::ToolOutput;
-    use crate::tools::descriptor::{ReplayPolicy, ToolCapabilityDescriptor, ToolKind, SCHEMA_VERSION};
+    use crate::tools::descriptor::{
+        ReplayPolicy, ToolCapabilityDescriptor, ToolKind, SCHEMA_VERSION,
+    };
     use crate::tools::handlers::ToolHandler;
     use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
     use async_trait::async_trait;
@@ -1478,14 +1602,14 @@ mod tests {
             3,
             "default queue must be [initial Snapshot, Invalidated, replacement Snapshot]"
         );
-        assert!(matches!(
-            q.items[1],
-            ProjectionEvent::Invalidated
-        ), "Invalidated must precede the replacement Snapshot");
-        assert!(matches!(
-            q.items[2],
-            ProjectionEvent::Snapshot(_)
-        ), "replacement Snapshot must follow Invalidated");
+        assert!(
+            matches!(q.items[1], ProjectionEvent::Invalidated),
+            "Invalidated must precede the replacement Snapshot"
+        );
+        assert!(
+            matches!(q.items[2], ProjectionEvent::Snapshot(_)),
+            "replacement Snapshot must follow Invalidated"
+        );
     }
 
     /// RED (round2): ordinary default-consumer overflow on a registry change
@@ -1558,9 +1682,19 @@ mod tests {
         assert_eq!(replacement.entries.len(), 65);
         assert_eq!(replacement.registry_cursor, Cursor(65));
         let entry = replacement.entries.get("t63").expect("t63 must be present");
-        assert_eq!(entry.handler.definition().description, "v63", "current replacement handler");
-        assert_eq!(entry.descriptor.description, "v63", "current replacement descriptor");
-        assert_eq!(entry.descriptor.revision, 65, "current replacement revision");
+        assert_eq!(
+            entry.handler.definition().description,
+            "v63",
+            "current replacement handler"
+        );
+        assert_eq!(
+            entry.descriptor.description, "v63",
+            "current replacement descriptor"
+        );
+        assert_eq!(
+            entry.descriptor.revision, 65,
+            "current replacement revision"
+        );
 
         // Let the REAL applier drain and apply the replacement (no direct
         // applied assignment). The source worker's re-processing of the 64
@@ -1570,7 +1704,11 @@ mod tests {
         assert_eq!(applied.entries.len(), 65);
         assert_eq!(applied.registry_cursor, Cursor(65));
         let entry = applied.entries.get("t63").expect("t63 must be applied");
-        assert_eq!(entry.handler.definition().description, "v63", "applied handler");
+        assert_eq!(
+            entry.handler.definition().description,
+            "v63",
+            "applied handler"
+        );
         assert_eq!(entry.descriptor.description, "v63", "applied descriptor");
     }
 
@@ -1592,7 +1730,10 @@ mod tests {
             ProjectionEvent::Snapshot(snap) => {
                 assert_eq!(snap.entries.len(), 1, "initial cut predates the mutation");
                 assert!(snap.entries.contains_key("a"));
-                assert!(!snap.entries.contains_key("b"), "mutation must not leak into the initial cut");
+                assert!(
+                    !snap.entries.contains_key("b"),
+                    "mutation must not leak into the initial cut"
+                );
                 assert_eq!(snap.registry_cursor, Cursor(1));
             }
             other => panic!("expected initial snapshot, got {other:?}"),
@@ -1610,7 +1751,8 @@ mod tests {
     #[tokio::test]
     async fn attach_snapshot_is_handler_descriptor_atomic() {
         let reg = ToolHandlerRegistry::new();
-        reg.register(desc_labeled("a", "v1"), fake_labeled("a", "v1")).unwrap();
+        reg.register(desc_labeled("a", "v1"), fake_labeled("a", "v1"))
+            .unwrap();
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
 
@@ -1621,11 +1763,16 @@ mod tests {
         };
         let e1 = snap1.entries.get("a").unwrap();
         assert_eq!(e1.descriptor.revision, 1);
-        assert_eq!(e1.handler.definition().description, "v1", "original handler");
+        assert_eq!(
+            e1.handler.definition().description,
+            "v1",
+            "original handler"
+        );
         assert_eq!(e1.descriptor.description, "v1", "original descriptor");
 
         // Replace with a DISTINGUISHABLE handler+descriptor (same name "a").
-        reg.replace(desc_labeled("a", "v2"), fake_labeled("a", "v2")).unwrap();
+        reg.replace(desc_labeled("a", "v2"), fake_labeled("a", "v2"))
+            .unwrap();
 
         let mut h2 = host.attach(Scope::default());
         let snap2 = match recv_bounded(&mut h2).await {
@@ -1634,17 +1781,39 @@ mod tests {
         };
         let e2 = snap2.entries.get("a").unwrap();
         assert_eq!(e2.descriptor.revision, 2);
-        assert_eq!(e2.handler.definition().description, "v2", "replacement handler");
+        assert_eq!(
+            e2.handler.definition().description,
+            "v2",
+            "replacement handler"
+        );
         assert_eq!(e2.descriptor.description, "v2", "replacement descriptor");
 
         // Negative control: each snapshot freezes handler AND descriptor at ONE
         // generation. A mixed pair (v1 handler + rev 2 descriptor, or vice
         // versa) would fail these consistency assertions.
         assert_eq!(snap1.entries.get("a").unwrap().descriptor.revision, 1);
-        assert_eq!(snap1.entries.get("a").unwrap().handler.definition().description, "v1");
+        assert_eq!(
+            snap1
+                .entries
+                .get("a")
+                .unwrap()
+                .handler
+                .definition()
+                .description,
+            "v1"
+        );
         assert_eq!(snap1.entries.get("a").unwrap().descriptor.description, "v1");
         assert_eq!(snap2.entries.get("a").unwrap().descriptor.revision, 2);
-        assert_eq!(snap2.entries.get("a").unwrap().handler.definition().description, "v2");
+        assert_eq!(
+            snap2
+                .entries
+                .get("a")
+                .unwrap()
+                .handler
+                .definition()
+                .description,
+            "v2"
+        );
         assert_eq!(snap2.entries.get("a").unwrap().descriptor.description, "v2");
     }
 
@@ -1704,7 +1873,11 @@ mod tests {
         }
         match recv_bounded(&mut handle).await {
             ProjectionEvent::Snapshot(snap) => {
-                assert_eq!(snap.entries.len(), 300, "replacement snapshot must be complete");
+                assert_eq!(
+                    snap.entries.len(),
+                    300,
+                    "replacement snapshot must be complete"
+                );
             }
             other => panic!("expected replacement snapshot, got {other:?}"),
         }
@@ -1732,7 +1905,11 @@ mod tests {
         }
         match recv_bounded(&mut handle).await {
             ProjectionEvent::Snapshot(snap) => {
-                assert_eq!(snap.registry_cursor, Cursor(1), "registry revision must not advance");
+                assert_eq!(
+                    snap.registry_cursor,
+                    Cursor(1),
+                    "registry revision must not advance"
+                );
                 assert!(snap.entries.contains_key("a"));
             }
             other => panic!("expected replacement snapshot, got {other:?}"),
@@ -1752,7 +1929,10 @@ mod tests {
             other => panic!("expected snapshot, got {other:?}"),
         }
 
-        assert!(tree.revoke(&tool_id("a")), "revoke must be a real transition");
+        assert!(
+            tree.revoke(&tool_id("a")),
+            "revoke must be a real transition"
+        );
 
         match recv_bounded(&mut handle).await {
             ProjectionEvent::Invalidated => {}
@@ -1760,7 +1940,11 @@ mod tests {
         }
         match recv_bounded(&mut handle).await {
             ProjectionEvent::Snapshot(snap) => {
-                assert_eq!(snap.registry_cursor, Cursor(1), "registry revision must not advance");
+                assert_eq!(
+                    snap.registry_cursor,
+                    Cursor(1),
+                    "registry revision must not advance"
+                );
                 assert!(!snap.entries.contains_key("a"), "revoked id must be absent");
             }
             other => panic!("expected replacement snapshot, got {other:?}"),
@@ -1780,7 +1964,10 @@ mod tests {
             other => panic!("expected snapshot, got {other:?}"),
         }
 
-        assert!(tree.dispose(LifetimeScope::Runtime), "dispose must be a real transition");
+        assert!(
+            tree.dispose(LifetimeScope::Runtime),
+            "dispose must be a real transition"
+        );
 
         match recv_bounded(&mut handle).await {
             ProjectionEvent::Invalidated => {}
@@ -1788,8 +1975,15 @@ mod tests {
         }
         match recv_bounded(&mut handle).await {
             ProjectionEvent::Snapshot(snap) => {
-                assert_eq!(snap.registry_cursor, Cursor(1), "registry revision must not advance");
-                assert!(!snap.entries.contains_key("a"), "disposed id must be absent");
+                assert_eq!(
+                    snap.registry_cursor,
+                    Cursor(1),
+                    "registry revision must not advance"
+                );
+                assert!(
+                    !snap.entries.contains_key("a"),
+                    "disposed id must be absent"
+                );
             }
             other => panic!("expected replacement snapshot, got {other:?}"),
         }
@@ -1886,7 +2080,11 @@ mod tests {
             other => panic!("expected replacement snapshot, got {other:?}"),
         };
         // Exact cut: 65 registrations had completed when the 65th overflowed.
-        assert_eq!(snap.entries.len(), 65, "replacement snapshot is the cut at registration 65");
+        assert_eq!(
+            snap.entries.len(),
+            65,
+            "replacement snapshot is the cut at registration 65"
+        );
         assert_eq!(snap.registry_cursor, Cursor(65));
 
         // The remaining 5 registrations (66..=70) arrive as deltas.
@@ -1897,9 +2095,15 @@ mod tests {
                 other => panic!("expected registered delta for slow consumer, got {other:?}"),
             }
         }
-        assert_eq!(slow_remaining, 70, "slow consumer reconstructs full membership via deltas");
+        assert_eq!(
+            slow_remaining, 70,
+            "slow consumer reconstructs full membership via deltas"
+        );
 
-        assert_eq!(fast_changes, 70, "the fast consumer must receive every change");
+        assert_eq!(
+            fast_changes, 70,
+            "the fast consumer must receive every change"
+        );
     }
 
     #[tokio::test]
@@ -1980,7 +2184,10 @@ mod tests {
         // close (this is what `close_and_discard` must drop).
         let closed_id = {
             let map = host.inner.consumers.lock().unwrap();
-            *map.by_id.keys().max().expect("closed consumer must be in map")
+            *map.by_id
+                .keys()
+                .max()
+                .expect("closed consumer must be in map")
         };
         {
             let map = host.inner.consumers.lock().unwrap();
@@ -2050,13 +2257,14 @@ mod tests {
         // The canceled handle's queue is empty at this point (initial
         // snapshot already drained), so its `recv` must terminate with
         // `None` once the source worker observes the closed flag.
-        let canceled_after = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            canceled.recv(),
-        )
-        .await
-        .expect("canceled handle did not terminate");
-        assert!(canceled_after.is_none(), "canceled handle must return None, got {canceled_after:?}");
+        let canceled_after =
+            tokio::time::timeout(std::time::Duration::from_secs(1), canceled.recv())
+                .await
+                .expect("canceled handle did not terminate");
+        assert!(
+            canceled_after.is_none(),
+            "canceled handle must return None, got {canceled_after:?}"
+        );
 
         // Mutate the registry: the source worker's fan-out must skip the
         // closed consumer, but the other handle must still receive the
@@ -2068,13 +2276,14 @@ mod tests {
             }
             other => panic!("keep must receive the post-cancel mutation, got {other:?}"),
         }
-        let canceled_still = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            canceled.recv(),
-        )
-        .await
-        .expect("canceled handle still terminated after mutation");
-        assert!(canceled_still.is_none(), "canceled handle must remain None after registry mutation");
+        let canceled_still =
+            tokio::time::timeout(std::time::Duration::from_secs(1), canceled.recv())
+                .await
+                .expect("canceled handle still terminated after mutation");
+        assert!(
+            canceled_still.is_none(),
+            "canceled handle must remain None after registry mutation"
+        );
     }
 
     /// The DEFAULT applier — not a seeded publisher state — delivers the
@@ -2097,7 +2306,10 @@ mod tests {
         // Close the source and give the applier a chance to observe it.
         host.clone().close_and_await().await;
 
-        assert!(host.current_snapshot().is_none(), "closed source must fail closed");
+        assert!(
+            host.current_snapshot().is_none(),
+            "closed source must fail closed"
+        );
     }
 
     /// The applier clears the applied snapshot on `Invalidated` (fail-closed)
@@ -2165,12 +2377,16 @@ mod tests {
         assert_eq!(initial.registry_cursor, Cursor(1));
 
         // Real ownership invalidation (not a registry mutation).
-        assert!(tree.revoke(&tool_id("a")), "revoke must be a real transition");
+        assert!(
+            tree.revoke(&tool_id("a")),
+            "revoke must be a real transition"
+        );
 
         // Await the replacement snapshot applied by the real applier.
         let replacement = await_snapshot_where(&host, |s| !s.entries.contains_key("a")).await;
         assert_eq!(
-            replacement.registry_cursor, Cursor(1),
+            replacement.registry_cursor,
+            Cursor(1),
             "owner invalidation must not advance the registry cursor"
         );
         assert!(replacement.entries.is_empty(), "revoked id must be absent");
@@ -2184,7 +2400,10 @@ mod tests {
         let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
         let _ = await_snapshot_where(&host, |s| s.entries.contains_key("a")).await;
 
-        host.inner.applier_test_gate.hold.store(true, Ordering::SeqCst);
+        host.inner
+            .applier_test_gate
+            .hold
+            .store(true, Ordering::SeqCst);
         let entered = host.inner.applier_test_gate.entered.notified();
         tokio::pin!(entered);
         reg.register(desc("b"), fake("b")).unwrap();
@@ -2203,15 +2422,21 @@ mod tests {
             "shutdown cannot report completion while captured delivery is held"
         );
 
-        host.inner.applier_test_gate.hold.store(false, Ordering::SeqCst);
+        host.inner
+            .applier_test_gate
+            .hold
+            .store(false, Ordering::SeqCst);
         host.inner.applier_test_gate.release.notify_waiters();
         let outcome = host.clone().close_and_await().await;
-        assert_eq!(outcome, ProjectionShutdownOutcome {
-            source_joined: true,
-            applier_joined: true,
-            source_failed: false,
-            applier_failed: false,
-        });
+        assert_eq!(
+            outcome,
+            ProjectionShutdownOutcome {
+                source_joined: true,
+                applier_joined: true,
+                source_failed: false,
+                applier_failed: false,
+            }
+        );
         assert!(host.current_snapshot().is_none());
     }
 
@@ -2236,7 +2461,10 @@ mod tests {
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
         let mut handle = host.attach(Scope::default());
-        assert!(matches!(recv_bounded(&mut handle).await, ProjectionEvent::Snapshot(_)));
+        assert!(matches!(
+            recv_bounded(&mut handle).await,
+            ProjectionEvent::Snapshot(_)
+        ));
 
         let outcome = host.clone().close_and_await().await;
         assert!(outcome.source_joined && outcome.applier_joined);
@@ -2247,8 +2475,14 @@ mod tests {
             .await
             .expect("closed handle did not terminate")
             .is_some();
-        assert!(!received, "post-close authority mutations reached the handle");
-        assert!(reg.revision() >= 2, "host-local close must not close the registry");
+        assert!(
+            !received,
+            "post-close authority mutations reached the handle"
+        );
+        assert!(
+            reg.revision() >= 2,
+            "host-local close must not close the registry"
+        );
     }
 
     #[tokio::test]
@@ -2258,7 +2492,10 @@ mod tests {
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
         let mut handle = host.attach(Scope::default());
-        assert!(matches!(recv_bounded(&mut handle).await, ProjectionEvent::Snapshot(_)));
+        assert!(matches!(
+            recv_bounded(&mut handle).await,
+            ProjectionEvent::Snapshot(_)
+        ));
 
         drop(host);
         assert!(
@@ -2267,7 +2504,10 @@ mod tests {
                 .expect("dropped host did not close the receipt")
                 .is_none()
         );
-        assert!(!reg.is_closed(), "dropping a host must not close the registry");
+        assert!(
+            !reg.is_closed(),
+            "dropping a host must not close the registry"
+        );
     }
 
     #[tokio::test]
@@ -2277,7 +2517,10 @@ mod tests {
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
         let mut handle = host.attach(Scope::default());
-        assert!(matches!(recv_bounded(&mut handle).await, ProjectionEvent::Snapshot(_)));
+        assert!(matches!(
+            recv_bounded(&mut handle).await,
+            ProjectionEvent::Snapshot(_)
+        ));
 
         // Keep the authority sender alive: registry close is a bit + wakeup,
         // not broadcast sender closure and not itself host quiescence.
@@ -2286,10 +2529,12 @@ mod tests {
         assert!(outcome.source_joined);
         assert!(outcome.applier_joined);
         assert!(host.current_snapshot().is_none());
-        assert!(tokio::time::timeout(std::time::Duration::from_secs(1), handle.recv())
-            .await
-            .expect("closed receipt did not terminate")
-            .is_none());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), handle.recv())
+                .await
+                .expect("closed receipt did not terminate")
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -2335,5 +2580,363 @@ mod tests {
 
         let output = captured.invoke(serde_json::json!({})).await.unwrap();
         assert_eq!(output.value["tool"], "a");
+    }
+
+    // ---- Diagnostic hold / close (Task1 fix round) ----
+
+    /// Observed plane of the host-owned hold slot (None = no active hold).
+    fn active_hold_plane(host: &ProjectionHost) -> Option<DiagnosticPlane> {
+        host.inner
+            .diagnostic_hold
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .active
+            .as_ref()
+            .map(|h| h.plane)
+    }
+
+    /// Await until the hold slot satisfies `pred`, registering the hold
+    /// `Notified` before re-checking the slot (no sleep-as-proof). Bounded.
+    async fn await_hold_slot(
+        host: &ProjectionHost,
+        bound: std::time::Duration,
+        pred: impl Fn(Option<DiagnosticPlane>) -> bool,
+    ) -> Option<DiagnosticPlane> {
+        tokio::time::timeout(bound, async {
+            loop {
+                let notified = host.inner.diagnostic_hold_notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                let observed = active_hold_plane(host);
+                if pred(observed) {
+                    return observed;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .expect("hold slot never reached the expected state within bound")
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropped_hold_future_is_released_by_host_timer() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let _ = await_snapshot_where(&host, |s| s.entries.contains_key("a")).await;
+
+        let holder = Arc::clone(&host);
+        let task = tokio::spawn(async move {
+            holder
+                .diagnostic_hold(
+                    DiagnosticPlane::Delivery,
+                    std::time::Duration::from_millis(200),
+                )
+                .await
+        });
+        let observed = await_hold_slot(&host, std::time::Duration::from_millis(100), |p| {
+            p == Some(DiagnosticPlane::Delivery)
+        })
+        .await;
+        assert_eq!(observed, Some(DiagnosticPlane::Delivery));
+
+        // Caller disconnects: the holding future is dropped without release.
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            active_hold_plane(&host),
+            Some(DiagnosticPlane::Delivery),
+            "dropping the caller must not be what clears the slot"
+        );
+
+        // The host-owned timer must clear the slot at expiry (bounded wait).
+        let cleared = await_hold_slot(&host, std::time::Duration::from_millis(1000), |p| {
+            p.is_none()
+        })
+        .await;
+        assert_eq!(cleared, None);
+
+        // A second hold is accepted after the timer released the first.
+        host.diagnostic_hold(
+            DiagnosticPlane::SourceIntake,
+            std::time::Duration::from_millis(1),
+        )
+        .await
+        .expect("second hold must succeed after timer expiry");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stale_timer_does_not_clear_newer_hold() {
+        let reg = ToolHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg, Arc::clone(&tree));
+        let _ = await_snapshot_where(&host, |_| true).await;
+
+        let first = Arc::clone(&host);
+        let first_task = tokio::spawn(async move {
+            first
+                .diagnostic_hold(
+                    DiagnosticPlane::SourceIntake,
+                    std::time::Duration::from_millis(100),
+                )
+                .await
+        });
+        await_hold_slot(&host, std::time::Duration::from_millis(50), |p| {
+            p == Some(DiagnosticPlane::SourceIntake)
+        })
+        .await;
+        host.diagnostic_release();
+        first_task.await.unwrap().unwrap();
+
+        let second = Arc::clone(&host);
+        let second_task = tokio::spawn(async move {
+            second
+                .diagnostic_hold(
+                    DiagnosticPlane::Delivery,
+                    std::time::Duration::from_millis(1000),
+                )
+                .await
+        });
+        await_hold_slot(&host, std::time::Duration::from_millis(50), |p| {
+            p == Some(DiagnosticPlane::Delivery)
+        })
+        .await;
+
+        // Pass the first hold's original expiry; its timer must not clear the
+        // newer hold.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert_eq!(active_hold_plane(&host), Some(DiagnosticPlane::Delivery));
+
+        let cleared = await_hold_slot(&host, std::time::Duration::from_millis(2000), |p| {
+            p.is_none()
+        })
+        .await;
+        assert_eq!(cleared, None);
+        second_task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hold_rejects_out_of_range_and_overlapping_requests() {
+        let reg = ToolHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg, Arc::clone(&tree));
+        let _ = await_snapshot_where(&host, |_| true).await;
+
+        for bad in [0u64, 5001] {
+            let err = host
+                .diagnostic_hold(
+                    DiagnosticPlane::Delivery,
+                    std::time::Duration::from_millis(bad),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(err, DiagnosticError::InvalidHoldDuration, "duration {bad}");
+            assert_eq!(
+                active_hold_plane(&host),
+                None,
+                "rejected hold must not install"
+            );
+        }
+
+        let holder = Arc::clone(&host);
+        let task = tokio::spawn(async move {
+            holder
+                .diagnostic_hold(
+                    DiagnosticPlane::Delivery,
+                    std::time::Duration::from_millis(5000),
+                )
+                .await
+        });
+        await_hold_slot(&host, std::time::Duration::from_millis(50), |p| p.is_some()).await;
+        let overlap = host
+            .diagnostic_hold(
+                DiagnosticPlane::SourceIntake,
+                std::time::Duration::from_millis(1),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(overlap, DiagnosticError::HoldAlreadyActive);
+        assert_eq!(
+            active_hold_plane(&host),
+            Some(DiagnosticPlane::Delivery),
+            "overlap rejection must not replace the active hold"
+        );
+
+        host.diagnostic_release();
+        task.await.unwrap().unwrap();
+        assert_eq!(active_hold_plane(&host), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delivery_hold_overflow_queues_invalidated_before_replacement() {
+        let reg = ToolHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount_with_capacity(reg.clone(), Arc::clone(&tree), 2);
+        let _ = await_snapshot_where(&host, |_| true).await;
+
+        let holder = Arc::clone(&host);
+        let task = tokio::spawn(async move {
+            holder
+                .diagnostic_hold(
+                    DiagnosticPlane::Delivery,
+                    std::time::Duration::from_millis(5000),
+                )
+                .await
+        });
+        await_hold_slot(&host, std::time::Duration::from_millis(50), |p| {
+            p == Some(DiagnosticPlane::Delivery)
+        })
+        .await;
+        for i in 0..10 {
+            let n = format!("t{i}");
+            reg.register(desc(&n), fake(&n)).unwrap();
+        }
+
+        // Observe the real default queue while delivery is held: the source
+        // keeps running, overflow replaced the stale backlog, and the queue
+        // head is `Invalidated` followed by the final-membership replacement.
+        tokio::time::timeout(std::time::Duration::from_millis(1000), async {
+            loop {
+                {
+                    let q = host
+                        .inner
+                        .default_consumer
+                        .queue
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let last_full = matches!(
+                        q.items.back(),
+                        Some(ProjectionEvent::Snapshot(s)) if s.entries.len() == 10
+                    );
+                    if last_full {
+                        assert!(
+                            matches!(q.items.front(), Some(ProjectionEvent::Invalidated)),
+                            "overflow must place Invalidated before the replacement"
+                        );
+                        assert!(q.items.len() <= 2, "capacity must not be resized");
+                        break;
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("source worker never queued the final replacement");
+        assert!(host
+            .current_snapshot()
+            .map_or(true, |s| s.entries.len() < 10));
+        assert!(host.diagnostic_status().replacement_count > 0);
+
+        host.diagnostic_release();
+        task.await.unwrap().unwrap();
+        let applied = await_snapshot_where(&host, |s| s.entries.len() == 10).await;
+        assert_eq!(applied.entries.len(), 10);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_bypasses_active_hold() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let _ = await_snapshot_where(&host, |s| s.entries.contains_key("a")).await;
+
+        let holder = Arc::clone(&host);
+        let _task = tokio::spawn(async move {
+            holder
+                .diagnostic_hold(
+                    DiagnosticPlane::SourceIntake,
+                    std::time::Duration::from_millis(5000),
+                )
+                .await
+        });
+        await_hold_slot(&host, std::time::Duration::from_millis(50), |p| p.is_some()).await;
+
+        // Ordinary (non-diagnostic) close must not wait out the hold.
+        let started = tokio::time::Instant::now();
+        let outcome = Arc::clone(&host).close_and_await().await;
+        assert!(outcome.source_joined && outcome.applier_joined);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(5000),
+            "cancellation must bypass the hold, waited {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn diagnostic_close_timeout_stays_fail_closed() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let _ = await_snapshot_where(&host, |s| s.entries.contains_key("a")).await;
+
+        // Stall the real applier mid-delivery so the shared completion
+        // boundary cannot be reached.
+        host.inner
+            .applier_test_gate
+            .hold
+            .store(true, Ordering::SeqCst);
+        let entered = host.inner.applier_test_gate.entered.notified();
+        tokio::pin!(entered);
+        reg.register(desc("b"), fake("b")).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), &mut entered)
+            .await
+            .expect("real default applier did not enter the barrier");
+
+        let started = tokio::time::Instant::now();
+        let err = host.diagnostic_close().await.unwrap_err();
+        assert_eq!(err, DiagnosticError::CloseTimeout { elapsed_ms: 5000 });
+        assert!(started.elapsed() <= std::time::Duration::from_millis(5001));
+        assert!(
+            host.is_closing(),
+            "timeout must leave the host close-requested"
+        );
+        assert_eq!(
+            host.diagnostic_status().lifecycle,
+            DiagnosticLifecycle::Closing
+        );
+        assert!(
+            host.inner
+                .completion
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .outcome
+                .is_none(),
+            "timeout must not fabricate completion"
+        );
+        // Shared authority is not closed by the projection close.
+        reg.register(desc("c"), fake("c")).unwrap();
+
+        // The retained joins still complete through the same boundary.
+        host.inner
+            .applier_test_gate
+            .hold
+            .store(false, Ordering::SeqCst);
+        host.inner.applier_test_gate.release.notify_waiters();
+        let outcome = Arc::clone(&host).close_and_await().await;
+        assert!(outcome.source_joined && outcome.applier_joined);
+        assert_eq!(
+            host.diagnostic_status().lifecycle,
+            DiagnosticLifecycle::Closed
+        );
+    }
+
+    #[tokio::test]
+    async fn hold_on_closed_host_is_rejected() {
+        let reg = ToolHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg, Arc::clone(&tree));
+        let _ = Arc::clone(&host).close_and_await().await;
+        let err = host
+            .diagnostic_hold(
+                DiagnosticPlane::Delivery,
+                std::time::Duration::from_millis(10),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err, DiagnosticError::Closed);
+        assert_eq!(active_hold_plane(&host), None);
     }
 }

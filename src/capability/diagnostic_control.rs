@@ -80,6 +80,9 @@ pub enum DiagnosticError {
     Closed,
     /// `revoke_tool` could not find a binding for the named tool.
     UnknownTool { name: String },
+    /// The supplied owner tree is not (by `Arc` identity) the tree the host
+    /// is mounted on; refusing to pair the host with a second authority.
+    AuthorityMismatch,
 }
 
 /// Narrow diagnostic surface over an existing host + ownership tree pair.
@@ -93,9 +96,18 @@ pub struct DiagnosticControl {
 
 impl DiagnosticControl {
     /// Build a diagnostic control over the given host and ownership tree.
-    /// Both must be the SAME authority objects the rest of the system uses.
-    pub fn new(host: Arc<ProjectionHost>, tree: Arc<OwnershipTree>) -> Self {
-        Self { host, tree }
+    /// Both must be the SAME authority objects the rest of the system uses:
+    /// `tree` must be the exact `Arc` the host was mounted on (checked by
+    /// pointer identity, never by value). A mismatch is refused fail-closed
+    /// with [`DiagnosticError::AuthorityMismatch`].
+    pub fn new(
+        host: Arc<ProjectionHost>,
+        tree: Arc<OwnershipTree>,
+    ) -> Result<Self, DiagnosticError> {
+        if !Arc::ptr_eq(host.owner_tree(), &tree) {
+            return Err(DiagnosticError::AuthorityMismatch);
+        }
+        Ok(Self { host, tree })
     }
 
     /// Read the REAL applied state plus queue / telemetry counters.
@@ -278,7 +290,7 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount(reg, Arc::clone(&tree));
-        DiagnosticControl::new(host, tree)
+        DiagnosticControl::new(host, tree).unwrap()
     }
 
     fn control_with(tools: &[&str]) -> DiagnosticControl {
@@ -288,7 +300,43 @@ mod tests {
         }
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount(reg, Arc::clone(&tree));
-        DiagnosticControl::new(host, tree)
+        DiagnosticControl::new(host, tree).unwrap()
+    }
+
+    /// Fix round — the control must not silently pair a host with a second
+    /// owner authority: a tree that is not the host's mounted Arc is rejected
+    /// by identity (`Arc::ptr_eq`), even when structurally equivalent.
+    #[tokio::test]
+    async fn mismatched_owner_tree_is_rejected() {
+        let reg = ToolHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg, Arc::clone(&tree));
+        let other = Arc::new(OwnershipTree::new());
+        let err = DiagnosticControl::new(Arc::clone(&host), other)
+            .err()
+            .expect("a second owner authority must be rejected");
+        assert_eq!(err, DiagnosticError::AuthorityMismatch);
+        // The mounted tree itself still works.
+        assert!(DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn same_owner_tree_is_accepted_and_shared() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg, Arc::clone(&tree));
+        let ctrl = DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree)).unwrap();
+        assert!(Arc::ptr_eq(host.owner_tree(), &tree));
+        // The tree nonce is per-instance: a control bump followed by a direct
+        // bump on the caller's tree is consecutive only if both hit one tree.
+        let via_ctrl = ctrl.bump_runtime().unwrap();
+        let direct = tree.bump(crate::capability::ownership::LifetimeScope::Runtime);
+        assert_eq!(
+            direct.0,
+            via_ctrl.0 + 1,
+            "bump must land on the caller's tree"
+        );
     }
 
     /// RED — §3.1 status must read post-applier applied state, never the
@@ -318,7 +366,7 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount_with_capacity(reg.clone(), Arc::clone(&tree), 2);
-        let ctrl = DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree));
+        let ctrl = DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree)).unwrap();
 
         let ctrl = Arc::new(ctrl);
         let hold_ctrl = Arc::clone(&ctrl);
@@ -358,7 +406,7 @@ mod tests {
         reg.register(desc("seed"), fake("seed")).unwrap();
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
-        let ctrl = DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree));
+        let ctrl = DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree)).unwrap();
 
         // Wait for the initial applied state so the rest of the test
         // observes only the new registrations.
@@ -437,7 +485,7 @@ mod tests {
         reg.register(desc("a"), fake("a")).unwrap();
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount(reg, Arc::clone(&tree));
-        let ctrl = DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree));
+        let ctrl = DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree)).unwrap();
 
         let s0 = await_status(&ctrl, |s| !s.applied_tool_ids.is_empty()).await;
         let cursor_before = s0.registry_cursor.0;
@@ -475,7 +523,7 @@ mod tests {
         reg.register(desc("a"), fake("a")).unwrap();
         let tree = Arc::new(OwnershipTree::new());
         let host = ProjectionHost::mount(reg, Arc::clone(&tree));
-        let ctrl = DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree));
+        let ctrl = DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree)).unwrap();
 
         let s0 = await_status(&ctrl, |s| !s.applied_owner_generations.is_empty()).await;
         let gen_before: OwnerGeneration = *s0.applied_owner_generations.values().next().unwrap();
