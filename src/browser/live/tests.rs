@@ -61,6 +61,192 @@ async fn fixture_with(
     (server, owner, handle)
 }
 
+#[tokio::test]
+async fn target_destroyed_closes_control_recording_fetch_and_viewer_together() {
+    use aleph_protocol::browser_live::*;
+    use std::sync::Mutex;
+    let (server, owner, _handle) = fixture().await;
+    let mut target = binding("T1");
+    target.browser_session_id = owner.browser_session_id().into();
+    owner.attach_target(target.clone()).await.unwrap();
+    let mut viewer = owner.subscribe_latest("T1").unwrap();
+    let mut recording = owner
+        .observe_recording(
+            "T1",
+            &SessionId("S1".into()),
+            aleph_cdp::methods::screencast::ScreencastFormat::Jpeg { quality: 80 },
+        )
+        .await
+        .unwrap();
+    let mut fetch = owner.register_fetch("T1", &SessionId("S1".into())).await;
+    let summaries = Arc::new(Mutex::new(Vec::new()));
+    let saved = summaries.clone();
+    let control = owner
+        .bind_control(
+            "resource",
+            ViewerBinding {
+                principal: IssuerIdentity::User {
+                    user_id: "user".into(),
+                },
+                task: ConversationBinding {
+                    session_key: "session".into(),
+                    run_id: "run".into(),
+                },
+                target: target.clone(),
+            },
+            ViewportCssPx {
+                width: 800,
+                height: 600,
+            },
+            Arc::new(move |summary| {
+                saved.lock().unwrap().push(summary);
+                Ok(())
+            }),
+        )
+        .await
+        .unwrap();
+    let lease = control
+        .register_viewer(
+            "viewer",
+            1,
+            i64::MAX,
+            vec![ViewerPermission::Frames, ViewerPermission::HumanInput],
+        )
+        .unwrap();
+    assert!(
+        control
+            .take(
+                &lease,
+                ControlRequest {
+                    expected_control_epoch: 0,
+                    action_seq: 1,
+                    expires_at_ms: i64::MAX
+                }
+            )
+            .await
+            .accepted
+    );
+    server
+        .push_event(json!({ "method": "Target.targetDestroyed", "params": { "targetId": "T1" } }));
+    assert!(within(viewer.next(), "viewer closed on target death")
+        .await
+        .is_none());
+    assert!(
+        within(recording.frames.recv(), "recording closed on target death")
+            .await
+            .is_none()
+    );
+    assert!(within(fetch.rx.recv(), "fetch closed on target death")
+        .await
+        .is_none());
+    assert!(lease.closed());
+    assert_eq!(summaries.lock().unwrap().len(), 1);
+    assert_eq!(
+        summaries.lock().unwrap()[0].ended_by,
+        InterventionEnd::TargetClosed
+    );
+    assert!(owner
+        .mutate(Some("T1"), async {
+            panic!("dead target mutation started");
+            #[allow(unreachable_code)]
+            Ok(())
+        })
+        .await
+        .is_err());
+    assert!(owner.attach_target(target).await.is_err());
+    assert!(
+        owner.mutate(None, async { Ok(()) }).await.is_ok(),
+        "a target tombstone must not permanently disable browser_open"
+    );
+    assert_eq!(server.connection_count(), 1);
+}
+
+#[tokio::test]
+async fn cede_keeps_shared_consumers_but_owner_retirement_closes_them() {
+    use aleph_protocol::browser_live::*;
+    let (_server, owner, _handle) = fixture().await;
+    let mut target = binding("T1");
+    target.browser_session_id = owner.browser_session_id().into();
+    owner.attach_target(target.clone()).await.unwrap();
+    let mut viewer = owner.subscribe_latest("T1").unwrap();
+    let mut recording = owner
+        .observe_recording(
+            "T1",
+            &SessionId("S1".into()),
+            aleph_cdp::methods::screencast::ScreencastFormat::Jpeg { quality: 80 },
+        )
+        .await
+        .unwrap();
+    let mut fetch = owner.register_fetch("T1", &SessionId("S1".into())).await;
+    let control = owner
+        .bind_control(
+            "resource",
+            ViewerBinding {
+                principal: IssuerIdentity::Connection {
+                    connection_id: "connection".into(),
+                },
+                task: ConversationBinding {
+                    session_key: "session".into(),
+                    run_id: "run".into(),
+                },
+                target,
+            },
+            ViewportCssPx {
+                width: 800,
+                height: 600,
+            },
+            Arc::new(|_| Ok(())),
+        )
+        .await
+        .unwrap();
+    let lease = control
+        .register_viewer(
+            "viewer",
+            1,
+            i64::MAX,
+            vec![ViewerPermission::Frames, ViewerPermission::HumanInput],
+        )
+        .unwrap();
+    assert!(
+        control
+            .take(
+                &lease,
+                ControlRequest {
+                    expected_control_epoch: 0,
+                    action_seq: 1,
+                    expires_at_ms: i64::MAX
+                }
+            )
+            .await
+            .accepted
+    );
+    assert!(
+        control
+            .cede(
+                &lease,
+                ControlRequest {
+                    expected_control_epoch: 1,
+                    action_seq: 2,
+                    expires_at_ms: i64::MAX
+                }
+            )
+            .await
+            .accepted
+    );
+    assert!(!lease.closed());
+    assert!(owner.state().streams["T1"].tap.is_some());
+    assert!(owner.state().fetch.contains_key("T1"));
+    assert!(owner.subscribe_latest("T1").is_ok());
+    owner.retire();
+    assert!(within(viewer.next(), "retired viewer").await.is_none());
+    assert!(within(recording.frames.recv(), "retired recording")
+        .await
+        .is_none());
+    assert!(within(fetch.rx.recv(), "retired fetch").await.is_none());
+    assert!(lease.closed());
+    assert!(owner.mutate(None, async { Ok(()) }).await.is_err());
+}
+
 fn frame_event(session: &str, ack_id: u64, payload: &str) -> Value {
     json!({
         "method": "Page.screencastFrame",

@@ -179,6 +179,9 @@ impl CdpBackend {
     /// may open one — the same split, for the same reason, as
     /// `PlaywrightCliBackend::run` / `run_launching`.
     pub(crate) async fn handle(&self) -> Result<Arc<EngineHandle>, BrowserError> {
+        if let Ok(handle) = MUTATION_HANDLE.try_with(Arc::clone) {
+            return self.bound_handle(handle);
+        }
         let handle = self
             .registry
             .handle(self.engine, &self.req, EngineLaunch::Refuse)
@@ -190,11 +193,44 @@ impl CdpBackend {
     /// The profile's engine, launching one if there is none — i.e. the caller is
     /// saying "give me a browser".
     pub(crate) async fn handle_launching(&self) -> Result<Arc<EngineHandle>, BrowserError> {
+        if let Ok(handle) = MUTATION_HANDLE.try_with(Arc::clone) {
+            return self.bound_handle(handle);
+        }
         let handle = self
             .registry
             .handle(self.engine, &self.req, EngineLaunch::Allow)
             .await?;
         events::ensure_pump(&handle, &self.tab_identities);
+        Ok(handle)
+    }
+
+    /// All agent writes share the live owner's target permit. The backend
+    /// future is lazy and the permit spans its completion, including probes.
+    async fn mutate<T>(
+        &self,
+        target_id: Option<&str>,
+        launching: bool,
+        future: impl std::future::Future<Output = Result<T, BrowserError>>,
+    ) -> Result<T, BrowserError> {
+        let handle = if launching {
+            self.handle_launching().await?
+        } else {
+            self.handle().await?
+        };
+        let owner = handle.live_owner();
+        // Pin the exact checked handle: a registry lookup inside this lazy
+        // future must not land on a replacement engine after ownership checks.
+        MUTATION_HANDLE
+            .scope(handle, owner.mutate(target_id, future))
+            .await
+    }
+
+    fn bound_handle(&self, handle: Arc<EngineHandle>) -> Result<Arc<EngineHandle>, BrowserError> {
+        if handle.engine != self.engine || handle.profile != self.req.profile {
+            return Err(BrowserError::ActionFailed(
+                "mutation attempted to cross its bound engine/profile".into(),
+            ));
+        }
         Ok(handle)
     }
 
@@ -243,6 +279,10 @@ impl CdpBackend {
     pub(crate) fn forget_tab(&self, tab_id: &str) {
         self.tab_identities.forget(&self.req.profile, tab_id);
     }
+}
+
+tokio::task_local! {
+    static MUTATION_HANDLE: Arc<EngineHandle>;
 }
 
 /// Three CDP failures, three different operator problems.
@@ -376,22 +416,26 @@ impl BrowserBackend for CdpBackend {
     }
 
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {
-        tabs::open_tab(self, url).await
+        self.mutate(None, true, tabs::open_tab(self, url)).await
     }
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
-        tabs::close_tab(self, tab_id).await
+        self.mutate(Some(tab_id), false, tabs::close_tab(self, tab_id))
+            .await
     }
     async fn list_tabs(&self) -> Result<Vec<TabLine>, BrowserError> {
         tabs::list_tabs(self).await
     }
     async fn switch_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
-        tabs::switch_tab(self, tab_id).await
+        self.mutate(Some(tab_id), false, tabs::switch_tab(self, tab_id))
+            .await
     }
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {
-        navigate::navigate(self, tab_id, url).await
+        self.mutate(Some(tab_id), false, navigate::navigate(self, tab_id, url))
+            .await
     }
     async fn history(&self, tab_id: &str, nav: HistoryNav) -> Result<(), BrowserError> {
-        navigate::history(self, tab_id, nav).await
+        self.mutate(Some(tab_id), false, navigate::history(self, tab_id, nav))
+            .await
     }
     async fn snapshot(&self, tab_id: &str) -> Result<SnapshotOutput, BrowserError> {
         snapshot::snapshot(self, tab_id).await
@@ -404,7 +448,8 @@ impl BrowserBackend for CdpBackend {
         snapshot::snapshot_presented(self, tab_id, max_chars).await
     }
     async fn evaluate(&self, tab_id: &str, js: &str) -> Result<String, BrowserError> {
-        evaluate::evaluate(self, tab_id, js).await
+        self.mutate(Some(tab_id), false, evaluate::evaluate(self, tab_id, js))
+            .await
     }
     async fn screenshot(
         &self,
@@ -417,20 +462,33 @@ impl BrowserBackend for CdpBackend {
         screenshot::pdf(self, capabilities(self.engine), tab_id, output_path).await
     }
     async fn resize(&self, tab_id: &str, width: u32, height: u32) -> Result<(), BrowserError> {
-        screenshot::resize(self, tab_id, width, height).await
+        self.mutate(
+            Some(tab_id),
+            false,
+            screenshot::resize(self, tab_id, width, height),
+        )
+        .await
     }
     async fn emulate(&self, tab_id: &str, opts: &EmulateOptions) -> Result<(), BrowserError> {
-        screenshot::emulate(self, tab_id, opts).await
+        self.mutate(Some(tab_id), false, screenshot::emulate(self, tab_id, opts))
+            .await
     }
 
     async fn click(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
-        actions::click(self, capabilities(self.engine), tab_id, target).await
+        self.mutate(
+            Some(tab_id),
+            false,
+            actions::click(self, capabilities(self.engine), tab_id, target),
+        )
+        .await
     }
     async fn dblclick(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
-        actions::dblclick(self, tab_id, target).await
+        self.mutate(Some(tab_id), false, actions::dblclick(self, tab_id, target))
+            .await
     }
     async fn hover(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
-        actions::hover(self, tab_id, target).await
+        self.mutate(Some(tab_id), false, actions::hover(self, tab_id, target))
+            .await
     }
     async fn type_text(
         &self,
@@ -438,7 +496,12 @@ impl BrowserBackend for CdpBackend {
         target: ActionTarget,
         text: &str,
     ) -> Result<(), BrowserError> {
-        actions::type_text(self, capabilities(self.engine), tab_id, target, text).await
+        self.mutate(
+            Some(tab_id),
+            false,
+            actions::type_text(self, capabilities(self.engine), tab_id, target, text),
+        )
+        .await
     }
     async fn fill(
         &self,
@@ -446,7 +509,12 @@ impl BrowserBackend for CdpBackend {
         target: ActionTarget,
         value: &str,
     ) -> Result<(), BrowserError> {
-        actions::fill(self, capabilities(self.engine), tab_id, target, value).await
+        self.mutate(
+            Some(tab_id),
+            false,
+            actions::fill(self, capabilities(self.engine), tab_id, target, value),
+        )
+        .await
     }
     async fn select(
         &self,
@@ -454,10 +522,16 @@ impl BrowserBackend for CdpBackend {
         target: ActionTarget,
         value: &str,
     ) -> Result<(), BrowserError> {
-        actions::select(self, tab_id, target, value).await
+        self.mutate(
+            Some(tab_id),
+            false,
+            actions::select(self, tab_id, target, value),
+        )
+        .await
     }
     async fn press_key(&self, tab_id: &str, key: &str) -> Result<(), BrowserError> {
-        actions::press_key(self, tab_id, key).await
+        self.mutate(Some(tab_id), false, actions::press_key(self, tab_id, key))
+            .await
     }
     async fn scroll(
         &self,
@@ -465,7 +539,12 @@ impl BrowserBackend for CdpBackend {
         target: ActionTarget,
         direction: ScrollDirection,
     ) -> Result<(), BrowserError> {
-        actions::scroll(self, tab_id, target, direction).await
+        self.mutate(
+            Some(tab_id),
+            false,
+            actions::scroll(self, tab_id, target, direction),
+        )
+        .await
     }
     async fn drag(
         &self,
@@ -473,7 +552,12 @@ impl BrowserBackend for CdpBackend {
         from: ActionTarget,
         to: ActionTarget,
     ) -> Result<(), BrowserError> {
-        actions::drag(self, capabilities(self.engine), tab_id, from, to).await
+        self.mutate(
+            Some(tab_id),
+            false,
+            actions::drag(self, capabilities(self.engine), tab_id, from, to),
+        )
+        .await
     }
     async fn upload(
         &self,
@@ -481,7 +565,12 @@ impl BrowserBackend for CdpBackend {
         target: Option<ActionTarget>,
         paths: &[String],
     ) -> Result<(), BrowserError> {
-        actions::upload(self, capabilities(self.engine), tab_id, target, paths).await
+        self.mutate(
+            Some(tab_id),
+            false,
+            actions::upload(self, capabilities(self.engine), tab_id, target, paths),
+        )
+        .await
     }
     async fn handle_dialog(
         &self,
@@ -489,7 +578,12 @@ impl BrowserBackend for CdpBackend {
         action: &str,
         prompt_text: Option<&str>,
     ) -> Result<(), BrowserError> {
-        dialog::handle_dialog(self, capabilities(self.engine), tab_id, action, prompt_text).await
+        self.mutate(
+            Some(tab_id),
+            false,
+            dialog::handle_dialog(self, capabilities(self.engine), tab_id, action, prompt_text),
+        )
+        .await
     }
     async fn console_messages(&self, tab_id: &str) -> Result<String, BrowserError> {
         events::console_messages(self, tab_id).await
@@ -502,20 +596,31 @@ impl BrowserBackend for CdpBackend {
         tab_id: &str,
         rule: routes::NewRouteRule,
     ) -> Result<routes::RouteRuleInfo, BrowserError> {
-        CdpBackend::route_add(self, tab_id, rule).await
+        self.mutate(
+            Some(tab_id),
+            false,
+            CdpBackend::route_add(self, tab_id, rule),
+        )
+        .await
     }
     async fn route_list(&self) -> Result<Vec<routes::RouteRuleInfo>, BrowserError> {
         CdpBackend::route_list(self).await
     }
     async fn route_remove(&self, rule_id: &str) -> Result<routes::RouteRuleInfo, BrowserError> {
-        CdpBackend::route_remove(self, rule_id).await
+        self.mutate(None, false, CdpBackend::route_remove(self, rule_id))
+            .await
     }
     async fn route_clear(
         &self,
         tab_id: &str,
         scope: routes::RouteScope,
     ) -> Result<usize, BrowserError> {
-        CdpBackend::route_clear(self, tab_id, scope).await
+        self.mutate(
+            Some(tab_id),
+            false,
+            CdpBackend::route_clear(self, tab_id, scope),
+        )
+        .await
     }
     async fn record_start(
         &self,
@@ -538,13 +643,16 @@ impl BrowserBackend for CdpBackend {
         CdpBackend::record_status(self, tab_id).await
     }
     async fn cookies(&self, op: &CookieOp) -> Result<String, BrowserError> {
-        cookies::cookies(self, op).await
+        // The read form shares the conservative profile-wide gate: cookie
+        // commands include cross-target mutations and cannot borrow a target.
+        self.mutate(None, false, cookies::cookies(self, op)).await
     }
     async fn save_state(&self, path: &std::path::Path) -> Result<(), BrowserError> {
         cookies::save_state(self, path).await
     }
     async fn load_state(&self, path: &std::path::Path) -> Result<(), BrowserError> {
-        cookies::load_state(self, path).await
+        self.mutate(None, false, cookies::load_state(self, path))
+            .await
     }
     // `wait_for` and `fill_form` keep the trait's shared defaults
     // (`backend.rs`) — real shared implementations, not capability stubs, and

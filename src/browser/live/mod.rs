@@ -14,6 +14,7 @@
 //! Every frame is acknowledged to the engine exactly once: by the recorder
 //! (after write) when its tap accepted the frame, otherwise by the owner.
 
+pub(crate) mod control;
 pub(crate) mod session;
 pub mod stream_hub;
 
@@ -27,7 +28,11 @@ use std::time::Duration;
 use aleph_cdp::methods::screencast::{self, ScreencastFormat};
 use aleph_cdp::methods::target;
 use aleph_cdp::{CdpConnection, CdpError, CdpEvent, SessionId, TargetId};
-use aleph_protocol::browser_live::BrowserTargetBinding;
+use aleph_protocol::browser_live::{
+    BrowserLiveState, BrowserTargetBinding, Controller, InterventionEnd, ViewerBinding,
+    ViewportCssPx,
+};
+use control::{AgentPermit, InterventionSink, TargetControl};
 use tokio::sync::mpsc;
 
 use crate::browser::cdp_backend::map_cdp_err;
@@ -84,8 +89,12 @@ struct FetchSlot {
 #[derive(Default)]
 struct State {
     next_epoch: u64,
+    ended: bool,
+    destroyed: std::collections::HashSet<String>,
     streams: HashMap<String, TargetStream>,
     fetch: HashMap<String, FetchSlot>,
+    // Closed controls stay as tombstones until this connection owner dies.
+    controls: HashMap<String, Arc<TargetControl>>,
 }
 
 pub(crate) struct LiveProfileOwner {
@@ -99,6 +108,10 @@ pub(crate) struct LiveProfileOwner {
     /// Serialises start/stop of engine screencasts so two callers racing on one
     /// target cannot both start (or one stop under the other's feet).
     lifecycle: tokio::sync::Mutex<()>,
+    // Excludes control registration during an agent operation, including open
+    // and global state changes whose affected target does not exist yet.
+    mutations: tokio::sync::Mutex<()>,
+    browser_session_id: String,
 }
 
 impl LiveProfileOwner {
@@ -121,6 +134,8 @@ impl LiveProfileOwner {
             state: Mutex::new(State::default()),
             lagged: AtomicU64::new(0),
             lifecycle: tokio::sync::Mutex::new(()),
+            mutations: tokio::sync::Mutex::new(()),
+            browser_session_id: uuid::Uuid::new_v4().to_string(),
         });
         let weak = Arc::downgrade(&owner);
         tokio::spawn(async move {
@@ -186,6 +201,8 @@ impl LiveProfileOwner {
     /// requests are cancelled by the engine rather than left hanging or
     /// continued blindly.
     fn fail_closed_after_lag(self: &Arc<Self>) {
+        self.state().ended = true;
+        self.end_controls(None, InterventionEnd::TargetClosed);
         let (streams, fetch) = {
             let mut st = self.state();
             (
@@ -252,6 +269,132 @@ impl LiveProfileOwner {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    pub(crate) fn browser_session_id(&self) -> &str {
+        &self.browser_session_id
+    }
+
+    /// Install an internal control capability for an ALREADY attached exact
+    /// target. No auth/grant is issued here. Epochs and browser-session identity
+    /// come from this one owner, not a client or profile active-tab pointer.
+    pub(crate) async fn bind_control(
+        &self,
+        resource_id: &str,
+        binding: ViewerBinding,
+        viewport: ViewportCssPx,
+        sink: InterventionSink,
+    ) -> Result<Arc<TargetControl>, BrowserError> {
+        let _mutation = self.mutations.lock().await;
+        if self.state().ended
+            || resource_id.is_empty()
+            || binding.target.profile != self.profile
+            || binding.target.browser_session_id != self.browser_session_id
+            || viewport.width == 0
+            || viewport.height == 0
+            || self.conn.closed().borrow().is_some()
+        {
+            return Err(BrowserError::ActionFailed(
+                "live control binding does not name this browser owner".into(),
+            ));
+        }
+        let mut st = self.state();
+        if st.ended || st.destroyed.contains(&binding.target.target_id) {
+            return Err(BrowserError::TabNotFound(binding.target.target_id));
+        }
+        let stream = st
+            .streams
+            .get(&binding.target.target_id)
+            .filter(|s| s.attached)
+            .ok_or_else(|| BrowserError::TabNotFound(binding.target.target_id.clone()))?;
+        if st.controls.contains_key(&binding.target.target_id) {
+            return Err(BrowserError::ActionFailed(
+                "target already has a control binding; explicit revoke/rebind required".into(),
+            ));
+        }
+        let control = TargetControl::new(
+            BrowserLiveState {
+                resource_id: resource_id.to_string(),
+                binding: binding.clone(),
+                connection_epoch: 1,
+                stream_epoch: stream.epoch,
+                viewport_css_px: viewport,
+                controller: Controller::Agent,
+                control_epoch: 0,
+            },
+            sink,
+        );
+        st.controls
+            .insert(binding.target.target_id, control.clone());
+        Ok(control)
+    }
+
+    /// The sole CDP backend mutation gate. A target verb acquires only that
+    /// target's control permit; open/global mutations acquire all live target
+    /// permits in stable order. Registration cannot race the empty-map case.
+    /// No backend future is polled until all permits are acquired/revalidated.
+    pub(crate) async fn mutate<T>(
+        &self,
+        target_id: Option<&str>,
+        future: impl Future<Output = Result<T, BrowserError>>,
+    ) -> Result<T, BrowserError> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(250);
+        let _mutation = tokio::time::timeout_at(deadline, self.mutations.lock())
+            .await
+            .map_err(|_| {
+                BrowserError::ActionFailed("browser mutation permit delayed over 250ms".into())
+            })?;
+        let controls = {
+            let st = self.state();
+            if st.ended || self.conn.closed().borrow().is_some() {
+                return Err(BrowserError::ActionFailed(
+                    "browser live owner is closed".into(),
+                ));
+            }
+            let mut controls: Vec<_> = st
+                .controls
+                .iter()
+                .filter(|(target, _)| target_id.is_none_or(|id| id == target.as_str()))
+                .map(|(id, control)| (id.clone(), control.clone()))
+                .collect();
+            controls.sort_by(|a, b| a.0.cmp(&b.0));
+            controls
+        };
+        let mut permits: Vec<AgentPermit> = Vec::with_capacity(controls.len());
+        for (_, control) in controls {
+            // A target tombstone rejects operations on that target, not open
+            // or profile-wide operations on its surviving sibling targets.
+            // Never take control locks while holding the owner map lock.
+            if target_id.is_none() && !control.is_live() {
+                continue;
+            }
+            permits.push(
+                tokio::time::timeout_at(deadline, control.agent_permit())
+                    .await
+                    .map_err(|_| {
+                        BrowserError::ActionFailed(
+                            "browser mutation permit delayed over 250ms".into(),
+                        )
+                    })??,
+            );
+        }
+        control::run_agent(&permits, future).await
+    }
+
+    fn end_controls(&self, target: Option<&str>, reason: InterventionEnd) {
+        let controls: Vec<_> = {
+            let st = self.state();
+            st.controls
+                .iter()
+                .filter(|(id, _)| target.is_none_or(|t| t == id.as_str()))
+                .map(|(_, c)| c.clone())
+                .collect()
+        };
+        for control in controls {
+            if let Err(error) = control.invalidate(reason) {
+                tracing::error!(%error, "browser intervention destination delivery failed; control remains closed");
+            }
+        }
+    }
+
     // ---- viewer API ----
 
     /// Bind a viewer to a target: ensures the target's one engine screencast.
@@ -270,6 +413,12 @@ impl LiveProfileOwner {
         }
         let session = (self.resolver)(binding.target_id.clone()).await?;
         let _life = self.lifecycle.lock().await;
+        {
+            let st = self.state();
+            if st.ended || st.destroyed.contains(&binding.target_id) {
+                return Err(BrowserError::TabNotFound(binding.target_id));
+            }
+        }
         self.ensure_stream(&binding.target_id, &session, VIEWER_FORMAT)
             .await
             .map_err(|e| map_cdp_err(self.engine, "Page.startScreencast", e))?;
@@ -289,6 +438,7 @@ impl LiveProfileOwner {
     #[allow(dead_code)] // consumed by the Task 3 gateway
     pub(crate) async fn close_target(&self, target_id: &str) -> Result<(), BrowserError> {
         let _life = self.lifecycle.lock().await;
+        self.end_controls(Some(target_id), InterventionEnd::TargetClosed);
         let removed = {
             let mut st = self.state();
             let epoch = st.next_epoch;
@@ -494,7 +644,13 @@ impl LiveProfileOwner {
         });
     }
 
+    pub(crate) fn retire(self: &Arc<Self>) {
+        self.fail_closed_after_lag();
+    }
+
     fn end_all(&self, reason: EndReason) {
+        self.state().ended = true;
+        self.end_controls(None, InterventionEnd::TargetClosed);
         let streams: Vec<TargetStream> = {
             let mut st = self.state();
             st.fetch.clear();
@@ -510,6 +666,8 @@ impl LiveProfileOwner {
             "Page.screencastFrame" => self.on_frame(ev),
             "Target.targetDestroyed" => {
                 if let Some(target) = ev.params.get("targetId").and_then(|v| v.as_str()) {
+                    self.state().destroyed.insert(target.to_string());
+                    self.end_controls(Some(target), InterventionEnd::TargetClosed);
                     let (stream, session) = {
                         let mut st = self.state();
                         st.fetch.remove(target);
