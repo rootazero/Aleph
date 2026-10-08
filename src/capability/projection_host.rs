@@ -365,6 +365,13 @@ struct DiagnosticHoldState {
     active: Option<DiagnosticHold>,
 }
 
+/// Optional diagnostic-only state. Disabled hosts do not allocate the hold
+/// mutex or notification primitive at all.
+struct DiagnosticMachinery {
+    hold: Mutex<DiagnosticHoldState>,
+    notify: Notify,
+}
+
 impl DiagnosticHoldState {
     /// Clear the slot if (and only if) it still holds hold `id`.
     fn clear_if(&mut self, id: u64) -> bool {
@@ -433,12 +440,9 @@ struct HostInner {
     completion_notify: Notify,
     #[cfg(test)]
     applier_test_gate: ApplierTestGate,
-    /// Active diagnostic hold. While `Some`, the worker for the corresponding
-    /// `plane` suspends event advancement until the hold clears (release time
-    /// elapses, `release()` runs, or the host closes).
-    diagnostic_hold: Mutex<DiagnosticHoldState>,
-    /// Notifies the held worker(s) when the hold releases (or expires).
-    diagnostic_hold_notify: Notify,
+    /// Diagnostic-only hold/timer machinery. `None` is the production
+    /// disabled mode and allocates neither the hold mutex nor its notifier.
+    diagnostics: Option<DiagnosticMachinery>,
     /// Total `Invalidated` enqueues on the default consumer (overflow
     /// recovery). Counts both `enqueue_snapshot` overflow and explicit
     /// `invalidate_all` invalidations on the default.
@@ -460,6 +464,18 @@ impl ProjectionHost {
     /// live change streams are subscribed before the first snapshot.
     #[must_use]
     pub fn mount(registry: ToolHandlerRegistry, tree: Arc<OwnershipTree>) -> Arc<Self> {
+        Self::mount_with_diagnostics(registry, tree, true)
+    }
+
+    /// Mount the canonical projection host with startup-scoped diagnostics.
+    /// `false` leaves the ordinary source/delivery path unchanged while
+    /// omitting all diagnostic hold/timer machinery.
+    #[must_use]
+    pub fn mount_with_diagnostics(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
         let facade = ZahirFacade::new(registry.clone(), Arc::clone(&tree));
         // Subscribe to BOTH live sources BEFORE reading the initial snapshot
         // (subscribe-before-snapshot).
@@ -502,8 +518,10 @@ impl ProjectionHost {
             completion_notify: Notify::new(),
             #[cfg(test)]
             applier_test_gate: ApplierTestGate::new(),
-            diagnostic_hold: Mutex::new(DiagnosticHoldState::default()),
-            diagnostic_hold_notify: Notify::new(),
+            diagnostics: diagnostics_enabled.then(|| DiagnosticMachinery {
+                hold: Mutex::new(DiagnosticHoldState::default()),
+                notify: Notify::new(),
+            }),
             replacement_count: AtomicU64::new(0),
             lag_count: AtomicU64::new(0),
         });
@@ -588,8 +606,10 @@ impl ProjectionHost {
             completion_notify: Notify::new(),
             #[cfg(test)]
             applier_test_gate: ApplierTestGate::new(),
-            diagnostic_hold: Mutex::new(DiagnosticHoldState::default()),
-            diagnostic_hold_notify: Notify::new(),
+            diagnostics: Some(DiagnosticMachinery {
+                hold: Mutex::new(DiagnosticHoldState::default()),
+                notify: Notify::new(),
+            }),
             replacement_count: AtomicU64::new(0),
             lag_count: AtomicU64::new(0),
         });
@@ -835,6 +855,9 @@ impl ProjectionHost {
         plane: DiagnosticPlane,
         duration: Duration,
     ) -> Result<(), DiagnosticError> {
+        let Some(diagnostics) = self.inner.diagnostics.as_ref() else {
+            return Err(DiagnosticError::Closed);
+        };
         if duration.is_zero() || duration > Duration::from_millis(5000) {
             return Err(DiagnosticError::InvalidHoldDuration);
         }
@@ -843,9 +866,8 @@ impl ProjectionHost {
         }
         let release_at = tokio::time::Instant::now() + duration;
         let id = {
-            let mut guard = self
-                .inner
-                .diagnostic_hold
+            let mut guard = diagnostics
+                .hold
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if guard.active.is_some() {
@@ -862,13 +884,15 @@ impl ProjectionHost {
             let timer = tokio::spawn(async move {
                 tokio::time::sleep_until(release_at).await;
                 if let Some(inner) = weak.upgrade() {
-                    let cleared = inner
-                        .diagnostic_hold
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .clear_if(id);
-                    if cleared {
-                        inner.diagnostic_hold_notify.notify_waiters();
+                    if let Some(diagnostics) = inner.diagnostics.as_ref() {
+                        let cleared = diagnostics
+                            .hold
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clear_if(id);
+                        if cleared {
+                            diagnostics.notify.notify_waiters();
+                        }
                     }
                 }
             });
@@ -880,17 +904,16 @@ impl ProjectionHost {
             });
             id
         };
-        self.inner.diagnostic_hold_notify.notify_waiters();
+        diagnostics.notify.notify_waiters();
 
         // Wait until hold `id` no longer occupies the slot (timer expiry,
         // release, or close). Dropping this future has no effect on the slot.
         loop {
-            let notified = self.inner.diagnostic_hold_notify.notified();
+            let notified = diagnostics.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            let still_ours = self
-                .inner
-                .diagnostic_hold
+            let still_ours = diagnostics
+                .hold
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .active
@@ -905,9 +928,11 @@ impl ProjectionHost {
 
     /// Release any active diagnostic hold. No-op if no hold is active.
     pub fn diagnostic_release(&self) {
-        let taken = self
-            .inner
-            .diagnostic_hold
+        let Some(diagnostics) = self.inner.diagnostics.as_ref() else {
+            return;
+        };
+        let taken = diagnostics
+            .hold
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .active
@@ -916,7 +941,7 @@ impl ProjectionHost {
             // The slot is already cleared under the lock; aborting the alarm
             // only avoids a redundant wake (its id-guarded clear is a no-op).
             hold.timer.abort();
-            self.inner.diagnostic_hold_notify.notify_waiters();
+            diagnostics.notify.notify_waiters();
         }
     }
 
@@ -1094,13 +1119,16 @@ async fn wait_diagnostic_hold(
     let Some(active) = inner.upgrade() else {
         return false;
     };
+    let Some(diagnostics) = active.diagnostics.as_ref() else {
+        return false;
+    };
     // Arm the wakeup BEFORE reading the slot so a concurrent release/expiry
     // between the read and the await cannot be lost.
-    let notify = active.diagnostic_hold_notify.notified();
+    let notify = diagnostics.notify.notified();
     tokio::pin!(notify);
     notify.as_mut().enable();
-    let release_at = active
-        .diagnostic_hold
+    let release_at = diagnostics
+        .hold
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .active
@@ -2625,7 +2653,9 @@ mod tests {
     /// Observed plane of the host-owned hold slot (None = no active hold).
     fn active_hold_plane(host: &ProjectionHost) -> Option<DiagnosticPlane> {
         host.inner
-            .diagnostic_hold
+            .diagnostics
+            .as_ref()?
+            .hold
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .active
@@ -2642,7 +2672,13 @@ mod tests {
     ) -> Option<DiagnosticPlane> {
         tokio::time::timeout(bound, async {
             loop {
-                let notified = host.inner.diagnostic_hold_notify.notified();
+                let notified = host
+                    .inner
+                    .diagnostics
+                    .as_ref()
+                    .expect("enabled test host must have diagnostics")
+                    .notify
+                    .notified();
                 tokio::pin!(notified);
                 notified.as_mut().enable();
                 let observed = active_hold_plane(host);
@@ -2959,6 +2995,28 @@ mod tests {
             host.diagnostic_status().lifecycle,
             DiagnosticLifecycle::Closed
         );
+    }
+
+    #[tokio::test]
+    async fn disabled_mount_has_no_diagnostic_hold_path() {
+        let reg = ToolHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount_with_diagnostics(reg.clone(), Arc::clone(&tree), false);
+
+        let err = host
+            .diagnostic_hold(
+                DiagnosticPlane::Delivery,
+                std::time::Duration::from_millis(10),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err, DiagnosticError::Closed);
+
+        reg.register(desc("ordinary"), fake("ordinary")).unwrap();
+        let snapshot =
+            await_snapshot_where(&host, |snapshot| snapshot.entries.contains_key("ordinary")).await;
+        assert!(snapshot.entries.contains_key("ordinary"));
+        let _ = Arc::clone(&host).close_and_await().await;
     }
 
     #[tokio::test]

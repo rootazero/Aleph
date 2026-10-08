@@ -62,9 +62,9 @@ use bootstrap_factories::build_task_delivery_engine;
 fn startup_diagnostics_control(
     host: Arc<ProjectionHost>,
     tree: Arc<OwnershipTree>,
-    env_value: Option<&str>,
+    diagnostics_enabled: bool,
 ) -> Result<Option<Arc<DiagnosticControl>>, DiagnosticError> {
-    if env_value != Some("1") {
+    if !diagnostics_enabled {
         return Ok(None);
     }
 
@@ -250,13 +250,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // owner is configured against the live registry, not a separate one.
     alephcore::tools::markdown_skill::set_markdown_skill_registry(tool_registry_phase2.clone());
 
-    // Mount the live projection on the canonical registry authority. The
+    // Read the startup-only switch exactly once before mounting. The
     // ownership tree is the single runtime owner authority shared by the
     // facade and host; no request-local or second registry is created.
+    let diagnostics_enabled = std::env::var("ALEPH_CAPABILITY_DIAGNOSTICS")
+        .ok()
+        .as_deref()
+        == Some("1");
     let ownership_tree = Arc::new(OwnershipTree::new());
-    let projection_host = ProjectionHost::mount(
+    let projection_host = ProjectionHost::mount_with_diagnostics(
         (*tool_registry_phase2).clone(),
         Arc::clone(&ownership_tree),
+        diagnostics_enabled,
     );
     alephcore::capability::projection_host::set_projection_host(Arc::clone(&projection_host));
     if !projection_host.wait_until_ready().await {
@@ -266,9 +271,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let diagnostics_control = startup_diagnostics_control(
         Arc::clone(&projection_host),
         Arc::clone(&ownership_tree),
-        std::env::var("ALEPH_CAPABILITY_DIAGNOSTICS")
-            .ok()
-            .as_deref(),
+        diagnostics_enabled,
     )
     .map_err(|error| format!("failed to install capability diagnostics: {error:?}"))?;
 
@@ -4438,16 +4441,19 @@ mod tests {
             Some("01"),
             Some("1\n"),
         ] {
-            let control =
-                startup_diagnostics_control(Arc::clone(&host), Arc::clone(&other_tree), value)
-                    .expect("disabled values must not construct a mismatched control");
+            let control = startup_diagnostics_control(
+                Arc::clone(&host),
+                Arc::clone(&other_tree),
+                value == Some("1"),
+            )
+            .expect("disabled values must not construct a mismatched control");
             assert!(
                 control.is_none(),
                 "diagnostics must be disabled for env value {value:?}"
             );
         }
 
-        let control = startup_diagnostics_control(Arc::clone(&host), Arc::clone(&tree), Some("1"))
+        let control = startup_diagnostics_control(Arc::clone(&host), Arc::clone(&tree), true)
             .expect("the canonical host/tree pair must construct successfully")
             .expect("exactly `1` must enable diagnostics");
         assert_eq!(
@@ -4455,7 +4461,7 @@ mod tests {
             alephcore::capability::diagnostic_control::DiagnosticLifecycle::Active
         );
 
-        let mismatch = match startup_diagnostics_control(Arc::clone(&host), other_tree, Some("1")) {
+        let mismatch = match startup_diagnostics_control(Arc::clone(&host), other_tree, true) {
             Ok(_) => panic!("a second owner authority must be rejected"),
             Err(error) => error,
         };
@@ -4471,9 +4477,13 @@ mod tests {
         let production = alephcore::utils::source_scan::code_text(
             &alephcore::utils::source_scan::production_prefix(&src),
         );
+        let mount = production
+            .find("ProjectionHost::mount_with_diagnostics(")
+            .expect("startup must mount the canonical host with one diagnostics decision");
         let decision = production
-            .find("let diagnostics_control = startup_diagnostics_control(")
-            .expect("startup must make one diagnostics enablement decision");
+            .find("let diagnostics_enabled =")
+            .expect("startup must make one exact diagnostics enablement decision");
+        assert!(decision < mount);
         let registration = production
             .find("register_agent_handlers(")
             .expect("startup must pass the decision into agent registration");
@@ -4533,7 +4543,7 @@ mod tests {
         let production = alephcore::utils::source_scan::code_text(&production);
 
         for call in [
-            "ProjectionHost::mount(",
+            "ProjectionHost::mount_with_diagnostics(",
             "set_projection_host(",
             "wait_until_ready(",
         ] {
@@ -4553,8 +4563,8 @@ mod tests {
             .find("set_mcp_tool_registry(")
             .expect("set_mcp_tool_registry call must exist (sibling census)");
         let mount_at = production
-            .find("ProjectionHost::mount(")
-            .expect("ProjectionHost::mount call must exist (asserted above)");
+            .find("ProjectionHost::mount_with_diagnostics(")
+            .expect("ProjectionHost::mount_with_diagnostics call must exist (asserted above)");
         assert!(
             mount_at > install_at,
             "ProjectionHost::mount must be installed AFTER set_mcp_tool_registry — \

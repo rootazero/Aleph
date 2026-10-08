@@ -11,7 +11,7 @@
 
 This report covers Task 4 only. The startup environment is enabled only when `ALEPH_CAPABILITY_DIAGNOSTICS == "1"`. The implementation reuses the canonical, readiness-confirmed `ProjectionHost` and the same `Arc<OwnershipTree>` through the existing `DiagnosticControl` and Task 3 `BuiltinToolConfig::diagnostics_control` path.
 
-Disabled values—including unset, empty, `0`, `true`, `TRUE`, leading/trailing whitespace, `01`, and `"1\n"`—return `None` before `DiagnosticControl::new`; therefore no diagnostics hold/timer machinery is created. No second authority is introduced.
+Disabled values—including unset, empty, `0`, `true`, `TRUE`, leading/trailing whitespace, `01`, and `"1\n"`—return `None` before `DiagnosticControl::new`. The repair additionally makes `DiagnosticMachinery` optional and mounts the host with `diagnostics_enabled`, so a disabled host does not retain the hold mutex or `Notify`; this is established by the guarded tests below, not by source inspection alone. No second authority is introduced.
 
 ## TDD 结果 / TDD Results
 
@@ -33,7 +33,7 @@ error[E0425]: cannot find function `startup_diagnostics_control` in this scope
 
 ### GREEN
 
-以下三个 Task 4 定向测试均通过，且每次 guard 内存门禁均为 `PASS`：
+Task 4 的修复已落地：`ProjectionHost::mount_with_diagnostics(..., diagnostics_enabled)` 只在启用时构造并保留 `DiagnosticMachinery`；startup 在 mount 前读取严格 env 值并传入该参数。以下三个 Task 4 定向测试均通过，且每次 guard 内存门禁均为 `PASS`：
 
 ```text
 python3 .superpowers/sdd/2026-10-07-capability-phase4-h-pre-runtime-mount/cargo-guard.py test --bin aleph-server commands::start::tests::diagnostics_requires_exact_startup_env --no-fail-fast
@@ -52,6 +52,8 @@ python3 .superpowers/sdd/2026-10-07-capability-phase4-h-pre-runtime-mount/cargo-
 python3 .superpowers/sdd/2026-10-07-capability-phase4-h-pre-runtime-mount/cargo-guard.py test --bin aleph-server --no-fail-fast
 # 118 passed; 0 failed; 0 ignored
 ```
+
+修复后的受保护回归结果：`projection_host` 测试 34 passed；startup 测试 9 passed。上述结果已由 guarded test 执行记录；本次提交不重新运行 Cargo。
 
 ## 验证覆盖 / Verification Coverage
 
