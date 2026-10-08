@@ -318,14 +318,24 @@ struct AppliedState {
     /// Real default-applier `Invalidated` consumption count. Bumped once
     /// per consumed `Invalidated` event (the default consumer's
     /// `Invalidated` arm under the applied lock). Plain Snapshot applies
-    /// (initial mount, close snapshot) do NOT bump this counter.
+    /// (initial mount; a plain terminal close snapshot delivered when the
+    /// queue is empty and no preceding invalidation is queued) do NOT
+    /// bump this counter. Note: a terminal close snapshot that follows
+    /// an overflow-induced `Invalidated` (queue-full delivery at close
+    /// time) IS a real replacement — see `applied_replacement_count`.
     applied_invalidation_count: u64,
     /// Real default-applier replacement `Snapshot` consumption count.
     /// Bumped once per consumed `Snapshot` that follows an
     /// `Invalidated`-cleared slot (i.e. `awaiting_replacement == true` on
-    /// entry). Plain `Snapshot`s that are NOT replacement (initial mount,
-    /// close snapshot, and any direct `Snapshot` that races a non-
-    /// invalidated apply) MUST NOT bump this counter.
+    /// entry). Plain `Snapshot`s that are NOT replacement (initial mount;
+    /// a plain terminal close snapshot when no preceding invalidation is
+    /// queued; any direct `Snapshot` that races a non-invalidated apply)
+    /// MUST NOT bump this counter. A terminal close snapshot delivered
+    /// AFTER an overflow-induced `Invalidated` IS a real replacement and
+    /// DOES bump — the close snapshot path (via `enqueue_snapshot`) can
+    /// emit `[Invalidated, Snapshot]` when the queue is full, and the
+    /// applier consumes that pair honestly. Behaviour is defensible
+    /// because the `Snapshot` really followed a real `Invalidated`.
     applied_replacement_count: u64,
     /// Internal gate: `true` after consuming `Invalidated` (and clearing
     /// `snapshot`); cleared on the very next consumed `Snapshot` after the
@@ -341,7 +351,10 @@ struct AppliedState {
     /// `applied_tool_ids` shape — same vector shape that the host already
     /// exposes, so no new namespace-keyed authority is introduced) carried
     /// by the most recent applied replacement. Cleared / overwritten only
-    /// on the next replacement receipt; never on close.
+    /// on the next replacement receipt; never on close. Memory: a single
+    /// `Vec<String>` overwritten per replacement (no historical growth),
+    /// length bounded by the most recent replacement snapshot's entry
+    /// count (no hard cap, no claim of strictly-bounded memory).
     last_replacement_tool_ids: Vec<String>,
 }
 
@@ -3241,6 +3254,176 @@ mod tests {
         assert!(
             status.last_replacement_tool_ids.iter().any(|n| n == "a"),
             "replacement must carry the registered tool name"
+        );
+    }
+
+    /// RED round-1 fix (review Important I1): prove that
+    ///   (a) enqueue of an `Invalidated` + replacement `Snapshot` pair does
+    ///       NOT yet bump the applier-side replacement receipts (the source-
+    ///       side enqueue counter has moved, the applier has not consumed
+    ///       the replacement yet), AND
+    ///   (b) the moment the real default applier has consumed the
+    ///       `Invalidated` but is held at the gate BEFORE consuming the
+    ///       replacement `Snapshot`, the applied-state shows
+    ///       `applied_invalidation_count == 1`, `applied_replacement_count
+    ///       == 0`, `last_replacement_*` still empty, `current_snapshot()
+    ///       == None`, AND
+    ///   (c) after releasing the gate, the actual consumed replacement
+    ///       snapshot bumps the receipt and the recorded cursor + tool-id
+    ///       set are STRICTLY equal to the replacement payload (a real
+    ///       registry change so the replacement cursor and ids differ
+    ///       from the initial applied snapshot).
+    ///
+    /// Uses the existing `applier_test_gate` (the `Snapshot`-arm barrier
+    /// at projection_host.rs:1510-1516) — the `Invalidated` arm has no
+    /// gate check, so consuming the `Invalidated` first and then being
+    /// held at the next `Snapshot` is exactly what the gate is for. No
+    /// sleep / no yield ordering guess — the entered `Notified` is the
+    /// deterministic wake, the readiness `Notified` re-check pattern is
+    /// the deterministic progress wait.
+    #[tokio::test]
+    async fn gated_invalidation_pair_separates_enqueue_from_applied() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("alpha"), fake("alpha")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        // Drain the initial snapshot install.
+        let initial = await_snapshot_where(&host, |s| s.entries.contains_key("alpha")).await;
+        let initial_cursor = initial.registry_cursor;
+        let initial_ids: std::collections::BTreeSet<String> =
+            initial.entries.keys().cloned().collect();
+        assert_eq!(
+            initial_ids,
+            std::collections::BTreeSet::from(["alpha".to_string()]),
+            "initial snapshot must reflect the registered tool before any              registry change"
+        );
+
+        // Real registry changes that advance the cursor AND change the
+        // tool-id membership, so the eventual replacement snapshot has
+        // BOTH a strictly greater cursor AND a strictly different tool-id
+        // set than the initial snapshot. This is what makes assertion (c)
+        // meaningful: an implementation that fabricated receipts from the
+        // initial state (or from the registry head instead of the actual
+        // applied payload) cannot satisfy it.
+        reg.unregister("alpha").expect("unregister alpha");
+        reg.register(desc("beta"), fake("beta")).unwrap();
+        reg.register(desc("gamma"), fake("gamma")).unwrap();
+        // Drain those updates before arming the gate so the queue is
+        // empty when the invalidation pair lands.
+        let _ = await_snapshot_where(&host, |s| {
+            s.entries.contains_key("gamma") && !s.entries.contains_key("alpha")
+        })
+        .await;
+
+        // Sanity: the registry-side counter is still zero at this point
+        // (process_registry_change does NOT bump it unless the queue
+        // overflows; the empty-queue register/unregister path never does).
+        assert_eq!(
+            host.inner.replacement_count.load(Ordering::SeqCst),
+            0,
+            "pre-gate: source-side replacement_count must stay zero when              only ordinary registry changes have flowed"
+        );
+
+        // Arm the Snapshot-arm barrier, then enqueue the Invalidated +
+        // replacement Snapshot pair. The applier will pop the Invalidated
+        // first (no gate check -> bumps invalidation_count, clears the
+        // applied snapshot, sets awaiting_replacement) and then hold on
+        // the replacement Snapshot.
+        let entered = host.test_arm_applier_gate();
+        tokio::pin!(entered);
+        invalidate_all(&host.inner);
+
+        // Wait for the real default applier to enter the barrier.
+        tokio::time::timeout(std::time::Duration::from_secs(10), &mut entered)
+            .await
+            .expect("real default applier did not enter the gate; the                      production worker may have been disabled or the                      cfg(test) seam regressed");
+
+        // (a) + (b) — enqueue has happened but the applier has not yet
+        // consumed the replacement Snapshot.
+        let status = host.diagnostic_status();
+        // Source-side enqueue counter has advanced (invalidate_all bumped
+        // it synchronously under the publish lock).
+        assert_eq!(
+            status.replacement_count, 1,
+            "after invalidate_all the source-side enqueue counter MUST              reflect the queued pair; the real applier has not yet              consumed the replacement Snapshot so the applied counter is              still zero"
+        );
+        assert_eq!(
+            status.applied_replacement_count, 0,
+            "while the replacement Snapshot is held at the gate, the              applied replacement count MUST be zero"
+        );
+        // The Invalidated arm has run, so the applied slot was cleared
+        // and the counter moved.
+        assert_eq!(status.applied_invalidation_count, 1);
+        assert!(
+            host.current_snapshot().is_none(),
+            "the Invalidated arm must clear the applied snapshot before              the replacement Snapshot is consumed; the gate is still              holding the replacement, so the snapshot stays cleared"
+        );
+        // Receipts from any prior replacement must not leak; the
+        // replacement has NOT yet been consumed.
+        assert_eq!(
+            status.last_replacement_registry_cursor, None,
+            "no replacement consumed yet; last_replacement cursor MUST              stay None"
+        );
+        assert!(
+            status.last_replacement_tool_ids.is_empty(),
+            "no replacement consumed yet; last_replacement ids MUST stay              empty"
+        );
+
+        // Release the barrier; the real default applier pops the held
+        // Snapshot and applies it.
+        host.test_release_applier_gate();
+        let status = await_status_where(&host, |s| s.applied_replacement_count > 0).await;
+
+        // (c) — the recorded cursor + tool-id set are STRICTLY equal to
+        // the actual replacement payload. The replacement payload was
+        // built by `invalidate_all` from the CURRENT registry state at
+        // the moment of the call: entries = ["beta", "gamma"], cursor =
+        // the registry revision AFTER the third mutation.
+        let expected_registry_state = reg.snapshot_state();
+        let expected_cursor = Cursor(expected_registry_state.revision());
+        let expected_ids: std::collections::BTreeSet<String> =
+            expected_registry_state.entries().keys().cloned().collect();
+        assert_eq!(
+            status.applied_invalidation_count, 1,
+            "exactly one Invalidated was consumed"
+        );
+        assert_eq!(
+            status.applied_replacement_count, 1,
+            "exactly one replacement Snapshot was consumed"
+        );
+        let recorded_cursor = status
+            .last_replacement_registry_cursor
+            .expect("replacement cursor must be set after release");
+        assert_eq!(
+            recorded_cursor, expected_cursor,
+            "recorded cursor MUST equal the actual applied replacement              payload's cursor (registry state at invalidate_all time), not              the initial cursor and not the registry head"
+        );
+        assert!(
+            recorded_cursor > initial_cursor,
+            "the replacement cursor MUST be strictly greater than the              initial cursor; an implementation that fabricated the receipt              from the initial snapshot would fail this"
+        );
+        let recorded_ids: std::collections::BTreeSet<String> =
+            status.last_replacement_tool_ids.iter().cloned().collect();
+        assert_eq!(
+            recorded_ids, expected_ids,
+            "recorded tool-id set MUST exactly equal the actual applied              replacement payload's entries (a set equality, not `any`); an              implementation that recorded the initial set or a stale set              would fail this"
+        );
+        assert!(
+            recorded_ids
+                .iter()
+                .all(|n| n != "alpha"),
+            "the replacement set MUST NOT contain the initial tool;              proving the receipt came from the post-mutation payload"
+        );
+        assert!(
+            recorded_ids.contains("beta") && recorded_ids.contains("gamma"),
+            "the replacement set MUST contain exactly the post-mutation              tools"
+        );
+        assert_eq!(
+            host.current_snapshot()
+                .expect("replacement applied -> snapshot present")
+                .registry_cursor,
+            expected_cursor,
+            "current applied snapshot cursor MUST equal the replacement              payload cursor (same lock cut, no two-cut pairing)"
         );
     }
 }
