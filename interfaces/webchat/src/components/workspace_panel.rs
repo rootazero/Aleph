@@ -33,7 +33,10 @@
 
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
-use crate::state::layout::{clamp_width, coerce_body, LayoutMode, WorkspaceBody, WorkspaceState};
+use crate::state::layout::{
+    clamp_width, coerce_body_with, LayoutMode, WorkspaceBody, WorkspaceState,
+};
+use crate::views::browser::{BrowserViewer, BrowserWorkspace};
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -46,6 +49,7 @@ fn body_label(body: WorkspaceBody, i18n: crate::i18n::I18nCtx) -> String {
         WorkspaceBody::Deliverables => t_string!(i18n, common.team_deliverables).to_string(),
         WorkspaceBody::Tasks => t_string!(i18n, common.team_tasks).to_string(),
         WorkspaceBody::Canvas => t_string!(i18n, canvas.title).to_string(),
+        WorkspaceBody::Browser => t_string!(i18n, browser_viewer.title).to_string(),
     }
 }
 
@@ -63,7 +67,16 @@ pub fn WorkspacePanel() -> impl IntoView {
     // body alone means a user who was on `Tasks`, visited a single-agent
     // conversation and came back finds `Tasks` again — and nothing has to
     // race a team_id that arrives one frame after the session switch.
-    let active = Memo::new(move |_| coerce_body(workspace.body.get(), is_team.get()));
+    // The Browser body exists only while a `BrowserWorkspace` context holds an
+    // authorized browser resource. The context is optional on purpose: nothing
+    // provides it at the app root yet (TODO(Task6): the producer/issuer wiring
+    // provides it and feeds its model), so until then there is no Browser tab
+    // rather than an empty one.
+    let browser = use_context::<BrowserWorkspace>();
+    let has_browser = Memo::new(move |_| browser.is_some_and(|b| b.has_browser()));
+    let active = Memo::new(move |_| {
+        coerce_body_with(workspace.body.get(), is_team.get(), has_browser.get())
+    });
 
     let pane_ref = NodeRef::<leptos::html::Aside>::new();
     let dragging = RwSignal::new(false);
@@ -188,7 +201,7 @@ pub fn WorkspacePanel() -> impl IntoView {
                 // closure reads `active` at the leaf, so selecting a tab
                 // repaints two class attributes and rebuilds nothing.
                 {move || {
-                    WorkspaceBody::available(is_team.get())
+                    WorkspaceBody::available_with(is_team.get(), has_browser.get())
                         .iter()
                         .copied()
                         .map(|body| view! {
@@ -226,6 +239,16 @@ pub fn WorkspacePanel() -> impl IntoView {
                             <TeamTasksView />
                         </div>
                     }.into_any(),
+                    WorkspaceBody::Browser => match browser {
+                        Some(browser) => view! {
+                            <div class="flex-1 overflow-y-auto">
+                                {move || view! {
+                                    <BrowserViewer model=browser.model.get() standalone=false />
+                                }}
+                            </div>
+                        }.into_any(),
+                        None => ().into_any(),
+                    },
                     // Rendered by the keep-alive container below, never here.
                     WorkspaceBody::Canvas => ().into_any(),
                 }}
