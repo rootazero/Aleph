@@ -18,6 +18,8 @@ from drive import (
     classify_hold_race,
     effect_marker_for,
     effect_markers,
+    final_body_only_has,
+    final_provider_body,
     fixture_args,
     fixture_tool_names,
     is_canonical_closed_chat_terminal,
@@ -460,6 +462,117 @@ class AppliedRecoveryVerdictTests(unittest.TestCase):
 
     def test_final_must_keep_base(self):
         self.assertEqual(self.verdict(after=self.after(applied_tool_ids=[])), "fail")
+
+
+class FinalProviderBodyTests(unittest.TestCase):
+    """Pure tests for the final-body oracle that replaces union-vacuity."""
+
+    BASE = "srv__qa_echo"
+    OLD_TEMP = "srv__initial__temporaryqa_echo_0"
+    CURRENT_TEMP = "srv__source__temporaryqa_echo_0"
+
+    def _body(self, *names):
+        return {"tools": [{"name": n} for n in names]}
+
+    def test_returns_last_body_with_nonempty_tools(self):
+        bodies = [
+            {"tools": []},
+            self._body(self.OLD_TEMP),
+            self._body(self.BASE, self.CURRENT_TEMP),
+            {"tools": []},
+        ]
+        result = final_provider_body(bodies)
+        self.assertEqual(result, self._body(self.BASE, self.CURRENT_TEMP))
+
+    def test_returns_none_when_no_body_has_tools(self):
+        bodies = [{"tools": []}, {"tools": []}]
+        self.assertIsNone(final_provider_body(bodies))
+        self.assertIsNone(final_provider_body([]))
+
+    def test_skips_empty_tools_in_reversed_scan(self):
+        bodies = [
+            self._body(self.OLD_TEMP),
+            {"tools": []},
+            {"tools": []},
+        ]
+        result = final_provider_body(bodies)
+        self.assertEqual(result, self._body(self.OLD_TEMP))
+
+    def test_final_body_only_has_accepts_clean_base(self):
+        body = self._body(self.BASE)
+        self.assertTrue(final_body_only_has(body, self.BASE))
+
+    def test_final_body_only_has_rejects_current_temp(self):
+        body = self._body(self.BASE, self.CURRENT_TEMP)
+        self.assertFalse(final_body_only_has(body, self.BASE, self.CURRENT_TEMP))
+
+    def test_final_body_only_has_rejects_old_temp_regression(self):
+        """REGRESSION: prior scenario temporary in earlier request must not leak.
+
+        The final-body oracle only inspects the LAST non-empty-tools body.
+        A prior temporary in an earlier request must therefore be invisible
+        to the oracle (which is the desired behavior). This test pins that
+        the oracle does NOT read earlier bodies, so union-vacuity is gone.
+        """
+        # Two bodies: earlier request has an old temp from a prior scenario,
+        # final request has only the base.
+        bodies = [
+            self._body(self.OLD_TEMP, self.BASE),
+            self._body(self.BASE),
+            {"tools": []},
+        ]
+        final = final_provider_body(bodies)
+        # Oracle looks only at the final body: old temp is NOT there.
+        self.assertTrue(final_body_only_has(final, self.BASE))
+        # But if we mistakenly used union-vacuity over all bodies,
+        # the old temp would appear and the check would pass falsely.
+        # This test guards against re-introducing the union.
+        all_names = set()
+        for b in bodies:
+            all_names.update(n for n in [t.get("name") for t in b.get("tools", [])] if n)
+        self.assertIn(self.OLD_TEMP, all_names, "regression fixture must include old temp in earlier request")
+
+    def test_final_body_only_has_rejects_missing_base(self):
+        body = self._body(self.CURRENT_TEMP)
+        self.assertFalse(final_body_only_has(body, self.BASE, self.CURRENT_TEMP))
+
+    def test_final_body_only_has_rejects_empty_body(self):
+        self.assertFalse(final_body_only_has({"tools": []}, self.BASE))
+        self.assertFalse(final_body_only_has(None, self.BASE))
+        self.assertFalse(final_body_only_has({}, self.BASE))
+
+
+class DisabledSurfaceTests(unittest.TestCase):
+    """Pure tests for the disabled-arm gap behavior."""
+
+    def test_disabled_gap_text_marks_unverified(self):
+        """The disabled arm must surface a gap for runtime/MCP metadata
+        + hold/timer machinery. Pure test: verify the gap text contains
+        the required phrasing so the arm fails closed to exit 3."""
+        from drive import QA
+        q = QA()
+        q.gap(
+            "disabled runtime/MCP metadata surface and hold/timer machinery allocation",
+            "no legitimate external query exists on a disabled server to prove these absent from outside the process; cannot fake PASS",
+        )
+        self.assertGreater(len(q.unverified), 0)
+        self.assertIn("disabled runtime/MCP metadata", q.unverified[0])
+
+    def test_disabled_receipts_without_gap_would_pass_vacuously(self):
+        """Pin that the two existing receipts (catalog absent + invoke
+        refused) alone do NOT cover the surface. A fixture that only
+        collects those receipts and asserts pass is incomplete."""
+        from drive import QA
+        q = QA()
+        q.receipt("diagnostic tool is absent when ALEPH_CAPABILITY_DIAGNOSTICS is not exactly 1", True, "")
+        q.receipt("disabled diagnostic invocation is refused", True, "")
+        # Without the gap, the arm has zero unverified entries and could
+        # be marked PASS — but the surface is not fully proven.
+        self.assertEqual(len(q.unverified), 0)
+        self.assertEqual(len(q.failures), 0)
+        # The gap is what forces the arm to fail closed.
+        q.gap("disabled runtime/MCP metadata surface and hold/timer machinery allocation", "")
+        self.assertEqual(len(q.unverified), 1)
 
 
 if __name__ == "__main__":

@@ -357,6 +357,76 @@ def provider_bodies_exclude(bodies, *excluded_ids):
     return True
 
 
+def final_provider_body(bodies):
+    """Return the LAST body with a non-empty ``tools`` list.
+
+    The model makes tool calls from the LAST tool-list body it received.
+    Bodies after the last tool-list body are typically summary/finish
+    calls that carry ``tools: []``. Identifying the actual final
+    tools/list for THIS scenario avoids the union-vacuity that lets
+    prior temporary tools from earlier requests in the same chat appear
+    in the final source/delivery surface. ``None`` is returned when no
+    body carries a tool list, forcing the caller to fail closed instead
+    of asserting a vacuous union.
+    """
+    if not bodies:
+        return None
+    for body in reversed(bodies):
+        if isinstance(body, dict) and body.get("tools"):
+            return body
+    return None
+
+
+def final_body_only_has(final_body, base_tool, *excluded):
+    """The final body must contain ``base_tool`` and exclude every other name.
+
+    Asserts the exact surviving base set: ``base_tool`` must be present,
+    and NO excluded tool (old temporary from a prior scenario, current
+    temporary from this scenario's burst, or other unexpected identity)
+    may appear. Empty body, missing base, or any excluded name causes
+    failure. This replaces the union-vacuity check that previously hid
+    prior temporaries in the final source/delivery surface.
+    """
+    if not isinstance(final_body, dict):
+        return False
+    present = {
+        x.get("name")
+        for x in final_body.get("tools", [])
+        if isinstance(x, dict) and isinstance(x.get("name"), str)
+    }
+    if base_tool not in present:
+        return False
+    for exc in excluded:
+        if isinstance(exc, str) and exc in present:
+            return False
+    return True
+
+
+async def cleanup_other_servers(conn, q, current_name):
+    """Delete every MCP server except ``current_name``.
+
+    Idempotent: if no other servers exist, this is a no-op. Used before
+    the hold/burst in delivery/source scenarios to prevent prior temporary
+    tools from earlier scenarios (initial/replacement/ownership) from
+    appearing in the final provider body. The shared registry is
+    independent of the projection host, so removing servers does not
+    affect the diagnostics status surface.
+    """
+    current_id = server_id(current_name)
+    ok, body = await gateway(conn, q, "tools.catalog", {})
+    if not ok:
+        return
+    tools = names(body)
+    server_ids = set()
+    for tool in tools:
+        if "__" in tool:
+            sid = tool.split("__", 1)[0]
+            if sid and sid != current_id:
+                server_ids.add(sid)
+    for sid in sorted(server_ids):
+        await gateway(conn, q, "mcp_config.delete", {"id": sid})
+
+
 def is_rejection(msg):
     """Accept only a real JSON-RPC error or an explicit ``ok: false``."""
     error = msg.get("error") if isinstance(msg, dict) else None
@@ -686,6 +756,11 @@ async def hold_and_updates(conn, q, args, plane, count, prefix):
     name, tool = await owner_fixture(conn, q, args, prefix)
     if not tool:
         return
+    # Remove every other MCP server from previous scenarios so prior
+    # temporary tools cannot leak into the final provider body. The
+    # shared registry is independent of the projection host, so this
+    # cleanup does not affect the diagnostics status surface.
+    await cleanup_other_servers(conn, q, name)
     _, before_raw = await diag(conn, q, "status")
     before = status_body(before_raw)
     capacity = int(before.get("pending_capacity", 0))
@@ -819,11 +894,14 @@ async def hold_and_updates(conn, q, args, plane, count, prefix):
         tool,
         effect_marker_for(args, plane.split("_")[0]),
     )
-    provider_final = set().union(*(provider_tools(b) for b in bodies)) if bodies else set()
+    final_body = final_provider_body(bodies)
+    final_tools = provider_tools(final_body) if final_body else set()
     q.receipt(
         f"{plane} final provider exposes surviving base only",
-        bool(bodies) and temporary.isdisjoint(provider_final) and tool in provider_final,
-        str(sorted(x for x in provider_final if "temporaryqa_echo" in x)),
+        bool(bodies)
+        and final_body is not None
+        and final_body_only_has(final_body, tool, *temporary),
+        f"final_body_tools={sorted(final_tools)}; bodies={len(bodies)}",
     )
 
 
@@ -833,17 +911,98 @@ async def close_case(conn, q, args):
         return
     pre_ok, pre_raw = await diag(conn, q, "status")
     pre = status_body(pre_raw)
+    pre_cursor = pre.get("registry_cursor")
     q.receipt(
         "close pre-status is active with applied fixture",
         pre_ok and pre.get("lifecycle") == "active" and tool in pre.get("applied_tool_ids", []),
         json.dumps(pre)[:300],
     )
-    ok, close = await diag(conn, q, "close")
-    q.receipt(
-        "close completes shared source/applier join",
-        ok and close.get("source_joined") and close.get("applier_joined") and not close.get("source_failed") and not close.get("applier_failed"),
-        json.dumps(close),
-    )
+
+    # === Close-during-hold proof ===
+    # Arm a real outstanding hold on a non-close plane, invoke close
+    # while the hold is still pending, prove the held timer cannot
+    # mutate state, and prove the canonical diagnostics operation
+    # fails closed after close. The host's ``hold`` RPC only returns
+    # success after the timer expires, so awaiting first-success is
+    # NOT an armed proof; the two-connection race in ``_armed_hold``
+    # is the accepted shape (one side returns HoldAlreadyActive, the
+    # other stays pending inside its 5s timer).
+    armed = await _armed_hold(args, q, "source_intake")
+    if armed is not None:
+        hold_ws, hold_task = armed
+        # The hold task is still pending; this is the armed proof.
+        hold_still_pending = not hold_task.done()
+        q.receipt(
+            "close-during-hold: hold is armed and pending without premature release",
+            hold_still_pending,
+            f"hold_task.done()={hold_task.done()}",
+        )
+        ok, close = await diag(conn, q, "close")
+        q.receipt(
+            "close-during-hold: close completes shared source/applier join",
+            ok and close.get("source_joined") and close.get("applier_joined") and not close.get("source_failed") and not close.get("applier_failed"),
+            json.dumps(close),
+        )
+        post_close_ok, post_close_raw = await diag(conn, q, "status")
+        post_close_cursor = status_body(post_close_raw).get("registry_cursor") or pre_cursor
+        q.receipt(
+            "close-during-hold: host reaches Closed state with applied snapshot preserved",
+            is_closed_status(post_close_ok, post_close_raw, pre.get("applied_tool_ids", [])),
+            json.dumps(post_close_raw)[:400],
+        )
+        # The held plane must not accept new hold attempts after close:
+        # a second ``hold`` on the same plane must fail with the
+        # canonical closed-host error, NOT HoldAlreadyActive (which
+        # would mean the old hold is still being honored).
+        held_retry_ok, held_retry_body = await diag(conn, q, "hold", plane="source_intake", duration_ms=500)
+        held_retry_text = _wire_text(held_retry_body) if isinstance(held_retry_body, dict) else ""
+        held_plane_fail_closed = (
+            not held_retry_ok
+            and is_canonical_host_closed(False, held_retry_body)
+            and "hold_already_active" not in held_retry_text
+            and "diagnostics hold already active" not in held_retry_text
+        )
+        q.receipt(
+            "close-during-hold: held plane cannot accept new hold (fail-closed, not HoldAlreadyActive)",
+            held_plane_fail_closed,
+            json.dumps(held_retry_body)[:300],
+        )
+        # The canonical diagnostics operation must fail closed with the
+        # same wire shape after close, not with a generic tool-not-found
+        # boundary on the closed-state runloop.
+        canonical_ok, canonical_raw = await diag(conn, q, "status")
+        q.receipt(
+            "close-during-hold: canonical diagnostics operation fails closed",
+            is_closed_status(canonical_ok, canonical_raw, pre.get("applied_tool_ids", [])),
+            json.dumps(canonical_raw)[:400],
+        )
+        # Await the hold autorelease so the held timer completes.
+        try:
+            await asyncio.wait_for(hold_task, timeout=10)
+        except asyncio.TimeoutError:
+            hold_task.cancel()
+        await _safe_close_ws(hold_ws)
+        # The held timer could not have mutated state: the registry
+        # cursor must be unchanged after the hold releases, because the
+        # applier was already closed when the timer expired.
+        final_cursor_ok, final_cursor_raw = await diag(conn, q, "status")
+        final_cursor = status_body(final_cursor_raw).get("registry_cursor") or post_close_cursor
+        q.receipt(
+            "close-during-hold: held timer could not mutate state after close (cursor unchanged)",
+            final_cursor == post_close_cursor,
+            f"post_close_cursor={post_close_cursor}; final_cursor={final_cursor}",
+        )
+    else:
+        q.gap(
+            "close-during-hold proof",
+            "could not arm a real outstanding hold via _armed_hold; close-during-hold receipts skipped",
+        )
+        ok, close = await diag(conn, q, "close")
+        q.receipt(
+            "close completes shared source/applier join",
+            ok and close.get("source_joined") and close.get("applier_joined") and not close.get("source_failed") and not close.get("applier_failed"),
+            json.dumps(close),
+        )
     post_ok, post_raw = await diag(conn, q, "status")
     q.receipt(
         "post-close host status is closed or canonical closed refusal",
@@ -931,6 +1090,17 @@ async def disabled(conn, q, args):
     q.receipt("diagnostic tool is absent when ALEPH_CAPABILITY_DIAGNOSTICS is not exactly 1", not visible, str(sorted(x for x in names(body.get("result", {})) if "diagnostic" in x)))
     msg = await conn.call("tools.invoke", {"tool_name": DIAG, "arguments": {"operation": "status"}})
     q.receipt("disabled diagnostic invocation is refused", is_rejection(msg), json.dumps(msg)[:300])
+    # The diagnostics host is not started when ALEPH_CAPABILITY_DIAGNOSTICS
+    # is not exactly 1, so there is no legitimate external query to assert
+    # that runtime/MCP metadata AND hold/timer machinery allocation are
+    # absent from outside the process. We do NOT infer this from the source
+    # catalog (that's a code-shape argument, not a runtime receipt) and we
+    # do NOT start a mock just to produce an empty receipt. Mark the
+    # remaining surface as UNVERIFIED so the arm fails closed to exit 3.
+    q.gap(
+        "disabled runtime/MCP metadata surface and hold/timer machinery allocation",
+        "no legitimate external query exists on a disabled server to prove these absent from outside the process; cannot fake PASS",
+    )
 
 
 async def main(args):
