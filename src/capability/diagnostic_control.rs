@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use crate::capability::descriptor::CapabilityId;
 use crate::capability::facade::Cursor;
-use crate::capability::ownership::{OwnerGeneration, OwnershipTree};
+use crate::capability::ownership::{BoundRevoke, OwnerGeneration, OwnershipTree};
 use crate::capability::projection_host::{ProjectionHost, ProjectionShutdownOutcome};
 
 /// Which production-path block to hold. Re-exported from [`ProjectionHost`]
@@ -157,7 +157,14 @@ impl DiagnosticControl {
     /// Revoke the tool binding for `tool_name` on the SAME tree. The
     /// capability id is derived from `TOOL_NAMESPACE`; arbitrary ids are
     /// NOT accepted.
-    pub fn revoke_tool(&self, tool_name: &str) -> Result<(), DiagnosticError> {
+    ///
+    /// Uses [`OwnershipTree::revoke_bound`]: only an id with a live binding
+    /// is revoked (irreversibly). An unknown / not-yet-bound name returns
+    /// [`DiagnosticError::UnknownTool`] WITHOUT mutating the tree (no
+    /// tombstone), so the error carries no side effect. Returns
+    /// `Ok(true)` when this call revoked a live binding and `Ok(false)` when
+    /// the id was already tombstoned (idempotent, nothing changed).
+    pub fn revoke_tool(&self, tool_name: &str) -> Result<bool, DiagnosticError> {
         if self.host.is_closing() {
             return Err(DiagnosticError::Closed);
         }
@@ -165,12 +172,12 @@ impl DiagnosticControl {
             namespace: crate::capability::backend::TOOL_NAMESPACE.to_string(),
             name: tool_name.to_string(),
         };
-        if self.tree.revoke(&id) {
-            Ok(())
-        } else {
-            Err(DiagnosticError::UnknownTool {
+        match self.tree.revoke_bound(&id) {
+            BoundRevoke::Revoked => Ok(true),
+            BoundRevoke::AlreadyRevoked => Ok(false),
+            BoundRevoke::NotBound => Err(DiagnosticError::UnknownTool {
                 name: tool_name.to_string(),
-            })
+            }),
         }
     }
 
@@ -476,7 +483,7 @@ mod tests {
 
         let outcome = ctrl.close().await.unwrap();
         assert!(outcome.source_joined || outcome.applier_joined);
-        let _ = hold_task.await.unwrap().unwrap();
+        hold_task.await.unwrap().unwrap();
 
         let s = ctrl.status().unwrap();
         assert_eq!(s.lifecycle, DiagnosticLifecycle::Closed);
@@ -520,6 +527,44 @@ mod tests {
             s1.registry_cursor.0, cursor_before,
             "revoke must NOT advance the registry cursor"
         );
+    }
+
+    /// Final-review I3 — an `UnknownTool` answer must carry NO side effect:
+    /// the mistyped / not-yet-registered name is not tombstoned, and a later
+    /// registration of that name still reaches the applied state. A repeat
+    /// revoke of a revoked tool is idempotent (`Ok(false)`), and the first
+    /// revoke of a bound tool reports `Ok(true)` and tombstones it.
+    #[tokio::test]
+    async fn revoke_tool_unknown_is_side_effect_free_and_repeat_is_idempotent() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let ctrl = DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree)).unwrap();
+        await_status(&ctrl, |s| s.applied_tool_ids.iter().any(|t| t.name == "a")).await;
+
+        let late_id = CapabilityId {
+            namespace: crate::capability::backend::TOOL_NAMESPACE.to_string(),
+            name: "late".to_string(),
+        };
+        assert!(matches!(
+            ctrl.revoke_tool("late"),
+            Err(DiagnosticError::UnknownTool { ref name }) if name == "late"
+        ));
+        assert!(!tree.is_revoked(&late_id), "UnknownTool must not tombstone");
+
+        reg.register(desc("late"), fake("late")).unwrap();
+        await_status(&ctrl, |s| s.applied_tool_ids.iter().any(|t| t.name == "late")).await;
+
+        assert!(ctrl.revoke_tool("a").unwrap(), "bound tool: this call revoked it");
+        assert!(!ctrl.revoke_tool("a").unwrap(), "repeat is idempotent");
+        let a_id = CapabilityId {
+            namespace: crate::capability::backend::TOOL_NAMESPACE.to_string(),
+            name: "a".to_string(),
+        };
+        assert!(tree.is_revoked(&a_id));
+        let s = await_status(&ctrl, |s| !s.applied_tool_ids.iter().any(|t| t.name == "a")).await;
+        assert!(s.applied_tool_ids.iter().any(|t| t.name == "late"));
     }
 
     /// RED — §3.4 dispose is irreversible; a second dispose reports `Closed`.

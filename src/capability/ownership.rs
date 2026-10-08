@@ -492,6 +492,33 @@ impl OwnershipTree {
 
     pub fn revoke(&self, capability: &CapabilityId) -> bool {
         let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        Self::revoke_locked(&mut inner, capability)
+    }
+
+    /// Revoke `capability` ONLY when it currently has a live binding.
+    ///
+    /// Unlike [`revoke`](Self::revoke) (which tombstones unconditionally,
+    /// including unknown ids), this never creates a tombstone for an id that
+    /// has no binding: a mistyped or not-yet-bound name leaves the tree
+    /// unchanged (no tombstone, no event), so a later registration of that
+    /// name is NOT silently refused. Observation and mutation happen under
+    /// the SAME mutex, so the answer cannot race a concurrent register/revoke.
+    /// An existing binding is revoked with the identical irreversible
+    /// transition as [`revoke`](Self::revoke).
+    pub fn revoke_bound(&self, capability: &CapabilityId) -> BoundRevoke {
+        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        if inner.revoked.contains(capability) {
+            return BoundRevoke::AlreadyRevoked;
+        }
+        if !inner.bindings.keys().any(|key| &key.capability == capability) {
+            return BoundRevoke::NotBound;
+        }
+        let removed = Self::revoke_locked(&mut inner, capability);
+        debug_assert!(removed, "a bound capability must lose its binding");
+        BoundRevoke::Revoked
+    }
+
+    fn revoke_locked(inner: &mut OwnershipInner, capability: &CapabilityId) -> bool {
         let before = inner.bindings.len();
         inner.bindings.retain(|key, _| &key.capability != capability);
         let new_tombstone = inner.revoked.insert(capability.clone());
@@ -521,6 +548,17 @@ impl OwnershipTree {
         }
         bindings_released
     }
+}
+
+/// Outcome of [`OwnershipTree::revoke_bound`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundRevoke {
+    /// A live binding existed; it was removed and the id is now tombstoned.
+    Revoked,
+    /// The id was already tombstoned; nothing changed.
+    AlreadyRevoked,
+    /// No binding and no tombstone; nothing changed (no tombstone created).
+    NotBound,
 }
 
 impl Default for OwnershipTree {
@@ -1717,6 +1755,65 @@ mod tests {
             other => panic!("expected Revoked after dispose, got {other:?}"),
         }
         // And no further event follows.
+        assert_no_change(&mut rx, TEST_QUIET);
+    }
+
+    /// `revoke_bound` on an unknown / not-yet-registered id must NOT create a
+    /// tombstone or emit an event, so a later registration still succeeds.
+    #[test]
+    fn revoke_bound_unknown_leaves_no_tombstone_and_allows_later_register() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("typo");
+        let vis = full_vis();
+        let mut rx = tree.subscribe_changes();
+        assert_eq!(tree.revoke_bound(&cap), BoundRevoke::NotBound);
+        assert!(!tree.is_revoked(&cap), "NotBound must not tombstone");
+        assert_no_change(&mut rx, TEST_QUIET);
+        tree.register(cap.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis.clone())
+            .expect("register after NotBound must succeed");
+        assert_eq!(tree.resolve(&cap, &vis), Some(()));
+    }
+
+    /// `revoke_bound` on a bound id performs the same irreversible transition
+    /// as `revoke`: every binding (all owners / visibilities) is removed, the
+    /// id is tombstoned, exactly one `Revoked` event is emitted, and a later
+    /// register is refused. A repeat is `AlreadyRevoked` with no event.
+    #[test]
+    fn revoke_bound_existing_is_irreversible_and_repeat_is_already_revoked() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("bound");
+        let vis = full_vis();
+        let restricted = restricted_vis("ws");
+        tree.register(cap.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis.clone())
+            .expect("register runtime");
+        tree.register(
+            cap.clone(),
+            OwnerRef::Task(TaskId("t".into())),
+            LifetimeScope::Task,
+            restricted.clone(),
+        )
+        .expect("register task-owned restricted");
+        let claim = tree
+            .claim(&cap, &vis, OwnerRef::Runtime, "c".into())
+            .expect("claim");
+        let mut rx = tree.subscribe_changes();
+
+        assert_eq!(tree.revoke_bound(&cap), BoundRevoke::Revoked);
+        assert!(tree.is_revoked(&cap));
+        assert_eq!(tree.resolve(&cap, &vis), None);
+        assert_eq!(tree.resolve(&cap, &restricted), None);
+        assert_eq!(tree.claim_state(&claim, &cap, &vis), ClaimState::Unknown);
+        match rx.try_recv() {
+            Ok(OwnershipChange::Revoked { capability }) => assert_eq!(capability, cap),
+            other => panic!("expected one Revoked event, got {other:?}"),
+        }
+        assert_no_change(&mut rx, TEST_QUIET);
+        assert_eq!(
+            tree.register(cap.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis.clone()),
+            Err(RegisterError::Revoked)
+        );
+
+        assert_eq!(tree.revoke_bound(&cap), BoundRevoke::AlreadyRevoked);
         assert_no_change(&mut rx, TEST_QUIET);
     }
 }

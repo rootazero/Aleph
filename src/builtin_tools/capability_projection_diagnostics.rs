@@ -262,6 +262,10 @@ pub enum DiagnosticResponse {
     },
     RevokeTool {
         tool_name: String,
+        /// `true` when the id was already tombstoned and this call changed
+        /// nothing (idempotent repeat); `false` when this call revoked a live
+        /// binding. An unbound name is an `unknown_tool` error with no effect.
+        already_revoked: bool,
     },
     DisposeRuntime,
     Hold {
@@ -306,7 +310,8 @@ pub enum DiagnosticToolError {
     /// The host remains close-requested / fail-closed. NEVER serialized as a
     /// successful `Close` response — this variant exists for that reason.
     CloseTimeout { elapsed_ms: u64 },
-    /// `revoke_tool` could not find a binding for the named tool.
+    /// `revoke_tool` found no live binding (and no tombstone) for the named
+    /// tool. The tree is left unchanged: no tombstone is created.
     UnknownTool { name: String },
 }
 
@@ -428,8 +433,11 @@ pub async fn execute_capability_projection_diagnostics(
             })
         }
         DiagnosticRequest::RevokeTool { tool_name } => {
-            control.revoke_tool(&tool_name)?;
-            Ok(DiagnosticResponse::RevokeTool { tool_name })
+            let revoked_now = control.revoke_tool(&tool_name)?;
+            Ok(DiagnosticResponse::RevokeTool {
+                tool_name,
+                already_revoked: !revoked_now,
+            })
         }
         DiagnosticRequest::DisposeRuntime {} => {
             control.dispose_runtime()?;

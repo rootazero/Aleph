@@ -13,6 +13,9 @@ import json
 import os
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 QA = Path(__file__).resolve().parents[1]
@@ -20,6 +23,10 @@ sys.path.insert(0, str(QA / "browser_managed"))
 from qa_rpc import Ledger, ws_connect, ran  # noqa: E402
 
 DIAG = "capability_projection_diagnostics"
+# Read-only builtin exposed on the MCP face next to DIAG (run.sh writes
+# `[mcp_server] expose = [DIAG, MCP_CONTROL]`). Its presence in `tools/list`
+# is the non-vacuity control for DIAG's absence on the same response.
+MCP_CONTROL = "grep"
 
 
 class Conn:
@@ -128,6 +135,53 @@ def provider_bodies(path: Path, marker: str):
         if isinstance(body, dict) and marker in json.dumps(body, sort_keys=True):
             out.append(body)
     return out
+
+
+def mcp_base_from_ws(ws_url):
+    """The gateway's HTTP origin for the real `/mcp` route, from the WS URL."""
+    u = urllib.parse.urlsplit(ws_url)
+    return f"http://{u.hostname}:{u.port}"
+
+
+def _mcp_post(base, msg, session=None, timeout=30):
+    headers = {"content-type": "application/json", "accept": "application/json, text/event-stream"}
+    if session:
+        headers["mcp-session-id"] = session
+    req = urllib.request.Request(base + "/mcp", data=json.dumps(msg).encode(), method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            return r.status, {k.lower(): v for k, v in r.headers.items()}, (json.loads(raw) if raw else None)
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            parsed = json.loads(raw) if raw else None
+        except ValueError:
+            parsed = raw.decode(errors="replace")
+        return e.code, {k.lower(): v for k, v in e.headers.items()}, parsed
+    except (urllib.error.URLError, OSError) as e:
+        return 0, {}, str(e)
+
+
+def mcp_tools_list(base):
+    """Real loopback MCP-face `initialize` + `tools/list` against Aleph's
+    own `/mcp` route (not the QA stdio fixture). Returns
+    ``(names | None, evidence)``; ``None`` means the surface was not reached,
+    which callers must treat as FAIL, never as absence."""
+    st, hd, body = _mcp_post(base, {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "qa-hpre", "version": "0"}},
+    })
+    sid = hd.get("mcp-session-id")
+    if st != 200 or not sid:
+        return None, f"initialize status={st} sid={sid} body={json.dumps(body)[:200]}"
+    _mcp_post(base, {"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
+    st, _, body = _mcp_post(base, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, sid)
+    tools = (body or {}).get("result", {}).get("tools") if isinstance(body, dict) else None
+    if st != 200 or not isinstance(tools, list):
+        return None, f"tools/list status={st} body={json.dumps(body)[:200]}"
+    names_ = sorted(t.get("name") for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str))
+    return names_, f"tools/list names={names_}"
 
 
 def provider_tools(body):
@@ -524,6 +578,7 @@ async def initial(conn, q, args):
     q.receipt("positive initial fixture reaches tools.catalog", bool(hits), str(hits))
     if hits:
         await send_run(conn, q, marker_for(args, "initial"), args.provider_log, args.effect_log, hits[0], effect_marker_for(args, "initial"))
+    await enabled_surface_controls(conn, q, args, marker_for(args, "initial"))
 
 
 async def replacement(conn, q, args):
@@ -1090,17 +1145,60 @@ async def disabled(conn, q, args):
     q.receipt("diagnostic tool is absent when ALEPH_CAPABILITY_DIAGNOSTICS is not exactly 1", not visible, str(sorted(x for x in names(body.get("result", {})) if "diagnostic" in x)))
     msg = await conn.call("tools.invoke", {"tool_name": DIAG, "arguments": {"operation": "status"}})
     q.receipt("disabled diagnostic invocation is refused", is_rejection(msg), json.dumps(msg)[:300])
-    # The diagnostics host is not started when ALEPH_CAPABILITY_DIAGNOSTICS
-    # is not exactly 1, so there is no legitimate external query to assert
-    # that runtime/MCP metadata AND hold/timer machinery allocation are
-    # absent from outside the process. We do NOT infer this from the source
-    # catalog (that's a code-shape argument, not a runtime receipt) and we
-    # do NOT start a mock just to produce an empty receipt. Mark the
-    # remaining surface as UNVERIFIED so the arm fails closed to exit 3.
-    q.gap(
-        "disabled runtime/MCP metadata surface and hold/timer machinery allocation",
-        "no legitimate external query exists on a disabled server to prove these absent from outside the process; cannot fake PASS",
+
+    # Provider surface: one real chat.send through the real AgentLoop; the
+    # recording mock captures the exact `tools[]` handed to the provider. An
+    # empty recording is FAIL (provider_bodies_exclude returns False), and a
+    # baseline builtin must be present so absence is not vacuous.
+    marker = marker_for(args, "disabled_provider")
+    await _chat_run(conn, q, marker)
+    await _recorded_provider_bodies(args.provider_log, marker)
+    bodies = provider_bodies(args.provider_log, marker)
+    # Auxiliary (planning/summary) provider calls carry no tools[]; the
+    # receipt is about the tool-bearing AgentLoop turns, of which there must
+    # be at least one, each carrying a baseline builtin (non-vacuous).
+    tooled = [b for b in bodies if provider_tools(b)]
+    q.receipt(
+        "disabled provider tool-bearing requests exist and carry a baseline builtin",
+        bool(tooled) and all(MCP_CONTROL in provider_tools(b) for b in tooled),
+        f"bodies={len(bodies)} tool_bearing={len(tooled)} sizes={[len(provider_tools(b)) for b in tooled]}",
     )
+    q.receipt(
+        "disabled provider tools[] excludes the diagnostic tool on every recorded request",
+        bool(tooled) and provider_bodies_exclude(bodies, DIAG),
+        f"bodies={len(bodies)} tool_bearing={len(tooled)}",
+    )
+
+    # External MCP surface: Aleph's own `/mcp` face (loopback), with DIAG
+    # explicitly whitelisted in `[mcp_server].expose` by run.sh, so absence
+    # is decided by the runtime registry and not by the whitelist.
+    listed, evidence = mcp_tools_list(mcp_base_from_ws(args.ws))
+    q.receipt("disabled MCP-face tools/list reached and lists the exposed control tool", listed is not None and MCP_CONTROL in listed, evidence)
+    q.receipt("disabled MCP-face tools/list omits the exposed diagnostic tool", listed is not None and DIAG not in listed, evidence)
+
+    # Internal hold/timer machinery allocation has no external protocol on a
+    # disabled server; it is covered in-process by the projection_host
+    # disabled-mount test only. Keep it an explicit UNVERIFIED gap (exit 3);
+    # never infer it from the receipts above.
+    q.gap(
+        "disabled hold/timer machinery allocation",
+        "no external protocol observes in-process diagnostic machinery allocation; covered only by the in-process projection_host disabled-mount test; cannot fake PASS",
+    )
+
+
+async def enabled_surface_controls(conn, q, args, marker):
+    """Paired positive controls for the disabled arm's absence receipts: on
+    an ENABLED server the same provider/MCP surfaces must carry DIAG,
+    otherwise the disabled absence would be vacuous."""
+    bodies = provider_bodies(args.provider_log, marker)
+    tooled = [b for b in bodies if provider_tools(b)]
+    q.receipt(
+        "enabled provider tools[] carries the diagnostic tool on every tool-bearing request (positive control)",
+        bool(tooled) and all(DIAG in provider_tools(b) for b in tooled),
+        f"bodies={len(bodies)} tool_bearing={len(tooled)}",
+    )
+    listed, evidence = mcp_tools_list(mcp_base_from_ws(args.ws))
+    q.receipt("enabled MCP-face tools/list lists the exposed diagnostic tool (positive control)", listed is not None and DIAG in listed and MCP_CONTROL in listed, evidence)
 
 
 async def main(args):

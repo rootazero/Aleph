@@ -3000,7 +3000,7 @@ mod tests {
         .expect("source worker never queued the final replacement");
         assert!(host
             .current_snapshot()
-            .map_or(true, |s| s.entries.len() < 10));
+            .is_none_or(|s| s.entries.len() < 10));
         assert!(host.diagnostic_status().replacement_count > 0);
 
         host.diagnostic_release();

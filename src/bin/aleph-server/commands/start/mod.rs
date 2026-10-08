@@ -59,6 +59,12 @@ use bootstrap_factories::build_task_delivery_engine;
 
 // ── (subsystem initializer helpers extracted to start/helpers.rs) ────────────
 
+/// The single startup enablement predicate for capability diagnostics:
+/// only the exact value `1` enables it (no trimming, no case folding).
+fn diagnostics_enabled_from_env(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
 fn startup_diagnostics_control(
     host: Arc<ProjectionHost>,
     tree: Arc<OwnershipTree>,
@@ -253,10 +259,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Read the startup-only switch exactly once before mounting. The
     // ownership tree is the single runtime owner authority shared by the
     // facade and host; no request-local or second registry is created.
-    let diagnostics_enabled = std::env::var("ALEPH_CAPABILITY_DIAGNOSTICS")
-        .ok()
-        .as_deref()
-        == Some("1");
+    let diagnostics_enabled = diagnostics_enabled_from_env(
+        std::env::var("ALEPH_CAPABILITY_DIAGNOSTICS").ok().as_deref(),
+    );
     let ownership_tree = Arc::new(OwnershipTree::new());
     let projection_host = ProjectionHost::mount_with_diagnostics(
         (*tool_registry_phase2).clone(),
@@ -4237,7 +4242,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
 #[cfg(test)]
 mod tests {
-    use super::{startup_diagnostics_control, OwnershipTree, ProjectionHost};
+    use super::{
+        diagnostics_enabled_from_env, startup_diagnostics_control, OwnershipTree, ProjectionHost,
+    };
     use std::sync::Arc;
 
     /// `spend::install_policy`/`spend::install_ledger` had **zero production
@@ -4441,10 +4448,14 @@ mod tests {
             Some("01"),
             Some("1\n"),
         ] {
+            // Drive the REAL production predicate (not a test-local copy of
+            // it): every non-exact value must be decided "disabled".
+            let enabled = diagnostics_enabled_from_env(value);
+            assert!(!enabled, "{value:?} must not enable diagnostics");
             let control = startup_diagnostics_control(
                 Arc::clone(&host),
                 Arc::clone(&other_tree),
-                value == Some("1"),
+                enabled,
             )
             .expect("disabled values must not construct a mismatched control");
             assert!(
@@ -4453,7 +4464,12 @@ mod tests {
             );
         }
 
-        let control = startup_diagnostics_control(Arc::clone(&host), Arc::clone(&tree), true)
+        assert!(diagnostics_enabled_from_env(Some("1")));
+        let control = startup_diagnostics_control(
+            Arc::clone(&host),
+            Arc::clone(&tree),
+            diagnostics_enabled_from_env(Some("1")),
+        )
             .expect("the canonical host/tree pair must construct successfully")
             .expect("exactly `1` must enable diagnostics");
         assert_eq!(

@@ -163,6 +163,22 @@ class ProviderBodiesExcludeTests(unittest.TestCase):
         self.assertTrue(provider_bodies_exclude(bodies, "qa_hpre_close", "qa_hpre_post_close"))
 
 
+class McpFaceProbeTests(unittest.TestCase):
+    def test_base_is_the_gateway_http_origin(self):
+        self.assertEqual(drive.mcp_base_from_ws("ws://127.0.0.1:18831/ws"), "http://127.0.0.1:18831")
+
+    def test_unreachable_surface_is_none_not_absence(self):
+        # A closed port must never read as "DIAG absent": callers FAIL on None.
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        listed, evidence = drive.mcp_tools_list(f"http://127.0.0.1:{port}")
+        self.assertIsNone(listed)
+        self.assertIn("initialize status=0", evidence)
+
+
 class HoldRaceTests(_AsyncCase):
     """Two-connection hold race: which side is currently host-owned?"""
 

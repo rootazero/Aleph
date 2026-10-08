@@ -63,6 +63,10 @@ kill "$GEN_PID" 2>/dev/null || true
 wait "$GEN_PID" 2>/dev/null || true
 [ -f "$CONFIG" ] || { cat "$QA_ROOT/generate.log"; echo "SETUP_RESULT: FAIL no config"; exit 1; }
 "$PYTHON" "$PATCH" "$CONFIG" --gateway-port "$GATEWAY_PORT" --mock-port "$MOCK_PORT" || exit 1
+# Expose the diagnostic tool (plus a read-only builtin control) on Aleph's own
+# loopback `/mcp` face, so the disabled arm's MCP `tools/list` absence is
+# decided by the runtime registry, not by the default expose whitelist.
+"$PYTHON" "$REPO/qa/mcp_face/patch_mcp.py" "$CONFIG" --expose "capability_projection_diagnostics,grep" || exit 1
 
 # Runtime-only MCP fixture. The MCP mutation itself remains the existing
 # mcp_config.create/update/delete route; this process supplies a real handler
@@ -156,7 +160,9 @@ run_scenario() {
     [ "$scenario" = disabled ] && enabled=0
     stop_children
     start_server "$enabled" "$slog" || { echo "SCENARIO_RESULT[$scenario]: exit=1"; RC=1; return; }
-    if [ "$scenario" != disabled ]; then start_mock "$spec" "$mlog" "$requests" || { echo "SCENARIO_RESULT[$scenario]: exit=2"; RC=2; stop_children; return; }; fi
+    # Every arm, including disabled, records the real provider request so the
+    # disabled arm can assert tools[] absence on an actual AgentLoop request.
+    start_mock "$spec" "$mlog" "$requests" || { echo "SCENARIO_RESULT[$scenario]: exit=2"; RC=2; stop_children; return; }
     echo "SCENARIO_COMMAND[$scenario]: $PYTHON $HERE/drive.py --scenario $scenario --ws $WS"
     "$PYTHON" "$HERE/drive.py" --scenario "$scenario" --ws "$WS" --provider-log "$requests" --effect-log "$effects" --fixture-script "$FIXTURE_SCRIPT" --python "$PYTHON" --prefix "$PREFIX" --run-id "$RUN_ID" >"$out" 2>&1
     local rc=$?; cat "$out"; echo "SCENARIO_RESULT[$scenario]: exit=$rc"
@@ -164,7 +170,7 @@ run_scenario() {
     stop_children
 }
 
-run_scenario disabled '{}'
+run_scenario disabled '{"name":"capability_projection_diagnostics","input":{"operation":"status"}}'
 run_scenario initial "{\"name\":\"${PREFIX}_initial__qa_echo\",\"input\":{\"marker\":\"QA_HPRE_INITIAL_${RUN_ID}\"}}"
 run_scenario replacement "[{\"name\":\"${PREFIX}_replace_old__qa_echo\",\"input\":{\"marker\":\"QA_HPRE_REPLACEMENT_${RUN_ID}\"}},{\"name\":\"${PREFIX}_replace_new__qa_echo\",\"input\":{\"marker\":\"QA_HPRE_REPLACEMENT_${RUN_ID}\"}}]"
 run_scenario ownership "{\"name\":\"${PREFIX}_owner__qa_echo\",\"input\":{\"marker\":\"QA_HPRE_OWNER_${RUN_ID}\"}}"
