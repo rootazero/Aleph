@@ -951,6 +951,44 @@ impl ProjectionHost {
     }
 }
 
+/// Test-only crate-visible handles on the private default-applier barrier
+/// ([`ApplierTestGate`]), so sibling modules (e.g. the diagnostics tool) can
+/// stall the REAL applier mid-delivery and drive a live `CloseTimeout`
+/// without wall-clock sleeps. Compiled out of production builds; the
+/// production 5000 ms close contract is untouched.
+#[cfg(test)]
+impl ProjectionHost {
+    /// Arm the barrier and return a future that resolves once the real
+    /// default applier has entered it. The `Notified` is created before the
+    /// caller triggers the next snapshot, so the wake cannot be missed.
+    pub(crate) fn test_arm_applier_gate(&self) -> tokio::sync::futures::Notified<'_> {
+        self.inner
+            .applier_test_gate
+            .hold
+            .store(true, Ordering::SeqCst);
+        self.inner.applier_test_gate.entered.notified()
+    }
+
+    /// Disarm the barrier and wake the stalled applier.
+    pub(crate) fn test_release_applier_gate(&self) {
+        self.inner
+            .applier_test_gate
+            .hold
+            .store(false, Ordering::SeqCst);
+        self.inner.applier_test_gate.release.notify_waiters();
+    }
+
+    /// Whether the shared completion boundary has recorded an outcome.
+    pub(crate) fn test_completion_recorded(&self) -> bool {
+        self.inner
+            .completion
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .outcome
+            .is_some()
+    }
+}
+
 /// A subscriber's receipt end of the projection stream.
 pub struct ProjectionHandle {
     host: Arc<HostInner>,

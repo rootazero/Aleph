@@ -115,10 +115,13 @@ where
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DiagnosticRequest {
     /// Read the REAL applied state plus queue / telemetry counters.
-    /// No fields, but expressed as an empty struct so `deny_unknown_fields`
-    /// refuses `role` / `loopback` / `connection_id` / `kind` / `namespace` /
-    /// `generation` smuggled alongside the tag (serde does NOT apply
-    /// `deny_unknown_fields` to unit variants in an internally-tagged enum).
+    /// No fields, but expressed as an empty struct (`Status {}`) rather than
+    /// a unit variant: in an internally-tagged enum, `deny_unknown_fields`
+    /// makes an empty-struct variant reject `role` / `loopback` /
+    /// `connection_id` / `kind` / `namespace` / `generation` smuggled
+    /// alongside the tag, whereas a unit variant silently accepts and drops
+    /// extra keys. Pinned by
+    /// `empty_struct_variants_reject_extra_keys_but_unit_variants_would_not`.
     Status {},
     /// Invoke the existing tree's `bump(Runtime)` and return the new generation.
     BumpRuntime {},
@@ -261,13 +264,21 @@ pub enum DiagnosticResponse {
 /// Tool-facing error. `Denied` is the authorization gate's only output —
 /// every other variant is a domain error from `DiagnosticControl` re-exposed
 /// so the handler can map them to a structured failure response.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Wire form mirrors [`DiagnosticResponse`]: internally tagged (here on
+/// `error`), snake_case, carrying only each variant's own fields — e.g.
+/// `{"error":"denied","reason":"..."}`,
+/// `{"error":"close_timeout","elapsed_ms":5000}`, `{"error":"host_closed"}`.
+/// Serialize-only: errors are produced by this handler, never parsed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "error", rename_all = "snake_case")]
 pub enum DiagnosticToolError {
     /// Authorization denied: caller does not pass the strict three-part check.
     /// Returned BEFORE any host/tree side-effect, for every operation
-    /// (including `status`). The `String` explains which of the three facts
-    /// was missing or mismatched.
-    Denied(String),
+    /// (including `status`). `reason` names which of the three facts was
+    /// missing or mismatched (a struct variant so the tagged wire form can
+    /// carry it).
+    Denied { reason: String },
     /// `hold` duration outside the 1..=5000 ms window. Defense in depth — the
     /// JSON schema clamps this at parse time; the runtime check covers any
     /// future allow-by-config path.
@@ -287,7 +298,7 @@ pub enum DiagnosticToolError {
 impl std::fmt::Display for DiagnosticToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Denied(reason) => write!(f, "diagnostics denied: {reason}"),
+            Self::Denied { reason } => write!(f, "diagnostics denied: {reason}"),
             Self::InvalidHoldDuration => write!(f, "diagnostics hold duration out of range"),
             Self::HostClosed => write!(f, "diagnostics host is closed"),
             Self::HoldAlreadyActive => write!(f, "diagnostics hold already active"),
@@ -311,9 +322,9 @@ impl From<DiagnosticError> for DiagnosticToolError {
             DiagnosticError::CloseTimeout { elapsed_ms } => Self::CloseTimeout { elapsed_ms },
             DiagnosticError::Closed => Self::HostClosed,
             DiagnosticError::UnknownTool { name } => Self::UnknownTool { name },
-            DiagnosticError::AuthorityMismatch => {
-                Self::Denied("diagnostic control authority mismatch".to_string())
-            }
+            DiagnosticError::AuthorityMismatch => Self::Denied {
+                reason: "diagnostic control authority mismatch".to_string(),
+            },
         }
     }
 }
@@ -336,20 +347,22 @@ impl From<DiagnosticError> for DiagnosticToolError {
 /// bypass this gate (it is enforced BEFORE the call into
 /// `DiagnosticControl`; the allow-list is consulted by a separate code path
 /// upstream of this handler).
+///
+/// Each fact is read exactly once. An "actual" connection id is a
+/// NON-EMPTY string: an ambient `Some("")` is denied just like `None`.
 fn authorization_failure_reason() -> Option<String> {
-    if current_caller_role().as_deref() != Some("operator") {
-        return Some(format!(
-            "caller role is not 'operator' (got {:?})",
-            current_caller_role()
-        ));
+    let role = current_caller_role();
+    if role.as_deref() != Some("operator") {
+        return Some(format!("caller role is not 'operator' (got {role:?})"));
     }
     if !current_caller_is_loopback() {
         return Some("caller is not loopback".to_string());
     }
-    if current_caller_conn_id().is_none() {
-        return Some("caller connection id is missing".to_string());
+    match current_caller_conn_id() {
+        Some(id) if !id.is_empty() => None,
+        Some(_) => Some("caller connection id is empty".to_string()),
+        None => Some("caller connection id is missing".to_string()),
     }
-    None
 }
 
 // ============================================================================
@@ -385,7 +398,7 @@ pub async fn execute_capability_projection_diagnostics(
     // `TurnContext::caller_is_operator()`, and is not bypassed by
     // `ALEPH_GATEWAY_TOOLS_ALLOW` (the gateway only dispatches).
     if let Some(reason) = authorization_failure_reason() {
-        return Err(DiagnosticToolError::Denied(reason));
+        return Err(DiagnosticToolError::Denied { reason });
     }
 
     match request {
@@ -589,7 +602,7 @@ mod tests {
             })
             .await;
             assert!(
-                matches!(res, Err(DiagnosticToolError::Denied(_))),
+                matches!(res, Err(DiagnosticToolError::Denied { .. })),
                 "status admitted for role={role:?} loopback={loopback} conn={conn:?}: {res:?}"
             );
 
@@ -603,7 +616,7 @@ mod tests {
             })
             .await;
             assert!(
-                matches!(res, Err(DiagnosticToolError::Denied(_))),
+                matches!(res, Err(DiagnosticToolError::Denied { .. })),
                 "bump_runtime admitted for role={role:?} loopback={loopback} conn={conn:?}: {res:?}"
             );
 
@@ -618,7 +631,7 @@ mod tests {
             })
             .await;
             assert!(
-                matches!(res, Err(DiagnosticToolError::Denied(_))),
+                matches!(res, Err(DiagnosticToolError::Denied { .. })),
                 "dispose_runtime admitted for role={role:?} loopback={loopback} conn={conn:?}: {res:?}"
             );
         }
@@ -699,7 +712,7 @@ mod tests {
             let label = format!("{req:?}");
             let res = execute_capability_projection_diagnostics(req, ctrl.clone()).await;
             assert!(
-                matches!(res, Err(DiagnosticToolError::Denied(_))),
+                matches!(res, Err(DiagnosticToolError::Denied { .. })),
                 "no ambient identity must deny {label}: {res:?}"
             );
         }
@@ -845,7 +858,7 @@ mod tests {
         let err: DiagnosticToolError = DiagnosticError::CloseTimeout { elapsed_ms: 5000 }.into();
         assert_eq!(err, DiagnosticToolError::CloseTimeout { elapsed_ms: 5000 });
         assert!(
-            !matches!(err, DiagnosticToolError::Denied(_)),
+            !matches!(err, DiagnosticToolError::Denied { .. }),
             "CloseTimeout must not be re-coded as Denied"
         );
         // The success variants do NOT admit a CloseTimeout payload: their
@@ -883,5 +896,191 @@ mod tests {
         }
     }
 
-    // ---- GREEN-phase gate toggle ----
+    /// LIVE close timeout through the authorized tool entry point.
+    ///
+    /// The REAL default applier is stalled mid-delivery via the host's
+    /// test-only applier barrier, so the shared completion boundary cannot
+    /// be reached. Virtual time (`start_paused`) lets the production 5000 ms
+    /// deadline elapse deterministically without a wall-clock sleep. The
+    /// tool must return `Err(CloseTimeout { elapsed_ms: 5000 })` — never a
+    /// `Close` success — and the host must stay close-requested /
+    /// fail-closed (lifecycle `Closing`, no fabricated completion, mutating
+    /// operations refused as `HostClosed`).
+    #[tokio::test(start_paused = true)]
+    async fn live_close_timeout_is_returned_as_tool_error_and_host_stays_fail_closed() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("a"), fake("a")).expect("register a");
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let ctrl = Arc::new(DiagnosticControl::new(Arc::clone(&host), Arc::clone(&tree)).unwrap());
+        let _ = await_status(&ctrl, |s| !s.applied_tool_ids.is_empty()).await;
+
+        // Stall the real applier on the next delivery.
+        let entered = host.test_arm_applier_gate();
+        tokio::pin!(entered);
+        reg.register(desc("b"), fake("b")).expect("register b");
+        tokio::time::timeout(Duration::from_secs(10), &mut entered)
+            .await
+            .expect("real default applier did not enter the barrier");
+
+        let started = tokio::time::Instant::now();
+        let res = with_ambient(Some("operator"), true, Some("127.0.0.1:56"), async {
+            execute_capability_projection_diagnostics(DiagnosticRequest::Close {}, ctrl.clone())
+                .await
+        })
+        .await;
+        let err = match res {
+            Err(err) => err,
+            Ok(resp) => panic!("close timeout must never be reported as success: {resp:?}"),
+        };
+        assert_eq!(err, DiagnosticToolError::CloseTimeout { elapsed_ms: 5000 });
+        assert!(started.elapsed() <= Duration::from_millis(5001));
+        assert_eq!(
+            serde_json::to_value(&err).unwrap(),
+            json!({"error": "close_timeout", "elapsed_ms": 5000})
+        );
+
+        // Host stays close-requested / fail-closed.
+        assert!(
+            host.is_closing(),
+            "timeout must leave the host close-requested"
+        );
+        assert_eq!(
+            ctrl.status().expect("status").lifecycle,
+            DiagnosticLifecycle::Closing
+        );
+        assert!(
+            !host.test_completion_recorded(),
+            "timeout must not fabricate completion"
+        );
+        let bump = with_ambient(Some("operator"), true, Some("127.0.0.1:56"), async {
+            execute_capability_projection_diagnostics(
+                DiagnosticRequest::BumpRuntime {},
+                ctrl.clone(),
+            )
+            .await
+        })
+        .await;
+        assert_eq!(bump.unwrap_err(), DiagnosticToolError::HostClosed);
+        assert!(!tree.is_disposed(LifetimeScope::Runtime));
+
+        // Release the barrier; the retained joins complete through the same
+        // boundary (no leaked workers).
+        host.test_release_applier_gate();
+        let outcome = Arc::clone(&host).close_and_await().await;
+        assert!(outcome.source_joined && outcome.applier_joined);
+        assert_eq!(
+            ctrl.status().expect("status").lifecycle,
+            DiagnosticLifecycle::Closed
+        );
+    }
+
+    // ---- Stable error wire form ----
+
+    /// `DiagnosticToolError` serializes symmetrically with
+    /// `DiagnosticResponse`: internally tagged (`error`), snake_case, with
+    /// only the variant's own fields. Pinned per variant so a downstream
+    /// registry never hand-copies the mapping.
+    #[test]
+    fn tool_error_serializes_as_stable_tagged_wire_form() {
+        let cases = [
+            (
+                DiagnosticToolError::Denied {
+                    reason: "caller is not loopback".into(),
+                },
+                json!({"error": "denied", "reason": "caller is not loopback"}),
+            ),
+            (
+                DiagnosticToolError::InvalidHoldDuration,
+                json!({"error": "invalid_hold_duration"}),
+            ),
+            (
+                DiagnosticToolError::HostClosed,
+                json!({"error": "host_closed"}),
+            ),
+            (
+                DiagnosticToolError::HoldAlreadyActive,
+                json!({"error": "hold_already_active"}),
+            ),
+            (
+                DiagnosticToolError::CloseTimeout { elapsed_ms: 5000 },
+                json!({"error": "close_timeout", "elapsed_ms": 5000}),
+            ),
+            (
+                DiagnosticToolError::UnknownTool { name: "zz".into() },
+                json!({"error": "unknown_tool", "name": "zz"}),
+            ),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(serde_json::to_value(&err).unwrap(), expected, "{err:?}");
+        }
+        // Display semantics are unchanged by the structured variant.
+        assert_eq!(
+            DiagnosticToolError::Denied { reason: "x".into() }.to_string(),
+            "diagnostics denied: x"
+        );
+    }
+
+    /// Pins the serde fact the request-shape comment relies on: for an
+    /// internally tagged enum with `deny_unknown_fields`, an EMPTY STRUCT
+    /// variant rejects extra keys, while a UNIT variant accepts and drops
+    /// them. That is why every field-less operation is `Name {}`.
+    #[test]
+    fn empty_struct_variants_reject_extra_keys_but_unit_variants_would_not() {
+        #[derive(Debug, Deserialize)]
+        #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+        enum Probe {
+            Unit,
+            Empty {},
+        }
+        assert!(
+            serde_json::from_value::<Probe>(json!({"operation": "unit", "role": "operator"}))
+                .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<Probe>(json!({"operation": "empty", "role": "operator"}))
+                .is_err()
+        );
+        assert!(parse_request(json!({"operation": "release", "role": "operator"})).is_err());
+    }
+
+    // ---- Actual connection id must be non-empty ----
+
+    /// An ambient `CALLER_CONN_ID` of `Some("")` is NOT an actual connection
+    /// id: it must deny exactly like a missing one, for every operation
+    /// (including `status`), with no host/tree side-effect.
+    #[tokio::test]
+    async fn empty_connection_id_is_denied() {
+        let (ctrl, tree) = control_with_tool();
+        let _ = await_status(&ctrl, |s| !s.applied_tool_ids.is_empty()).await;
+        let before = ctrl.status().expect("status before");
+
+        for req in [
+            DiagnosticRequest::Status {},
+            DiagnosticRequest::BumpRuntime {},
+            DiagnosticRequest::DisposeRuntime {},
+            DiagnosticRequest::Close {},
+        ] {
+            let label = format!("{req:?}");
+            let res = with_ambient(Some("operator"), true, Some(""), async {
+                execute_capability_projection_diagnostics(req, ctrl.clone()).await
+            })
+            .await;
+            match res {
+                Err(err @ DiagnosticToolError::Denied { .. }) => assert!(
+                    err.to_string().contains("connection id is empty"),
+                    "{label}: denial must name the empty connection id: {err}"
+                ),
+                other => panic!("{label}: empty connection id admitted: {other:?}"),
+            }
+        }
+
+        let after = ctrl.status().expect("status after");
+        assert_eq!(before.lifecycle, after.lifecycle);
+        assert_eq!(
+            before.applied_owner_generations,
+            after.applied_owner_generations
+        );
+        assert!(!tree.is_disposed(LifetimeScope::Runtime));
+    }
 }
