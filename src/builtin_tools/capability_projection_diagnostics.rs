@@ -437,6 +437,106 @@ pub async fn execute_capability_projection_diagnostics(
     }
 }
 
+// ----------------------------------------------------------------------------
+// AlephTool adapter — schema-only.
+//
+// Compile-forced minimal addition (see `task-3-report.md`). The real
+// entry point stays `execute_capability_projection_diagnostics` plus
+// `parse_request`, which the `ToolRegistry::execute_tool` dispatch arm
+// invokes directly. A full `AlephTool` impl would duplicate the
+// parse / execute / serialize pipeline already wired into the arm, and
+// would need a `JsonSchema` derive on `DiagnosticRequest` (a wider
+// module change). This struct is the minimum needed to register the
+// schema in the runtime tool map: a one-method adapter mirroring the
+// `MediaUnderstandTool { pipeline }` shape exactly. The `control`
+// field is held so the registry keeps the handle alive for its
+// lifetime; the `definition()` body only reads the const metadata, so
+// no parallel state is created. The wire-level three-part check
+// (operator + loopback + conn_id) is NOT bypassed — it is enforced by
+// the dispatch arm before this adapter's existence matters.
+// ----------------------------------------------------------------------------
+#[derive(Clone)]
+pub struct DiagnosticTool {
+    /// Live `DiagnosticControl` handle. Held so the registry keeps the
+    /// runtime in scope for the lifetime of the constructed struct
+    /// (mirrors the `MediaUnderstandTool { pipeline }` shape); the
+    /// `definition()` method itself only reads the const metadata, so
+    /// the field is held-not-read by design.
+    #[allow(dead_code)]
+    control: Arc<DiagnosticControl>,
+}
+
+impl DiagnosticTool {
+    /// Stable name exposed to the LLM-facing tool list and to the
+    /// dispatch arm. Must match the OPERATOR_TOOLS / DANGEROUS_TOOLS
+    /// entries in `gateway::method_authz` and `security::dangerous_tools`
+    /// exactly (the tripwires there assert this).
+    pub const NAME: &'static str = "capability_projection_diagnostics";
+
+    /// LLM-facing description. The seven operations are listed in the
+    /// order `parse_request` discriminates them; the strict
+    /// `deny_unknown_fields` contract is enforced at parse time, not
+    /// here, so the schema below only names the `operation` tag and
+    /// leaves the variant body free-form.
+    pub const DESCRIPTION: &'static str = "\
+Capability-runtime diagnostic control surface. Enablement-gated on \
+`ALEPH_CAPABILITY_DIAGNOSTICS=1` at startup; when disabled, the tool is \
+not advertised, not dispatched, and hold / timer state is empty. The \
+wire-level three-part check (operator role + loopback transport + \
+non-empty connection id) lives in `execute_capability_projection_diagnostics`, \
+so even when this entry is visible to the LLM only an authorized operator \
+process can drive it. ALEPH_GATEWAY_TOOLS_ALLOW cannot bypass that gate.\n\
+\n\
+Operations (tagged `operation`):\n\
+  status              — read REAL applied state, queue / telemetry counters (no args)\n\
+  bump_runtime        — advance the runtime generation (no args)\n\
+  revoke_tool         — drop a single tool from the live tree (`tool_name`)\n\
+  dispose_runtime     — drop the whole runtime scope (no args)\n\
+  hold                — freeze one plane (`plane`, `duration_ms` in 1..=5000)\n\
+  release             — release any active hold (no args)\n\
+  close               — shut the host (no args)";
+
+    #[must_use]
+    pub const fn new(control: Arc<DiagnosticControl>) -> Self {
+        Self { control }
+    }
+
+    /// Schema for the LLM-facing `UnifiedTool`. The strict
+    /// `deny_unknown_fields` contract is enforced by `parse_request` at
+    /// dispatch time; this schema only advertises the `operation` tag
+    /// and leaves the variant body free-form, so the model sees the
+    /// seven operation names without an over-specified shape the
+    /// parser would then have to keep in sync.
+    #[must_use]
+    pub fn definition(&self) -> crate::ToolDefinition {
+        crate::ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: Self::DESCRIPTION.to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": [
+                            "status",
+                            "bump_runtime",
+                            "revoke_tool",
+                            "dispose_runtime",
+                            "hold",
+                            "release",
+                            "close",
+                        ],
+                    },
+                },
+                "required": ["operation"],
+            }),
+            requires_confirmation: false,
+            category: crate::ToolCategory::Builtin,
+            strict: false,
+        }
+    }
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

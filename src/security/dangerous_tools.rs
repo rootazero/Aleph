@@ -58,6 +58,26 @@ pub const DANGEROUS_TOOLS: &[&str] = &[
     "node_invoke",
     "node_invoke_many",
     "node_file",
+    // --- Capability-projection diagnostics ---
+    // Conditional shape (`ALEPH_CAPABILITY_DIAGNOSTICS=1`): the tool is
+    // registered only when startup wires a `DiagnosticControl` into
+    // `BuiltinToolConfig.diagnostics_control`. When registered, it is
+    // dangerous on the gateway `tools.invoke` surface for the same reason
+    // the runtime-facing halves above are: its writes (`Hold` tears down
+    // a source plane, `RevokeTool` removes a tool from the live tree,
+    // `Close` shuts the host) are state mutations on the same Aleph
+    // surface `runtime_manage` rewrites, and this surface has no
+    // approval transport to raise the argument-level cards the agent
+    // loop would have raised. The handler-local three-part identity
+    // check (operator + loopback + conn_id) inside
+    // `execute_capability_projection_diagnostics` is the only authority
+    // on top of this deny — ALEPH_GATEWAY_TOOLS_ALLOW can lift the
+    // surface-level deny, but the ambient task-locals are still
+    // re-checked before any host/tree side-effect, so the override
+    // cannot reach a non-operator caller. Paired with the
+    // `OPERATOR_TOOLS` entry in `method_authz.rs`, so the agent-loop
+    // half and the gateway-half travel together.
+    "capability_projection_diagnostics",
 ];
 
 /// Environment variable that re-permits specific dangerous tools on the
@@ -171,17 +191,94 @@ mod tests {
     /// A denylist entry that names no real tool denies nothing. The port from
     /// openclaw shipped seven such ghosts and nobody noticed for the list's
     /// whole life, because no test ever asked whether the names were real.
+    ///
+    /// A name is "real" if it appears in EITHER of the two registration
+    /// shapes:
+    ///   * `BUILTIN_TOOL_DEFINITIONS` — the unconditional catalog.
+    ///   * The source census (`executor::builtin_registry::dispatchable
+    ///     ::advertised_tools`) — covers the `reg(…)` shape AND the
+    ///     constructor's `if let Some(ref X) = config.X { … }` conditional
+    ///     blocks. Some tools live only in the conditional shape
+    ///     (`capability_projection_diagnostics`, gated on
+    ///     `ALEPH_CAPABILITY_DIAGNOSTICS=1`); checking only the
+    ///     unconditional catalog would falsely mark them as ghosts.
     #[test]
     fn every_entry_names_a_real_tool() {
+        let catalog: std::collections::BTreeSet<&str> = crate::executor::BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|d| d.name)
+            .collect();
+        let conditional: std::collections::BTreeSet<String> =
+            crate::executor::builtin_registry::dispatchable::advertised_tools();
+        let conditional_strs: std::collections::BTreeSet<&str> =
+            conditional.iter().map(String::as_str).collect();
         for t in DANGEROUS_TOOLS {
             assert!(
-                crate::executor::BUILTIN_TOOL_DEFINITIONS
-                    .iter()
-                    .any(|d| d.name == *t),
+                catalog.contains(t) || conditional_strs.contains(t),
                 "`{t}` is on the dangerous denylist but no builtin tool is registered \
-                 under that name — the entry denies nothing"
+                 under that name — the entry denies nothing. The name must appear \
+                 in either BUILTIN_TOOL_DEFINITIONS (unconditional catalog) or in \
+                 the source census (which covers `reg(…)` and the constructor's \
+                 conditional `if let Some(ref X) = config.X` blocks)."
             );
         }
+    }
+
+    /// `capability_projection_diagnostics` lives on both halves of the
+    /// hard floor: a chat-tier run cannot reach it on the agent loop
+    /// (operator-required) and a remote caller cannot reach it on the
+    /// gateway `tools.invoke` surface (dangerous, with no approval
+    /// transport — the only authority on top is the handler-local strict
+    /// three-part identity check inside
+    /// `execute_capability_projection_diagnostics`). A missing
+    /// OPERATOR_TOOLS entry would re-open the runtime surface; a missing
+    /// DANGEROUS_TOOLS entry would re-open the gateway surface; this test
+    /// pins both.
+    #[test]
+    fn diagnostics_is_in_dangerous_tools_and_is_a_real_tool() {
+        assert!(
+            is_dangerous_tool("capability_projection_diagnostics"),
+            "capability_projection_diagnostics must be on the dangerous denylist: \
+             it mutates live capability state on the host (Hold tears down a \
+             source plane, Close shuts the host) and there is no approval \
+             transport on the gateway `tools.invoke` surface to raise the \
+             argument-level cards the agent loop would have raised"
+        );
+        let advertised = crate::executor::builtin_registry::dispatchable::advertised_tools();
+        assert!(
+            advertised.contains("capability_projection_diagnostics"),
+            "capability_projection_diagnostics is on the dangerous denylist but \
+             the source census cannot find it — the constructor's conditional \
+             `Registered schema for capability_projection_diagnostics` line is \
+             missing, or the scan was removed"
+        );
+    }
+
+    /// The two halves of the hard floor must travel together: the agent-loop
+    /// operator gate and the gateway-surface denylist. Without the operator
+    /// gate, a chat-tier channel run could call the tool via the loop; without
+    /// the denylist, a remote `tools.invoke` caller could reach it on a
+    /// surface that has no approval transport. The handler-local strict
+    /// three-part identity check inside
+    /// `execute_capability_projection_diagnostics` is the only authority on
+    /// top of both — ALEPH_GATEWAY_TOOLS_ALLOW unblocks the gateway deny
+    /// but the ambient task-locals (CALLER_ROLE / CALLER_IS_LOOPBACK /
+    /// CALLER_CONN_ID) are still re-checked before any host/tree side-effect.
+    /// The combination means there is no surface — gateway OR agent loop —
+    /// that can call the tool without the ambient identity.
+    #[test]
+    fn diagnostics_is_not_a_gateway_surface_bypass() {
+        use crate::gateway::method_authz::tool_requires_operator;
+        assert!(
+            is_dangerous_tool("capability_projection_diagnostics"),
+            "operator-gated-but-not-dangerous would let a remote `tools.invoke` \
+             caller reach the tool with only ALEPH_GATEWAY_TOOLS_ALLOW"
+        );
+        assert!(
+            tool_requires_operator("capability_projection_diagnostics"),
+            "dangerous-but-not-operator-gated would let a chat-tier channel run \
+             reach the tool through the agent loop"
+        );
     }
 
     #[test]

@@ -1694,6 +1694,49 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .await
             }),
 
+            // Capability-runtime diagnostic control surface. GATED on
+            // `diagnostics_control: Some(_)` (set by startup when
+            // `ALEPH_CAPABILITY_DIAGNOSTICS=1`); when the env is unset
+            // this arm is the only path that can reach the handler,
+            // and the `None` check below rejects it with the same
+            // shape as `media_understand` / `config_audit`. The
+            // handler-local three-part identity check
+            // (operator + loopback + conn_id) is enforced by the
+            // tool module itself before any state change; this arm
+            // only answers "is the runtime willing to dispatch this
+            // tool at all", which is the enablement half of the
+            // two-part guard. Bypassing it would require either the
+            // config handle to be installed without the operator
+            // gate, or the tool to be unconditional, both of which
+            // the OPERATOR_TOOLS / DANGEROUS_TOOLS entries and the
+            // every_entry_names_a_real_tool tripwire would catch.
+            "capability_projection_diagnostics" => Box::pin(async move {
+                let dc = self.diagnostics_control.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "capability_projection_diagnostics not available: \
+                         no DiagnosticControl configured (set ALEPH_CAPABILITY_DIAGNOSTICS=1)",
+                    )
+                })?;
+                let request =
+                    crate::builtin_tools::capability_projection_diagnostics::parse_request(
+                        arguments,
+                    )
+                    .map_err(|e| {
+                        AlephError::tool(format!("capability_projection_diagnostics: {e}"))
+                    })?;
+                let response = crate::builtin_tools::capability_projection_diagnostics::execute_capability_projection_diagnostics(
+                    request,
+                    crate::sync_primitives::Arc::clone(dc),
+                )
+                .await
+                .map_err(|e| AlephError::tool(format!("capability_projection_diagnostics: {e}")))?;
+                serde_json::to_value(response).map_err(|e| {
+                    AlephError::tool(format!(
+                        "capability_projection_diagnostics: serialize response: {e}"
+                    ))
+                })
+            }),
+
             // Pre-compression context recovery — needs a memory backend plus the
             // active session id (resolved from the per-task turn context,
             // matching the session_key the compaction pipeline writes raw

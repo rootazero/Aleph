@@ -19,9 +19,14 @@ mod definitions;
 // it is gated here rather than carrying a `#[cfg(test)]` inside the file —
 // an attribute above a `mod` gates whatever item follows it, and inserting a
 // new one between the attribute and its intended target is a documented way
-// to silently move the gate.
+// to silently move the gate. `pub(crate)` so cross-crate test consumers
+// (notably `security::dangerous_tools::tests
+// ::every_entry_names_a_real_tool`, which pins every denylist entry against
+// a real tool) can call `advertised_tools()` without rebuilding the
+// registry; the test-only `#[cfg(test)]` gate keeps it out of the runtime
+// surface entirely.
 #[cfg(test)]
-mod dispatchable;
+pub(crate) mod dispatchable;
 mod groups;
 mod registry;
 

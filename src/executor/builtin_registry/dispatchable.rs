@@ -60,14 +60,26 @@ fn production_source(src: &str) -> String {
     ))
 }
 
-/// Tool names the model can be told about, from both registration shapes.
+/// Tool names the model can be told about, from all three registration
+/// shapes.
 ///
-/// Panics if either scan finds implausibly few names: the failure mode this
+/// Panics if any scan finds implausibly few names: the failure mode this
 /// guards against is a scanner that stops matching (a refactor renames `reg`,
-/// rustfmt reflows the catalog) and thereafter passes by finding nothing.
-fn advertised_tools() -> std::collections::BTreeSet<String> {
+/// rustfmt reflows the catalog, a future shape moves) and thereafter passes
+/// by finding nothing.
+///
+/// `pub` so cross-crate consumers (the `dangerous_tools` test that pins
+/// every denylist entry against a real tool) can verify a conditionally
+/// registered tool exists without rebuilding the registry. The set returned
+/// here is a SOURCE-LEVEL set, not a runtime one: a tool registered in the
+/// constructor's `if let Some(ref X) = config.X { … }` block will appear here
+/// regardless of whether `config.X` is `Some` at runtime — the assertion the
+/// census exists to make is "if you wire it, you dispatch it", which is a
+/// source-level invariant.
+pub fn advertised_tools() -> std::collections::BTreeSet<String> {
     let catalog_src = production_source(include_str!("definitions.rs"));
     let core_src = production_source(include_str!("builder/core_tools.rs"));
+    let constructor_src = production_source(include_str!("builder/constructor/mod.rs"));
 
     let mut names = std::collections::BTreeSet::new();
 
@@ -95,6 +107,39 @@ fn advertised_tools() -> std::collections::BTreeSet<String> {
         }
     }
 
+    // Constructor's conditional registration block: every conditional tool
+    // logs either `info!("Registered schema for X")` (single) or
+    // `info!("Registered schemas for X, Y, Z")` (plural, comma-separated).
+    // Those log lines are the ONLY source-of-truth inventory of which tool
+    // names the conditional shape advertises — there is no central table,
+    // and a denylist entry that names one of them depends on these being
+    // there at source level. Same shape-aware scan as the other two:
+    // match the `Registered schema` keyword, walk to ` for `, walk to the
+    // closing quote, split on commas, keep snake_case tokens only.
+    let mut constructor_count = 0usize;
+    for (idx, _) in constructor_src.match_indices("Registered schema") {
+        let rest = &constructor_src[idx..];
+        let Some(for_offset) = rest.find(" for ") else {
+            continue;
+        };
+        let after_for = &rest[for_offset + " for ".len()..];
+        let Some(quote_end) = after_for.find('"') else {
+            continue;
+        };
+        let names_str = &after_for[..quote_end];
+        for part in names_str.split(',') {
+            let part = part.trim();
+            if !part.is_empty()
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            {
+                names.insert(part.to_string());
+                constructor_count += 1;
+            }
+        }
+    }
+
     assert!(
         catalog_count > 100,
         "catalog scan found only {catalog_count} entries — the scanner stopped \
@@ -104,6 +149,12 @@ fn advertised_tools() -> std::collections::BTreeSet<String> {
         reg_count > 20,
         "core_tools scan found only {reg_count} `reg(` calls — the scanner \
          stopped matching and would now pass by finding nothing"
+    );
+    assert!(
+        constructor_count > 10,
+        "constructor scan found only {constructor_count} `Registered schema` \
+         names — the scanner stopped matching and would now pass by finding \
+         nothing"
     );
     names
 }
@@ -260,5 +311,97 @@ mod tests {
             "CRLF checkout kept the test module in the production scan"
         );
         assert!(stripped.contains("real_tool"));
+    }
+
+    /// The conditional registration shape must be picked up too.
+    ///
+    /// The constructor's `if let Some(ref X) = config.X { … }` blocks are
+    /// the third registration site (alongside `BUILTIN_TOOL_DEFINITIONS` and
+    /// `reg(…)`): a tool like `capability_projection_diagnostics` lives ONLY
+    /// there, because it must not be advertised unconditionally (the feature
+    /// is gated on `ALEPH_CAPABILITY_DIAGNOSTICS=1`). Without this scan the
+    /// census would happily report "all clear" about a denylist entry that
+    /// names a tool the constructor registers but the catalog does not.
+    #[test]
+    fn the_census_sees_constructor_conditional_registration() {
+        let advertised = advertised_tools();
+        // From the constructor's single-name `Registered schema for X` line.
+        assert!(
+            advertised.contains("config_audit"),
+            "conditional registration shape not seen in the census"
+        );
+        // From the constructor's plural
+        // `Registered schemas for X, Y, Z` line.
+        assert!(
+            advertised.contains("media_understand"),
+            "constructor plural-schema line not seen in the census"
+        );
+    }
+
+    /// The diagnostics tool, once wired, must be in the source census.
+    ///
+    /// `capability_projection_diagnostics` is conditionally registered
+    /// (gated on `BuiltinToolConfig.diagnostics_control.is_some()`, which
+    /// startup sets only when `ALEPH_CAPABILITY_DIAGNOSTICS=1`). The census
+    /// is source-level, so it sees the name in the constructor's
+    /// `if let Some(ref dc) = config.diagnostics_control { … }` block
+    /// regardless of the runtime config. The dispatch arm lives next to the
+    /// other per-call-handle arms in `tool_registry_impl.rs`; the dispatch
+    /// census (`every_advertised_builtin_tool_is_dispatchable`) catches a
+    /// missing arm by name.
+    #[test]
+    fn enabled_diagnostics_is_in_census() {
+        let advertised = advertised_tools();
+        let dispatchable = dispatchable_tools();
+        assert!(
+            advertised.contains("capability_projection_diagnostics"),
+            "capability_projection_diagnostics is registered in the constructor's \
+             conditional block but the source census does not see it — the \
+             `Registered schema for capability_projection_diagnostics` log \
+             line is missing, or the constructor scan was removed"
+        );
+        assert!(
+            dispatchable.contains("capability_projection_diagnostics"),
+            "capability_projection_diagnostics is in the source census but has no \
+             arm in `ToolRegistry::execute_tool` — every call would answer \
+             \"Unknown tool: capability_projection_diagnostics\" while the \
+             description is billed on every request"
+        );
+    }
+
+    /// The diagnostics tool must NOT be unconditionally advertised.
+    ///
+    /// The unconditional shape is `BUILTIN_TOOL_DEFINITIONS` in
+    /// `definitions.rs` — adding the tool there would advertise it
+    /// regardless of the `ALEPH_CAPABILITY_DIAGNOSTICS` env var, defeating
+    /// the entire point of the conditional gate. This test pins that the
+    /// name is absent from the catalog even after the constructor wires it
+    /// in: a future "simplification" that moves the entry from the
+    /// conditional block to the unconditional catalog would fail here.
+    #[test]
+    fn disabled_diagnostics_has_no_unconditional_catalog_entry() {
+        let catalog_src = production_source(include_str!("definitions.rs"));
+        // The catalog uses `name: "foo",` rows. Same shape the census uses.
+        let mut cursor = 0usize;
+        let mut found = false;
+        while let Some(idx) = catalog_src[cursor..].find("name:") {
+            let abs = cursor + idx;
+            if let Some(n) = quoted_after(&catalog_src[abs + "name:".len()..]) {
+                if n == "capability_projection_diagnostics" {
+                    found = true;
+                    break;
+                }
+            }
+            cursor = abs + "name:".len();
+        }
+        assert!(
+            !found,
+            "capability_projection_diagnostics is unconditionally listed in \
+             BUILTIN_TOOL_DEFINITIONS — the tool would advertise regardless of \
+             ALEPH_CAPABILITY_DIAGNOSTICS, defeating the conditional gate. \
+             Remove the entry from definitions.rs and keep the registration in \
+             the constructor's `if let Some(ref dc) = config.diagnostics_control` \
+             block."
+        );
     }
 }

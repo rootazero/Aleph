@@ -167,4 +167,14 @@ pub struct BuiltinToolConfig {
     /// reconstructed. `None` → agent-driven MCP installs report "MCP manager
     /// unavailable"; plugin installs and secret storage still work.
     pub hub_mcp_handle: Option<crate::mcp::manager::McpManagerHandle>,
+
+    /// Capability-runtime diagnostic control surface for
+    /// `capability_projection_diagnostics`. Set by startup when the env
+    /// `ALEPH_CAPABILITY_DIAGNOSTICS=1`; `None` disables the tool
+    /// entirely — no advertisement, no dispatch arm, no hold/timer
+    /// state. The wire-level gate (operator + loopback + conn_id) lives
+    /// in the tool module itself; this field is the *enablement* half
+    /// of the two-part guard, mirroring the `media_pipeline` /
+    /// `catalog_cache` / `config` slots above.
+    pub diagnostics_control: Option<Arc<crate::capability::diagnostic_control::DiagnosticControl>>,
 }
