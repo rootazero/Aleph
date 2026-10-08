@@ -19,6 +19,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::agents::AgentDef;
+use crate::builtin_tools::terminal::capabilities::is_tool_allowed_with_legacy_terminal_alias;
 use crate::session::events::ToolOutput;
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 
@@ -30,6 +31,13 @@ pub struct AllowlistToolService {
 impl AllowlistToolService {
     pub fn new(inner: Arc<dyn ToolService>, agent_def: Arc<AgentDef>) -> Self {
         Self { inner, agent_def }
+    }
+
+    /// The single policy answer for every face of this service. Delegates to
+    /// the shared legacy-`terminal` adapter so the five observation verbs
+    /// obey the same policy `tools.invoke` / `tools.effective` apply.
+    fn is_allowed(&self, name: &str) -> bool {
+        is_tool_allowed_with_legacy_terminal_alias(&self.agent_def, name)
     }
 
     /// Refuse a call the allowlist denies — recording it first.
@@ -54,7 +62,7 @@ impl AllowlistToolService {
 #[async_trait]
 impl ToolService for AllowlistToolService {
     async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
-        if !self.agent_def.is_tool_allowed(name) {
+        if !self.is_allowed(name) {
             return Err(self.deny(name, &input).await);
         }
         // The narrowed retrieval set rides down to the dispatch this delegates
@@ -76,7 +84,7 @@ impl ToolService for AllowlistToolService {
         // Run the allowlist check first so a disallowed tool returns the same
         // `PermissionDenied` error regardless of which call path the harness
         // took, then delegate to the inner cancel-aware path.
-        if !self.agent_def.is_tool_allowed(name) {
+        if !self.is_allowed(name) {
             return Err(self.deny(name, &input).await);
         }
         crate::tools::result_processing::with_recovery_tools(
@@ -97,7 +105,7 @@ impl ToolService for AllowlistToolService {
     ) -> (Result<ToolOutput, ToolError>, Option<Value>) {
         // Same allowlist gate as `execute_with_cancel`: a disallowed tool is
         // refused BEFORE dispatch, so it carries no replay-eligible marker.
-        if !self.agent_def.is_tool_allowed(name) {
+        if !self.is_allowed(name) {
             return (Err(self.deny(name, &input).await), None);
         }
         crate::tools::result_processing::with_recovery_tools(
@@ -116,7 +124,7 @@ impl ToolService for AllowlistToolService {
             .list()
             .await
             .into_iter()
-            .filter(|d| self.agent_def.is_tool_allowed(&d.name))
+            .filter(|d| self.is_allowed(&d.name))
             .collect()
     }
 
@@ -132,12 +140,12 @@ impl ToolService for AllowlistToolService {
             .dispatchable_list()
             .await
             .into_iter()
-            .filter(|d| self.agent_def.is_tool_allowed(&d.name))
+            .filter(|d| self.is_allowed(&d.name))
             .collect()
     }
 
     async fn describe(&self, name: &str) -> Option<ToolDefinition> {
-        if !self.agent_def.is_tool_allowed(name) {
+        if !self.is_allowed(name) {
             return None;
         }
         self.inner.describe(name).await
@@ -158,7 +166,7 @@ impl ToolService for AllowlistToolService {
         use crate::builtin_tools::{CtxSearchTool, FileReadTool};
         use crate::tools::AlephTool;
         let parent = self.inner.recovery_tools();
-        let allowed = |name: &str| self.agent_def.is_tool_allowed(name);
+        let allowed = |name: &str| self.is_allowed(name);
         crate::tools::result_processing::RecoveryTools {
             ctx_search: parent.ctx_search && allowed(<CtxSearchTool as AlephTool>::NAME),
             file_read: parent.file_read && allowed(<FileReadTool as AlephTool>::NAME),
@@ -175,7 +183,7 @@ impl ToolService for AllowlistToolService {
         let inner = self.inner.metadata_schema();
         let filtered: Vec<crate::tool_metadata::ToolDefinition> = inner
             .iter()
-            .filter(|d| self.agent_def.is_tool_allowed(&d.name))
+            .filter(|d| self.is_allowed(&d.name))
             .cloned()
             .collect();
         std::sync::Arc::from(filtered)
@@ -189,7 +197,7 @@ impl ToolService for AllowlistToolService {
         // Disallowed tools are whole-world exclusive (never parallel); otherwise
         // forward the inner service's bounded scope so disjoint-path mutations
         // still parallelize for subagents.
-        if !self.agent_def.is_tool_allowed(name) {
+        if !self.is_allowed(name) {
             return crate::tools::concurrency::ConcurrencyClaim::global();
         }
         self.inner.call_concurrency_claim(name, input).await
@@ -453,5 +461,221 @@ mod tests {
         let svc = AllowlistToolService::new(Arc::new(ActorProbe), def);
         assert!(svc.execute("anything", json!({})).await.is_err());
         assert_eq!(crate::identity::current_actor(), None);
+    }
+
+    // ---------------------------------------------------------------------
+    // A4 compat — a legacy `terminal` policy entry keeps governing the five
+    // legacy observation verbs now that the child sees canonical names.
+    // ---------------------------------------------------------------------
+
+    const OBSERVATION_FIVE: [&str; 5] = ["list", "read", "status", "wait", "explain"];
+
+    fn canonical(verb: &str) -> String {
+        format!("terminal_sessions_{verb}")
+    }
+
+    /// Parent exposing the six canonical observation tools plus `read`;
+    /// every delegated execution is counted and echoes name + input.
+    struct TerminalParent {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl TerminalParent {
+        fn names() -> Vec<String> {
+            let mut v: Vec<String> = OBSERVATION_FIVE.iter().map(|a| canonical(a)).collect();
+            v.push(canonical("attach"));
+            v.push("read".into());
+            v
+        }
+
+        fn count(&self, name: &str, input: Value) -> ToolOutput {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ToolOutput {
+                value: json!({ "tool": name, "input": input }),
+                metadata: ToolOutputMetadata::default(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ToolService for TerminalParent {
+        async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
+            Ok(self.count(name, input))
+        }
+        async fn list(&self) -> Vec<ToolDefinition> {
+            Self::names()
+                .into_iter()
+                .map(|name| ToolDefinition {
+                    name,
+                    description: "fake".into(),
+                    input_schema: json!({}),
+                    source: ToolSource::Builtin,
+                    metadata: Default::default(),
+                })
+                .collect()
+        }
+        async fn describe(&self, name: &str) -> Option<ToolDefinition> {
+            self.list().await.into_iter().find(|d| d.name == name)
+        }
+        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+            let defs: Vec<_> = Self::names()
+                .into_iter()
+                .map(|n| {
+                    crate::tool_metadata::ToolDefinition::new(
+                        n,
+                        "fake",
+                        json!({}),
+                        crate::tool_metadata::ToolCategory::Builtin,
+                    )
+                })
+                .collect();
+            std::sync::Arc::from(defs)
+        }
+    }
+
+    fn agent(allowed: &[&str], denied: &[&str]) -> Arc<AgentDef> {
+        let mut def = AgentDef::new("test", AgentMode::SubAgent);
+        def.allowed_tools = allowed.iter().map(|s| (*s).to_owned()).collect();
+        def.denied_tools = denied.iter().map(|s| (*s).to_owned()).collect();
+        Arc::new(def)
+    }
+
+    fn wrapped(def: Arc<AgentDef>) -> (AllowlistToolService, Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let parent = Arc::new(TerminalParent {
+            calls: calls.clone(),
+        });
+        (AllowlistToolService::new(parent, def), calls)
+    }
+
+    fn only_names(defs: &[ToolDefinition]) -> Vec<String> {
+        let mut v: Vec<String> = defs
+            .iter()
+            .map(|d| d.name.clone())
+            .filter(|n| n.starts_with("terminal_sessions_"))
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn sorted_five() -> Vec<String> {
+        let mut v: Vec<String> = OBSERVATION_FIVE.iter().map(|a| canonical(a)).collect();
+        v.sort();
+        v
+    }
+
+    /// Drive every execution face for `name` and report whether each ran the
+    /// inner service (`true`) or was refused with the exact existing
+    /// `PermissionDenied` shape (`false`); inner call count is checked against it.
+    async fn faces_allow(def: Arc<AgentDef>, name: &str) -> bool {
+        let (svc, calls) = wrapped(def);
+        let input = json!({ "session_id": "x" });
+        let a = svc.execute(name, input.clone()).await;
+        let b = svc
+            .execute_with_cancel(name, input.clone(), CancellationToken::new())
+            .await;
+        let (c, _) = svc
+            .execute_with_cancel_effective(name, input.clone(), CancellationToken::new())
+            .await;
+        let results = [a, b, c];
+        let allowed = results[0].is_ok();
+        for r in &results {
+            assert_eq!(r.is_ok(), allowed, "every execute face must agree");
+            match r {
+                Ok(out) => assert_eq!(out.value, json!({ "tool": name, "input": input })),
+                Err(ToolError::PermissionDenied { name: n, reason }) => {
+                    assert_eq!(n, name);
+                    assert_eq!(reason, "agent 'test' disallows this tool");
+                }
+                Err(other) => panic!("unexpected error {other:?}"),
+            }
+        }
+        let expected_calls = if allowed { 3 } else { 0 };
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            expected_calls,
+            "inner must run exactly once per allowed face and never when denied"
+        );
+        allowed
+    }
+
+    /// `allowed:[*], denied:[terminal]`: the five are refused on every face
+    /// and hidden from list/describe/metadata; `attach` is untouched.
+    #[tokio::test]
+    async fn terminal_capability_legacy_deny_blocks_the_five_not_attach() {
+        let def = || agent(&["*"], &["terminal"]);
+        for verb in OBSERVATION_FIVE {
+            assert!(
+                !faces_allow(def(), &canonical(verb)).await,
+                "legacy deny must refuse {verb}"
+            );
+        }
+        assert!(faces_allow(def(), &canonical("attach")).await);
+        assert!(faces_allow(def(), "read").await);
+
+        let (svc, _) = wrapped(def());
+        let expected = vec![canonical("attach")];
+        assert_eq!(only_names(&svc.list().await), expected);
+        assert_eq!(only_names(&svc.dispatchable_list().await), expected);
+        assert!(svc.describe(&canonical("list")).await.is_none());
+        assert!(svc.describe(&canonical("attach")).await.is_some());
+        let schema: Vec<String> = svc
+            .metadata_schema()
+            .iter()
+            .map(|d| d.name.clone())
+            .filter(|n| n.starts_with("terminal_sessions_"))
+            .collect();
+        assert_eq!(schema, vec![canonical("attach")]);
+    }
+
+    /// `allowed:[terminal]`: the five run, `attach` is not granted.
+    #[tokio::test]
+    async fn terminal_capability_legacy_allow_admits_the_five_not_attach() {
+        let def = || agent(&["terminal"], &[]);
+        for verb in OBSERVATION_FIVE {
+            assert!(
+                faces_allow(def(), &canonical(verb)).await,
+                "legacy allow must admit {verb}"
+            );
+        }
+        assert!(!faces_allow(def(), &canonical("attach")).await);
+        assert!(!faces_allow(def(), "read").await);
+
+        let (svc, _) = wrapped(def());
+        assert_eq!(only_names(&svc.list().await), sorted_five());
+        assert_eq!(only_names(&svc.dispatchable_list().await), sorted_five());
+        assert!(svc.describe(&canonical("explain")).await.is_some());
+        assert!(svc.describe(&canonical("attach")).await.is_none());
+    }
+
+    /// Deny-first in both directions across the two spellings.
+    #[tokio::test]
+    async fn terminal_capability_canonical_deny_beats_legacy_allow_and_vice_versa() {
+        for verb in OBSERVATION_FIVE {
+            let name = canonical(verb);
+            assert!(
+                !faces_allow(agent(&["terminal"], &[&name]), &name).await,
+                "canonical deny beats legacy allow ({verb})"
+            );
+            assert!(
+                !faces_allow(agent(&[&name], &["terminal"]), &name).await,
+                "legacy deny beats canonical allow ({verb})"
+            );
+        }
+    }
+
+    /// Non-regression and persistence: the other tools keep their answer, and
+    /// the shared policy value is never rewritten.
+    #[tokio::test]
+    async fn terminal_capability_legacy_alias_leaves_policy_and_other_tools_alone() {
+        let def = agent(&["terminal", "read"], &["terminal"]);
+        let before = serde_json::to_vec(&*def).unwrap();
+        assert!(faces_allow(agent(&["terminal", "read"], &[]), "read").await);
+        assert!(faces_allow(def.clone(), "read").await);
+        assert!(faces_allow(agent(&["read"], &["terminal"]), "read").await);
+        let (svc, _) = wrapped(def.clone());
+        let _ = svc.list().await;
+        let _ = svc.execute(&canonical("list"), json!({})).await;
+        assert_eq!(serde_json::to_vec(&*def).unwrap(), before);
     }
 }

@@ -38,7 +38,8 @@ use super::super::protocol::{
 use super::parse_params;
 use crate::agents::{AgentDef, AgentRegistry};
 use crate::builtin_tools::terminal::capabilities::{
-    is_observation_capability, normalize_terminal_compat_call,
+    is_observation_capability, is_tool_allowed_with_legacy_terminal_alias,
+    normalize_terminal_compat_call,
 };
 use crate::executor::ToolRegistry;
 use crate::tools::ToolHandlerRegistry;
@@ -470,42 +471,6 @@ fn mask_presentation_in_place(result: &mut Value) {
             obj.insert(aleph_protocol::PRESENTATION_KEY.to_string(), foreign);
         }
     }
-}
-
-/// The agent allowlist check, with the retired `terminal` tool name still
-/// honored in user-authored policy for the five observation actions it used to
-/// carry.
-///
-/// Scope: a compatibility rename, not a permission-model change. The ingress
-/// rewrites `terminal{action}` to `terminal_sessions_<action>` before this
-/// gate, so an `AgentDef` that says `denied_tools: [terminal]` /
-/// `allowed_tools: [terminal]` would otherwise stop meaning anything. For
-/// those five canonical names only, a request-local clone of the policy maps
-/// the literal `terminal` entries to the name being checked, then the one
-/// existing `AgentDef::is_tool_allowed` (deny-first, named sets, flat list)
-/// decides — no second algorithm, nothing persisted, registry untouched.
-/// `terminal_sessions_attach` had no legacy alias and is checked verbatim, as
-/// is every other tool. No named tool set contains `terminal`, so sets need no
-/// aliasing.
-fn is_tool_allowed_with_legacy_terminal_alias(agent_def: &AgentDef, tool_name: &str) -> bool {
-    const LEGACY_NAME: &str = "terminal";
-    const LEGACY_ACTIONS: [&str; 5] = ["list", "read", "status", "wait", "explain"];
-    let aliased = tool_name
-        .strip_prefix("terminal_sessions_")
-        .is_some_and(|action| LEGACY_ACTIONS.contains(&action));
-    if !aliased {
-        return agent_def.is_tool_allowed(tool_name);
-    }
-    let mut local = agent_def.clone();
-    for entry in local
-        .allowed_tools
-        .iter_mut()
-        .chain(local.denied_tools.iter_mut())
-        .filter(|entry| entry.as_str() == LEGACY_NAME)
-    {
-        *entry = tool_name.to_owned();
-    }
-    local.is_tool_allowed(tool_name)
 }
 
 /// If the caller supplied a top-level `agent_id`, fold it into the JSON

@@ -202,6 +202,41 @@ pub(crate) fn is_observation_capability(name: &str) -> bool {
     Verb::from_canonical(name).is_some()
 }
 
+/// Whether the agent's tool policy admits `tool_name`, honouring the legacy
+/// `terminal` entry for the five observation verbs that used to be reachable
+/// through the `terminal{action}` selector.
+///
+/// This is the one place the compatibility answer is derived; `tools.invoke`,
+/// `tools.effective` and `AllowlistToolService` all call it so they cannot
+/// drift. For `terminal_sessions_{list,read,status,wait,explain}` a request-local
+/// copy of the policy has its flat `terminal` entries (allowed and denied)
+/// rewritten to the canonical name, and the existing
+/// [`AgentDef::is_tool_allowed`] (deny-first, recursion guard, named sets,
+/// wildcard) decides — no second algorithm, nothing persisted, registry
+/// untouched. `attach` (never a legacy action), unknown `terminal_sessions_*`
+/// names and every other tool are checked verbatim; no prefix aliasing.
+#[must_use]
+pub(crate) fn is_tool_allowed_with_legacy_terminal_alias(
+    agent_def: &crate::agents::AgentDef,
+    tool_name: &str,
+) -> bool {
+    let legacy_aliased = Verb::from_canonical(tool_name)
+        .is_some_and(|verb| Verb::from_legacy_action(verb.label()) == Some(verb));
+    if !legacy_aliased {
+        return agent_def.is_tool_allowed(tool_name);
+    }
+    let mut local = agent_def.clone();
+    for entry in local
+        .allowed_tools
+        .iter_mut()
+        .chain(local.denied_tools.iter_mut())
+        .filter(|entry| entry.as_str() == LEGACY_NAME)
+    {
+        *entry = tool_name.to_owned();
+    }
+    local.is_tool_allowed(tool_name)
+}
+
 /// The operator gate every observation shares: an absent turn context is
 /// trusted (cron / internal / local no-auth daemon), exactly like every other
 /// operator gate.
@@ -360,4 +395,60 @@ pub fn register_observation_capabilities(
         scope.track(handle);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod legacy_alias_tests {
+    use super::*;
+    use crate::agents::{AgentDef, AgentMode};
+
+    fn def(allowed: &[&str], denied: &[&str]) -> AgentDef {
+        AgentDef::new("a", AgentMode::Primary)
+            .with_allowed_tools(allowed.iter().map(|s| (*s).to_owned()).collect())
+            .with_denied_tools(denied.iter().map(|s| (*s).to_owned()).collect())
+    }
+
+    /// The alias set is derived from the Verb table: exactly the five legacy
+    /// actions, never `attach`, and never an unknown `terminal_sessions_*`.
+    #[test]
+    fn terminal_capability_alias_covers_exactly_the_five_legacy_verbs() {
+        let allow_terminal = def(&["terminal"], &[]);
+        for verb in Verb::ALL {
+            let name = verb.canonical_name();
+            let expected = verb != Verb::Attach;
+            assert_eq!(
+                is_tool_allowed_with_legacy_terminal_alias(&allow_terminal, &name),
+                expected,
+                "{name}"
+            );
+        }
+        // A future verb must not be admitted by prefix amplification.
+        assert!(!is_tool_allowed_with_legacy_terminal_alias(
+            &allow_terminal,
+            "terminal_sessions_kill"
+        ));
+        let deny_terminal = def(&["*"], &["terminal"]);
+        assert!(is_tool_allowed_with_legacy_terminal_alias(
+            &deny_terminal,
+            "terminal_sessions_kill"
+        ));
+        assert!(is_tool_allowed_with_legacy_terminal_alias(
+            &deny_terminal,
+            "terminal_sessions_attach"
+        ));
+        assert!(!is_tool_allowed_with_legacy_terminal_alias(
+            &deny_terminal,
+            "terminal_sessions_wait"
+        ));
+    }
+
+    /// The raw policy is left byte-identical (the rewrite is request-local).
+    #[test]
+    fn terminal_capability_alias_does_not_mutate_the_policy() {
+        let agent = def(&["*", "terminal"], &["terminal"]);
+        let before = serde_json::to_vec(&agent).unwrap();
+        let _ = is_tool_allowed_with_legacy_terminal_alias(&agent, "terminal_sessions_list");
+        assert_eq!(serde_json::to_vec(&agent).unwrap(), before);
+        assert_eq!(agent.denied_tools, vec!["terminal".to_owned()]);
+    }
 }
