@@ -173,6 +173,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // `canvas.*` RPC handlers hold (only that instance carries the event
     // bus). `None` when the canvas root could not be created at boot.
     canvas_store: Option<Arc<alephcore::canvas::CanvasStore>>,
+    // Startup-scoped diagnostics over the already-mounted canonical host/tree.
+    diagnostics_control: Option<Arc<alephcore::capability::diagnostic_control::DiagnosticControl>>,
 ) -> alephcore::Result<AgentHandlersResult> {
     // Assigned in both the real-execution branch and the simulated branch
     // below; deferred init keeps the dead initial value out (and lets the
@@ -610,6 +612,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             hub_mcp_handle,
             // The gateway's own canvas store Arc — see the parameter doc.
             canvas_store: canvas_store.clone(),
+            diagnostics_control,
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await?;

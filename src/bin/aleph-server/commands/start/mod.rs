@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::cli::Args;
 
+use alephcore::capability::diagnostic_control::{DiagnosticControl, DiagnosticError};
 use alephcore::capability::ownership::OwnershipTree;
 use alephcore::capability::projection_host::{ProjectionHost, ProjectionShutdownOutcome};
 use alephcore::executor::BuiltinToolRegistry;
@@ -57,6 +58,18 @@ mod bootstrap_factories;
 use bootstrap_factories::build_task_delivery_engine;
 
 // ── (subsystem initializer helpers extracted to start/helpers.rs) ────────────
+
+fn startup_diagnostics_control(
+    host: Arc<ProjectionHost>,
+    tree: Arc<OwnershipTree>,
+    env_value: Option<&str>,
+) -> Result<Option<Arc<DiagnosticControl>>, DiagnosticError> {
+    if env_value != Some("1") {
+        return Ok(None);
+    }
+
+    DiagnosticControl::new(host, tree).map(Arc::new).map(Some)
+}
 
 // NOTE: `start_server` below is a single ~2270-line monolithic bootstrap
 // sequence. Its hundreds of locals (shared mutable handles, config, server,
@@ -249,6 +262,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if !projection_host.wait_until_ready().await {
         return Err("projection host closed before startup readiness".into());
     }
+
+    let diagnostics_control = startup_diagnostics_control(
+        Arc::clone(&projection_host),
+        Arc::clone(&ownership_tree),
+        std::env::var("ALEPH_CAPABILITY_DIAGNOSTICS")
+            .ok()
+            .as_deref(),
+    )
+    .map_err(|error| format!("failed to install capability diagnostics: {error:?}"))?;
 
     // The host is retained in a process slot (see `projection_host_slot()`)
     // so it survives every early `?` in the post-mount bootstrap body that
@@ -1478,6 +1500,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         early_marketplace_configs,
         mcp_handle.clone(),
         canvas_store.clone(),
+        diagnostics_control,
     )
     .await?;
 
@@ -4211,6 +4234,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
 #[cfg(test)]
 mod tests {
+    use super::{startup_diagnostics_control, OwnershipTree, ProjectionHost};
+    use std::sync::Arc;
+
     /// `spend::install_policy`/`spend::install_ledger` had **zero production
     /// callers** until this round wired them in here — every mention of
     /// either name anywhere in `src/` was inside `#[cfg(test)]` or a doc
@@ -4394,6 +4420,99 @@ mod tests {
             .map(|suffix| format!("users.{suffix}"))
             .collect()
     }
+    #[tokio::test]
+    async fn diagnostics_requires_exact_startup_env() {
+        let registry = alephcore::tools::ToolHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(registry, Arc::clone(&tree));
+        let other_tree = Arc::new(OwnershipTree::new());
+
+        for value in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("true"),
+            Some("TRUE"),
+            Some(" 1"),
+            Some("1 "),
+            Some("01"),
+            Some("1\n"),
+        ] {
+            let control =
+                startup_diagnostics_control(Arc::clone(&host), Arc::clone(&other_tree), value)
+                    .expect("disabled values must not construct a mismatched control");
+            assert!(
+                control.is_none(),
+                "diagnostics must be disabled for env value {value:?}"
+            );
+        }
+
+        let control = startup_diagnostics_control(Arc::clone(&host), Arc::clone(&tree), Some("1"))
+            .expect("the canonical host/tree pair must construct successfully")
+            .expect("exactly `1` must enable diagnostics");
+        assert_eq!(
+            control.status().unwrap().lifecycle,
+            alephcore::capability::diagnostic_control::DiagnosticLifecycle::Active
+        );
+
+        let mismatch = match startup_diagnostics_control(Arc::clone(&host), other_tree, Some("1")) {
+            Ok(_) => panic!("a second owner authority must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            mismatch,
+            alephcore::capability::diagnostic_control::DiagnosticError::AuthorityMismatch
+        );
+    }
+
+    #[test]
+    fn disabled_startup_does_not_construct_diagnostic_control() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::code_text(
+            &alephcore::utils::source_scan::production_prefix(&src),
+        );
+        let decision = production
+            .find("let diagnostics_control = startup_diagnostics_control(")
+            .expect("startup must make one diagnostics enablement decision");
+        let registration = production
+            .find("register_agent_handlers(")
+            .expect("startup must pass the decision into agent registration");
+        assert!(decision < registration);
+        let production_with_literals = alephcore::utils::source_scan::code_keeping_literals(
+            &alephcore::utils::source_scan::production_prefix(&src),
+        );
+        assert!(
+            production_with_literals.contains("std::env::var(\"ALEPH_CAPABILITY_DIAGNOSTICS\")")
+        );
+    }
+
+    #[test]
+    fn diagnostics_registration_follows_canonical_mount_readiness() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::code_text(
+            &alephcore::utils::source_scan::production_prefix(&src),
+        );
+        let ready = production
+            .find("wait_until_ready(")
+            .expect("startup must await host readiness");
+        let decision = production
+            .find("let diagnostics_control = startup_diagnostics_control(")
+            .expect("startup must construct diagnostics after readiness");
+        let registration = production
+            .find("register_agent_handlers(")
+            .expect("startup must pass diagnostics into registration");
+        assert!(ready < decision && decision < registration);
+        assert!(production.contains("Arc::clone(&projection_host)"));
+        assert!(production.contains("Arc::clone(&ownership_tree)"));
+
+        let agent_init = include_str!("builder/agent_init/mod.rs").replace('\r', "");
+        let agent_production = alephcore::utils::source_scan::code_text(
+            &alephcore::utils::source_scan::production_prefix(&agent_init),
+        );
+        assert!(agent_production.contains("diagnostics_control"));
+        assert!(agent_production.contains("diagnostics_control,"));
+    }
+
     /// Task5 H-pre wiring census. The projection host is the live consumer
     /// of the canonical `ToolHandlerRegistry` and the production requests
     /// must read the SAME registry the MCP bridge writes. The mount must
