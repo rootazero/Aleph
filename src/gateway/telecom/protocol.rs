@@ -233,7 +233,12 @@ pub fn accept_event(
         env.kind,
         TelecomKind::SmsInbound(_) | TelecomKind::SmsCommand(_) | TelecomKind::CallTurn(_)
     );
-    if decays && ctx.now >= env.expires_at {
+    // A command carries its own deadline; the stricter of the two governs.
+    let deadline = match &env.kind {
+        TelecomKind::SmsCommand(c) => env.expires_at.min(c.expires_at),
+        _ => env.expires_at,
+    };
+    if decays && ctx.now >= deadline {
         return Ok(Acceptance::Expired(key));
     }
     Ok(Acceptance::Fresh(key))
@@ -285,7 +290,10 @@ fn stage_rank(o: TelecomOutcome) -> u8 {
 
 /// Monotonic outcome transition for a reported `incoming` outcome.
 ///
-/// `Unknown` is a holding state, not a failure: any real fact may resolve it.
+/// `Unknown` is a holding state, not a failure: only a terminal fact
+/// (Delivered/Played/Failed/Cancelled) may resolve it; stale non-terminal
+/// receipts are `Ignored(Regressed)` and `Unknown -> Unknown` is `Unchanged`
+/// (callers must not reset `OutcomeRecord::entered_at` on `Unchanged`).
 /// `OutcomeUnknownExpired` cannot be *reported* — see [`expire_unknown`].
 pub fn advance_outcome(
     current: Option<TelecomOutcome>,
@@ -315,10 +323,14 @@ pub fn advance_outcome(
         };
     }
     if cur == O::Unknown {
-        return if incoming == O::Accepted {
-            ignored(IgnoreReason::Regressed)
-        } else {
+        // Only a terminal fact may resolve `Unknown`. A late non-terminal
+        // receipt (Accepted/Submitted/Connected) must not move it back to a
+        // submittable state, and a repeated `Unknown` is `Unchanged` above so
+        // the caller never refreshes the retention clock (`entered_at`).
+        return if is_terminal(incoming) {
             applied(incoming)
+        } else {
+            ignored(IgnoreReason::Regressed)
         };
     }
     // cur is Accepted | Submitted | Connected.

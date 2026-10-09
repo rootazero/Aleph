@@ -268,6 +268,72 @@ fn expired_event_is_recorded_but_never_triggers_a_reply() {
 }
 
 #[test]
+fn command_own_expiry_is_enforced_even_when_envelope_is_unexpired() {
+    let mut l = ledger();
+    let mut env = envelope(
+        "c1",
+        TelecomKind::SmsCommand(SmsCommand {
+            operation_id: "op-1".into(),
+            approval_reference: None,
+            recipient_binding_id: BINDING.into(),
+            expires_at: t0() + Duration::minutes(5),
+            body: "hi".into(),
+            encoding: SmsEncoding::Gsm7,
+            segment_count: 1,
+        }),
+    );
+    env.expires_at = t0() + Duration::hours(24);
+    let now = t0() + Duration::minutes(6);
+    assert!(matches!(
+        accept_event(&mut l, &ctx(now), &env).unwrap(),
+        Acceptance::Expired(_)
+    ));
+    // Within both deadlines it is fresh.
+    let mut l2 = ledger();
+    assert!(matches!(
+        accept_event(&mut l2, &ctx(t0() + Duration::minutes(4)), &env).unwrap(),
+        Acceptance::Fresh(_)
+    ));
+    // The envelope deadline still wins when it is the stricter one.
+    env.expires_at = t0() + Duration::minutes(2);
+    let mut l3 = ledger();
+    assert!(matches!(
+        accept_event(&mut l3, &ctx(t0() + Duration::minutes(3)), &env).unwrap(),
+        Acceptance::Expired(_)
+    ));
+}
+
+#[test]
+fn retry_with_refreshed_created_at_inside_ledger_is_duplicate() {
+    let mut l = ledger();
+    let env = envelope("e1", sms("m1", "x"));
+    accept_event(&mut l, &ctx(t0()), &env).unwrap();
+    let mut retry = envelope("e1-retry", sms("m1", "x"));
+    retry.created_at = t0() + Duration::days(3);
+    retry.expires_at = t0() + Duration::days(4);
+    assert!(matches!(
+        accept_event(&mut l, &ctx(t0() + Duration::days(3)), &retry).unwrap(),
+        Acceptance::Duplicate(_)
+    ));
+}
+
+#[test]
+fn retry_preserving_original_created_at_is_stale_after_horizon_pruned() {
+    // Contract: `created_at` is the original event's time and is unchanged by
+    // retries, so a retry after the ledger forgot the key is still Stale.
+    let mut l = ledger();
+    let env = envelope("e1", sms("m1", "x"));
+    accept_event(&mut l, &ctx(t0()), &env).unwrap();
+    let later = t0() + Duration::days(8);
+    l.prune(later);
+    assert!(l.is_empty());
+    let retry = envelope("e1-retry", sms("m1", "x"));
+    let verdict = accept_event(&mut l, &ctx(later), &retry).unwrap();
+    assert!(matches!(verdict, Acceptance::Stale(_)));
+    assert!(l.is_empty());
+}
+
+#[test]
 fn late_delivery_receipt_is_not_dropped_for_age() {
     let mut l = ledger();
     let env = envelope("r1", receipt("r1", "m1", TelecomOutcome::Delivered));
@@ -376,6 +442,28 @@ fn unknown_is_not_failure_and_can_be_resolved_by_a_real_receipt() {
         advance_outcome(Some(O::Unknown), O::Failed),
         Ok(applied(Some(O::Unknown), O::Failed))
     );
+}
+
+#[test]
+fn stale_non_terminal_receipt_cannot_revive_unknown() {
+    for late in [O::Accepted, O::Submitted, O::Connected] {
+        assert_eq!(
+            advance_outcome(Some(O::Unknown), late),
+            Ok(OutcomeTransition::Ignored(IgnoreReason::Regressed)),
+            "{late:?}"
+        );
+    }
+    // Repeated Unknown is Unchanged, so retention is never reset.
+    assert_eq!(
+        advance_outcome(Some(O::Unknown), O::Unknown),
+        Ok(OutcomeTransition::Unchanged)
+    );
+    for terminal in [O::Delivered, O::Played, O::Failed, O::Cancelled] {
+        assert_eq!(
+            advance_outcome(Some(O::Unknown), terminal),
+            Ok(applied(Some(O::Unknown), terminal))
+        );
+    }
 }
 
 #[test]

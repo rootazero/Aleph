@@ -63,6 +63,10 @@ pub struct TelecomEnvelope {
     /// Relay-assigned unique id of this frame; audit/correlation only.
     pub event_id: String,
     pub kind: TelecomKind,
+    /// Creation time of the **original** provider event. A provider/Relay
+    /// retry of the same event MUST carry the same value (never the retry
+    /// time) and the same `expires_at`; Core's stale-horizon check relies on
+    /// it so retries cannot launder an old event into a fresh one.
     pub created_at: DateTime<Utc>,
     /// Past this instant the event must not trigger a semantic reply or an
     /// irreversible action.
