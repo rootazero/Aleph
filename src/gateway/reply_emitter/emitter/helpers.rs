@@ -4,6 +4,7 @@ use tracing::{debug, error, info, warn};
 use super::super::sanitize::sanitize_llm_output;
 use super::ReplyEmitter;
 use crate::gateway::channel::OutboundMessage;
+use crate::gateway::channel_registry::QueueDisposition;
 
 /// Whether a send is eligible for the side-answer badge.
 ///
@@ -271,10 +272,10 @@ impl ReplyEmitter {
     /// Send media as a separate standalone message.
     ///
     /// Latches [`ReplyEmitter::media_may_be_queued`] when the send failed in a
-    /// way the durable queue accepts (`delivery_queue::should_enqueue`) — i.e. a
-    /// queued row for this media may now exist, and it may reference the files
-    /// by path. Asking the queue's own predicate rather than re-deriving custody
-    /// here keeps one answer to "is this recoverable?"; latching it on the
+    /// way the durable queue actually took custody (`QueueDisposition::Queued`).
+    /// That row may reference the files by path. Using the registry's report
+    /// rather than inferring admission from the error keeps one authority for
+    /// custody; latching it on the
     /// emitter rather than returning it means the three call sites that never
     /// clean up inherit the answer without knowing the problem exists.
     pub(crate) async fn send_media_standalone(
@@ -299,16 +300,16 @@ impl ReplyEmitter {
             inline_keyboard: None,
             metadata: Default::default(),
         };
-        match self
+        let report = self
             .channel_registry
-            .send(&self.route.channel_id, message)
-            .await
-        {
+            .send_reported(&self.route.channel_id, message)
+            .await;
+        match report.result {
             Ok(_) => {
                 info!(run_id = %self.run_id, count = count, "Media standalone message sent successfully");
             }
             Err(e) => {
-                let queued = crate::gateway::delivery_queue::should_enqueue(&e);
+                let queued = report.queue == QueueDisposition::Queued;
                 warn!(error = %e, queued, "Failed to send media standalone message");
                 if queued {
                     self.media_may_be_queued.store(true, Ordering::SeqCst);
@@ -508,11 +509,11 @@ impl ReplyEmitter {
                 metadata: metadata.clone(),
             };
 
-            match self
+            let report = self
                 .channel_registry
-                .send(&self.route.channel_id, message)
-                .await
-            {
+                .send_reported(&self.route.channel_id, message)
+                .await;
+            match report.result {
                 Ok(result) => {
                     debug!(
                         "Sent reply to channel {} (message_id: {}, chunk {}/{})",
@@ -523,32 +524,24 @@ impl ReplyEmitter {
                     );
                 }
                 Err(e) => {
-                    // Whether the rest of the answer is still worth offering is
-                    // the queue's question, so ask the queue's own predicate
-                    // rather than writing a second classification here.
-                    //
-                    // Transient (`NotConnected` / `RateLimited`): keep going.
-                    // Each remaining chunk fails live too and is persisted by
-                    // `ChannelRegistry::maybe_enqueue` in ascending row id, and
-                    // `claim_conversation` replays a conversation in id order —
-                    // so the tail is delivered late but in one piece. Breaking
-                    // here dropped chunks i+1..N on the floor: not sent, not
-                    // queued, not dead-lettered, and not even named in this log
-                    // line, so `channel_outbox` showed a healthy queue while the
-                    // conversation ended mid-sentence forever.
-                    let transient = crate::gateway::delivery_queue::should_enqueue(&e);
+                    // Only actual queue custody permits offering the tail.
+                    // A transient error alone does not prove admission (policy,
+                    // missing store, payload cap, or persistence may refuse it).
+                    // The registry owns bounded retries and ordered replay;
+                    // consume its final disposition rather than guessing here.
+                    let queued = report.queue == QueueDisposition::Queued;
                     error!(
                         channel = %self.route.channel_id,
                         chunk = i + 1,
                         total_chunks,
-                        abandoned = if transient { 0 } else { total_chunks - i - 1 },
+                        queue = ?report.queue,
+                        abandoned = if queued { 0 } else { total_chunks - i - 1 },
                         error = %e,
                         "Failed to send reply chunk to channel"
                     );
-                    if !transient {
-                        // Terminal for this message: retrying the tail against a
-                        // transport that just refused it permanently only adds
-                        // noise. The count above is what makes the loss nameable.
+                    if !queued {
+                        // Without custody, submitting more chunks is not a
+                        // recovery strategy. Name the abandoned tail above.
                         break;
                     }
                 }

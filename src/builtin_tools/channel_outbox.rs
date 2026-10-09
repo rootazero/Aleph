@@ -187,6 +187,11 @@ pub struct ChannelOutboxOutput {
     /// the arithmetic the user is being shown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skipped_over_cap: Option<u64>,
+    /// `redrive`: retired by an ExplicitOnly channel policy. These messages
+    /// were never sent and their bodies were removed; ask the user to send
+    /// again explicitly rather than implying duplicate risk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped_policy_retired: Option<u64>,
 }
 
 impl ChannelOutboxOutput {
@@ -205,6 +210,7 @@ impl ChannelOutboxOutput {
             skipped_queue_full: None,
             skipped_not_replay_safe: None,
             skipped_over_cap: None,
+            skipped_policy_retired: None,
         }
     }
 }
@@ -260,16 +266,19 @@ impl ChannelOutboxTool {
             .into_iter()
             .filter(|dl| channel.is_none_or(|c| dl.channel_id == c))
             .take(limit)
-            .map(|dl| DeadLetterEntry {
-                channel_id: dl.channel_id,
-                conversation_id: dl.message.conversation_id.as_str().to_string(),
-                preview: dl.message.text.chars().take(PREVIEW_CHARS).collect(),
-                attempts: dl.attempts,
-                last_error: dl.last_error,
-                reason: dl.reason.as_str().to_string(),
-                replay_safe: dl.reason.replay_safe(),
-                redrivable: dl.reason.redrivable(),
-                age_secs: (now - dl.created_at).max(0),
+            .map(|dl| {
+                let redrivable = dl.redrivable();
+                DeadLetterEntry {
+                    channel_id: dl.channel_id,
+                    conversation_id: dl.message.conversation_id.as_str().to_string(),
+                    preview: dl.message.text.chars().take(PREVIEW_CHARS).collect(),
+                    attempts: dl.attempts,
+                    last_error: dl.last_error,
+                    reason: dl.reason.as_str().to_string(),
+                    replay_safe: dl.reason.replay_safe(),
+                    redrivable,
+                    age_secs: (now - dl.created_at).max(0),
+                }
             })
             .collect();
 
@@ -292,19 +301,28 @@ impl ChannelOutboxTool {
                 false,
             );
         };
-        // Every bucket the store distinguishes is reported. The three refusals
-        // have three different remedies, and a message that folds them tells
-        // the user to do the wrong thing about two of them.
+        // Every bucket the store distinguishes is reported. The four refusals
+        // have four different remedies, and a message that folds them tells
+        // the user to do the wrong thing about three of them.
+        let unknown = if outcome.skipped_unsafe > 0 {
+            format!(
+                "; {} left (outcome unknown — resending could duplicate)",
+                outcome.skipped_unsafe
+            )
+        } else {
+            String::new()
+        };
         let mut out = ChannelOutboxOutput::blank(
             format!(
                 "Requeued {} message(s) for delivery; {} left (live queue full — \
-                 retry later), {} left (outcome unknown — resending could \
-                 duplicate), {} left (payload over the queue's size cap — raise \
-                 max_payload_bytes).",
+                 retry later){}; {} left (payload over the queue's size cap — raise \
+                 max_payload_bytes); {} left (retired by channel policy; never \
+                 sent, body removed; send again explicitly).",
                 outcome.moved,
                 outcome.skipped_capacity,
-                outcome.skipped_unsafe,
-                outcome.skipped_over_cap
+                unknown,
+                outcome.skipped_over_cap,
+                outcome.skipped_policy_retired
             ),
             true,
         );
@@ -312,6 +330,7 @@ impl ChannelOutboxTool {
         out.skipped_queue_full = Some(outcome.skipped_capacity);
         out.skipped_not_replay_safe = Some(outcome.skipped_unsafe);
         out.skipped_over_cap = Some(outcome.skipped_over_cap);
+        out.skipped_policy_retired = Some(outcome.skipped_policy_retired);
         out
     }
 }
@@ -333,7 +352,9 @@ impl AlephTool for ChannelOutboxTool {
         "Redrive moves only redrivable=true entries. replay_safe=false may ",
         "already have been sent — skipped_not_replay_safe; ask the user. ",
         "'payload_too_large' never left the process but a replay re-hits the ",
-        "cap — skipped_over_cap; raise max_payload_bytes."
+        "cap — skipped_over_cap; raise max_payload_bytes. ",
+        "'explicit_only_retired' was never sent and its body was removed — ",
+        "skipped_policy_retired; ask the user to send again explicitly."
     );
 
     type Args = ChannelOutboxArgs;
@@ -492,6 +513,167 @@ mod tests {
             "expected the preview short-circuit, got: {:?}",
             out.message
         );
+    }
+
+    #[test]
+    fn redrive_separates_policy_retirement_from_unknown_outcome() {
+        use crate::gateway::channel::OutboundMessage;
+        use crate::gateway::delivery_queue::{
+            DeadLetterReason, DeliveryQueueConfig, DeliveryStore, EnqueueOutcome,
+        };
+
+        let store = Arc::new(
+            DeliveryStore::open_in_memory(DeliveryQueueConfig::default())
+                .expect("in-memory delivery store"),
+        );
+        let retired_id = match store
+            .enqueue_fresh("sms", &OutboundMessage::text("peer", "private"), "down", 0)
+            .expect("retired fixture row")
+        {
+            EnqueueOutcome::Queued(id) => id,
+            other => panic!("unexpected retired fixture outcome: {other:?}"),
+        };
+        store
+            .record_scrubbed_dead_letter(
+                retired_id,
+                1,
+                "explicit-only",
+                DeadLetterReason::ExplicitOnlyRetired,
+            )
+            .expect("retired fixture");
+        let unknown_id = match store
+            .enqueue_fresh(
+                "sms",
+                &OutboundMessage::text("peer", "maybe-sent"),
+                "down",
+                0,
+            )
+            .expect("unknown fixture row")
+        {
+            EnqueueOutcome::Queued(id) => id,
+            other => panic!("unexpected unknown fixture outcome: {other:?}"),
+        };
+        assert!(matches!(
+            store.record_dead_letter(unknown_id, 1, "unknown", DeadLetterReason::UnknownOutcome),
+            Ok(())
+        ));
+        let tool = ChannelOutboxTool::new(Arc::new(
+            ChannelRegistry::new().with_delivery_store(store.clone()),
+        ));
+
+        let out = tool.redrive(Some("sms"));
+        assert_eq!(out.skipped_not_replay_safe, Some(1));
+        assert_eq!(out.skipped_policy_retired, Some(1));
+        assert_eq!(
+            out.redriven.unwrap()
+                + out.skipped_queue_full.unwrap()
+                + out.skipped_not_replay_safe.unwrap()
+                + out.skipped_over_cap.unwrap()
+                + out.skipped_policy_retired.unwrap(),
+            2,
+            "every dead letter must appear in exactly one redrive bucket"
+        );
+        let json = serde_json::to_value(&out).unwrap();
+        assert_eq!(json["skipped_policy_retired"], 1);
+        assert_eq!(json["skipped_not_replay_safe"], 1);
+        let blank = serde_json::to_value(ChannelOutboxOutput::blank("empty", false)).unwrap();
+        assert!(blank.get("skipped_policy_retired").is_none());
+        let entries = tool.dead_letters(Some("sms"), 10).dead_letters.unwrap();
+        let retired = entries
+            .iter()
+            .find(|e| e.reason == "explicit_only_retired")
+            .unwrap();
+        assert!(retired.replay_safe);
+        assert!(!retired.redrivable);
+        assert!(retired.preview.is_empty());
+        let unknown = entries
+            .iter()
+            .find(|e| e.reason == "unknown_outcome")
+            .unwrap();
+        assert!(!unknown.replay_safe && !unknown.redrivable);
+        assert!(
+            out.message.contains("retired by channel policy")
+                && out.message.contains("never sent")
+                && out.message.contains("body removed")
+                && out.message.contains("send again explicitly"),
+            "policy retirement needs its own accurate remedy: {}",
+            out.message
+        );
+        assert!(out
+            .message
+            .contains("1 left (outcome unknown — resending could duplicate)"));
+        // Keep the retired-only text free of a zero-count duplicate warning.
+        let retired_store =
+            Arc::new(DeliveryStore::open_in_memory(DeliveryQueueConfig::default()).unwrap());
+        let retired_tool = ChannelOutboxTool::new(Arc::new(
+            ChannelRegistry::new().with_delivery_store(retired_store.clone()),
+        ));
+        let id = match retired_store
+            .enqueue_fresh("sms", &OutboundMessage::text("peer", "private"), "down", 0)
+            .unwrap()
+        {
+            EnqueueOutcome::Queued(id) => id,
+            other => panic!("unexpected retired fixture outcome: {other:?}"),
+        };
+        retired_store
+            .record_scrubbed_dead_letter(
+                id,
+                1,
+                "explicit-only",
+                DeadLetterReason::ExplicitOnlyRetired,
+            )
+            .unwrap();
+        let retired_out = retired_tool.redrive(Some("sms"));
+        assert_eq!(retired_out.skipped_policy_retired, Some(1));
+        assert_eq!(retired_out.skipped_not_replay_safe, Some(0));
+        assert!(retired_out
+            .message
+            .contains("1 left (retired by channel policy; never sent"));
+        assert!(
+            !retired_out.message.contains("duplicate")
+                && !retired_out.message.contains("outcome unknown"),
+            "policy-retired rows must not be described as duplicate-risk: {}",
+            retired_out.message
+        );
+    }
+
+    #[test]
+    fn dead_letters_uses_row_retirement_fence_for_historical_exhausted_reason() {
+        use crate::gateway::channel::OutboundMessage;
+        use crate::gateway::delivery_queue::{
+            DeadLetterReason, DeliveryQueueConfig, DeliveryStore, EnqueueOutcome,
+        };
+
+        let store = Arc::new(
+            DeliveryStore::open_in_memory(DeliveryQueueConfig::default())
+                .expect("in-memory delivery store"),
+        );
+        let id = match store
+            .enqueue_fresh(
+                "sms",
+                &OutboundMessage::text("peer", "historical"),
+                "down",
+                0,
+            )
+            .expect("fixture row")
+        {
+            EnqueueOutcome::Queued(id) => id,
+            other => panic!("unexpected fixture outcome: {other:?}"),
+        };
+        store
+            .record_scrubbed_dead_letter(id, 1, "exhausted", DeadLetterReason::Exhausted)
+            .expect("historical exhausted row retired by policy");
+
+        let tool =
+            ChannelOutboxTool::new(Arc::new(ChannelRegistry::new().with_delivery_store(store)));
+        let entries = tool
+            .dead_letters(Some("sms"), 10)
+            .dead_letters
+            .expect("dead-letter output");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].reason, "exhausted");
+        assert!(entries[0].replay_safe);
+        assert!(!entries[0].redrivable);
     }
 
     #[tokio::test]
