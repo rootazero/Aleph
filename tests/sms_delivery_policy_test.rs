@@ -452,3 +452,290 @@ async fn queued_rows_for_an_unregistered_channel_keep_existing_behaviour() {
     assert_eq!(store.len().unwrap(), 1, "still queued");
     assert!(store.recent_dead_letters(10).unwrap().is_empty());
 }
+
+// ======================= fix round 1 =============================================
+//
+// I1: the policy that governed the transport call is the one that governs the
+// enqueue decision. I4: every retained, recognised ExplicitOnly payload is
+// logically scrubbed and cannot be put back in the queue.
+
+/// An `ExplicitOnly` channel whose `send` removes itself from the registry
+/// (optionally putting an `Automatic` replacement in its place) and then fails
+/// with a queueable `NotConnected` — the race a post-send policy re-lookup
+/// reads as "no declaration, so enqueue".
+struct VanishingExplicit {
+    info: ChannelInfo,
+    state: ChannelState,
+    registry: Mutex<Option<Arc<ChannelRegistry>>>,
+    replace_with_automatic: bool,
+    sends: Arc<Sends>,
+}
+
+impl VanishingExplicit {
+    fn new(id: &str, replace_with_automatic: bool, sends: Arc<Sends>) -> Self {
+        Self {
+            info: ChannelInfo {
+                id: ChannelId::new(id),
+                name: id.to_string(),
+                channel_type: "explicit-mock".to_string(),
+                status: ChannelStatus::Connected,
+                capabilities: ChannelCapabilities::default(),
+            },
+            state: ChannelState::new(8),
+            registry: Mutex::new(None),
+            replace_with_automatic,
+            sends,
+        }
+    }
+}
+
+#[async_trait]
+impl Channel for VanishingExplicit {
+    fn info(&self) -> &ChannelInfo {
+        &self.info
+    }
+    fn state(&self) -> &ChannelState {
+        &self.state
+    }
+    fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
+        OutboundDeliveryPolicy::ExplicitOnly
+    }
+    async fn start(&mut self) -> ChannelResult<()> {
+        Ok(())
+    }
+    async fn stop(&mut self) -> ChannelResult<()> {
+        Ok(())
+    }
+    async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+        self.sends.attempts.fetch_add(1, Ordering::SeqCst);
+        let registry = self.registry.lock().unwrap().clone();
+        if let Some(registry) = registry {
+            let id = self.info.id.clone();
+            let _ = registry.unregister(&id).await;
+            if self.replace_with_automatic {
+                registry
+                    .register(Box::new(MockChannel::new(id.as_str(), Arc::default())))
+                    .await;
+            }
+        }
+        Err(ChannelError::NotConnected("gone".into()))
+    }
+}
+
+async fn vanishing_fixture(replace: bool) -> (Arc<ChannelRegistry>, Arc<DeliveryStore>, Arc<Sends>) {
+    let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
+    let registry = Arc::new(ChannelRegistry::new().with_delivery_store(Arc::clone(&store)));
+    let sends = Arc::new(Sends::default());
+    let channel = VanishingExplicit::new("vanish", replace, Arc::clone(&sends));
+    *channel.registry.lock().unwrap() = Some(Arc::clone(&registry));
+    registry.register(Box::new(channel)).await;
+    (registry, store, sends)
+}
+
+#[tokio::test]
+async fn explicit_only_channel_unregistered_mid_send_is_never_persisted() {
+    let (registry, store, sends) = vanishing_fixture(false).await;
+
+    let err = tokio::time::timeout(
+        Duration::from_secs(5),
+        registry.send(
+            &ChannelId::new("vanish"),
+            OutboundMessage::text(PEER, "mid-send-secret"),
+        ),
+    )
+    .await
+    .expect("no deadlock")
+    .expect_err("channel reports NotConnected");
+
+    assert!(matches!(err, ChannelError::NotConnected(_)), "{err:?}");
+    assert_eq!(sends.attempts.load(Ordering::SeqCst), 1);
+    assert_nothing_stored(&store);
+}
+
+#[tokio::test]
+async fn explicit_only_channel_replaced_mid_send_is_never_persisted() {
+    let (registry, store, sends) = vanishing_fixture(true).await;
+
+    let err = tokio::time::timeout(
+        Duration::from_secs(5),
+        registry.send(
+            &ChannelId::new("vanish"),
+            OutboundMessage::text(PEER, "mid-send-secret"),
+        ),
+    )
+    .await
+    .expect("no deadlock")
+    .expect_err("channel reports NotConnected");
+
+    assert!(matches!(err, ChannelError::NotConnected(_)), "{err:?}");
+    assert_eq!(sends.attempts.load(Ordering::SeqCst), 1);
+    assert_nothing_stored(&store);
+}
+
+#[tokio::test]
+async fn a_send_to_a_never_registered_channel_keeps_the_legacy_queueing() {
+    // No ExplicitOnly witness exists for "ghost": legacy behaviour stays.
+    let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
+    let registry = ChannelRegistry::new().with_delivery_store(Arc::clone(&store));
+    let err = registry
+        .send(&ChannelId::new("ghost"), OutboundMessage::text("c", "x"))
+        .await
+        .expect_err("not registered");
+    assert!(matches!(err, ChannelError::NotConnected(_)));
+    assert_eq!(store.len().unwrap(), 1, "legacy: queued for a later registration");
+}
+
+// ---- I4: retained payload scrub ---------------------------------------------------
+
+/// Plain registry (no channel yet) over `store`.
+fn registry_over(store: &Arc<DeliveryStore>) -> Arc<ChannelRegistry> {
+    Arc::new(ChannelRegistry::new().with_delivery_store(Arc::clone(store)))
+}
+
+async fn register_sms(registry: &ChannelRegistry) -> Arc<FakeTransport> {
+    let transport = FakeTransport::new(Mode::Accept);
+    let channel = SmsChannel::new(SMS_ID, sms_config()).with_transport(transport.clone());
+    registry.register(Box::new(channel)).await;
+    transport
+}
+
+fn assert_letter_scrubbed(l: &alephcore::gateway::delivery_queue::DeadLetter) {
+    assert!(
+        !format!("{l:?}").contains(LEGACY_BODY),
+        "dead letter still carries the plaintext body: {l:?}"
+    );
+    assert!(l.message.text.is_empty(), "body scrubbed");
+    assert!(l.message.attachments.is_empty());
+    assert!(l.message.metadata.is_empty());
+    // History is not the replay predicate: policy retirement is sticky even
+    // when the original Exhausted/Permanent reason was individually safe.
+    assert!(l.retired_by_policy, "row must carry an independent retirement fence");
+    assert!(!l.redrivable(), "a bodyless retired row must never be redriven");
+}
+
+#[tokio::test]
+async fn registering_an_explicit_only_channel_promptly_scrubs_old_recognised_rows() {
+    let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
+    // Rows predate the registration of the channel that declares the policy.
+    seed_legacy_row(&store, PEER, LEGACY_BODY);
+    seed_legacy_row(&store, PEER, LEGACY_BODY);
+    let id = store.claim_due(now_secs(), 10).unwrap()[0].id;
+    store
+        .record_dead_letter(
+            id,
+            3,
+            &format!("failed carrying {LEGACY_BODY}"),
+            alephcore::gateway::delivery_queue::DeadLetterReason::Exhausted,
+        )
+        .unwrap();
+
+    let registry = registry_over(&store);
+    register_sms(&registry).await;
+
+    assert_eq!(store.len().unwrap(), 0, "live row retired at registration");
+    let letters = store.recent_dead_letters(10).unwrap();
+    assert_eq!(letters.len(), 2, "{letters:?}");
+    for l in &letters {
+        assert_letter_scrubbed(l);
+    }
+    assert_eq!(letters.iter().filter(|l| l.reason.as_str() == "exhausted").count(), 1,
+        "original historical reason remains, independent of row retirement");
+    assert_eq!(letters.iter().filter(|l| l.reason.as_str() == "explicit_only_retired").count(), 1);
+    // Redrive can neither resurrect the old Exhausted letter nor the retired one.
+    let out = registry.redrive_dead_letters(None).expect("store attached");
+    assert_eq!(out.moved, 0);
+    assert_eq!(out.skipped_policy_retired, 2);
+    assert_eq!(out.skipped_unsafe, 0, "no false historical ambiguity");
+    assert_eq!(store.len().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn recovered_in_flight_sms_rows_are_scrubbed_and_stay_unknown_outcome() {
+    let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
+    let registry = registry_over(&store);
+    let transport = register_sms(&registry).await;
+    seed_legacy_row(&store, PEER, LEGACY_BODY);
+    let due = store.claim_due(now_secs(), 10).unwrap();
+    store.mark_inflight(due[0].id, now_secs() - 5).unwrap();
+
+    // Process "restart": reconcile copies in-flight rows verbatim, then the
+    // drain's registry-aware pass must scrub them.
+    spawn_drain(Arc::clone(&registry), Arc::clone(&store));
+    for _ in 0..100 {
+        let l = store.recent_dead_letters(10).unwrap();
+        if l.len() == 1 && l[0].message.text.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+
+    assert_eq!(transport.submits(), 0);
+    assert_eq!(store.len().unwrap(), 0);
+    let letters = store.recent_dead_letters(10).unwrap();
+    assert_eq!(letters.len(), 1, "{letters:?}");
+    assert_letter_scrubbed(&letters[0]);
+    assert_eq!(
+        letters[0].reason.as_str(),
+        "unknown_outcome",
+        "historical uncertainty is kept, not rewritten to 'never sent'"
+    );
+    assert!(!letters[0].reason.replay_safe());
+    let out = registry.redrive_dead_letters(None).expect("store attached");
+    assert_eq!(out.moved, 0);
+    assert_eq!(out.skipped_unsafe, 1, "{out:?}");
+}
+
+#[tokio::test]
+async fn retirement_is_sticky_after_unregister_and_across_a_restart() {
+    let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
+    {
+        let registry = registry_over(&store);
+        register_sms(&registry).await;
+        registry.unregister(&sms_id()).await;
+    }
+    // A fresh registry over the same store: the SMS channel is not registered
+    // (not yet restarted), but the store remembers it declared ExplicitOnly.
+    let registry = registry_over(&store);
+    seed_legacy_row(&store, PEER, LEGACY_BODY);
+    spawn_drain(Arc::clone(&registry), Arc::clone(&store));
+    for _ in 0..100 {
+        if store.len().unwrap() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+    assert_eq!(store.len().unwrap(), 0, "scrubbed, not rescheduled");
+    let letters = store.recent_dead_letters(10).unwrap();
+    assert_eq!(letters.len(), 1);
+    assert_letter_scrubbed(&letters[0]);
+
+    // A failed send to the now-unregistered channel is not persisted either.
+    let _ = registry
+        .send(&sms_id(), OutboundMessage::text(PEER, "new-secret"))
+        .await
+        .expect_err("not registered");
+    assert_eq!(store.len().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_registered_automatic_channel_overrides_a_stale_explicit_marker() {
+    let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
+    {
+        let registry = registry_over(&store);
+        register_sms(&registry).await;
+    }
+    let registry = registry_over(&store);
+    // Same id now belongs to an ordinary channel.
+    registry
+        .register(Box::new(MockChannel::failing(
+            SMS_ID,
+            Arc::default(),
+            Fail::NotConnected,
+        )))
+        .await;
+    let _ = registry
+        .send(&sms_id(), OutboundMessage::text("c", "ordinary"))
+        .await
+        .expect_err("down");
+    assert_eq!(store.len().unwrap(), 1, "ordinary channel queues as before");
+}

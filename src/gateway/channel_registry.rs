@@ -40,6 +40,39 @@ use super::voice::VoiceState;
 /// Type alias for a thread-safe, shareable channel handle
 type ChannelHandle = Arc<RwLock<Box<dyn Channel>>>;
 
+/// Actual custody of a fresh message after the transport attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueDisposition {
+    Delivered,
+    Queued,
+    NoStore,
+    NotQueueable,
+    PolicyRefused,
+    DeadLettered,
+    PersistFailed,
+}
+
+/// Transport result and its actual policy/custody witnesses. Only `Queued`
+/// permits a caller to rely on the queue for continuation or media retention.
+#[derive(Debug)]
+pub struct SendReport {
+    pub result: ChannelResult<SendResult>,
+    pub policy: Option<OutboundDeliveryPolicy>,
+    pub queue: QueueDisposition,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum AttemptKind<'a> {
+    Fresh,
+    Replay { store: &'a super::delivery_queue::DeliveryStore, record_id: i64 },
+}
+
+pub(crate) struct Attempt {
+    pub result: ChannelResult<SendResult>,
+    pub policy: Option<OutboundDeliveryPolicy>,
+    pub replay_refused: bool,
+}
+
 /// Whether the registry *intends* a channel to be carrying traffic right now.
 ///
 /// [`ChannelStatus`] alone cannot answer this. `Disconnected` is written by
@@ -265,6 +298,7 @@ impl ChannelRegistry {
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
+        self.observe_delivery_policy(&channel_id, channel.outbound_delivery_policy())?;
         channels.insert(channel_id.clone(), Arc::new(RwLock::new(channel)));
 
         info!(
@@ -284,6 +318,12 @@ impl ChannelRegistry {
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
+        if self.observe_delivery_policy(&channel_id, channel.outbound_delivery_policy()).is_err() {
+            // The public registration signature is unchanged. A failed store
+            // observation latches the channel closed in the store; replay and
+            // fresh admission still refuse it after unregister.
+            warn!(channel = %channel_id, "delivery policy observation failed; replay/admission fenced");
+        }
         channels.insert(channel_id.clone(), Arc::new(RwLock::new(channel)));
         info!("Registered channel: {}", channel_id);
         channel_id
@@ -548,6 +588,20 @@ impl ChannelRegistry {
         channel_id: &ChannelId,
         message: OutboundMessage,
     ) -> ChannelResult<SendResult> {
+        self.send_reported(channel_id, message).await.result
+    }
+
+    /// [`send`](Self::send) plus what actually happened to a failed message:
+    /// the policy of the channel instance that carried the transport call and
+    /// the queue's real disposition. Callers that decide "is the rest of this
+    /// reply still worth offering?" must ask this, not re-derive it from the
+    /// error class — an error the queue *accepts* in principle was not
+    /// necessarily queued (explicit-only channel, no store, persist failure).
+    pub async fn send_reported(
+        &self,
+        channel_id: &ChannelId,
+        message: OutboundMessage,
+    ) -> SendReport {
         if let Some(store) = &self.delivery_store {
             super::delivery_queue::flush_conversation(
                 self,
@@ -563,11 +617,24 @@ impl ChannelRegistry {
         // deep copy of the payload — which for a message carrying inline
         // attachment bytes is the difference between one and two copies of the
         // whole media blob on every single outbound send.
-        match self.send_attempt(channel_id, &message).await {
-            Ok(sent) => Ok(sent),
+        let attempt = self
+            .send_attempt(channel_id, &message, AttemptKind::Fresh)
+            .await;
+        match attempt.result {
+            Ok(sent) => SendReport {
+                result: Ok(sent),
+                policy: attempt.policy,
+                queue: QueueDisposition::Delivered,
+            },
             Err(e) => {
-                self.maybe_enqueue(channel_id, &message, &e).await;
-                Err(e)
+                let queue = self
+                    .maybe_enqueue(channel_id, &message, &e, attempt.policy)
+                    .await;
+                SendReport {
+                    result: Err(e),
+                    policy: attempt.policy,
+                    queue,
+                }
             }
         }
     }
@@ -576,27 +643,41 @@ impl ChannelRegistry {
     /// attached and the error is duplicate-safe to retry. Best-effort: a
     /// persistence failure is logged and swallowed (the original send error is
     /// what the caller sees).
+    ///
+    /// `policy` is the one captured from the channel instance that actually
+    /// carried the transport call. It is never re-resolved by id here: the
+    /// channel can have been unregistered or replaced while the send was in
+    /// flight, and an absent registration is not permission to persist the body
+    /// of a message an explicit-only channel just failed to send.
     async fn maybe_enqueue(
         &self,
         channel_id: &ChannelId,
         message: &OutboundMessage,
         err: &ChannelError,
-    ) {
+        policy: Option<OutboundDeliveryPolicy>,
+    ) -> QueueDisposition {
         let Some(store) = &self.delivery_store else {
-            return;
+            return QueueDisposition::NoStore;
         };
         if !super::delivery_queue::should_enqueue(err) {
-            return;
+            return QueueDisposition::NotQueueable;
         }
         // An explicit-only channel's failure is the caller's to see and to
         // re-request: it must not be stored (the body would be persisted in
-        // plaintext) nor replayed later without a fresh instruction.
-        if self.outbound_delivery_policy(channel_id).await
-            == Some(OutboundDeliveryPolicy::ExplicitOnly)
-        {
-            return;
+        // plaintext) nor replayed later without a fresh instruction. A channel
+        // that never produced a policy (not registered) is still refused when
+        // the store remembers it declared one.
+        let explicit = match policy {
+            Some(OutboundDeliveryPolicy::ExplicitOnly) => true,
+            _ => match store.is_explicit_only_channel(channel_id.as_str()) {
+                Ok(explicit) => explicit,
+                Err(_) => return QueueDisposition::PolicyRefused,
+            },
+        };
+        if explicit {
+            return QueueDisposition::PolicyRefused;
         }
-        // Ordered after the two cheap refusals above so a message that is never
+        // Ordered after the cheap refusals above so a message that is never
         // going to be queued never pays for a file read.
         let custody =
             super::delivery_queue::take_media_custody(message, store.config().max_payload_bytes)
@@ -604,24 +685,33 @@ impl ChannelRegistry {
         let message = custody.as_ref().unwrap_or(message);
         let next =
             super::delivery_queue::now_secs() + store.config().initial_backoff.as_secs() as i64;
-        match store.enqueue(channel_id.as_str(), message, &format!("{err:?}"), next) {
-            Ok(super::delivery_queue::EnqueueOutcome::Queued(_)) => info!(
-                channel = %channel_id,
-                "outbound send failed transiently; queued for durable retry"
-            ),
+        match store.enqueue_fresh(channel_id.as_str(), message, &format!("{err:?}"), next) {
+            Ok(super::delivery_queue::EnqueueOutcome::Queued(_)) => {
+                info!(
+                    channel = %channel_id,
+                    "outbound send failed transiently; queued for durable retry"
+                );
+                QueueDisposition::Queued
+            }
             // Reported distinctly rather than folded into the success log: the
             // message is *not* coming back, and the operator's next question is
             // "which one?" — answered by the dead-letter trail the store wrote.
-            Ok(super::delivery_queue::EnqueueOutcome::TooLarge { bytes }) => warn!(
-                channel = %channel_id,
-                bytes,
-                "outbound payload exceeds the durable-queue byte cap; dead-lettered instead of retried"
-            ),
-            Err(e) => warn!(
-                channel = %channel_id,
-                error = %e,
-                "failed to persist outbound delivery for retry"
-            ),
+            Ok(super::delivery_queue::EnqueueOutcome::TooLarge { bytes }) => {
+                warn!(
+                    channel = %channel_id,
+                    bytes,
+                    "outbound payload exceeds the durable-queue byte cap; dead-lettered instead of retried"
+                );
+                QueueDisposition::DeadLettered
+            }
+            Ok(super::delivery_queue::EnqueueOutcome::PolicyRefused) => QueueDisposition::PolicyRefused,
+            Err(_) => {
+                warn!(
+                    channel = %channel_id,
+                    "failed to persist outbound delivery for retry"
+                );
+                QueueDisposition::PersistFailed
+            }
         }
     }
 
@@ -633,20 +723,30 @@ impl ChannelRegistry {
         &self,
         channel_id: &ChannelId,
         message: &OutboundMessage,
-    ) -> ChannelResult<SendResult> {
-        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
-            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
-        })?;
+        kind: AttemptKind<'_>,
+    ) -> Attempt {
+        let Some(channel_arc) = self.get(channel_id).await else {
+            return Attempt {
+                result: Err(ChannelError::NotConnected(format!(
+                    "Channel not found: {channel_id}"
+                ))),
+                policy: None,
+                replay_refused: false,
+            };
+        };
 
-        {
-            let channel = channel_arc.read().await;
-            if channel.status() == ChannelStatus::Disabled {
-                return Err(ChannelError::NotConnected(format!(
-                    "Channel {channel_id} is disabled"
-                )));
-            }
-        }
+        self.send_on(&channel_arc, channel_id, message, kind).await
+    }
 
+    /// The transport leg of [`send_attempt`](Self::send_attempt), on the
+    /// instance and policy it already resolved.
+    async fn send_on(
+        &self,
+        channel_arc: &Arc<RwLock<Box<dyn Channel>>>,
+        channel_id: &ChannelId,
+        message: &OutboundMessage,
+        kind: AttemptKind<'_>,
+    ) -> Attempt {
         // Extension hooks observe outbound channel traffic. Capture the message
         // facts once, before `channel.send` (repeatedly) consumes a clone of the
         // OutboundMessage. The observer fires a single MessageSending regardless
@@ -673,15 +773,44 @@ impl ChannelRegistry {
         //
         // An explicit-only channel never gets the automatic retry: each extra
         // transport call is a second submission the caller did not ask for.
-        let mut retries_left = match channel_arc.read().await.outbound_delivery_policy() {
-            OutboundDeliveryPolicy::Automatic => self.send_retry.max_rate_limit_retries,
-            OutboundDeliveryPolicy::ExplicitOnly => 0,
-        };
+        let mut retries_left = self.send_retry.max_rate_limit_retries;
+        let mut is_retry = false;
         loop {
-            let result = {
-                let channel = channel_arc.read().await;
+            // Revalidate on every acquisition: `get` exposes this Arc and a
+            // writer can replace its Box during an observer or retry wait.
+            // This exact guard carries both the policy and the transport call.
+            let channel = channel_arc.read().await;
+            let policy = channel.outbound_delivery_policy();
+            if (matches!(kind, AttemptKind::Replay { .. }) || is_retry)
+                && policy == OutboundDeliveryPolicy::ExplicitOnly
+            {
+                // Refuse only. This Arc may be stale (replaced by a newer
+                // registration of the same id), so it has no authority to
+                // classify the id or scrub rows: register/prepare own that.
+                return Attempt {
+                    result: Err(ChannelError::ConfigError("explicit-only channel: replay refused".into())),
+                    policy: Some(policy),
+                    replay_refused: true,
+                };
+            }
+            if let AttemptKind::Replay { store, record_id } = kind {
+                // A claimed body can outlive its row (scrub followed by an
+                // Automatic replacement). Validate row and marker while
+                // stamping the actual attempt under one store transaction.
+                if !matches!(store.begin_replay(record_id, channel_id.as_str()), Ok(true)) {
+                    return Attempt {
+                        result: Err(ChannelError::ConfigError("delivery row/policy unavailable: replay refused".into())),
+                        policy: Some(policy),
+                        replay_refused: true,
+                    };
+                }
+            }
+            let result = if channel.status() == ChannelStatus::Disabled {
+                Err(ChannelError::NotConnected(format!("Channel {channel_id} is disabled")))
+            } else {
                 channel.send(message.clone()).await
             };
+            drop(channel);
 
             match result {
                 Ok(sent) => {
@@ -696,9 +825,10 @@ impl ChannelRegistry {
                         ],
                     )
                     .await;
-                    return Ok(sent);
+                    return Attempt { result: Ok(sent), policy: Some(policy), replay_refused: false };
                 }
-                Err(ChannelError::RateLimited { retry_after_secs }) if retries_left > 0 => {
+                Err(ChannelError::RateLimited { retry_after_secs })
+                    if retries_left > 0 && policy == OutboundDeliveryPolicy::Automatic => {
                     let wait =
                         Duration::from_secs(retry_after_secs).min(self.send_retry.max_retry_after);
                     warn!(
@@ -709,9 +839,10 @@ impl ChannelRegistry {
                         "Outbound send rate-limited; honoring retry-after before retry"
                     );
                     retries_left -= 1;
+                    is_retry = true;
                     tokio::time::sleep(wait).await;
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Attempt { result: Err(e), policy: Some(policy), replay_refused: false },
             }
         }
     }
@@ -1142,6 +1273,58 @@ impl ChannelRegistry {
         }
     }
 
+    fn observe_delivery_policy(
+        &self,
+        channel_id: &ChannelId,
+        policy: OutboundDeliveryPolicy,
+    ) -> ChannelResult<()> {
+        if let Some(store) = &self.delivery_store {
+            store.observe_channel_policy(channel_id.as_str(), policy).map_err(|_| {
+                ChannelError::Internal("delivery policy persistence failed".into())
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Lifecycle/drain/tool-entry privacy hook. No map lock crosses channel I/O.
+    /// Tool consumption and richer outbox reporting belong to the next stage.
+    pub async fn prepare_delivery_store(&self) -> ChannelResult<()> {
+        if let Some(store) = &self.delivery_store {
+            self.prepare_delivery_store_on(store).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn prepare_delivery_store_on(
+        &self, store: &super::delivery_queue::DeliveryStore,
+    ) -> ChannelResult<()> {
+        let handles: Vec<_> = self.channels.read().await.iter()
+            .map(|(id, handle)| (id.clone(), handle.clone())).collect();
+        for (id, handle) in handles {
+            let channel = handle.read().await;
+            // Recheck map identity after acquiring the channel guard. No map
+            // guard crosses a channel await; it spans only synchronous store
+            // observation so a stale Arc cannot overwrite a new registration.
+            // Lock order is map -> instance everywhere else, so blocking on
+            // the map while holding the instance guard can close a fair-RwLock
+            // cycle. Never wait here: contention is a fail-closed, retryable
+            // refusal (the instance guard drops on return).
+            let Ok(channels) = self.channels.try_read() else {
+                return Err(ChannelError::Internal("delivery registry busy; retry".into()));
+            };
+            if channels.get(&id).is_some_and(|current| Arc::ptr_eq(current, &handle))
+                && channel.outbound_delivery_policy() == OutboundDeliveryPolicy::ExplicitOnly
+            {
+                store.observe_channel_policy(id.as_str(), OutboundDeliveryPolicy::ExplicitOnly)
+                    .map_err(|_| ChannelError::Internal("delivery policy persistence failed".into()))?;
+            }
+        }
+        store.scrub_marked_channels().map_err(|_| {
+            ChannelError::Internal("delivery payload retirement failed".into())
+        })?;
+        Ok(())
+    }
+
     /// Record that `channel_id` is *supposed to be running*, so the health
     /// monitor can tell a transport that died from one an operator stopped.
     async fn set_desired(&self, channel_id: &ChannelId, desired: DesiredChannelState) {
@@ -1224,6 +1407,8 @@ mod tests {
         fail_times: AtomicU32,
         attempts: Arc<AtomicU32>,
         terminal: bool,
+        delivery_policy: OutboundDeliveryPolicy,
+        retry_after_secs: u64,
     }
 
     impl FlakyChannel {
@@ -1242,6 +1427,8 @@ mod tests {
                 fail_times: AtomicU32::new(fail_times),
                 attempts,
                 terminal,
+                delivery_policy: OutboundDeliveryPolicy::Automatic,
+                retry_after_secs: 0,
             }
         }
     }
@@ -1253,6 +1440,9 @@ mod tests {
         }
         fn state(&self) -> &ChannelState {
             &self.state
+        }
+        fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
+            self.delivery_policy
         }
         async fn start(&mut self) -> ChannelResult<()> {
             Ok(())
@@ -1268,7 +1458,7 @@ mod tests {
             if self.fail_times.load(Ordering::SeqCst) > 0 {
                 self.fail_times.fetch_sub(1, Ordering::SeqCst);
                 return Err(ChannelError::RateLimited {
-                    retry_after_secs: 0,
+                    retry_after_secs: self.retry_after_secs,
                 });
             }
             Ok(SendResult {
@@ -1282,6 +1472,159 @@ mod tests {
         let registry = ChannelRegistry::new().with_send_retry_policy(policy);
         registry.register(Box::new(channel)).await;
         registry
+    }
+
+    #[tokio::test]
+    async fn replay_revalidates_policy_when_the_box_changes_inside_the_same_arc() {
+        use super::super::delivery_queue::{DeadLetterReason, DeliveryQueueConfig, DeliveryStore};
+        let attempts = Arc::new(AtomicU32::new(0));
+        let replacement_attempts = Arc::new(AtomicU32::new(0));
+        let mut automatic = FlakyChannel::new(10, false, attempts.clone());
+        automatic.retry_after_secs = 1;
+        let registry = Arc::new(registry_with(automatic, SendRetryPolicy::default()).await);
+        let id = ChannelId::new("flaky");
+        let handle = registry.get(&id).await.unwrap();
+        let store = Arc::new(DeliveryStore::open_in_memory(DeliveryQueueConfig::default()).unwrap());
+        let message = OutboundMessage::text("c", "private-replay-body");
+        let row = match store.enqueue(id.as_str(), &message, "down", 0).unwrap() {
+            super::super::delivery_queue::EnqueueOutcome::Queued(row) => row,
+            outcome => panic!("unexpected fixture outcome: {outcome:?}"),
+        };
+        let run = {
+            let registry = registry.clone();
+            let store = store.clone();
+            let id = id.clone();
+            tokio::spawn(async move {
+                registry.send_attempt(&id, &message, AttemptKind::Replay { store: &store, record_id: row }).await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while attempts.load(Ordering::SeqCst) == 0 { tokio::task::yield_now().await; }
+            let mut explicit = FlakyChannel::new(0, false, replacement_attempts.clone());
+            explicit.delivery_policy = OutboundDeliveryPolicy::ExplicitOnly;
+            *handle.write().await = Box::new(explicit);
+        }).await.unwrap();
+        let attempt = tokio::time::timeout(Duration::from_secs(4), run).await.unwrap().unwrap();
+        assert!(attempt.replay_refused);
+        assert_eq!(attempt.policy, Some(OutboundDeliveryPolicy::ExplicitOnly));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(replacement_attempts.load(Ordering::SeqCst), 0, "new Box must receive no replay");
+        // Refusal is not classification: the refused replay leaves the row for
+        // the guarded prepare path, which sees the live ExplicitOnly policy.
+        registry.prepare_delivery_store_on(&store).await.unwrap();
+        assert!(store.is_empty());
+        let letter = store.recent_dead_letters(1).unwrap().remove(0);
+        assert_eq!(letter.reason, DeadLetterReason::UnknownOutcome, "first attempt was on wire");
+        assert!(letter.retired_by_policy);
+        assert!(!format!("{letter:?}").contains("private-replay-body"));
+    }
+
+    /// F1 guard: `get_capabilities`/`list` hold the map read guard while they
+    /// await the instance guard. `prepare` must therefore never *await* the map
+    /// while holding the instance read guard. The future is polled by hand (no
+    /// sleeps, no timeouts): after the instance writer leaves, prepare owns the
+    /// instance read guard while a map writer is parked. It must fail closed
+    /// (release the instance guard) instead of parking behind that writer.
+    #[tokio::test]
+    async fn prepare_never_awaits_the_map_while_holding_an_instance_guard() {
+        use super::super::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+        use std::future::{poll_fn, Future};
+        use std::task::Poll;
+        let attempts = Arc::new(AtomicU32::new(0));
+        let store = Arc::new(DeliveryStore::open_in_memory(DeliveryQueueConfig::default()).unwrap());
+        let registry = registry_with(FlakyChannel::new(0, false, attempts), SendRetryPolicy::default())
+            .await
+            .with_delivery_store(store.clone());
+        let handle = registry.get(&ChannelId::new("flaky")).await.unwrap();
+
+        let instance_writer = handle.write().await;
+        let mut prepare = Box::pin(registry.prepare_delivery_store_on(&store));
+        let first = poll_fn(|cx| Poll::Ready(prepare.as_mut().poll(cx))).await;
+        assert!(first.is_pending(), "snapshot done, parked on the instance guard");
+
+        let map_writer = registry.channels.write().await;
+        drop(instance_writer);
+        let mut outcome = None;
+        for _ in 0..8 {
+            if let Poll::Ready(done) = poll_fn(|cx| Poll::Ready(prepare.as_mut().poll(cx))).await {
+                outcome = Some(done);
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let outcome = outcome.expect("prepare must not park on the map while holding the instance guard");
+        assert!(outcome.is_err(), "map contention is a fail-closed refusal, not a silent success");
+        assert!(handle.try_write().is_ok(), "the instance guard was released by the refusal");
+        drop(map_writer);
+        registry.prepare_delivery_store_on(&store).await.expect("uncontended prepare succeeds");
+    }
+
+    /// F2 guard: an already-captured ExplicitOnly handle must be refused on
+    /// replay without re-classifying the channel id that a newer Automatic
+    /// instance now owns.
+    #[tokio::test]
+    async fn stale_explicit_only_handle_cannot_reclassify_a_newer_automatic_registration() {
+        use super::super::delivery_queue::{DeliveryQueueConfig, DeliveryStore, EnqueueOutcome};
+        let store = Arc::new(DeliveryStore::open_in_memory(DeliveryQueueConfig::default()).unwrap());
+        let registry = ChannelRegistry::new().with_delivery_store(store.clone());
+        let id = ChannelId::new("flaky");
+        registry.register(Box::new(FlakyChannel::new(0, false, Arc::new(AtomicU32::new(0))))).await;
+        let old = OutboundMessage::text("c", "old-body");
+        let EnqueueOutcome::Queued(r) = store.enqueue(id.as_str(), &old, "down", 0).unwrap() else {
+            panic!("fixture row must queue");
+        };
+        let explicit_attempts = Arc::new(AtomicU32::new(0));
+        let mut explicit = FlakyChannel::new(0, false, explicit_attempts.clone());
+        explicit.delivery_policy = OutboundDeliveryPolicy::ExplicitOnly;
+        registry.register(Box::new(explicit)).await; // retires r
+        let stale = registry.get(&id).await.unwrap();
+        let new_attempts = Arc::new(AtomicU32::new(0));
+        registry.register(Box::new(FlakyChannel::new(0, false, new_attempts.clone()))).await;
+        assert_eq!(store.is_explicit_only_channel(id.as_str()).unwrap(), false);
+        let fresh = OutboundMessage::text("c", "fresh-body");
+        let EnqueueOutcome::Queued(n) = store.enqueue_fresh(id.as_str(), &fresh, "down", 0).unwrap() else {
+            panic!("fresh row must queue under the Automatic instance");
+        };
+
+        let attempt = registry
+            .send_on(&stale, &id, &old, AttemptKind::Replay { store: &store, record_id: r })
+            .await;
+        assert!(attempt.replay_refused);
+        assert_eq!(explicit_attempts.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            store.is_explicit_only_channel(id.as_str()).unwrap(),
+            false,
+            "a stale handle has no authority to reclassify the channel id"
+        );
+        assert_eq!(store.len().unwrap(), 1, "the newer registration's message is untouched");
+        assert!(store.recent_dead_letters(10).unwrap().iter().all(|l| !l.message.text.is_empty() || l.retired_by_policy));
+
+        let later = registry
+            .send_attempt(&id, &fresh, AttemptKind::Replay { store: &store, record_id: n })
+            .await;
+        assert!(!later.replay_refused, "replay through the current Automatic instance stays allowed");
+        assert!(later.result.is_ok());
+        assert_eq!(new_attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn report_distinguishes_real_admission_from_no_store_and_dead_letter() {
+        use super::super::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+        let policy = SendRetryPolicy { max_rate_limit_retries: 0, ..Default::default() };
+        let registry = registry_with(FlakyChannel::new(10, false, Arc::new(AtomicU32::new(0))), policy).await;
+        let report = registry.send_reported(&ChannelId::new("flaky"), OutboundMessage::text("c", "hello")).await;
+        assert_eq!(report.queue, QueueDisposition::NoStore);
+        assert_eq!(report.policy, Some(OutboundDeliveryPolicy::Automatic));
+        let store = Arc::new(DeliveryStore::open_in_memory(DeliveryQueueConfig { max_payload_bytes: 1, ..Default::default() }).unwrap());
+        let registry = registry.with_delivery_store(store.clone());
+        let report = registry.send_reported(&ChannelId::new("flaky"), OutboundMessage::text("c", "too large")).await;
+        assert_eq!(report.queue, QueueDisposition::DeadLettered, "not Queued when persistence retires over-cap payload");
+        assert_eq!(store.len().unwrap(), 0);
+        let store = Arc::new(DeliveryStore::open_in_memory(DeliveryQueueConfig::default()).unwrap());
+        let registry = registry.with_delivery_store(store.clone());
+        let report = registry.send_reported(&ChannelId::new("flaky"), OutboundMessage::text("c", "queued")).await;
+        assert_eq!(report.queue, QueueDisposition::Queued);
+        assert_eq!(store.len().unwrap(), 1);
     }
 
     #[tokio::test]
