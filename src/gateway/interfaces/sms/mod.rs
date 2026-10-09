@@ -47,6 +47,7 @@
 
 pub mod config;
 pub mod message_ops;
+pub mod transport;
 
 pub use config::{SmsConfig, MAX_COMMAND_TTL_SECS, MAX_SEGMENTS_LIMIT};
 pub use message_ops::{
@@ -54,6 +55,7 @@ pub use message_ops::{
     normalize_e164, scoped_message_id, PendingSmsOperation, SmsError, SmsInboundMeta,
     SmsOutcomeMeta, METADATA_APPROVAL_REFERENCE,
 };
+pub use transport::*;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -70,25 +72,6 @@ use crate::sync_primitives::{Arc, Mutex, PoisonError};
 
 /// Dedup horizon (spec §9: Relay keeps metadata 7 days; Core mirrors it).
 const DEDUP_RETENTION_DAYS: i64 = 7;
-
-/// What the Relay said when handed a pending operation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SmsSubmission {
-    pub operation_id: String,
-    pub outcome: TelecomOutcome,
-}
-
-/// Seam for the authenticated Relay connection (Task 3). Implementations must
-/// report what the Relay actually said; they must not synthesise outcomes.
-#[async_trait]
-pub trait SmsTransport: Send + Sync {
-    /// Is the authenticated Relay connection currently established?
-    async fn is_connected(&self) -> bool;
-
-    /// Submit a pending operation. `Err` means the request was not handed
-    /// over; `Ok` carries the Relay's first outcome for it.
-    async fn submit(&self, operation: &PendingSmsOperation) -> ChannelResult<SmsSubmission>;
-}
 
 /// Result of feeding one Relay envelope to [`SmsChannel::ingest_envelope`].
 #[derive(Debug, Clone, PartialEq, Eq)]
