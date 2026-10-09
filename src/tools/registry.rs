@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::Weak;
 
 use arc_swap::ArcSwap;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Notify};
 
 use crate::session::events::ToolOutput;
 use crate::tools::descriptor::{
@@ -188,6 +188,20 @@ struct RegistryShared {
     /// only the unit token, and the real state lives behind `ArcSwap`, so
     /// resuming after a panic in a mutator is safe.
     mutation_lock: std::sync::Mutex<()>,
+    /// Notification-only close waiter: carries no payload and no revision.
+    ///
+    /// `close()` publishes the `closed` bit under `mutation_lock` and THEN
+    /// calls `notify_waiters()`, so a waiter that observes the wake also
+    /// observes `is_closed() == true`. Observers MUST register a `notified()`
+    /// future BEFORE reading the `closed` bit (register-then-check):
+    ///
+    /// * close-before-check — the bit is already set, read it directly;
+    /// * check-then-close-before-wait — a `Notified` future captures the
+    ///   notify generation AT CREATION and observes later changes when polled,
+    ///   so the already-registered future resolves instead of sleeping forever;
+    /// * multi-waiter — `notify_waiters` (not `notify_one`) wakes every
+    ///   registered observer, none is starved.
+    close_signal: Arc<Notify>,
 }
 
 impl RegistryShared {
@@ -322,6 +336,7 @@ impl ToolHandlerRegistry {
                 inner: ArcSwap::from_pointee(RegistryState::default()),
                 change_tx: tx,
                 mutation_lock: std::sync::Mutex::new(()),
+                close_signal: Arc::new(Notify::new()),
             }),
         }
     }
@@ -588,11 +603,30 @@ impl ToolHandlerRegistry {
             next.closed = true;
             Arc::new(next)
         });
+        // Publish the closed bit first (the rcu swap above), then wake every
+        // registered close waiter. `notify_waiters` is used so multiple
+        // concurrent observers are all released; a `Notified` future captures
+        // the notify generation AT CREATION and observes later changes when
+        // polled, so an observer that checked `is_closed()` before the swap
+        // and is about to await its already-registered future still wakes.
+        self.shared.close_signal.notify_waiters();
     }
 
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.shared.inner.load().closed
+    }
+
+    /// A shared, notification-only close signal for observers that must
+    /// distinguish "closed" from a lagged or silently-dropped change stream.
+    ///
+    /// Callers register `Notify::notified()` BEFORE reading `is_closed()` (or
+    /// `snapshot_state().is_closed()`) and await it only when the bit was not
+    /// yet set, closing the close-before-wait race. No `RegistryChange::Closed`
+    /// event and no revision/cursor change is introduced.
+    #[must_use]
+    pub(crate) fn close_signal(&self) -> Arc<Notify> {
+        Arc::clone(&self.shared.close_signal)
     }
 
     /// Subscribe to registry mutation events.
@@ -1386,6 +1420,93 @@ mod tests {
                 pair[0] < pair[1],
                 "published change events must be in revision order, got {seen_revisions:?}"
             );
+        }
+    }
+
+    /// The close signal wakes a registered waiter exactly once after
+    /// `close()`, letting an observer distinguish "closed" from a
+    /// silently-lagged change stream without polling.
+    #[tokio::test]
+    async fn close_signal_wakes_registered_waiter() {
+        let reg = ToolHandlerRegistry::new();
+        let signal = reg.close_signal();
+        assert!(!reg.is_closed());
+
+        // Explicit readiness handshake (not a yield-based guess): the waiter
+        // creates its `notified()` future BEFORE signalling readiness, so the
+        // test's close() is guaranteed to happen after registration.
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let reg2 = reg.clone();
+        let wake = tokio::spawn(async move {
+            let n = signal.notified();
+            let _ = ready_tx.send(());
+            n.await;
+        });
+        ready_rx.await.expect("waiter must signal registration");
+        reg2.close();
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), wake)
+            .await
+            .expect("close must wake the registered waiter")
+            .expect("join");
+        assert!(reg2.is_closed());
+    }
+
+    /// Register-then-check ordering: a waiter that registers its `notified()`
+    /// future BEFORE reading `is_closed()` never loses the wake, even when
+    /// `close()` lands between the check and the await — the `Notified` future
+    /// captured the generation at creation and observes the later change.
+    #[tokio::test]
+    async fn close_signal_register_before_check_loses_no_wake() {
+        let reg = ToolHandlerRegistry::new();
+        let signal = reg.close_signal();
+
+        let notified = signal.notified();
+        tokio::pin!(notified);
+        if reg.is_closed() {
+            // Already closed before the check: no await needed.
+            return;
+        }
+        // Simulate close() landing right after the check: close first, then
+        // await the already-registered future.
+        reg.close();
+        tokio::time::timeout(std::time::Duration::from_secs(5), &mut notified)
+            .await
+            .expect("registered-before-check waiter must observe the generation change");
+        assert!(reg.is_closed());
+    }
+
+    /// `notify_waiters` releases every registered waiter, not just one.
+    #[tokio::test]
+    async fn close_signal_wakes_all_waiters() {
+        let reg = ToolHandlerRegistry::new();
+        let signal = reg.close_signal();
+
+        // Explicit readiness handshake: each waiter creates its `notified()`
+        // future BEFORE signalling readiness, so close() happens only after
+        // every waiter has registered (no yield-based guess).
+        let (ready_tx, mut ready_rx) = tokio::sync::mpsc::channel(8);
+        let waiters: Vec<_> = (0..8)
+            .map(|_| {
+                let s = Arc::clone(&signal);
+                let ready_tx = ready_tx.clone();
+                tokio::spawn(async move {
+                    let n = s.notified();
+                    let _ = ready_tx.send(()).await;
+                    n.await;
+                })
+            })
+            .collect();
+        for _ in 0..8 {
+            ready_rx.recv().await.expect("every waiter must register");
+        }
+        reg.close();
+
+        for w in waiters {
+            tokio::time::timeout(std::time::Duration::from_secs(5), w)
+                .await
+                .expect("every waiter must be released")
+                .expect("join");
         }
     }
 }

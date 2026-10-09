@@ -12,7 +12,7 @@
 //! [`Service`] is a pure relation edge (`requires` / `provides` / `conflicts`):
 //! it carries no data and is never invocable.
 
-use crate::capability::ownership::{LifetimeScope, OwnerGeneration, OwnerRef, VisibilityScope};
+use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
 
 /// The nine capability kinds this contract names.
 ///
@@ -97,7 +97,6 @@ pub struct CapabilityDescriptor {
     pub kind: CapabilityKind,
     pub schema: SchemaRef,
     pub revision: CapabilityRevision,
-    pub owner_generation: OwnerGeneration,
     pub lifetime: LifetimeScope,
     pub visibility: VisibilityScope,
     pub owner: OwnerRef,

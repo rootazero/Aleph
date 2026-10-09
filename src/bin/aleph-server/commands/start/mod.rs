@@ -8,6 +8,9 @@ use std::sync::Arc;
 
 use crate::cli::Args;
 
+use alephcore::capability::diagnostic_control::{DiagnosticControl, DiagnosticError};
+use alephcore::capability::ownership::OwnershipTree;
+use alephcore::capability::projection_host::{ProjectionHost, ProjectionShutdownOutcome};
 use alephcore::executor::BuiltinToolRegistry;
 use alephcore::gateway::pairing_store::SqlitePairingStore;
 use alephcore::gateway::router::AgentRouter;
@@ -55,6 +58,24 @@ mod bootstrap_factories;
 use bootstrap_factories::build_task_delivery_engine;
 
 // ── (subsystem initializer helpers extracted to start/helpers.rs) ────────────
+
+/// The single startup enablement predicate for capability diagnostics:
+/// only the exact value `1` enables it (no trimming, no case folding).
+fn diagnostics_enabled_from_env(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+fn startup_diagnostics_control(
+    host: Arc<ProjectionHost>,
+    tree: Arc<OwnershipTree>,
+    diagnostics_enabled: bool,
+) -> Result<Option<Arc<DiagnosticControl>>, DiagnosticError> {
+    if !diagnostics_enabled {
+        return Ok(None);
+    }
+
+    DiagnosticControl::new(host, tree).map(Arc::new).map(Some)
+}
 
 // NOTE: `start_server` below is a single ~2270-line monolithic bootstrap
 // sequence. Its hundreds of locals (shared mutable handles, config, server,
@@ -235,7 +256,48 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // owner is configured against the live registry, not a separate one.
     alephcore::tools::markdown_skill::set_markdown_skill_registry(tool_registry_phase2.clone());
 
-    // First production consumer of `ToolHandlerRegistry::subscribe`. Logs every
+    // Read the startup-only switch exactly once before mounting. The
+    // ownership tree is the single runtime owner authority shared by the
+    // facade and host; no request-local or second registry is created.
+    let diagnostics_enabled = diagnostics_enabled_from_env(
+        std::env::var("ALEPH_CAPABILITY_DIAGNOSTICS").ok().as_deref(),
+    );
+    let ownership_tree = Arc::new(OwnershipTree::new());
+    let projection_host = ProjectionHost::mount_with_diagnostics(
+        (*tool_registry_phase2).clone(),
+        Arc::clone(&ownership_tree),
+        diagnostics_enabled,
+    );
+    alephcore::capability::projection_host::set_projection_host(Arc::clone(&projection_host));
+    if !projection_host.wait_until_ready().await {
+        return Err("projection host closed before startup readiness".into());
+    }
+
+    let diagnostics_control = startup_diagnostics_control(
+        Arc::clone(&projection_host),
+        Arc::clone(&ownership_tree),
+        diagnostics_enabled,
+    )
+    .map_err(|error| format!("failed to install capability diagnostics: {error:?}"))?;
+
+    // The host is retained in a process slot (see `projection_host_slot()`)
+    // so it survives every early `?` in the post-mount bootstrap body that
+    // drops this local binding. We do NOT wrap the ~3700-line post-mount
+    // body in a drain macro: doing so honestly would require every fallible
+    // post-mount call to opt in, and silently skipping any one would invert
+    // "all exits drain" into "no exit drains". The honest accounting is
+    // therefore:
+    //
+    // * the orderly AND fatal `run_until_shutdown` funnel below explicitly
+    //   awaits `close_and_await` before any registry-owning scope is
+    //   disposed, so the real production path drains;
+    // * an early `?` before `run_until_shutdown` returns leaves the host
+    //   Arc alive in the slot but the source/applier workers may keep
+    //   running until process exit; this is a known gap to escalate to the
+    //   controller rather than a universal drain framework (per
+    //   task-5-boot-drain-preflight.md).
+
+    // First production consumer of `ToolHandlerRegistry::subscribe`.  Logs every
     // MCP-driven register/unregister so operators can see exactly when
     // remote tools enter or leave the LLM's surface. The channel has a
     // 256-slot ring buffer; slow logger backlog is dropped (Lagged), not
@@ -1468,6 +1530,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         mcp_handle.clone(),
         canvas_store.clone(),
         tool_registry_phase2.clone(),
+        diagnostics_control,
     )
     .await?;
 
@@ -3924,6 +3987,32 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let shutdown_rx = setup_graceful_shutdown(args);
     let run_result = server.run_until_shutdown(shutdown_rx).await;
+    // Close the projection host before any registry-owning scope is disposed.
+    // This funnel is reached by both the orderly shutdown (`shutdown_rx`
+    // fired) and the fatal `run_until_shutdown` error path, so closing here
+    // is the single explicit drain boundary the controller preflight calls
+    // for. The outcome is reported (worker join failures are warn-logged
+    // rather than propagated), so a non-quiescent close does not silently
+    // become `Ok` and the rest of the existing common teardown still runs.
+    match Arc::clone(&projection_host).close_and_await().await {
+        ProjectionShutdownOutcome {
+            source_joined: true,
+            applier_joined: true,
+            ..
+        } => {
+            tracing::debug!("projection host drained before registry-scope dispose");
+        }
+        outcome => {
+            tracing::warn!(
+                source_joined = outcome.source_joined,
+                applier_joined = outcome.applier_joined,
+                source_failed = outcome.source_failed,
+                applier_failed = outcome.applier_failed,
+                "projection host did not quiesce before registry-scope dispose; \
+                 continuing teardown so other shared resources still drain"
+            );
+        }
+    }
     // Dispose the builtin router scope first so it runs before the bash reaper
     // and any other registry-touching teardown. Taking rather than borrowing
     // moves ownership out of the `Option` so a second dispose is impossible.
@@ -4186,6 +4275,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        diagnostics_enabled_from_env, startup_diagnostics_control, OwnershipTree, ProjectionHost,
+    };
+    use std::sync::Arc;
+
     /// `spend::install_policy`/`spend::install_ledger` had **zero production
     /// callers** until this round wired them in here — every mention of
     /// either name anywhere in `src/` was inside `#[cfg(test)]` or a doc
@@ -4368,5 +4462,205 @@ mod tests {
             .filter_map(|seg| seg.split('"').next())
             .map(|suffix| format!("users.{suffix}"))
             .collect()
+    }
+    #[tokio::test]
+    async fn diagnostics_requires_exact_startup_env() {
+        let registry = alephcore::tools::ToolHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(registry, Arc::clone(&tree));
+        let other_tree = Arc::new(OwnershipTree::new());
+
+        for value in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("true"),
+            Some("TRUE"),
+            Some(" 1"),
+            Some("1 "),
+            Some("01"),
+            Some("1\n"),
+        ] {
+            // Drive the REAL production predicate (not a test-local copy of
+            // it): every non-exact value must be decided "disabled".
+            let enabled = diagnostics_enabled_from_env(value);
+            assert!(!enabled, "{value:?} must not enable diagnostics");
+            let control = startup_diagnostics_control(
+                Arc::clone(&host),
+                Arc::clone(&other_tree),
+                enabled,
+            )
+            .expect("disabled values must not construct a mismatched control");
+            assert!(
+                control.is_none(),
+                "diagnostics must be disabled for env value {value:?}"
+            );
+        }
+
+        assert!(diagnostics_enabled_from_env(Some("1")));
+        let control = startup_diagnostics_control(
+            Arc::clone(&host),
+            Arc::clone(&tree),
+            diagnostics_enabled_from_env(Some("1")),
+        )
+            .expect("the canonical host/tree pair must construct successfully")
+            .expect("exactly `1` must enable diagnostics");
+        assert_eq!(
+            control.status().unwrap().lifecycle,
+            alephcore::capability::diagnostic_control::DiagnosticLifecycle::Active
+        );
+
+        let mismatch = match startup_diagnostics_control(Arc::clone(&host), other_tree, true) {
+            Ok(_) => panic!("a second owner authority must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            mismatch,
+            alephcore::capability::diagnostic_control::DiagnosticError::AuthorityMismatch
+        );
+    }
+
+    #[test]
+    fn disabled_startup_does_not_construct_diagnostic_control() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::code_text(
+            &alephcore::utils::source_scan::production_prefix(&src),
+        );
+        let mount = production
+            .find("ProjectionHost::mount_with_diagnostics(")
+            .expect("startup must mount the canonical host with one diagnostics decision");
+        let decision = production
+            .find("let diagnostics_enabled =")
+            .expect("startup must make one exact diagnostics enablement decision");
+        assert!(decision < mount);
+        let registration = production
+            .find("register_agent_handlers(")
+            .expect("startup must pass the decision into agent registration");
+        assert!(decision < registration);
+        let production_with_literals = alephcore::utils::source_scan::code_keeping_literals(
+            &alephcore::utils::source_scan::production_prefix(&src),
+        );
+        assert!(
+            production_with_literals.contains("std::env::var(\"ALEPH_CAPABILITY_DIAGNOSTICS\")")
+        );
+    }
+
+    #[test]
+    fn diagnostics_registration_follows_canonical_mount_readiness() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::code_text(
+            &alephcore::utils::source_scan::production_prefix(&src),
+        );
+        let ready = production
+            .find("wait_until_ready(")
+            .expect("startup must await host readiness");
+        let decision = production
+            .find("let diagnostics_control = startup_diagnostics_control(")
+            .expect("startup must construct diagnostics after readiness");
+        let registration = production
+            .find("register_agent_handlers(")
+            .expect("startup must pass diagnostics into registration");
+        assert!(ready < decision && decision < registration);
+        assert!(production.contains("Arc::clone(&projection_host)"));
+        assert!(production.contains("Arc::clone(&ownership_tree)"));
+
+        let agent_init = include_str!("builder/agent_init/mod.rs").replace('\r', "");
+        let agent_production = alephcore::utils::source_scan::code_text(
+            &alephcore::utils::source_scan::production_prefix(&agent_init),
+        );
+        assert!(agent_production.contains("diagnostics_control"));
+        assert!(agent_production.contains("diagnostics_control,"));
+    }
+
+    /// Task5 H-pre wiring census. The projection host is the live consumer
+    /// of the canonical `ToolHandlerRegistry` and the production requests
+    /// must read the SAME registry the MCP bridge writes. The mount must
+    /// therefore happen AFTER `set_mcp_tool_registry`, on the same Arc, and
+    /// must await the real applied default-snapshot readiness before the
+    /// bootstrap admits any consumer — a publisher-side `enqueue_snapshot`
+    /// masquerading as delivery would silently boot a request loop that
+    /// reads the registry's OWN state rather than a host-applied cut.
+    #[test]
+    fn boot_mounts_projection_host_from_canonical_registry_and_awaits_readiness() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::production_prefix(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] split matched nothing — this test would be \
+             reading its own source"
+        );
+        let production = alephcore::utils::source_scan::code_text(&production);
+
+        for call in [
+            "ProjectionHost::mount_with_diagnostics(",
+            "set_projection_host(",
+            "wait_until_ready(",
+        ] {
+            assert!(
+                production.contains(call),
+                "start/mod.rs must contain a production call to {call} — \
+                 without it the projection host is not the runtime consumer \
+                 of the canonical registry, and run-loop reads of the host \
+                 either never see MCP-bridged tools or read raw publisher state"
+            );
+        }
+
+        // Ordering: the mount must follow the canonical registry install,
+        // so the registry the host subscribes to is the same one
+        // `set_mcp_tool_registry` just exposed to the run loop.
+        let install_at = production
+            .find("set_mcp_tool_registry(")
+            .expect("set_mcp_tool_registry call must exist (sibling census)");
+        let mount_at = production
+            .find("ProjectionHost::mount_with_diagnostics(")
+            .expect("ProjectionHost::mount_with_diagnostics call must exist (asserted above)");
+        assert!(
+            mount_at > install_at,
+            "ProjectionHost::mount must be installed AFTER set_mcp_tool_registry — \
+             mounting on a different registry gives the run loop and the host \
+             two authorities, which is the duplicate-authority shape Task5 \
+             explicitly forbids"
+        );
+    }
+
+    /// Task5 shutdown census. The host must be closed BEFORE
+    /// `builtin_registration_scope.take()` runs, because the scope's
+    /// dispose drops the registry-owning scope and any host worker still
+    /// iterating would race it. The same funnel is reached by both the
+    /// orderly shutdown and a fatal `run_until_shutdown` error, so a
+    /// single placement there is sufficient. The host is retained in a
+    /// process slot so a missing close does not crash, but it would leak
+    /// the worker tasks for the rest of the process — this guard exists
+    /// so that silent removal of the close call shows up red.
+    #[test]
+    fn boot_closes_projection_host_before_registry_scope_dispose() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::production_prefix(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] split matched nothing"
+        );
+        let production = alephcore::utils::source_scan::code_text(&production);
+
+        let close_at = production
+            .find("close_and_await(")
+            .expect(
+                "start/mod.rs must call close_and_await in production — \
+                 the host retains its Arc in a process slot, so without \
+                 an explicit close the orderly/fatal shutdown funnel leaks \
+                 the source and applier workers for the rest of the process",
+            );
+        let scope_take_at = production
+            .find("builtin_registration_scope.take()")
+            .expect(
+                "builtin_registration_scope.take() must exist in production — \
+                 the sibling builtin-scope dispose census depends on it",
+            );
+        assert!(
+            close_at < scope_take_at,
+            "close_and_await must run BEFORE builtin_registration_scope.take() — \
+             the scope's dispose drops registry-owning state, and a host \
+             worker still iterating under it would race the disposal"
+        );
     }
 }

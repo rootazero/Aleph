@@ -501,7 +501,7 @@ fn push_len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(bytes);
 }
 
-fn canonicalize_json(value: &serde_json::Value, out: &mut Vec<u8>) {
+pub(crate) fn canonicalize_json(value: &serde_json::Value, out: &mut Vec<u8>) {
     match value {
         serde_json::Value::Null => out.extend_from_slice(b"null"),
         serde_json::Value::Bool(value) => {

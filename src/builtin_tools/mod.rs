@@ -40,6 +40,7 @@ pub mod bash_exec;
 // registry. Re-declaring it here would just be a duplicate declaration.
 pub mod browser_tools;
 pub mod canvas;
+pub mod capability_projection_diagnostics;
 pub mod channel_directory;
 pub mod channel_manage;
 pub mod channel_message;

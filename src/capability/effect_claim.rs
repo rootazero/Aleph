@@ -100,6 +100,32 @@ mod tests {
     #[test] fn no_claimed_invoking() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Invoking)]).terminal, EffectClaimState::Unknown); }
     #[test] fn duplicate_active_claim() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Claimed),event(EffectClaimState::Claimed)]).terminal, EffectClaimState::Unknown); }
     #[test] fn post_terminal_is_unknown() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Claimed),event(EffectClaimState::Invoking),event(EffectClaimState::Failed),event(EffectClaimState::Succeeded)]).terminal, EffectClaimState::Unknown); }
+    #[test]
+    fn duplicate_claim_and_illegal_migration_remain_fail_closed() {
+        // Already-pinned semantics must not regress when producer integration
+        // lands later. Duplicate active claim and terminal-then-migrate both
+        // close to Unknown — never "ignore", never a second-idempotent result.
+        assert_eq!(
+            reconcile_effect_claim(&[
+                event(EffectClaimState::Prepared),
+                event(EffectClaimState::Claimed),
+                event(EffectClaimState::Claimed),
+            ])
+            .terminal,
+            EffectClaimState::Unknown
+        );
+        assert_eq!(
+            reconcile_effect_claim(&[
+                event(EffectClaimState::Prepared),
+                event(EffectClaimState::Claimed),
+                event(EffectClaimState::Invoking),
+                event(EffectClaimState::Succeeded),
+                event(EffectClaimState::Succeeded),
+            ])
+            .terminal,
+            EffectClaimState::Unknown
+        );
+    }
     #[test] fn identity_mismatch_is_unknown() { let mut changed=event(EffectClaimState::Claimed); changed.owner="other".into(); assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),changed]).terminal, EffectClaimState::Unknown); }
     #[test] fn missing_memo_is_fail_closed() { assert_eq!(reconcile_effect_claim(&[]).terminal, EffectClaimState::Unknown); assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Unknown)]).terminal, EffectClaimState::Unknown); }
     #[test] fn failed_claim_is_not_replayed() { assert_eq!(reconcile_effect_claim(&[event(EffectClaimState::Prepared),event(EffectClaimState::Claimed),event(EffectClaimState::Invoking),event(EffectClaimState::Failed)]).terminal, EffectClaimState::Failed); }

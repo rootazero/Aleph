@@ -19,9 +19,14 @@ mod definitions;
 // it is gated here rather than carrying a `#[cfg(test)]` inside the file —
 // an attribute above a `mod` gates whatever item follows it, and inserting a
 // new one between the attribute and its intended target is a documented way
-// to silently move the gate.
+// to silently move the gate. `pub(crate)` so cross-crate test consumers
+// (notably `security::dangerous_tools::tests
+// ::every_entry_names_a_real_tool`, which pins every denylist entry against
+// a real tool) can call `advertised_tools()` without rebuilding the
+// registry; the test-only `#[cfg(test)]` gate keeps it out of the runtime
+// surface entirely.
 #[cfg(test)]
-mod dispatchable;
+pub(crate) mod dispatchable;
 mod groups;
 mod registry;
 
@@ -341,6 +346,91 @@ mod tests {
                 .await;
 
             assert!(result.is_ok());
+        }
+    }
+
+    /// Runtime (not source-scan) proof of the diagnostics enablement gate:
+    /// the SAME `BuiltinToolRegistry::with_config` builder production uses,
+    /// driven with `diagnostics_control: None` vs `Some(..)`, and the effect
+    /// asserted on every registry-owned surface — runtime tool map,
+    /// advertised schema, the `unified_tools()` iterator the provider-facing
+    /// tool list is built from, and the dispatch result.
+    mod diagnostics_gate_runtime_tests {
+        use super::*;
+        use crate::capability::diagnostic_control::DiagnosticControl;
+        use crate::capability::ownership::OwnershipTree;
+        use crate::capability::projection_host::ProjectionHost;
+
+        const NAME: &str = "capability_projection_diagnostics";
+
+        fn status_args() -> serde_json::Value {
+            serde_json::json!({ "operation": "status" })
+        }
+
+        #[tokio::test]
+        async fn disabled_registry_has_no_diagnostics_surface_and_refuses_dispatch() {
+            let _home = crate::utils::paths::IsolatedAlephHome::new();
+            let config = BuiltinToolConfig {
+                diagnostics_control: None,
+                ..Default::default()
+            };
+            let registry = BuiltinToolRegistry::with_config(config).await.unwrap();
+
+            assert!(registry.get_tool(NAME).is_none(), "absent from runtime map");
+            assert!(!registry.has_tool(NAME), "has_tool must be false");
+            assert!(registry.get_tool_schema(NAME).is_none(), "no advertised schema");
+            assert!(
+                registry.unified_tools().all(|t| t.name != NAME),
+                "absent from the provider-facing tool iterator"
+            );
+            // Sanity: the iterator is not vacuously empty.
+            assert!(registry.unified_tools().any(|t| t.name == "file_ops"));
+
+            let err = registry
+                .execute_tool(NAME, status_args())
+                .await
+                .expect_err("disabled dispatch must fail closed");
+            assert!(
+                err.to_string().contains("not available"),
+                "disabled dispatch must be refused by the enablement gate, got: {err}"
+            );
+        }
+
+        #[tokio::test]
+        async fn enabled_registry_advertises_diagnostics_and_dispatch_reaches_identity_gate() {
+            let _home = crate::utils::paths::IsolatedAlephHome::new();
+            let tree = Arc::new(OwnershipTree::new());
+            let host = ProjectionHost::mount_with_diagnostics(
+                crate::tools::ToolHandlerRegistry::new(),
+                Arc::clone(&tree),
+                true,
+            );
+            let control = Arc::new(DiagnosticControl::new(host, tree).unwrap());
+            let config = BuiltinToolConfig {
+                diagnostics_control: Some(control),
+                ..Default::default()
+            };
+            let registry = BuiltinToolRegistry::with_config(config).await.unwrap();
+
+            assert!(registry.get_tool(NAME).is_some(), "present in runtime map");
+            assert!(registry.get_tool_schema(NAME).is_some(), "schema advertised");
+            assert!(registry.unified_tools().any(|t| t.name == NAME));
+
+            // No ambient operator/loopback/conn identity in this test, so the
+            // handler-local three-part check must refuse — but it must be the
+            // HANDLER refusing, not the disabled-gate "not available" refusal.
+            let err = registry
+                .execute_tool(NAME, status_args())
+                .await
+                .expect_err("identity-less dispatch must still fail closed");
+            assert!(
+                !err.to_string().contains("not available"),
+                "enabled dispatch must pass the enablement gate, got: {err}"
+            );
+            assert!(
+                err.to_string().contains("operator"),
+                "refusal must come from the handler-local identity gate, got: {err}"
+            );
         }
     }
 }

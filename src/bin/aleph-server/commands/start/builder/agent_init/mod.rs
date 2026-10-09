@@ -178,6 +178,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // observation capabilities through it; they are not executor-registry
     // tools, so the raw `BuiltinToolRegistry` cannot answer for them.
     canonical_tools: Arc<alephcore::tools::ToolHandlerRegistry>,
+    // Startup-scoped diagnostics over the already-mounted canonical host/tree.
+    diagnostics_control: Option<Arc<alephcore::capability::diagnostic_control::DiagnosticControl>>,
 ) -> alephcore::Result<AgentHandlersResult> {
     // Assigned in both the real-execution branch and the simulated branch
     // below; deferred init keeps the dead initial value out (and lets the
@@ -615,6 +617,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             hub_mcp_handle,
             // The gateway's own canvas store Arc — see the parameter doc.
             canvas_store: canvas_store.clone(),
+            diagnostics_control,
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await?;

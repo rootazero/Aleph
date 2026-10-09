@@ -385,6 +385,16 @@ pub struct BuiltinToolRegistry {
     pub(crate) recall_context_db: Option<crate::memory::store::MemoryBackend>,
     /// Memory backend for the `memory_trace` tool (evidence-chain walk).
     pub(crate) memory_trace_db: Option<crate::memory::store::MemoryBackend>,
+    /// Capability-runtime diagnostic control surface for
+    /// `capability_projection_diagnostics` (enablement gate). Mirrors the
+    /// `BuiltinToolConfig::diagnostics_control` slot: when `None` the
+    /// tool is not advertised, not dispatched, and the hold/timer
+    /// state is empty. The wire-level operator + loopback + conn_id
+    /// check lives in the tool module itself; this handle only
+    /// answers "is the runtime willing to dispatch this tool at all".
+    pub(crate) diagnostics_control: Option<
+        crate::sync_primitives::Arc<crate::capability::diagnostic_control::DiagnosticControl>,
+    >,
     /// Tool metadata for lookup
     pub(crate) tools: HashMap<String, UnifiedTool>,
 }

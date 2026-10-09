@@ -114,6 +114,20 @@ const OPERATOR_TOOLS: &[&str] = &[
     // finding one surface over. `"member"` and `"guest"` both fail
     // `turn_context::role_is_operator`, so this one entry covers both.
     "workspace_manage",
+    // The capability-projection diagnostics tool. The surface is
+    // unusual: it answers with a live snapshot of the capability host /
+    // tree (so it is a read of the same Aleph state `runtime_manage`
+    // rewrites), and its write operations are the most invasive the
+    // toolset exposes — a `Hold` tears down a source plane for a bounded
+    // window, `RevokeTool` removes a tool from the live tree, `Close`
+    // shuts the host. None of that is chat-tier reach. The handler-local
+    // three-part identity check (operator + loopback + conn_id) in
+    // `execute_capability_projection_diagnostics` is the only authority
+    // on top of this gate, and ALEPH_GATEWAY_TOOLS_ALLOW cannot bypass
+    // it — a read-only denylist entry without this operator entry would
+    // reopen exactly that finding one surface over, so both halves
+    // travel together.
+    "capability_projection_diagnostics",
     // The tool face of the wholesale-gated `plugin.` / `plugins.` RPC family
     // (`method_admin::ADMIN_PREFIXES`), and exactly the same shape as the
     // `workspace_manage` entry above. `plugin_manage` became dispatchable on
@@ -364,6 +378,27 @@ mod tests {
             unique.len(),
             OPERATOR_TOOLS.len(),
             "OPERATOR_TOOLS must not list a tool twice"
+        );
+    }
+
+    #[test]
+    fn diagnostics_is_in_operator_tools() {
+        // The capability_projection_diagnostics tool is wired only when
+        // `ALEPH_CAPABILITY_DIAGNOSTICS=1` at startup, but the OPERATOR
+        // gate is unconditional: even when the tool is *advertised*, it
+        // must never be reachable from a chat-tier caller. The
+        // handler-local three-part check (operator + loopback + conn_id)
+        // is the *inner* guard; this entry is the *outer* guard and the
+        // first line a chat-tier path crosses. Splitting the two guards
+        // (one in OPERATOR_TOOLS, one in DANGEROUS_TOOLS) is the same
+        // shape as the plugin_manage / workspace_manage entries above
+        // and exists for the same reason: any one guard missing
+        // re-opens the closed capability-runtime control surface to
+        // exactly the path that tripwire's `findings/4` calls out.
+        assert!(
+            tool_requires_operator("capability_projection_diagnostics"),
+            "capability_projection_diagnostics must require the operator role; \
+             the inner three-part check only runs if the outer gate passes"
         );
     }
 
