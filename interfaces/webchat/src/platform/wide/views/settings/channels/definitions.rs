@@ -1,4 +1,4 @@
-// Channel definition data model and static definitions for all 14 messaging channels.
+// Channel definition data model and static definitions for all 15 messaging channels.
 //
 // This module provides the `ChannelDefinition` type describing each channel's metadata,
 // brand identity, and configuration fields. The definitions drive the generic settings
@@ -68,6 +68,8 @@ const ICON_IMESSAGE: &str =
     r#"<path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>"#;
 
 const ICON_SLACK: &str = r#"<path d="M14.5 2c-.83 0-1.5.67-1.5 1.5v5c0 .83.67 1.5 1.5 1.5h5c.83 0 1.5-.67 1.5-1.5S20.33 7 19.5 7H16V3.5c0-.83-.67-1.5-1.5-1.5zm-5 0C8.67 2 8 2.67 8 3.5V7H4.5C3.67 7 3 7.67 3 8.5S3.67 10 4.5 10h5c.83 0 1.5-.67 1.5-1.5v-5C11 2.67 10.33 2 9.5 2zm5 12c-.83 0-1.5.67-1.5 1.5V17h-3.5c-.83 0-1.5.67-1.5 1.5s.67 1.5 1.5 1.5h5c.83 0 1.5-.67 1.5-1.5v-5c0-.83-.67-1.5-1.5-1.5zm-10 0c-.83 0-1.5.67-1.5 1.5s.67 1.5 1.5 1.5H8v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-5c0-.83-.67-1.5-1.5-1.5h-5z"/>"#;
+
+const ICON_SMS: &str = r#"<path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM7 9h10v2H7V9zm6 5H7v-2h6v2zm4-6H7V6h10v2z"/>"#;
 
 const ICON_EMAIL: &str =
     r#"<rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22,7 12,13 2,7"/>"#;
@@ -330,6 +332,69 @@ static IMESSAGE_FIELDS: &[FieldDef] = &[
         help: "Group chats allowed to interact (empty = all)",
         required: false,
         default_value: "",
+        options: &[],
+    },
+];
+
+static SMS_FIELDS: &[FieldDef] = &[
+    FieldDef {
+        key: "region",
+        label: "Region",
+        kind: FieldKind::Text,
+        placeholder: "CN",
+        help: "ISO 3166-1 alpha-2 region of the service number. Always explicit: Aleph never infers it from a phone number prefix",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "service_address",
+        label: "Service Number",
+        kind: FieldKind::Text,
+        placeholder: "+8613800000000",
+        help: "Your SMS service number in strict E.164 form (leading +, 8-15 digits)",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "binding_ref",
+        label: "Relay Binding",
+        kind: FieldKind::Text,
+        placeholder: "core-binding-1",
+        help: "Reference to the telecom Relay binding that carries this number. Provider credentials are never entered here",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "inbound_enabled",
+        label: "Receive SMS",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Turn received SMS into agent messages",
+        required: false,
+        default_value: "true",
+        options: &[],
+    },
+    FieldDef {
+        key: "outbound_enabled",
+        label: "Send SMS",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Allow the agent to request outbound SMS (each send still needs approval)",
+        required: false,
+        default_value: "true",
+        options: &[],
+    },
+    FieldDef {
+        key: "max_segments",
+        label: "Max Segments",
+        kind: FieldKind::Number { min: 1, max: 10 },
+        placeholder: "3",
+        help: "Longest outbound message, in SMS segments (long messages are billed per segment)",
+        required: false,
+        default_value: "3",
         options: &[],
     },
 ];
@@ -1486,6 +1551,17 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         config_section: "channels.qq",
         fields: QQ_FIELDS,
         docs_url: "https://bot.q.qq.com/wiki/",
+    },
+    // SMS
+    ChannelDefinition {
+        id: "sms",
+        name: "SMS",
+        description: "Text messages through a thin telecom Relay (experimental; needs a Relay binding, no region or line is guaranteed to work)",
+        icon_svg: ICON_SMS,
+        brand_color: "#34A853",
+        config_section: "channels.sms",
+        fields: SMS_FIELDS,
+        docs_url: "https://www.itu.int/rec/T-REC-E.164",
     },
 ];
 

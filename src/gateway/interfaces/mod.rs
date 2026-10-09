@@ -22,6 +22,7 @@
 //! - **Feishu**: Feishu/Lark Bot WebSocket + REST API integration
 //! - **LINE**: LINE Messaging API webhook + REST API integration
 //! - **`WeChat`**: `WeChat` iLink Bot API integration
+//! - **SMS**: SMS through the thin telecom Relay (unavailable until a Relay transport is attached)
 
 pub mod cli;
 pub mod plugin;
@@ -44,6 +45,7 @@ pub mod nostr;
 pub mod qq;
 pub mod signal;
 pub mod slack;
+pub mod sms;
 pub mod telegram;
 pub mod webhook;
 pub mod whatsapp;
@@ -67,6 +69,7 @@ pub use nostr::{NostrChannel, NostrChannelFactory, NostrConfig};
 pub use qq::{QQChannel, QQChannelFactory, QQConfig, QQDmPolicy, QQGroupPolicy};
 pub use signal::{SignalChannel, SignalChannelFactory, SignalConfig};
 pub use slack::{SlackChannel, SlackChannelFactory, SlackConfig};
+pub use sms::{SmsChannel, SmsChannelFactory, SmsConfig, SmsTransport};
 pub use telegram::{TelegramChannel, TelegramChannelFactory, TelegramConfig};
 pub use webhook::{WebhookChannel, WebhookChannelConfig, WebhookChannelFactory};
 pub use wechat::{WeChatChannel, WeChatChannelFactory, WeChatConfig};
@@ -125,6 +128,7 @@ pub fn register_channel_plugins() {
     register_plain_channel!("nostr", NostrChannelFactory);
     register_plain_channel!("signal", SignalChannelFactory);
     register_plain_channel!("slack", SlackChannelFactory);
+    register_plain_channel!("sms", SmsChannelFactory);
     register_plain_channel!("webhook", WebhookChannelFactory);
     register_plain_channel!("xmpp", XmppChannelFactory);
 }

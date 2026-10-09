@@ -55,6 +55,7 @@ pub const CONFIGURABLE_CHANNEL_TYPES: &[&str] = &[
     "qq",
     "signal",
     "slack",
+    "sms",
     "telegram",
     "webhook",
     "wechat",
