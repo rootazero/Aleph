@@ -88,9 +88,9 @@ impl IMessageChannel {
                 typing_indicator: false,
                 read_receipts: false,
                 rich_text: false,
-                polls: false,        // AppleScript has no native poll API
-                group_icons: false,  // AppleScript group-chat API cannot set icon
-                max_message_length: 20000,              // Approximate limit
+                polls: false,              // AppleScript has no native poll API
+                group_icons: false,        // AppleScript group-chat API cannot set icon
+                max_message_length: 20000, // Approximate limit
                 max_attachment_size: 100 * 1024 * 1024, // 100 MB
                 stream_protocol: Default::default(),
             },

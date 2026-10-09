@@ -26,19 +26,19 @@ pub mod usage_fold;
 
 pub use actor::{ActorCommand, SessionActor};
 pub use boundary_repair::{
-    DegradeNote, RepairReport, boundary_repair_text, boundary_repair_text_with_policy,
-    repair_boundary, repair_boundary_with_policy, repairs_for, repairs_for_with_policy,
+    boundary_repair_text, boundary_repair_text_with_policy, repair_boundary,
+    repair_boundary_with_policy, repairs_for, repairs_for_with_policy, DegradeNote, RepairReport,
 };
 pub use events::{
     ApprovalSource, ErrorKind, EventSeq, MessageContent, SessionEvent, SessionEventRecord,
     Timestamp, ToolOutput, TurnId, TurnTrigger,
 };
 pub use in_process::InProcessActorSessionService;
-pub use marker_balance::{RetireOutcome, open_run_after_retire, retire_from_and_close_run};
+pub use marker_balance::{open_run_after_retire, retire_from_and_close_run, RetireOutcome};
 pub use projection::project_row;
 pub use reduction::{
-    DanglingCall, DanglingProvenance, LogContradiction, RunDisposition, RunProgress, RunReduction,
-    RunStartFacts, reduce_disposition, reduce_run, validate_slice,
+    reduce_disposition, reduce_run, validate_slice, DanglingCall, DanglingProvenance,
+    LogContradiction, RunDisposition, RunProgress, RunReduction, RunStartFacts,
 };
 pub use service::{SessionError, SessionHandle, SessionId, SessionService};
 pub use store::SessionEventStore;

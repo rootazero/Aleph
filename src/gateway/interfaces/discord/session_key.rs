@@ -183,6 +183,9 @@ mod tests {
 
     #[test]
     fn resolve_kind_guild_when_only_guild_set() {
-        assert_eq!(resolve_kind(&guild_ctx(1, 7, 99)), ChannelKind::GuildChannel);
+        assert_eq!(
+            resolve_kind(&guild_ctx(1, 7, 99)),
+            ChannelKind::GuildChannel
+        );
     }
 }

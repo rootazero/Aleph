@@ -91,7 +91,9 @@ async fn misaligned_intents_and_missing_application_id_both_surfaced() {
     let findings = check.run(Posture::Inspect).await;
     assert_eq!(findings.len(), 1);
     assert!(
-        findings[0].detail.contains("guild_messages is on but message_content is off"),
+        findings[0]
+            .detail
+            .contains("guild_messages is on but message_content is off"),
         "{:?}",
         findings[0]
     );
@@ -108,9 +110,9 @@ async fn misaligned_intents_and_missing_application_id_both_surfaced() {
 /// "config is fine" from "config could not be read".
 #[tokio::test]
 async fn missing_file_yields_unknown_tag() {
-    let check = DiscordChannelHealthCheck::new(
-        std::path::PathBuf::from("/nonexistent/path/discord-config.toml"),
-    );
+    let check = DiscordChannelHealthCheck::new(std::path::PathBuf::from(
+        "/nonexistent/path/discord-config.toml",
+    ));
     let findings = check.run(Posture::Inspect).await;
     assert_eq!(findings.len(), 1);
     assert!(findings[0].detail.contains("Could not load"));

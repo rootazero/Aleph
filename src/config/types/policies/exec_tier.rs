@@ -91,6 +91,18 @@ impl<'a> ToolFacts<'a> {
                 || crate::security::dangerous_tools::is_confirmation_gated(name),
         }
     }
+
+    /// Build facts from an already-captured capability declaration. Unlike
+    /// [`Self::for_tool`], this never supplements the declaration with a
+    /// name-keyed builtin table: replacement generations own their metadata.
+    #[must_use]
+    pub fn from_declared(name: &'a str, declared: DeclaredFacts) -> Self {
+        Self {
+            name,
+            idempotent: declared.idempotent,
+            requires_approval: declared.requires_confirmation,
+        }
+    }
 }
 
 /// `file_ops` operations that destroy or relocate data irreversibly.

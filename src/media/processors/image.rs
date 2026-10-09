@@ -88,9 +88,15 @@ impl MediaProvider for ImageMediaProvider {
         // `UnsupportedFormat`. Mirror `to_vision_format` here so the declared
         // surface matches the actual one.
         vec![
-            MediaType::Image { format: MediaImageFormat::Png },
-            MediaType::Image { format: MediaImageFormat::Jpeg },
-            MediaType::Image { format: MediaImageFormat::WebP },
+            MediaType::Image {
+                format: MediaImageFormat::Png,
+            },
+            MediaType::Image {
+                format: MediaImageFormat::Jpeg,
+            },
+            MediaType::Image {
+                format: MediaImageFormat::WebP,
+            },
         ]
     }
 

@@ -330,12 +330,10 @@ const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
 /// the `is_shell_safe` call uses a single `iter().all()` and they are
 /// rejected by omission.
 const SAFE_CHARS: &[char] = &[
-    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
-    'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
-    'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-    ' ', '/', '.', '_', '-', ':', '"', '\'', '=', '\\',
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
+    't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
+    'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4',
+    '5', '6', '7', '8', '9', ' ', '/', '.', '_', '-', ':', '"', '\'', '=', '\\',
 ];
 
 #[must_use]
@@ -718,14 +716,11 @@ mod tests {
         // // needs, so write it long-form and sort it lexicographically
         // instead of by category — a reviewer eyeballs it as a set of glyphs.
         let expected: &[char] = &[
-            ' ', '"', '\'', '/', '\\', ':', '=', '.', '-', '_',
-            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-            'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J',
-            'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
-            'U', 'V', 'W', 'X', 'Y', 'Z',
-            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
-            'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't',
-            'u', 'v', 'w', 'x', 'y', 'z',
+            ' ', '"', '\'', '/', '\\', ':', '=', '.', '-', '_', '0', '1', '2', '3', '4', '5', '6',
+            '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N',
+            'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e',
+            'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v',
+            'w', 'x', 'y', 'z',
         ];
         assert_eq!(SAFE_CHARS, expected);
     }
@@ -737,16 +732,16 @@ mod tests {
         assert!(is_shell_safe("cargo test --quiet"));
         // Rejected: shell metacharacters, newlines, NUL.
         for bad in [
-            "rm -rf /; echo done",   // `;` is not in the allow-list
-            "echo `whoami`",         // backtick
-            "echo $(cmd)",            // curl
-            "echo hi\nrm -rf /",     // newline
-            "echo hi\rdone",          // CR
-            "echo hi>file",           // redirect
-            "echo hi<file",           // redirect
-            "echo hi|grep h",         // pipe
-            "echo hi&&rm",            // control
-            "",                       // empty is allowed — nothing to forbid
+            "rm -rf /; echo done", // `;` is not in the allow-list
+            "echo `whoami`",       // backtick
+            "echo $(cmd)",         // curl
+            "echo hi\nrm -rf /",   // newline
+            "echo hi\rdone",       // CR
+            "echo hi>file",        // redirect
+            "echo hi<file",        // redirect
+            "echo hi|grep h",      // pipe
+            "echo hi&&rm",         // control
+            "",                    // empty is allowed — nothing to forbid
         ] {
             assert!(!is_shell_safe(bad), "{bad:?} should be rejected");
         }

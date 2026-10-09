@@ -51,5 +51,3 @@ fn replace_swaps_atomically() {
     assert_eq!(reg.resolve("a").unwrap().agent, "coder");
     assert_eq!(reg.resolve("b").unwrap().agent, "explore");
 }
-
-

@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::agents::AgentDef;
+use crate::builtin_tools::terminal::capabilities::is_tool_allowed_with_legacy_terminal_alias;
 use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
@@ -166,7 +167,7 @@ pub async fn handle_effective(
         Some(agent_def) => {
             let kept: Vec<UnifiedTool> = tools
                 .into_iter()
-                .filter(|t| agent_def.is_tool_allowed(&t.name))
+                .filter(|t| is_tool_allowed_with_legacy_terminal_alias(agent_def, &t.name))
                 .collect();
             (kept, Some(agent_def.id.clone()))
         }
@@ -387,5 +388,151 @@ mod tests {
         let tools = vec![make_tool("a", "x", ToolSource::Native)];
         let filtered = filter_by_source(tools, Some("mcp:nonexistent"));
         assert!(filtered.is_empty());
+    }
+
+    // ---------------------------------------------------------------------
+    // A4 compat — `tools.effective` must answer a legacy `terminal` policy
+    // entry exactly as `tools.invoke` does for the five observation verbs.
+    // ---------------------------------------------------------------------
+
+    const OBSERVATION_FIVE: [&str; 5] = ["list", "read", "status", "wait", "explain"];
+
+    /// Run the real `tools.effective` handler over a catalog holding the six
+    /// canonical observation tools plus `file_read`, `bash` and `subagent`,
+    /// and return the visible tool names (sorted).
+    async fn effective_names(agent: &AgentDef) -> Vec<String> {
+        let catalog = ToolCatalog::new();
+        let canonical = OBSERVATION_FIVE
+            .iter()
+            .chain(std::iter::once(&"attach"))
+            .map(|verb| format!("terminal_sessions_{verb}"));
+        let others = ["file_read", "bash", "subagent"].map(String::from);
+        for name in canonical.chain(others) {
+            catalog
+                .register_with_conflict_resolution(make_tool(&name, "fixture", ToolSource::Builtin))
+                .await;
+        }
+        let req = JsonRpcRequest::with_id("tools.effective", None, serde_json::json!(1));
+        let resp = handle_effective(req, &catalog, Some(agent)).await;
+        assert!(resp.is_success(), "tools.effective must succeed: {resp:?}");
+        let result: serde_json::Value = resp.result.expect("success carries a result");
+        let mut names: Vec<String> = result["groups"]
+            .as_array()
+            .expect("groups array")
+            .iter()
+            .flat_map(|g| g["tools"].as_array().expect("tools array").iter())
+            .map(|t| t["name"].as_str().expect("tool name").to_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn terminal_names(visible: &[String]) -> Vec<String> {
+        visible
+            .iter()
+            .filter(|n| n.starts_with("terminal_sessions_"))
+            .cloned()
+            .collect()
+    }
+
+    fn canonical_five() -> Vec<String> {
+        let mut v: Vec<String> = OBSERVATION_FIVE
+            .iter()
+            .map(|a| format!("terminal_sessions_{a}"))
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn primary() -> AgentDef {
+        AgentDef::new("a", crate::agents::AgentMode::Primary)
+    }
+
+    /// `allowed:[*], denied:[terminal]` hides the five legacy-aliased
+    /// observation tools but never `attach` (it had no legacy alias).
+    #[tokio::test]
+    async fn terminal_capability_effective_legacy_deny_hides_the_five_not_attach() {
+        let agent = primary()
+            .with_allowed_tools(vec!["*".into()])
+            .with_denied_tools(vec!["terminal".into()]);
+        let visible = effective_names(&agent).await;
+        assert_eq!(
+            terminal_names(&visible),
+            vec!["terminal_sessions_attach".to_string()],
+            "legacy deny must hide exactly the five; visible = {visible:?}"
+        );
+        assert!(visible.contains(&"file_read".to_string()));
+    }
+
+    /// `allowed:[terminal]` shows the five but does not grant `attach`.
+    #[tokio::test]
+    async fn terminal_capability_effective_legacy_allow_shows_the_five_not_attach() {
+        let agent = primary().with_allowed_tools(vec!["terminal".into()]);
+        let visible = effective_names(&agent).await;
+        assert_eq!(terminal_names(&visible), canonical_five(), "{visible:?}");
+    }
+
+    /// An explicit canonical deny beats a legacy allow.
+    #[tokio::test]
+    async fn terminal_capability_effective_canonical_deny_beats_legacy_allow() {
+        let agent = primary()
+            .with_allowed_tools(vec!["terminal".into()])
+            .with_denied_tools(vec!["terminal_sessions_wait".into()]);
+        let visible = effective_names(&agent).await;
+        let mut expected = canonical_five();
+        expected.retain(|n| n != "terminal_sessions_wait");
+        assert_eq!(terminal_names(&visible), expected, "{visible:?}");
+    }
+
+    /// A legacy deny beats a canonical allow (deny-first is preserved).
+    #[tokio::test]
+    async fn terminal_capability_effective_legacy_deny_beats_canonical_allow() {
+        let mut allowed: Vec<String> = canonical_five();
+        allowed.push("terminal_sessions_attach".into());
+        let agent = primary()
+            .with_allowed_tools(allowed)
+            .with_denied_tools(vec!["terminal".into()]);
+        let visible = effective_names(&agent).await;
+        assert_eq!(
+            terminal_names(&visible),
+            vec!["terminal_sessions_attach".to_string()],
+            "{visible:?}"
+        );
+    }
+
+    /// Non-regression: other tools, named sets and the sub-agent recursion
+    /// guard keep their existing answers, and `terminal` entries never leak
+    /// into non-terminal names.
+    #[tokio::test]
+    async fn terminal_capability_effective_other_policy_unchanged() {
+        let agent = primary()
+            .with_allowed_tool_sets(vec!["READ_ONLY".into()])
+            .with_allowed_tools(vec!["terminal".into()])
+            .with_denied_tools(vec!["bash".into()]);
+        let visible = effective_names(&agent).await;
+        assert!(visible.contains(&"file_read".to_string()), "named set");
+        assert!(!visible.contains(&"bash".to_string()));
+        assert!(!visible.contains(&"subagent".to_string()));
+
+        let sub = AgentDef::new("s", crate::agents::AgentMode::SubAgent)
+            .with_allowed_tools(vec!["*".into(), "terminal".into()]);
+        let visible = effective_names(&sub).await;
+        assert!(
+            !visible.contains(&"subagent".to_string()),
+            "recursion guard overrides the wildcard"
+        );
+        assert_eq!(visible.len(), 8, "everything else is visible: {visible:?}");
+    }
+
+    /// The compatibility answer is derived per call; the persisted policy is
+    /// not rewritten (serialized bytes identical before and after).
+    #[tokio::test]
+    async fn terminal_capability_effective_does_not_rewrite_the_persisted_policy() {
+        let agent = primary()
+            .with_allowed_tools(vec!["*".into(), "terminal".into()])
+            .with_denied_tools(vec!["terminal".into()]);
+        let before = serde_json::to_vec(&agent).unwrap();
+        let _ = effective_names(&agent).await;
+        assert_eq!(serde_json::to_vec(&agent).unwrap(), before);
     }
 }

@@ -252,18 +252,21 @@ effect**, which is that table's expiry check rather than a second copy of it.
 
 Observes the PTY sessions the caller owns — the same data `pty.*` and `runtime.*` gate
 operator-only on their RPC and event faces, so this tool is gated the same way
-(`method_authz::OPERATOR_TOOLS` **and** an inline re-check in `builtin_tools/terminal.rs`).
+(`method_authz::OPERATOR_TOOLS` **and** `builtin_tools/terminal/capabilities.rs::require_operator_caller`).
+六个 canonical handlers 从 registry 派生 schema/catalog；旧 `terminal {action}` 仅在 `tools.invoke` ingress 转换后走 scoped dispatch，不注册第二个身份。 / Six canonical handlers own their schemas and catalog metadata; the legacy RPC shape is ingress-only compatibility, not a second callable.
+`tools.invoke` 调 canonical `terminal_sessions_*` 时，经每请求一个 `ScopedToolService` 并 opt-in `ResultTransport::StructuredRpc`：成功值保持完整类型化 JSON，仅旁路面向模型的 ingress 清洗 / 结果预算 / offload / flatten / prompt tally；captured-entry 与 proof 闸及 metadata hoist 不变；未新增 transport 大小上限。详见 [TERMINAL_RUNTIME.md §3.3](TERMINAL_RUNTIME.md)。 / `tools.invoke` dispatches canonical terminal tools through a per-request `ScopedToolService` opted into `StructuredRpc`: the success value stays full typed JSON; only model-facing cleaning/budget/offload/flatten/prompt tally are bypassed; gates and metadata hoists are unchanged; no transport-size cap.
 **No write verb**: a PTY passes neither `[sandbox.command_policy]` nor the exec tier, so typing
 into one would hand the model a shell that bypasses every command gate — an authorization
 decision, not a feature (round-2 spec §7.1 holds the shape it would take if that is ever decided).
 
 | Tool | Description | Args |
 |------|-------------|------|
-| `terminal(list)` | The caller's own PTY sessions: `session_id`, `shell`, `cwd` (the SPAWN dir), `created_at`, `closed` | `action` |
-| `terminal(read)` | One session's current visible screen, no scrollback | `action`, `session_id` |
-| `terminal(status)` | Each session's detected agent state (`working`/`blocked`/`idle`/`unknown`) — the table `runtime.agents.list` serves | `action` |
-| `terminal(wait)` | Block until one session's state enters `until`, then return the entry. Answers `timeout` with the CURRENT entry, `gone` if the session ends first. Never polls the screen | `action`, `session_id`, `until?` (default `["blocked","idle"]`), `timeout_ms?` (default 60000, **clamped** to 150000) |
-| `terminal(explain)` | Why a state was reported: which manifest rule matched, at which manifest version, over which screen text and title | `action`, `session_id` |
+| `terminal_sessions_list` | The caller's own PTY sessions: `session_id`, `shell`, `cwd` (the SPAWN dir), `created_at`, `closed` | none |
+| `terminal_sessions_read` | One session's current visible screen, no scrollback | `session_id` |
+| `terminal_sessions_status` | Each session's detected agent state (`working`/`blocked`/`idle`/`unknown`) — the table `runtime.agents.list` serves | none |
+| `terminal_sessions_wait` | Block until one session's state enters `until`, then return the entry. Answers `timeout` with the CURRENT entry, `gone` if the session ends first. Never polls the screen | `session_id`, `until?` (default `["blocked","idle"]`), `timeout_ms?` (default 60000, **clamped** to 150000) |
+| `terminal_sessions_explain` | Why a state was reported: which manifest rule matched, at which manifest version, over which screen text and title | `session_id` |
+| `terminal_sessions_attach` | Read-only attach snapshot of an owned session | `session_id` |
 
 ⚠️ **`explain`'s state may legitimately differ from `status`'s, and that is not a bug.** `explain`
 re-runs the detection engine over a FRESH read of the live screen; `status` reports the table, which

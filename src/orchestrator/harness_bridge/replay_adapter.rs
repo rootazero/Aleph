@@ -19,6 +19,49 @@ use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity};
 use crate::tools::handlers::ToolHandler;
 use crate::tools::registry::ToolHandlerRegistry;
 
+/// Sealed replay eligibility for one captured Safe handler generation.
+/// No public constructor, mutable fields, Clone, Default or serde support.
+pub(crate) struct ReplayAdmissionToken {
+    call_id: String,
+    tool_name: String,
+    identity: ToolCallIdentity,
+    input: serde_json::Value,
+    actor: Option<String>,
+}
+
+impl ReplayAdmissionToken {
+    fn new(
+        call_id: String,
+        tool_name: String,
+        identity: ToolCallIdentity,
+        input: serde_json::Value,
+    ) -> Self {
+        Self {
+            call_id,
+            tool_name,
+            identity,
+            input,
+            actor: crate::identity::current_actor(),
+        }
+    }
+
+    pub(crate) fn matches(
+        &self,
+        call_id: &str,
+        name: &str,
+        identity: &ToolCallIdentity,
+        input: &serde_json::Value,
+        actor: Option<&str>,
+    ) -> bool {
+        self.identity.replay_policy == ReplayPolicy::Safe
+            && self.call_id == call_id
+            && self.tool_name == name
+            && self.identity == *identity
+            && self.input == *input
+            && self.actor.as_deref() == actor
+    }
+}
+
 /// Concrete [`ReplayPreparer`] for the orchestrator bridge.
 pub struct ReplayAdapter {
     registry: Arc<ToolHandlerRegistry>,
@@ -55,12 +98,19 @@ impl ReplayPreparer for ReplayAdapter {
             || current.replay_policy != ReplayPolicy::Safe
             || stored.schema_version != current.schema_version
             || stored.replay_contract_fingerprint != current.replay_contract_fingerprint
-            || stored.replay_contract_fingerprint.is_none() // both Some + equal
+            || stored.replay_contract_fingerprint.is_none()
+        // both Some + equal
         {
             return ReplayPrepare::Refused;
         }
         ReplayPrepare::Ready(ReplayPermit::new(Box::new(PermitInvoker {
             handler: entry.handler.clone(),
+            admission: ReplayAdmissionToken::new(
+                req.call_id.clone(),
+                req.tool_name.clone(),
+                current,
+                effective_input.clone(),
+            ),
             call_id: req.call_id.clone(),
             turn_id: req.turn_id,
             effective_input,
@@ -72,6 +122,7 @@ impl ReplayPreparer for ReplayAdapter {
 /// snapshot plus the call correlation needed to rebuild the outcome event.
 struct PermitInvoker {
     handler: Arc<dyn ToolHandler>,
+    admission: ReplayAdmissionToken,
     call_id: String,
     turn_id: TurnId,
     effective_input: serde_json::Value,
@@ -82,12 +133,25 @@ impl ReplayInvoker for PermitInvoker {
         Box::pin(async move {
             let PermitInvoker {
                 handler,
+                admission,
                 call_id,
                 turn_id,
                 effective_input,
             } = *self;
             let at = now_ms();
-            match handler.invoke(effective_input).await {
+            let invocation = crate::tools::dispatch_verdict::with_replay_admission(
+                admission,
+                handler.invoke(effective_input),
+            );
+            let result = crate::approval::with_call_identity(
+                Some(crate::approval::CallIdentity {
+                    call_id: call_id.clone(),
+                    turn_id,
+                }),
+                invocation,
+            )
+            .await;
+            match result {
                 Ok(output) => SessionEvent::ToolResult {
                     turn_id,
                     call_id,
@@ -306,12 +370,214 @@ mod tests {
         assert!(matches!(adapter.prepare(&req), ReplayPrepare::Refused));
     }
 
+    struct ScopeProbe {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        canonical: Arc<std::sync::OnceLock<std::sync::Weak<dyn ToolHandler>>>,
+    }
+
+    #[async_trait]
+    impl ToolHandler for ScopeProbe {
+        fn definition(&self) -> ToolDefinition {
+            handler("scope_probe", false).definition()
+        }
+
+        async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
+            use std::sync::atomic::Ordering;
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            assert!(
+                crate::tools::current_dispatch_verdict().is_none(),
+                "replay is not dispatch approval"
+            );
+            let canonical = self.canonical.get().unwrap().upgrade().unwrap();
+            // Same task, token present, but each changed tuple must be refused.
+            let changed_input = canonical.invoke(serde_json::json!({"changed": true})).await;
+            let changed_call = crate::approval::with_call_identity(
+                Some(crate::approval::CallIdentity {
+                    turn_id: TurnId::nil(),
+                    call_id: "other-call".into(),
+                }),
+                canonical.invoke(input.clone()),
+            )
+            .await;
+            let changed_actor =
+                crate::identity::as_actor("other-actor", canonical.invoke(input.clone())).await;
+            let child = tokio::spawn(async move {
+                let before = crate::tools::current_dispatch_verdict().is_none();
+                // Republish even the SAME call identity: only the sealed replay
+                // admission must be missing, not merely call correlation.
+                let result = crate::approval::with_call_identity(
+                    Some(crate::approval::CallIdentity {
+                        turn_id: TurnId::nil(),
+                        call_id: "call-1".into(),
+                    }),
+                    canonical.invoke(input),
+                )
+                .await;
+                let after = crate::tools::current_dispatch_verdict().is_none();
+                before && after && matches!(result, Err(ToolError::PermissionDenied { .. }))
+            })
+            .await
+            .unwrap();
+            assert!(
+                crate::tools::current_dispatch_verdict().is_none(),
+                "parent replay still has no dispatch proof after child"
+            );
+            assert_eq!(
+                crate::approval::current_tool_call_id().as_deref(),
+                Some("call-1")
+            );
+            Ok(ToolOutput {
+                value: serde_json::json!({
+                    "input_denied": matches!(changed_input, Err(ToolError::PermissionDenied { .. })),
+                    "call_denied": matches!(changed_call, Err(ToolError::PermissionDenied { .. })),
+                    "actor_denied": matches!(changed_actor, Err(ToolError::PermissionDenied { .. })),
+                    "child_denied_without_dispatch_proof": child,
+                }),
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn prepared_safe_replay_has_no_dispatch_proof_and_child_cannot_borrow_admission() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let canonical = Arc::new(std::sync::OnceLock::new());
+        let registry = Arc::new(ToolHandlerRegistry::new());
+        registry
+            .register(
+                safe_desc("scope_probe"),
+                Arc::new(ScopeProbe {
+                    calls: calls.clone(),
+                    canonical: canonical.clone(),
+                }),
+            )
+            .unwrap();
+        let entry = registry.resolve_entry("scope_probe").unwrap();
+        assert!(canonical.set(Arc::downgrade(&entry.handler)).is_ok());
+        let req = request(
+            "scope_probe",
+            ToolCallIdentity::from_descriptor(&entry.descriptor),
+            Some(serde_json::json!({"original": true})),
+        );
+        assert!(crate::tools::current_dispatch_verdict().is_none());
+        let adapter = ReplayAdapter::new(registry);
+        let permit = match adapter.prepare(&req) {
+            ReplayPrepare::Ready(p) => p,
+            ReplayPrepare::Refused => panic!("valid Safe replay must prepare"),
+        };
+        assert!(
+            crate::tools::current_dispatch_verdict().is_none(),
+            "prepare never publishes authority"
+        );
+        let event = permit.invoke("claim".into()).await;
+        assert!(
+            crate::tools::current_dispatch_verdict().is_none(),
+            "replay scope must end"
+        );
+        assert!(
+            crate::approval::current_tool_call_id().is_none(),
+            "call correlation must restore"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "only the prepared parent reaches the raw effect"
+        );
+        match event {
+            SessionEvent::ToolResult { output, .. } => assert_eq!(
+                output.value,
+                serde_json::json!({
+                    "input_denied": true, "call_denied": true, "actor_denied": true,
+                    "child_denied_without_dispatch_proof": true,
+                })
+            ),
+            other => panic!("prepared parent must succeed: {other:?}"),
+        }
+        let after = crate::approval::with_call_identity(
+            Some(crate::approval::CallIdentity {
+                turn_id: TurnId::nil(),
+                call_id: "call-1".into(),
+            }),
+            entry.handler.invoke(req.effective_input.unwrap()),
+        )
+        .await;
+        assert!(
+            matches!(after, Err(ToolError::PermissionDenied { .. })),
+            "same tuple after scope has no admission"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn prepared_replay_keeps_its_snapshot_and_error_clears_both_scopes() {
+        let registry = Arc::new(ToolHandlerRegistry::new());
+        registry
+            .register(safe_desc("safe_error"), handler("safe_error", true))
+            .unwrap();
+        let identity =
+            ToolDescriptorLookup::tool_call_identity(registry.as_ref(), "safe_error").unwrap();
+        let adapter = ReplayAdapter::new(registry.clone());
+        let req = request("safe_error", identity, Some(serde_json::json!({})));
+        let permit = match adapter.prepare(&req) {
+            ReplayPrepare::Ready(p) => p,
+            _ => panic!("matching Safe tool prepares"),
+        };
+        // Replacement is not re-resolved by PermitInvoker. Its success would
+        // disguise the captured handler's error, so this is an effect assertion.
+        registry
+            .replace(safe_desc("safe_error"), handler("safe_error", false))
+            .unwrap();
+        assert!(crate::tools::current_dispatch_verdict().is_none());
+        let event = permit.invoke("claim".into()).await;
+        assert!(
+            matches!(event, SessionEvent::ToolError { ref error, .. } if error.contains("boom"))
+        );
+        assert!(crate::tools::current_dispatch_verdict().is_none());
+        assert!(crate::approval::current_tool_call_id().is_none());
+        let entry = registry.resolve_entry("safe_error").unwrap();
+        let after = crate::approval::with_call_identity(
+            Some(crate::approval::CallIdentity {
+                turn_id: TurnId::nil(),
+                call_id: "call-1".into(),
+            }),
+            entry.handler.invoke(serde_json::json!({})),
+        )
+        .await;
+        assert!(matches!(after, Err(ToolError::PermissionDenied { .. })));
+    }
+
+    #[test]
+    fn missing_identity_current_unsafe_and_missing_contract_are_refused() {
+        let (registry, identity) = register_safe("safe_tool");
+        let adapter = ReplayAdapter::new(registry.clone());
+        let mut req = request("safe_tool", identity, Some(serde_json::json!({})));
+        req.stored_identity = None;
+        assert!(matches!(adapter.prepare(&req), ReplayPrepare::Refused));
+        req.stored_identity = Some(ToolCallIdentity {
+            replay_contract_fingerprint: None,
+            ..identity
+        });
+        assert!(matches!(adapter.prepare(&req), ReplayPrepare::Refused));
+        req.stored_identity = Some(identity);
+        registry
+            .replace(desc("safe_tool"), handler("safe_tool", false))
+            .unwrap();
+        assert!(matches!(adapter.prepare(&req), ReplayPrepare::Refused));
+    }
+
     #[tokio::test]
     async fn invoke_maps_ok_to_tool_result_and_err_to_tool_error() {
         let turn_id = Uuid::new_v4();
 
         let ok_invoker = PermitInvoker {
             handler: handler("t", false),
+            admission: ReplayAdmissionToken::new(
+                "c-ok".into(),
+                "t".into(),
+                ToolCallIdentity::from_descriptor(&safe_desc("t")),
+                serde_json::json!({}),
+            ),
             call_id: "c-ok".into(),
             turn_id,
             effective_input: serde_json::json!({}),
@@ -332,6 +598,12 @@ mod tests {
 
         let err_invoker = PermitInvoker {
             handler: handler("t", true),
+            admission: ReplayAdmissionToken::new(
+                "c-err".into(),
+                "t".into(),
+                ToolCallIdentity::from_descriptor(&safe_desc("t")),
+                serde_json::json!({}),
+            ),
             call_id: "c-err".into(),
             turn_id,
             effective_input: serde_json::json!({}),

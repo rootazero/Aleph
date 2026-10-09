@@ -31,8 +31,8 @@
 //! its `in_flight` slot across the whole candidate, and the team path holds the
 //! dispatcher's task-row lock.
 
-use crate::session::events::{ParkReason, RunOutcome, SessionEvent, now_ms};
-use crate::session::reduction::{DanglingProvenance, RunProgress, RunReduction, reduce_run};
+use crate::session::events::{now_ms, ParkReason, RunOutcome, SessionEvent};
+use crate::session::reduction::{reduce_run, DanglingProvenance, RunProgress, RunReduction};
 use crate::session::service::{SessionError, SessionId};
 use crate::session::store::SessionEventStore;
 use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity, ToolDescriptorLookup};
@@ -623,11 +623,12 @@ mod tests {
         );
         let fingerprint_drift = TestDescriptorLookup {
             identity: Some(ToolCallIdentity {
-                replay_contract_fingerprint: crate::tools::descriptor::ReplayContractFingerprint::parse(&format!(
-                    "v1:{}",
-                    "0b".repeat(crate::tools::descriptor::REPLAY_CONTRACT_DIGEST_LEN),
-                ))
-                .ok(),
+                replay_contract_fingerprint:
+                    crate::tools::descriptor::ReplayContractFingerprint::parse(&format!(
+                        "v1:{}",
+                        "0b".repeat(crate::tools::descriptor::REPLAY_CONTRACT_DIGEST_LEN),
+                    ))
+                    .ok(),
                 ..identity(ReplayPolicy::Safe, 3)
             }),
         };

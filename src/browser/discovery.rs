@@ -12,8 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::BrowserError;
 use super::profile::BrowserType;
+use super::BrowserError;
 
 /// Well-known binary names for PATH lookup (cross-platform).
 const CHROMIUM_NAMES: &[&str] = &[

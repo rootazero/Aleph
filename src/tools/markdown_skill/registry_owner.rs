@@ -201,7 +201,6 @@ impl MarkdownSkillRegistryOwner {
         handle.dispose()
     }
 
-
     /// Tear down every slot this owner installed and drop the registry link.
     ///
     /// Consumes the tracked [`ToolRegistrationScope`] and returns it, leaving
@@ -228,7 +227,9 @@ pub enum MarkdownRegistryError {
 
     /// The registry already holds `name` under a handle this owner did not
     /// install. Refused rather than silently clobbering a foreign capability.
-    #[error("tool name {name:?} is owned by another subsystem and cannot be replaced by markdown skill")]
+    #[error(
+        "tool name {name:?} is owned by another subsystem and cannot be replaced by markdown skill"
+    )]
     ForeignCollision { name: String },
 
     /// The underlying [`ToolHandlerRegistry`] rejected the operation. The
@@ -320,10 +321,7 @@ mod tests {
             )
         }
 
-        fn call(
-            &self,
-            _args: Value,
-        ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
+        fn call(&self, _args: Value) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
             Box::pin(async { Ok(Value::Null) })
         }
     }
@@ -340,10 +338,7 @@ mod tests {
         let err = owner
             .install_or_replace(FakeTool::boxed("alpha"))
             .expect_err("install without a configured registry must fail closed");
-        assert!(matches!(
-            err,
-            MarkdownRegistryError::RegistryNotConfigured
-        ));
+        assert!(matches!(err, MarkdownRegistryError::RegistryNotConfigured));
         assert!(owner.is_empty(), "no handle must have been created");
     }
 
@@ -383,7 +378,10 @@ mod tests {
         let replaced = owner
             .install_or_replace(FakeTool::boxed("beta"))
             .expect("replace must succeed for an owned name");
-        assert!(replaced, "second install for an owned name is a replacement");
+        assert!(
+            replaced,
+            "second install for an owned name is a replacement"
+        );
 
         // The registry still has exactly one entry, and the revision has
         // advanced — the new handler is observable through `resolve`.
@@ -419,7 +417,10 @@ mod tests {
         let replaced = owner
             .install_or_replace(FakeTool::boxed("gamma"))
             .expect("replace");
-        assert!(replaced, "second install for an owned name is a replacement");
+        assert!(
+            replaced,
+            "second install for an owned name is a replacement"
+        );
         assert!(
             registry.resolve("gamma").is_some(),
             "replacement must keep the entry alive"
@@ -465,7 +466,10 @@ mod tests {
             matches!(err, MarkdownRegistryError::ForeignCollision { ref name } if name == "foreign_name"),
             "got {err:?}"
         );
-        assert!(owner.is_empty(), "the owner must not hold a handle for a refused name");
+        assert!(
+            owner.is_empty(),
+            "the owner must not hold a handle for a refused name"
+        );
         // The foreign entry survives — sanity-check.
         assert!(registry.resolve("foreign_name").is_some());
     }
@@ -483,7 +487,10 @@ mod tests {
         assert!(registry.resolve("delta").is_some());
 
         let removed = owner.remove("delta");
-        assert!(removed, "remove must report success when the handle existed");
+        assert!(
+            removed,
+            "remove must report success when the handle existed"
+        );
         assert_eq!(owner.len(), 0);
         assert!(
             registry.resolve("delta").is_none(),
@@ -518,7 +525,10 @@ mod tests {
             report.failures().collect::<Vec<_>>()
         );
         assert!(owner.is_empty());
-        assert!(!owner.is_configured(), "take_shutdown must drop the registry link");
+        assert!(
+            !owner.is_configured(),
+            "take_shutdown must drop the registry link"
+        );
         assert_eq!(
             registry.revision(),
             rev_before + 2,
@@ -545,7 +555,11 @@ mod tests {
         // reverse-order disposal leaves the entry gone and reports no errors
         // (the stale disposer is a harmless no-op, not a failure).
         let scope = owner.take_shutdown();
-        assert_eq!(scope.len(), 2, "scope must retain the superseded generation");
+        assert_eq!(
+            scope.len(),
+            2,
+            "scope must retain the superseded generation"
+        );
         let report = scope.dispose().await;
         assert!(
             report.all_ok(),

@@ -436,7 +436,7 @@ mod tests {
     #[tokio::test]
     async fn an_engine_override_against_a_live_other_engine_names_switch_engine() {
         use crate::browser::engine::Engine;
-        use crate::browser::testkit::{SwitchFixture, switch_fixture};
+        use crate::browser::testkit::{switch_fixture, SwitchFixture};
         // This test resolves `$ALEPH_HOME` through
         // `prepare_engine -> engine_handle_for -> launch_request_for_engine ->
         // browser_state_dir`, exactly the path `browser::home_guard_census`

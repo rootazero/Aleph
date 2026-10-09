@@ -192,7 +192,11 @@ mod tests {
 
     #[test]
     fn degraded_maps_to_authority_change_warn() {
-        let entry = build_entry(2, "G2", &synthetic_audit(HealthStatus::Degraded, &["Embed Links"]));
+        let entry = build_entry(
+            2,
+            "G2",
+            &synthetic_audit(HealthStatus::Degraded, &["Embed Links"]),
+        );
         assert_eq!(entry.event_type, AuditEventType::AuthorityChange);
         assert_eq!(entry.severity, AuditSeverity::Warn);
         assert!(entry.detail.contains("degraded"));
@@ -204,7 +208,11 @@ mod tests {
     /// rejected but audit recorded it" assertion the wire-up will hinge on.
     #[test]
     fn critical_maps_to_exec_blocked_critical() {
-        let entry = build_entry(3, "G3", &synthetic_audit(HealthStatus::Critical, &["Send Messages"]));
+        let entry = build_entry(
+            3,
+            "G3",
+            &synthetic_audit(HealthStatus::Critical, &["Send Messages"]),
+        );
         assert_eq!(entry.event_type, AuditEventType::ExecBlocked);
         assert_eq!(entry.severity, AuditSeverity::Critical);
         assert!(entry.detail.contains("critical"));
@@ -271,7 +279,9 @@ mod tests {
         assert_eq!(entries.len(), 3);
         for (i, entry) in entries.iter().enumerate() {
             assert!(
-                entry.detail.contains(&format!("guild={}", (i + 1) * 100).to_string()),
+                entry
+                    .detail
+                    .contains(&format!("guild={}", (i + 1) * 100).to_string()),
                 "detail: {}",
                 entry.detail
             );

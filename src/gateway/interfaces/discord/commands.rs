@@ -96,18 +96,12 @@ pub(crate) fn audit_command_dispatch(
 /// caller should include enough detail for an operator to reconstruct the
 /// decision (e.g. "guild 1234 not in allowlist"). Severity is `Warn`
 /// (matches the rest of the `ExecBlocked` producers).
-pub(crate) fn audit_command_blocked(
-    actor_user: Option<&str>,
-    channel_id: &str,
-    reason: &str,
-) {
+pub(crate) fn audit_command_blocked(actor_user: Option<&str>, channel_id: &str, reason: &str) {
     let Some(log) = audit_global() else {
         return;
     };
     let actor = actor_user.map(str::to_string);
-    let detail = format!(
-        "discord.command.blocked: {reason} channel={channel_id}"
-    );
+    let detail = format!("discord.command.blocked: {reason} channel={channel_id}");
     tokio::spawn(async move {
         let _ = log
             .log(AuditEntry {
@@ -227,7 +221,10 @@ impl ComponentId {
     /// Convenience: is this an approval-style callback?
     #[must_use]
     pub fn is_approval(&self) -> bool {
-        matches!(self.kind, ComponentKind::ApprovalApprove | ComponentKind::ApprovalDeny)
+        matches!(
+            self.kind,
+            ComponentKind::ApprovalApprove | ComponentKind::ApprovalDeny
+        )
     }
 }
 
@@ -344,23 +341,13 @@ impl CommandRegistry {
     /// answered within 3s or it shows an error spinner).
     #[must_use]
     pub fn dispatch(&self, id: &ComponentId) -> Option<DispatchOutcome> {
-        let outcome = self
-            .handlers
-            .get(&id.kind)
-            .map(|h| h(id))
-            .or_else(|| {
-                // Unknown kinds fall back to AckNoReply unless a handler
-                // is explicitly registered for `Callback`.
-                self.handlers
-                    .get(&ComponentKind::Callback)
-                    .map(|h| h(id))
-            });
+        let outcome = self.handlers.get(&id.kind).map(|h| h(id)).or_else(|| {
+            // Unknown kinds fall back to AckNoReply unless a handler
+            // is explicitly registered for `Callback`.
+            self.handlers.get(&ComponentKind::Callback).map(|h| h(id))
+        });
         // Record every dispatch so the trail captures unknown-kind fallbacks.
-        audit_command_dispatch(
-            None,
-            id.kind.as_str(),
-            id.payload.as_str(),
-        );
+        audit_command_dispatch(None, id.kind.as_str(), id.payload.as_str());
         outcome
     }
 }
@@ -505,8 +492,8 @@ pub fn dispatch_component_click(
     // routing them through the registry's Callback fallback would
     // AckOnly-swalllow clicks that bots depend on for approval
     // resolution (Review Focus #3).
-    let is_legacy_no_colon = matches!(&id.kind, ComponentKind::Unknown(k) if k == custom_id)
-        && id.payload.is_empty();
+    let is_legacy_no_colon =
+        matches!(&id.kind, ComponentKind::Unknown(k) if k == custom_id) && id.payload.is_empty();
     if is_legacy_no_colon {
         return CommandAction::Forward(Box::new(legacy_inbound(
             custom_id,
@@ -585,10 +572,7 @@ mod tests {
     #[test]
     fn parse_unknown_kind_is_preserved() {
         let id = ComponentId::parse("mystery:x").unwrap();
-        assert_eq!(
-            id.kind,
-            ComponentKind::Unknown("mystery".to_string())
-        );
+        assert_eq!(id.kind, ComponentKind::Unknown("mystery".to_string()));
         assert_eq!(id.payload, "x");
     }
 
@@ -638,15 +622,9 @@ mod tests {
     fn registry_defaults_route_approval() {
         let r = CommandRegistry::with_defaults();
         let id = ComponentId::parse("approve:m1").unwrap();
-        assert_eq!(
-            r.dispatch(&id),
-            Some(DispatchOutcome::ForwardToApproval)
-        );
+        assert_eq!(r.dispatch(&id), Some(DispatchOutcome::ForwardToApproval));
         let id = ComponentId::parse("deny:m1").unwrap();
-        assert_eq!(
-            r.dispatch(&id),
-            Some(DispatchOutcome::ForwardToApproval)
-        );
+        assert_eq!(r.dispatch(&id), Some(DispatchOutcome::ForwardToApproval));
     }
 
     #[test]
@@ -704,15 +682,8 @@ mod tests {
         // this as Unknown(<whole>) with empty payload; Review Focus #3
         // requires the dispatcher NOT swallow it as AckNoReply.
         let r = CommandRegistry::with_defaults();
-        let action = dispatch_component_click(
-            &r,
-            "cb_msg-123",
-            "user-1",
-            Some("alice"),
-            42,
-            conv(),
-            true,
-        );
+        let action =
+            dispatch_component_click(&r, "cb_msg-123", "user-1", Some("alice"), 42, conv(), true);
         match action {
             CommandAction::Forward(msg) => {
                 // The inbound router matches on the cb_ prefix; the
@@ -751,15 +722,8 @@ mod tests {
     fn dispatch_approval_deny_reconstructs_callback_data() {
         // Same as approve but :deny tier.
         let r = CommandRegistry::with_defaults();
-        let action = dispatch_component_click(
-            &r,
-            "deny:msg-7",
-            "user-1",
-            Some("alice"),
-            42,
-            conv(),
-            true,
-        );
+        let action =
+            dispatch_component_click(&r, "deny:msg-7", "user-1", Some("alice"), 42, conv(), true);
         match action {
             CommandAction::Forward(msg) => {
                 assert_eq!(msg.text, "approve:msg-7:deny");
@@ -775,15 +739,8 @@ mod tests {
         // AckOnly — mirrors the legacy handle_component forwarding the raw
         // custom_id.
         let r = CommandRegistry::new();
-        let action = dispatch_component_click(
-            &r,
-            "mystery:x",
-            "user-1",
-            Some("alice"),
-            42,
-            conv(),
-            true,
-        );
+        let action =
+            dispatch_component_click(&r, "mystery:x", "user-1", Some("alice"), 42, conv(), true);
         match action {
             CommandAction::Forward(msg) => {
                 assert_eq!(msg.text, "mystery:x");
@@ -798,15 +755,8 @@ mod tests {
         // AckNoReply via the dispatcher (via with_defaults path which
         // also registers Callback).
         let r = CommandRegistry::with_defaults();
-        let action = dispatch_component_click(
-            &r,
-            "mystery:x",
-            "user-1",
-            Some("alice"),
-            42,
-            conv(),
-            true,
-        );
+        let action =
+            dispatch_component_click(&r, "mystery:x", "user-1", Some("alice"), 42, conv(), true);
         assert!(matches!(action, CommandAction::AckOnly));
     }
 
@@ -833,8 +783,7 @@ mod tests {
         match action {
             CommandAction::Forward(msg) => {
                 assert_eq!(
-                    msg.text,
-                    "approve:req-42:session",
+                    msg.text, "approve:req-42:session",
                     "session tier must round-trip; dispatcher must not default to :once"
                 );
             }

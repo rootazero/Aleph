@@ -14,7 +14,7 @@ mod common;
 
 use alephcore::gateway::interfaces::discord::config::DiscordConfig;
 use alephcore::gateway::interfaces::discord::permissions::{
-    audit_permissions, ALEPH_PERMISSIONS, HealthStatus, RequirementLevel,
+    audit_permissions, HealthStatus, RequirementLevel, ALEPH_PERMISSIONS,
 };
 use alephcore::gateway::interfaces::discord::security::{
     startup_audit_for_config, startup_audit_for_guild,

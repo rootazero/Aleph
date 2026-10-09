@@ -14,8 +14,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::notes;
-use super::scan::{ScanOptions, build_regex, render, scan_text};
-use super::walk::{WalkRequest, display_path, walk};
+use super::scan::{build_regex, render, scan_text, ScanOptions};
+use super::walk::{display_path, walk, WalkRequest};
 use crate::builtin_tools::error::ToolError;
 use crate::builtin_tools::file_ops::{get_denied_paths, is_binary, DeniedPath};
 use crate::builtin_tools::{notify_tool_result, notify_tool_start};

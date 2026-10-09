@@ -427,7 +427,9 @@ impl BrowserBackend for FakeBackend {
             .map_err(|e| BrowserError::ActionFailed(e.to_string()))
     }
 
-    async fn route_list(&self) -> Result<Vec<super::cdp_backend::routes::RouteRuleInfo>, BrowserError> {
+    async fn route_list(
+        &self,
+    ) -> Result<Vec<super::cdp_backend::routes::RouteRuleInfo>, BrowserError> {
         self.record("route_list".into())?;
         Ok(self.routes.list("fake"))
     }
@@ -437,9 +439,9 @@ impl BrowserBackend for FakeBackend {
         rule_id: &str,
     ) -> Result<super::cdp_backend::routes::RouteRuleInfo, BrowserError> {
         self.record(format!("route_remove:{rule_id}"))?;
-        self.routes.remove(rule_id).ok_or_else(|| {
-            BrowserError::ActionFailed(format!("no mock route {rule_id:?}"))
-        })
+        self.routes
+            .remove(rule_id)
+            .ok_or_else(|| BrowserError::ActionFailed(format!("no mock route {rule_id:?}")))
     }
 
     async fn route_clear(

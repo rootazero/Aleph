@@ -209,7 +209,10 @@ impl SkillSystem {
             // Filesystem-identity dedup, not literal spelling: a published
             // plugin dir reached through a symlinked $HOME is the same root
             // the base list may already carry under another spelling.
-            if !roots.iter().any(|r| crate::utils::paths::equivalent(r, &published.dir)) {
+            if !roots
+                .iter()
+                .any(|r| crate::utils::paths::equivalent(r, &published.dir))
+            {
                 roots.push(published.dir);
             }
         }
@@ -1013,9 +1016,9 @@ fn is_workspace_aleph_skills(path: &Path) -> bool {
             _ => None,
         })
         .collect();
-    comps.windows(2).any(|w| {
-        w[0] == std::ffi::OsStr::new(".aleph") && w[1] == std::ffi::OsStr::new("skills")
-    })
+    comps
+        .windows(2)
+        .any(|w| w[0] == std::ffi::OsStr::new(".aleph") && w[1] == std::ffi::OsStr::new("skills"))
 }
 
 #[cfg(test)]

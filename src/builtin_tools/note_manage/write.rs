@@ -8,11 +8,11 @@ use tracing::{info, warn};
 
 use crate::error::{AlephError, Result};
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::{KnowledgeNote, sanitize_title};
+use crate::memory::notes::{sanitize_title, KnowledgeNote};
 
-use super::NoteManageTool;
 use super::args::{NoteListEntry, NoteManageArgs, NoteManageResult};
 use super::helpers::{merge_relations, related_keywords, scan_note_for_threats};
+use super::NoteManageTool;
 
 impl NoteManageTool {
     pub(super) async fn handle_create(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {

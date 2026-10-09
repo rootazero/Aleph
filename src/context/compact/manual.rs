@@ -872,9 +872,9 @@ mod tests {
             let closer_pos = cut + tail_offset;
             // rposition in events[..closer_pos]: the LAST opener under this
             // id that sits before this closer. That's the pair.
-            let opener_pos = events[..closer_pos].iter().rposition(|r| {
-                matches!(&r.event, SessionEvent::RunStarted { run_id: id, .. } if id == run_id)
-            });
+            let opener_pos = events[..closer_pos].iter().rposition(
+                |r| matches!(&r.event, SessionEvent::RunStarted { run_id: id, .. } if id == run_id),
+            );
             if let Some(pos) = opener_pos {
                 assert!(
                     pos >= cut,
@@ -1337,10 +1337,7 @@ mod tests {
         // The registry view over this session lists ONE fold (recorded wins
         // over the legacy derivation for the same span) with Manual provenance.
         let events: Vec<SessionEvent> = after.iter().map(|r| r.event.clone()).collect();
-        let folds = crate::context::compact::folds::list_folds(
-            &sid.to_key_string(),
-            &events,
-        );
+        let folds = crate::context::compact::folds::list_folds(&sid.to_key_string(), &events);
         assert_eq!(folds.len(), 1, "one compaction, one fold: {folds:?}");
         assert_eq!(
             folds[0].strategy,

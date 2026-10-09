@@ -115,7 +115,8 @@ fn resolve_target(
 #[async_trait]
 impl AlephTool for BrowserClickTool {
     const NAME: &'static str = "browser_click";
-    const DESCRIPTION: &'static str = "Click an element on the page by accessibility ref_id or coordinates; \
+    const DESCRIPTION: &'static str =
+        "Click an element on the page by accessibility ref_id or coordinates; \
          set double=true for a double-click (by coordinates only on a \
          driver=\"cdp\" profile)";
     type Args = BrowserClickArgs;

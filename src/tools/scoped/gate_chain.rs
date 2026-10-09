@@ -391,14 +391,27 @@ impl ScopedToolService {
     /// The ordered chain. Equivalent to the disjunction it replaced — same
     /// predicates, same order, same set of gated calls — and additionally says
     /// which arm matched. See the module doc for why the order is what it is.
+    #[cfg(test)]
     pub(super) fn confirmation_rule<'a>(
         &'a self,
         name: &str,
         input: &Value,
     ) -> Option<GateRule<'a>> {
+        self.confirmation_rule_for_descriptor(name, input, None)
+    }
+
+    pub(super) fn confirmation_rule_for_descriptor<'a>(
+        &'a self,
+        name: &str,
+        input: &Value,
+        descriptor: Option<&crate::tools::descriptor::ToolCapabilityDescriptor>,
+    ) -> Option<GateRule<'a>> {
         // 1. The floor. Read independently of the tier and of any explicit
         //    `allow`, exactly as `check_confirmation_gate` has always read it.
-        if self.inner.requires_confirmation(name) {
+        if descriptor.map_or_else(
+            || self.inner.requires_confirmation(name),
+            |d| d.requires_confirmation,
+        ) {
             return Some(GateRule::ToolDeclared);
         }
         // 2. The second floor: a write that can retire the gates themselves.
@@ -420,7 +433,7 @@ impl ScopedToolService {
         //      or because the tier tightened the default. `permission_for` is
         //      the chokepoint that composes them; `explain` says which one it
         //      was, without recomputing the composition.
-        if self.permission_for(name) != PermissionAction::Ask {
+        if self.permission_for_descriptor(name, descriptor) != PermissionAction::Ask {
             return None;
         }
         Some(match self.explicit_match(name) {
@@ -442,8 +455,17 @@ impl ScopedToolService {
     /// question at a different point in `execute_gated`, and collapsing the two
     /// would make every ask-path caller pattern-match a variant it can never
     /// see.
+    #[cfg(test)]
     pub(super) fn deny_rule<'a>(&'a self, name: &str) -> Option<GateRule<'a>> {
-        if self.permission_for(name) != PermissionAction::Deny {
+        self.deny_rule_for_descriptor(name, None)
+    }
+
+    pub(super) fn deny_rule_for_descriptor<'a>(
+        &'a self,
+        name: &str,
+        descriptor: Option<&crate::tools::descriptor::ToolCapabilityDescriptor>,
+    ) -> Option<GateRule<'a>> {
+        if self.permission_for_descriptor(name, descriptor) != PermissionAction::Deny {
             return None;
         }
         // The side question's own ceiling, checked first: every denial during
@@ -461,7 +483,7 @@ impl ScopedToolService {
         // operator never wrote, pointing at a fix that cannot work. The
         // predicate is derived by difference (`denied_only_by_plan`), so an
         // operator's real `deny` on the same tool keeps reporting as one.
-        if self.denied_only_by_plan(name) {
+        if self.denied_only_by_plan_for_descriptor(name, descriptor) {
             return Some(GateRule::PlanMode);
         }
         Some(GateRule::PolicyDeny {

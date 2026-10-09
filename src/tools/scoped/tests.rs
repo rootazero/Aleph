@@ -954,10 +954,8 @@ async fn execute_with_cancel_effective_is_none_when_hook_denies() {
         HookKind::Interceptor,
         "echo 'deny: hard policy stop'",
     );
-    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new()).with_hook_executor(
-        Arc::new(HookExecutor::new(vec![deny])),
-        "test-session",
-    );
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_hook_executor(Arc::new(HookExecutor::new(vec![deny])), "test-session");
 
     let (result, effective) = svc
         .execute_with_cancel_effective(
@@ -4558,8 +4556,12 @@ fn a_side_question_refusal_names_itself_not_the_plan_handoff() {
 /// `with_call_identity(..)` scope — which is what lets
 /// `session::call_log::emit_for_ambient_call` treat a missing identity as a
 /// counted, logged anomaly rather than an expected shape (spec §6.2). Equality
-/// on the originator set, derived from the source: a new originator must scope
+/// on the originator set, derived from the source: every originator must scope
 /// an identity around its dispatch, or not reach the gate.
+///
+/// The harness Act phase and the MCP server face are both production
+/// originators; the latter creates a fresh request identity because the MCP
+/// face has no model-supplied tool-call id.
 ///
 /// What it does not see: a 2-arg `ToolService::execute(name, input)`
 /// originator — `.execute(` is too common a name to census textually (it is
@@ -4589,18 +4591,13 @@ fn every_production_dispatch_into_the_scoped_gate_is_scoped_by_a_call_identity()
         vec!["src/gateway/mcp_face/mod.rs", "src/harness/agent/act.rs"],
         "a new originator must scope a CallIdentity around its dispatch, or not reach the gate: {originators:?}"
     );
-    let (calls, scoped) = originators["src/harness/agent/act.rs"];
-    assert!(calls >= 1, "self-protection: the scan found the Act phase");
-    assert_eq!(
-        calls, scoped,
-        "every dispatch in act.rs is wrapped by exactly one identity scope"
-    );
-    let (calls, scoped) = originators["src/gateway/mcp_face/mod.rs"];
-    assert!(calls >= 1, "self-protection: the scan found the MCP face");
-    assert_eq!(
-        calls, scoped,
-        "every dispatch in mcp_face is wrapped by exactly one identity scope"
-    );
+    for (path, (calls, scoped)) in originators {
+        assert!(calls >= 1, "self-protection: the scan found {path}");
+        assert_eq!(
+            calls, scoped,
+            "every dispatch in {path} is wrapped by exactly one identity scope"
+        );
+    }
 }
 
 /// Every production site that parks a call on a human — awaits an
@@ -4962,4 +4959,1258 @@ async fn an_agent_with_no_retrieval_tool_gets_a_cut_not_an_offload() {
         text.contains("no retrieval tool"),
         "the cut says so:\n{text}"
     );
+}
+
+// A3 acceptance tests use the real registry projection, gates, hooks and retry
+// pipeline. Only the terminal transport and human approval transport are doubles.
+mod a3 {
+    use super::*;
+    use crate::approval::{with_call_identity, CallIdentity};
+    use crate::sandbox::exec_approval::gate::{
+        ApprovalOutcome, ApprovalRequester, ApprovalResponse,
+    };
+    use crate::sandbox::exec_approval::ApprovalAction;
+    use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity, ToolCapabilityDescriptor};
+    use crate::tools::handlers::ToolHandler;
+    use crate::tools::registry::ToolHandlerRegistry;
+    use crate::tools::service::ToolDefinitionMetadata;
+    use std::collections::VecDeque;
+    use tokio::sync::Barrier;
+    // Planned readonly gate API, not a fixture-produced or writable verdict.
+    use super::super::current_dispatch_verdict;
+
+    #[derive(Debug, PartialEq)]
+    struct VerdictAudit {
+        own: bool,
+        sibling_call: bool,
+        wrong_name: bool,
+        wrong_revision: bool,
+        wrong_schema_version: bool,
+        wrong_replay_policy: bool,
+        wrong_fingerprint: bool,
+        wrong_input: bool,
+        sibling_actor: bool,
+    }
+
+    // The handler owns its expected identity independently of live registry
+    // lookup: rev1 must remain rev1 even after the registry publishes rev2.
+    fn unsafe_identity(revision: u64) -> ToolCallIdentity {
+        ToolCallIdentity {
+            schema_version: crate::tools::descriptor::SCHEMA_VERSION,
+            revision,
+            replay_policy: ReplayPolicy::Unsafe,
+            replay_contract_fingerprint: None,
+        }
+    }
+
+    // Planned matches borrowing shape: (&str, &str, &ToolCallIdentity,
+    // &Value, Option<&str>). No test constructs DispatchVerdict; only the
+    // actual production gates may mint it. Each negative changes ONE field.
+    fn audit_verdict(name: &str, own_identity: &ToolCallIdentity, input: &Value) -> VerdictAudit {
+        let call_id = crate::approval::current_tool_call_id().expect("handler has a call ID");
+        let actor = crate::identity::current_actor();
+        let verdict = current_dispatch_verdict().expect("gate must publish a dispatch verdict");
+        let sibling_call = if call_id == "parallel-allow-a" {
+            "parallel-allow-b"
+        } else {
+            "parallel-allow-a"
+        };
+        let sibling_actor = if actor.as_deref() == Some("actor-allow-a") {
+            "actor-allow-b"
+        } else {
+            "actor-allow-a"
+        };
+        let wrong_identity = ToolCallIdentity {
+            revision: own_identity.revision + 1,
+            ..*own_identity
+        };
+        let wrong_schema_version = ToolCallIdentity {
+            schema_version: own_identity.schema_version + 1,
+            ..*own_identity
+        };
+        let wrong_replay_policy = ToolCallIdentity {
+            replay_policy: ReplayPolicy::Safe,
+            ..*own_identity
+        };
+        let mut fingerprint_source =
+            ToolCapabilityDescriptor::from_definition(&definition(name, false), 0);
+        fingerprint_source.replay_policy = ReplayPolicy::Safe;
+        fingerprint_source.implementation_contract =
+            Some(crate::tools::descriptor::ImplementationContract {
+                id: "test:unrelated-contract".into(),
+                version: "1".into(),
+            });
+        let wrong_fingerprint = ToolCallIdentity {
+            replay_contract_fingerprint: Some(
+                fingerprint_source.replay_contract_fingerprint().unwrap(),
+            ),
+            ..*own_identity
+        };
+        VerdictAudit {
+            own: verdict.matches(&call_id, name, own_identity, input, actor.as_deref()),
+            sibling_call: verdict.matches(
+                sibling_call,
+                name,
+                own_identity,
+                input,
+                actor.as_deref(),
+            ),
+            wrong_name: verdict.matches(
+                &call_id,
+                "other-tool",
+                own_identity,
+                input,
+                actor.as_deref(),
+            ),
+            wrong_revision: verdict.matches(
+                &call_id,
+                name,
+                &wrong_identity,
+                input,
+                actor.as_deref(),
+            ),
+            wrong_schema_version: verdict.matches(
+                &call_id,
+                name,
+                &wrong_schema_version,
+                input,
+                actor.as_deref(),
+            ),
+            wrong_replay_policy: verdict.matches(
+                &call_id,
+                name,
+                &wrong_replay_policy,
+                input,
+                actor.as_deref(),
+            ),
+            wrong_fingerprint: verdict.matches(
+                &call_id,
+                name,
+                &wrong_fingerprint,
+                input,
+                actor.as_deref(),
+            ),
+            wrong_input: verdict.matches(
+                &call_id,
+                name,
+                own_identity,
+                &json!({"different": true}),
+                actor.as_deref(),
+            ),
+            sibling_actor: verdict.matches(
+                &call_id,
+                name,
+                own_identity,
+                input,
+                Some(sibling_actor),
+            ),
+        }
+    }
+
+    fn assert_bound_verdict(audit: &VerdictAudit) {
+        assert!(
+            audit.own,
+            "handler must hold authority for its exact tuple: {audit:?}"
+        );
+        assert!(
+            !audit.sibling_call,
+            "a sibling call cannot borrow proof: {audit:?}"
+        );
+        assert!(
+            !audit.wrong_name,
+            "proof must bind the tool name: {audit:?}"
+        );
+        assert!(
+            !audit.wrong_revision,
+            "proof must bind the captured revision: {audit:?}"
+        );
+        assert!(
+            !audit.wrong_schema_version,
+            "proof must bind the schema version: {audit:?}"
+        );
+        assert!(
+            !audit.wrong_replay_policy,
+            "proof must bind replay policy: {audit:?}"
+        );
+        assert!(
+            !audit.wrong_fingerprint,
+            "proof must bind the contract fingerprint: {audit:?}"
+        );
+        assert!(
+            !audit.wrong_input,
+            "proof must bind the executed bytes: {audit:?}"
+        );
+        assert!(
+            !audit.sibling_actor,
+            "a sibling actor cannot borrow proof: {audit:?}"
+        );
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Invocation {
+        handler: &'static str,
+        call_id: Option<String>,
+        actor: Option<String>,
+        input: Value,
+        identity: ToolCallIdentity,
+        before_yield: VerdictAudit,
+        after_yield: VerdictAudit,
+    }
+
+    struct RecordingHandler {
+        definition: ToolDefinition,
+        tag: &'static str,
+        invoked: StdArc<StdMutex<Vec<Invocation>>>,
+        partial_write: Option<std::path::PathBuf>,
+        own_identity: ToolCallIdentity,
+        overlap: Option<StdArc<Barrier>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ToolHandler for RecordingHandler {
+        fn definition(&self) -> ToolDefinition {
+            self.definition.clone()
+        }
+
+        async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
+            let before_yield = audit_verdict(&self.definition.name, &self.own_identity, &input);
+            if let Some(overlap) = &self.overlap {
+                // Both authorized handlers must be live before either reads
+                // its verdict again. join! interleaves them on ONE Tokio task.
+                overlap.wait().await;
+            }
+            let after_yield = audit_verdict(&self.definition.name, &self.own_identity, &input);
+            self.invoked.lock().unwrap().push(Invocation {
+                handler: self.tag,
+                call_id: crate::approval::current_tool_call_id(),
+                actor: crate::identity::current_actor(),
+                input,
+                identity: self.own_identity,
+                before_yield,
+                after_yield,
+            });
+            if let Some(path) = &self.partial_write {
+                use std::io::Write;
+                let mut sink = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .unwrap();
+                // The first bytes reached the terminal before transport failed.
+                sink.write_all(b"partial\n").unwrap();
+                sink.flush().unwrap();
+                return Err(ToolError::Transport {
+                    name: self.definition.name.clone(),
+                    cause: "terminal disconnected after partial write".into(),
+                });
+            }
+            Ok(ToolOutput {
+                value: json!({"handler": self.tag}),
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    fn definition(name: &str, idempotent: bool) -> ToolDefinition {
+        ToolDefinition {
+            name: name.into(),
+            description: "A3 terminal transport fixture".into(),
+            input_schema: json!({"type": "object"}),
+            source: ToolSource::Builtin,
+            metadata: ToolDefinitionMetadata {
+                requires_approval: true,
+                idempotent,
+                max_duration_ms: Some(2_000),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn register(registry: &ToolHandlerRegistry, handler: impl ToolHandler) {
+        let descriptor = ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
+        registry.register(descriptor, StdArc::new(handler)).unwrap();
+    }
+
+    // The projection remains the real production adapter, for discovery.
+    // PLANNED INTERNAL SEAM / COMPILE RED: ScopedToolService needs a retained
+    // Arc<ToolHandlerRegistry> to resolve_entry ONCE before gates, then dispatch
+    // that captured entry. This test-only helper assumes private storage named
+    // `canonical_registry`; no new public builder or fake live adapter is used.
+    // Today neither LoopToolRegistry nor McpRegistryTool retains that link or
+    // a full RegistryEntry, so fixing only resolve_entry cannot make this green.
+    fn service(registry: &StdArc<ToolHandlerRegistry>) -> ScopedToolService {
+        let mut inner = LoopToolRegistry::new();
+        for entry in registry.entries_snapshot().values() {
+            inner.register(Box::new(
+                crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                    StdArc::clone(&entry.handler),
+                    &entry.descriptor,
+                ),
+            ));
+        }
+        let mut svc = ScopedToolService::new(StdArc::new(inner), BTreeSet::new());
+        svc.canonical_registry = Some(StdArc::clone(registry));
+        svc
+    }
+
+    fn identity(id: &str) -> CallIdentity {
+        CallIdentity {
+            turn_id: crate::session::events::TurnId::nil(),
+            call_id: id.into(),
+        }
+    }
+
+    struct SequenceRequester {
+        answers: StdMutex<VecDeque<ApprovalOutcome>>,
+        seen: StdMutex<Vec<(Option<String>, ApprovalAction)>>,
+    }
+
+    impl SequenceRequester {
+        fn new(answers: impl IntoIterator<Item = ApprovalOutcome>) -> Self {
+            Self {
+                answers: StdMutex::new(answers.into_iter().collect()),
+                seen: StdMutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ApprovalRequester for SequenceRequester {
+        async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((crate::approval::current_tool_call_id(), action.clone()));
+            self.answers
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(ApprovalOutcome::Denied)
+                .into()
+        }
+    }
+
+    struct BoundaryRequester {
+        registry: StdArc<ToolHandlerRegistry>,
+        arrived: StdArc<Barrier>,
+        release: StdArc<Barrier>,
+        seen: StdMutex<Vec<(String, ToolCallIdentity)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ApprovalRequester for BoundaryRequester {
+        async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
+            let entry = self.registry.resolve_entry(&action.tool_name).unwrap();
+            let first = {
+                let mut seen = self.seen.lock().unwrap();
+                let first = seen.is_empty();
+                seen.push((
+                    crate::approval::current_tool_call_id().unwrap(),
+                    ToolCallIdentity::from_descriptor(&entry.descriptor),
+                ));
+                first
+            };
+            if first {
+                self.arrived.wait().await;
+                self.release.wait().await;
+            }
+            ApprovalOutcome::Approved.into()
+        }
+    }
+
+    // Break caught: re-resolving by name after approval executes rev2 under
+    // rev1 authority instead of the captured handler.
+    // The same service must refresh only the NEXT call. Authority is observed
+    // inside the real handlers, not inferred from ambient ID or registry reads.
+    #[tokio::test]
+    async fn replacement_between_gate_and_dispatch_uses_captured_entry() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "handler1",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let arrived = StdArc::new(Barrier::new(2));
+        let release = StdArc::new(Barrier::new(2));
+        let requester = StdArc::new(BoundaryRequester {
+            registry: registry.clone(),
+            arrived: arrived.clone(),
+            release: release.clone(),
+            seen: StdMutex::new(Vec::new()),
+        });
+        let svc = StdArc::new(
+            service(&registry)
+                .with_turn_context(turn_ctx("a3-replacement"))
+                .with_confirmation(requester.clone()),
+        );
+        let first_svc = svc.clone();
+        let first = tokio::spawn(with_call_identity(
+            Some(identity("replace-a")),
+            async move {
+                first_svc
+                    .execute("terminal", json!({"action": "write", "data": "one"}))
+                    .await
+            },
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(5), arrived.wait())
+            .await
+            .expect("rev1 must reach the approval barrier");
+        let replacement = RecordingHandler {
+            definition: definition("terminal", false),
+            tag: "handler2",
+            invoked: invoked.clone(),
+            partial_write: None,
+            own_identity: unsafe_identity(2),
+            overlap: None,
+        };
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0),
+                StdArc::new(replacement),
+            )
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), release.wait())
+            .await
+            .expect("replacement must release the in-flight gate");
+        let first_output = tokio::time::timeout(std::time::Duration::from_secs(5), first)
+            .await
+            .expect("captured rev1 dispatch must complete")
+            .unwrap()
+            .expect("in-flight approval was granted");
+        assert_eq!(
+            parse_tool_output(&first_output.value),
+            json!({"handler": "handler1"})
+        );
+        assert_eq!(requester.seen.lock().unwrap()[0].1.revision, 1);
+        assert_eq!(invoked.lock().unwrap()[0].handler, "handler1");
+
+        // Deliberately no service rebuild: stale request projection is not
+        // an acceptable substitute for the canonical next-call snapshot.
+        let next_output = with_call_identity(
+            Some(identity("replace-b")),
+            svc.execute("terminal", json!({"action": "write", "data": "two"})),
+        )
+        .await
+        .expect("next call was separately approved");
+        let boundary = requester.seen.lock().unwrap();
+        assert_eq!(
+            boundary
+                .iter()
+                .map(|(id, i)| (id.as_str(), i.revision))
+                .collect::<Vec<_>>(),
+            vec![("replace-a", 1), ("replace-b", 2)]
+        );
+        let calls = invoked.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].call_id.as_deref(), Some("replace-a"));
+        assert_eq!(calls[1].call_id.as_deref(), Some("replace-b"));
+        assert_eq!(calls[0].identity, unsafe_identity(1));
+        assert_eq!(calls[1].identity, unsafe_identity(2));
+        assert_eq!(calls[0].input, json!({"action": "write", "data": "one"}));
+        assert_eq!(calls[1].input, json!({"action": "write", "data": "two"}));
+        for call in calls.iter() {
+            assert_bound_verdict(&call.before_yield);
+            assert_bound_verdict(&call.after_yield);
+        }
+        assert!(
+            current_dispatch_verdict().is_none(),
+            "proof must leave the dispatch scope"
+        );
+        assert_eq!(
+            calls[1].handler, "handler2",
+            "rev2 boundary identity must name the executed handler"
+        );
+        assert_eq!(
+            parse_tool_output(&next_output.value),
+            json!({"handler": "handler2"})
+        );
+    }
+
+    // Break caught: `authorized` on the original bytes skips the gate after a
+    // hook replaces them, letting an AllowOnce authorize different terminal I/O.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn proof_for_original_input_cannot_authorize_rewrite() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "terminal",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let requester = StdArc::new(SequenceRequester::new([
+            ApprovalOutcome::Approved,
+            ApprovalOutcome::Denied,
+        ]));
+        let executor = StdArc::new(HookExecutor::new(vec![make_command_hook(
+            HookEvent::BeforeToolCall,
+            HookKind::Interceptor,
+            r#"printf '%s\n' 'update_input: {"action":"write","data":"rewritten"}'"#,
+        )]));
+        let svc = service(&registry)
+            .with_turn_context(turn_ctx("a3-rewrite"))
+            .with_confirmation(requester.clone())
+            .with_hook_executor(executor, "a3-rewrite");
+        let (result, effective) = with_call_identity(
+            Some(identity("rewrite-a")),
+            svc.execute_with_cancel_effective(
+                "terminal",
+                json!({"action": "write", "data": "original"}),
+                CancellationToken::new(),
+            ),
+        )
+        .await;
+        assert!(
+            invoked.lock().unwrap().is_empty(),
+            "no rewritten bytes were approved; terminal must not be reached"
+        );
+        assert!(
+            matches!(result, Err(ToolError::Refused { .. })),
+            "rewritten input must be refused, got {result:?}"
+        );
+        assert_eq!(
+            effective, None,
+            "a refused rewrite never crosses the dispatch line"
+        );
+        let seen = requester.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "the rewrite needs a new decision");
+        assert_eq!(seen[0].0.as_deref(), Some("rewrite-a"));
+        assert_eq!(seen[1].0.as_deref(), Some("rewrite-a"));
+        assert_ne!(seen[0].1.grant_key, seen[1].1.grant_key);
+        assert!(seen[0].1.summary.contains("original"));
+        assert!(seen[1].1.summary.contains("rewritten"));
+    }
+
+    struct ParallelRequester {
+        barrier: Barrier,
+        seen: StdMutex<Vec<(String, String, Option<String>)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ApprovalRequester for ParallelRequester {
+        async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
+            assert!(
+                current_dispatch_verdict().is_none(),
+                "pending approval has no proof yet"
+            );
+            let id = crate::approval::current_tool_call_id().unwrap();
+            self.seen.lock().unwrap().push((
+                id.clone(),
+                action.tool_name.clone(),
+                crate::identity::current_actor(),
+            ));
+            self.barrier.wait().await;
+            assert!(
+                current_dispatch_verdict().is_none(),
+                "a sibling's live proof cannot enter this gate"
+            );
+            if id == "parallel-allow-a" || id == "parallel-allow-b" {
+                ApprovalOutcome::Approved.into()
+            } else {
+                ApprovalOutcome::Denied.into()
+            }
+        }
+    }
+
+    // Break caught: a name-keyed/shared verdict authorizes the wrong call or
+    // actor while two approved handlers overlap. A denied third sibling must
+    // never reach the handler. Same name AND identical input on purpose.
+    #[tokio::test]
+    async fn same_name_parallel_calls_do_not_share_verdict() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "terminal",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: Some(StdArc::new(Barrier::new(2))),
+            },
+        );
+        let requester = StdArc::new(ParallelRequester {
+            barrier: Barrier::new(3),
+            seen: StdMutex::new(Vec::new()),
+        });
+        let svc = service(&registry)
+            .with_turn_context(turn_ctx("a3-parallel"))
+            .with_confirmation(requester.clone());
+        let input = json!({"action": "write", "data": "same-bytes"});
+        let allow_a = crate::identity::as_actor(
+            "actor-allow-a",
+            with_call_identity(
+                Some(identity("parallel-allow-a")),
+                svc.execute("terminal", input.clone()),
+            ),
+        );
+        let allow_b = crate::identity::as_actor(
+            "actor-allow-b",
+            with_call_identity(
+                Some(identity("parallel-allow-b")),
+                svc.execute("terminal", input.clone()),
+            ),
+        );
+        let deny = crate::identity::as_actor(
+            "actor-deny",
+            with_call_identity(
+                Some(identity("parallel-deny")),
+                svc.execute("terminal", input.clone()),
+            ),
+        );
+        assert!(current_dispatch_verdict().is_none());
+        let (allowed_a, allowed_b, denied) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                // Deliberately not spawn: sibling futures share a Tokio task,
+                // so per-future restoration must work across handler awaits.
+                tokio::join!(allow_a, allow_b, deny)
+            })
+            .await
+            .expect("three decisions and two live handlers must cross their barriers");
+        assert!(
+            allowed_a.is_ok(),
+            "approved sibling A must run: {allowed_a:?}"
+        );
+        assert!(
+            allowed_b.is_ok(),
+            "approved sibling B must run: {allowed_b:?}"
+        );
+        assert!(
+            matches!(denied, Err(ToolError::Refused { .. })),
+            "denied sibling must not run: {denied:?}"
+        );
+        assert!(
+            current_dispatch_verdict().is_none(),
+            "proof must not escape join!"
+        );
+        let mut calls = invoked.lock().unwrap();
+        calls.sort_by(|a, b| a.call_id.cmp(&b.call_id));
+        assert_eq!(
+            calls.len(),
+            2,
+            "denied sibling cannot borrow either live proof"
+        );
+        for (call, id, actor) in [
+            (&calls[0], "parallel-allow-a", "actor-allow-a"),
+            (&calls[1], "parallel-allow-b", "actor-allow-b"),
+        ] {
+            assert_eq!(call.handler, "terminal");
+            assert_eq!(call.call_id.as_deref(), Some(id));
+            assert_eq!(call.actor.as_deref(), Some(actor));
+            assert_eq!(call.input, input);
+            assert_eq!(call.identity, unsafe_identity(1));
+            assert_bound_verdict(&call.before_yield);
+            assert_bound_verdict(&call.after_yield);
+        }
+        let mut seen = requester.seen.lock().unwrap().clone();
+        seen.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            seen,
+            vec![
+                (
+                    "parallel-allow-a".into(),
+                    "terminal".into(),
+                    Some("actor-allow-a".into())
+                ),
+                (
+                    "parallel-allow-b".into(),
+                    "terminal".into(),
+                    Some("actor-allow-b".into())
+                ),
+                (
+                    "parallel-deny".into(),
+                    "terminal".into(),
+                    Some("actor-deny".into())
+                ),
+            ]
+        );
+    }
+
+    struct SpawningHandler {
+        definition: ToolDefinition,
+        service: StdArc<std::sync::OnceLock<std::sync::Weak<ScopedToolService>>>,
+        writes: StdArc<AtomicUsize>,
+        parent_audits: StdArc<StdMutex<Vec<VerdictAudit>>>,
+        own_identity: ToolCallIdentity,
+    }
+
+    #[async_trait::async_trait]
+    impl ToolHandler for SpawningHandler {
+        fn definition(&self) -> ToolDefinition {
+            self.definition.clone()
+        }
+
+        async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
+            // The second invocation is the unauthorized child if the gate leaks.
+            // Do not recurse forever when demonstrating that failure.
+            if self.writes.fetch_add(1, Ordering::SeqCst) != 0 {
+                return Ok(ToolOutput {
+                    value: json!({"unauthorized_child_write": true}),
+                    metadata: Default::default(),
+                });
+            }
+            self.parent_audits.lock().unwrap().push(audit_verdict(
+                &self.definition.name,
+                &self.own_identity,
+                &input,
+            ));
+            let svc = self.service.get().unwrap().upgrade().unwrap();
+            let name = self.definition.name.clone();
+            let child_input = input.clone();
+            let child = tokio::spawn(async move {
+                let call_id = crate::approval::current_tool_call_id();
+                let actor = crate::identity::current_actor();
+                let proof_before = current_dispatch_verdict().is_some();
+                let result = svc.execute(&name, child_input).await;
+                let proof_after = current_dispatch_verdict().is_some();
+                json!({
+                    "child_call_id": call_id,
+                    "child_actor": actor,
+                    "child_proof_before": proof_before,
+                    "child_proof_after": proof_after,
+                    "child_denied": matches!(result, Err(ToolError::Refused { .. }) | Err(ToolError::PermissionDenied { .. })),
+                })
+            }).await.unwrap();
+            // Awaiting a child must not consume or overwrite the parent's proof.
+            self.parent_audits.lock().unwrap().push(audit_verdict(
+                &self.definition.name,
+                &self.own_identity,
+                &input,
+            ));
+            Ok(ToolOutput {
+                value: child,
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    // Break caught: publishing a call proof on the shared service (or copying
+    // it into spawned children) authorizes a child without its own decision.
+    // Observe actual proof absence in the child AND parent proof on both sides
+    // of spawn. Merely failing at the parent's operator gate cannot pass this.
+    #[tokio::test]
+    async fn child_task_does_not_inherit_human_or_operator_proof() {
+        for (name, session, parent_id) in [
+            ("terminal", "a3-child-human", "parent-human"),
+            ("vault_store", "a3-child-operator", "parent-operator"),
+        ] {
+            let registry = StdArc::new(ToolHandlerRegistry::new());
+            let cell = StdArc::new(std::sync::OnceLock::new());
+            let writes = StdArc::new(AtomicUsize::new(0));
+            let parent_audits = StdArc::new(StdMutex::new(Vec::new()));
+            register(
+                &registry,
+                SpawningHandler {
+                    definition: definition(name, false),
+                    service: cell.clone(),
+                    writes: writes.clone(),
+                    parent_audits: parent_audits.clone(),
+                    own_identity: unsafe_identity(1),
+                },
+            );
+            let requester = StdArc::new(SequenceRequester::new([
+                ApprovalOutcome::Approved,
+                ApprovalOutcome::Denied,
+            ]));
+            let own_channel = StdArc::new(SequenceRequester::new([]));
+            let mut ctx = turn_ctx(session);
+            // terminal also requires operator status. Keep its parent
+            // operator-tier (None) so it reaches HUMAN confirmation; only the
+            // vault case is guest-tier and exercises live operator approval.
+            if name == "vault_store" {
+                ctx.caller_role = Some("guest".into());
+            }
+            let svc = service(&registry).with_turn_context(ctx);
+            let svc = StdArc::new(if name == "vault_store" {
+                svc.with_config_approval(requester.clone())
+                    .with_confirmation(own_channel.clone())
+            } else {
+                svc.with_confirmation(requester.clone())
+            });
+            assert!(cell.set(StdArc::downgrade(&svc)).is_ok());
+            let output = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                crate::identity::as_actor(
+                    "parent-actor",
+                    with_call_identity(
+                        Some(identity(parent_id)),
+                        svc.execute(name, json!({"data": "same-bytes"})),
+                    ),
+                ),
+            )
+            .await
+            .expect("parent and its independently gated child must complete")
+            .expect("only the parent call is approved");
+            assert_eq!(
+                writes.load(Ordering::SeqCst),
+                1,
+                "{name}: child must not reach the write transport"
+            );
+            assert_eq!(
+                parse_tool_output(&output.value),
+                json!({
+                    "child_call_id": null, "child_actor": null, "child_denied": true,
+                    "child_proof_before": false, "child_proof_after": false,
+                }),
+                "{name}: child requires its own identity and decision"
+            );
+            let audits = parent_audits.lock().unwrap();
+            assert_eq!(
+                audits.len(),
+                2,
+                "{name}: parent must reach the handler and survive spawn"
+            );
+            for audit in audits.iter() {
+                assert_bound_verdict(audit);
+            }
+            assert!(
+                current_dispatch_verdict().is_none(),
+                "parent proof must be scoped"
+            );
+            let seen = requester.seen.lock().unwrap();
+            assert_eq!(seen.len(), 2, "{name}: child must ask independently");
+            assert_eq!(seen[0].0.as_deref(), Some(parent_id));
+            assert_eq!(seen[1].0, None);
+            assert!(
+                own_channel.seen.lock().unwrap().is_empty(),
+                "operator approval must not double-prompt the parent's own channel"
+            );
+        }
+    }
+
+    // Break caught: an optimistic legacy idempotent bit overrides explicit
+    // Unsafe replay policy and respins a terminal write after bytes escaped.
+    #[tokio::test]
+    async fn unsafe_terminal_write_error_is_not_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = dir.path().join("terminal-bytes");
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        // Unsafe is a separate contract, not inferred from idempotency. Keep
+        // the old bit optimistic so this cannot pass merely on a static list.
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", true),
+                tag: "terminal",
+                invoked: invoked.clone(),
+                partial_write: Some(sink.clone()),
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        assert_eq!(
+            registry.descriptor("terminal").unwrap().replay_policy,
+            ReplayPolicy::Unsafe
+        );
+        let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
+        let svc = service(&registry)
+            .with_turn_context(turn_ctx("a3-partial-write"))
+            .with_confirmation(requester.clone());
+        let result = with_call_identity(
+            Some(identity("partial-write")),
+            svc.execute("terminal", json!({"action": "write", "data": "partial"})),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(ToolError::Transport { .. })),
+            "partial-write error must reach the caller: {result:?}"
+        );
+        assert_eq!(
+            std::fs::read(&sink).unwrap(),
+            b"partial\n",
+            "partial bytes must reach the terminal exactly once"
+        );
+        assert_eq!(
+            invoked.lock().unwrap().len(),
+            1,
+            "Unsafe terminal I/O must have exactly one attempt"
+        );
+        for call in invoked.lock().unwrap().iter() {
+            assert_bound_verdict(&call.before_yield);
+            assert_bound_verdict(&call.after_yield);
+        }
+        assert!(
+            current_dispatch_verdict().is_none(),
+            "error must clear the dispatch proof"
+        );
+        assert_eq!(
+            requester.seen.lock().unwrap().len(),
+            1,
+            "a retry must not hide behind the original approval"
+        );
+    }
+
+    #[tokio::test]
+    async fn removed_canonical_entry_never_resurrects_its_projection() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "old",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
+        let svc = service(&registry).with_confirmation(requester.clone());
+        registry.unregister("terminal").unwrap();
+        let (result, effective) = with_call_identity(
+            Some(identity("removed")),
+            svc.execute_with_cancel_effective(
+                "terminal",
+                json!({"action": "write"}),
+                CancellationToken::new(),
+            ),
+        )
+        .await;
+        assert!(matches!(result, Err(ToolError::NotFound { .. })));
+        assert_eq!(effective, None);
+        assert!(
+            invoked.lock().unwrap().is_empty(),
+            "old projection is not fallback authority"
+        );
+        assert!(
+            requester.seen.lock().unwrap().is_empty(),
+            "removed entry cannot even request admission"
+        );
+        assert!(current_dispatch_verdict().is_none());
+    }
+
+    #[tokio::test]
+    async fn source_changed_canonical_entry_fails_closed_for_same_service() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "old",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let svc = service(&registry);
+        let mut changed = definition("terminal", false);
+        changed.source = ToolSource::Mcp {
+            server_id: "hidden-server".into(),
+        };
+        let replacement = RecordingHandler {
+            definition: changed,
+            tag: "hidden",
+            invoked: invoked.clone(),
+            partial_write: None,
+            own_identity: unsafe_identity(2),
+            overlap: None,
+        };
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0),
+                StdArc::new(replacement),
+            )
+            .unwrap();
+        let (result, effective) = with_call_identity(
+            Some(identity("source-change")),
+            svc.execute_with_cancel_effective("terminal", json!({}), CancellationToken::new()),
+        )
+        .await;
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert_eq!(effective, None);
+        assert!(invoked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn live_canonical_descriptor_not_stale_projection_decides_next_confirmation() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        let mut first = definition("terminal", true);
+        first.metadata.requires_approval = false;
+        register(
+            &registry,
+            RecordingHandler {
+                definition: first,
+                tag: "old",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Denied]));
+        let svc = service(&registry)
+            .with_exec_tier(crate::config::types::policies::ExecTier::Full)
+            .with_confirmation(requester.clone());
+        let replacement = RecordingHandler {
+            definition: definition("terminal", false),
+            tag: "new-confirmed",
+            invoked: invoked.clone(),
+            partial_write: None,
+            own_identity: unsafe_identity(2),
+            overlap: None,
+        };
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0),
+                StdArc::new(replacement),
+            )
+            .unwrap();
+        let (result, effective) = with_call_identity(
+            Some(identity("fresh-floor")),
+            svc.execute_with_cancel_effective("terminal", json!({}), CancellationToken::new()),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(ToolError::Refused { .. })),
+            "rev2's declared floor survives Full"
+        );
+        assert_eq!(effective, None);
+        assert_eq!(requester.seen.lock().unwrap().len(), 1);
+        assert!(invoked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn actual_file_ops_read_is_admitted_but_canonical_scheduling_is_global() {
+        use crate::tools::concurrency::ConcurrencyClaim;
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        register(
+            &registry,
+            crate::tools::handlers::builtin::BuiltinHandler::new(
+                "file_ops".into(),
+                StdArc::new(crate::builtin_tools::FileOpsTool::new()),
+            ),
+        );
+        let svc = service(&registry)
+            .with_exec_tier(crate::config::types::policies::ExecTier::Plan)
+            .with_turn_context({
+                let mut ctx = turn_ctx("a3-actual-file-ops-side-question");
+                ctx.side_question = true;
+                ctx
+            });
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("read-visible.txt");
+        std::fs::write(&victim, "must survive denied mutation").unwrap();
+        let read = json!({"operation": "list", "path": dir.path().to_str().unwrap()});
+        let write = json!({"operation": "delete", "path": victim.to_str().unwrap()});
+        let entry = registry.resolve_entry("file_ops").unwrap();
+        // The admission wrapper must delegate the captured handler's claim.
+        assert_eq!(
+            entry.handler.concurrency_claim(&read),
+            ConcurrencyClaim::Shared
+        );
+        assert_eq!(
+            svc.call_concurrency_claim("file_ops", &read).await,
+            ConcurrencyClaim::global()
+        );
+        assert_eq!(
+            svc.call_concurrency_claim("file_ops", &write).await,
+            ConcurrencyClaim::global()
+        );
+
+        let listed = crate::identity::as_actor(
+            "operator",
+            with_call_identity(
+                Some(identity("actual-file-ops-read")),
+                svc.execute("file_ops", read),
+            ),
+        )
+        .await
+        .expect("actual builtin read arm is admitted despite coarse false metadata");
+        let listed_value: Value = serde_json::from_str(
+            listed
+                .value
+                .as_str()
+                .expect("file_ops output is serialized JSON"),
+        )
+        .expect("file_ops output JSON parses");
+        assert_eq!(listed_value["success"], json!(true));
+        assert!(listed_value["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| { file["name"] == json!("read-visible.txt") }));
+        let refused = crate::identity::as_actor(
+            "operator",
+            with_call_identity(
+                Some(identity("actual-file-ops-delete")),
+                svc.execute("file_ops", write),
+            ),
+        )
+        .await;
+        assert!(matches!(refused, Err(ToolError::PermissionDenied { .. })));
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "must survive denied mutation"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_replaced_builtin_cannot_use_name_only_shared_claim_to_bypass_side_question() {
+        struct CustomFixtureHandler {
+            definition: ToolDefinition,
+            effects: StdArc<AtomicUsize>,
+        }
+
+        #[async_trait::async_trait]
+        impl ToolHandler for CustomFixtureHandler {
+            fn definition(&self) -> ToolDefinition {
+                self.definition.clone()
+            }
+
+            async fn invoke(&self, _input: Value) -> Result<ToolOutput, ToolError> {
+                self.effects.fetch_add(1, Ordering::SeqCst);
+                Ok(ToolOutput {
+                    value: json!({"effect": "file_read"}),
+                    metadata: Default::default(),
+                })
+            }
+        }
+
+        fn builtin_fixture_definition(idempotent: bool, concurrent_safe: bool) -> ToolDefinition {
+            ToolDefinition {
+                name: "file_read".into(),
+                description: "A3 builtin replacement fixture".into(),
+                input_schema: json!({"type": "object"}),
+                source: ToolSource::Builtin,
+                metadata: ToolDefinitionMetadata {
+                    requires_approval: false,
+                    idempotent,
+                    concurrent_safe,
+                    max_duration_ms: Some(2_000),
+                    ..Default::default()
+                },
+            }
+        }
+
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let effects = StdArc::new(AtomicUsize::new(0));
+        let rev1 = builtin_fixture_definition(true, true);
+        register(
+            &registry,
+            CustomFixtureHandler {
+                definition: rev1.clone(),
+                effects: effects.clone(),
+            },
+        );
+        let svc = service(&registry)
+            .with_exec_tier(crate::config::types::policies::ExecTier::Plan)
+            .with_turn_context({
+                let mut ctx = turn_ctx("a3-replaced-builtin-side-question");
+                ctx.side_question = true;
+                ctx
+            });
+
+        // Same canonical name and Builtin source, but rev2 declares the
+        // opposite live facts. The registry is the authority for this call;
+        // the service projection remains the rev1 discovery snapshot.
+        let rev2 = builtin_fixture_definition(false, false);
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&rev2, 0),
+                StdArc::new(CustomFixtureHandler {
+                    definition: rev2,
+                    effects: effects.clone(),
+                }),
+            )
+            .expect("same-name canonical replacement must succeed");
+
+        let result = crate::identity::as_actor(
+            "operator",
+            with_call_identity(
+                Some(identity("replaced-builtin-side-question")),
+                svc.execute("file_read", json!({"path": "/tmp/fixture"})),
+            ),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(ToolError::PermissionDenied { .. })),
+            "rev2's non-idempotent/non-concurrent-safe declaration must remain denied: {result:?}"
+        );
+        assert_eq!(
+            effects.load(Ordering::SeqCst),
+            0,
+            "a denied replaced builtin must not reach the actual effect handler"
+        );
+    }
+
+    #[tokio::test]
+    async fn production_projection_link_rechecks_mcp_visibility_at_capture() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        let mut def = definition("server__write", false);
+        def.source = ToolSource::Mcp {
+            server_id: "server".into(),
+        };
+        register(
+            &registry,
+            RecordingHandler {
+                definition: def,
+                tag: "visible",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let visibility = StdArc::new(std::sync::atomic::AtomicBool::new(true));
+        let switch = visibility.clone();
+        let visible: crate::tools::handlers::McpServerFilter =
+            StdArc::new(move |_| switch.load(Ordering::SeqCst));
+        let mut inner = LoopToolRegistry::new();
+        inner.bind_canonical_registry(registry.clone(), visible);
+        let entry = registry.resolve_entry("server__write").unwrap();
+        inner.register(Box::new(
+            crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                entry.handler,
+                &entry.descriptor,
+            ),
+        ));
+        let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
+        let svc = ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
+            .with_confirmation(requester.clone());
+        assert!(
+            StdArc::ptr_eq(svc.canonical_registry.as_ref().unwrap(), &registry),
+            "Scoped new retains the production Arc"
+        );
+        with_call_identity(
+            Some(identity("visible-call")),
+            svc.execute("server__write", json!({})),
+        )
+        .await
+        .unwrap();
+        visibility.store(false, Ordering::SeqCst);
+        let (result, effective) = with_call_identity(
+            Some(identity("hidden-call")),
+            svc.execute_with_cancel_effective("server__write", json!({}), CancellationToken::new()),
+        )
+        .await;
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert_eq!(effective, None);
+        assert_eq!(
+            invoked.lock().unwrap().len(),
+            1,
+            "the hidden server is never called a second time"
+        );
+        assert_eq!(requester.seen.lock().unwrap().len(), 1);
+    }
 }

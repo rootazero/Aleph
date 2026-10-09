@@ -19,11 +19,13 @@ use std::sync::Weak;
 use arc_swap::ArcSwap;
 use tokio::sync::broadcast;
 
+use crate::session::events::ToolOutput;
 use crate::tools::descriptor::{
     ReplayPolicyLookup, ToolCallIdentity, ToolCapabilityDescriptor, ToolDescriptorLookup,
 };
-use crate::tools::handlers::ToolHandler;
+use crate::tools::handlers::{McpServerFilter, ToolHandler};
 use crate::tools::service::{ToolDefinition, ToolError, ToolSource};
+use serde_json::Value;
 
 /// One registry value: the callable handler plus the frozen descriptor that is
 /// its capability contract.
@@ -31,6 +33,71 @@ use crate::tools::service::{ToolDefinition, ToolError, ToolSource};
 pub struct RegistryEntry {
     pub handler: Arc<dyn ToolHandler>,
     pub descriptor: Arc<ToolCapabilityDescriptor>,
+}
+
+/// Registry-owned invocation boundary. The raw handler is never returned by
+/// any canonical resolver, snapshot, unregister, or visibility binding.
+struct AdmissionHandler {
+    inner: Arc<dyn ToolHandler>,
+    descriptor: Arc<ToolCapabilityDescriptor>,
+}
+
+#[async_trait::async_trait]
+impl ToolHandler for AdmissionHandler {
+    async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
+        let identity = ToolCallIdentity::from_descriptor(&self.descriptor);
+        let actor = crate::identity::current_actor();
+        let admitted = crate::approval::current_tool_call_id().is_some_and(|call_id| {
+            crate::tools::dispatch_verdict::invocation_admitted(
+                &call_id,
+                &self.descriptor.name,
+                &identity,
+                &input,
+                actor.as_deref(),
+            )
+        });
+        if !admitted {
+            return Err(ToolError::PermissionDenied {
+                name: self.descriptor.name.clone(),
+                reason:
+                    "canonical invocation requires exact dispatch or sealed Safe replay admission"
+                        .into(),
+            });
+        }
+        self.inner.invoke(input).await
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        self.inner.definition()
+    }
+    fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        self.inner.concurrency_claim(input)
+    }
+    fn fences_output(&self) -> bool {
+        self.inner.fences_output()
+    }
+
+    fn bind_visible_servers(&self, visible: &McpServerFilter) -> Option<Arc<dyn ToolHandler>> {
+        self.inner.bind_visible_servers(visible).map(|inner| {
+            Arc::new(Self {
+                inner,
+                descriptor: Arc::clone(&self.descriptor),
+            }) as Arc<dyn ToolHandler>
+        })
+    }
+}
+
+impl RegistryEntry {
+    fn admitted(handler: Arc<dyn ToolHandler>, descriptor: ToolCapabilityDescriptor) -> Self {
+        let descriptor = Arc::new(descriptor);
+        Self {
+            handler: Arc::new(AdmissionHandler {
+                inner: handler,
+                descriptor: Arc::clone(&descriptor),
+            }),
+            descriptor,
+        }
+    }
 }
 
 /// One immutable registry generation. Entries, the mutation revision and the
@@ -234,11 +301,12 @@ impl ReplayPolicyLookup for ToolHandlerRegistry {
 impl ToolDescriptorLookup for ToolHandlerRegistry {
     /// Copy the durable identity fields from the current descriptor for `name`.
     ///
-    /// `descriptor` reads one `RegistryEntry` (handler and descriptor written in
-    /// the same atomic swap), so the returned identity and the handler a caller
-    /// resolves are always the same registry generation. Returns `None` for an
-    /// unknown name — a missing descriptor is unknown, never allow-all. This is
-    /// a snapshot read and never authorizes replay.
+    /// This identity is a snapshot of one descriptor, not a guarantee that a
+    /// separate handler lookup observes the same generation. Callers needing
+    /// both must capture [`Self::resolve_entry`] once and derive the identity
+    /// from that entry's descriptor. Returns `None` for an unknown name — a
+    /// missing descriptor is unknown, never allow-all. This snapshot read
+    /// never authorizes replay or dispatch.
     fn tool_call_identity(&self, name: &str) -> Option<ToolCallIdentity> {
         self.descriptor(name)
             .map(|descriptor| ToolCallIdentity::from_descriptor(&descriptor))
@@ -305,10 +373,7 @@ impl ToolHandlerRegistry {
             let mut next = (**current).clone();
             next.entries.insert(
                 name.clone(),
-                RegistryEntry {
-                    handler: Arc::clone(&handler),
-                    descriptor: Arc::new(normalized),
-                },
+                RegistryEntry::admitted(Arc::clone(&handler), normalized),
             );
             next.revision = assigned;
             outcome = Ok(assigned);
@@ -371,10 +436,7 @@ impl ToolHandlerRegistry {
             let mut next = (**current).clone();
             next.entries.insert(
                 name.clone(),
-                RegistryEntry {
-                    handler: Arc::clone(&handler),
-                    descriptor: Arc::new(normalized),
-                },
+                RegistryEntry::admitted(Arc::clone(&handler), normalized),
             );
             next.revision = assigned;
             outcome = Ok(assigned);
@@ -391,6 +453,16 @@ impl ToolHandlerRegistry {
             name,
             revision,
         })
+    }
+
+    /// Capture the handler and descriptor for `name` from one atomic generation.
+    ///
+    /// The owned entry remains paired and usable after replacement or removal.
+    /// This is an exact canonical-name lookup, not dispatch authorization.
+    #[must_use]
+    pub fn resolve_entry(&self, name: &str) -> Option<RegistryEntry> {
+        let state = self.shared.inner.load();
+        state.entries.get(name).cloned()
     }
 
     /// Resolve the live handler for `name`.
@@ -473,7 +545,6 @@ impl ToolHandlerRegistry {
             closed: state.closed,
         }
     }
-
 
     /// Frozen handler+descriptor view from one registry generation. Consumers
     /// that project callable tools should prefer this over pairing
@@ -589,7 +660,7 @@ fn mismatch_reason(descriptor: &ToolCapabilityDescriptor, definition: &ToolDefin
 mod tests {
     use super::*;
     use crate::session::events::ToolOutput;
-    use crate::tools::descriptor::{ReplayPolicy, SCHEMA_VERSION, ToolKind};
+    use crate::tools::descriptor::{ReplayPolicy, ToolKind, SCHEMA_VERSION};
     use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolSource};
     use async_trait::async_trait;
     use serde_json::Value;
@@ -658,6 +729,274 @@ mod tests {
         }
     }
 
+    // This raw fixture deliberately knows nothing about admission proof.
+    // Only the canonical registry entry may stop its observable effect.
+    struct AdmissionCountingHandler {
+        name: String,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ToolHandler for AdmissionCountingHandler {
+        async fn invoke(&self, _input: Value) -> Result<ToolOutput, ToolError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(ToolOutput {
+                value: serde_json::json!({"executed": true}),
+                metadata: Default::default(),
+            })
+        }
+
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: self.name.clone(),
+                description: "Observable raw admission fixture".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+                source: ToolSource::Builtin,
+                metadata: ToolDefinitionMetadata::default(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn canonical_unsafe_entry_invoke_without_proof_denies_before_inner_effect() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let reg = ToolHandlerRegistry::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let raw: Arc<dyn ToolHandler> = Arc::new(AdmissionCountingHandler {
+            name: "a3_raw_unsafe".into(),
+            calls: Arc::clone(&calls),
+        });
+        let descriptor = ToolCapabilityDescriptor::from_definition(&raw.definition(), 0);
+        assert!(descriptor.matches_definition(&raw.definition()));
+        assert_eq!(descriptor.replay_policy, ReplayPolicy::Unsafe);
+        reg.register(descriptor, raw).expect("valid Unsafe fixture");
+        let entry = reg.resolve_entry("a3_raw_unsafe").expect("canonical entry");
+        entry
+            .descriptor
+            .validate()
+            .expect("valid registered descriptor");
+
+        // No dispatcher, Scoped wrapper, admission scope, or replay token.
+        let result = entry.handler.invoke(serde_json::json!({})).await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "unproved raw call reached the inner handler"
+        );
+        assert!(
+            matches!(result, Err(ToolError::PermissionDenied { ref name, .. }) if name == "a3_raw_unsafe"),
+            "canonical Unsafe raw invocation must return PermissionDenied without proof"
+        );
+    }
+
+    #[tokio::test]
+    async fn canonical_safe_entry_invoke_without_proof_denies_before_inner_effect() {
+        use crate::tools::descriptor::ImplementationContract;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let reg = ToolHandlerRegistry::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let raw: Arc<dyn ToolHandler> = Arc::new(AdmissionCountingHandler {
+            name: "a3_raw_safe".into(),
+            calls: Arc::clone(&calls),
+        });
+        let mut descriptor = ToolCapabilityDescriptor::from_definition(&raw.definition(), 0);
+        descriptor.replay_policy = ReplayPolicy::Safe;
+        descriptor.implementation_contract = Some(ImplementationContract {
+            id: "test:a3-raw-safe".into(),
+            version: "1".into(),
+        });
+        assert!(descriptor.matches_definition(&raw.definition()));
+        reg.register(descriptor, raw)
+            .expect("valid Safe fixture with audited contract");
+        let entry = reg.resolve_entry("a3_raw_safe").expect("canonical entry");
+        entry
+            .descriptor
+            .validate()
+            .expect("valid registered descriptor");
+        assert_eq!(entry.descriptor.replay_policy, ReplayPolicy::Safe);
+        assert!(entry.descriptor.replay_contract_fingerprint().is_some());
+
+        // Safe replay metadata is not dispatch or replay admission proof.
+        let result = entry.handler.invoke(serde_json::json!({})).await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "unproved Safe raw call reached the inner handler"
+        );
+        assert!(
+            matches!(result, Err(ToolError::PermissionDenied { ref name, .. }) if name == "a3_raw_safe"),
+            "canonical Safe raw invocation must return PermissionDenied without proof"
+        );
+    }
+
+    // A3 tests-first: the fixed API is
+    // resolve_entry(&self, name: &str) -> Option<RegistryEntry>.
+    // No fixture emulates it with separate handler/descriptor lookups.
+    struct RevisionHandler {
+        generation: u64,
+    }
+
+    #[async_trait]
+    impl ToolHandler for RevisionHandler {
+        fn fences_output(&self) -> bool {
+            false
+        }
+
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: "terminal".into(),
+                description: format!("terminal implementation {}", self.generation),
+                input_schema: serde_json::json!({"type": "object"}),
+                source: ToolSource::Builtin,
+                metadata: ToolDefinitionMetadata::default(),
+            }
+        }
+
+        async fn invoke(&self, _input: Value) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                value: serde_json::json!({"generation": self.generation}),
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    // Invoke a frozen fixture entry through the real gates, never by minting
+    // proof in a test or exposing the registry-owned wrapper's raw handler.
+    async fn invoke_captured(entry: &RegistryEntry) -> ToolOutput {
+        use crate::tools::service::ToolService;
+        let mut projection = crate::tools::runtime::LoopToolRegistry::new();
+        // Frozen fixture store containing the actual captured, already wrapped
+        // pair. Re-registering would assign a new identity and double-wrap it.
+        let frozen = Arc::new(ToolHandlerRegistry::new());
+        frozen.shared.inner.store(Arc::new(RegistryState {
+            entries: [(entry.descriptor.name.clone(), entry.clone())].into(),
+            revision: entry.descriptor.revision,
+            closed: false,
+        }));
+        projection.bind_canonical_registry(frozen, Arc::new(|_| true));
+        projection.register(Box::new(
+            crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                entry.handler.clone(),
+                &entry.descriptor,
+            ),
+        ));
+        let service =
+            crate::tools::scoped::ScopedToolService::new(Arc::new(projection), Default::default());
+        let mut output = crate::approval::with_call_identity(
+            Some(crate::approval::CallIdentity {
+                turn_id: crate::session::events::TurnId::nil(),
+                call_id: "captured-fixture".into(),
+            }),
+            service.execute(&entry.descriptor.name, serde_json::json!({})),
+        )
+        .await
+        .expect("frozen fixture entry passes real gates");
+        output.value =
+            serde_json::from_str(output.value.as_str().expect("Layer 2 rendered JSON")).unwrap();
+        output
+    }
+
+    // Break caught: a captured entry pairs rev1 authority with rev2 code, or
+    // becomes a live name lookup instead of retaining its owned generation.
+    #[tokio::test]
+    async fn resolve_entry_keeps_handler_and_identity_from_one_generation() {
+        use crate::tools::descriptor::{ImplementationContract, ToolCallIdentity};
+        use tokio::sync::Barrier;
+
+        let reg = ToolHandlerRegistry::new();
+        let first_handler: Arc<dyn ToolHandler> = Arc::new(RevisionHandler { generation: 1 });
+        reg.register(
+            ToolCapabilityDescriptor::from_definition(&first_handler.definition(), 0),
+            Arc::clone(&first_handler),
+        )
+        .unwrap();
+        let first_published = reg.resolve("terminal").unwrap();
+        assert!(
+            !Arc::ptr_eq(&first_published, &first_handler),
+            "canonical publication owns the admission wrapper"
+        );
+        let next_handler: Arc<dyn ToolHandler> = Arc::new(RevisionHandler { generation: 2 });
+        let mut next_descriptor =
+            ToolCapabilityDescriptor::from_definition(&next_handler.definition(), 0);
+        next_descriptor.replay_policy = ReplayPolicy::Safe;
+        next_descriptor.implementation_contract = Some(ImplementationContract {
+            id: "test:terminal-generation".into(),
+            version: "2".into(),
+        });
+        let arrived = Barrier::new(2);
+        let release = Barrier::new(2);
+        let holder = async {
+            let captured: RegistryEntry = reg.resolve_entry("terminal").expect("rev1 entry");
+            arrived.wait().await;
+            release.wait().await;
+            let identity = ToolCallIdentity::from_descriptor(&captured.descriptor);
+            assert_eq!(identity.revision, 1);
+            assert_eq!(identity.replay_policy, ReplayPolicy::Unsafe);
+            assert_eq!(identity.replay_contract_fingerprint, None);
+            assert_eq!(captured.descriptor.description, "terminal implementation 1");
+            assert!(Arc::ptr_eq(&captured.handler, &first_published));
+            let output = invoke_captured(&captured).await;
+            assert_eq!(output.value, serde_json::json!({"generation": 1}));
+            captured
+        };
+        let replacer = async {
+            arrived.wait().await;
+            reg.replace(next_descriptor, Arc::clone(&next_handler))
+                .unwrap();
+            release.wait().await;
+        };
+        let (captured, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(holder, replacer)
+        })
+        .await
+        .expect("capture must precede replacement and retained invocation must finish");
+        let current = reg.resolve_entry("terminal").expect("rev2 entry");
+        let identity = ToolCallIdentity::from_descriptor(&current.descriptor);
+        assert_eq!(identity.revision, 2);
+        assert_eq!(identity.replay_policy, ReplayPolicy::Safe);
+        assert!(identity.replay_contract_fingerprint.is_some());
+        assert_eq!(current.descriptor.description, "terminal implementation 2");
+        assert!(Arc::ptr_eq(
+            &current.handler,
+            &reg.resolve("terminal").unwrap()
+        ));
+        assert!(
+            !Arc::ptr_eq(&current.handler, &next_handler),
+            "replacement also owns an admission wrapper"
+        );
+        assert!(!Arc::ptr_eq(&current.handler, &captured.handler));
+        assert_eq!(
+            invoke_captured(&current).await.value,
+            serde_json::json!({"generation": 2})
+        );
+
+        reg.unregister("terminal").unwrap();
+        assert!(reg.resolve_entry("terminal").is_none());
+        assert_eq!(captured.descriptor.revision, 1);
+        assert_eq!(
+            invoke_captured(&captured).await.value,
+            serde_json::json!({"generation": 1}),
+            "unregister must not revoke an already captured owned entry"
+        );
+    }
+
+    // Break caught: resolve_entry fabricates an entry on miss or falls back
+    // to a stale compatibility projection after canonical removal.
+    #[test]
+    fn resolve_entry_returns_none_for_missing_and_unregistered_name() {
+        let resolve: fn(&ToolHandlerRegistry, &str) -> Option<RegistryEntry> =
+            ToolHandlerRegistry::resolve_entry;
+        let reg = ToolHandlerRegistry::new();
+        assert!(resolve(&reg, "terminal").is_none());
+        reg.register(desc("terminal"), fake("terminal")).unwrap();
+        assert!(resolve(&reg, "terminal").is_some());
+        assert!(resolve(&reg, "missing").is_none());
+        reg.unregister("terminal").unwrap();
+        assert!(resolve(&reg, "terminal").is_none());
+    }
+
     #[test]
     fn replay_lookup_is_descriptor_based_not_tool_name_special_case() {
         let reg = ToolHandlerRegistry::new();
@@ -695,7 +1034,8 @@ mod tests {
     #[test]
     fn tool_call_identity_defaults_to_unsafe_policy() {
         let reg = ToolHandlerRegistry::new();
-        reg.register(desc("plain"), fake("plain")).expect("register");
+        reg.register(desc("plain"), fake("plain"))
+            .expect("register");
         assert_eq!(
             ToolDescriptorLookup::tool_call_identity(&reg, "plain")
                 .unwrap()
@@ -738,7 +1078,10 @@ mod tests {
         reg.replace(next, fake("t")).expect("replace");
 
         let identity = ToolDescriptorLookup::tool_call_identity(&reg, "t").unwrap();
-        assert_eq!(identity.revision, 2, "identity must track the new generation");
+        assert_eq!(
+            identity.revision, 2,
+            "identity must track the new generation"
+        );
         assert_eq!(identity.replay_policy, ReplayPolicy::Safe);
     }
 

@@ -39,7 +39,7 @@ use crate::browser::manager::ProfileManager;
 use crate::browser::tab_registry;
 use crate::browser::types::TabLine;
 use crate::security::content_sanitizer::{
-    ContentSource, sanitize_external_text, wrap_external_content,
+    sanitize_external_text, wrap_external_content, ContentSource,
 };
 
 use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
@@ -1069,15 +1069,13 @@ mod tests {
         let rows = |text: &str| tab_registry::parse_tab_lines(text);
 
         // Cloud metadata endpoint reached via redirect → blocked.
-        assert!(
-            current_page_block(
-                &manager,
-                &rows("1: http://169.254.169.254/latest/meta-data"),
-                "1"
-            )
-            .await
-            .is_some()
-        );
+        assert!(current_page_block(
+            &manager,
+            &rows("1: http://169.254.169.254/latest/meta-data"),
+            "1"
+        )
+        .await
+        .is_some());
 
         // Loopback → blocked.
         assert!(
@@ -1094,11 +1092,9 @@ mod tests {
         );
 
         // Non-http schemes carry no network target → skipped.
-        assert!(
-            current_page_block(&manager, &rows("1: about:blank"), "1")
-                .await
-                .is_none()
-        );
+        assert!(current_page_block(&manager, &rows("1: about:blank"), "1")
+            .await
+            .is_none());
 
         // No matching tab → nothing to check.
         assert!(
@@ -1319,12 +1315,10 @@ mod tests {
             recovery.category,
             recovery::BrowserFailureCategory::StaleRef
         );
-        assert!(
-            recovery
-                .next_actions
-                .iter()
-                .any(|a| a.tool == "browser_snapshot")
-        );
+        assert!(recovery
+            .next_actions
+            .iter()
+            .any(|a| a.tool == "browser_snapshot"));
     }
 
     /// The drift signal: resolve says "live" (same loader — an SPA

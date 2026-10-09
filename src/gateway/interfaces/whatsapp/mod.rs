@@ -881,7 +881,10 @@ mod tests {
         let recorded = fake.sent_group_pictures().await;
         assert_eq!(recorded.len(), 1, "fake should record exactly one call");
         assert_eq!(recorded[0].0, "1234567890@g.us");
-        assert_eq!(recorded[0].1, 8, "decoded bytes should be the 8-byte PNG signature");
+        assert_eq!(
+            recorded[0].1, 8,
+            "decoded bytes should be the 8-byte PNG signature"
+        );
     }
 
     /// Non-base64 data: URLs (RFC 2397 violations) are rejected at the
@@ -905,6 +908,9 @@ mod tests {
             "expected RFC 2397 violation, got: {err}"
         );
         let recorded = fake.sent_group_pictures().await;
-        assert!(recorded.is_empty(), "fake must not be called on validation failure");
+        assert!(
+            recorded.is_empty(),
+            "fake must not be called on validation failure"
+        );
     }
 }

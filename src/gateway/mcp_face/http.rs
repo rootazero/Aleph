@@ -126,6 +126,7 @@ pub fn mcp_routes(state: Arc<McpRouteState>) -> Router {
 
 /// Guards 1–3 (transport, origin) then authorization. `Err` is the refusal
 /// response, ready to return.
+#[allow(clippy::result_large_err)] // house shape for Result<_, Response> gates
 fn admit(
     state: &McpRouteState,
     peer: SocketAddr,
@@ -186,6 +187,7 @@ fn admit(
 
 /// The remote-only bucket (R6.4). `Ok(())` for loopback without touching the
 /// limiter — the exemption is structural, not a zero-cost check.
+#[allow(clippy::result_large_err)] // house shape for Result<_, Response> gates
 fn charge_remote_post(state: &McpRouteState, admitted: &Admitted) -> Result<(), Response> {
     if admitted.caller.is_local {
         return Ok(());
@@ -202,6 +204,7 @@ fn charge_remote_post(state: &McpRouteState, admitted: &Admitted) -> Result<(), 
 }
 
 /// The session named by the header, or the refusal to send.
+#[allow(clippy::result_large_err)] // house shape for Result<_, Response> gates
 fn session_from_header(
     state: &McpRouteState,
     headers: &HeaderMap,

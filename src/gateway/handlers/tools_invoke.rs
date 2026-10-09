@@ -17,6 +17,15 @@
 //!
 //! ## Response (tool error)
 //! Returns RPC error with `INTERNAL_ERROR` code and the tool's error message.
+//!
+//! ## Terminal observation capabilities
+//! The legacy `terminal{action}` shape is rewritten to its canonical
+//! `terminal_sessions_<action>` identity at the ingress
+//! (`normalize_terminal_compat_call`), before every floor below. The six
+//! canonical names are registered on the canonical `ToolHandlerRegistry`
+//! only (they are not executor-registry tools), so they dispatch through a
+//! per-request `ScopedToolService` over it — see `invoke_canonical`. Every
+//! other tool keeps the raw `ToolRegistry` path.
 
 use crate::sync_primitives::Arc;
 
@@ -27,8 +36,13 @@ use super::super::protocol::{
     JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, INTERNAL_ERROR, INVALID_PARAMS,
 };
 use super::parse_params;
-use crate::agents::AgentRegistry;
+use crate::agents::{AgentDef, AgentRegistry};
+use crate::builtin_tools::terminal::capabilities::{
+    is_observation_capability, is_tool_allowed_with_legacy_terminal_alias,
+    normalize_terminal_compat_call,
+};
 use crate::executor::ToolRegistry;
+use crate::tools::ToolHandlerRegistry;
 
 /// Tool names explicitly permitted for non-operator (member) callers on this
 /// surface (P1 member hardening, Task 9 review fix round 1).
@@ -40,8 +54,9 @@ use crate::executor::ToolRegistry;
 /// team from a template — a member-facing feature with no other RPC path.
 ///
 /// (b) Why every addition is load-bearing: `tools.invoke` does NOT route
-/// through `ScopedToolService` (see the module doc above) — so nothing on
-/// this surface gets exec-tier approval, `tool_permissions`, hooks, or the
+/// through `ScopedToolService` for ordinary tools (only the canonical
+/// terminal observation capabilities do — see the module doc above) — so
+/// nothing on this surface gets exec-tier approval, `tool_permissions`, hooks, or the
 /// operation ledger. A name added here executes IMMEDIATELY for every
 /// member with none of those gates, regardless of what the tool actually
 /// does. This is why `OPERATOR_TOOLS` (a narrow curated self-config/cluster
@@ -88,10 +103,40 @@ pub async fn handle_invoke<R>(
 where
     R: ToolRegistry + ?Sized,
 {
-    let params: InvokeParams = match parse_params(&request) {
+    handle_invoke_with_canonical(request, registry, agents, None).await
+}
+
+/// [`handle_invoke`] plus the canonical `ToolHandlerRegistry` the terminal
+/// observation capabilities are registered on. With `Some`, the canonical
+/// terminal names dispatch through [`invoke_canonical`]; with `None` (test
+/// mode / legacy callers) terminal observations fail closed without falling
+/// back to the raw `registry`. Non-terminal tools retain their existing path.
+pub async fn handle_invoke_with_canonical<R>(
+    request: JsonRpcRequest,
+    registry: Arc<R>,
+    agents: Option<Arc<AgentRegistry>>,
+    canonical: Option<Arc<ToolHandlerRegistry>>,
+) -> JsonRpcResponse
+where
+    R: ToolRegistry + ?Sized,
+{
+    let mut params: InvokeParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    // Compat ingress: legacy `terminal{action,..}` becomes its canonical
+    // `terminal_sessions_<action>` call BEFORE any floor, so every floor, the
+    // agent allowlist and the dispatch all see the one real identity. An
+    // action that does not normalize is refused here and never reaches a
+    // registry under any name.
+    match normalize_terminal_compat_call(&params.tool_name, std::mem::take(&mut params.arguments)) {
+        Ok((name, arguments)) => {
+            params.tool_name = name;
+            params.arguments = arguments;
+        }
+        Err(err) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, err.to_string()),
+    }
 
     if params.tool_name.trim().is_empty() {
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "tool_name must not be empty");
@@ -241,7 +286,7 @@ where
                 );
             }
         };
-        if !agent_def.is_tool_allowed(&params.tool_name) {
+        if !is_tool_allowed_with_legacy_terminal_alias(&agent_def, &params.tool_name) {
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
@@ -255,7 +300,27 @@ where
 
     let arguments = merge_agent_id(params.arguments, params.agent_id.as_deref());
 
-    match registry.execute_tool(&params.tool_name, arguments).await {
+    let outcome = match canonical {
+        Some(canonical) if is_observation_capability(&params.tool_name) => {
+            invoke_canonical(
+                canonical,
+                &request.id,
+                params.agent_id.as_deref(),
+                &params.tool_name,
+                arguments,
+            )
+            .await
+        }
+        None if is_observation_capability(&params.tool_name) => {
+            Err("canonical terminal registry is not bound".to_string())
+        }
+        _ => registry
+            .execute_tool(&params.tool_name, arguments)
+            .await
+            .map_err(|err| err.to_string()),
+    };
+
+    match outcome {
         Ok(mut result) => {
             mask_presentation_in_place(&mut result);
             JsonRpcResponse::success(
@@ -273,6 +338,74 @@ where
             format!("tool '{}' failed: {}", params.tool_name, err),
         ),
     }
+}
+
+/// Dispatch a canonical capability through a per-request `ScopedToolService`
+/// over the canonical registry, so the call reaches the handler the only way
+/// canonical handlers can be reached: with a dispatch verdict.
+///
+/// The per-request `TurnContext` is ALWAYS present and carries the request's
+/// own `CALLER_ROLE` — an absent turn context would read as operator at the
+/// gate (`current_turn_context().is_none_or(..)`), which is exactly the
+/// widening this must not cause for a member/guest caller. (The floors above
+/// already refuse non-operators; this keeps the inner gate honest too.) The
+/// call identity `rpc:tools.invoke:<request id>` is the existing
+/// `with_call_identity` carrier, not a new task-local.
+async fn invoke_canonical(
+    canonical: Arc<ToolHandlerRegistry>,
+    request_id: &Option<Value>,
+    agent_id: Option<&str>,
+    tool_name: &str,
+    arguments: Value,
+) -> Result<Value, String> {
+    use crate::approval::tool_call::{with_call_identity, CallIdentity};
+    use crate::tools::runtime::LoopToolRegistry;
+    use crate::tools::turn_context::TurnContext;
+    use crate::tools::ToolService;
+
+    let request_label = match request_id {
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+        None => "none".to_string(),
+    };
+    let call_id = format!("rpc:tools.invoke:{request_label}");
+
+    let mut inner = LoopToolRegistry::new();
+    let entry = canonical
+        .resolve_entry(tool_name)
+        .ok_or_else(|| format!("canonical tool not found: {tool_name}"))?;
+    inner.register(Box::new(
+        crate::tools::adapters::McpRegistryTool::from_registry_entry(
+            entry.handler,
+            &entry.descriptor,
+        ),
+    ));
+    inner.bind_canonical_registry(canonical, Arc::new(|_| true));
+    let ctx = TurnContext {
+        session_key: crate::routing::session_key::SessionKey::Ephemeral {
+            agent_id: agent_id.unwrap_or("main").to_string(),
+            ephemeral_id: call_id.clone(),
+        },
+        run_id: call_id.clone(),
+        channel_id: String::new(),
+        conversation_id: String::new(),
+        caller_role: crate::gateway::caller_identity::current_caller_role(),
+        channel_tool_permissions: None,
+        unattended: false,
+        plan_gate: None,
+        side_question: false,
+    };
+    let service = crate::tools::ScopedToolService::new(Arc::new(inner), Default::default())
+        .with_turn_context(ctx)
+        .with_structured_rpc_transport();
+    let identity = CallIdentity {
+        turn_id: crate::session::events::TurnId::nil(),
+        call_id,
+    };
+    with_call_identity(Some(identity), service.execute(tool_name, arguments))
+        .await
+        .map(|output| output.value)
+        .map_err(|err| err.to_string())
 }
 
 /// Mask the `_presentation` side-channel in a tool result this surface is
@@ -802,6 +935,495 @@ mod tests {
                     resp.error
                 );
                 assert!(reg.last_call().is_some());
+            })
+            .await;
+    }
+
+    /// A4 RED: legacy `tools.invoke{tool_name:"terminal", arguments:{action}}`
+    /// keeps working for operators by being normalized to the canonical name
+    /// (action key stripped) BEFORE the registry lookup — no unknown-tool, and
+    /// no call under the retired legacy name.
+    #[tokio::test]
+    async fn terminal_capability_operator_legacy_terminal_invoke_reaches_canonical_name() {
+        crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("operator".to_string()), async {
+                struct CapturingRead;
+                #[async_trait::async_trait]
+                impl crate::tools::handlers::ToolHandler for CapturingRead {
+                    async fn invoke(&self, input: Value) -> Result<crate::session::events::ToolOutput, crate::tools::ToolError> {
+                        assert_eq!(input, json!({"session_id": "x"}));
+                        let context = crate::tools::turn_context::current_turn_context()
+                            .expect("RPC must install a turn context");
+                        assert_eq!(context.caller_role.as_deref(), Some("operator"));
+                        assert_eq!(crate::approval::current_tool_call_id().as_deref(), Some("rpc:tools.invoke:1"));
+                        Ok(crate::session::events::ToolOutput {
+                            value: json!({"text": "hi"}),
+                            metadata: Default::default(),
+                        })
+                    }
+                    fn definition(&self) -> crate::tools::service::ToolDefinition {
+                        crate::tools::service::ToolDefinition {
+                            name: "terminal_sessions_read".into(),
+                            description: "Test observation".into(),
+                            input_schema: json!({"type":"object", "properties":{"session_id":{"type":"string"}}, "required":["session_id"]}),
+                            source: crate::tools::service::ToolSource::Builtin,
+                            metadata: crate::tools::service::ToolDefinitionMetadata {
+                                idempotent: true,
+                                ..Default::default()
+                            },
+                        }
+                    }
+                }
+                let canonical = Arc::new(ToolHandlerRegistry::new());
+                let handler: Arc<dyn crate::tools::handlers::ToolHandler> = Arc::new(CapturingRead);
+                let descriptor = crate::tools::ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
+                let _handle = canonical.register(descriptor, handler).unwrap();
+                let reg = Arc::new(StubRegistry::new());
+                let params = json!({
+                    "tool_name": "terminal",
+                    "arguments": {"action": "read", "session_id": "x"}
+                });
+                let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+                let resp = handle_invoke_with_canonical(req, reg.clone(), None, Some(canonical)).await;
+                assert!(resp.is_success(), "expected success: {:?}", resp.error);
+                let result = resp.result.unwrap();
+                assert_eq!(result["tool_name"], "terminal_sessions_read");
+                assert_eq!(result["result"]["text"], "hi", "full result: {result}");
+                assert!(reg.last_call().is_none(), "canonical calls must never hit raw executor");
+            })
+            .await;
+    }
+
+    /// Transport-contract regression: a large (>100KB) structured
+    /// `TerminalOutput` envelope returned by a canonical terminal read must
+    /// reach the RPC caller as the structured object with the screen text
+    /// intact — not as a Layer-2-truncated string (default token budget, no
+    /// result store).
+    #[tokio::test]
+    async fn terminal_capability_rpc_preserves_large_structured_envelope() {
+        // Varied (non-repetitive) text so size is real and not compressible away.
+        let mut screen = String::new();
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut line_no = 0u32;
+        while screen.len() < 120 * 1024 {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            screen.push_str(&format!(
+                "{line_no:05} {state:016x} row-{} col-{}\n",
+                state % 9973,
+                (state >> 17) % 7919
+            ));
+            line_no += 1;
+        }
+        assert!(screen.len() > 100 * 1024);
+
+        struct CannedRead {
+            output: Value,
+            calls: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        #[async_trait::async_trait]
+        impl crate::tools::handlers::ToolHandler for CannedRead {
+            async fn invoke(
+                &self,
+                _input: Value,
+            ) -> Result<crate::session::events::ToolOutput, crate::tools::ToolError> {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(crate::session::events::ToolOutput {
+                    value: self.output.clone(),
+                    metadata: Default::default(),
+                })
+            }
+            fn definition(&self) -> crate::tools::service::ToolDefinition {
+                crate::tools::service::ToolDefinition {
+                    name: "terminal_sessions_read".into(),
+                    description: "Test observation".into(),
+                    input_schema: json!({"type":"object", "properties":{"session_id":{"type":"string"}}, "required":["session_id"]}),
+                    source: crate::tools::service::ToolSource::Builtin,
+                    metadata: crate::tools::service::ToolDefinitionMetadata {
+                        idempotent: true,
+                        ..Default::default()
+                    },
+                }
+            }
+        }
+
+        let envelope = crate::builtin_tools::terminal::TerminalOutput {
+            success: true,
+            message: "read ok".to_string(),
+            data: Some(json!({"screen": screen.clone()})),
+            lost_with_restart: false,
+        };
+        let canned = serde_json::to_value(&envelope).unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("operator".to_string()), async {
+                let canonical = Arc::new(ToolHandlerRegistry::new());
+                let handler: Arc<dyn crate::tools::handlers::ToolHandler> = Arc::new(CannedRead {
+                    output: canned,
+                    calls: calls.clone(),
+                });
+                let descriptor = crate::tools::ToolCapabilityDescriptor::from_definition(
+                    &handler.definition(),
+                    0,
+                );
+                let _handle = canonical.register(descriptor, handler).unwrap();
+                let reg = Arc::new(StubRegistry::new());
+                let params = json!({
+                    "tool_name": "terminal",
+                    "arguments": {"action": "read", "session_id": "x"}
+                });
+                let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+                let resp =
+                    handle_invoke_with_canonical(req, reg.clone(), None, Some(canonical)).await;
+                assert!(resp.is_success(), "expected success: {:?}", resp.error);
+                let result = resp.result.unwrap();
+                assert_eq!(result["tool_name"], "terminal_sessions_read");
+                assert!(
+                    result["result"].is_object(),
+                    "large structured envelope must stay an object, got {}",
+                    if result["result"].is_string() {
+                        "truncated String"
+                    } else {
+                        "non-object"
+                    }
+                );
+                assert_eq!(result["result"]["success"], true);
+                assert_eq!(result["result"]["message"], "read ok");
+                assert_eq!(
+                    result["result"]["data"]["screen"].as_str(),
+                    Some(screen.as_str()),
+                    "screen text must be retained exactly"
+                );
+                assert_eq!(
+                    calls.load(std::sync::atomic::Ordering::SeqCst),
+                    1,
+                    "the admitted handler must run exactly once"
+                );
+                assert!(
+                    reg.last_call().is_none(),
+                    "canonical calls must never hit raw executor"
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn terminal_observation_rpc_never_falls_back_without_canonical_binding() {
+        let reg = Arc::new(StubRegistry::new().with_ok("terminal_sessions_list", json!([])));
+        let req = JsonRpcRequest::with_id(
+            "tools.invoke",
+            Some(json!({
+                "tool_name": "terminal", "arguments": {"action": "list"}
+            })),
+            json!(2),
+        );
+        let resp = handle_invoke(req, reg.clone(), None).await;
+        assert!(!resp.is_success());
+        assert!(resp
+            .error
+            .unwrap()
+            .message
+            .contains("canonical terminal registry is not bound"));
+        assert!(reg.last_call().is_none());
+    }
+
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn terminal_observation_rpc_real_handlers_and_member_floor() {
+        let canonical = Arc::new(ToolHandlerRegistry::new());
+        let mut scope = crate::tools::ToolRegistrationScope::new("rpc-terminal-test");
+        crate::builtin_tools::terminal::capabilities::register_observation_capabilities(
+            &canonical, &mut scope,
+        )
+        .unwrap();
+        for role in ["operator", "member", "guest"] {
+            crate::gateway::caller_identity::CALLER_ROLE
+                .scope(Some(role.into()), async {
+                    for name in ["terminal", "terminal_sessions_list"] {
+                        let reg = Arc::new(StubRegistry::new());
+                        let args = if name == "terminal" {
+                            json!({"action":"list"})
+                        } else {
+                            json!({})
+                        };
+                        let req = JsonRpcRequest::with_id(
+                            "tools.invoke",
+                            Some(json!({"tool_name":name, "arguments":args})),
+                            json!(3),
+                        );
+                        let resp = handle_invoke_with_canonical(
+                            req,
+                            reg.clone(),
+                            None,
+                            Some(canonical.clone()),
+                        )
+                        .await;
+                        if role == "operator" {
+                            assert!(resp.is_success(), "{name}: {:?}", resp.error);
+                            assert_eq!(resp.result.unwrap()["result"]["success"], true);
+                        } else {
+                            assert_eq!(resp.error.unwrap().code, AUTH_REQUIRED);
+                        }
+                        assert!(reg.last_call().is_none());
+                    }
+                })
+                .await;
+        }
+        crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("guest".into()), async {
+                let result = invoke_canonical(
+                    canonical,
+                    &Some(json!(4)),
+                    None,
+                    "terminal_sessions_list",
+                    json!({}),
+                )
+                .await;
+                assert!(
+                    result.is_err(),
+                    "inner scoped gate must preserve the request's guest role"
+                );
+            })
+            .await;
+    }
+
+    /// Canonical registry whose six terminal observation names are counting
+    /// stubs, so a permission test can tell "admitted and ran" from "refused".
+    fn counting_terminal_registry() -> (
+        Arc<ToolHandlerRegistry>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        struct Counting {
+            name: &'static str,
+            calls: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        #[async_trait::async_trait]
+        impl crate::tools::handlers::ToolHandler for Counting {
+            async fn invoke(
+                &self,
+                _input: Value,
+            ) -> Result<crate::session::events::ToolOutput, crate::tools::ToolError> {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(crate::session::events::ToolOutput {
+                    value: json!({"success": true}),
+                    metadata: Default::default(),
+                })
+            }
+            fn definition(&self) -> crate::tools::service::ToolDefinition {
+                crate::tools::service::ToolDefinition {
+                    name: self.name.into(),
+                    description: "Test observation".into(),
+                    input_schema: json!({"type":"object"}),
+                    source: crate::tools::service::ToolSource::Builtin,
+                    metadata: crate::tools::service::ToolDefinitionMetadata {
+                        idempotent: true,
+                        ..Default::default()
+                    },
+                }
+            }
+        }
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let canonical = Arc::new(ToolHandlerRegistry::new());
+        for name in [
+            "terminal_sessions_list",
+            "terminal_sessions_read",
+            "terminal_sessions_status",
+            "terminal_sessions_wait",
+            "terminal_sessions_explain",
+            "terminal_sessions_attach",
+        ] {
+            let handler: Arc<dyn crate::tools::handlers::ToolHandler> = Arc::new(Counting {
+                name,
+                calls: calls.clone(),
+            });
+            let descriptor =
+                crate::tools::ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
+            // Handle dropped on purpose: registration must outlive this fn.
+            std::mem::forget(canonical.register(descriptor, handler).unwrap());
+        }
+        (canonical, calls)
+    }
+
+    /// Run one `tools.invoke` as an operator against an agent with the given
+    /// policy; returns (admitted, handler invocation count).
+    async fn invoke_terminal_as_agent(
+        agent: AgentDef,
+        tool_name: &str,
+        arguments: Value,
+    ) -> (bool, usize) {
+        let (canonical, calls) = counting_terminal_registry();
+        let agents = AgentRegistry::new();
+        let agent_id = agent.id.clone();
+        agents.register(agent);
+        let admitted = crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("operator".to_string()), async {
+                let req = JsonRpcRequest::with_id(
+                    "tools.invoke",
+                    Some(json!({
+                        "tool_name": tool_name,
+                        "agent_id": agent_id,
+                        "arguments": arguments,
+                    })),
+                    json!(9),
+                );
+                let resp = handle_invoke_with_canonical(
+                    req,
+                    Arc::new(StubRegistry::new()),
+                    Some(Arc::new(agents)),
+                    Some(canonical),
+                )
+                .await;
+                resp.is_success()
+            })
+            .await;
+        (admitted, calls.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    const LEGACY_FIVE: [&str; 5] = ["list", "read", "status", "wait", "explain"];
+
+    /// A4 compat: a user-authored `denied_tools:[terminal]` still denies the
+    /// five legacy observation actions, whether called under the legacy name
+    /// or the canonical one; the handler never runs.
+    #[tokio::test]
+    async fn terminal_capability_legacy_terminal_deny_blocks_invocation() {
+        for action in LEGACY_FIVE {
+            let denied = || {
+                AgentDef::new("a", AgentMode::Primary).with_denied_tools(vec!["terminal".into()])
+            };
+            let (ok, ran) = invoke_terminal_as_agent(
+                denied(),
+                "terminal",
+                json!({"action": action, "session_id": "x"}),
+            )
+            .await;
+            assert!(!ok && ran == 0, "legacy call `{action}` must be denied");
+            let (ok, ran) = invoke_terminal_as_agent(
+                denied(),
+                &format!("terminal_sessions_{action}"),
+                json!({"session_id": "x"}),
+            )
+            .await;
+            assert!(
+                !ok && ran == 0,
+                "canonical `{action}` must honor legacy deny"
+            );
+        }
+    }
+
+    /// `attach` never had a legacy alias: `denied_tools:[terminal]` must not
+    /// deny it, and `allowed_tools:[terminal]` must not admit it.
+    #[tokio::test]
+    async fn terminal_capability_legacy_terminal_entry_does_not_alias_attach() {
+        let (ok, ran) = invoke_terminal_as_agent(
+            AgentDef::new("a", AgentMode::Primary).with_denied_tools(vec!["terminal".into()]),
+            "terminal_sessions_attach",
+            json!({"session_id": "x"}),
+        )
+        .await;
+        assert!(
+            ok && ran == 1,
+            "deny of legacy `terminal` must not reach attach"
+        );
+        let (ok, ran) = invoke_terminal_as_agent(
+            AgentDef::new("a", AgentMode::Primary).with_allowed_tools(vec!["terminal".into()]),
+            "terminal_sessions_attach",
+            json!({"session_id": "x"}),
+        )
+        .await;
+        assert!(
+            !ok && ran == 0,
+            "allow of legacy `terminal` must not admit attach"
+        );
+    }
+
+    /// A4 compat: `allowed_tools:[terminal]` still admits the five legacy
+    /// actions (legacy or canonical name), and nothing else.
+    #[tokio::test]
+    async fn terminal_capability_legacy_terminal_allow_admits_invocation() {
+        for action in LEGACY_FIVE {
+            let allowed = || {
+                AgentDef::new("a", AgentMode::Primary).with_allowed_tools(vec!["terminal".into()])
+            };
+            let (ok, ran) = invoke_terminal_as_agent(
+                allowed(),
+                "terminal",
+                json!({"action": action, "session_id": "x"}),
+            )
+            .await;
+            assert!(ok && ran == 1, "legacy call `{action}` must be admitted");
+            let (ok, ran) = invoke_terminal_as_agent(
+                allowed(),
+                &format!("terminal_sessions_{action}"),
+                json!({"session_id": "x"}),
+            )
+            .await;
+            assert!(
+                ok && ran == 1,
+                "canonical `{action}` must honor legacy allow"
+            );
+        }
+        let (ok, ran) = invoke_terminal_as_agent(
+            AgentDef::new("a", AgentMode::Primary).with_allowed_tools(vec!["terminal".into()]),
+            "terminal_sessions_attach",
+            json!({"session_id": "x"}),
+        )
+        .await;
+        assert!(!ok && ran == 0);
+    }
+
+    /// Deny-first stays: an explicit canonical deny beats a legacy allow, and
+    /// a canonical allow does not rescue a legacy deny.
+    #[tokio::test]
+    async fn terminal_capability_canonical_deny_beats_legacy_allow() {
+        for action in LEGACY_FIVE {
+            let canonical = format!("terminal_sessions_{action}");
+            let (ok, ran) = invoke_terminal_as_agent(
+                AgentDef::new("a", AgentMode::Primary)
+                    .with_allowed_tools(vec!["terminal".into()])
+                    .with_denied_tools(vec![canonical.clone()]),
+                "terminal",
+                json!({"action": action, "session_id": "x"}),
+            )
+            .await;
+            assert!(
+                !ok && ran == 0,
+                "canonical deny must beat legacy allow ({action})"
+            );
+            let (ok, ran) = invoke_terminal_as_agent(
+                AgentDef::new("a", AgentMode::Primary)
+                    .with_allowed_tools(vec![canonical.clone()])
+                    .with_denied_tools(vec!["terminal".into()]),
+                &canonical,
+                json!({"session_id": "x"}),
+            )
+            .await;
+            assert!(
+                !ok && ran == 0,
+                "legacy deny must beat canonical allow ({action})"
+            );
+        }
+    }
+
+    /// A4 RED: a legacy `terminal` call whose action does not normalize is
+    /// refused at the ingress; the registry is never touched.
+    #[tokio::test]
+    async fn terminal_capability_legacy_terminal_invoke_with_unknown_action_is_refused() {
+        crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("operator".to_string()), async {
+                let reg = Arc::new(StubRegistry::new().with_ok("terminal", json!({"ok": true})));
+                let params = json!({
+                    "tool_name": "terminal",
+                    "arguments": {"action": "spawn"}
+                });
+                let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+                let resp = handle_invoke(req, reg.clone(), None).await;
+                assert!(!resp.is_success(), "unknown legacy action must be refused");
+                assert!(
+                    reg.last_call().is_none(),
+                    "registry must not be touched (and never under the legacy name)"
+                );
             })
             .await;
     }

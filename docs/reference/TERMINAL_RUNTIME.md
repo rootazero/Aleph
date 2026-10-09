@@ -425,11 +425,23 @@ Python，而这台主机上没装解释器。**Windows 恰好是前台探测没�
 
 ---
 
-### 3.3 工具面等待（`src/builtin_tools/terminal.rs`）
+### 3.3 借用运行时与工具面等待 / Borrowed observation runtime
+
+A2 将观察实现迁至 `src/gateway/pty/runtime.rs::TerminalRuntime<'a>`，只借用已有 `PtyManager` 与 `RuntimeAgents`，不新增 session store、sampler 或时钟。A4 的 `src/builtin_tools/terminal/capabilities.rs` 注册六个 `terminal_sessions_*` canonical handlers，拥有 operator gate/schema，复用 `src/builtin_tools/terminal.rs` 的旧工具 envelope 与 `lost_with_restart` 墓碑 adapter；catalog 从 registry 派生。旧 `terminal {action}` 仅在 `tools.invoke` ingress 归一化后走带请求 caller role 与 call identity 的 scoped dispatch。`pty.attach` / `runtime.*` 直接传 `ObservationCaller::Gateway` 给同一 runtime，不投影为 Tool caller；A3 admission/proof 不变，A4 不开放写入。 / A4 wires six canonical read handlers and scoped RPC compatibility; Gateway RPCs retain their distinct caller semantics and A3 proof remains unchanged.
+
+**A4 `tools.invoke` 结构化返回（`ResultTransport::StructuredRpc`）/ Structured RPC result.** canonical `terminal_sessions_*` 经 `src/gateway/handlers/tools_invoke.rs::invoke_canonical` 走**每请求一个**的 `ScopedToolService`，并在该请求的 service 上显式 opt-in `with_structured_rpc_transport()`（`src/tools/scoped/builder.rs`；枚举在 `src/tools/scoped/mod.rs::ResultTransport`，默认 `ModelContext`）。该选择只随这一个请求的 service 存在，不是全局或 task-local。成功时 RPC 的 `result` 仍是**完整类型化 JSON**（`output.value`）；只有 `apply_layer_two` 里面向模型上下文的下游被旁路：model-ingress 清洗、result-token 预算、offload 落盘、文本 flatten、prompt tally 计费。大屏幕 envelope 因此不再被默认 4000-token 预算截成字符串（回归 `terminal_capability_rpc_preserves_large_structured_envelope`，`apply_layer_two` 侧见 `structured_rpc_transport_preserves_large_json_and_skips_prompt_tally`）。准入与执行不变：captured-entry / A3 proof 闸、operator gate 照旧在 `apply_layer_two` 之前执行；`apply_layer_two` 中先于旁路的 metadata hoist也照旧。**未新增 transport 层大小上限**——这是已知取舍：旁路预算后，一次 RPC 返回的体积只受 handler 自身 schema/屏幕尺寸约束。 / `tools.invoke` opts the one per-request `ScopedToolService` into `StructuredRpc`; the success value stays the full typed JSON, and only model-facing ingress cleaning, token budget, offload, flattening and prompt tally are bypassed. Admission/execution gates (captured entry, A3 proof, operator gate) and metadata hoists are unchanged. No transport-size cap was added.
+
+**A4 策略兼容（已实现）/ Policy compat (implemented).** 旧 `terminal` 条目在 agent 的 `allowed_tools` / `denied_tools` 里继续对**五个旧动作**（`list/read/status/wait/explain`，无论以旧名或 canonical 名调用）生效；`attach` 从无旧别名，`terminal` 的 deny/allow 既不拒绝也不准入它；deny 优先，canonical deny 压过 legacy allow，反之亦然。`src/gateway/handlers/tools_invoke.rs::is_tool_allowed_with_legacy_terminal_alias` 只对这五个 canonical 名创建请求级策略副本，再调用既有 `AgentDef::is_tool_allowed`；不修改配置、registry 或权限判据。对应 RED→GREEN 测试为 `terminal_capability_legacy_terminal_*` / `terminal_capability_canonical_deny_beats_legacy_allow`。 / Legacy `terminal` policy entries still govern the five legacy actions under either name, never `attach`, with deny-first semantics. The request-local compatibility helper reuses the existing allow/deny predicate.
+
+**Gateway 直连设计偏离（已获批）/ Approved deviation.** `pty.attach` / `runtime.*` 仍由 Gateway 直接调用 `TerminalRuntime`（`ObservationCaller::Gateway`），**没有**实现 `invoke_terminal_projection` 投影层。 / Gateway RPCs call `TerminalRuntime` directly; no `invoke_terminal_projection` exists.
+
+**A4 验证状态 / A4 verification.** Full Core baseline remains 20669 passed / 18 failed / 19 ignored, exit 101 (the unrelated red set is not reclassified here); the targeted A4 matrix, including protocol/panel terminal filters and the final `gateway::pty` rerun, passed. The existing clippy baseline blocker is `interfaces/cli/src/commands/open_cmd.rs:118`. A4 is committed; A5/A6/A7, B and C, full Core remediation, clippy remediation and real-machine QA remain future work. / The targeted A4 matrix passed; full parity is not claimed.
+
+`wait` 先订阅已有 generation watch，再判定；取消使用 `CancellationToken`，不轮询 screen、不跨 await 持锁。已关闭 PTY 优先返回 `gone`，即使退出结算尚未删掉旧 agent row；这不代表进程已回收。真实 close + stale row 回归在 `closed_pty_wins_over_a_stale_matching_agent_row`。 / An absent PTY wins over a stale row, without claiming process settlement.
 
 | 常量 | 值 | 所有者 | 说明 |
 |---|---|---|---|
-| `WAIT_DEFAULT_TIMEOUT_MS` | 60 000 | `src/builtin_tools/terminal.rs` | 与 `bash_exec` 的 `process_action: "wait"` 同值同理由 |
+| `WAIT_DEFAULT_TIMEOUT_MS` | 60 000 | `src/gateway/pty/runtime.rs` | 与 `bash_exec` 的 `process_action: "wait"` 同值同理由 |
 | `WAIT_MAX_TIMEOUT_MS` | 150 000 | 同上 | **派生自** `bash_exec` 的 `WAIT_MAX_TIMEOUT_SECS`（170 s）所受的同一个约束：阻塞调用必须在 harness 的 180 s 前台工具预算内返回（R10，别去扩预算）。守卫 `the_wait_ceiling_stays_under_the_foreground_tool_budget` 钉的是**那个常量**，不是这个数字的第二份拷贝 |
 | `WAIT_DEFAULT_UNTIL` | `[blocked, idle]` | 同上 | 「告诉我它什么时候需要我」；`working`/`unknown` 合法但从不是那句话的意思 |
 | `EXPLAIN_SCREEN_TAIL_LINES` | 12 | 同上 | 只是回显给人看的窗口。**引擎吃的是整屏**，与采样器一致 |
@@ -448,13 +460,13 @@ Python，而这台主机上没装解释器。**Windows 恰好是前台探测没�
 |---|---|---|
 | RPC（`pty.*` / `runtime.*`） | operator-only | `src/gateway/method_admin.rs::ADMIN_PREFIXES` |
 | 事件（`pty.screen` / `pty.exit` / `runtime.agents.changed`） | operator-only | `src/gateway/event_scope.rs::default_rules` |
-| 工具（`terminal`） | operator-only **两道** | `src/gateway/method_authz.rs::OPERATOR_TOOLS` + `src/builtin_tools/terminal.rs::caller_is_operator` 内联 |
+| 工具（六个 `terminal_sessions_*`；`tools.invoke` 保留旧 `terminal {action}`） | operator-only **两道** | `src/gateway/method_authz.rs::OPERATOR_TOOLS` + `src/builtin_tools/terminal/capabilities.rs::require_operator_caller` 内联 |
 | 子系统开关 | `[policies.terminal] enabled` | `src/config/types/policies/terminal.rs::TerminalConfig`；执行点 `src/gateway/handlers/pty.rs::handle_spawn`（每次 spawn 读新值）；关掉会杀掉在飞会话（`live_apply` 的 `"policies.terminal"` 臂调 `PtyManager::close_all`） |
 | spawn 目录 | 工作区根内 | `src/gateway/pty/jail.rs::resolve_spawn_cwd`。**只管起点**——终端里的 `cd` 不受约束，别把它当隔离引用 |
 
-**归属过滤在这个文件里只有一个谓词**：`src/builtin_tools/terminal.rs::terminal_admits`。
-`list` 直接拿它比 `SessionInfo::created_by`；`read` / `wait` / `explain` 经 `owner_record_admits` +
-`PtyManager::owner_of` 走同一个函数体，所以五张镜头不可能对「哪些行你能看」悄悄给出不同答案。
+**归属推导集中于** `src/gateway/pty/runtime.rs::ObservationCaller` 与 `caller_admits`：`list` 比对 live `SessionInfo::created_by`，`status` 比对 manager owner record，`attach/read/wait/explain` 经 `TerminalRuntime::owned`。Tool 墓碑 adapter 也复用该推导，不另造权限源。 / All observation faces share caller-aware admission.
+
+**两种 caller 不可混同**：Gateway 无 actor 保留旧 `SessionOwner::admits(None)` 行为（包括 `Unknown` owner 的残留 agent row）；Tool 无 actor 只允许已知 unowned session，`Unknown` 必须拒绝。有 actor 的两面均只允许精确 owner。守卫 `tool_without_actor_does_not_inherit_gateway_admission`、`alice_and_bob_ownership_reaches_every_observation_face` 及 runtime 的 orphan-row 回归。 / Actorless Gateway and Tool intentionally have different admission; no silent widening.
 
 **零身份臂（spec D7）是刻意收窄的**：`actor == None` 时只放行 `created_by == None` 的会话，
 而**生产上每一次 spawn 都盖 actor**（loopback 的 operator 解析出 `Some(OWNER_USER_ID)`——
@@ -478,7 +490,7 @@ Python，而这台主机上没装解释器。**Windows 恰好是前台探测没�
 （把 `check_operator_gate` 已经算出的 `approved_by_operator_gate` 传下来），那条缝还不存在。
 **别用「删掉内联检查」来修它**：审批卡的文案今天写着 "…which changes Aleph's own configuration"，
 对一个只读工具是假的，删掉内联检查等于让一张贴错标签的卡真的授出一次别人终端屏幕的读取。
-全文在 `src/builtin_tools/terminal.rs` 的模块 doc 与 `src/gateway/method_authz.rs` 的 `terminal` 条目。
+A4 保留这两道闸与旧拒绝 envelope；既有 A3 call-bound approval proof 不会重盖 caller role，不能把 role 改成 operator 来替代证明。参见 `src/gateway/method_authz.rs` 的六个 canonical 条目与保留的 `terminal` 条目。 / A4 preserves both gates and the legacy refusal envelope; A3 proof does not elevate the ambient role.
 
 ---
 
@@ -507,6 +519,11 @@ Python，而这台主机上没装解释器。**Windows 恰好是前台探测没�
   - `cwd` —— live cwd，来源顺序见 §2 第 5 步。
 - `terminal{wait}` 的载荷直接用 `RuntimeAgentEntry`，所以等待者拿回的行与 `status`、
   `runtime.agents.list` 是**同一种拼法**（判据 §10）。
+
+`shared/protocol/src/terminal.rs`
+- `TerminalReadResponse` / `TerminalWaitResponse` / `TerminalExplainResponse` 由 Core 的 borrowed runtime 实际构造并序列化；不是展示用 DTO。旧工具 envelope 和 `lost_with_restart` 仍由 adapter 保留。 / Typed payload producers retain the legacy outer envelope.
+- `TerminalSessionParams` / `TerminalWaitParams` 保留省略、空集合和原 timeout；默认值、空集合拒绝与 clamping 的唯一执行点仍在 Core。 / Wire params do not implement execution policy.
+- `actual_core_producers_preserve_the_legacy_wire` 钉实际 read/wait/explain producer；`explain_wire_uses_real_newlines_and_keeps_the_last_twelve_lines` 钉多行 tail 与真实换行。quiet、caller ownership、取消与 watch 唤醒均有 `src/gateway/pty/runtime.rs` 效果测试；fixture 不能替代这些证据。
 
 ---
 

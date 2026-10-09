@@ -165,15 +165,14 @@ pub use browser_tools::{
     BrowserOpenOutput, BrowserOpenTool, BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool,
     BrowserPressKeyArgs, BrowserPressKeyOutput, BrowserPressKeyTool, BrowserProfileArgs,
     BrowserProfileOutput, BrowserProfileTool, BrowserQaArgs, BrowserQaOutput, BrowserQaTool,
-    BrowserRecordArgs, BrowserRecordOutput,
-    BrowserRecordTool, BrowserResizeArgs, BrowserResizeOutput, BrowserResizeTool,
-    BrowserScreenshotArgs, BrowserScreenshotOutput, BrowserScreenshotTool, BrowserScrollArgs,
-    BrowserScrollOutput, BrowserScrollTool, BrowserSelectArgs, BrowserSelectOutput,
-    BrowserSelectTool, BrowserSessionArgs, BrowserSessionOutput, BrowserSessionTool,
-    BrowserSnapshotArgs, BrowserSnapshotOutput, BrowserSnapshotTool, BrowserTabsArgs,
-    BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs, BrowserTypeOutput, BrowserTypeTool,
-    BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool, BrowserWaitForArgs,
-    BrowserWaitForOutput, BrowserWaitForTool,
+    BrowserRecordArgs, BrowserRecordOutput, BrowserRecordTool, BrowserResizeArgs,
+    BrowserResizeOutput, BrowserResizeTool, BrowserScreenshotArgs, BrowserScreenshotOutput,
+    BrowserScreenshotTool, BrowserScrollArgs, BrowserScrollOutput, BrowserScrollTool,
+    BrowserSelectArgs, BrowserSelectOutput, BrowserSelectTool, BrowserSessionArgs,
+    BrowserSessionOutput, BrowserSessionTool, BrowserSnapshotArgs, BrowserSnapshotOutput,
+    BrowserSnapshotTool, BrowserTabsArgs, BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs,
+    BrowserTypeOutput, BrowserTypeTool, BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool,
+    BrowserWaitForArgs, BrowserWaitForOutput, BrowserWaitForTool,
 };
 pub use canvas::{CanvasTool, CanvasToolAction, CanvasToolArgs};
 pub use channel_directory::{
@@ -289,7 +288,7 @@ pub use strategy_manage::{StrategyAction, StrategyArgs, StrategyOutput, Strategy
 pub use system_tool::{SystemArgs, SystemOutput, SystemTool};
 pub use task_manage::*;
 pub use team::*;
-pub use terminal::{TerminalAction, TerminalArgs, TerminalOutput, TerminalTool};
+pub use terminal::TerminalOutput;
 pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreTool};
 pub use voice_tools::{
     LocalVoiceArgs, LocalVoiceOutput, LocalVoiceTool, VoiceModeSetArgs, VoiceModeSetOutput,

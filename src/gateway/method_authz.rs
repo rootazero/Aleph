@@ -153,11 +153,23 @@ const OPERATOR_TOOLS: &[&str] = &[
     // for `terminal` — a read-only tool that changes nothing. Nothing is
     // disclosed by it today only because `terminal`'s own inline gate
     // refuses the call anyway even after a human approves that card
-    // (`caller_is_operator()` reads an unchanged `TurnContext` — see
-    // `terminal.rs`'s module doc). The card's TEXT is still wrong for a
+    // (`require_operator_caller()` reads an unchanged `TurnContext` — see
+    // `terminal/capabilities.rs`). The card's TEXT is still wrong for a
     // read-only tool, and the fix belongs in `gate_chain.rs`, not in this
     // list or in `terminal.rs` (task-11 review F1).
+    //
+    // The six canonical `terminal_sessions_*` capabilities (one per verb)
+    // are the real tool identities; bare `terminal` is kept only because the
+    // `tools.invoke` compat rewrite and old operator allow-lists still name
+    // it. `capabilities::invoke_observation` repeats the operator check
+    // inline for the same reason as above.
     "terminal",
+    "terminal_sessions_list",
+    "terminal_sessions_read",
+    "terminal_sessions_status",
+    "terminal_sessions_wait",
+    "terminal_sessions_explain",
+    "terminal_sessions_attach",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an
@@ -319,6 +331,30 @@ mod tests {
                  refused over JSON-RPC"
             );
         }
+    }
+
+    /// A4 RED: the six canonical terminal observation capabilities are the
+    /// tool face of the operator-only `pty.`/`runtime.` disclosure; the legacy
+    /// `terminal` entry stays until the compat ingress is gone.
+    #[test]
+    fn terminal_capability_canonical_read_names_require_operator() {
+        for name in [
+            "terminal_sessions_list",
+            "terminal_sessions_read",
+            "terminal_sessions_status",
+            "terminal_sessions_wait",
+            "terminal_sessions_explain",
+            "terminal_sessions_attach",
+        ] {
+            assert!(
+                tool_requires_operator(name),
+                "`{name}` exposes another principal's terminal content and must be OPERATOR_TOOLS"
+            );
+        }
+        assert!(
+            tool_requires_operator("terminal"),
+            "legacy `terminal` stays operator-gated (compat ingress)"
+        );
     }
 
     #[test]

@@ -97,7 +97,7 @@ impl IrcChannel {
             deletion: false,
             typing_indicator: false,
             read_receipts: false,
-            rich_text: false,        // IRC has minimal formatting (mIRC codes)
+            rich_text: false, // IRC has minimal formatting (mIRC codes)
             polls: false,
             group_icons: false,
             max_message_length: 400, // Conservative PRIVMSG limit

@@ -173,11 +173,7 @@ where
     match toml::from_str(&content) {
         Ok(parsed) => parsed,
         Err(e) => {
-            warn!(
-                "Failed to parse {kind} file {}: {}",
-                path.display(),
-                e
-            );
+            warn!("Failed to parse {kind} file {}: {}", path.display(), e);
             T::default()
         }
     }

@@ -12,9 +12,9 @@ use crate::memory::notes::canonicalize_category;
 use crate::memory::notes::sanitize_title;
 use crate::memory::notes::store::NoteStore;
 
-use super::NoteManageTool;
 use super::args::{NoteListEntry, NoteManageArgs, NoteManageResult, SearchAdvisory};
 use super::helpers::{bound_chars, validate_category};
+use super::NoteManageTool;
 
 /// Per-note content cap in `query` results. A single sprawling note must not
 /// crowd out the other hits (or the context window).

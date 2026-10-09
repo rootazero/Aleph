@@ -421,9 +421,13 @@ async fn reconcile_capability_tools(
             // with no way to discover) or dangles a discovery tool over
             // nothing. The template-list tool rides the same gate (see
             // `RESOURCE_TEMPLATE_LIST_TOOL`).
-            set_capability(registry, handle, &mut scopes.resource, RESOURCE_LIST_TOOL, |s| {
-                Arc::new(McpListResourcesTool::new(s))
-            });
+            set_capability(
+                registry,
+                handle,
+                &mut scopes.resource,
+                RESOURCE_LIST_TOOL,
+                |s| Arc::new(McpListResourcesTool::new(s)),
+            );
             set_capability(
                 registry,
                 handle,
@@ -442,9 +446,13 @@ async fn reconcile_capability_tools(
     }
     if want_prompt != *prompt_live {
         if want_prompt {
-            set_capability(registry, handle, &mut scopes.prompt, PROMPT_LIST_TOOL, |s| {
-                Arc::new(McpListPromptsTool::new(s))
-            });
+            set_capability(
+                registry,
+                handle,
+                &mut scopes.prompt,
+                PROMPT_LIST_TOOL,
+                |s| Arc::new(McpListPromptsTool::new(s)),
+            );
             *prompt_live = set_capability(registry, handle, &mut scopes.prompt, PROMPT_TOOL, |s| {
                 Arc::new(McpGetPromptTool::new(s))
             });
@@ -737,6 +745,7 @@ mod tests {
     use crate::mcp::McpTool;
     use crate::tools::handlers::mcp::McpHandler;
     use crate::tools::handlers::registration::register_mcp_tools;
+    use crate::tools::service::{ToolError, ToolService};
 
     fn mcp_tool(name: &str) -> McpTool {
         McpTool {
@@ -755,8 +764,11 @@ mod tests {
     async fn bound_builtins(
         fake: &test_support::FakeManager,
         visible: &McpServerFilter,
-    ) -> std::collections::HashMap<String, Arc<dyn ToolHandler>> {
-        let registry = ToolHandlerRegistry::new();
+    ) -> (
+        Arc<ToolHandlerRegistry>,
+        std::collections::HashMap<String, Arc<dyn ToolHandler>>,
+    ) {
+        let registry = Arc::new(ToolHandlerRegistry::new());
         let (mut resource, mut prompt, mut login) = (false, false, false);
         let mut capabilities = CapabilityScopes::new();
         reconcile_capability_tools(
@@ -772,7 +784,7 @@ mod tests {
             resource && prompt && login,
             "premise: every builtin is switched on"
         );
-        registry
+        let handlers = registry
             .snapshot()
             .iter()
             .map(|(name, handler)| {
@@ -781,7 +793,54 @@ mod tests {
                     .expect("a capability builtin binds to the run's servers");
                 (name.clone(), bound)
             })
-            .collect()
+            .collect();
+        (registry, handlers)
+    }
+
+    fn scoped_service(
+        registry: Arc<ToolHandlerRegistry>,
+        visible: McpServerFilter,
+    ) -> crate::tools::ScopedToolService {
+        let mut inner = crate::tools::runtime::LoopToolRegistry::new();
+        inner.bind_canonical_registry(registry.clone(), visible);
+        for entry in registry.entries_snapshot().values() {
+            inner.register(Box::new(
+                crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                    Arc::clone(&entry.handler),
+                    &entry.descriptor,
+                ),
+            ));
+        }
+        crate::tools::ScopedToolService::new(Arc::new(inner), std::collections::BTreeSet::new())
+    }
+
+    fn strip_output_fence(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::String(text) => serde_json::Value::String(
+                text.lines()
+                    .filter(|line| !line.contains("<<<"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            value => value,
+        }
+    }
+
+    async fn invoke_scoped(
+        service: &crate::tools::ScopedToolService,
+        name: &str,
+        args: serde_json::Value,
+        call_id: &str,
+    ) -> Result<serde_json::Value, crate::tools::service::ToolError> {
+        crate::approval::with_call_identity(
+            Some(crate::approval::CallIdentity {
+                turn_id: crate::session::events::TurnId::nil(),
+                call_id: call_id.to_string(),
+            }),
+            service.execute(name, args),
+        )
+        .await
+        .map(|o| o.value)
     }
 
     /// Face ⑤ inside the capability builtins. Run A has both servers but may
@@ -798,10 +857,11 @@ mod tests {
         let b = fake_manager(vec![capable_server("github")]);
         let hide: McpServerFilter = Arc::new(|id| id != HIDDEN);
         let all: McpServerFilter = Arc::new(|_| true);
-        let in_a = bound_builtins(&a, &hide).await;
-        let in_b = bound_builtins(&b, &all).await;
+        let (registry_a, in_a) = bound_builtins(&a, &hide).await;
+        let (registry_b, _in_b) = bound_builtins(&b, &all).await;
         assert_eq!(in_a.len(), 6, "all six builtins: {:?}", in_a.keys());
-
+        let svc_a = scoped_service(registry_a, hide.clone());
+        let svc_b = scoped_service(registry_b, all.clone());
         for (name, args) in [
             (
                 RESOURCE_TOOL,
@@ -810,15 +870,39 @@ mod tests {
             (PROMPT_TOOL, json!({ "name": format!("{HIDDEN}:p") })),
             (LOGIN_TOOL, json!({ "server": HIDDEN })),
         ] {
-            let hidden = in_a[name].invoke(args.clone()).await.map(|o| o.value);
-            let absent = in_b[name].invoke(args).await.map(|o| o.value);
+            let hidden = invoke_scoped(&svc_a, name, args.clone(), &format!("hidden-{name}")).await;
+            let absent = invoke_scoped(&svc_b, name, args, &format!("absent-{name}")).await;
             let hidden = hidden.expect_err("an invisible server resolves to nothing");
             let absent = absent.expect_err("an absent server resolves to nothing");
-            assert_eq!(
-                hidden.to_string(),
-                absent.to_string(),
-                "{name}: an invisible server must answer what an unknown one answers"
-            );
+            match (hidden, absent) {
+                (
+                    ToolError::Execution {
+                        name: hidden_name,
+                        cause: hidden_cause,
+                    },
+                    ToolError::Execution {
+                        name: absent_name,
+                        cause: absent_cause,
+                    },
+                ) => {
+                    assert_eq!(hidden_name, absent_name, "{name}: stable tool name");
+                    let strip_fence = |cause: String| {
+                        cause
+                            .lines()
+                            .filter(|line| !line.contains("<<<"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    };
+                    assert_eq!(
+                        strip_fence(hidden_cause.clone()),
+                        strip_fence(absent_cause.clone()),
+                        "{name}: hidden and absent servers must have the same semantic error"
+                    );
+                }
+                (hidden, absent) => panic!(
+                    "{name}: hidden and absent servers must have the same error kind: {hidden:?} / {absent:?}"
+                ),
+            }
         }
 
         for name in [
@@ -827,12 +911,27 @@ mod tests {
             PROMPT_LIST_TOOL,
         ] {
             a.forget_asked();
-            in_a[name].invoke(json!({})).await.expect("the lister runs");
+            invoke_scoped(&svc_a, name, json!({}), &format!("list-a-{name}"))
+                .await
+                .expect("the lister runs");
             assert_eq!(a.asked(), ["github"], "{name} asked about");
             let narrowed = json!({ "server": HIDDEN });
-            let hidden = in_a[name].invoke(narrowed.clone()).await.unwrap().value;
-            let absent = in_b[name].invoke(narrowed).await.unwrap().value;
-            assert_eq!(hidden, absent, "{name} narrowed to the invisible server");
+            let hidden = invoke_scoped(
+                &svc_a,
+                name,
+                narrowed.clone(),
+                &format!("hidden-list-{name}"),
+            )
+            .await
+            .unwrap();
+            let absent = invoke_scoped(&svc_b, name, narrowed, &format!("absent-list-{name}"))
+                .await
+                .unwrap();
+            assert_eq!(
+                strip_output_fence(hidden),
+                strip_output_fence(absent),
+                "{name} narrowed to the invisible server"
+            );
         }
     }
 
@@ -1056,18 +1155,17 @@ mod tests {
             "replacement".to_string(),
             serde_json::json!({"type": "object"}),
         ));
-        let descriptor =
-            ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0);
+        let descriptor = ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0);
         registry
             .replace(descriptor, Arc::clone(&replacement))
             .expect("replace succeeds");
 
         assert!(stale.dispose().await.all_ok());
-        let live = registry.resolve("srv__t");
-        assert!(
-            live.is_some(),
-            "a superseded scope must not remove the replacement"
-        );
-        assert!(Arc::ptr_eq(&live.unwrap(), &replacement));
+        let live = registry
+            .resolve_entry("srv__t")
+            .expect("a superseded scope must not remove the replacement");
+        assert_eq!(live.descriptor.revision, 2);
+        assert_eq!(live.descriptor.name, replacement.definition().name);
+        assert_eq!(live.handler.definition().description, "replacement");
     }
 }

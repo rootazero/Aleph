@@ -249,9 +249,8 @@ fn enum_body() -> &'static str {
     // through their filters. Box::leak satisfies the &'static str
     // signature callers expect; the 24-line slice is a one-time cost
     // per test process.
-    let joined: &'static str = Box::leak(
-        lines[open_idx + 1..close_idx].join("\n").into_boxed_str(),
-    );
+    let joined: &'static str =
+        Box::leak(lines[open_idx + 1..close_idx].join("\n").into_boxed_str());
     joined
 }
 

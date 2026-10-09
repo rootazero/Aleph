@@ -29,12 +29,12 @@ pub mod api;
 pub mod commands;
 pub mod config;
 pub mod draft;
+pub mod group_policy;
 pub mod permissions;
 pub mod reconnect;
 pub mod resolver;
 pub mod security;
 pub mod session_key;
-pub mod group_policy;
 
 pub use commands::{ComponentId, ComponentKind};
 pub use config::{DiscordConfig, IntentsConfig};
@@ -221,7 +221,7 @@ impl DiscordChannel {
             typing_indicator: true,
             read_receipts: false,
             rich_text: true, // Markdown support
-            polls: true,    // Discord supports polls via API; stub returns Unsupported until adapter is wired
+            polls: true, // Discord supports polls via API; stub returns Unsupported until adapter is wired
             group_icons: false,
             max_message_length: 2000,
             max_attachment_size: 25 * 1024 * 1024, // 25MB for normal, 100MB for Nitro
@@ -604,10 +604,9 @@ impl EventHandler for Handler {
             if let Some(stt_source) = self.stt_source.clone() {
                 let inbound_tx = self.inbound_tx.clone();
                 tokio::spawn(async move {
-                    let result = crate::gateway::voice::inbound::process_inbound_voice(
-                        inbound, &stt_source,
-                    )
-                    .await;
+                    let result =
+                        crate::gateway::voice::inbound::process_inbound_voice(inbound, &stt_source)
+                            .await;
                     if let Err(e) = inbound_tx.send(result.message) {
                         tracing::error!(
                             error = ?e,

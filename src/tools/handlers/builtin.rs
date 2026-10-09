@@ -118,6 +118,13 @@ impl ToolHandler for BuiltinHandler {
         }
     }
 
+    fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        // Classify the bound leaf, never a caller-supplied registry alias.
+        // Multiplexers such as file_ops legitimately have read arms even when
+        // their coarse idempotent/concurrent_safe metadata is false.
+        crate::tools::adapters::builtin_concurrency_claim(self.inner.name(), input)
+    }
+
     fn fences_output(&self) -> bool {
         self.fences_output
     }
@@ -163,12 +170,10 @@ impl ToolHandler for BuiltinRegistryRouter {
             // them to `ToolError::ValidationFailed` so the harness reports
             // them as fixable schema errors with the tool-supplied prose,
             // rather than opaque `Execution` failures.
-            Err(crate::error::AlephError::Validation(cause)) => {
-                Err(ToolError::ValidationFailed {
-                    name: self.name.clone(),
-                    cause,
-                })
-            }
+            Err(crate::error::AlephError::Validation(cause)) => Err(ToolError::ValidationFailed {
+                name: self.name.clone(),
+                cause,
+            }),
             Err(e) => Err(ToolError::Execution {
                 name: self.name.clone(),
                 cause: e.to_string(),
@@ -254,12 +259,25 @@ impl ToolHandler for BuiltinRegistryRouter {
                     requires_approval: true,
                     tags: Vec::new(),
                     idempotent: false,
-                    max_duration_ms: Some(
-                        crate::tools::budget::resolve_tool_budget_ms(&self.name, None),
-                    ),
+                    max_duration_ms: Some(crate::tools::budget::resolve_tool_budget_ms(
+                        &self.name, None,
+                    )),
                     concurrent_safe: false,
                 },
             },
+        }
+    }
+
+    fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        // This router can also bind MCP/Plugin/custom catalog entries. Only
+        // an actual builtin binding may use the builtin per-input classifier.
+        let trustworthy_builtin = self.inner.get_tool(&self.name).is_some_and(|tool| {
+            tool.name == self.name && matches!(&tool.source, crate::ToolSource::Builtin)
+        });
+        if trustworthy_builtin {
+            crate::tools::adapters::builtin_concurrency_claim(&self.name, input)
+        } else {
+            crate::tools::concurrency::ConcurrencyClaim::global()
         }
     }
 }
@@ -309,8 +327,10 @@ pub async fn register_builtin_routers(
         ) {
             continue;
         }
-        let handler: Arc<dyn ToolHandler> =
-            Arc::new(BuiltinRegistryRouter::new(name.clone(), Arc::clone(&tool_registry)));
+        let handler: Arc<dyn ToolHandler> = Arc::new(BuiltinRegistryRouter::new(
+            name.clone(),
+            Arc::clone(&tool_registry),
+        ));
         let descriptor = ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
         match registry.register(descriptor, handler) {
             Ok(handle) => scope.track(handle),
@@ -508,9 +528,9 @@ mod builtin_handler_tests {
         {
             let value = self.results.get(tool_name).cloned();
             let name = tool_name.to_string();
-            Box::pin(async move {
-                value.ok_or_else(|| crate::error::AlephError::tool_not_found(&name))
-            })
+            Box::pin(
+                async move { value.ok_or_else(|| crate::error::AlephError::tool_not_found(&name)) },
+            )
         }
     }
 
@@ -574,14 +594,19 @@ mod builtin_handler_tests {
         .await
         .expect("registration should succeed");
 
-        let handler = registry
-            .resolve("ordinary_builtin")
-            .expect("ordinary name is registered");
-        let output = handler
+        // Exercise the router itself directly. The registry-facing wrapper
+        // intentionally requires a gate-issued proof; that boundary is tested
+        // by scoped dispatch, while this test remains about delegation.
+        let routed =
+            BuiltinRegistryRouter::new("ordinary_builtin".to_string(), Arc::clone(&tool_registry));
+        let output = routed
             .invoke(serde_json::json!({}))
             .await
             .expect("invoke should succeed");
-        assert_eq!(output.value, sentinel, "invoke must forward to execute_tool");
+        assert_eq!(
+            output.value, sentinel,
+            "invoke must forward to execute_tool"
+        );
     }
 
     /// A duplicate partway through the batch rolls back every earlier

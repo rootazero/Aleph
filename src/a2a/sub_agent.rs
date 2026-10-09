@@ -281,8 +281,6 @@ impl A2ASubAgent {
     }
 }
 
-
-
 /// SubAgentRequest/Result shaped wrapper around `emit_delegation_primitives`.
 /// Kept as the entry point for the A2A path which still has those types in
 /// scope; the new harness-based `subagent_spawner` calls the primitive helper

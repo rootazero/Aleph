@@ -313,7 +313,7 @@ impl McpFace {
         // built for in `tool_service`.
         let identity = crate::approval::CallIdentity {
             turn_id: uuid::Uuid::new_v4(),
-            call_id: uuid::Uuid::new_v4().to_string(),
+            call_id: format!("mcp:{}:{}", session.id, uuid::Uuid::new_v4()),
         };
         let outcome = crate::gateway::caller_identity::with_caller_identity(
             Some(caller.role.to_string()),

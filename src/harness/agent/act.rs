@@ -535,12 +535,7 @@ impl AgentHarness {
                     "cross-batch dedup: refusing identical repeat of a previously-failed call",
                 );
                 self.emit_cross_batch_refusal(
-                    session_id,
-                    turn_id,
-                    &call,
-                    started,
-                    iteration,
-                    callback,
+                    session_id, turn_id, &call, started, iteration, callback,
                 )
                 .await;
                 continue;
@@ -637,7 +632,9 @@ impl AgentHarness {
                             call_id: call.id.clone(),
                         }),
                         async move {
-                            tools.execute_with_cancel_effective(&name, args, call_cancel).await
+                            tools
+                                .execute_with_cancel_effective(&name, args, call_cancel)
+                                .await
                         },
                     ));
                 fut.await
@@ -966,7 +963,9 @@ impl AgentHarness {
                 let started = Instant::now();
                 let (exec, effective_input) =
                     crate::approval::with_call_identity(Some(identity), async move {
-                        tools.execute_with_cancel_effective(&name, args, call_cancel).await
+                        tools
+                            .execute_with_cancel_effective(&name, args, call_cancel)
+                            .await
                     })
                     .await;
                 let dur_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
@@ -1215,13 +1214,7 @@ impl AgentHarness {
             cause: CROSS_BATCH_REFUSED_CAUSE.to_string(),
         };
         self.emit_tool_error(
-            session_id,
-            turn_id,
-            call,
-            synthetic,
-            started,
-            iteration,
-            callback,
+            session_id, turn_id, call, synthetic, started, iteration, callback,
         )
         .await;
         if let Some(ref tracker) = self.stall_tracker {

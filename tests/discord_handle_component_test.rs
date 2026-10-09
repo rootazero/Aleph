@@ -21,7 +21,10 @@ use alephcore::gateway::interfaces::discord::commands::{
 };
 
 fn ctx() -> (CommandRegistry, ConversationId) {
-    (CommandRegistry::with_defaults(), ConversationId::new("channel-1"))
+    (
+        CommandRegistry::with_defaults(),
+        ConversationId::new("channel-1"),
+    )
 }
 
 /// Approve button (typed ComponentId wire format `approve:<id>`)
@@ -117,15 +120,7 @@ fn legacy_multitier_approval_payload_is_preserved() {
 #[test]
 fn unknown_kind_with_callback_handler_acks_only_no_inbound() {
     let (registry, conv) = ctx();
-    let action = dispatch_component_click(
-        &registry,
-        "mystery:x",
-        "user-1",
-        None,
-        42,
-        conv,
-        false,
-    );
+    let action = dispatch_component_click(&registry, "mystery:x", "user-1", None, 42, conv, false);
     assert!(
         matches!(action, CommandAction::AckOnly),
         "with_defaults() registers Callback handler → AckNoReply, not Forward, got {action:?}"
@@ -139,15 +134,7 @@ fn unknown_kind_with_callback_handler_acks_only_no_inbound() {
 fn unknown_kind_without_callback_handler_falls_back_to_legacy_inbound() {
     let registry = CommandRegistry::new(); // empty, no Callback fallback
     let conv = ConversationId::new("channel-1");
-    let action = dispatch_component_click(
-        &registry,
-        "mystery:x",
-        "user-1",
-        None,
-        42,
-        conv,
-        false,
-    );
+    let action = dispatch_component_click(&registry, "mystery:x", "user-1", None, 42, conv, false);
     match action {
         CommandAction::Forward(inbound) => {
             assert_eq!(
@@ -168,15 +155,8 @@ fn unknown_kind_without_callback_handler_falls_back_to_legacy_inbound() {
 #[test]
 fn legacy_cb_id_no_colon_forwards_raw_to_inbound() {
     let (registry, conv) = ctx();
-    let action = dispatch_component_click(
-        &registry,
-        "cb_legacy_id",
-        "user-1",
-        None,
-        42,
-        conv,
-        false,
-    );
+    let action =
+        dispatch_component_click(&registry, "cb_legacy_id", "user-1", None, 42, conv, false);
     match action {
         CommandAction::Forward(inbound) => {
             assert_eq!(
@@ -194,15 +174,7 @@ fn legacy_cb_id_no_colon_forwards_raw_to_inbound() {
 #[test]
 fn empty_payload_rejected_as_malformed_legacy_fallback() {
     let (registry, conv) = ctx();
-    let action = dispatch_component_click(
-        &registry,
-        "approve:",
-        "user-1",
-        None,
-        42,
-        conv,
-        false,
-    );
+    let action = dispatch_component_click(&registry, "approve:", "user-1", None, 42, conv, false);
     match action {
         CommandAction::Forward(inbound) => {
             assert_eq!(

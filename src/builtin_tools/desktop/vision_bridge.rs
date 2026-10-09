@@ -31,8 +31,8 @@ use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
 use crate::sync_primitives::{Arc, Mutex};
-use crate::vision::VisionPipeline;
 use crate::vision::types::{ImageFormat, ImageInput};
+use crate::vision::VisionPipeline;
 
 /// Default time-to-live for a cached augmentation (matches opencodex's 300s).
 const DEFAULT_TTL: Duration = Duration::from_secs(300);
@@ -46,7 +46,8 @@ const DEFAULT_MAX_ENTRIES: usize = 32;
 /// Phrased for an agent that will *act* on the result: it asks for elements,
 /// their text, and rough locations rather than prose, so a text-only model has
 /// enough to choose a next action.
-const DESCRIBE_PROMPT: &str = "You are describing a desktop screenshot for an AI agent that controls \
+const DESCRIBE_PROMPT: &str =
+    "You are describing a desktop screenshot for an AI agent that controls \
 the computer but cannot see images. List the visible UI elements (buttons, fields, menus, links), \
 their visible text, and their approximate on-screen location. Be concise and factual.";
 
@@ -224,9 +225,9 @@ fn cache_key(image_base64: &str, want_description: bool) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vision::VisionError;
     use crate::vision::provider::VisionProvider;
     use crate::vision::types::{OcrResult, VisionCapabilities, VisionResult};
+    use crate::vision::VisionError;
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

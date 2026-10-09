@@ -170,7 +170,12 @@ impl InProcessActorSessionService {
                         event: evt,
                         created_at_ms: at,
                     };
-                    crate::session::actor::notify_appended(id, &record, self.observer.as_ref(), &bcast_tx);
+                    crate::session::actor::notify_appended(
+                        id,
+                        &record,
+                        self.observer.as_ref(),
+                        &bcast_tx,
+                    );
                 }
                 Err(e) => {
                     tracing::warn!(

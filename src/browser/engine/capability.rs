@@ -851,7 +851,12 @@ mod tests {
             .collect();
         assert_eq!(
             exempt_disagreements,
-            vec!["drag", "effect_probe", "network_interception", "error_events"],
+            vec![
+                "drag",
+                "effect_probe",
+                "network_interception",
+                "error_events"
+            ],
             "a matrix-exempt row other than \
              `drag`/`effect_probe`/`network_interception`/`error_events` \
              now answers differently per engine. That difference is published to the model \

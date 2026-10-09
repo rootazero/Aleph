@@ -38,6 +38,7 @@ use tokio::sync::RwLock;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use crate::config::Config;
+use crate::gateway::pty::runtime::{ObservationCaller, TerminalRuntime};
 use crate::gateway::pty::{self, SpawnOptions};
 use crate::sync_primitives::Arc;
 
@@ -259,12 +260,23 @@ pub async fn handle_attach(request: JsonRpcRequest) -> JsonRpcResponse {
     if let Err(resp) = require_owned(&request, &params.session_id) {
         return resp;
     }
-    match pty::manager().attach_snapshot(&params.session_id) {
+    // Observation of a live screen goes through the one runtime adapter that
+    // the terminal tool face and `runtime.*` also use; `require_owned` above
+    // stays as the transport's own ownership refusal.
+    let caller = ObservationCaller::Gateway {
+        actor: crate::gateway::visibility::ambient_actor(),
+    };
+    let runtime = TerminalRuntime::new(pty::manager(), crate::gateway::runtime::agents());
+    match runtime.attach(&caller, &params.session_id) {
         Ok(snapshot) => match serde_json::to_value(&snapshot) {
             Ok(v) => JsonRpcResponse::success(id, v),
             Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, format!("encode failed: {e}")),
         },
-        Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, e),
+        Err(
+            crate::tools::service::ToolError::Execution { cause, .. }
+            | crate::tools::service::ToolError::ValidationFailed { cause, .. },
+        ) => JsonRpcResponse::error(id, INVALID_PARAMS, cause),
+        Err(other) => JsonRpcResponse::error(id, INVALID_PARAMS, other.to_string()),
     }
 }
 
@@ -1552,6 +1564,73 @@ mod tests {
              is passing vacuously",
             addressed.len()
         );
+    }
+
+    /// A4: the production `pty.attach` RPC is served by the A2
+    /// `TerminalRuntime::attach` seam. This drives the real `handle_attach`
+    /// on a spawned session and pins what the runtime-backed handler must
+    /// still return: the typed `PtyAttachResponse` (exact key set, geometry,
+    /// full-row snapshot, a seq no older than the spawn cursor), the request
+    /// id echoed in the envelope, and the unknown / removed refusal in the
+    /// manager's own words (`no_such_session`, not a runtime-flavoured text).
+    ///
+    /// Limitation: the runtime and the manager return the same snapshot, so
+    /// a black-box test cannot tell WHICH owner path produced it; the path
+    /// itself is held by the runtime's own `attach` tests (A2) and by review
+    /// of `handle_attach`.
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn terminal_capability_pty_attach_rpc_calls_terminal_runtime_attach() {
+        let (config, _tmp) = isolated_config();
+        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 6, "cols": 40 })), config).await;
+        let spawned = spawn.result.as_ref().expect("spawned");
+        let sid = spawned["session_id"]
+            .as_str()
+            .expect("session_id")
+            .to_string();
+        let spawn_seq = spawned["seq"].as_u64().expect("spawn carries a seq");
+
+        let mut request = req("pty.attach", json!({ "session_id": sid }));
+        request.id = Some(json!("attach-7"));
+        let resp = handle_attach(request).await;
+        assert!(
+            resp.error.is_none(),
+            "attach must succeed: {:?}",
+            resp.error
+        );
+        assert_eq!(
+            resp.id,
+            Some(json!("attach-7")),
+            "envelope id must be echoed"
+        );
+        let value = resp.result.expect("attach result");
+        let parsed: aleph_protocol::pty::PtyAttachResponse =
+            serde_json::from_value(value.clone()).expect("typed PtyAttachResponse");
+        assert_eq!((parsed.rows, parsed.cols), (6, 40));
+        assert_eq!(parsed.patch.rows.len(), 6, "a snapshot carries every row");
+        assert!(
+            parsed.seq >= spawn_seq,
+            "attach seq {} is older than the spawn cursor {spawn_seq}",
+            parsed.seq
+        );
+        assert_eq!(
+            value.as_object().expect("object").len(),
+            5,
+            "no extra keys beyond seq/rows/cols/patch/scrollback_len: {value}"
+        );
+
+        // Removed: the refusal is the transport's `no_such_session`, same
+        // words as a never-existed id.
+        let _ = handle_close(req("pty.close", json!({ "session_id": sid }))).await;
+        for gone in [sid.as_str(), "never-existed"] {
+            let resp = handle_attach(req("pty.attach", json!({ "session_id": gone }))).await;
+            assert!(resp.result.is_none(), "{gone} must not read as a screen");
+            assert_eq!(
+                resp.error.expect("error").message,
+                pty::no_such_session(gone),
+                "removed / unknown must keep the manager's refusal text"
+            );
+        }
     }
 
     /// Every test in this crate that reaches the process-global `PtyManager`

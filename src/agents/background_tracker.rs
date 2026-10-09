@@ -152,8 +152,6 @@ fn tokens_from_outcome(outcome: &CompletedOutcome) -> Option<u64> {
     }
 }
 
-
-
 pub struct BackgroundAgentTracker {
     running: RwLock<HashMap<String, RunningAgent>>,
     completed: RwLock<HashMap<String, CompletedAgent>>,

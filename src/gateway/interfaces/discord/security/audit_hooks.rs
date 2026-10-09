@@ -174,12 +174,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(global_audit_log)]
     async fn record_requested_does_not_panic_when_no_audit_log() {
-        record_approval_requested(
-            Some("user-1".into()),
-            Some("sess-1".into()),
-            "!ping",
-        )
-        .await;
+        record_approval_requested(Some("user-1".into()), Some("sess-1".into()), "!ping").await;
     }
 
     #[tokio::test]
@@ -226,12 +221,7 @@ mod tests {
             "test log already installed"
         );
 
-        record_approval_requested(
-            Some("user-1".into()),
-            Some("sess-1".into()),
-            "!ping",
-        )
-        .await;
+        record_approval_requested(Some("user-1".into()), Some("sess-1".into()), "!ping").await;
         record_approval_resolved(
             Some("user-1".into()),
             Some("sess-1".into()),

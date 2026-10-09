@@ -10,6 +10,8 @@ use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant, GrantScope};
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
+use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity, ToolCapabilityDescriptor};
+use crate::tools::registry::RegistryEntry;
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::{RefusedBy, ToolError};
 
@@ -178,13 +180,26 @@ impl ConfirmDenial {
     }
 }
 
-/// Which dispatch branch `execute_gated` is routing into. Kept as a
-/// fieldless enum so the retry closure can capture it by value.
-#[derive(Copy, Clone)]
+/// Which dispatch branch `execute_gated` is routing into. Cloning the owned
+/// Arc pair keeps every attempt on the same captured generation.
+#[derive(Clone)]
 enum RoutingTarget {
+    Canonical(RegistryEntry),
     Subagent,
     Inner,
     Missing,
+}
+
+/// Only this module can construct the proof that all dispatch gates passed.
+/// No Default, serde, Clone, public field, or crate-wide naked mint exists.
+pub(in crate::tools) struct GateAdmissionToken {
+    _sealed: (),
+}
+
+impl GateAdmissionToken {
+    fn new() -> Self {
+        Self { _sealed: () }
+    }
 }
 
 impl ScopedToolService {
@@ -270,6 +285,89 @@ impl ScopedToolService {
         let usage_origin = resolved.and_then(LoopTool::usage_origin).map(|o| o.key());
         let name: &str = canonical.as_deref().unwrap_or(name);
 
+        // Request projection is an ACL/visibility surface, never a callable
+        // fallback for a removed or source-changed canonical capability.
+        let is_subagent = self
+            .subagent_tool
+            .as_ref()
+            .is_some_and(|st| st.name() == name);
+        let captured = if let Some(registry) = &self.canonical_registry {
+            if is_subagent || self.inner.is_request_local(name) {
+                None
+            } else if let Some(projection) = resolved {
+                if matches!(
+                    projection.usage_origin(),
+                    Some(crate::tools::usage::UsageOrigin::Plugin(_))
+                ) {
+                    // Only unrelated Plugin compatibility bypasses canonical
+                    // proof. A collision/source replacement must not resurrect it.
+                    if let Some(entry) = registry.resolve_entry(name) {
+                        if !matches!((&entry.descriptor.source, projection.usage_origin()),
+                            (crate::tools::service::ToolSource::Extension { plugin_id }, Some(crate::tools::usage::UsageOrigin::Plugin(id))) if plugin_id == id)
+                        {
+                            return Err(ToolError::PermissionDenied {
+                                name: name.into(),
+                                reason:
+                                    "Plugin projection collides with a different canonical source"
+                                        .into(),
+                            });
+                        }
+                    }
+                    None
+                } else {
+                    let mut entry = registry
+                        .resolve_entry(name)
+                        .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
+                    let projected = projection.capability_descriptor().ok_or_else(|| {
+                        ToolError::PermissionDenied {
+                            name: name.into(),
+                            reason: "noncanonical production projection cannot dispatch".into(),
+                        }
+                    })?;
+                    if projected.source != entry.descriptor.source {
+                        return Err(ToolError::PermissionDenied { name: name.into(), reason: "canonical source changed; rebuild the request visibility projection".into() });
+                    }
+                    if let Some(visible) = &self.visible_mcp_servers {
+                        if matches!(&entry.descriptor.source, crate::tools::service::ToolSource::Mcp { server_id } if !visible(server_id))
+                        {
+                            return Err(ToolError::PermissionDenied {
+                                name: name.into(),
+                                reason: "canonical MCP server is not visible to this request"
+                                    .into(),
+                            });
+                        }
+                        if let Some(bound) = entry.handler.bind_visible_servers(visible) {
+                            entry.handler = bound;
+                        }
+                    } else if matches!(
+                        &entry.descriptor.source,
+                        crate::tools::service::ToolSource::Mcp { .. }
+                    ) {
+                        return Err(ToolError::PermissionDenied {
+                            name: name.into(),
+                            reason: "canonical MCP visibility is not bound".into(),
+                        });
+                    }
+                    Some(entry)
+                }
+            } else {
+                return Err(ToolError::NotFound { name: name.into() });
+            }
+        } else {
+            // Projection-only fixture construction has no live store. Production
+            // run_loop refuses a missing store before either service is built.
+            None
+        };
+        let fixture_descriptor = self
+            .canonical_registry
+            .is_none()
+            .then(|| resolved.and_then(LoopTool::capability_descriptor).cloned())
+            .flatten();
+        let descriptor = captured
+            .as_ref()
+            .map(|e| e.descriptor.as_ref())
+            .or(fixture_descriptor.as_ref());
+
         // `None` when no ledger is installed or the dispatch carries no
         // attributable agent — see `ledger::ScopedToolService::ledger_intent`.
         // Cheap by construction: the fingerprint and the masked summary are
@@ -293,7 +391,7 @@ impl ScopedToolService {
         //
         // The reason names the entry that denied it (`deny_rule`), so the model
         // relays something the user can act on instead of "the policy says no".
-        if let Some(rule) = self.deny_rule(name) {
+        if let Some(rule) = self.deny_rule_for_descriptor(name, descriptor) {
             // The per-CALL half of the read-only verdicts. `ExecTier::Plan::rule_for` only
             // sees a tool's NAME-level facts, so a read/write multiplexer —
             // `file_ops` above all, whose `list`/`search`/`stats` arms are the
@@ -329,11 +427,9 @@ impl ScopedToolService {
             // true by construction — that is how `deny_rule` produced the
             // variant — so this is a no-op there and a real bound here.
             if matches!(rule, GateRule::PlanMode | GateRule::SideQuestion)
-                && self.denied_only_by_plan(name)
-                && self
-                    .inner
-                    .call_concurrency_claim(name, &input)
-                    .is_some_and(|c| c == crate::tools::concurrency::ConcurrencyClaim::Shared)
+                && self.denied_only_by_plan_for_descriptor(name, descriptor)
+                && self.dispatch_concurrency_claim(name, &input, captured.as_ref(), descriptor)
+                    == crate::tools::concurrency::ConcurrencyClaim::Shared
             {
                 // Falls through to the rest of the pipeline — this call reads.
             } else {
@@ -363,7 +459,7 @@ impl ScopedToolService {
         // after an "allow once".
         let authorized = approved_by_operator_gate
             || self
-                .check_confirmation_gate(name, &input, approved_by_operator_gate)
+                .check_confirmation_gate(name, &input, approved_by_operator_gate, descriptor)
                 .await?;
 
         // Fire pre-hook (legacy observational decorator removed — extension
@@ -373,7 +469,7 @@ impl ScopedToolService {
         // rewrite the tool input via `update_input:`. Inert when no executor
         // is wired or when no hooks match the event. Runs BEFORE routing so a
         // blocked call never reaches the retry pipeline.
-        let (effective_input, mut pre_hook_contexts) = match self
+        let (effective_input, mut pre_hook_contexts, hook_authorized) = match self
             .run_before_tool_hooks(name, input.clone(), authorized)
             .await
         {
@@ -397,16 +493,37 @@ impl ScopedToolService {
         // overwhelmingly common case: no hook, or a hook that did not rewrite,
         // leaves the two values equal and skips this entirely.
         //
-        // Skip the re-check entirely when `authorized` is already true: the
-        // user/grantor already said yes to the action, so re-asking on a
-        // benign hook rewrite (input normalisation, scope expansion) would be
-        // a double-prompt — exactly the case `confirm_with_memory` was meant
-        // to prevent. Destructive rewrites (e.g. `list` → `delete`) still
-        // re-trigger the gate via the rule's own fingerprint logic because
-        // `effective_input` differs enough to miss the recorded grant.
-        if effective_input != input && !authorized {
-            self.check_confirmation_gate(name, &effective_input, approved_by_operator_gate)
-                .await?;
+        // Authorization on old bytes never applies to a rewrite. Re-run the
+        // policy/tier, operator and confirmation gates on the effective tuple.
+        if effective_input != input {
+            if let Some(rule) = self.deny_rule_for_descriptor(name, descriptor) {
+                if !(matches!(rule, GateRule::PlanMode | GateRule::SideQuestion)
+                    && self.denied_only_by_plan_for_descriptor(name, descriptor)
+                    && self.dispatch_concurrency_claim(
+                        name,
+                        &effective_input,
+                        captured.as_ref(),
+                        descriptor,
+                    ) == crate::tools::concurrency::ConcurrencyClaim::Shared)
+                {
+                    let explanation = rule.reason(name);
+                    if let Some(ref l) = ledger {
+                        l.commit_refusal(&effective_input, &explanation).await;
+                    }
+                    return Err(ToolError::PermissionDenied {
+                        name: name.into(),
+                        reason: format!("{explanation}{}", rule.deny_advice()),
+                    });
+                }
+            }
+            let operator = self.check_operator_gate(name, &effective_input).await?;
+            self.check_confirmation_gate(
+                name,
+                &effective_input,
+                operator || hook_authorized,
+                descriptor,
+            )
+            .await?;
         }
 
         // Cat-guard: when a raw `file_read` / shell read targets a file inside
@@ -435,7 +552,9 @@ impl ScopedToolService {
         // Route to subagent tool if name matches; otherwise route into the
         // inner LoopToolRegistry. Both paths share the retry/Layer 2/sanitize
         // pipeline below.
-        let routing = if self
+        let routing = if let Some(entry) = captured.as_ref() {
+            RoutingTarget::Canonical(entry.clone())
+        } else if self
             .subagent_tool
             .as_ref()
             .is_some_and(|st| st.name() == name)
@@ -461,7 +580,8 @@ impl ScopedToolService {
         // Same resolution chain `describe()` publishes (the tool's own
         // declaration → the builtin table → the default), read straight off the
         // tool so the clock we enforce and the budget we advertise cannot drift.
-        let declared_ms = match routing {
+        let declared_ms = match &routing {
+            RoutingTarget::Canonical(entry) => entry.descriptor.max_duration_ms,
             RoutingTarget::Subagent => self
                 .subagent_tool
                 .as_ref()
@@ -485,11 +605,26 @@ impl ScopedToolService {
         // between here and the receipt still leaves a truthful post-guardrail
         // input. A call that never reaches this line (gate denial, hook
         // refusal, post-rewrite re-check) leaves `capture` at `None`.
+        if captured.is_some() && crate::approval::current_tool_call_id().is_none() {
+            return Err(ToolError::PermissionDenied {
+                name: name.into(),
+                reason: "canonical dispatch has no call identity".into(),
+            });
+        }
         *capture = Some(effective_input.clone());
+        let admission = GateAdmissionToken::new();
 
         let mut result = match tokio::time::timeout(
             budget,
-            self.route_and_execute(routing, name, &effective_input, cancel, deadline),
+            self.route_and_execute(
+                routing,
+                name,
+                &effective_input,
+                cancel,
+                deadline,
+                descriptor,
+                &admission,
+            ),
         )
         .await
         {
@@ -533,6 +668,32 @@ impl ScopedToolService {
         }
 
         result
+    }
+
+    /// The captured handler decides argument-level Plan/side-question admission.
+    fn dispatch_concurrency_claim(
+        &self,
+        name: &str,
+        input: &Value,
+        captured: Option<&RegistryEntry>,
+        descriptor: Option<&ToolCapabilityDescriptor>,
+    ) -> crate::tools::concurrency::ConcurrencyClaim {
+        use crate::tools::concurrency::ConcurrencyClaim;
+        if let Some(entry) = captured {
+            return entry.handler.concurrency_claim(input);
+        }
+        // Preserve projection-only fixture and compatibility classification.
+        match descriptor {
+            Some(d) if matches!(&d.source, crate::tools::service::ToolSource::Builtin) => {
+                crate::tools::adapters::builtin_concurrency_claim(name, input)
+            }
+            Some(d) if d.concurrent_safe => ConcurrencyClaim::Shared,
+            Some(_) => ConcurrencyClaim::global(),
+            None => self
+                .inner
+                .call_concurrency_claim(name, input)
+                .unwrap_or_else(ConcurrencyClaim::global),
+        }
     }
 
     /// Operator authorization gate: chat-tier device trying to run a
@@ -648,11 +809,12 @@ impl ScopedToolService {
         name: &str,
         input: &Value,
         approved_by_operator_gate: bool,
+        descriptor: Option<&ToolCapabilityDescriptor>,
     ) -> Result<bool, ToolError> {
         if approved_by_operator_gate {
             return Ok(true);
         }
-        let Some(rule) = self.confirmation_rule(name, input) else {
+        let Some(rule) = self.confirmation_rule_for_descriptor(name, input, descriptor) else {
             return Ok(false);
         };
         match &self.approval_requester {
@@ -721,13 +883,15 @@ impl ScopedToolService {
     ///
     /// Split out of [`Self::execute_gated`] so the wall clock can wrap exactly
     /// this and nothing above it. Everything above it can block on a person.
-    async fn route_and_execute(
-        &self,
+    async fn route_and_execute<'call>(
+        &'call self,
         routing: RoutingTarget,
         name: &str,
         effective_input: &Value,
         cancel: CancellationToken,
         deadline: std::time::Instant,
+        descriptor: Option<&ToolCapabilityDescriptor>,
+        admission: &'call GateAdmissionToken,
     ) -> Result<ToolOutput, ToolError> {
         match routing {
             RoutingTarget::Missing => Err(ToolError::NotFound {
@@ -750,47 +914,34 @@ impl ScopedToolService {
                 // read-only MCP tool never got its one retry on a transient
                 // transport blip. The name-table fallback still covers any
                 // builtin not routed through `RegistryToolAdapter`.
-                let idempotent = self.inner.is_idempotent(name)
-                    || crate::tools::retry::is_idempotent_builtin_name(name);
+                // Explicit Unsafe dominates every optimistic legacy bit/table.
+                let idempotent = descriptor.map_or_else(
+                    || {
+                        self.inner.is_idempotent(name)
+                            || crate::tools::retry::is_idempotent_builtin_name(name)
+                    },
+                    |d| d.replay_policy != ReplayPolicy::Unsafe && d.idempotent,
+                );
+                let attempt_name = name.to_owned();
+                let attempt_input = effective_input.clone();
+                // Return one named future type with owned attempt data, rather
+                // than lending independently borrowed name/entry to async move.
+                let invoke = || {
+                    self.invoke_admitted_target(
+                        target.clone(),
+                        attempt_name.clone(),
+                        attempt_input.clone(),
+                        cancel.clone(),
+                        admission,
+                    )
+                };
                 let raw_outcome =
-                    crate::tools::retry::execute_with_one_shot_backoff(idempotent, || {
-                        let input = effective_input.clone();
-                        let name_owned = name.to_string();
-                        let cancel = cancel.clone();
-                        async move {
-                            let raw = match target {
-                                RoutingTarget::Subagent => {
-                                    let st = self.subagent_tool.as_ref().ok_or_else(|| {
-                                        ToolError::Execution {
-                                            name: name_owned.clone(),
-                                            cause: "SubagentTool was checked above but is now None"
-                                                .into(),
-                                        }
-                                    })?;
-                                    st.execute(input, cancel).await
-                                }
-                                RoutingTarget::Inner => {
-                                    // A tool that offloads its own output names
-                                    // only the retrieval tools this dispatch can
-                                    // call, as Layer 2 does below.
-                                    crate::tools::result_processing::with_recovery_tools(
-                                        self.recovery_tools(),
-                                        self.inner.execute(&name_owned, input, cancel),
-                                    )
-                                    .await
-                                }
-                                RoutingTarget::Missing => {
-                                    return Err(ToolError::Execution {
-                                        name: name_owned.clone(),
-                                        cause: "Routing target became Missing after being checked"
-                                            .into(),
-                                    });
-                                }
-                            };
-                            Self::tool_result_to_output(&name_owned, raw)
-                        }
-                    })
-                    .await;
+                    if descriptor.is_some_and(|d| d.replay_policy == ReplayPolicy::Unsafe) {
+                        // Do not even enter the retry helper for an Unsafe contract.
+                        invoke().await
+                    } else {
+                        crate::tools::retry::execute_with_one_shot_backoff(idempotent, invoke).await
+                    };
                 match raw_outcome {
                     Ok(output) => Ok(self.apply_layer_two(name, output, deadline).await),
                     // Attribute anything that came back after the run was
@@ -827,6 +978,84 @@ impl ScopedToolService {
                 }
             }
         }
+    }
+
+    /// One attempt with owned captured data and a single sealed-token lifetime.
+    async fn invoke_admitted_target<'call>(
+        &'call self,
+        target: RoutingTarget,
+        name: String,
+        input: Value,
+        cancel: CancellationToken,
+        admission: &'call GateAdmissionToken,
+    ) -> Result<ToolOutput, ToolError> {
+        if let RoutingTarget::Canonical(entry) = &target {
+            let call_id = crate::approval::current_tool_call_id().ok_or_else(|| {
+                ToolError::PermissionDenied {
+                    name: name.clone(),
+                    reason: "canonical dispatch has no call identity".into(),
+                }
+            })?;
+            let identity = ToolCallIdentity::from_descriptor(&entry.descriptor);
+            let proof_input = input.clone();
+            let proof_name = name.clone();
+            let actor = crate::identity::current_actor();
+            crate::tools::dispatch_verdict::with_gate_admission(
+                admission,
+                call_id,
+                proof_name,
+                identity,
+                proof_input,
+                actor,
+                self.invoke_target(target, name, input, cancel),
+            )
+            .await
+        } else {
+            self.invoke_target(target, name, input, cancel).await
+        }
+    }
+
+    /// Invoke the already chosen target, never resolve a canonical handler again.
+    async fn invoke_target(
+        &self,
+        target: RoutingTarget,
+        name: String,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        let raw = match target {
+            RoutingTarget::Canonical(entry) => {
+                return crate::tools::result_processing::with_recovery_tools(
+                    self.recovery_tools(),
+                    crate::tools::adapters::mcp_adapter::invoke_handler(
+                        &entry.handler,
+                        &entry.descriptor,
+                        input,
+                        cancel,
+                    ),
+                )
+                .await;
+            }
+            RoutingTarget::Subagent => {
+                let st = self
+                    .subagent_tool
+                    .as_ref()
+                    .ok_or_else(|| ToolError::Execution {
+                        name: name.clone(),
+                        cause: "SubagentTool was checked above but is now None".into(),
+                    })?;
+                st.execute(input, cancel).await
+            }
+            RoutingTarget::Inner => {
+                crate::tools::result_processing::with_recovery_tools(
+                    self.recovery_tools(),
+                    self.inner.execute(&name, input, cancel),
+                )
+                .await
+            }
+            RoutingTarget::Missing => return Err(ToolError::NotFound { name }),
+        };
+        Self::tool_result_to_output(&name, raw)
     }
 
     /// Stable session key for the session approval memory *and* the denial
@@ -1357,10 +1586,10 @@ impl ScopedToolService {
         name: &str,
         input: Value,
         already_authorized: bool,
-    ) -> Result<(Value, Vec<String>), ToolError> {
+    ) -> Result<(Value, Vec<String>, bool), ToolError> {
         let executor = match self.hook_executor_for_memo("before_tool_call") {
             Some(executor) => executor,
-            None => return Ok((input, Vec::new())),
+            None => return Ok((input, Vec::new(), false)),
         };
 
         let ctx = self.build_hook_context(name, &input, None, None);
@@ -1402,19 +1631,20 @@ impl ScopedToolService {
             });
         }
 
+        let effective_input = hook_result.updated_input.unwrap_or_else(|| input.clone());
+        let same_authorized_bytes = already_authorized && effective_input == input;
+        let mut hook_authorized = false;
+
         // Ask: route through the approval requester (same seam as
         // `confirm_tools`). Fails closed when no transport is wired.
         if let Some(PermissionDecision::Ask { reason }) = hook_result.permission_decision {
-            if already_authorized {
+            if same_authorized_bytes {
                 tracing::debug!(
                     tool = %name,
                     "hook asked for confirmation on a call a gate above already had \
                      approved — not re-prompting"
                 );
-                return Ok((
-                    hook_result.updated_input.unwrap_or(input),
-                    hook_result.additional_contexts,
-                ));
+                return Ok((effective_input, hook_result.additional_contexts, true));
             }
             match &self.approval_requester {
                 Some(requester) => {
@@ -1427,9 +1657,11 @@ impl ScopedToolService {
                     // so the trail can say a *hook* stopped this call and not
                     // the tier — the first thing an operator asks when a card
                     // appears for a tool their configuration allows.
-                    let action = ApprovalAction::for_tool_call(name, &input, reason)
+                    let action = ApprovalAction::for_tool_call(name, &effective_input, reason)
                         .gated_by(super::gate_chain::GateRule::HookRequested.id());
-                    if let Err(denial) = self.confirm_with_memory(requester, &action, &input).await
+                    if let Err(denial) = self
+                        .confirm_with_memory(requester, &action, &effective_input)
+                        .await
                     {
                         // An expired card is not a refusal — mirror the confirm
                         // gate and return the retryable ApprovalExpired rather
@@ -1452,6 +1684,7 @@ impl ScopedToolService {
                             ),
                         });
                     }
+                    hook_authorized = true;
                 }
                 // Third of three "refused without asking anyone" arms in this
                 // file (`check_operator_gate`, `check_confirmation_gate`, and
@@ -1466,7 +1699,7 @@ impl ScopedToolService {
                 None => {
                     self.record_gate_refusal(
                         name,
-                        &input,
+                        &effective_input,
                         super::gate_chain::GateRule::HookRequested,
                         "auto-denied: a BeforeToolCall hook requested confirmation and no \
                          approval channel is available",
@@ -1487,8 +1720,9 @@ impl ScopedToolService {
         // Last-writer-wins rewrite of the tool input; surface
         // `context:` lines so they actually reach the LLM next turn.
         Ok((
-            hook_result.updated_input.unwrap_or(input),
+            effective_input,
             hook_result.additional_contexts,
+            hook_authorized,
         ))
     }
 
@@ -1666,6 +1900,17 @@ impl ScopedToolService {
         // different URL or re-encode the payload. Absent failures write
         // nothing, so the success path stays byte-identical.
         super::artifact_harvest::annotate_media_failures(&mut out.value, &media_failures);
+
+        // An RPC caller consumes the structured value itself, not a prompt
+        // rendering of it. Model-ingress hygiene, the result-token budget,
+        // offload persistence and text flattening exist to protect a model's
+        // context window; applying them here would destroy a valid protocol
+        // envelope (and charge the session's prompt tally for output no model
+        // ever sees). Admission, execution and the metadata hoists above have
+        // already run identically for both transports.
+        if self.result_transport == super::ResultTransport::StructuredRpc {
+            return out;
+        }
 
         let explicit = self.inner.max_result_tokens_for(name);
         let budget = crate::tools::result_processing::resolve_result_budget(name, explicit);
@@ -2311,5 +2556,57 @@ mod tests {
             )
             .await;
         assert_eq!(tally_of(&session), None);
+    }
+
+    /// A request-owned StructuredRpc service returns the tool's value
+    /// untouched — no flatten, no truncation — and does not charge the
+    /// session's prompt tally for output no model receives.
+    #[tokio::test]
+    async fn structured_rpc_transport_preserves_large_json_and_skips_prompt_tally() {
+        let (turn, session) = tally_turn();
+        let svc = bare_service().with_structured_rpc_transport();
+        let big = "x".repeat(300 * 1024);
+        let value = serde_json::json!({"success": true, "data": {"blob": big, "n": [1, 2, 3]}});
+        let out = crate::tools::turn_context::TURN_CONTEXT
+            .scope(
+                turn,
+                svc.apply_layer_two(
+                    "terminal_sessions_read",
+                    ToolOutput {
+                        value: value.clone(),
+                        metadata: Default::default(),
+                    },
+                    soon(),
+                ),
+            )
+            .await;
+        assert_eq!(out.value, value);
+        assert_eq!(tally_of(&session), None, "RPC output must not be charged");
+    }
+
+    /// The metadata hoists run before the transport branch for both
+    /// transports: the presentation leaves `value` and lands in metadata.
+    #[tokio::test]
+    async fn structured_rpc_transport_keeps_metadata_hoists() {
+        let svc = bare_service().with_structured_rpc_transport();
+        let out = svc
+            .apply_layer_two(
+                "terminal_sessions_read",
+                ToolOutput {
+                    value: serde_json::json!({
+                        "ok": true,
+                        "_presentation": serde_json::to_value(
+                            aleph_protocol::Presentation::FileChanges { changes: vec![] }
+                        )
+                        .unwrap(),
+                    }),
+                    metadata: Default::default(),
+                },
+                soon(),
+            )
+            .await;
+        assert!(out.value.get("_presentation").is_none(), "{:?}", out.value);
+        assert!(out.metadata.presentation.is_some());
+        assert_eq!(out.value["ok"], true);
     }
 }

@@ -1562,7 +1562,7 @@ mod tests {
             // COMPOSE: the `authority_change` audit actor.
             ("src/builtin_tools/agent_manage/update.rs", 1, 1),
             // COMPOSE: spawn's `created_by`; COMPARE: two ownership checks.
-            ("src/gateway/handlers/pty.rs", 3, 1),
+            ("src/gateway/handlers/pty.rs", 4, 1),
             // COMPOSE: `namespace_explicit_project_id` builds a project id.
             ("src/builtin_tools/scratchpad.rs", 1, 1),
             // COMPARE only from here on.
@@ -1575,7 +1575,7 @@ mod tests {
             ("src/builtin_tools/memory_search.rs", 1, 0),
             ("src/builtin_tools/sessions/send_tool.rs", 2, 0),
             ("src/builtin_tools/sessions/list_tool.rs", 1, 0),
-            ("src/builtin_tools/terminal.rs", 1, 0),
+            ("src/builtin_tools/terminal/capabilities.rs", 1, 0),
         ];
         fn references_to_ambient_actor(code: &str) -> usize {
             const NAME: &str = "ambient_actor";

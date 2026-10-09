@@ -10,8 +10,8 @@ use crate::error::{AlephError, Result};
 use crate::memory::notes::sanitize_title;
 use crate::memory::notes::store::NoteStore;
 
-use super::NoteManageTool;
 use super::args::{NoteManageArgs, NoteManageResult};
+use super::NoteManageTool;
 
 impl NoteManageTool {
     pub(super) async fn handle_delete(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {

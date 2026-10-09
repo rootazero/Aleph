@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use aleph_desktop::AccessibilityCapability;
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxElement, DEFAULT_MAX_NODES, QueryFocusedParams, QueryTreeParams,
+    AxElement, QueryFocusedParams, QueryTreeParams, DEFAULT_MAX_NODES,
 };
 use serde_json::json;
 
@@ -592,7 +592,7 @@ mod tests {
     use super::*;
     use crate::routing::session_key::SessionKey;
     use crate::sync_primitives::Mutex;
-    use crate::tools::turn_context::{TURN_CONTEXT, TurnContext};
+    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
     use aleph_desktop::Result as DResult;
     use aleph_protocol::desktop_bridge::methods::ax::QueryResult;
     use async_trait::async_trait;
