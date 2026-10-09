@@ -431,23 +431,36 @@ mod tests {
         use crate::tools::registry::ToolHandlerRegistry;
         use std::sync::Arc;
 
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        const TEST_NAME: &str =
+            "security::dangerous_tools::tests::gateway_allow_does_not_bypass_handler_local_three_part_gate";
+        const CHILD_ENV: &str = "ALEPH_DIAGNOSTICS_AUTH_TEST_CHILD";
 
-        // Panic-safe env restore: captures the prior value (could be unset)
-        // and restores it on Drop, so a panic inside the test cannot leak
-        // the env var into any sibling test in this module.
-        let prev = std::env::var(GATEWAY_TOOLS_ALLOW_ENV).ok();
-        std::env::set_var(GATEWAY_TOOLS_ALLOW_ENV, "capability_projection_diagnostics");
-        struct RestoreEnv(Option<String>);
-        impl Drop for RestoreEnv {
-            fn drop(&mut self) {
-                match &self.0 {
-                    Some(v) => std::env::set_var(GATEWAY_TOOLS_ALLOW_ENV, v),
-                    None => std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV),
-                }
-            }
+        // Set only the child's startup environment, never the parallel libtest
+        // process environment. An in-process lock cannot protect unrelated
+        // tests spawning children while set_var/remove_var runs.
+        if std::env::var(CHILD_ENV).ok().as_deref() != Some(TEST_NAME) {
+            let output =
+                std::process::Command::new(std::env::current_exe().expect("test executable"))
+                    .args(["--exact", TEST_NAME, "--nocapture", "--test-threads=1"])
+                    .env(CHILD_ENV, TEST_NAME)
+                    .env(GATEWAY_TOOLS_ALLOW_ENV, "capability_projection_diagnostics")
+                    .output()
+                    .expect("spawn isolated diagnostics authorization test");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success(),
+                "isolated handler test failed: {}\n{stdout}\n{stderr}",
+                output.status
+            );
+            // A stale exact filter must not silently succeed with zero tests.
+            assert!(
+                stdout.contains("1 passed; 0 failed"),
+                "isolated handler test did not execute: {stdout}\n{stderr}"
+            );
+            println!("isolated diagnostics authorization receipt:\n{stdout}");
+            return;
         }
-        let _restore = RestoreEnv(prev);
 
         // Precondition: the override must unblock the surface-level deny —
         // otherwise the test would prove the wrong thing (the Denied reply
@@ -467,6 +480,7 @@ mod tests {
         // pattern as `src/security/ssrf/fetch.rs::bypass_fetch_*` (sync
         // `#[test]` + `Runtime::new` + `block_on`).
         let tree = Arc::new(OwnershipTree::new());
+        let mut ownership_changes = tree.subscribe_changes();
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         let (ctrl, status_before) = rt.block_on(async {
@@ -523,12 +537,12 @@ mod tests {
                         "{label} denied but reason does not name a missing fact: {reason}"
                     );
                 }
-                Err(other) => panic!(
-                    "{label} must deny via DiagnosticToolError::Denied, got {other:?}"
-                ),
-                Ok(ok) => panic!(
-                    "{label} was admitted with no ambient identity (override only): {ok:?}"
-                ),
+                Err(other) => {
+                    panic!("{label} must deny via DiagnosticToolError::Denied, got {other:?}")
+                }
+                Ok(ok) => {
+                    panic!("{label} was admitted with no ambient identity (override only): {ok:?}")
+                }
             }
         }
 
@@ -555,10 +569,11 @@ mod tests {
             "host lifecycle must be unchanged after the unauthorized loop"
         );
 
-        // Explicit removal as a belt-and-braces second restore. The Drop
-        // guard above handles the panic case; this makes the happy path
-        // obvious to a reader and matches the explicit-remove pattern of
-        // every other env-var test in this module.
-        std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV);
+        // Even an empty tree emits a notification if bump/dispose runs.
+        // Pin that the denied calls never reached those authority mutations.
+        assert!(matches!(
+            ownership_changes.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
     }
 }
