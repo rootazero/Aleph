@@ -85,6 +85,18 @@ pub enum ChannelError {
     Busy(String),
 }
 
+/// How the generic outbound machinery may treat a channel's sends. See
+/// [`Channel::outbound_delivery_policy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutboundDeliveryPolicy {
+    /// In-memory `RateLimited` retry and durable queue replay are allowed.
+    #[default]
+    Automatic,
+    /// One caller-requested send is one attempt: no generic retry, no durable
+    /// persistence of the message, no replay of stored rows.
+    ExplicitOnly,
+}
+
 /// Channel identifier
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ChannelId(pub String);
@@ -864,6 +876,25 @@ pub trait Channel: Send + Sync {
     /// Channels that don't support approval delivery return `None`.
     fn approval_capability(&self) -> Option<Arc<dyn ChannelApprovalCapability>> {
         None
+    }
+
+    /// Whether the generic outbound machinery may re-attempt or persist a send
+    /// to this channel on the caller's behalf.
+    ///
+    /// [`Automatic`](OutboundDeliveryPolicy::Automatic) (the default) is every
+    /// pre-existing channel's behaviour: [`ChannelRegistry`](super::channel_registry::ChannelRegistry)
+    /// retries `RateLimited` in memory and parks duplicate-safe failures in the
+    /// durable queue for later replay.
+    ///
+    /// [`ExplicitOnly`](OutboundDeliveryPolicy::ExplicitOnly) is for channels
+    /// whose every send is an individually authorised, possibly paid, external
+    /// effect (SMS): a replay would mint a fresh operation identity and
+    /// expiry, re-extending an approval that has already lapsed, and the
+    /// durable queue would retain the plaintext body. The channel itself is the
+    /// authority on this — consumers ask it, they never match on a channel
+    /// type string.
+    fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
+        OutboundDeliveryPolicy::Automatic
     }
 
     /// Webhook ingestion handler for channels that receive over HTTP POST.

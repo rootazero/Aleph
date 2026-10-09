@@ -64,7 +64,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use super::channel::{ChannelError, ChannelId, OutboundMessage};
+use super::channel::{ChannelError, ChannelId, OutboundDeliveryPolicy, OutboundMessage};
 use super::channel_registry::ChannelRegistry;
 
 /// Tuning for the durable delivery queue and its drain task.
@@ -363,6 +363,16 @@ pub enum DeadLetterReason {
     /// remedy for this one is "raise the cap", not "decide whether a duplicate
     /// is acceptable".
     PayloadTooLarge,
+    /// A queued row addressed to a channel whose
+    /// [`OutboundDeliveryPolicy`](super::channel::OutboundDeliveryPolicy) is
+    /// `ExplicitOnly` (e.g. SMS). Such a channel is never replayed from the
+    /// queue, so the row was retired without any transport call and its payload
+    /// scrubbed ([`DeliveryStore::record_scrubbed_dead_letter`]).
+    ///
+    /// Never sent ⇒ [`replay_safe`](Self::replay_safe), yet deliberately not
+    /// [`redrivable`](Self::redrivable): re-inserting it would put an implicit
+    /// retry back in the queue, and the body no longer exists to re-send.
+    ExplicitOnlyRetired,
 }
 
 impl DeadLetterReason {
@@ -376,6 +386,7 @@ impl DeadLetterReason {
         Self::Permanent,
         Self::UnknownOutcome,
         Self::PayloadTooLarge,
+        Self::ExplicitOnlyRetired,
     ];
 
     /// The database tokens a redrive is willing to move.
@@ -402,7 +413,7 @@ impl DeadLetterReason {
     pub const fn replay_safe(self) -> bool {
         matches!(
             self,
-            Self::Exhausted | Self::Permanent | Self::PayloadTooLarge
+            Self::Exhausted | Self::Permanent | Self::PayloadTooLarge | Self::ExplicitOnlyRetired
         )
     }
 
@@ -436,6 +447,7 @@ impl DeadLetterReason {
             Self::Permanent => "permanent",
             Self::UnknownOutcome => "unknown_outcome",
             Self::PayloadTooLarge => "payload_too_large",
+            Self::ExplicitOnlyRetired => "explicit_only_retired",
         }
     }
 
@@ -449,6 +461,7 @@ impl DeadLetterReason {
             "permanent" => Self::Permanent,
             "unknown_outcome" => Self::UnknownOutcome,
             "payload_too_large" => Self::PayloadTooLarge,
+            "explicit_only_retired" => Self::ExplicitOnlyRetired,
             _ => Self::Ambiguous,
         }
     }
@@ -1182,6 +1195,56 @@ impl DeliveryStore {
         tx.commit()
     }
 
+    /// Retire a live row into `dead_letters` **without keeping its content**.
+    ///
+    /// Used for rows that must never be sent again and must not linger in
+    /// plaintext (see [`DeadLetterReason::ExplicitOnlyRetired`]). Same
+    /// transaction shape as [`record_dead_letter`](Self::record_dead_letter), but
+    /// the stored payload is a content-free [`OutboundMessage`] that keeps only
+    /// the conversation id (the queue's ordering/forensic key): no text, no
+    /// attachments, no reply target, keyboard or metadata.
+    pub fn record_scrubbed_dead_letter(
+        &self,
+        id: i64,
+        attempts: u32,
+        last_error: &str,
+        reason: DeadLetterReason,
+    ) -> rusqlite::Result<()> {
+        let died_at = now_secs();
+        let mut conn = self.guard();
+        let tx = conn.transaction()?;
+        let row: Option<(String, Option<String>, i64)> = tx
+            .query_row(
+                "SELECT channel_id, conversation_id, created_at
+                 FROM outbound_deliveries WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+
+        if let Some((channel_id, conversation_id, created_at)) = row {
+            let conversation = conversation_id.as_deref().unwrap_or_default();
+            let scrubbed = serde_json::to_string(&OutboundMessage::text(conversation, ""))
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            Self::insert_dead_letter(
+                &tx,
+                self.config.max_queue_len,
+                DeadLetterInsert {
+                    channel_id: &channel_id,
+                    conversation_id: conversation,
+                    payload: &scrubbed,
+                    attempts,
+                    last_error,
+                    reason,
+                    created_at,
+                    died_at,
+                },
+            )?;
+            tx.execute("DELETE FROM outbound_deliveries WHERE id = ?1", params![id])?;
+        }
+        tx.commit()
+    }
+
     /// One-pass observability snapshot of the live queue (and the dead-letter
     /// count). Reads only columns the queue already maintains — no extra state.
     /// `now` is injected so the oldest-age computation is testable.
@@ -1535,6 +1598,26 @@ async fn deliver_one(
 ) -> bool {
     let channel = ChannelId(rec.channel_id.clone());
 
+    // The channel's own declaration decides whether a stored row may be
+    // replayed at all. An explicit-only channel (SMS) is never sent from the
+    // queue — whatever put the row here (a pre-policy build, a restore) — so
+    // retire it, content scrubbed, *before* any in-flight stamp or transport
+    // call. Returning `true` lets the rest of the conversation (and the live
+    // send this may be a preflush for) proceed. A channel that is not
+    // registered has no declaration: it keeps the existing path below.
+    if registry.outbound_delivery_policy(&channel).await
+        == Some(OutboundDeliveryPolicy::ExplicitOnly)
+    {
+        retire_scrubbed(
+            store,
+            rec,
+            rec.attempts,
+            "channel outbound policy is explicit-only: queued row retired without sending",
+            DeadLetterReason::ExplicitOnlyRetired,
+        );
+        return true;
+    }
+
     // Stamp *before* crossing the transport boundary. If the daemon dies
     // between here and the settle below, the stamp is the only evidence that
     // this record's outcome is unknown rather than "never tried" — see
@@ -1856,6 +1939,30 @@ fn retire(
         Err(dl_err) => {
             warn!(id = rec.id, error = %dl_err, "delivery queue: dead-letter failed; dropping");
             let _ = store.drop_record(rec.id, "dead-letter failed");
+        }
+    }
+}
+
+/// [`retire`] for a row whose content must not survive: the dead letter keeps
+/// the routing facts but not the body. If the scrubbing move fails, the row is
+/// dropped outright rather than left queued (plaintext, replayable).
+fn retire_scrubbed(
+    store: &DeliveryStore,
+    rec: &DeliveryRecord,
+    attempts: u32,
+    last_error: &str,
+    reason: DeadLetterReason,
+) {
+    match store.record_scrubbed_dead_letter(rec.id, attempts, last_error, reason) {
+        Ok(()) => warn!(
+            id = rec.id,
+            channel = %rec.channel_id,
+            reason = reason.as_str(),
+            "delivery queue: retired queued message of an explicit-only channel without sending"
+        ),
+        Err(dl_err) => {
+            warn!(id = rec.id, error = %dl_err, "delivery queue: scrubbed dead-letter failed; dropping");
+            let _ = store.drop_record(rec.id, "scrubbed dead-letter failed");
         }
     }
 }
@@ -2213,6 +2320,45 @@ mod tests {
         let s = store();
         // No such id — must not error, must not create a phantom dead letter.
         s.record_dead_letter(999, 5, "gone", DeadLetterReason::Exhausted)
+            .unwrap();
+        assert_eq!(s.stats(now_secs()).unwrap().dead_lettered, 0);
+    }
+
+    #[test]
+    fn scrubbed_dead_letter_keeps_routing_facts_but_not_content_and_is_not_redrivable() {
+        let s = store();
+        let now = now_secs();
+        let mut m = msg("top-secret-body");
+        m.reply_to = Some(crate::gateway::channel::MessageId::new("r1"));
+        let id = s.enqueue_id("sms", &m, "NotConnected", now).unwrap();
+
+        s.record_scrubbed_dead_letter(id, 2, "explicit", DeadLetterReason::ExplicitOnlyRetired)
+            .unwrap();
+
+        assert!(s.is_empty());
+        let dl = s.recent_dead_letters(10).unwrap();
+        assert_eq!(dl.len(), 1);
+        assert_eq!(dl[0].channel_id, "sms");
+        assert_eq!(dl[0].message.conversation_id, m.conversation_id);
+        assert!(dl[0].message.text.is_empty());
+        assert!(dl[0].message.reply_to.is_none());
+        assert!(!format!("{:?}", dl[0]).contains("top-secret-body"));
+        assert_eq!(dl[0].reason, DeadLetterReason::ExplicitOnlyRetired);
+        assert!(dl[0].reason.replay_safe());
+        assert!(!dl[0].reason.redrivable());
+
+        let out = s.redrive_dead_letters(now, None).unwrap();
+        assert_eq!(
+            out.moved, 0,
+            "a policy retirement is never put back in the queue"
+        );
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn scrubbed_dead_letter_missing_row_is_noop() {
+        let s = store();
+        s.record_scrubbed_dead_letter(999, 0, "gone", DeadLetterReason::ExplicitOnlyRetired)
             .unwrap();
         assert_eq!(s.stats(now_secs()).unwrap().dead_lettered, 0);
     }
@@ -3081,11 +3227,12 @@ mod tests {
                 | DeadLetterReason::Ambiguous
                 | DeadLetterReason::Permanent
                 | DeadLetterReason::UnknownOutcome
-                | DeadLetterReason::PayloadTooLarge => {}
+                | DeadLetterReason::PayloadTooLarge
+                | DeadLetterReason::ExplicitOnlyRetired => {}
             }
             assert_eq!(DeadLetterReason::from_str_lossy(r.as_str()), *r);
         }
-        assert_eq!(DeadLetterReason::ALL.len(), 5);
+        assert_eq!(DeadLetterReason::ALL.len(), 6);
     }
 
     /// The two questions must not collapse back into one boolean. Derived from
@@ -3106,6 +3253,11 @@ mod tests {
         // possible) yet refused by redrive (a verbatim replay re-hits the cap).
         assert!(DeadLetterReason::PayloadTooLarge.replay_safe());
         assert!(!DeadLetterReason::PayloadTooLarge.redrivable());
+        // Same shape, different cause: retired by policy before any transport
+        // call, so duplicate-safe, but a verbatim redrive would re-queue an
+        // implicit retry of a body that no longer exists.
+        assert!(DeadLetterReason::ExplicitOnlyRetired.replay_safe());
+        assert!(!DeadLetterReason::ExplicitOnlyRetired.redrivable());
         assert!(
             !DeadLetterReason::redrivable_tokens()
                 .contains(&DeadLetterReason::PayloadTooLarge.as_str()),

@@ -112,7 +112,7 @@ pub struct DeadLetterEntry {
     /// Last transport error observed.
     pub last_error: String,
     /// Why retrying stopped: `exhausted` | `ambiguous` | `permanent` |
-    /// `unknown_outcome` | `payload_too_large`.
+    /// `unknown_outcome` | `payload_too_large` | `explicit_only_retired`.
     pub reason: String,
     /// `true` when a redrive provably cannot double-send this message. `false`
     /// means the outcome of the last attempt is unknown.

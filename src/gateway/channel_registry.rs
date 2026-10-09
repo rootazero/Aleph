@@ -33,7 +33,7 @@ use tracing::{error, info, warn};
 use super::channel::{
     Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory, ChannelHealth,
     ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, HealthStatus,
-    InboundMessage, InboundMessageSender, OutboundMessage, SendResult,
+    InboundMessage, InboundMessageSender, OutboundDeliveryPolicy, OutboundMessage, SendResult,
 };
 use super::voice::VoiceState;
 
@@ -361,6 +361,21 @@ impl ChannelRegistry {
         }
     }
 
+    /// The channel's own declared outbound delivery policy.
+    ///
+    /// `None` when the channel is not registered. That is deliberately not
+    /// `Automatic`: an unregistered channel has no declaration to honour, and
+    /// the callers keep their pre-existing behaviour for it instead of
+    /// guessing a policy.
+    pub(crate) async fn outbound_delivery_policy(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Option<OutboundDeliveryPolicy> {
+        let handle = self.get(channel_id).await?;
+        let channel = handle.read().await;
+        Some(channel.outbound_delivery_policy())
+    }
+
     /// List all channels.
     ///
     /// **Audit fix**: the previous implementation iterated `HashMap::values`
@@ -573,6 +588,14 @@ impl ChannelRegistry {
         if !super::delivery_queue::should_enqueue(err) {
             return;
         }
+        // An explicit-only channel's failure is the caller's to see and to
+        // re-request: it must not be stored (the body would be persisted in
+        // plaintext) nor replayed later without a fresh instruction.
+        if self.outbound_delivery_policy(channel_id).await
+            == Some(OutboundDeliveryPolicy::ExplicitOnly)
+        {
+            return;
+        }
         // Ordered after the two cheap refusals above so a message that is never
         // going to be queued never pays for a file read.
         let custody =
@@ -647,7 +670,13 @@ impl ChannelRegistry {
         // immediately, matching the pre-existing single-attempt semantics. The
         // read lock is re-acquired per attempt so a retry-after sleep never
         // blocks channel restarts.
-        let mut retries_left = self.send_retry.max_rate_limit_retries;
+        //
+        // An explicit-only channel never gets the automatic retry: each extra
+        // transport call is a second submission the caller did not ask for.
+        let mut retries_left = match channel_arc.read().await.outbound_delivery_policy() {
+            OutboundDeliveryPolicy::Automatic => self.send_retry.max_rate_limit_retries,
+            OutboundDeliveryPolicy::ExplicitOnly => 0,
+        };
         loop {
             let result = {
                 let channel = channel_arc.read().await;

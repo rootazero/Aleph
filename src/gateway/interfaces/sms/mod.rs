@@ -62,7 +62,8 @@ use aleph_protocol::telecom_relay::{TelecomEnvelope, TelecomKind, TelecomOutcome
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundDeliveryPolicy, OutboundMessage,
+    SendResult,
 };
 use crate::gateway::telecom::{accept_event, AcceptContext, Acceptance, DedupLedger};
 use crate::sync_primitives::{Arc, Mutex, PoisonError};
@@ -245,6 +246,13 @@ impl Channel for SmsChannel {
 
     fn state(&self) -> &ChannelState {
         &self.channel_state
+    }
+
+    /// One requested SMS is one attempt: it is a separately authorised, paid
+    /// external effect, so the generic registry must not retry it or persist
+    /// its body for replay.
+    fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
+        OutboundDeliveryPolicy::ExplicitOnly
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
