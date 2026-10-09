@@ -25,6 +25,14 @@
 //! a delivery claim. `unknown` is reported as an error that says so and must
 //! not be retried implicitly (spec §6).
 //!
+//! # Authorization
+//!
+//! This module does not authenticate sends. `approval_reference` in
+//! `OutboundMessage::metadata` is an opaque string forwarded to the Relay, not
+//! proof of approval. Scoped reply/proactive approval is enforced upstream of
+//! the channel (Task 4); until it is wired, outbound SMS is not production
+//! ready.
+//!
 //! # Usage
 //!
 //! ```toml
@@ -43,8 +51,8 @@ pub mod message_ops;
 pub use config::{SmsConfig, MAX_COMMAND_TTL_SECS, MAX_SEGMENTS_LIMIT};
 pub use message_ops::{
     build_pending_operation, convert_inbound, estimate_segments, max_chars_for_segments,
-    normalize_e164, PendingSmsOperation, SmsError, SmsInboundMeta, SmsOutcomeMeta,
-    METADATA_APPROVAL_REFERENCE,
+    normalize_e164, scoped_message_id, PendingSmsOperation, SmsError, SmsInboundMeta,
+    SmsOutcomeMeta, METADATA_APPROVAL_REFERENCE,
 };
 
 use async_trait::async_trait;
@@ -136,6 +144,14 @@ impl SmsChannel {
         &self.config
     }
 
+    /// Number of dedup keys currently held (in-memory; durable ACK is Task 3).
+    pub fn dedup_len(&self) -> usize {
+        self.ledger
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+
     /// Plain text only. Everything else a messaging channel can do is `false`
     /// because SMS has no wire for it; `max_message_length` is the UCS-2
     /// multipart limit for the configured segment budget.
@@ -190,19 +206,22 @@ impl SmsChannel {
             now,
         };
         let mut ledger = self.ledger.lock().unwrap_or_else(PoisonError::into_inner);
-        let snapshot = ledger.clone();
+        // Bound memory: drop keys past the retention horizon before admitting.
+        ledger.prune(now);
         let acceptance = accept_event(&mut ledger, &ctx, env).map_err(SmsError::from)?;
         match &acceptance {
             Acceptance::Duplicate(_) => Ok(SmsIngest::Duplicate),
             Acceptance::Stale(_) => Ok(SmsIngest::Stale),
             Acceptance::Expired(_) => Ok(SmsIngest::Expired),
-            Acceptance::Fresh(_) => {
+            Acceptance::Fresh(key) => {
                 debug_assert!(acceptance.admits_agent_turn(env));
                 let id = message.id.clone();
                 if self.channel_state.send_inbound(message) {
                     Ok(SmsIngest::Committed(id))
                 } else {
-                    *ledger = snapshot;
+                    // Undo only this event's record; every other key
+                    // (including Duplicate/Stale/Expired ones) stays.
+                    ledger.forget(key);
                     Err(SmsError::NoConsumer)
                 }
             }
@@ -268,6 +287,19 @@ impl Channel for SmsChannel {
         if self.channel_state.status() != ChannelStatus::Connected {
             return Err(ChannelError::NotConnected(
                 "SMS channel is not connected; nothing was sent".into(),
+            ));
+        }
+        // The cached status can be stale (relay dropped after start): ask the
+        // transport now, before building or submitting anything.
+        if !transport.is_connected().await {
+            self.channel_state
+                .set_status(ChannelStatus::Disconnected)
+                .await;
+            self.channel_state
+                .record_failure(Some("SMS relay connection lost".to_string()))
+                .await;
+            return Err(ChannelError::NotConnected(
+                "SMS relay connection is not established; nothing was sent".into(),
             ));
         }
         let operation = build_pending_operation(&self.config, &message, Utc::now())?;

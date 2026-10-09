@@ -10,9 +10,11 @@
 //! Spec: `docs/superpowers/specs/2026-10-09-pstn-sms-thin-relay-design.md` §6, §8.
 
 pub mod protocol;
+pub mod sms_meta;
 
 pub use protocol::{
     accept_event, advance_outcome, dedup_key, expire_unknown, fence_generation, follow_up,
     AcceptContext, Acceptance, DedupKey, DedupLedger, FollowUp, IgnoreReason, OutcomeRecord,
     OutcomeTransition, TelecomError, UnknownExpiry,
 };
+pub use sms_meta::SmsInboundMeta;

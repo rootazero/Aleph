@@ -382,7 +382,7 @@ static SMS_FIELDS: &[FieldDef] = &[
         label: "Send SMS",
         kind: FieldKind::Toggle,
         placeholder: "",
-        help: "Allow the agent to request outbound SMS (each send still needs approval)",
+        help: "Allow the agent to request outbound SMS. Sending authorization is enforced by Core upstream of this channel and is not yet available in production",
         required: false,
         default_value: "true",
         options: &[],

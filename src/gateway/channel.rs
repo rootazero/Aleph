@@ -273,6 +273,9 @@ pub enum MessageMeta {
     /// Slack `bot_id`, Discord `author.bot`, …) push this variant so the
     /// gateway-level pair-loop guard can short-circuit bot↔bot reply storms.
     BotAuthored,
+    /// SMS transport facts (provider identity, encoding, segments, binding).
+    /// Typed so SMS consumers never depend on `InboundMessage::raw`.
+    Sms(Box<crate::gateway::telecom::SmsInboundMeta>),
 }
 
 /// Message received from a channel

@@ -134,6 +134,14 @@ impl DedupLedger {
         self.seen.is_empty()
     }
 
+    /// Remove one key. Used to undo the record of an event that was admitted
+    /// but could not be committed downstream (e.g. no consumer), so the
+    /// Relay's redelivery is fresh again. Returns whether the key was present.
+    /// Touches nothing else: other recorded keys are never affected.
+    pub fn forget(&mut self, key: &DedupKey) -> bool {
+        self.seen.remove(key).is_some()
+    }
+
     /// Forget keys recorded at or before `now - retention`.
     pub fn prune(&mut self, now: DateTime<Utc>) {
         let horizon = self.retention;
@@ -452,6 +460,36 @@ mod tests {
     #[test]
     fn dedup_key_ignores_body() {
         assert_eq!(dedup_key(&env("m1", "a")), dedup_key(&env("m1", "b")));
+    }
+
+    #[test]
+    fn forget_removes_only_the_named_key() {
+        let t = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+        let ctx = AcceptContext {
+            authenticated_binding: "b",
+            active_generation: 1,
+            now: t,
+        };
+        let mut ledger = DedupLedger::new(Duration::days(7));
+        let (a, b) = (env("m-a", "x"), env("m-b", "x"));
+        let key_a = match accept_event(&mut ledger, &ctx, &a).unwrap() {
+            Acceptance::Fresh(k) => k,
+            other => panic!("{other:?}"),
+        };
+        accept_event(&mut ledger, &ctx, &b).unwrap();
+        assert_eq!(ledger.len(), 2);
+
+        assert!(ledger.forget(&key_a));
+        assert!(!ledger.forget(&key_a), "second forget is a no-op");
+        assert_eq!(ledger.len(), 1);
+        assert!(matches!(
+            accept_event(&mut ledger, &ctx, &a).unwrap(),
+            Acceptance::Fresh(_)
+        ));
+        assert!(matches!(
+            accept_event(&mut ledger, &ctx, &b).unwrap(),
+            Acceptance::Duplicate(_)
+        ));
     }
 
     #[test]

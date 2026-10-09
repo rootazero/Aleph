@@ -18,7 +18,8 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::gateway::channel::{
-    ChannelError, ChannelId, ConversationId, InboundMessage, MessageId, OutboundMessage, UserId,
+    ChannelError, ChannelId, ConversationId, InboundMessage, MessageId, MessageMeta,
+    OutboundMessage, UserId,
 };
 use crate::gateway::telecom::TelecomError;
 
@@ -257,32 +258,30 @@ pub fn build_pending_operation(
 // Inbound: SmsInbound -> InboundMessage
 // ---------------------------------------------------------------------------
 
-/// Transport facts preserved on an inbound SMS (stored in
-/// `InboundMessage::raw` under the `"sms"` key). Contains no body.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SmsInboundMeta {
-    pub region: String,
-    pub binding_ref: String,
-    pub provider_account_id: String,
-    /// Dedup identity (provider's message id).
-    pub provider_message_id: String,
-    /// Relay frame id; audit only.
-    pub envelope_event_id: String,
-    pub connection_generation: u64,
-    pub service_address: String,
-    pub peer_address: String,
-    pub encoding: SmsEncoding,
-    pub segment_count: u32,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-}
+pub use crate::gateway::telecom::SmsInboundMeta;
 
 impl SmsInboundMeta {
-    /// Read back the metadata attached by [`convert_inbound`].
+    /// Read back the typed metadata attached by [`convert_inbound`]. Reads
+    /// `InboundMessage::metadata` only; `raw` is not consulted.
     pub fn from_message(msg: &InboundMessage) -> Option<Self> {
-        let sms = msg.raw.as_ref()?.get("sms")?.clone();
-        serde_json::from_value(sms).ok()
+        msg.metadata.iter().find_map(|m| match m {
+            MessageMeta::Sms(meta) => Some((**meta).clone()),
+            _ => None,
+        })
     }
+}
+
+/// Unambiguous channel-level message id: `<len(account)>:<account>:<message>`.
+/// The length prefix makes the split unique even if an id contains `:`, so two
+/// provider accounts can never collide on the same provider message id. The
+/// unscoped provider id stays in [`SmsInboundMeta`].
+pub fn scoped_message_id(provider_account_id: &str, provider_message_id: &str) -> String {
+    format!(
+        "{}:{}:{}",
+        provider_account_id.len(),
+        provider_account_id,
+        provider_message_id
+    )
 }
 
 /// Convert an inbound SMS envelope into the channel-agnostic
@@ -331,7 +330,10 @@ fn convert_sms(
         expires_at: env.expires_at,
     };
     Ok(InboundMessage {
-        id: MessageId::new(sms.provider_message_id.clone()),
+        id: MessageId::new(scoped_message_id(
+            &sms.provider_account_id,
+            &sms.provider_message_id,
+        )),
         channel_id: channel_id.clone(),
         conversation_id: ConversationId::new(peer.clone()),
         sender_id: UserId::new(peer),
@@ -342,8 +344,8 @@ fn convert_sms(
         timestamp: env.created_at,
         reply_to: None,
         is_group: false,
-        raw: Some(serde_json::json!({ "sms": meta })),
-        metadata: Vec::new(),
+        raw: None,
+        metadata: vec![MessageMeta::Sms(Box::new(meta))],
     })
 }
 

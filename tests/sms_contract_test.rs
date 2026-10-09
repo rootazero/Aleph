@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use aleph_protocol::telecom_relay::{SmsEncoding, TelecomOutcome};
@@ -33,7 +33,7 @@ fn config() -> SmsConfig {
 
 /// Fake Relay transport: reports a fixed outcome and counts submissions.
 struct FakeTransport {
-    connected: bool,
+    connected: AtomicBool,
     outcome: TelecomOutcome,
     submits: AtomicUsize,
     echo_wrong_id: bool,
@@ -42,7 +42,7 @@ struct FakeTransport {
 impl FakeTransport {
     fn new(connected: bool, outcome: TelecomOutcome) -> Arc<Self> {
         Arc::new(Self {
-            connected,
+            connected: AtomicBool::new(connected),
             outcome,
             submits: AtomicUsize::new(0),
             echo_wrong_id: false,
@@ -53,7 +53,7 @@ impl FakeTransport {
 #[async_trait]
 impl SmsTransport for FakeTransport {
     async fn is_connected(&self) -> bool {
-        self.connected
+        self.connected.load(Ordering::SeqCst)
     }
 
     async fn submit(
@@ -216,6 +216,87 @@ async fn accepted_send_is_ok_with_operation_id_not_delivery() {
 }
 
 #[tokio::test]
+async fn submitted_and_delivered_outcomes_are_ok_with_operation_id() {
+    for outcome in [TelecomOutcome::Submitted, TelecomOutcome::Delivered] {
+        let t = FakeTransport::new(true, outcome);
+        let mut channel = SmsChannel::new("sms-test", config()).with_transport(t.clone());
+        channel.start().await.unwrap();
+        let result = channel
+            .send(OutboundMessage::text("+14155550100", "hello"))
+            .await
+            .unwrap_or_else(|e| panic!("{outcome:?}: {e:?}"));
+        assert!(!result.message_id.as_str().is_empty(), "{outcome:?}");
+        assert_eq!(t.submits.load(Ordering::SeqCst), 1, "{outcome:?}");
+    }
+}
+
+#[tokio::test]
+async fn send_after_stop_is_not_connected_and_does_not_submit() {
+    let t = FakeTransport::new(true, TelecomOutcome::Accepted);
+    let mut channel = SmsChannel::new("sms-test", config()).with_transport(t.clone());
+    channel.start().await.unwrap();
+    channel.stop().await.unwrap();
+    assert_eq!(channel.status(), ChannelStatus::Disconnected);
+    let err = channel
+        .send(OutboundMessage::text("+14155550100", "hi"))
+        .await
+        .expect_err("stopped");
+    assert!(matches!(err, ChannelError::NotConnected(_)), "{err:?}");
+    assert_eq!(t.submits.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn transport_drop_after_start_is_detected_at_send() {
+    let t = FakeTransport::new(true, TelecomOutcome::Accepted);
+    let mut channel = SmsChannel::new("sms-test", config()).with_transport(t.clone());
+    channel.start().await.unwrap();
+    assert_eq!(channel.status(), ChannelStatus::Connected);
+
+    // Relay drops while the cached status still says Connected.
+    t.connected.store(false, Ordering::SeqCst);
+    let err = channel
+        .send(OutboundMessage::text("+14155550100", "hi"))
+        .await
+        .expect_err("relay is down");
+    assert!(matches!(err, ChannelError::NotConnected(_)), "{err:?}");
+    assert_eq!(t.submits.load(Ordering::SeqCst), 0, "nothing submitted");
+    assert_ne!(
+        channel.status(),
+        ChannelStatus::Connected,
+        "status must not keep claiming Connected"
+    );
+
+    // Reconnect does not silently resurrect the send path: start() is required.
+    t.connected.store(true, Ordering::SeqCst);
+    assert!(channel
+        .send(OutboundMessage::text("+14155550100", "hi"))
+        .await
+        .is_err());
+    channel.start().await.unwrap();
+    assert!(channel
+        .send(OutboundMessage::text("+14155550100", "hi"))
+        .await
+        .is_ok());
+    assert_eq!(t.submits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn invalid_config_start_fails_without_connecting() {
+    let mut bad = config();
+    bad.service_address = "13800000000".into(); // not E.164
+    let t = FakeTransport::new(true, TelecomOutcome::Accepted);
+    let mut channel = SmsChannel::new("sms-test", bad).with_transport(t.clone());
+    let err = channel.start().await.expect_err("invalid config");
+    assert!(matches!(err, ChannelError::ConfigError(_)), "{err:?}");
+    assert_eq!(channel.status(), ChannelStatus::Error);
+    assert!(channel
+        .send(OutboundMessage::text("+14155550100", "hi"))
+        .await
+        .is_err());
+    assert_eq!(t.submits.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn non_success_outcomes_are_errors() {
     for outcome in [
         TelecomOutcome::Failed,
@@ -256,7 +337,7 @@ async fn unknown_outcome_says_unknown() {
 #[tokio::test]
 async fn mismatched_operation_id_is_rejected() {
     let t = Arc::new(FakeTransport {
-        connected: true,
+        connected: AtomicBool::new(true),
         outcome: TelecomOutcome::Accepted,
         submits: AtomicUsize::new(0),
         echo_wrong_id: true,

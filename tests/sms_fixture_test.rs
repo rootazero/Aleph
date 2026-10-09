@@ -6,9 +6,9 @@ use aleph_protocol::telecom_relay::{
     OutcomeReport, SmsEncoding, SmsInbound, TelecomEnvelope, TelecomKind, TelecomOutcome,
     TELECOM_PROTOCOL_VERSION,
 };
-use alephcore::gateway::channel::Channel;
+use alephcore::gateway::channel::{Channel, MessageMeta};
 use alephcore::gateway::interfaces::sms::message_ops::{
-    convert_inbound, SmsError, SmsInboundMeta, SmsOutcomeMeta,
+    convert_inbound, scoped_message_id, SmsError, SmsInboundMeta, SmsOutcomeMeta,
 };
 use alephcore::gateway::interfaces::sms::{SmsChannel, SmsConfig, SmsIngest};
 use chrono::{DateTime, Duration, Utc};
@@ -53,7 +53,13 @@ fn convert_inbound_preserves_metadata_and_provider_identity() {
     let channel_id = alephcore::gateway::channel::ChannelId::new("sms");
     let msg = convert_inbound(&config(), &channel_id, &env).unwrap();
 
-    assert_eq!(msg.id.as_str(), "pm-1", "id is the provider message id");
+    assert_eq!(
+        msg.id.as_str(),
+        "6:acct-1:pm-1",
+        "id is scoped by provider account"
+    );
+    assert_eq!(msg.id.as_str(), scoped_message_id("acct-1", "pm-1"));
+    assert!(msg.raw.is_none(), "runtime metadata is not in raw");
     assert_eq!(msg.conversation_id.as_str(), PEER);
     assert_eq!(msg.sender_id.as_str(), PEER);
     assert_eq!(msg.text, "hello");
@@ -64,7 +70,7 @@ fn convert_inbound_preserves_metadata_and_provider_identity() {
         "original event time, not delivery time"
     );
 
-    let meta = SmsInboundMeta::from_message(&msg).expect("sms meta in raw");
+    let meta = SmsInboundMeta::from_message(&msg).expect("typed sms meta");
     assert_eq!(meta.region, "CN");
     assert_eq!(meta.binding_ref, BINDING);
     assert_eq!(meta.provider_account_id, "acct-1");
@@ -169,7 +175,7 @@ async fn ingest_publishes_once_and_dedups_by_provider_identity() {
             .unwrap(),
         SmsIngest::Committed(_)
     ));
-    assert_eq!(rx.try_recv().unwrap().id.as_str(), "pm-11");
+    assert_eq!(rx.try_recv().unwrap().id.as_str(), "6:acct-1:pm-11");
 }
 
 #[tokio::test]
@@ -188,7 +194,7 @@ async fn ingest_without_subscriber_is_not_recorded_so_redelivery_is_fresh() {
         channel.ingest_envelope(&env, 7, now).unwrap(),
         SmsIngest::Committed(_)
     ));
-    assert_eq!(rx.try_recv().unwrap().id.as_str(), "pm-20");
+    assert_eq!(rx.try_recv().unwrap().id.as_str(), "6:acct-1:pm-20");
 }
 
 #[tokio::test]
@@ -297,4 +303,153 @@ fn only_delivered_counts_as_delivered() {
         assert_eq!(meta.operation_id, "op-1");
         assert_eq!(meta.delivered(), delivered, "{outcome:?}");
     }
+}
+
+// ---- typed metadata, scoped ids ---------------------------------------------
+
+#[test]
+fn typed_metadata_survives_without_raw_and_through_serde() {
+    let now = Utc::now();
+    let env = inbound("pm-50", "hello", now);
+    let mut msg = convert_inbound(
+        &config(),
+        &alephcore::gateway::channel::ChannelId::new("sms"),
+        &env,
+    )
+    .unwrap();
+    let before = SmsInboundMeta::from_message(&msg).unwrap();
+
+    // Strip debugging payload: required runtime metadata must still be there.
+    msg.raw = None;
+    assert_eq!(SmsInboundMeta::from_message(&msg).unwrap(), before);
+
+    // MessageMeta serde roundtrip.
+    let meta = msg
+        .metadata
+        .iter()
+        .find(|m| matches!(m, MessageMeta::Sms(_)))
+        .unwrap();
+    let json = serde_json::to_string(meta).unwrap();
+    let back: MessageMeta = serde_json::from_str(&json).unwrap();
+    match back {
+        MessageMeta::Sms(m) => assert_eq!(*m, before),
+        other => panic!("{other:?}"),
+    }
+    assert!(!json.contains("hello"), "metadata carries no body");
+
+    // Whole InboundMessage roundtrip keeps it.
+    let json = serde_json::to_string(&msg).unwrap();
+    let back: alephcore::gateway::channel::InboundMessage = serde_json::from_str(&json).unwrap();
+    assert_eq!(SmsInboundMeta::from_message(&back).unwrap(), before);
+    // Original (unscoped) provider id is preserved in typed metadata.
+    assert_eq!(before.provider_message_id, "pm-50");
+}
+
+#[test]
+fn metadata_debug_redacts_phone_numbers() {
+    let now = Utc::now();
+    let msg = convert_inbound(
+        &config(),
+        &alephcore::gateway::channel::ChannelId::new("sms"),
+        &inbound("pm-51", "secret body", now),
+    )
+    .unwrap();
+    let dbg = format!("{:?}", msg.metadata);
+    assert!(!dbg.contains(PEER) && !dbg.contains(SERVICE), "{dbg}");
+    assert!(!dbg.contains("secret body"), "{dbg}");
+}
+
+#[test]
+fn same_provider_message_id_on_two_accounts_gets_distinct_ids() {
+    let now = Utc::now();
+    let id = |acct: &str, msg: &str| {
+        let mut env = inbound(msg, "x", now);
+        if let TelecomKind::SmsInbound(s) = &mut env.kind {
+            s.provider_account_id = acct.into();
+        }
+        convert_inbound(
+            &config(),
+            &alephcore::gateway::channel::ChannelId::new("sms"),
+            &env,
+        )
+        .unwrap()
+        .id
+    };
+    assert_ne!(id("acct-A", "pm-1"), id("acct-B", "pm-1"));
+    // Delimiter games cannot make two (account, message) pairs collide.
+    assert_ne!(id("a", "b:c"), id("a:b", "c"));
+    assert_eq!(id("acct-A", "pm-1"), id("acct-A", "pm-1"));
+}
+
+// ---- dedup ledger bounds / rollback scope -----------------------------------
+
+#[tokio::test]
+async fn ingest_prunes_keys_past_retention() {
+    let now = Utc::now();
+    let channel = SmsChannel::new("sms", config());
+    let _rx = channel.state().inbound_subscribe();
+
+    // Expired frames are recorded (so a redelivery is a duplicate).
+    for i in 0..5 {
+        let env = inbound(&format!("old-{i}"), "late", now - Duration::seconds(1000));
+        assert_eq!(
+            channel.ingest_envelope(&env, 7, now).unwrap(),
+            SmsIngest::Expired
+        );
+    }
+    assert_eq!(channel.dedup_len(), 5);
+
+    // Eight days later the old keys are gone; only the new one remains.
+    let later = now + Duration::days(8);
+    assert!(matches!(
+        channel
+            .ingest_envelope(&inbound("new-1", "hi", later), 7, later)
+            .unwrap(),
+        SmsIngest::Committed(_)
+    ));
+    assert_eq!(channel.dedup_len(), 1, "expired keys pruned");
+}
+
+#[tokio::test]
+async fn no_consumer_rollback_keeps_other_keys() {
+    let now = Utc::now();
+    let channel = SmsChannel::new("sms", config());
+
+    // One committed (with a subscriber), one expired, both recorded.
+    let rx = channel.state().inbound_subscribe();
+    let committed = inbound("keep-1", "hi", now);
+    let expired = inbound("keep-2", "late", now - Duration::seconds(1000));
+    assert!(matches!(
+        channel.ingest_envelope(&committed, 7, now).unwrap(),
+        SmsIngest::Committed(_)
+    ));
+    assert_eq!(
+        channel.ingest_envelope(&expired, 7, now).unwrap(),
+        SmsIngest::Expired
+    );
+    assert_eq!(channel.dedup_len(), 2);
+
+    // Subscriber goes away; a fresh message hits NoConsumer.
+    drop(rx);
+    let fresh = inbound("fresh-1", "hello", now);
+    let err = channel.ingest_envelope(&fresh, 7, now).unwrap_err();
+    assert!(matches!(err, SmsError::NoConsumer), "{err:?}");
+
+    // Only the fresh key was undone; the earlier keys still dedup.
+    assert_eq!(channel.dedup_len(), 2);
+    assert_eq!(
+        channel.ingest_envelope(&committed, 7, now).unwrap(),
+        SmsIngest::Duplicate
+    );
+    assert_eq!(
+        channel.ingest_envelope(&expired, 7, now).unwrap(),
+        SmsIngest::Duplicate
+    );
+    // And the rolled-back one is fresh again once someone listens.
+    let mut rx = channel.state().inbound_subscribe();
+    assert!(matches!(
+        channel.ingest_envelope(&fresh, 7, now).unwrap(),
+        SmsIngest::Committed(_)
+    ));
+    assert_eq!(rx.try_recv().unwrap().text, "hello");
 }
