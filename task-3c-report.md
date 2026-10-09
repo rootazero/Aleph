@@ -31,3 +31,9 @@ Cargo 输出了既有 warning：`src/gateway/handlers/tools_invoke.rs:39` 的 un
 - 未运行 workspace 全量测试、clippy 或跨平台构建；未联网。
 - 未做真机/Relay 集成验证；本次验证仅覆盖 `telecom::sms_inbox` 定向单元测试。
 - Task3a、Task3b、factory、Relay 仍不在本次变更范围内；本报告不表示 Task3 已完成。
+
+## Static-review follow-up / 静态复审跟进
+
+- 修复 `expired_tombstone_insert_rolls_back_on_storage_failure` 假绿：将 `created_at` 改为 `now - 2s`，保持 `expires_at = now - 1s`，从而通过 `validate_inbound_shape` 并实际触发 INSERT trigger；错误断言收紧为 `Err(SmsInboxError::Storage(_))`。
+- 实际执行：`rustfmt --edition 2021 /home/zou/data/workspace/Aleph-sms-pstn-sdd/src/gateway/telecom/sms_inbox.rs`；`CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib gateway::telecom::sms_inbox::tests -- --nocapture`（11 passed, 0 failed, 0 ignored, 20760 filtered out）；`git diff --check`。
+- 未运行 workspace fmt、clippy、全量测试或联网操作；未修改 Task3a/3b。

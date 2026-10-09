@@ -975,9 +975,17 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let mut expired = envelope("account-a", "expired-rollback", "body", now);
+        let mut expired = envelope(
+            "account-a",
+            "expired-rollback",
+            "body",
+            now - Duration::seconds(2),
+        );
         expired.expires_at = now - Duration::seconds(1);
-        assert!(store.accept(&context(now), &expired).is_err());
+        assert!(matches!(
+            store.accept(&context(now), &expired),
+            Err(SmsInboxError::Storage(_))
+        ));
         let raw_count: i64 = store
             .conn
             .lock()
