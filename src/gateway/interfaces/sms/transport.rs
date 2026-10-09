@@ -19,7 +19,10 @@ use crate::gateway::telecom::{
     TelecomError, UnknownExpiry,
 };
 
-use super::{estimate_segments, PendingSmsOperation, SmsChannel, SmsError, SmsIngest};
+use super::{
+    estimate_segments, normalize_e164, PendingSmsOperation, SmsChannel, SmsConfig, SmsError,
+    SmsIngest, MAX_COMMAND_TTL_SECS, MAX_SEGMENTS_LIMIT,
+};
 
 /// What a future authenticated Relay adapter must implement. This is a peer
 /// seam, not a provider client: production code must supply the connection,
@@ -79,6 +82,8 @@ pub enum SmsTransportError {
     StaleGeneration { active: u64, got: u64 },
     #[error("future connection generation {got} (active {active})")]
     FutureGeneration { active: u64, got: u64 },
+    #[error("SMS relay connection generation is exhausted")]
+    GenerationExhausted,
     #[error("SMS operation {operation_id} expired at {expires_at}")]
     Expired {
         operation_id: String,
@@ -101,6 +106,16 @@ pub enum SmsTransportError {
     InvalidSegmentAdmission { operation_id: String },
     #[error("SMS operation {operation_id} segment admission disagrees with its body")]
     SegmentAdmissionMismatch { operation_id: String },
+    #[error("SMS outbound submission is disabled")]
+    OutboundDisabled,
+    #[error("SMS operation {operation_id} has an invalid peer address")]
+    InvalidPeerAddress { operation_id: String },
+    #[error("SMS operation {operation_id} has an empty body")]
+    EmptyBody { operation_id: String },
+    #[error("SMS operation {operation_id} exceeds the configured segment policy")]
+    SegmentLimitExceeded { operation_id: String },
+    #[error("SMS operation {operation_id} exceeds the configured command TTL")]
+    CommandTtlExceeded { operation_id: String },
     #[error("SMS authorization capability is unavailable")]
     AuthorizationUnavailable,
     #[error("SMS authorization denied: {0}")]
@@ -117,6 +132,34 @@ pub enum SmsTransportError {
     Envelope(#[from] EnvelopeError),
     #[error(transparent)]
     Telecom(#[from] TelecomError),
+}
+
+/// Immutable admission policy applied again to caller-provided operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SmsTransportPolicy {
+    pub outbound_enabled: bool,
+    pub max_segments: u32,
+    pub command_ttl_secs: u64,
+}
+
+impl Default for SmsTransportPolicy {
+    fn default() -> Self {
+        Self {
+            outbound_enabled: true,
+            max_segments: MAX_SEGMENTS_LIMIT,
+            command_ttl_secs: MAX_COMMAND_TTL_SECS,
+        }
+    }
+}
+
+impl From<&SmsConfig> for SmsTransportPolicy {
+    fn from(config: &SmsConfig) -> Self {
+        Self {
+            outbound_enabled: config.outbound_enabled,
+            max_segments: config.max_segments,
+            command_ttl_secs: config.command_ttl_secs,
+        }
+    }
 }
 
 /// The authenticated lease currently accepted by Core.
@@ -171,6 +214,8 @@ pub struct SmsRelayTransport {
     binding_id: String,
     peer: Arc<dyn SmsRelayPeer>,
     authorizer: Arc<dyn SmsSendAuthorizer>,
+    policy: SmsTransportPolicy,
+    connect_lock: tokio::sync::Mutex<()>,
     state: tokio::sync::Mutex<TransportState>,
 }
 
@@ -186,6 +231,30 @@ impl SmsRelayTransport {
             binding_id: binding_id.into(),
             peer,
             authorizer,
+            policy: SmsTransportPolicy::default(),
+            connect_lock: tokio::sync::Mutex::new(()),
+            state: tokio::sync::Mutex::new(TransportState {
+                next_generation: 0,
+                active: None,
+                operations: HashMap::new(),
+            }),
+        }
+    }
+
+    /// Construct a transport whose admission policy is derived from the
+    /// already-validated channel configuration.
+    pub fn new_with_config(
+        binding_id: impl Into<String>,
+        config: SmsConfig,
+        peer: Arc<dyn SmsRelayPeer>,
+        authorizer: Arc<dyn SmsSendAuthorizer>,
+    ) -> Self {
+        Self {
+            binding_id: binding_id.into(),
+            peer,
+            authorizer,
+            policy: SmsTransportPolicy::from(&config),
+            connect_lock: tokio::sync::Mutex::new(()),
             state: tokio::sync::Mutex::new(TransportState {
                 next_generation: 0,
                 active: None,
@@ -195,15 +264,22 @@ impl SmsRelayTransport {
     }
 
     pub async fn connect(&self) -> Result<RelayLease, SmsTransportError> {
-        let mut state = self.state.lock().await;
-        let generation = state.next_generation.saturating_add(1);
-        state.next_generation = generation;
+        let _connect_guard = self.connect_lock.lock().await;
+        let generation = {
+            let mut state = self.state.lock().await;
+            let generation = state
+                .next_generation
+                .checked_add(1)
+                .ok_or(SmsTransportError::GenerationExhausted)?;
+            state.next_generation = generation;
+            generation
+        };
         self.peer.connect(&self.binding_id, generation).await?;
         let lease = RelayLease {
             binding_id: self.binding_id.clone(),
             generation,
         };
-        state.active = Some(lease.clone());
+        self.state.lock().await.active = Some(lease.clone());
         Ok(lease)
     }
 
@@ -222,15 +298,21 @@ impl SmsRelayTransport {
     }
 
     pub async fn heartbeat(&self, generation: u64) -> Result<(), SmsTransportError> {
-        let mut state = self.state.lock().await;
-        let lease = current_lease(&state)?;
-        check_generation(lease.generation, generation)?;
-        if let Err(error) = self
+        let lease = {
+            let state = self.state.lock().await;
+            let lease = current_lease(&state)?;
+            check_generation(lease.generation, generation)?;
+            lease
+        };
+        let result = self
             .peer
             .heartbeat(&lease.binding_id, lease.generation)
-            .await
-        {
-            state.active = None;
+            .await;
+        if let Err(error) = result {
+            let mut state = self.state.lock().await;
+            if state.active.as_ref().map(|active| active.generation) == Some(lease.generation) {
+                state.active = None;
+            }
             return Err(error);
         }
         Ok(())
@@ -243,62 +325,55 @@ impl SmsRelayTransport {
         operation: &PendingSmsOperation,
         now: DateTime<Utc>,
     ) -> Result<TelecomOutcome, SmsTransportError> {
-        let mut state = self.state.lock().await;
-        let lease = current_lease(&state)?;
-        if operation.command.recipient_binding_id != lease.binding_id {
-            return Err(SmsTransportError::BindingMismatch {
-                expected: lease.binding_id.clone(),
-                claimed: operation.command.recipient_binding_id.clone(),
-            });
-        }
-        if let Some(existing) = state.operations.get(operation.operation_id()) {
-            if let Some(record) = existing.outcome {
-                return match record.outcome {
-                    TelecomOutcome::Unknown => Err(SmsTransportError::Unknown {
-                        operation_id: operation.operation_id().to_string(),
-                    }),
-                    TelecomOutcome::OutcomeUnknownExpired => {
-                        Err(SmsTransportError::UnknownExpired {
-                            operation_id: operation.operation_id().to_string(),
-                        })
-                    }
-                    outcome => Err(SmsTransportError::AlreadySubmitted {
-                        operation_id: operation.operation_id().to_string(),
-                        outcome,
-                    }),
-                };
+        let operation_id = operation.operation_id().to_string();
+        let lease = {
+            let mut state = self.state.lock().await;
+            let lease = current_lease(&state)?;
+            if let Some(existing) = state.operations.get(&operation_id) {
+                if let Some(record) = existing.outcome {
+                    return match record.outcome {
+                        TelecomOutcome::Unknown => Err(SmsTransportError::Unknown { operation_id }),
+                        TelecomOutcome::OutcomeUnknownExpired => {
+                            Err(SmsTransportError::UnknownExpired { operation_id })
+                        }
+                        outcome => Err(SmsTransportError::AlreadySubmitted {
+                            operation_id,
+                            outcome,
+                        }),
+                    };
+                }
+                return Err(SmsTransportError::UnknownWriteOutcome { operation_id });
             }
-            return Err(SmsTransportError::UnknownWriteOutcome {
-                operation_id: operation.operation_id().to_string(),
-            });
+            validate_operation_admission(&self.policy, &lease, operation, now)?;
+            state.operations.insert(
+                operation_id.clone(),
+                StoredOperation {
+                    operation: operation.clone(),
+                    outcome: None,
+                },
+            );
+            lease
+        };
+
+        if let Err(error) = self.authorizer.authorize(operation).await {
+            self.state.lock().await.operations.remove(&operation_id);
+            return Err(error);
         }
-        if now >= operation.command.expires_at {
-            return Err(SmsTransportError::Expired {
-                operation_id: operation.operation_id().to_string(),
-                expires_at: operation.command.expires_at,
-            });
-        }
-        validate_segment_admission(operation)?;
-        self.authorizer.authorize(operation).await?;
-        state.operations.insert(
-            operation.operation_id().to_string(),
-            StoredOperation {
-                operation: operation.clone(),
-                outcome: None,
-            },
-        );
+
         let result = self
             .peer
             .submit(&lease.binding_id, lease.generation, operation)
             .await;
+        let mut state = self.state.lock().await;
         match result {
             Ok(outcome) => {
                 if outcome == TelecomOutcome::OutcomeUnknownExpired {
+                    state.operations.remove(&operation_id);
                     return Err(SmsTransportError::Peer(
                         "peer cannot report derived outcome_unknown_expired".into(),
                     ));
                 }
-                if let Some(stored) = state.operations.get_mut(operation.operation_id()) {
+                if let Some(stored) = state.operations.get_mut(&operation_id) {
                     stored.outcome = Some(OutcomeRecord {
                         outcome,
                         entered_at: now,
@@ -307,18 +382,16 @@ impl SmsRelayTransport {
                 Ok(outcome)
             }
             Err(SmsTransportError::UnknownWriteOutcome { .. }) => {
-                if let Some(stored) = state.operations.get_mut(operation.operation_id()) {
+                if let Some(stored) = state.operations.get_mut(&operation_id) {
                     stored.outcome = Some(OutcomeRecord {
                         outcome: TelecomOutcome::Unknown,
                         entered_at: now,
                     });
                 }
-                Err(SmsTransportError::Unknown {
-                    operation_id: operation.operation_id().to_string(),
-                })
+                Err(SmsTransportError::Unknown { operation_id })
             }
             Err(error) => {
-                state.operations.remove(operation.operation_id());
+                state.operations.remove(&operation_id);
                 Err(error)
             }
         }
@@ -411,7 +484,10 @@ impl SmsRelayTransport {
         envelope: &TelecomEnvelope,
         now: DateTime<Utc>,
     ) -> Result<SmsInboundRelayResult, SmsTransportError> {
-        let lease = self.lease().await.ok_or(SmsTransportError::NotConnected)?;
+        // Keep the state guard across the synchronous effect: reconnect cannot
+        // replace the lease between fencing and channel ingestion.
+        let state = self.state.lock().await;
+        let lease = current_lease(&state)?;
         fence_envelope(&lease, envelope)?;
         if !matches!(envelope.kind, TelecomKind::SmsInbound(_)) {
             return Err(SmsTransportError::WrongEnvelopeKind);
@@ -474,6 +550,47 @@ fn fence_envelope(lease: &RelayLease, envelope: &TelecomEnvelope) -> Result<(), 
             other => SmsTransportError::Telecom(other),
         },
     )
+}
+
+fn validate_operation_admission(
+    policy: &SmsTransportPolicy,
+    lease: &RelayLease,
+    operation: &PendingSmsOperation,
+    now: DateTime<Utc>,
+) -> Result<(), SmsTransportError> {
+    let operation_id = operation.operation_id().to_string();
+    if operation.command.recipient_binding_id != lease.binding_id {
+        return Err(SmsTransportError::BindingMismatch {
+            expected: lease.binding_id.clone(),
+            claimed: operation.command.recipient_binding_id.clone(),
+        });
+    }
+    if !policy.outbound_enabled {
+        return Err(SmsTransportError::OutboundDisabled);
+    }
+    if normalize_e164(&operation.peer_address).is_err() {
+        return Err(SmsTransportError::InvalidPeerAddress { operation_id });
+    }
+    if operation.command.body.is_empty() {
+        return Err(SmsTransportError::EmptyBody { operation_id });
+    }
+    if now >= operation.command.expires_at {
+        return Err(SmsTransportError::Expired {
+            operation_id,
+            expires_at: operation.command.expires_at,
+        });
+    }
+    validate_segment_admission(operation)?;
+    if operation.command.segment_count > policy.max_segments {
+        return Err(SmsTransportError::SegmentLimitExceeded { operation_id });
+    }
+    let max_ttl_secs = policy.command_ttl_secs.min(MAX_COMMAND_TTL_SECS);
+    if operation.command.expires_at.signed_duration_since(now)
+        > Duration::seconds(max_ttl_secs as i64)
+    {
+        return Err(SmsTransportError::CommandTtlExceeded { operation_id });
+    }
+    Ok(())
 }
 
 fn validate_segment_admission(operation: &PendingSmsOperation) -> Result<(), SmsTransportError> {
@@ -587,6 +704,7 @@ mod tests {
     use super::*;
     use crate::gateway::channel::MessageId;
     use aleph_protocol::telecom_relay::{SmsCommand, SmsEncoding};
+    use tokio::sync::Notify;
 
     struct AllowAll;
 
@@ -640,6 +758,60 @@ mod tests {
                 encoding: SmsEncoding::Gsm7,
                 segment_count: 1,
             },
+        }
+    }
+
+    fn test_config(outbound_enabled: bool, max_segments: u32, command_ttl_secs: u64) -> SmsConfig {
+        SmsConfig {
+            region: "CN".into(),
+            service_address: "+8613800000000".into(),
+            binding_ref: "binding".into(),
+            inbound_enabled: true,
+            outbound_enabled,
+            max_segments,
+            command_ttl_secs,
+        }
+    }
+
+    #[derive(Default)]
+    struct BlockingSmsPeer {
+        connected_generation: std::sync::Mutex<Option<u64>>,
+        started: Notify,
+        release: Notify,
+    }
+
+    #[async_trait]
+    impl SmsRelayPeer for BlockingSmsPeer {
+        async fn connect(
+            &self,
+            _binding_id: &str,
+            generation: u64,
+        ) -> Result<(), SmsTransportError> {
+            *self.connected_generation.lock().unwrap() = Some(generation);
+            Ok(())
+        }
+
+        async fn heartbeat(
+            &self,
+            _binding_id: &str,
+            generation: u64,
+        ) -> Result<(), SmsTransportError> {
+            if *self.connected_generation.lock().unwrap() == Some(generation) {
+                Ok(())
+            } else {
+                Err(SmsTransportError::NotConnected)
+            }
+        }
+
+        async fn submit(
+            &self,
+            _binding_id: &str,
+            _generation: u64,
+            _operation: &PendingSmsOperation,
+        ) -> Result<TelecomOutcome, SmsTransportError> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(TelecomOutcome::Accepted)
         }
     }
 
@@ -767,6 +939,95 @@ mod tests {
         assert_eq!(sent.command.encoding, op.command.encoding);
         assert_eq!(sent.command.segment_count, op.command.segment_count);
         assert_eq!(sent.command.body, op.command.body);
+    }
+
+    #[tokio::test]
+    async fn manual_operations_are_rechecked_by_transport_policy() {
+        let peer = Arc::new(InMemorySmsPeer::default());
+        let transport = SmsRelayTransport::new_with_config(
+            "binding",
+            test_config(true, 1, 30),
+            peer.clone(),
+            allow_all(),
+        );
+        transport.connect().await.unwrap();
+        let now = Utc::now();
+
+        let mut too_many_segments = test_operation(now + Duration::seconds(10));
+        too_many_segments.command.operation_id = "too-many-segments".into();
+        too_many_segments.command.body = "a".repeat(161);
+        too_many_segments.command.segment_count = 2;
+        assert!(matches!(
+            transport.submit_at(&too_many_segments, now).await,
+            Err(SmsTransportError::SegmentLimitExceeded { .. })
+        ));
+
+        let mut invalid_peer = test_operation(now + Duration::seconds(10));
+        invalid_peer.command.operation_id = "invalid-peer".into();
+        invalid_peer.peer_address = "not-e164".into();
+        assert!(matches!(
+            transport.submit_at(&invalid_peer, now).await,
+            Err(SmsTransportError::InvalidPeerAddress { .. })
+        ));
+
+        let disabled = SmsRelayTransport::new_with_config(
+            "binding",
+            test_config(false, 1, 30),
+            peer.clone(),
+            allow_all(),
+        );
+        disabled.connect().await.unwrap();
+        let mut outbound_disabled = test_operation(now + Duration::seconds(10));
+        outbound_disabled.command.operation_id = "outbound-disabled".into();
+        assert!(matches!(
+            disabled.submit_at(&outbound_disabled, now).await,
+            Err(SmsTransportError::OutboundDisabled)
+        ));
+
+        let mut over_ttl = test_operation(now + Duration::seconds(31));
+        over_ttl.command.operation_id = "over-ttl".into();
+        assert!(matches!(
+            transport.submit_at(&over_ttl, now).await,
+            Err(SmsTransportError::CommandTtlExceeded { .. })
+        ));
+        assert!(peer.submissions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pending_peer_does_not_block_heartbeat_or_reconnect() {
+        let peer = Arc::new(BlockingSmsPeer::default());
+        let transport = Arc::new(SmsRelayTransport::new("binding", peer.clone(), allow_all()));
+        let first = transport.connect().await.unwrap();
+        let operation = test_operation(Utc::now() + Duration::seconds(60));
+        let started = peer.started.notified();
+        let submit_transport = Arc::clone(&transport);
+        let submit =
+            tokio::spawn(async move { submit_transport.submit_at(&operation, Utc::now()).await });
+        started.await;
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            transport.heartbeat(first.generation),
+        )
+        .await
+        .expect("heartbeat is not held behind peer submit")
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_millis(100), transport.connect())
+            .await
+            .expect("reconnect is not held behind peer submit")
+            .unwrap();
+        peer.release.notify_one();
+        assert_eq!(submit.await.unwrap().unwrap(), TelecomOutcome::Accepted);
+    }
+
+    #[tokio::test]
+    async fn generation_overflow_fails_closed() {
+        let peer = Arc::new(InMemorySmsPeer::default());
+        let transport = SmsRelayTransport::new("binding", peer, allow_all());
+        transport.state.lock().await.next_generation = u64::MAX;
+        assert_eq!(
+            transport.connect().await,
+            Err(SmsTransportError::GenerationExhausted)
+        );
     }
 
     #[test]
