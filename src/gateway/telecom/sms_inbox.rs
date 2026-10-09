@@ -240,6 +240,20 @@ impl SmsInbox {
         // semantics; durable dedup is decided in the SQLite transaction below.
         let mut validator_ledger = DedupLedger::new(self.config.dedup_horizon);
         let acceptance = accept_event(&mut validator_ledger, context, envelope)?;
+        let effective_expires_at = envelope.expires_at.min(
+            envelope
+                .created_at
+                .checked_add_signed(MAX_CONTENT_TTL)
+                .ok_or_else(|| {
+                    SmsInboxError::InvalidTimestamp("created_at plus content TTL overflowed".into())
+                })?,
+        );
+        let acceptance = match acceptance {
+            Acceptance::Fresh(key) if context.now >= effective_expires_at => {
+                Acceptance::Expired(key)
+            }
+            acceptance => acceptance,
+        };
 
         let mut conn = self.guard();
         let tx = conn.transaction()?;
@@ -270,6 +284,7 @@ impl SmsInbox {
                 return Ok(SmsInboxAdmission::Stale);
             }
             Acceptance::Expired(_) => {
+                insert_tombstone(&tx, envelope, inbound, effective_expires_at)?;
                 tx.commit()?;
                 return Ok(SmsInboxAdmission::Expired);
             }
@@ -277,14 +292,6 @@ impl SmsInbox {
             Acceptance::Duplicate(_) => unreachable!("temporary ledger starts empty"),
         }
 
-        let effective_expires_at = envelope.expires_at.min(
-            envelope
-                .created_at
-                .checked_add_signed(MAX_CONTENT_TTL)
-                .ok_or_else(|| {
-                    SmsInboxError::InvalidTimestamp("created_at plus content TTL overflowed".into())
-                })?,
-        );
         let stored_created_at = millis_to_datetime(envelope.created_at.timestamp_millis())?;
         let stored_expires_at = millis_to_datetime(effective_expires_at.timestamp_millis())?;
         let payload = EncryptedSmsPayload::from_envelope(
@@ -540,6 +547,40 @@ fn validate_inbound_shape(
     Ok(())
 }
 
+fn insert_tombstone(
+    tx: &Transaction<'_>,
+    envelope: &TelecomEnvelope,
+    inbound: &SmsInbound,
+    effective_expires_at: DateTime<Utc>,
+) -> Result<(), SmsInboxError> {
+    let encoding = serde_json::to_string(&inbound.encoding)
+        .map_err(|err| SmsInboxError::InvalidConfig(err.to_string()))?;
+    tx.execute(
+        "INSERT INTO sms_inbox (
+            protocol_version, binding_id, provider_account_id, provider_message_id,
+            event_id, connection_generation, service_address, peer_address,
+            encoding, segment_count, created_at, expires_at, content_bytes,
+            ciphertext, nonce, salt
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0,
+                   NULL, NULL, NULL)",
+        params![
+            envelope.protocol_version,
+            envelope.binding_id,
+            inbound.provider_account_id,
+            inbound.provider_message_id,
+            envelope.event_id,
+            envelope.connection_generation,
+            inbound.service_address,
+            inbound.peer_address,
+            encoding,
+            inbound.segment_count,
+            envelope.created_at.timestamp_millis(),
+            effective_expires_at.timestamp_millis(),
+        ],
+    )?;
+    Ok(())
+}
+
 fn prune_transaction(
     tx: &Transaction<'_>,
     now: DateTime<Utc>,
@@ -556,7 +597,7 @@ fn prune_transaction(
         SmsInboxError::InvalidConfig("dedup horizon overflows timestamp range".into())
     })?;
     tx.execute(
-        "DELETE FROM sms_inbox WHERE created_at <= ?1",
+        "DELETE FROM sms_inbox WHERE created_at < ?1",
         params![cutoff.timestamp_millis()],
     )?;
     Ok(())
@@ -856,6 +897,156 @@ mod tests {
             Err(SmsInboxError::InvalidTimestamp(_))
         ));
         assert_eq!(store.pending_count(now).unwrap(), 0);
+    }
+
+    #[test]
+    fn expired_events_leave_tombstones_and_redeliver_as_duplicates() {
+        let now = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+        let store = inbox(4, 4096);
+        let mut expired = envelope(
+            "account-a",
+            "expired-tombstone",
+            "original body",
+            now - Duration::hours(2),
+        );
+        expired.expires_at = now - Duration::hours(1);
+        assert!(matches!(
+            store.accept(&context(now), &expired),
+            Ok(SmsInboxAdmission::Expired)
+        ));
+        assert_eq!(store.pending_count(now).unwrap(), 0);
+
+        let mut redelivery = expired.clone();
+        redelivery.event_id = "different-event".into();
+        if let TelecomKind::SmsInbound(inbound) = &mut redelivery.kind {
+            inbound.body = "different body".into();
+        }
+        redelivery.expires_at = now + Duration::hours(1);
+        assert!(matches!(
+            store.accept(&context(now), &redelivery),
+            Ok(SmsInboxAdmission::Duplicate(_))
+        ));
+
+        let mut wrong_identity = redelivery.clone();
+        wrong_identity.binding_id = "wrong-binding".into();
+        assert!(matches!(
+            store.accept(&context(now), &wrong_identity),
+            Err(SmsInboxError::Protocol(
+                TelecomError::BindingMismatch { .. }
+            ))
+        ));
+
+        let raw = store.conn.lock().unwrap();
+        let (rows, content_bytes, ciphertext, nonce, salt): (
+            i64,
+            i64,
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+        ) = raw
+            .query_row(
+                "SELECT COUNT(*), content_bytes, ciphertext, nonce, salt FROM sms_inbox",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(content_bytes, 0);
+        assert!(ciphertext.is_none() && nonce.is_none() && salt.is_none());
+    }
+
+    #[test]
+    fn expired_tombstone_insert_rolls_back_on_storage_failure() {
+        let now = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+        let store = inbox(4, 4096);
+        let conn = store.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER sms_inbox_fail_expired AFTER INSERT ON sms_inbox
+             BEGIN SELECT RAISE(ABORT, 'test expired insertion failure'); END;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut expired = envelope("account-a", "expired-rollback", "body", now);
+        expired.expires_at = now - Duration::seconds(1);
+        assert!(store.accept(&context(now), &expired).is_err());
+        let raw_count: i64 = store
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM sms_inbox", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(raw_count, 0);
+    }
+
+    #[test]
+    fn content_ttl_expires_old_event_without_pending_content() {
+        let now = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+        let store = inbox(4, 4096);
+        let mut old = envelope(
+            "account-a",
+            "content-ttl",
+            "old body",
+            now - Duration::hours(25),
+        );
+        old.expires_at = now + Duration::hours(1);
+        assert!(matches!(
+            store.accept(&context(now), &old),
+            Ok(SmsInboxAdmission::Expired)
+        ));
+        assert_eq!(store.pending_count(now).unwrap(), 0);
+
+        let mut redelivery = old.clone();
+        redelivery.event_id = "ttl-retry".into();
+        redelivery.expires_at = now + Duration::hours(2);
+        assert!(matches!(
+            store.accept(&context(now), &redelivery),
+            Ok(SmsInboxAdmission::Duplicate(_))
+        ));
+    }
+
+    #[test]
+    fn dedup_horizon_keeps_exact_boundary_and_prunes_afterward() {
+        let first_seen = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+        let horizon = Duration::hours(1);
+        let config = SmsInboxConfig::new(4, 4096)
+            .unwrap()
+            .with_dedup_horizon(horizon)
+            .unwrap();
+        let store =
+            SmsInbox::open_in_memory(SecretsCrypto::new("dedicated-inbox-key"), config).unwrap();
+        let mut env = envelope("account-a", "horizon", "body", first_seen);
+        env.expires_at = first_seen + Duration::hours(2);
+        assert!(matches!(
+            store.accept(&context(first_seen), &env),
+            Ok(SmsInboxAdmission::Persisted(_))
+        ));
+
+        let exact = first_seen + horizon;
+        assert!(matches!(
+            store.accept(&context(exact), &env),
+            Ok(SmsInboxAdmission::Duplicate(_))
+        ));
+        let after = exact + Duration::milliseconds(1);
+        assert!(matches!(
+            store.accept(&context(after), &env),
+            Ok(SmsInboxAdmission::Stale)
+        ));
+        let raw_count: i64 = store
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM sms_inbox", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(raw_count, 0);
     }
 
     #[test]
