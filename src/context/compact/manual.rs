@@ -814,6 +814,8 @@ mod tests {
                     at: now_ms(),
                     project_root: None,
                     envelope: None,
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
                 },
             ),
             bulky(4, "in-run A"),
@@ -902,6 +904,8 @@ mod tests {
                     at: now_ms(),
                     project_root: None,
                     envelope: None,
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
                 },
             ),
             user(2, "older"),
@@ -920,6 +924,8 @@ mod tests {
                     at: now_ms(),
                     project_root: None,
                     envelope: None,
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
                 },
             ),
             user(5, "newer"),
@@ -954,6 +960,8 @@ mod tests {
                     at: now_ms(),
                     project_root: None,
                     envelope: None,
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
                 },
             ),
             bulky(2, "work"),

@@ -185,4 +185,26 @@ git diff --check
 3. Add integration tests for crash/boot/manual resume flows
 4. Verify consumer isolation (non-telecom entries unaffected)
 5. Add real-world telecom provider round-trip tests
-6. Consider migration tool to mark Legacy records as Ordinary if they're provably non-telecom (via source_channel inspection)
+
+## Follow-up Fix (Commit 2)
+
+Fixed 19 test fixture constructions missing `telecom_provenance` field:
+
+- src/diagnostics/checks/session_log.rs (1)
+- src/gateway/projection_reconciler.rs (4)
+- src/agents/subagent_tool/recovery.rs (2)
+- src/context/compact/event_snap.rs (1)
+- src/context/compact/manual.rs (4)
+- src/context/compact/session_split.rs (1)
+- src/orchestrator/harness_bridge/tests.rs (1)
+- src/session/boundary_repair.rs (1)
+- src/session/in_process.rs (1)
+- src/session/marker_balance.rs (1)
+- src/session/reduction.rs (1 RunStartFacts + 3 SessionEvent)
+- src/session/store.rs (1)
+- src/session/usage_fold.rs (1)
+
+All test fixtures use explicit `PersistedTelecomMarker::Ordinary` (synthetic non-telecom runs).
+
+Moved report and tests from stray `.superpowers/sdd/task-4-resume-marker/` to correct location:
+`.superpowers/sdd/2026-10-09-pstn-sms-thin-relay-implementation/task-4-resume-marker-*`

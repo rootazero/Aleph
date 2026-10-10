@@ -264,6 +264,8 @@ fn blocked_run_log(turn: uuid::Uuid) -> Vec<SessionEventRecord> {
                 at: 0,
                 project_root: None,
                 envelope: None,
+                telecom_provenance:
+                    crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
             },
         ),
         ev(

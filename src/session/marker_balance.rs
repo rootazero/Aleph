@@ -143,6 +143,8 @@ mod tests {
             at,
             project_root: None,
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         }
     }
 

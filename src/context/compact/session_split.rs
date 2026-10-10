@@ -701,6 +701,8 @@ mod tests {
                 at: now_ms(),
                 project_root: Some(PARENT_ROOT.to_string()),
                 envelope: Some(parent_envelope()),
+                telecom_provenance:
+                    crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
             },
             created_at_ms: now_ms(),
         }

@@ -1047,6 +1047,8 @@ mod tests {
             at: 1,
             project_root: None,
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         }
     }
 
@@ -1056,6 +1058,8 @@ mod tests {
             at: 1,
             project_root: Some(root.to_string()),
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         }
     }
 
@@ -1933,6 +1937,10 @@ mod tests {
                 run_id: "b".into(),
                 project_root: Some("/p".into()),
                 envelope: None,
+                telecom_provenance:
+                    crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+                telecom_provenance:
+                    crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
             })
         );
         assert_eq!(r.run_anchor, Some(3));
