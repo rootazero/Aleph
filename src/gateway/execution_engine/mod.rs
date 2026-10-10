@@ -389,12 +389,14 @@ pub struct RunRequest {
     /// `Some` marks the run as admitted from a public telecom line; readers
     /// that gain a telecom-aware path may only *narrow* from it. `None` is the
     /// legacy / non-telecom value and says nothing (it is neither a deny nor a
-    /// grant). Typed, never read from `metadata`: the only production stamp is
-    /// `inbound_router::executor` from the typed `MessageMeta::Sms`, and
-    /// `TelecomPublicContext` has no serde surface, so a payload or persisted
-    /// marker cannot forge one. Rebuilt-from-storage producers (busy-queue
-    /// reinjection, crash resume) carry `None` — see the Task 4 contract
-    /// report for that residual gap.
+    /// grant). Typed, never read from `metadata`: `TelecomPublicContext` has
+    /// only `pub(crate)` constructors and the SMS adapter (typed
+    /// `MessageMeta::Sms`, stamped in `inbound_router::executor`) is its only
+    /// production producer. That is an in-crate convention, not a
+    /// cryptographic or unforgeable guarantee. Derived runs inherit it
+    /// (continuations, rescue); rebuilt-from-storage producers (busy-queue
+    /// reinjection, crash resume, goal-wait wake) carry `None` — see the Task 4
+    /// contract-fix report for that residual gap.
     pub telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
 }
 

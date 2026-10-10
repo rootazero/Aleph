@@ -160,6 +160,7 @@ pub(super) async fn post_run(
     agent: &Arc<AgentInstance>,
     policy_meta: &HashMap<String, String>,
     workspace: Option<&Path>,
+    telecom_public: Option<&crate::gateway::telecom::TelecomPublicContext>,
 ) {
     let Some(store) = crate::goal::global() else {
         return;
@@ -256,6 +257,7 @@ pub(super) async fn post_run(
                 session_manager.clone(),
                 Some(delay_ms),
                 ContinuationKind::Goal { wake_ms },
+                telecom_public.cloned(),
             );
             info!(session = %session, "goal pursuit: enqueued autonomous continuation");
         }
@@ -289,6 +291,7 @@ pub(super) async fn post_run(
                 now,
                 &policy_meta,
                 workspace,
+                telecom_public,
             )
             .await;
         }
@@ -376,6 +379,7 @@ async fn arbitrate_gate(
     claim_now_ms: u64,
     policy_meta: &HashMap<String, String>,
     workspace: Option<&Path>,
+    telecom_public: Option<&crate::gateway::telecom::TelecomPublicContext>,
 ) {
     let Some(store) = crate::goal::global() else {
         return;
@@ -477,6 +481,7 @@ async fn arbitrate_gate(
                 session_manager.clone(),
                 Some(0),
                 ContinuationKind::Goal { wake_ms },
+                telecom_public.cloned(),
             );
         }
         Ok(None) => info!(session = %session,

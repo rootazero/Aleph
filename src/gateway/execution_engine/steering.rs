@@ -82,6 +82,10 @@ pub(super) struct BusySibling {
     pub(super) model_override: Option<crate::gateway::model_override::ModelOverride>,
     /// Same argument, with file-writing consequences.
     pub(super) workspace_override: Option<std::path::PathBuf>,
+    /// Whether the sibling was admitted from a public telecom line. Only the
+    /// presence matters (see [`fold_is_admissible`]); the provenance itself is
+    /// never read here.
+    pub(super) telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     /// When the gate admitted it, on the monotonic clock. Compared against
     /// [`crate::gateway::busy_queue::waiting_since`] — see
     /// [`interrupt_targets_an_unseen_run`].
@@ -105,6 +109,7 @@ pub(super) async fn find_busy_sibling(
         metadata: run.request.metadata.clone(),
         model_override: run.request.model_override.clone(),
         workspace_override: run.request.workspace_override.clone(),
+        telecom_public: run.request.telecom_public.clone(),
         admitted_at: run.admitted_at,
     })
 }
@@ -692,6 +697,18 @@ fn fold_is_admissible(enabled: bool, request: &RunRequest, sibling: &BusySibling
         return false;
     }
 
+    // Public-telecom provenance is a run-wide ceiling fixed at admission. A
+    // fold keeps the SIBLING's request, so folding across a presence mismatch
+    // would either silently drop the ceiling (public text into an unrestricted
+    // run — the run then answers with owner-level reach) or silently impose it
+    // on an ordinary turn. Either way the text is applied under the wrong
+    // ceiling with a success answer. Defer instead: the lane redelivers it as
+    // its own run carrying its own provenance. Presence only — two public runs
+    // keep today's fold behaviour.
+    if request.telecom_public.is_some() != sibling.telecom_public.is_some() {
+        return false;
+    }
+
     true
 }
 
@@ -906,6 +923,7 @@ mod tests {
             metadata: request.metadata.clone(),
             model_override: request.model_override.clone(),
             workspace_override: request.workspace_override.clone(),
+            telecom_public: request.telecom_public.clone(),
             admitted_at: std::time::Instant::now(),
         }
     }
@@ -956,6 +974,52 @@ mod tests {
         assert!(
             !fold_is_admissible(true, &plain, &sibling_matching(&same)),
             "an untiered request must not inherit the sibling's tier by folding"
+        );
+    }
+
+    fn public_telecom_context() -> crate::gateway::telecom::TelecomPublicContext {
+        use crate::gateway::telecom::{SmsInboundMeta, TelecomPublicContext};
+        TelecomPublicContext::from_admitted_sms(&SmsInboundMeta {
+            region: "r".into(),
+            binding_ref: "b".into(),
+            provider_account_id: "a".into(),
+            provider_message_id: "m".into(),
+            envelope_event_id: "e".into(),
+            connection_generation: 1,
+            service_address: "+15550001111".into(),
+            peer_address: "+15552223333".into(),
+            encoding: aleph_protocol::telecom_relay::SmsEncoding::Gsm7,
+            segment_count: 1,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now(),
+        })
+    }
+
+    /// Public-telecom provenance is a run-wide ceiling: a fold across a
+    /// presence mismatch (either direction) is deferred, while two runs of the
+    /// same kind fold exactly as before.
+    #[test]
+    fn a_steer_never_folds_across_a_public_telecom_presence_mismatch() {
+        let plain = run_request("s1", "keep going");
+        let mut public = run_request("s1", "keep going");
+        public.telecom_public = Some(public_telecom_context());
+
+        assert!(
+            !fold_is_admissible(true, &public, &sibling_matching(&plain)),
+            "a public-line message folded into an unrestricted sibling would \
+             run with the sibling's (legacy, unrestricted) context"
+        );
+        assert!(
+            !fold_is_admissible(true, &plain, &sibling_matching(&public)),
+            "an ordinary message must not be folded into a public-line run"
+        );
+        assert!(
+            fold_is_admissible(true, &public, &sibling_matching(&public)),
+            "two public-line turns keep the existing fold behaviour"
+        );
+        assert!(
+            fold_is_admissible(true, &plain, &sibling_matching(&plain)),
+            "two ordinary turns keep the existing fold behaviour"
         );
     }
 

@@ -1145,6 +1145,7 @@ where
                         &agent,
                         &policy_meta,
                         workspace,
+                        request.telecom_public.as_ref(),
                     )
                     .await;
 
@@ -1205,6 +1206,7 @@ where
                                         self.session_manager.clone(),
                                         Some(delay_ms),
                                         ContinuationKind::Loop { wake_ms },
+                                        request.telecom_public.clone(),
                                     );
                                     info!(session = %session_key_str, delay_ms,
                                         "loop: enqueued next tick");
@@ -1468,6 +1470,7 @@ fn continuation_request(
     prompt: String,
     policy_meta: std::collections::HashMap<String, String>,
     workspace_override: Option<std::path::PathBuf>,
+    telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
 ) -> RunRequest {
     RunRequest {
         run_id: uuid::Uuid::new_v4().to_string(),
@@ -1481,7 +1484,9 @@ fn continuation_request(
         workspace_override,
         max_iterations_override: None,
         model_override: None,
-        telecom_public: None,
+        // Inherited, never re-derived or widened: a continuation of a
+        // public-telecom run stays under that run's public ceiling.
+        telecom_public,
     }
 }
 
@@ -1552,6 +1557,12 @@ fn admit_continuation(
 /// request (a demoted admin's continuation runs as `member`). `Legacy` is
 /// byte-identical to before. The verdict-to-request step is
 /// [`admit_continuation`].
+///
+/// `telecom_public` is the originating request's public-telecom provenance,
+/// inherited verbatim (including on every busy / authority re-arm). Producers
+/// that rebuild the run from storage (`goal_wait`'s hook-less wake) have none
+/// to pass — see the Task 4 contract-fix report.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_continuation_run(
     registry: Arc<crate::gateway::agent_instance::AgentRegistry>,
     adapter: Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
@@ -1571,6 +1582,7 @@ pub(super) fn spawn_continuation_run(
     session_manager: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
     delay_ms: Option<u64>,
     kind: ContinuationKind,
+    telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
 ) {
     // Prompt cloned (not moved) so the AgentBusy retry below can re-enqueue
     // the SAME tick prompt without recomputing it.
@@ -1579,6 +1591,7 @@ pub(super) fn spawn_continuation_run(
         prompt.clone(),
         policy_meta.clone(),
         workspace_override.clone(),
+        telecom_public.clone(),
     );
     let cont_agent_id = session_key.agent_id().to_string();
     tokio::spawn(async move {
@@ -1802,6 +1815,7 @@ pub(super) fn spawn_continuation_run(
                         session_manager.clone(),
                         Some(delay_ms),
                         next_kind,
+                        telecom_public.clone(),
                     );
                 }
                 return;
@@ -1816,6 +1830,7 @@ pub(super) fn spawn_continuation_run(
         let retry_bus = event_bus.clone();
         let retry_policy_meta = policy_meta;
         let retry_workspace = workspace_override;
+        let retry_telecom_public = telecom_public;
         // G1: broadcast the continuation live (Panel + `aleph watch`) via the
         // gateway event bus when one is wired; fall back to collect-and-drop in
         // tests / non-gateway contexts so those paths stay behavior-identical.
@@ -1938,6 +1953,7 @@ pub(super) fn spawn_continuation_run(
                     session_manager.clone(),
                     Some(delay_ms),
                     next_kind,
+                    retry_telecom_public.clone(),
                 );
             }
         }
@@ -2901,6 +2917,7 @@ mod fire_authority_tests {
             "keep going".to_string(),
             policy_meta,
             None,
+            None,
         );
 
         let Ok(admitted) = admit_continuation(authority, request) else {
@@ -2920,6 +2937,57 @@ mod fire_authority_tests {
         );
     }
 
+    /// A continuation of a public-telecom run keeps that run's provenance —
+    /// through the request builder AND the fire-time gate (which stamps the
+    /// request in place) — and an ordinary run's continuation stays `None`.
+    #[test]
+    fn the_continuation_request_inherits_the_originating_public_telecom_context() {
+        let ctx = crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(
+            &crate::gateway::telecom::SmsInboundMeta {
+                region: "r".into(),
+                binding_ref: "b".into(),
+                provider_account_id: "a".into(),
+                provider_message_id: "m".into(),
+                envelope_event_id: "e".into(),
+                connection_generation: 5,
+                service_address: "+15550001111".into(),
+                peer_address: "+15552223333".into(),
+                encoding: aleph_protocol::telecom_relay::SmsEncoding::Gsm7,
+                segment_count: 1,
+                created_at: chrono::Utc::now(),
+                expires_at: chrono::Utc::now(),
+            },
+        );
+        let key = crate::routing::session_key::SessionKey::main("fire-telecom-public");
+        let request = continuation_request(
+            &key,
+            "keep going".to_string(),
+            std::collections::HashMap::new(),
+            None,
+            Some(ctx.clone()),
+        );
+        assert_eq!(request.telecom_public.as_ref(), Some(&ctx));
+        let Ok(admitted) =
+            admit_continuation(crate::scope::authority::FireAuthority::Legacy, request)
+        else {
+            panic!("a legacy-authority continuation must be admitted");
+        };
+        assert_eq!(
+            admitted.telecom_public.as_ref(),
+            Some(&ctx),
+            "the fire-time gate must not drop the public ceiling"
+        );
+
+        let plain = continuation_request(
+            &key,
+            "keep going".to_string(),
+            std::collections::HashMap::new(),
+            None,
+            None,
+        );
+        assert!(plain.telecom_public.is_none(), "an ordinary run stays None");
+    }
+
     /// R-a at the continuation's own seam: "authority unknown" is a stop that
     /// is NOT a refusal — the caller re-arms instead of halting.
     #[test]
@@ -2928,6 +2996,7 @@ mod fire_authority_tests {
             &crate::routing::session_key::SessionKey::main("fire-authority-unknown"),
             "keep going".to_string(),
             bobs_room_continuation_policy(),
+            None,
             None,
         );
         match admit_continuation(

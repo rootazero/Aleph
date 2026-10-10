@@ -2229,6 +2229,7 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
         Some(sessions),
         None,
         super::execute::ContinuationKind::Goal { wake_ms },
+        None,
     );
 
     let request = adapter
@@ -2239,6 +2240,95 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
         request.workspace_override,
         Some(project),
         "the continuation must run inside the project the goal was set in"
+    );
+}
+
+/// A goal continuation spawned from a public-telecom (SMS) run must reach the
+/// adapter still marked public. `spawn_continuation_run` used to hardcode
+/// `telecom_public: None`, which silently turned a public-line run's autonomous
+/// follow-up into an unrestricted legacy run.
+#[tokio::test]
+async fn goal_continuation_inherits_the_originating_runs_public_telecom_context() {
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    use crate::goal::{ContinuationDecision, Goal, PursuitMode};
+
+    let temp = tempfile::tempdir().unwrap();
+    let store = goal_store_global();
+
+    let session = SessionKey::main("i2-continuation-telecom");
+    let session_str = session.to_key_string();
+    let now = 1_000u64;
+    store
+        .put(
+            &Goal::new(&session_str, "keep going", 0, now)
+                .with_pursuit(PursuitMode::Active { max_iterations: 5 }),
+        )
+        .unwrap();
+    let ContinuationDecision::Fire {
+        wake_ms, prompt, ..
+    } = store
+        .try_claim_continuation(&session_str, None, now, false, None)
+        .unwrap()
+    else {
+        panic!("an Active goal with runway must claim a continuation");
+    };
+
+    let sessions: Arc<dyn crate::gateway::session_store::SessionStore> =
+        test_session_manager(&temp);
+    let agent = AgentInstance::new(
+        AgentInstanceConfig {
+            agent_id: session.agent_id().to_string(),
+            workspace: temp.path().join("agent-workspace"),
+            agent_dir: temp.path().join("agents"),
+            ..Default::default()
+        },
+        Arc::clone(&sessions),
+    )
+    .unwrap();
+    let registry = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
+    registry.register(agent).await;
+
+    let public = crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(
+        &crate::gateway::telecom::SmsInboundMeta {
+            region: "r".into(),
+            binding_ref: "b".into(),
+            provider_account_id: "a".into(),
+            provider_message_id: "m".into(),
+            envelope_event_id: "e".into(),
+            connection_generation: 3,
+            service_address: "+15550001111".into(),
+            peer_address: "+15552223333".into(),
+            encoding: aleph_protocol::telecom_relay::SmsEncoding::Gsm7,
+            segment_count: 1,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now(),
+        },
+    );
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    super::execute::spawn_continuation_run(
+        registry,
+        Arc::clone(&adapter) as Arc<dyn ExecutionAdapter>,
+        session.clone(),
+        session_str,
+        prompt,
+        HashMap::new(),
+        None,
+        None,
+        Some(sessions),
+        None,
+        super::execute::ContinuationKind::Goal { wake_ms },
+        Some(public.clone()),
+    );
+
+    let request = adapter
+        .await_one()
+        .await
+        .expect("the claimed continuation must reach the execution adapter");
+    assert_eq!(
+        request.telecom_public,
+        Some(public),
+        "the continuation must stay under the originating run's public ceiling"
     );
 }
 
@@ -2294,8 +2384,16 @@ async fn a_goal_hook_continuation_acts_for_the_stored_author_not_the_last_speake
     let mut completing = HashMap::new();
     completing.insert(super::AUTHOR_USER_KEY.to_string(), "u-carol".to_string());
 
-    super::goal_continuation::post_run(&deps, &Some(sessions), &session, &agent, &completing, None)
-        .await;
+    super::goal_continuation::post_run(
+        &deps,
+        &Some(sessions),
+        &session,
+        &agent,
+        &completing,
+        None,
+        None,
+    )
+    .await;
 
     let request = adapter
         .await_one()

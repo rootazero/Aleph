@@ -13,10 +13,13 @@
 //! # Construction boundary
 //!
 //! The types have private fields, no `serde` derives and only `pub(crate)`
-//! constructors, so they cannot be deserialized from a payload, a metadata map
-//! or a persisted run marker. The one production stamp point is the inbound
-//! router, which derives the context from the *typed* `MessageMeta::Sms`
-//! produced by the SMS interface — never from the string `metadata` map.
+//! constructors, so no payload, metadata map or persisted marker deserializes
+//! into one. The SMS adapter is the only production producer: the inbound
+//! router derives the context from the *typed* `MessageMeta::Sms` that
+//! interface attaches — never from the string `metadata` map. This is an
+//! in-crate construction convention, not a cryptographic or "unforgeable"
+//! guarantee: any code in this crate could still call a `pub(crate)`
+//! constructor.
 //!
 //! This slice only defines and propagates the contract. Consumers (history /
 //! memory readers, approval, tool surface) are later slices.

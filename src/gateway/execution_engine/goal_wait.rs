@@ -474,6 +474,10 @@ impl GoalWakeService {
             session_manager,
             Some(delay_ms),
             ContinuationKind::Goal { wake_ms },
+            // Rebuilt from the goal row, which does not persist the public-
+            // telecom provenance: a hook-less wake carries `None`. Known
+            // residual gap (Task 4 contract-fix report) — never guess one.
+            None,
         );
     }
 
