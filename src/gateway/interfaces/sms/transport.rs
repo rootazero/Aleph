@@ -302,9 +302,11 @@ impl SmsRelayTransport {
         peer: Arc<dyn SmsRelayPeer>,
         authorizer: Arc<dyn SmsSendAuthorizer>,
     ) -> Self {
+        let binding_id = binding_id.into();
         let policy = SmsTransportPolicy::from(&config);
-        let config_valid = config.validate().is_ok() && valid_policy(&policy);
-        Self::new_internal(binding_id.into(), policy, config_valid, peer, authorizer)
+        let config_valid =
+            config.validate().is_ok() && valid_policy(&policy) && config.binding_ref == binding_id;
+        Self::new_internal(binding_id, policy, config_valid, peer, authorizer)
     }
 
     fn new_internal(
@@ -340,6 +342,9 @@ impl SmsRelayTransport {
                 .ok_or(SmsTransportError::GenerationExhausted)?;
             state.next_generation = generation;
             state.connecting_generation = Some(generation);
+            // Reserve the generation before awaiting the peer. The old lease
+            // remains available only for cleanup/audit, never admission.
+            state.active = None;
             generation
         };
         let result = self.peer.connect(&self.binding_id, generation).await;
@@ -744,12 +749,23 @@ fn prune_operations(
             return true;
         }
         let record = stored.outcome.expect("checked above");
-        let horizon_secs = if record.outcome == TelecomOutcome::Unknown {
-            policy.unknown_retention_secs
-        } else {
-            TERMINAL_OPERATION_RETENTION_SECS
-        };
-        now < record.entered_at + Duration::seconds(horizon_secs as i64)
+        if record.outcome == TelecomOutcome::Unknown {
+            let unknown_deadline =
+                record.entered_at + Duration::seconds(policy.unknown_retention_secs as i64);
+            if now < unknown_deadline {
+                return true;
+            }
+            // Unknown is never dropped at its first horizon: it becomes a
+            // terminal tombstone so the original operation identity cannot
+            // be submitted again during the terminal retention horizon.
+            stored.outcome = Some(OutcomeRecord {
+                outcome: TelecomOutcome::OutcomeUnknownExpired,
+                entered_at: unknown_deadline,
+            });
+            stored.phase = OperationPhase::Settled;
+        }
+        let terminal = stored.outcome.expect("unknown was converted above");
+        now < terminal.entered_at + Duration::seconds(TERMINAL_OPERATION_RETENTION_SECS as i64)
     });
 }
 
@@ -1063,6 +1079,140 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct ConnectBlockingPeer {
+        connected_generation: std::sync::Mutex<Option<u64>>,
+        block_next_connect: std::sync::atomic::AtomicBool,
+        connect_error: std::sync::Mutex<Option<SmsTransportError>>,
+        connect_started: Notify,
+        connect_release: Notify,
+    }
+
+    impl ConnectBlockingPeer {
+        fn block_next_connect(&self) {
+            self.block_next_connect
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn fail_next_connect(&self, error: SmsTransportError) {
+            *self.connect_error.lock().unwrap() = Some(error);
+        }
+    }
+
+    #[async_trait]
+    impl SmsRelayPeer for ConnectBlockingPeer {
+        async fn connect(
+            &self,
+            _binding_id: &str,
+            generation: u64,
+        ) -> Result<(), SmsTransportError> {
+            if generation > 1
+                && self
+                    .block_next_connect
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                self.connect_started.notify_one();
+                self.connect_release.notified().await;
+            }
+            if let Some(error) = self.connect_error.lock().unwrap().take() {
+                return Err(error);
+            }
+            *self.connected_generation.lock().unwrap() = Some(generation);
+            Ok(())
+        }
+
+        async fn heartbeat(
+            &self,
+            _binding_id: &str,
+            generation: u64,
+        ) -> Result<(), SmsTransportError> {
+            if *self.connected_generation.lock().unwrap() == Some(generation) {
+                Ok(())
+            } else {
+                Err(SmsTransportError::NotConnected)
+            }
+        }
+
+        async fn submit(
+            &self,
+            _binding_id: &str,
+            generation: u64,
+            _operation: &PendingSmsOperation,
+        ) -> Result<TelecomOutcome, SmsTransportError> {
+            if *self.connected_generation.lock().unwrap() == Some(generation) {
+                Ok(TelecomOutcome::Accepted)
+            } else {
+                Err(SmsTransportError::NotConnected)
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reconnect_fences_old_lease_during_peer_connect() {
+        let peer = Arc::new(ConnectBlockingPeer::default());
+        let transport = Arc::new(SmsRelayTransport::new("binding", peer.clone(), allow_all()));
+        let first = transport.connect().await.unwrap();
+        let operation = test_operation(Utc::now() + Duration::seconds(60));
+        peer.block_next_connect();
+        let started = peer.connect_started.notified();
+        let reconnect = {
+            let transport = Arc::clone(&transport);
+            tokio::spawn(async move { transport.connect().await })
+        };
+        started.await;
+
+        assert_eq!(transport.lease().await, None);
+        assert_eq!(
+            transport.heartbeat(first.generation).await,
+            Err(SmsTransportError::NotConnected)
+        );
+        assert_eq!(
+            transport.submit_at(&operation, Utc::now()).await,
+            Err(SmsTransportError::NotConnected)
+        );
+        let receipt = outcome_envelope(
+            first.generation,
+            operation.operation_id(),
+            TelecomOutcome::Delivered,
+        );
+        assert_eq!(
+            transport.record_outcome(&receipt, Utc::now()).await,
+            Err(SmsTransportError::NotConnected)
+        );
+
+        peer.connect_release.notify_one();
+        let second = reconnect.await.unwrap().unwrap();
+        assert!(second.generation > first.generation);
+        assert_eq!(transport.lease().await, Some(second));
+    }
+
+    #[tokio::test]
+    async fn failed_reconnect_after_disconnect_cannot_restore_old_lease() {
+        let peer = Arc::new(ConnectBlockingPeer::default());
+        let transport = Arc::new(SmsRelayTransport::new("binding", peer.clone(), allow_all()));
+        let first = transport.connect().await.unwrap();
+        peer.block_next_connect();
+        peer.fail_next_connect(SmsTransportError::Peer("connect failed".into()));
+        let started = peer.connect_started.notified();
+        let reconnect = {
+            let transport = Arc::clone(&transport);
+            tokio::spawn(async move { transport.connect().await })
+        };
+        started.await;
+        transport.disconnect().await;
+        peer.connect_release.notify_one();
+
+        assert_eq!(
+            reconnect.await.unwrap(),
+            Err(SmsTransportError::Peer("connect failed".into()))
+        );
+        assert_eq!(transport.lease().await, None);
+        assert_eq!(
+            transport.heartbeat(first.generation).await,
+            Err(SmsTransportError::NotConnected)
+        );
+    }
+
     #[tokio::test]
     async fn generation_fences_old_peer_events() {
         let peer = Arc::new(InMemorySmsPeer::default());
@@ -1349,6 +1499,70 @@ mod tests {
                 Err(SmsTransportError::InvalidConfiguration(_))
             ));
         }
+
+        let mismatched_binding = SmsRelayTransport::new_with_config(
+            "different-binding",
+            test_config(true, 1, 30),
+            peer,
+            allow_all(),
+        );
+        mismatched_binding.connect().await.unwrap();
+        assert!(matches!(
+            mismatched_binding
+                .submit_at(
+                    &test_operation(Utc::now() + Duration::seconds(10)),
+                    Utc::now()
+                )
+                .await,
+            Err(SmsTransportError::InvalidConfiguration(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn prune_unknown_at_retention_boundary_creates_tombstone() {
+        let peer = Arc::new(InMemorySmsPeer::with_outcomes([
+            Ok(TelecomOutcome::Unknown),
+            Ok(TelecomOutcome::Accepted),
+        ]));
+        let policy = SmsTransportPolicy::default()
+            .with_unknown_retention_secs(5)
+            .unwrap();
+        let transport =
+            SmsRelayTransport::new_with_policy("binding", policy, peer.clone(), allow_all());
+        transport.connect().await.unwrap();
+        let base = Utc::now();
+        let operation = test_operation(base + Duration::seconds(60));
+        assert_eq!(
+            transport.submit_at(&operation, base).await.unwrap(),
+            TelecomOutcome::Unknown
+        );
+
+        let mut trigger = operation.clone();
+        trigger.command.operation_id = "trigger-prune".into();
+        assert_eq!(
+            transport
+                .submit_at(&trigger, base + Duration::seconds(5))
+                .await
+                .unwrap(),
+            TelecomOutcome::Accepted
+        );
+        assert_eq!(
+            transport
+                .outcome(operation.operation_id())
+                .await
+                .unwrap()
+                .outcome,
+            TelecomOutcome::OutcomeUnknownExpired
+        );
+        assert_eq!(
+            transport
+                .submit_at(&operation, base + Duration::seconds(5))
+                .await,
+            Err(SmsTransportError::UnknownExpired {
+                operation_id: operation.operation_id().into(),
+            })
+        );
+        assert_eq!(peer.submissions().len(), 2);
     }
 
     #[tokio::test]
