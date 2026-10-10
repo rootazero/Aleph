@@ -120,6 +120,7 @@ impl HarnessRunner for AgentHarnessRunner {
         mut envelope: crate::thinker::TurnEnvelope,
         turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
         run_id: String,
+        _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also

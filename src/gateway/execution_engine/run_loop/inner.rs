@@ -1501,6 +1501,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // rebuilt on each retry iteration of the enclosing loop.
                 // rust-doctor-disable-next-line excessive-clone
                 model_directive: turn_model.clone(),
+                // Typed copy of the originating request's provenance; the
+                // retry loop rebuilds this FlowRequest but never alters it.
+                telecom_public: request.telecom_public.clone(),
             };
 
             // Dispatch via the orchestrator

@@ -10,6 +10,7 @@
 //! Spec: `docs/superpowers/specs/2026-10-09-pstn-sms-thin-relay-design.md` §6, §8.
 
 pub mod protocol;
+pub mod public_context;
 pub mod sms_inbox;
 pub mod sms_meta;
 
@@ -18,5 +19,6 @@ pub use protocol::{
     AcceptContext, Acceptance, DedupKey, DedupLedger, FollowUp, IgnoreReason, OutcomeRecord,
     OutcomeTransition, TelecomError, UnknownExpiry,
 };
+pub use public_context::{TelecomChannel, TelecomProvenance, TelecomPublicContext};
 pub use sms_inbox::{SmsInbox, SmsInboxAdmission, SmsInboxConfig, SmsInboxError, SmsInboxItem};
 pub use sms_meta::SmsInboundMeta;

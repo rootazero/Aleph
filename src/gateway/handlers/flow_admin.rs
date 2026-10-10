@@ -158,6 +158,7 @@ mod tests {
                 _envelope: crate::thinker::TurnEnvelope,
                 _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
                 _run_id: String,
+                _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
             ) -> Result<
                 crate::orchestrator::dispatch::FlowOutcome,
                 crate::orchestrator::errors::FlowError,

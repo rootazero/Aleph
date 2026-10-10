@@ -439,6 +439,9 @@ impl InboundMessageRouter {
             workspace_override: effective_workspace,
             max_iterations_override: None,
             model_override,
+            // Stamped from the TYPED `MessageMeta::Sms` the SMS interface
+            // produced, never from the string `metadata` map above.
+            telecom_public: telecom_public_from_message_meta(&ctx.message.metadata),
         };
 
         if !request.attachments.is_empty() {
@@ -896,5 +899,59 @@ mod permission_wiring_tests {
         assert_eq!(workspace, None::<PathBuf>);
         // Config tier inherits the safe steer default unless explicitly opted in.
         assert_eq!(busy, "steer");
+    }
+}
+
+/// Derive the public-telecom context from the TYPED `MessageMeta::Sms` the SMS
+/// interface attached to an admitted inbound message. Any other channel yields
+/// `None` (legacy behaviour, unchanged). This is the only production stamp
+/// point of `RunRequest::telecom_public`.
+fn telecom_public_from_message_meta(
+    metadata: &[crate::gateway::channel::MessageMeta],
+) -> Option<crate::gateway::telecom::TelecomPublicContext> {
+    metadata.iter().find_map(|m| match m {
+        crate::gateway::channel::MessageMeta::Sms(meta) => {
+            Some(crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(meta))
+        }
+        _ => None,
+    })
+}
+
+#[cfg(test)]
+mod telecom_stamp_tests {
+    use super::telecom_public_from_message_meta;
+    use crate::gateway::channel::MessageMeta;
+    use crate::gateway::telecom::{SmsInboundMeta, TelecomChannel};
+    use aleph_protocol::telecom_relay::SmsEncoding;
+
+    fn sms_meta() -> SmsInboundMeta {
+        SmsInboundMeta {
+            region: "r".into(),
+            binding_ref: "b".into(),
+            provider_account_id: "a".into(),
+            provider_message_id: "m".into(),
+            envelope_event_id: "e".into(),
+            connection_generation: 9,
+            service_address: "+15550001111".into(),
+            peer_address: "+15552223333".into(),
+            encoding: SmsEncoding::Gsm7,
+            segment_count: 1,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn sms_meta_stamps_public_context_and_other_channels_stay_none() {
+        let stamped = telecom_public_from_message_meta(&[
+            MessageMeta::AppMention,
+            MessageMeta::Sms(Box::new(sms_meta())),
+        ])
+        .expect("typed Sms meta must stamp");
+        assert_eq!(stamped.provenance().channel(), TelecomChannel::Sms);
+        assert_eq!(stamped.provenance().connection_generation(), 9);
+
+        assert!(telecom_public_from_message_meta(&[]).is_none());
+        assert!(telecom_public_from_message_meta(&[MessageMeta::BotAuthored]).is_none());
     }
 }

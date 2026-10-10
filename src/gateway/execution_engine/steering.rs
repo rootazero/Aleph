@@ -580,6 +580,9 @@ pub(super) async fn build_steering_rescue_request(
         workspace_override: request.workspace_override.clone(),
         max_iterations_override: request.max_iterations_override,
         model_override,
+        // A rescue continues THIS run's session log: it keeps the originating
+        // run's public-telecom provenance (never widened, never re-derived).
+        telecom_public: request.telecom_public.clone(),
     })
 }
 
@@ -974,6 +977,7 @@ mod tests {
             workspace_override: None,
             max_iterations_override: None,
             model_override: None,
+            telecom_public: None,
         }
     }
 

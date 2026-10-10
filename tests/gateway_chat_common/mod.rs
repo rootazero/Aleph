@@ -144,6 +144,7 @@ impl HarnessRunner for StubHarnessRunner {
         _envelope: alephcore::thinker::TurnEnvelope,
         _turn_model: Option<alephcore::providers::session_model_handle::SessionModelPref>,
         run_id: String,
+        _telecom_public: Option<alephcore::gateway::telecom::TelecomPublicContext>,
     ) -> Result<FlowOutcome, FlowError> {
         let ctx = StubContext {
             session_key,
@@ -261,5 +262,6 @@ pub fn basic_request() -> FlowRequest {
         think_level: None,
         envelope: alephcore::thinker::TurnEnvelope::none(),
         model_directive: None,
+        telecom_public: None,
     }
 }

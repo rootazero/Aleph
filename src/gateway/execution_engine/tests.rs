@@ -110,6 +110,7 @@ async fn test_simple_execution_engine_basic() {
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -162,6 +163,7 @@ async fn test_session_state_returns_to_idle_after_run() {
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
     };
 
     // Persisting the user message transitions the session to Running.
@@ -227,6 +229,7 @@ async fn test_first_message_publishes_session_updated_on_bus() {
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -308,6 +311,7 @@ async fn panel_originated_session_update_names_its_run_not_just_gui_chat() {
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
     };
 
     engine.execute(request, agent, emitter).await.unwrap();
@@ -367,6 +371,7 @@ async fn test_simple_execution_engine_run() {
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
     };
 
     // This should succeed and complete quickly
@@ -490,6 +495,7 @@ pub(super) fn gate_test_request(session_key: &SessionKey, run_id: &str) -> RunRe
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
     }
 }
 

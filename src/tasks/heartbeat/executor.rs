@@ -182,6 +182,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
             workspace_override: None,
             max_iterations_override: None,
             model_override: None,
+            telecom_public: None,
         };
 
         // Collect events (no user-facing emitter): the L2 agent declares its

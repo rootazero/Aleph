@@ -81,6 +81,7 @@ impl AgentLoopBridge {
             workspace_override: None,
             max_iterations_override: None,
             model_override: None,
+            telecom_public: None,
         }
     }
 

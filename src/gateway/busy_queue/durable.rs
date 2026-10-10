@@ -428,6 +428,7 @@ where
         workspace_override: payload.workspace_override.clone(),
         max_iterations_override: payload.max_iterations_override,
         model_override: payload.model_override.clone(),
+        telecom_public: None,
     })
 }
 

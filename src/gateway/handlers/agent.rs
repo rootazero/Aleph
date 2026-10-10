@@ -1080,6 +1080,7 @@ pub async fn build_run_request(
         workspace_override,
         max_iterations_override: None,
         model_override,
+        telecom_public: None,
     })
 }
 

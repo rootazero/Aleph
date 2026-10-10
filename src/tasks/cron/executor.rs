@@ -267,6 +267,7 @@ async fn execute_cron_job(
         workspace_override: None,
         max_iterations_override,
         model_override: None,
+        telecom_public: None,
     };
 
     let collector = Arc::new(CollectingEventEmitter::new());

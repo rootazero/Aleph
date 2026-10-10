@@ -1081,6 +1081,7 @@ async fn run_until_it_fails(
             crate::thinker::TurnEnvelope::default(),
             None,
             "probe-run".to_string(),
+            None,
         )
         .await;
 
@@ -1253,6 +1254,7 @@ async fn run_measures_its_messages(agent_id: &str, config: &crate::config::Confi
             crate::thinker::TurnEnvelope::default(),
             None,
             "budget-probe-run".to_string(),
+            None,
         )
         .await;
     assert!(
@@ -1420,6 +1422,7 @@ async fn the_run_markers_carry_the_engine_run_id() {
             crate::thinker::TurnEnvelope::default(),
             None,
             "engine-run-42".to_string(),
+            None,
         )
         .await;
 

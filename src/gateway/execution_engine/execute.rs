@@ -1481,6 +1481,7 @@ fn continuation_request(
         workspace_override,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
     }
 }
 

@@ -590,6 +590,10 @@ pub struct FlowRequest {
     /// configured model. `None` = no per-turn pick (every non-gateway
     /// dispatcher), leaving the directive chain byte-identical.
     pub model_directive: Option<crate::providers::session_model_handle::SessionModelPref>,
+    /// Public-telecom provenance copied verbatim from `RunRequest::telecom_public`.
+    /// `None` = legacy / non-telecom (neither deny nor grant). Forwarded to
+    /// `HarnessRunner::run` as its trailing argument; consumers are later slices.
+    pub telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -603,6 +607,7 @@ impl std::fmt::Debug for FlowRequest {
             .field("session_hint", &self.session_hint)
             .field("parent_session", &self.parent_session)
             .field("depth", &self.depth)
+            .field("telecom_public", &self.telecom_public)
             .field(
                 "tool_service",
                 &self.tool_service.as_ref().map(|_| "<dyn ToolService>"),
@@ -757,6 +762,10 @@ pub trait HarnessRunner: Send + Sync {
         // The engine's run id (`FlowRequest::run_id`). Implementations that
         // write run markers MUST write this id on them — see that field's doc.
         run_id: String,
+        // Public-telecom provenance of this run (`FlowRequest::telecom_public`).
+        // `None` = legacy / non-telecom. Contract slice only: implementations
+        // bind it; readers that narrow on it arrive in later slices.
+        telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<FlowOutcome, FlowError>;
 
     /// The guardrail registry this runner installs on its own harness, if
@@ -1146,6 +1155,8 @@ impl Orchestrator {
         let model_directive = req.model_directive.clone();
         // rust-doctor-disable-next-line excessive-clone
         let run_id = req.run_id.clone();
+        // rust-doctor-disable-next-line excessive-clone
+        let telecom_public = req.telecom_public.clone();
         // P1 data isolation — captured before the spawn boundary (task-locals
         // do not cross `tokio::spawn`); re-derived into a `ScopeAttribution`
         // and re-seeded inside, sibling of `with_agent_id`/`with_project_root`.
@@ -1283,6 +1294,7 @@ impl Orchestrator {
                                                     envelope,
                                                     model_directive,
                                                     run_id,
+                                                    telecom_public,
                                                 ),
                                             ),
                                         ),
