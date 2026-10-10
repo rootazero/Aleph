@@ -221,6 +221,7 @@ pub async fn perform_session_split(
         // reads its project root and envelope from nowhere else.
         project_root: open_run.project_root,
         envelope: open_run.envelope,
+        telecom_provenance: open_run.telecom_provenance,
     });
     session
         .emit_batch(&child, child_batch, None)

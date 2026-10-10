@@ -530,6 +530,10 @@ pub(super) fn hook_stop_receipt(
             .as_ref()
             .map(|p| p.display().to_string()),
         envelope: None,
+        telecom_provenance:
+            crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::capture(
+                request.telecom_public.as_ref(),
+            ),
     });
     events.push(SessionEvent::Error {
         turn_id: seeded_turn,
@@ -1112,6 +1116,8 @@ mod hook_stop_tests {
             at: 1,
             project_root: None,
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         });
         interrupted.push(SessionEvent::ResumeAttempted {
             target: 3,

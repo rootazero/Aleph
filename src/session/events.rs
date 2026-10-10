@@ -411,6 +411,16 @@ pub enum SessionEvent {
         /// byte-identical.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         envelope: Option<RunEnvelopeSnapshot>,
+        /// Server-authored telecom provenance marker for crash/boot/manual
+        /// resume. `Legacy` (default) on every marker written before this
+        /// field existed; omitted from wire when `Legacy` so legacy forms
+        /// stay byte-identical. Resume uses this to restore the typed
+        /// telecom context or refuse if unrecognised/corrupt.
+        #[serde(
+            default,
+            skip_serializing_if = "crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::is_legacy"
+        )]
+        telecom_provenance: crate::gateway::telecom::persisted_marker::PersistedTelecomMarker,
     },
     /// A harness run reached a terminal state on this session.
     RunFinished {
@@ -826,6 +836,8 @@ pub(crate) mod fixtures {
                     at: 0,
                     project_root: None,
                     envelope: None,
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Legacy,
                 },
             ),
             (
@@ -1177,6 +1189,8 @@ mod tests {
             at: 1_700_000_000_000,
             project_root: None,
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         };
         let json = serde_json::to_string(&ev).unwrap();
         let back: SessionEvent = serde_json::from_str(&json).unwrap();
@@ -1198,6 +1212,8 @@ mod tests {
             at: 1_700_000_000_000,
             project_root: Some("/Users/alice/proj".into()),
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"project_root\":\"/Users/alice/proj\""));
@@ -1256,6 +1272,8 @@ mod tests {
                 allowed_tools: Some(vec!["grep".into()]),
                 btw: Some("is it green?".into()),
             }),
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         };
         let json = serde_json::to_string(&ev).unwrap();
         let back: SessionEvent = serde_json::from_str(&json).unwrap();
@@ -1326,6 +1344,8 @@ mod tests {
             at: 1,
             project_root: None,
             envelope: Some(RunEnvelopeSnapshot::default()),
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"envelope\":{}"), "{json}");

@@ -76,6 +76,8 @@ impl FastPathJournal {
                 at,
                 project_root: None,
                 envelope: Some(envelope),
+                telecom_provenance:
+                    crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
             },
             SessionEvent::ToolCallRequested {
                 identity: None,

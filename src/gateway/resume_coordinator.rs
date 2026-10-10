@@ -377,6 +377,14 @@ pub enum ResumeRefusal {
     /// crash-loop count is unchanged, and the next boot or `agent.resume`
     /// asks again — however many times the store stays down.
     AuthorityUnknown(String),
+    /// Telecom provenance marker is unrecognised or corrupt, refusing to
+    /// resume as ordinary. The marker must be readable to restore the typed
+    /// telecom context or prove it was not telecom-originated.
+    TelecomProvenanceUnreadable(String),
+    /// Telecom provenance marker is Legacy (pre-marker record), cannot prove
+    /// the run was not telecom-originated. Restoring as None is unsafe until
+    /// legacy records are drained.
+    TelecomProvenanceLegacy(String),
 }
 
 impl ResumeRefusal {
@@ -393,6 +401,8 @@ impl ResumeRefusal {
             Self::TailReadFailed(_) => "tail_read_failed",
             Self::AuthorityRefused(_) => "authority_refused",
             Self::AuthorityUnknown(_) => "authority_unknown",
+            Self::TelecomProvenanceUnreadable(_) => "telecom_provenance_unreadable",
+            Self::TelecomProvenanceLegacy(_) => "telecom_provenance_legacy",
         }
     }
 
@@ -407,7 +417,9 @@ impl ResumeRefusal {
             | Self::IntentStampFailed(e)
             | Self::TailReadFailed(e)
             | Self::AuthorityRefused(e)
-            | Self::AuthorityUnknown(e) => e.clone(),
+            | Self::AuthorityUnknown(e)
+            | Self::TelecomProvenanceUnreadable(e)
+            | Self::TelecomProvenanceLegacy(e) => e.clone(),
         }
     }
 }
@@ -638,6 +650,10 @@ pub(crate) struct ResumePlan {
     /// Whether the crashed run's marker carried no envelope at all, so the
     /// resume follows today's session and global values.
     pub(crate) unsnapshotted: bool,
+    /// Telecom provenance marker restore result. `None` when no RunStarted
+    /// facts exist (writer-side failure); otherwise carries the restore
+    /// decision from the marker.
+    pub(crate) telecom_restore: Option<crate::gateway::telecom::persisted_marker::MarkerRestore>,
 }
 
 /// The per-run FACTS a `RunStarted` envelope freezes alongside the knobs —
@@ -810,6 +826,11 @@ pub(crate) fn plan_resume(
     }
 
     plan.degrade = degrade_note(sentences);
+
+    // Telecom provenance marker restore: always present when facts exist.
+    // The marker carries the restore decision; admit_resume enforces fail-closed.
+    plan.telecom_restore = Some(facts.telecom_provenance.restore());
+
     plan
 }
 
@@ -965,6 +986,7 @@ fn admit_resume<R>(
     session_id: &SessionId,
     workspace_override: Option<std::path::PathBuf>,
     model_override: Option<crate::gateway::model_override::ModelOverride>,
+    plan: &ResumePlan,
 ) -> Result<RunRequest, ResumeRefusal>
 where
     R: FnOnce(crate::scope::authority::FireSubject<'_>) -> crate::scope::authority::FireAuthority,
@@ -975,6 +997,33 @@ where
         row,
         &mut metadata,
     ))?;
+
+    // Enforce fail-closed telecom provenance: only Ordinary and Public may resume.
+    // Legacy/Unknown/Corrupt refuse before any intent/retrigger.
+    let telecom_public = match plan.telecom_restore.as_ref() {
+        None => {
+            // No RunStarted facts exist (writer-side failure ③-D2): cannot prove
+            // provenance, refuse as unproven rather than silently None.
+            return Err(ResumeRefusal::TelecomProvenanceLegacy(
+                "RunStarted marker missing: cannot prove the run was not telecom-originated".into(),
+            ));
+        }
+        Some(crate::gateway::telecom::persisted_marker::MarkerRestore::Ordinary) => None,
+        Some(crate::gateway::telecom::persisted_marker::MarkerRestore::Public(ctx)) => {
+            Some(ctx.clone())
+        }
+        Some(crate::gateway::telecom::persisted_marker::MarkerRestore::LegacyUnproven) => {
+            return Err(ResumeRefusal::TelecomProvenanceLegacy(
+                "pre-marker record: cannot prove the run was not telecom-originated; \
+                 refusing to resume as ordinary until legacy records are drained"
+                    .into(),
+            ));
+        }
+        Some(crate::gateway::telecom::persisted_marker::MarkerRestore::Refuse(reason)) => {
+            return Err(ResumeRefusal::TelecomProvenanceUnreadable(reason.clone()));
+        }
+    };
+
     Ok(RunRequest {
         run_id: uuid::Uuid::new_v4().to_string(),
         // Empty input — `FlowInput::Resume` ignores it; the session log
@@ -989,7 +1038,7 @@ where
         workspace_override,
         max_iterations_override: None,
         model_override,
-        telecom_public: None,
+        telecom_public,
     })
 }
 
@@ -2646,6 +2695,7 @@ impl ResumeCoordinator {
             session_id,
             workspace_override,
             plan.model_override.clone(),
+            plan,
         )?;
         // A replayed `/btw` stamp makes this resume a side question; the
         // emitter choice below depends on it.
@@ -3053,6 +3103,8 @@ mod tests {
             ResumeRefusal::TailReadFailed("range read failed".into()),
             ResumeRefusal::AuthorityRefused("principal deactivated".into()),
             ResumeRefusal::AuthorityUnknown("users store read failed".into()),
+            ResumeRefusal::TelecomProvenanceUnreadable("marker corrupt".into()),
+            ResumeRefusal::TelecomProvenanceLegacy("pre-marker record".into()),
         ];
         let words: std::collections::HashSet<&str> = all.iter().map(|r| r.reason()).collect();
         assert_eq!(words.len(), all.len(), "two refusals share one word");
@@ -3643,6 +3695,7 @@ mod tests {
             &session_id,
             None,
             None,
+            &ResumePlan::default(),
         )
         .expect("an active member resumes");
         assert_eq!(

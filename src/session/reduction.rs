@@ -364,6 +364,7 @@ pub struct RunStartFacts {
     pub run_id: String,
     pub project_root: Option<String>,
     pub envelope: Option<RunEnvelopeSnapshot>,
+    pub telecom_provenance: crate::gateway::telecom::persisted_marker::PersistedTelecomMarker,
 }
 
 /// Everything the consumers need to know about one session's runs.
@@ -594,6 +595,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                 run_id: rid,
                 project_root,
                 envelope,
+                telecom_provenance,
                 ..
             } => {
                 run_anchor = Some(record.seq);
@@ -603,6 +605,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                     run_id: rid.clone(),
                     project_root: project_root.clone(),
                     envelope: envelope.clone(),
+                    telecom_provenance: telecom_provenance.clone(),
                 });
                 saw_run_started = true;
                 after_finish_without_start = false;

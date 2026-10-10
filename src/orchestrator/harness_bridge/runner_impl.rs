@@ -1005,6 +1005,10 @@ impl HarnessRunner for AgentHarnessRunner {
                     at: crate::session::events::now_ms(),
                     project_root: project_root_str,
                     envelope: Some(run_envelope_snapshot),
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::capture(
+                            _telecom_public.as_ref(),
+                        ),
                 },
             )
             .await
