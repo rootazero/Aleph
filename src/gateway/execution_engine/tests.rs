@@ -14,6 +14,8 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
+mod goal_origin_race;
+
 /// Test event emitter that collects events
 pub(super) struct TestEmitter {
     events: Arc<RwLock<Vec<StreamEvent>>>,
@@ -2257,11 +2259,32 @@ async fn goal_continuation_inherits_the_originating_runs_public_telecom_context(
 
     let session = SessionKey::main("i2-continuation-telecom");
     let session_str = session.to_key_string();
+    let public = crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(
+        &crate::gateway::telecom::SmsInboundMeta {
+            region: "r".into(),
+            binding_ref: "b".into(),
+            provider_account_id: "a".into(),
+            provider_message_id: "m".into(),
+            envelope_event_id: "e".into(),
+            connection_generation: 3,
+            service_address: "+15550001111".into(),
+            peer_address: "+15552223333".into(),
+            encoding: aleph_protocol::telecom_relay::SmsEncoding::Gsm7,
+            segment_count: 1,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now(),
+        },
+    );
     let now = 1_000u64;
+    // The goal was created BY this public run, so its stored creator origin is
+    // that context. (Seeding it with a bare `put` — a legacy, origin-less goal —
+    // and then running it as public is the inconsistent state the fire-time
+    // origin check now rightly supersedes.)
     store
-        .put(
+        .put_with_origin(
             &Goal::new(&session_str, "keep going", 0, now)
                 .with_pursuit(PursuitMode::Active { max_iterations: 5 }),
+            Some(&public),
         )
         .unwrap();
     let ContinuationDecision::Fire {
@@ -2287,23 +2310,6 @@ async fn goal_continuation_inherits_the_originating_runs_public_telecom_context(
     .unwrap();
     let registry = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
     registry.register(agent).await;
-
-    let public = crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(
-        &crate::gateway::telecom::SmsInboundMeta {
-            region: "r".into(),
-            binding_ref: "b".into(),
-            provider_account_id: "a".into(),
-            provider_message_id: "m".into(),
-            envelope_event_id: "e".into(),
-            connection_generation: 3,
-            service_address: "+15550001111".into(),
-            peer_address: "+15552223333".into(),
-            encoding: aleph_protocol::telecom_relay::SmsEncoding::Gsm7,
-            segment_count: 1,
-            created_at: chrono::Utc::now(),
-            expires_at: chrono::Utc::now(),
-        },
-    );
 
     let adapter = Arc::new(RecordingAdapter::new());
     super::execute::spawn_continuation_run(

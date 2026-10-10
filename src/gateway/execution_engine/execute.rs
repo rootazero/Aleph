@@ -1627,10 +1627,11 @@ pub(super) fn spawn_continuation_run(
             }
             ContinuationKind::Goal { wake_ms } => {
                 let decision = crate::goal::global().map(|store| {
-                    store.confirm_fire(
+                    store.confirm_fire_for_origin(
                         &session_key_str,
                         wake_ms,
                         super::goal_continuation::now_ms(),
+                        telecom_public.as_ref(),
                     )
                 });
                 match decision {
@@ -1796,6 +1797,7 @@ pub(super) fn spawn_continuation_run(
                         super::goal_continuation::rearm_goal_after_busy(
                             &session_key_str,
                             origin.as_ref(),
+                            telecom_public.as_ref(),
                             "authority unknown",
                         )
                         .await
@@ -1896,6 +1898,7 @@ pub(super) fn spawn_continuation_run(
                         match super::goal_continuation::rearm_goal_after_busy(
                             &session_key_str,
                             origin.as_ref(),
+                            retry_telecom_public.as_ref(),
                             "agent busy",
                         )
                         .await
