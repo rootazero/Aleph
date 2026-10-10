@@ -396,14 +396,28 @@ impl SmsRelayTransport {
             .peer
             .heartbeat(&lease.binding_id, lease.generation)
             .await;
-        if let Err(error) = result {
-            let mut state = self.state.lock().await;
-            if state.active.as_ref().map(|active| active.generation) == Some(lease.generation) {
-                state.active = None;
+        let mut state = self.state.lock().await;
+        match result {
+            Err(error) => {
+                if state.active.as_ref().map(|active| active.generation) == Some(lease.generation) {
+                    state.active = None;
+                }
+                Err(error)
             }
-            return Err(error);
+            Ok(()) => {
+                // A peer success is only provisional: disconnect/reconnect may
+                // have replaced this lease while the peer was awaiting I/O.
+                let current = current_lease(&state)?;
+                check_generation(current.generation, lease.generation)?;
+                if current.binding_id != lease.binding_id {
+                    return Err(SmsTransportError::BindingMismatch {
+                        expected: current.binding_id,
+                        claimed: lease.binding_id,
+                    });
+                }
+                Ok(())
+            }
         }
-        Ok(())
     }
 
     /// Submit at a caller-provided time so expiry and boundary behavior are
@@ -620,9 +634,12 @@ impl SmsRelayTransport {
             Duration::seconds(self.policy.unknown_retention_secs as i64),
         ) {
             UnknownExpiry::Expired(expired) => {
+                // The explicit-id exemption only protects the unknown record
+                // long enough for this explicit transition. Once it is a
+                // tombstone, apply the ordinary terminal horizon immediately.
                 stored.outcome = Some(expired);
                 stored.phase = OperationPhase::Settled;
-                prune_operations(&mut state, now, &self.policy, Some(operation_id));
+                prune_operations(&mut state, now, &self.policy, None);
                 Ok(expired)
             }
             UnknownExpiry::Pending { .. } => Err(SmsTransportError::Unknown {
@@ -742,14 +759,19 @@ fn prune_operations(
     state: &mut TransportState,
     now: DateTime<Utc>,
     policy: &SmsTransportPolicy,
-    keep_operation_id: Option<&str>,
+    explicit_expiry_id: Option<&str>,
 ) {
     state.operations.retain(|operation_id, stored| {
-        if keep_operation_id == Some(operation_id.as_str()) || stored.outcome.is_none() {
+        if stored.outcome.is_none() {
             return true;
         }
         let record = stored.outcome.expect("checked above");
         if record.outcome == TelecomOutcome::Unknown {
+            // Only a still-unknown record needs protection until the caller
+            // performs explicit expiry. Existing tombstones never bypass GC.
+            if explicit_expiry_id == Some(operation_id.as_str()) {
+                return true;
+            }
             let unknown_deadline =
                 record.entered_at + Duration::seconds(policy.unknown_retention_secs as i64);
             if now < unknown_deadline {
@@ -1075,6 +1097,42 @@ mod tests {
         ) -> Result<TelecomOutcome, SmsTransportError> {
             self.started.notify_one();
             self.release.notified().await;
+            Ok(TelecomOutcome::Accepted)
+        }
+    }
+
+    #[derive(Default)]
+    struct HeartbeatBlockingPeer {
+        heartbeat_started: Notify,
+        heartbeat_release: Notify,
+    }
+
+    #[async_trait]
+    impl SmsRelayPeer for HeartbeatBlockingPeer {
+        async fn connect(
+            &self,
+            _binding_id: &str,
+            _generation: u64,
+        ) -> Result<(), SmsTransportError> {
+            Ok(())
+        }
+
+        async fn heartbeat(
+            &self,
+            _binding_id: &str,
+            _generation: u64,
+        ) -> Result<(), SmsTransportError> {
+            self.heartbeat_started.notify_one();
+            self.heartbeat_release.notified().await;
+            Ok(())
+        }
+
+        async fn submit(
+            &self,
+            _binding_id: &str,
+            _generation: u64,
+            _operation: &PendingSmsOperation,
+        ) -> Result<TelecomOutcome, SmsTransportError> {
             Ok(TelecomOutcome::Accepted)
         }
     }
@@ -1595,6 +1653,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expiry_paths_share_terminal_horizon_and_allow_new_operation_only_after_gc() {
+        // Cover automatic GC, first explicit expiry, and repeated explicit
+        // expiry just before, at, and after the same terminal deadline.
+        for path in ["automatic", "explicit", "repeated"] {
+            for offset in [-1, 0, 1] {
+                let peer = Arc::new(InMemorySmsPeer::with_outcomes([Ok(
+                    TelecomOutcome::Unknown,
+                )]));
+                let policy = SmsTransportPolicy::default()
+                    .with_unknown_retention_secs(5)
+                    .unwrap();
+                let transport = SmsRelayTransport::new_with_policy(
+                    "binding",
+                    policy,
+                    peer.clone(),
+                    allow_all(),
+                );
+                transport.connect().await.unwrap();
+                let base = Utc::now();
+                let operation = test_operation(base + Duration::seconds(60));
+                transport.submit_at(&operation, base).await.unwrap();
+                let tombstone = OutcomeRecord {
+                    outcome: TelecomOutcome::OutcomeUnknownExpired,
+                    entered_at: base + Duration::seconds(5),
+                };
+                let terminal_deadline = tombstone.entered_at
+                    + Duration::seconds(TERMINAL_OPERATION_RETENTION_SECS as i64);
+                let now = terminal_deadline + Duration::nanoseconds(offset);
+
+                if path == "repeated" {
+                    assert_eq!(
+                        transport
+                            .expire_unknown(operation.operation_id(), tombstone.entered_at)
+                            .await,
+                        Ok(tombstone)
+                    );
+                }
+                if path == "automatic" {
+                    // Trigger ordinary pruning without touching the old id.
+                    let mut trigger = test_operation(now + Duration::seconds(60));
+                    trigger.command.operation_id = "trigger-prune".into();
+                    transport.submit_at(&trigger, now).await.unwrap();
+                } else if path == "explicit" {
+                    let result = transport
+                        .expire_unknown(operation.operation_id(), now)
+                        .await;
+                    assert_eq!(result, Ok(tombstone));
+                } else {
+                    let result = transport
+                        .expire_unknown(operation.operation_id(), now)
+                        .await;
+                    let expected = if offset < 0 {
+                        Err(SmsTransportError::AlreadySubmitted {
+                            operation_id: operation.operation_id().into(),
+                            outcome: tombstone.outcome,
+                        })
+                    } else {
+                        Err(SmsTransportError::OperationNotFound {
+                            operation_id: operation.operation_id().into(),
+                        })
+                    };
+                    assert_eq!(result, expected, "path={path}, offset={offset}");
+                }
+
+                let submissions = peer.submissions().len();
+                if offset < 0 {
+                    assert_eq!(
+                        transport.outcome(operation.operation_id()).await,
+                        Some(tombstone)
+                    );
+                    assert_eq!(
+                        transport.submit_at(&operation, now).await,
+                        Err(SmsTransportError::UnknownExpired {
+                            operation_id: operation.operation_id().into(),
+                        })
+                    );
+                    assert_eq!(peer.submissions().len(), submissions);
+                } else {
+                    assert!(transport
+                        .operation(operation.operation_id())
+                        .await
+                        .is_none());
+                    assert!(transport.outcome(operation.operation_id()).await.is_none());
+                    assert_eq!(
+                        transport
+                            .expire_unknown(operation.operation_id(), now)
+                            .await,
+                        Err(SmsTransportError::OperationNotFound {
+                            operation_id: operation.operation_id().into(),
+                        })
+                    );
+                    // GC does not revive the original expired command. A new
+                    // request with a fresh deadline may reuse the cleared id.
+                    let mut replacement = operation.clone();
+                    replacement.command.expires_at = now + Duration::seconds(60);
+                    assert_eq!(
+                        transport.submit_at(&replacement, now).await.unwrap(),
+                        TelecomOutcome::Accepted
+                    );
+                    assert_eq!(peer.submissions().len(), submissions + 1);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn terminal_operation_pruning_is_bounded_and_deterministic() {
         let peer = Arc::new(InMemorySmsPeer::default());
         let transport = SmsRelayTransport::new("binding", peer, allow_all());
@@ -1637,6 +1801,76 @@ mod tests {
             .unwrap();
         peer.release.notify_one();
         assert_eq!(submit.await.unwrap().unwrap(), TelecomOutcome::Accepted);
+    }
+
+    #[tokio::test]
+    async fn late_successful_heartbeat_is_fenced_after_disconnect_and_reconnect() {
+        let peer = Arc::new(HeartbeatBlockingPeer::default());
+        let transport = Arc::new(SmsRelayTransport::new("binding", peer.clone(), allow_all()));
+        let first = transport.connect().await.unwrap();
+        let started = peer.heartbeat_started.notified();
+        let heartbeat = {
+            let transport = Arc::clone(&transport);
+            tokio::spawn(async move { transport.heartbeat(first.generation).await })
+        };
+        started.await;
+        transport.disconnect().await;
+        peer.heartbeat_release.notify_one();
+        assert_eq!(
+            heartbeat.await.unwrap(),
+            Err(SmsTransportError::NotConnected)
+        );
+
+        let peer = Arc::new(HeartbeatBlockingPeer::default());
+        let transport = Arc::new(SmsRelayTransport::new("binding", peer.clone(), allow_all()));
+        let first = transport.connect().await.unwrap();
+        let started = peer.heartbeat_started.notified();
+        let heartbeat = {
+            let transport = Arc::clone(&transport);
+            tokio::spawn(async move { transport.heartbeat(first.generation).await })
+        };
+        started.await;
+        transport.disconnect().await;
+        let second = transport.connect().await.unwrap();
+        assert!(second.generation > first.generation);
+        peer.heartbeat_release.notify_one();
+        assert_eq!(
+            heartbeat.await.unwrap(),
+            Err(SmsTransportError::StaleGeneration {
+                active: second.generation,
+                got: first.generation,
+            })
+        );
+        assert_eq!(transport.lease().await, Some(second));
+    }
+
+    #[tokio::test]
+    async fn late_successful_heartbeat_requires_the_same_binding() {
+        let peer = Arc::new(HeartbeatBlockingPeer::default());
+        let transport = Arc::new(SmsRelayTransport::new("binding", peer.clone(), allow_all()));
+        let first = transport.connect().await.unwrap();
+        let started = peer.heartbeat_started.notified();
+        let heartbeat = {
+            let transport = Arc::clone(&transport);
+            tokio::spawn(async move { transport.heartbeat(first.generation).await })
+        };
+        started.await;
+        // Binding is immutable through the public API; inject a same-generation
+        // replacement here to exercise both components of the final fence.
+        let replacement = RelayLease {
+            binding_id: "other-binding".into(),
+            generation: first.generation,
+        };
+        transport.state.lock().await.active = Some(replacement.clone());
+        peer.heartbeat_release.notify_one();
+        assert_eq!(
+            heartbeat.await.unwrap(),
+            Err(SmsTransportError::BindingMismatch {
+                expected: replacement.binding_id.clone(),
+                claimed: "binding".into(),
+            })
+        );
+        assert_eq!(transport.lease().await, Some(replacement));
     }
 
     #[tokio::test]
