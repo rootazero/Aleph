@@ -611,6 +611,323 @@ async fn rearm_loop_after_busy_is_bound_to_the_claimed_incarnation() {
     assert_eq!(reg.get(&session).unwrap().iterations_used, 1);
 }
 
+// ---- 5. stale-tick STOP effects -----------------------------------------
+//
+// The three terminal effects a continuation can apply to a loop - agent-miss
+// stop, refused-authority pause, run-failure stop - each follow an await (the
+// agent lookup, the authority lookup, the run itself). A tick that was claimed
+// for an OLD incarnation must not stop / pause the replacement, nor clear its
+// welded strategy, nor push a halt notice about it. Each effect has a negative
+// (replacement) and a positive (same incarnation) case on the live registry
+// row AND the welded strategy row, so neither side can pass vacuously.
+
+fn strategy_store() -> Arc<crate::strategy::StrategyStore> {
+    // `set_global_for_test` is install-once; seed/assert through whichever
+    // store is actually global (unique session keys avoid collisions).
+    crate::strategy::set_global_for_test(Arc::new(
+        crate::strategy::StrategyStore::open(&tempfile::tempdir().unwrap().keep().join("s.db"))
+            .unwrap(),
+    ));
+    crate::strategy::global().expect("strategy global set")
+}
+
+fn seed_strategy(session: &str) {
+    strategy_store()
+        .put(
+            &crate::strategy::loop_key(session),
+            &crate::strategy::Strategy {
+                objective: "o".into(),
+                approach: "a".into(),
+                phases: vec![],
+                guardrails: vec!["stay on the watch target".into()],
+                success_criteria: "ok".into(),
+                goal_id: None,
+            },
+        )
+        .unwrap();
+}
+
+fn has_strategy(session: &str) -> bool {
+    strategy_store()
+        .get(&crate::strategy::loop_key(session))
+        .unwrap()
+        .is_some()
+}
+
+/// Seed a loop with a welded strategy, claim a tick on it (-> its instance),
+/// then apply `replace`. Returns (session, claimed instance).
+fn stale_tick(tag: &str, replace: &Replace) -> (String, u64) {
+    let session = SessionKey::main(tag).to_key_string();
+    loops().put(loop_for(&session, None));
+    seed_strategy(&session);
+    let claimed = loops().get(&session).unwrap().instance;
+    replace.apply(&session);
+    (session, claimed)
+}
+
+fn assert_replacement_untouched(session: &str, claimed: u64, label: &str) {
+    let live = loops().get(session).expect("registered");
+    assert_ne!(live.instance, claimed, "{label}: must be a replacement");
+    assert_eq!(live.status, LoopStatus::Active, "{label}");
+    assert_eq!(live.stop_reason, None, "{label}: no stop reason written");
+    assert!(
+        has_strategy(session),
+        "{label}: the replacement's welded strategy must survive"
+    );
+}
+
+/// The registry primitive: a bound move on another incarnation writes nothing
+/// and reports `Refused`; on the right one it applies.
+#[test]
+fn transition_for_is_fenced_to_the_incarnation() {
+    let session = SessionKey::main("loop-transition-for").to_key_string();
+    loops().put(loop_for(&session, None));
+    let old = loops().get(&session).unwrap().instance;
+    loops().put(loop_for(&session, None));
+    let new = loops().get(&session).unwrap();
+    assert_ne!(old, new.instance);
+    assert_eq!(
+        loops().transition_for(&session, old, LoopStatus::Stopped, Some("x".into())),
+        crate::looping::TransitionOutcome::Refused {
+            current: LoopStatus::Active
+        }
+    );
+    assert_eq!(loops().get(&session).unwrap(), new, "nothing written");
+    assert!(matches!(
+        loops().transition_for(&session, new.instance, LoopStatus::Paused, None),
+        crate::looping::TransitionOutcome::Applied { .. }
+    ));
+}
+
+#[test]
+fn agent_miss_stop_does_not_touch_a_replacement_loop() {
+    for (label, _creator, replace) in swaps("loop-agentmiss") {
+        let tag = format!("loop-agentmiss-{}", label.replace([' ', '>'], ""));
+        let (session, claimed) = stale_tick(&tag, &replace);
+        assert!(
+            !super::super::execute::halt_loop_on_agent_miss(&session, claimed, "ghost"),
+            "{label}"
+        );
+        assert_replacement_untouched(&session, claimed, label);
+    }
+}
+
+#[test]
+fn agent_miss_stop_stops_the_same_incarnation_and_clears_its_strategy() {
+    let (session, claimed) = stale_tick("loop-agentmiss-same", &Replace::Nothing);
+    assert!(super::super::execute::halt_loop_on_agent_miss(
+        &session, claimed, "ghost"
+    ));
+    let live = loops().get(&session).unwrap();
+    assert_eq!(live.status, LoopStatus::Stopped);
+    assert!(live
+        .stop_reason
+        .as_deref()
+        .is_some_and(|r| r.contains("ghost")));
+    assert!(
+        !has_strategy(&session),
+        "the stopped loop's plan is dropped"
+    );
+}
+
+/// End to end through `spawn_continuation_run`: a registry WITHOUT the agent
+/// takes the agent-miss arm for the claimed (live) incarnation.
+#[tokio::test]
+async fn a_tick_whose_agent_is_gone_stops_its_own_loop() {
+    let rig = rig("loop-agentmiss-e2e").await;
+    loops().put(loop_for(&rig.session_str, None));
+    seed_strategy(&rig.session_str);
+    let (wake_ms, instance, prompt, origin) = rig.claim();
+    let empty = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
+    let adapter: Arc<dyn ExecutionAdapter> = Arc::new(RecordingAdapter::new());
+    super::super::execute::spawn_continuation_run(
+        empty,
+        adapter,
+        rig.session.clone(),
+        rig.session_str.clone(),
+        prompt,
+        HashMap::new(),
+        None,
+        None,
+        Some(Arc::clone(&rig.sessions)),
+        Some(0),
+        super::super::execute::ContinuationKind::Loop { wake_ms, instance },
+        origin,
+    );
+    assert!(
+        wait_until(FIRES, || rig
+            .live()
+            .is_some_and(|l| l.status == LoopStatus::Stopped))
+        .await,
+        "the agent-miss arm must stop the claimed loop"
+    );
+    assert!(!has_strategy(&rig.session_str));
+}
+
+#[tokio::test]
+async fn refused_authority_does_not_pause_a_replacement_loop() {
+    for (label, _creator, replace) in swaps("loop-refused") {
+        let tag = format!("loop-refused-{}", label.replace([' ', '>'], ""));
+        let (session, claimed) = stale_tick(&tag, &replace);
+        super::super::execute::halt_on_refused_authority(
+            super::super::execute::ContinuationKind::Loop {
+                wake_ms: 0,
+                instance: claimed,
+            },
+            &session,
+            crate::scope::authority::RefusalReason::Deactivated,
+            "principal deactivated",
+            None,
+        )
+        .await;
+        assert_replacement_untouched(&session, claimed, label);
+    }
+}
+
+#[tokio::test]
+async fn refused_authority_pauses_the_same_incarnation_and_keeps_its_strategy() {
+    let (session, claimed) = stale_tick("loop-refused-same", &Replace::Nothing);
+    super::super::execute::halt_on_refused_authority(
+        super::super::execute::ContinuationKind::Loop {
+            wake_ms: 0,
+            instance: claimed,
+        },
+        &session,
+        crate::scope::authority::RefusalReason::Deactivated,
+        "principal deactivated",
+        None,
+    )
+    .await;
+    let live = loops().get(&session).unwrap();
+    assert_eq!(live.status, LoopStatus::Paused);
+    assert!(live
+        .stop_reason
+        .as_deref()
+        .is_some_and(|r| r.contains("principal deactivated")));
+    assert!(has_strategy(&session), "a pause keeps the plan");
+}
+
+#[tokio::test]
+async fn failure_stop_does_not_touch_a_replacement_loop() {
+    for (label, _creator, replace) in swaps("loop-failstop") {
+        let tag = format!("loop-failstop-{}", label.replace([' ', '>'], ""));
+        let (session, claimed) = stale_tick(&tag, &replace);
+        super::super::execute::stop_loop_on_failure(
+            &session,
+            claimed,
+            &ExecutionError::Failed("boom".into()),
+            None,
+        )
+        .await;
+        assert_replacement_untouched(&session, claimed, label);
+    }
+}
+
+#[tokio::test]
+async fn failure_stop_stops_the_same_incarnation_and_clears_its_strategy() {
+    let (session, claimed) = stale_tick("loop-failstop-same", &Replace::Nothing);
+    super::super::execute::stop_loop_on_failure(
+        &session,
+        claimed,
+        &ExecutionError::Failed("boom".into()),
+        None,
+    )
+    .await;
+    let live = loops().get(&session).unwrap();
+    assert_eq!(live.status, LoopStatus::Stopped);
+    assert!(live
+        .stop_reason
+        .as_deref()
+        .is_some_and(|r| r.contains("boom")));
+    assert!(!has_strategy(&session));
+}
+
+/// An adapter that runs `hook` (the user replacing the loop while the run is
+/// in flight) then fails with a non-transient error.
+struct FailOnce {
+    hook: std::sync::Mutex<Option<Hook>>,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl ExecutionAdapter for FailOnce {
+    async fn execute(
+        &self,
+        _request: RunRequest,
+        _agent: Arc<AgentInstance>,
+        _emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        let hook = self.hook.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(ExecutionError::Failed("boom".to_string()))
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        Err(ExecutionError::RunNotFound(run_id.to_string()))
+    }
+
+    async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+        None
+    }
+
+    async fn active_run_count(&self) -> usize {
+        0
+    }
+}
+
+async fn failing_run(tag: &str, replace: Replace) -> (Rig, Arc<AtomicUsize>) {
+    let rig = rig(tag).await;
+    loops().put(loop_for(&rig.session_str, None));
+    seed_strategy(&rig.session_str);
+    let (wake_ms, instance, prompt, origin) = rig.claim();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let adapter = Arc::new(FailOnce {
+        hook: std::sync::Mutex::new(Some(replace.hook(rig.session_str.clone()))),
+        calls: Arc::clone(&calls),
+    });
+    rig.spawn(adapter, prompt, wake_ms, instance, origin);
+    assert!(
+        wait_until(FIRES, || calls.load(Ordering::SeqCst) == 1).await,
+        "the claimed tick never reached the adapter"
+    );
+    (rig, calls)
+}
+
+/// End to end, control: the run fails on the claimed incarnation and the
+/// failure stop lands (the harness reaches the effect the negative case denies).
+#[tokio::test]
+async fn a_failed_tick_stops_its_own_loop() {
+    let (rig, _calls) = failing_run("loop-failrun-same", Replace::Nothing).await;
+    assert!(
+        wait_until(FIRES, || rig
+            .live()
+            .is_some_and(|l| l.status == LoopStatus::Stopped))
+        .await,
+        "a failed tick must stop the loop it was claimed for"
+    );
+    assert!(!has_strategy(&rig.session_str));
+}
+
+/// End to end, fence: the loop is restarted while the tick's run is in flight;
+/// the run then fails. The replacement must not be stopped (the control above
+/// proves the same path does stop an un-replaced loop, so the quiet wait is not
+/// vacuous).
+#[tokio::test]
+async fn a_failed_stale_tick_does_not_stop_the_replacement() {
+    for (label, _creator, replace) in swaps("loop-failrun") {
+        let tag = format!("loop-failrun-{}", label.replace([' ', '>'], ""));
+        let (rig, _calls) = failing_run(&tag, replace).await;
+        tokio::time::sleep(QUIET).await;
+        let live = rig.live().unwrap();
+        assert_eq!(live.status, LoopStatus::Active, "{label}");
+        assert_eq!(live.stop_reason, None, "{label}");
+        assert!(has_strategy(&rig.session_str), "{label}");
+    }
+}
+
 // ---- census --------------------------------------------------------------
 
 /// `execute.rs` production code reaches the registry only through the
@@ -626,6 +943,10 @@ fn execute_rs_uses_only_the_identity_bound_loop_registry_calls() {
         "reg.confirm_fire(",
         ".rearm_after_busy(",
         ".rearm_after_interruption(",
+        // Continuation-side lifecycle moves (agent-miss stop, refused-authority
+        // pause, failure stop) must be fenced to the claimed incarnation; the
+        // unbound `transition` is for user verbs only.
+        ".transition(",
     ] {
         assert!(
             !code.contains(unbound),
@@ -637,6 +958,7 @@ fn execute_rs_uses_only_the_identity_bound_loop_registry_calls() {
         ".confirm_fire_for(",
         ".rearm_after_busy_for(",
         ".rearm_after_interruption_for(",
+        ".transition_for(",
     ] {
         assert!(code.contains(bound), "execute.rs must call `{bound}`");
     }

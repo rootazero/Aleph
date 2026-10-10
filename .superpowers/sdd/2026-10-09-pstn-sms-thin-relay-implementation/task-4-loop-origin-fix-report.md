@@ -53,3 +53,49 @@ and a census that `execute.rs` production code calls only the bound registry met
   new awaited-boundary test.
 - No change to src/harness/**, ScopeId, ordinary channels, Goal logic; no consumers/private/approval/live.
 - Not committed: task-3c-report.md, the plan, progress.
+
+---
+
+# Follow-up — fence stale loop stop effects
+
+Commit: `fix: fence stale loop stop effects`.
+
+## Problem (independent review, Important)
+`ContinuationKind::Loop` carried `instance`, but three stale-tick effects in `execute.rs` still went through the
+unbound `transition`, so an old tick resuming after an await could stop/pause a REPLACEMENT loop:
+agent-missing branch (Stopped + `clear_loop_welded_strategy`), `halt_on_refused_authority` (Paused + `notify_origin`),
+`stop_loop_on_failure` (Stopped + strategy clear + notify).
+
+## Fix
+- `src/looping/mod.rs`: `transition` now delegates to private `transition_inner(session, expected_instance: Option<u64>, ..)`;
+  new `transition_for(session, instance, to, reason) -> TransitionOutcome`. The instance is checked under the same
+  lock as the legality matrix; mismatch (or no active loop) => `Refused{current}`, nothing written. Unbound `transition`
+  keeps its old behaviour for other callers. Fence is instance-only (not Active-required) so a same-incarnation
+  Paused loop can still be stopped by a failure; the legality matrix still applies.
+- `execute.rs`: new `halt_loop_on_agent_miss(session, instance, agent_id) -> bool`; `halt_on_refused_authority` Loop arm and
+  `stop_loop_on_failure(session, instance, err, origin)` use `transition_for`. Strategy clear and user notification
+  happen ONLY when the outcome is `Applied` (previously `stop_loop_on_failure` notified unconditionally).
+
+## Tests (`loop_origin_race.rs` section 5, real registry/strategy/adapter effects)
+Per class a negative (replacement untouched: status, iterations, strategy kept, nothing notified) and a positive
+(same incarnation changes + strategy cleared/kept as designed): `transition_for_is_fenced_to_the_incarnation`,
+`agent_miss_stop_*`, `refused_authority_*`, `failure_stop_*`; e2e: `a_tick_whose_agent_is_gone_stops_its_own_loop`,
+`a_failed_tick_stops_its_own_loop` (control) paired with `a_failed_stale_tick_does_not_stop_the_replacement`
+(real race via replace-during-run adapter + quiet wait, not a sleep-and-hope). Census now forbids `.transition(`
+and requires `.transition_for(` in `execute.rs` production code.
+
+## Verification (OPENSSL_NO_VENDOR=1 CARGO_BUILD_JOBS=2)
+- `cargo test --lib loop_origin_race`: 19 passed.
+- Mutation: disabling the instance fence in `transition_inner` (`if false && ..`) => 5 FAILED (agent_miss negative,
+  failure_stop negative, refused negative, transition_for fence, a_failed_stale_tick). Reverted; tests green.
+- `cargo test --lib -- looping:: execution_engine:: goal_origin loop_manage`: 627 passed, 2 failed, both unrelated
+  and pre-existing: `btw_wire_tests::no_shipped_command_word_resolves_as_a_side_question`,
+  `run_loop::tests::project_skill_block_none_when_no_project_skills`.
+- rustfmt --edition 2021 --check clean on the 3 touched files; `git diff --check` clean.
+
+## NOT done / residual
+- `halt_on_refused_authority` and agent-miss negatives are exercised at the seam only (authority refusal cannot be driven
+  end-to-end cheaply; no hook between `confirm_fire` and the registry lookup). The e2e race is covered only for the failure path.
+- User notification is not asserted (tests run with origin None).
+- The two unrelated reds above were not re-verified against a clean HEAD this round.
+- No change to src/harness/**, ScopeId, consumers/private/live. Not committed: task-3c-report.md, plan, progress.

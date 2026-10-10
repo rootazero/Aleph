@@ -173,11 +173,49 @@ impl LoopRegistry {
         to: LoopStatus,
         reason: Option<String>,
     ) -> TransitionOutcome {
+        self.transition_inner(session_id, None, to, reason)
+    }
+
+    /// [`Self::transition`] fenced to ONE loop incarnation: the move applies
+    /// only when the live row's [`LoopState::instance`] equals `instance`,
+    /// checked under the same lock as the write. A stale tick (one claimed for
+    /// a loop that has since been stopped and restarted) therefore cannot stop
+    /// or pause the REPLACEMENT loop. A different incarnation answers
+    /// [`TransitionOutcome::Refused`] carrying the live status and writes
+    /// nothing; callers act on `Applied` only (clear the welded strategy,
+    /// notify the origin).
+    ///
+    /// Same-incarnation moves (pause+resume, field update, a paused loop being
+    /// stopped by a failure) keep the instance, so they stay legal under the
+    /// ordinary legality matrix. Every continuation-side lifecycle move in
+    /// `execution_engine/execute.rs` uses this form; the unbound
+    /// [`Self::transition`] is for user-initiated verbs, which act on whatever
+    /// loop is live.
+    pub fn transition_for(
+        &self,
+        session_id: &str,
+        instance: u64,
+        to: LoopStatus,
+        reason: Option<String>,
+    ) -> TransitionOutcome {
+        self.transition_inner(session_id, Some(instance), to, reason)
+    }
+
+    fn transition_inner(
+        &self,
+        session_id: &str,
+        expected_instance: Option<u64>,
+        to: LoopStatus,
+        reason: Option<String>,
+    ) -> TransitionOutcome {
         let mut map = self.lock();
         let Some(live) = map.get(session_id) else {
             return TransitionOutcome::Missing;
         };
         let from = live.status;
+        if expected_instance.is_some_and(|i| live.instance != i) {
+            return TransitionOutcome::Refused { current: from };
+        }
         let legal = match (from, to) {
             (LoopStatus::Active, LoopStatus::Paused | LoopStatus::Stopped)
             | (LoopStatus::Paused, LoopStatus::Active | LoopStatus::Stopped) => true,

@@ -1740,22 +1740,8 @@ pub(super) fn spawn_continuation_run(
                 "continuation: agent no longer exists — terminating instead of skipping"
             );
             match kind {
-                ContinuationKind::Loop { .. } => {
-                    if let Some(reg) = crate::looping::global() {
-                        if matches!(
-                            reg.transition(
-                                &session_key_str,
-                                crate::looping::LoopStatus::Stopped,
-                                Some(format!("Halted: agent '{cont_agent_id}' no longer exists")),
-                            ),
-                            crate::looping::TransitionOutcome::Applied { .. }
-                        ) {
-                            // Mirror the tool-stop cleanup: clear the welded
-                            // strategy so the stale plan cannot bleed into a
-                            // future session under a recreated agent.
-                            clear_loop_welded_strategy(&session_key_str, "agent-miss stop");
-                        }
-                    }
+                ContinuationKind::Loop { instance, .. } => {
+                    halt_loop_on_agent_miss(&session_key_str, instance, &cont_agent_id);
                 }
                 ContinuationKind::Goal { .. } => {
                     if let Some(store) = crate::goal::global() {
@@ -2004,7 +1990,13 @@ pub(super) fn spawn_continuation_run(
                             TransientPark::NotTransient => {
                                 warn!(error = %e, session = %session_key_str,
                                     "loop: tick run failed; stopping loop for user guidance");
-                                stop_loop_on_failure(&session_key_str, &e, origin.as_ref()).await;
+                                stop_loop_on_failure(
+                                    &session_key_str,
+                                    instance,
+                                    &e,
+                                    origin.as_ref(),
+                                )
+                                .await;
                             }
                         }
                     }
@@ -2082,6 +2074,37 @@ pub(super) async fn rearm_loop_after_busy(
     }
 }
 
+/// The agent-miss ending of a loop tick: stop the loop the tick was claimed
+/// for and drop its welded strategy. Fenced to `instance` under the registry
+/// lock (`transition_for`): the agent lookup is an await, so the loop may have
+/// been stopped and restarted meanwhile, and a stale tick must not stop the
+/// replacement. The strategy is cleared only when this call really stopped the
+/// loop. Returns whether it did.
+pub(super) fn halt_loop_on_agent_miss(
+    session_key_str: &str,
+    instance: u64,
+    agent_id: &str,
+) -> bool {
+    let Some(reg) = crate::looping::global() else {
+        return false;
+    };
+    let applied = matches!(
+        reg.transition_for(
+            session_key_str,
+            instance,
+            crate::looping::LoopStatus::Stopped,
+            Some(format!("Halted: agent '{agent_id}' no longer exists")),
+        ),
+        crate::looping::TransitionOutcome::Applied { .. }
+    );
+    if applied {
+        // Mirror the tool-stop cleanup: clear the welded strategy so the stale
+        // plan cannot bleed into a future session under a recreated agent.
+        clear_loop_welded_strategy(session_key_str, "agent-miss stop");
+    }
+    applied
+}
+
 /// Terminate a continuation whose person was DEFINITELY refused at fire time
 /// (deactivated or deleted — `FireVerdict::Refused`). The same two
 /// lifecycle writes as the agent-miss arm above, with two differences:
@@ -2106,7 +2129,7 @@ pub(super) async fn halt_on_refused_authority(
 ) {
     use crate::scope::authority::RefusalReason;
     match kind {
-        ContinuationKind::Loop { .. } => {
+        ContinuationKind::Loop { instance, .. } => {
             let Some(reg) = crate::looping::global() else {
                 return;
             };
@@ -2121,8 +2144,11 @@ pub(super) async fn halt_on_refused_authority(
                 ),
             };
             if matches!(
-                reg.transition(
+                // Fenced to the claimed incarnation: the authority lookup is an
+                // await, and a stale tick must not pause a replacement loop.
+                reg.transition_for(
                     session_key_str,
+                    instance,
                     crate::looping::LoopStatus::Paused,
                     Some(note.clone())
                 ),
@@ -2284,37 +2310,43 @@ async fn park_loop_on_transient_failure(
 /// the loop a stuck `Active` in the registry that the continuation hook never
 /// re-fired (it only runs on a run's success path) — a silent stall where
 /// `loop(action='status')` lies.
-async fn stop_loop_on_failure(
+pub(super) async fn stop_loop_on_failure(
     session_key_str: &str,
+    instance: u64,
     error: &ExecutionError,
     origin: Option<&OriginRoute>,
 ) {
     let reason: String = format!("{error}").chars().take(300).collect();
-    if let Some(reg) = crate::looping::global() {
-        // `transition` refuses a move out of the terminal `Stopped`, so a loop
-        // the user already stopped between the tick firing and its failure
-        // landing is never clobbered. The stored reason explains the halt to
-        // loop(action='status') even for Panel-only sessions with no origin
-        // channel to receive the notice.
-        if matches!(
-            reg.transition(
-                session_key_str,
-                crate::looping::LoopStatus::Stopped,
-                Some(format!("Halted by an error: {reason}")),
-            ),
-            crate::looping::TransitionOutcome::Applied { .. }
-        ) {
-            // Mirror the tool-stop cleanup (loop_manage stop): clear the
-            // loop-welded Strategy so the stale plan neither bleeds into
-            // later turns nor blocks a future start from re-planning.
-            clear_loop_welded_strategy(session_key_str, "failure stop");
-        }
+    let Some(reg) = crate::looping::global() else {
+        return;
+    };
+    // `transition_for` is fenced to the incarnation the failed tick was claimed
+    // for (the run is an await, so the loop may have been stopped and restarted
+    // since) and, like `transition`, refuses a move out of the terminal
+    // `Stopped`. Only a stop THIS call performed clears the strategy and
+    // notifies: a replacement loop, or one the user already stopped, gets
+    // neither a stale "halted on an error" notice nor a cleared plan. The
+    // stored reason explains the halt to loop(action='status') even for
+    // Panel-only sessions with no origin channel to receive the notice.
+    if matches!(
+        reg.transition_for(
+            session_key_str,
+            instance,
+            crate::looping::LoopStatus::Stopped,
+            Some(format!("Halted by an error: {reason}")),
+        ),
+        crate::looping::TransitionOutcome::Applied { .. }
+    ) {
+        // Mirror the tool-stop cleanup (loop_manage stop): clear the
+        // loop-welded Strategy so the stale plan neither bleeds into
+        // later turns nor blocks a future start from re-planning.
+        clear_loop_welded_strategy(session_key_str, "failure stop");
+        notify_origin(
+            origin,
+            format!("⚠️ Your timer loop halted on an error and was stopped: {reason}"),
+        )
+        .await;
     }
-    notify_origin(
-        origin,
-        format!("⚠️ Your timer loop halted on an error and was stopped: {reason}"),
-    )
-    .await;
 }
 
 /// Best-effort deliver a continuation stop/halt notice to the session's bound
@@ -2920,7 +2952,7 @@ mod fire_authority_tests {
         halt_on_refused_authority(
             ContinuationKind::Loop {
                 wake_ms: 0,
-                instance: 0,
+                instance: reg.get(session).expect("seeded").instance,
             },
             session,
             crate::scope::authority::RefusalReason::Deactivated,
