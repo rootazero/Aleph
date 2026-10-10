@@ -30,7 +30,7 @@ Implemented server-authored typed telecom provenance marker for crash/boot/manua
 
 4. **`admit_resume()` enforcement** (src/gateway/resume_coordinator.rs):
    - Added `plan: &ResumePlan` parameter
-   - Implemented fail-closed logic BEFORE fire authority/intent/retrigger:
+   - Implemented fail-closed logic after fire-time authority resolution and before intent/retrigger:
      - `None` telecom_restore (missing RunStarted) → refuse as `TelecomProvenanceLegacy`
      - `MarkerRestore::Ordinary` → `telecom_public = None` (ordinary resume)
      - `MarkerRestore::Public(ctx)` → `telecom_public = Some(ctx.clone())` (restore typed context)
@@ -87,11 +87,7 @@ Implemented server-authored typed telecom provenance marker for crash/boot/manua
 
 ### Fail-Closed Guarantee
 
-1. Resume refusal occurs in `admit_resume()` BEFORE:
-   - Fire authority check
-   - Crash-loop cap check
-   - Intent stamp write
-   - Retrigger dispatch
+1. `admit_resume()` resolves fire-time authority first (the existing order); provenance refusal then occurs before the crash-loop intent/cap work and retrigger dispatch.
 
 2. No RunStarted facts → refuse (cannot prove provenance)
 

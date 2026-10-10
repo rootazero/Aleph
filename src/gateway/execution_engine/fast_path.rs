@@ -1,6 +1,8 @@
 use super::{ExecutionEngine, ExecutionError, RunRequest, RunState};
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{EventEmitter, RunSummary, StreamEvent};
+use crate::gateway::telecom::persisted_marker::PersistedTelecomMarker;
+use crate::gateway::telecom::public_context::TelecomPublicContext;
 use crate::resilience::TaskStatus;
 use crate::session::events::{
     now_ms, EventSeq, MessageContent, RunEnvelopeSnapshot, RunOutcome, SessionEvent, Timestamp,
@@ -28,10 +30,20 @@ pub(super) struct FastPathJournal {
     pub(super) run_id: String,
     pub(super) call_id: String,
     tool: String,
+    telecom_provenance: PersistedTelecomMarker,
 }
 
 impl FastPathJournal {
     pub(super) fn new(svc: Arc<dyn SessionService>, session: SessionId, tool: &str) -> Self {
+        Self::new_with_telecom_public(svc, session, tool, None)
+    }
+
+    pub(super) fn new_with_telecom_public(
+        svc: Arc<dyn SessionService>,
+        session: SessionId,
+        tool: &str,
+        telecom_public: Option<&TelecomPublicContext>,
+    ) -> Self {
         Self {
             svc,
             session,
@@ -42,6 +54,7 @@ impl FastPathJournal {
             run_id: format!("slash-{}", uuid::Uuid::new_v4()),
             call_id: format!("slash-{}", uuid::Uuid::new_v4()),
             tool: tool.to_string(),
+            telecom_provenance: PersistedTelecomMarker::capture(telecom_public),
         }
     }
 
@@ -76,8 +89,7 @@ impl FastPathJournal {
                 at,
                 project_root: None,
                 envelope: Some(envelope),
-                telecom_provenance:
-                    crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+                telecom_provenance: self.telecom_provenance.clone(),
             },
             SessionEvent::ToolCallRequested {
                 identity: None,
@@ -345,6 +357,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::FastPathJournal;
+    use crate::gateway::telecom::{PersistedTelecomMarker, SmsInboundMeta, TelecomPublicContext};
     use crate::routing::session_key::SessionKey;
     use crate::session::events::{RunEnvelopeSnapshot, RunOutcome, SessionEvent, Timestamp};
     use crate::session::store::{event_type_tag, migrate_add_session_events, SqliteEventStore};
@@ -353,6 +366,25 @@ mod tests {
         SessionEventRecord, SessionEventStore, SessionService,
     };
     use crate::sync_primitives::Arc;
+    use aleph_protocol::telecom_relay::SmsEncoding;
+    use chrono::Utc;
+
+    fn public_context() -> TelecomPublicContext {
+        TelecomPublicContext::from_admitted_sms(&SmsInboundMeta {
+            region: "region".into(),
+            binding_ref: "binding".into(),
+            provider_account_id: "account".into(),
+            provider_message_id: "message".into(),
+            envelope_event_id: "event".into(),
+            connection_generation: 3,
+            service_address: "+15550001111".into(),
+            peer_address: "+15552223333".into(),
+            encoding: SmsEncoding::Gsm7,
+            segment_count: 1,
+            created_at: Utc::now(),
+            expires_at: Utc::now(),
+        })
+    }
 
     /// A real actor service over a real in-memory `SqliteEventStore` — the
     /// production transcript path, as `execution_engine/tests.rs` builds it.
@@ -433,6 +465,37 @@ mod tests {
         assert_eq!(r.dangling[0].tool_name, "select_model");
         assert_eq!(r.dangling[0].call_id, j.call_id);
         assert_eq!(r.dangling[0].provenance, DanglingProvenance::ThisRestart);
+    }
+
+    #[tokio::test]
+    async fn public_fast_path_writes_the_captured_telecom_marker() {
+        let (svc, store) = svc();
+        let sid = SessionKey::main("fp-public");
+        let context = public_context();
+        let j = FastPathJournal::new_with_telecom_public(
+            svc,
+            sid.clone(),
+            "session_rename",
+            Some(&context),
+        );
+        j.open(
+            "/rename x".into(),
+            None,
+            RunEnvelopeSnapshot::default(),
+            serde_json::json!({"topic": "x"}),
+        )
+        .await
+        .unwrap();
+        let log = store.load_all_events(&sid).await.unwrap();
+        match &log[2].event {
+            SessionEvent::RunStarted {
+                telecom_provenance, ..
+            } => assert_eq!(
+                telecom_provenance,
+                &PersistedTelecomMarker::capture(Some(&context))
+            ),
+            other => panic!("expected RunStarted, got {other:?}"),
+        }
     }
 
     /// The four seed rows share the journal's one `turn_id`, the marker

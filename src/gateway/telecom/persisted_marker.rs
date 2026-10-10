@@ -7,10 +7,10 @@
 //!
 //! # Rules
 //!
-//! * The only writers are the durable queue payload, goal persistence, and
-//!   the harness runner's resume snapshot writer (census test below).
-//!   Nothing builds a marker from a metadata map, a string key, or
-//!   `source_channel`.
+//! * The only writers are the durable queue payload, goal persistence, the
+//!   run-loop hook-stop receipt, the direct-tool fast path, and the harness
+//!   runner's resume snapshot writer (census test below). Nothing builds a
+//!   marker from a metadata map, a string key, or `source_channel`.
 //! * Reading never fails and never guesses: any JSON shape is classified into
 //!   a state. Only an exact, known v1 shape restores a context; everything else
 //!   is `Legacy` (field absent), `Unknown` (well-formed but unrecognised
@@ -340,12 +340,13 @@ mod tests {
         );
     }
 
-    /// `capture` is restricted to the three server-authored persistence paths:
-    /// durable queue payloads, goal storage, and the harness runner's resume
-    /// snapshot writer. The latter must preserve telecom provenance when a
-    /// resumed run is re-journaled.
+    /// `capture` is restricted to these server-authored persistence paths:
+    /// durable queue payloads, goal storage, the run-loop hook-stop receipt,
+    /// the direct-tool fast path, and the harness runner's resume snapshot
+    /// writer. The latter must preserve telecom provenance when a resumed run
+    /// is re-journaled.
     #[test]
-    fn capture_has_exactly_three_production_callers() {
+    fn capture_has_exactly_five_production_callers() {
         fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
             for e in std::fs::read_dir(dir).unwrap().flatten() {
                 let p = e.path();
@@ -353,8 +354,15 @@ mod tests {
                     walk(&p, hits);
                 } else if p.extension().is_some_and(|x| x == "rs") {
                     let s = std::fs::read_to_string(&p).unwrap();
-                    // Only the part before `#[cfg(test)] mod tests`.
-                    let prod = s.split("#[cfg(test)]").next().unwrap_or("");
+                    // Most modules keep tests after production code. The run
+                    // loop declares an out-of-line test module at the top,
+                    // so remove only that declaration rather than truncating
+                    // the production hook-stop writer below it.
+                    let prod = if p.ends_with("gateway/execution_engine/run_loop/mod.rs") {
+                        s.replace("#[cfg(test)]\nmod tests;\n", "")
+                    } else {
+                        s.split("#[cfg(test)]").next().unwrap_or("").to_string()
+                    };
                     if prod.contains(concat!("PersistedTelecomMarker", "::capture(")) {
                         hits.push(p.display().to_string());
                     }
@@ -367,12 +375,28 @@ mod tests {
             &mut hits,
         );
         hits.sort();
-        assert_eq!(hits.len(), 3, "{hits:?}");
-        assert!(hits[0].ends_with("busy_queue/durable.rs"), "{hits:?}");
-        assert!(hits[1].ends_with("goal/store.rs"), "{hits:?}");
-        assert!(
-            hits[2].ends_with("orchestrator/harness_bridge/runner_impl.rs"),
-            "{hits:?}"
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut relative: Vec<String> = hits
+            .into_iter()
+            .map(|path| {
+                std::path::Path::new(&path)
+                    .strip_prefix(&src)
+                    .unwrap()
+                    .display()
+                    .to_string()
+            })
+            .collect();
+        relative.sort();
+        assert_eq!(
+            relative,
+            [
+                "gateway/busy_queue/durable.rs",
+                "gateway/execution_engine/fast_path.rs",
+                "gateway/execution_engine/run_loop/mod.rs",
+                "goal/store.rs",
+                "orchestrator/harness_bridge/runner_impl.rs",
+            ],
+            "unexpected PersistedTelecomMarker::capture production callers"
         );
     }
 }
