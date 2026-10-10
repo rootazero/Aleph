@@ -298,6 +298,8 @@ mod last_run_tests {
             at: 1,
             project_root: None,
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         }
     }
 

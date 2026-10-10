@@ -1072,6 +1072,8 @@ mod tests {
             at: 1,
             project_root: None,
             envelope,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         }
     }
 
@@ -1937,8 +1939,6 @@ mod tests {
                 run_id: "b".into(),
                 project_root: Some("/p".into()),
                 envelope: None,
-                telecom_provenance:
-                    crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
                 telecom_provenance:
                     crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
             })
