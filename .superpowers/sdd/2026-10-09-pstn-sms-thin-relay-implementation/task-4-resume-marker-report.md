@@ -17,7 +17,7 @@ Implemented server-authored typed telecom provenance marker for crash/boot/manua
    - Updated `reduce_run()` to extract marker from `SessionEvent::RunStarted` events
    - Marker flows through reduction to resume planning
 
-3. **`src/gateway/resume_coordinator.rs`**: 
+3. **`src/gateway/resume_coordinator.rs`**:
    - Added `telecom_restore: Option<MarkerRestore>` field to `ResumePlan`
    - Updated `plan_resume()` to populate `telecom_restore` via `marker.restore()`
    - Added two new `ResumeRefusal` variants:
@@ -31,7 +31,7 @@ Implemented server-authored typed telecom provenance marker for crash/boot/manua
 4. **`admit_resume()` enforcement** (src/gateway/resume_coordinator.rs):
    - Added `plan: &ResumePlan` parameter
    - Implemented fail-closed logic BEFORE fire authority/intent/retrigger:
-     - `None` telecom_restore (missing RunStarted) → refuse as `TelecomProvenanceLegacy` 
+     - `None` telecom_restore (missing RunStarted) → refuse as `TelecomProvenanceLegacy`
      - `MarkerRestore::Ordinary` → `telecom_public = None` (ordinary resume)
      - `MarkerRestore::Public(ctx)` → `telecom_public = Some(ctx.clone())` (restore typed context)
      - `MarkerRestore::LegacyUnproven` → refuse as `TelecomProvenanceLegacy`
@@ -40,7 +40,7 @@ Implemented server-authored typed telecom provenance marker for crash/boot/manua
 
 ### Writer Path — Typed Capture
 
-5. **`src/orchestrator/harness_bridge/runner_impl.rs`**: 
+5. **`src/orchestrator/harness_bridge/runner_impl.rs`**:
    - Updated `SessionEvent::RunStarted` construction to capture telecom provenance:
      ```rust
      telecom_provenance: PersistedTelecomMarker::capture(_telecom_public.as_ref())
