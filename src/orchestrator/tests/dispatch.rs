@@ -855,6 +855,124 @@ async fn dispatch_forwards_telecom_public_context_and_none_stays_none() {
     );
 }
 
+/// Harness that reports the run-origin task-local as seen INSIDE the spawned
+/// harness task (the thing `tokio::spawn` drops), next to the typed argument.
+struct OriginProbeHarness {
+    seen: Arc<Mutex<Option<ProbeSeen>>>,
+}
+
+#[derive(Debug, PartialEq)]
+struct ProbeSeen {
+    ambient: Option<crate::gateway::telecom::TelecomPublicContext>,
+    typed: Option<crate::gateway::telecom::TelecomPublicContext>,
+}
+
+#[async_trait]
+impl crate::orchestrator::dispatch::HarnessRunner for OriginProbeHarness {
+    async fn run(
+        &self,
+        _session_key: String,
+        _spec: Arc<FlowSpec>,
+        _input: FlowInput,
+        _sandbox: Arc<dyn Sandbox>,
+        _events: broadcast::Sender<crate::orchestrator::dispatch::FlowStreamEvent>,
+        _cancel: CancellationToken,
+        _tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
+        _trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+        _interaction_manifest: Option<crate::thinker::InteractionManifest>,
+        _workspace_override: Option<std::path::PathBuf>,
+        _max_iterations_override: Option<u32>,
+        _transient_context: Option<String>,
+        _think_level: Option<crate::agents::thinking::ThinkLevel>,
+        _envelope: crate::thinker::TurnEnvelope,
+        _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+        _run_id: String,
+        telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
+    ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
+        *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(ProbeSeen {
+            ambient: crate::gateway::telecom::run_origin::current_run_origin(),
+            typed: telecom_public,
+        });
+        Ok(crate::orchestrator::dispatch::FlowOutcome::default())
+    }
+}
+
+fn origin_probe_orchestrator() -> (Orchestrator, Arc<Mutex<Option<ProbeSeen>>>) {
+    let mut spec_map = FlowSet::new();
+    spec_map.insert(
+        "default-agent".into(),
+        Arc::new(FlowSpec {
+            id: "default-agent".into(),
+            description: "t".into(),
+            agent: "main".into(),
+            brain: BrainRef::Default,
+            session_strategy: SessionStrategy::Fresh,
+            overrides: FlowOverrides::default(),
+        }),
+    );
+    let mut defaults = std::collections::HashMap::new();
+    defaults.insert("main".into(), "default-agent".into());
+    let seen = Arc::new(Mutex::new(None));
+    let orch = Orchestrator::new(
+        Arc::new(FlowRegistry::new(spec_map)),
+        Arc::new(defaults),
+        fake_session_service(),
+        build_sandbox_factory(Arc::new(|_| {
+            Ok(Arc::new(crate::sandbox::NoopSandbox) as Arc<dyn Sandbox>)
+        })),
+        Arc::new(OriginProbeHarness {
+            // rust-doctor-disable-next-line excessive-clone
+            seen: seen.clone(),
+        }),
+    );
+    (orch, seen)
+}
+
+/// The run-origin task-local must be live INSIDE the harness spawn, derived
+/// from the request's typed `telecom_public` only. A public request reads
+/// `Some`; an ordinary request reads `None` even when the dispatching task
+/// happens to carry some other (stale) origin; an unseeded dispatcher still
+/// yields the request's own origin.
+#[tokio::test]
+async fn the_harness_spawn_seeds_run_origin_from_the_typed_request_field() {
+    use crate::gateway::telecom::run_origin::{current_run_origin, seed_run_origin};
+    let expected = sms_public_context();
+
+    // public request, unseeded dispatcher (no gateway run scope).
+    let (orch, seen) = origin_probe_orchestrator();
+    assert_eq!(current_run_origin(), None);
+    let handle = orch
+        .dispatch(telecom_flow_request(Some(expected.clone())))
+        .await
+        .expect("dispatch ok");
+    let _ = handle.completion.await.unwrap();
+    assert_eq!(
+        seen.lock().unwrap_or_else(|e| e.into_inner()).take(),
+        Some(ProbeSeen {
+            ambient: Some(expected.clone()),
+            typed: Some(expected.clone()),
+        })
+    );
+
+    // ordinary request dispatched under a DIFFERENT public origin: the typed
+    // field wins; nothing is inherited from the dispatcher's task-local.
+    let stale = crate::gateway::telecom::run_origin::sample_public_context("stale");
+    let (orch, seen) = origin_probe_orchestrator();
+    let handle = seed_run_origin(Some(stale), async {
+        orch.dispatch(telecom_flow_request(None)).await
+    })
+    .await
+    .expect("dispatch ok");
+    let _ = handle.completion.await.unwrap();
+    assert_eq!(
+        seen.lock().unwrap_or_else(|e| e.into_inner()).take(),
+        Some(ProbeSeen {
+            ambient: None,
+            typed: None,
+        })
+    );
+}
+
 /// Harness that fails WITHOUT broadcasting a terminal `Complete` — the shape
 /// of `runner_impl`'s post-loop "session read" error. It mirrors one step
 /// event through the trace sink it was handed first, so the test also sees

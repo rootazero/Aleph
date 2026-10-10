@@ -10,15 +10,20 @@
 //! complete last.
 //!
 //! Rules
-//! - [`seed_run_origin`] has exactly ONE production caller:
-//!   `execution_engine::run_loop::with_request_scope`, from the request's own
-//!   `telecom_public`. A census test pins this.
+//! - [`seed_run_origin`] has exactly TWO production callers, each seeding from
+//!   a request's own typed `telecom_public`: the gateway-side
+//!   `execution_engine::run_loop::with_request_scope`, and the harness-side
+//!   `orchestrator::dispatch` spawn (a `tokio::spawn` drops the task-local, so
+//!   the harness task re-seeds it from `FlowRequest::telecom_public`). A census
+//!   test pins this.
 //! - [`CarriedAttribution`](crate::scope::CarriedAttribution) is the only user
 //!   of [`capture_carry`] / [`reestablish_carry`], so every spawn that already
 //!   carries scope / author carries the origin too.
 //! - A bare `tokio::spawn` loses the task-local (same class as scope and room
 //!   author). A reader then sees "unseeded", which is reported as `None`
-//!   (ordinary). That is a known gap, listed in the Task 4 goal-origin report.
+//!   (ordinary). That is a known gap for spawns that do not use the carrier;
+//!   see the "Not done" list in `task-4-sessions-provenance-report.md` and the
+//!   harness-spawn fix in `task-4-harness-origin-report.md`.
 
 use super::TelecomPublicContext;
 
@@ -196,10 +201,11 @@ mod tests {
     }
 
     #[test]
-    fn seed_run_origin_has_exactly_one_production_caller() {
+    fn seed_run_origin_has_exactly_two_production_callers() {
         let hits = production_files_containing("seed_run_origin(", "telecom/run_origin.rs");
-        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits.len(), 2, "{hits:?}");
         assert!(hits[0].ends_with("run_loop/mod.rs"), "{hits:?}");
+        assert!(hits[1].ends_with("orchestrator/dispatch.rs"), "{hits:?}");
     }
 
     #[test]

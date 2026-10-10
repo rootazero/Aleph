@@ -1157,6 +1157,15 @@ impl Orchestrator {
         let run_id = req.run_id.clone();
         // rust-doctor-disable-next-line excessive-clone
         let telecom_public = req.telecom_public.clone();
+        // Sixth capture at the same boundary: the run-origin task-local
+        // (`telecom::run_origin`) is seeded by `run_loop::with_request_scope`
+        // on the gateway side and dies at this `tokio::spawn`, so a tool
+        // executing inside the harness task (`sessions.send`, `goal`, `loop`)
+        // would read "unseeded" and launder a public telecom run into an
+        // ordinary child. It is re-seeded from the request's own typed
+        // `telecom_public` -- never from metadata / source_channel -- and an
+        // ordinary request is seeded explicitly as ordinary (`None`).
+        let run_origin = req.telecom_public.clone();
         // P1 data isolation — captured before the spawn boundary (task-locals
         // do not cross `tokio::spawn`); re-derived into a `ScopeAttribution`
         // and re-seeded inside, sibling of `with_agent_id`/`with_project_root`.
@@ -1275,26 +1284,29 @@ impl Orchestrator {
                                         originator,
                                         crate::gateway::media::with_pending_media(
                                             pending_media,
-                                            crate::extension::hooks::with_transcript_source(
-                                                transcripts,
-                                                harness.run(
-                                                    session_key,
-                                                    spec_clone,
-                                                    input_clone,
-                                                    sandbox_clone,
-                                                    event_tx,
-                                                    cancel_clone,
-                                                    tool_service_override,
-                                                    trace_sink,
-                                                    interaction_manifest,
-                                                    workspace_override,
-                                                    max_iterations_override,
-                                                    transient_context,
-                                                    think_level,
-                                                    envelope,
-                                                    model_directive,
-                                                    run_id,
-                                                    telecom_public,
+                                            crate::gateway::telecom::run_origin::seed_run_origin(
+                                                run_origin,
+                                                crate::extension::hooks::with_transcript_source(
+                                                    transcripts,
+                                                    harness.run(
+                                                        session_key,
+                                                        spec_clone,
+                                                        input_clone,
+                                                        sandbox_clone,
+                                                        event_tx,
+                                                        cancel_clone,
+                                                        tool_service_override,
+                                                        trace_sink,
+                                                        interaction_manifest,
+                                                        workspace_override,
+                                                        max_iterations_override,
+                                                        transient_context,
+                                                        think_level,
+                                                        envelope,
+                                                        model_directive,
+                                                        run_id,
+                                                        telecom_public,
+                                                    ),
                                                 ),
                                             ),
                                         ),
