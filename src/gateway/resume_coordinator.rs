@@ -701,6 +701,10 @@ pub(crate) fn plan_resume(
         plan.unsnapshotted = true;
         return plan;
     };
+    // Telecom provenance belongs to the RunStarted facts, not to the optional
+    // envelope. Initialize it before the legacy no-envelope return below so
+    // admission can preserve the marker's fail-closed decision.
+    plan.telecom_restore = Some(facts.telecom_provenance.restore());
     let mut sentences: Vec<String> = Vec::new();
 
     // Workspace. A folder that has since been deleted or moved falls back to
@@ -826,10 +830,6 @@ pub(crate) fn plan_resume(
     }
 
     plan.degrade = degrade_note(sentences);
-
-    // Telecom provenance marker restore: always present when facts exist.
-    // The marker carries the restore decision; admit_resume enforces fail-closed.
-    plan.telecom_restore = Some(facts.telecom_provenance.restore());
 
     plan
 }
@@ -3129,13 +3129,24 @@ mod tests {
         project_root: Option<&str>,
         envelope: Option<crate::session::events::RunEnvelopeSnapshot>,
     ) -> crate::session::reduction::RunStartFacts {
+        facts_with_marker(
+            project_root,
+            envelope,
+            crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+        )
+    }
+
+    fn facts_with_marker(
+        project_root: Option<&str>,
+        envelope: Option<crate::session::events::RunEnvelopeSnapshot>,
+        telecom_provenance: crate::gateway::telecom::persisted_marker::PersistedTelecomMarker,
+    ) -> crate::session::reduction::RunStartFacts {
         crate::session::reduction::RunStartFacts {
             seq: 1,
             run_id: "r".to_string(),
             project_root: project_root.map(str::to_string),
             envelope,
-            telecom_provenance:
-                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+            telecom_provenance,
         }
     }
 
@@ -3578,6 +3589,56 @@ mod tests {
         assert_eq!(plan.workspace, None);
         assert!(plan.degraded);
         assert!(plan.degrade.expect("stated").sentence.contains("/gone"));
+    }
+
+    /// An explicit ordinary marker survives even when the optional envelope
+    /// is absent, so admission can distinguish it from a legacy marker.
+    #[test]
+    fn a_no_envelope_preserves_ordinary_telecom_provenance() {
+        let plan = plan_resume(
+            Some(&facts_with_marker(
+                Some("/p"),
+                None,
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+            )),
+            None,
+            &|_| true,
+        );
+        assert!(plan.unsnapshotted);
+        assert_eq!(
+            plan.telecom_restore,
+            Some(crate::gateway::telecom::persisted_marker::MarkerRestore::Ordinary)
+        );
+    }
+
+    #[test]
+    fn a_no_envelope_restores_public_telecom_provenance_exactly() {
+        let ctx = crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(
+            &crate::gateway::telecom::SmsInboundMeta {
+                region: "region".into(),
+                binding_ref: "binding".into(),
+                provider_account_id: "account".into(),
+                provider_message_id: "message".into(),
+                envelope_event_id: "event".into(),
+                connection_generation: 7,
+                service_address: "+15550001111".into(),
+                peer_address: "+15552223333".into(),
+                encoding: aleph_protocol::telecom_relay::SmsEncoding::Gsm7,
+                segment_count: 1,
+                created_at: chrono::Utc::now(),
+                expires_at: chrono::Utc::now(),
+            },
+        );
+        let marker =
+            crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::capture(Some(&ctx));
+        let plan = plan_resume(Some(&facts_with_marker(None, None, marker)), None, &|_| {
+            true
+        });
+        assert!(plan.unsnapshotted);
+        assert_eq!(
+            plan.telecom_restore,
+            Some(crate::gateway::telecom::persisted_marker::MarkerRestore::Public(ctx))
+        );
     }
 
     /// A marker written before the envelope existed is counted, not assumed
