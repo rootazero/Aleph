@@ -3699,7 +3699,12 @@ mod tests {
             &session_id,
             None,
             None,
-            &ResumePlan::default(),
+            &ResumePlan {
+                telecom_restore: Some(
+                    crate::gateway::telecom::persisted_marker::MarkerRestore::Ordinary,
+                ),
+                ..ResumePlan::default()
+            },
         )
         .expect("an active member resumes");
         assert_eq!(
