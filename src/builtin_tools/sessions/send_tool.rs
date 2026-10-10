@@ -444,6 +444,15 @@ impl SessionsSendTool {
         // resolves every member's delegated child to the room's CREATOR
         // instead (`scope::room_author`'s fallback).
         let inherited_room_author = crate::scope::current_room_author();
+        // Same capture-before-spawn rule once more: WHERE a public telecom run
+        // came from. Read from the run-origin task-local (seeded only from the
+        // parent request's own admitted `telecom_public`, never from a model
+        // argument) and stored as the typed `RunRequest.telecom_public` field,
+        // so the fire-and-forget `tokio::spawn` below — which drops task-locals
+        // — and the auto-continuation request both carry the same value. An
+        // ordinary / unseeded parent reads `None`: this path never upgrades a
+        // run's origin, it only refuses to launder a public one into "ordinary".
+        let inherited_telecom_public = crate::gateway::telecom::run_origin::current_run_origin();
         // `TURN_CONTEXT` is reliably in scope here (ScopedToolService scopes it
         // around every tool dispatch and reading it does not cross a
         // `tokio::spawn` boundary), so the dispatching turn's `caller_role` AND
@@ -501,7 +510,7 @@ impl SessionsSendTool {
             workspace_override: inherited_workspace.clone(),
             max_iterations_override: None,
             model_override: None,
-            telecom_public: None,
+            telecom_public: inherited_telecom_public.clone(),
         };
 
         // Get execution adapter
@@ -583,7 +592,7 @@ impl SessionsSendTool {
                                 workspace_override: inherited_workspace.clone(),
                                 max_iterations_override: None,
                                 model_override: None,
-                                telecom_public: None,
+                                telecom_public: inherited_telecom_public.clone(),
                             };
                             let continue_emitter: Arc<
                                 dyn crate::gateway::event_emitter::EventEmitter + Send + Sync,
@@ -1018,6 +1027,216 @@ mod tests {
             .error
             .unwrap()
             .contains("GatewayContext not configured"));
+    }
+
+    // ============================================================================
+    // Telecom provenance (Task 4): a delegated child of a public telecom run
+    // ============================================================================
+
+    /// Records `(run_id, request.telecom_public)` for every `execute`, as the
+    /// typed field — NOT the task-local — and answers the first (non-`-continue`)
+    /// run with a truncated assistant reply so wait mode auto-continues.
+    struct ProvenanceAdapter {
+        seen: tokio::sync::mpsc::UnboundedSender<(
+            String,
+            Option<crate::gateway::telecom::TelecomPublicContext>,
+        )>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::gateway::execution_adapter::ExecutionAdapter for ProvenanceAdapter {
+        async fn execute(
+            &self,
+            request: RunRequest,
+            agent: Arc<crate::gateway::agent_instance::AgentInstance>,
+            _emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
+        ) -> std::result::Result<(), crate::gateway::execution_engine::ExecutionError> {
+            let reply = if request.run_id.ends_with("-continue") {
+                "tail"
+            } else {
+                "head [output truncated"
+            };
+            let store = agent.session_store();
+            store.get_or_create(&request.session_key).await.unwrap();
+            store
+                .append_message(
+                    &request.session_key,
+                    crate::gateway::session_store::types::MessageRecord {
+                        id: request.run_id.clone(),
+                        role: "assistant".to_string(),
+                        content: reply.to_string(),
+                        timestamp: chrono::Utc::now().timestamp(),
+                        metadata: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        tool_call_id: None,
+                        tool_name: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let _ = self
+                .seen
+                .send((request.run_id.clone(), request.telecom_public.clone()));
+            Ok(())
+        }
+        async fn cancel(
+            &self,
+            _run_id: &str,
+        ) -> std::result::Result<(), crate::gateway::execution_engine::ExecutionError> {
+            Ok(())
+        }
+        async fn get_status(
+            &self,
+            _run_id: &str,
+        ) -> Option<crate::gateway::execution_engine::RunStatus> {
+            None
+        }
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+
+    type Seen = tokio::sync::mpsc::UnboundedReceiver<(
+        String,
+        Option<crate::gateway::telecom::TelecomPublicContext>,
+    )>;
+
+    async fn provenance_tool() -> (SessionsSendTool, Seen, tempfile::TempDir) {
+        use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
+        use crate::gateway::session_store::SessionStore;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: tmp.path().join("agent-sessions"),
+                ..FileSessionStoreConfig::default()
+            })
+            .unwrap(),
+        );
+        let registry = Arc::new(AgentRegistry::new());
+        registry
+            .register(
+                AgentInstance::new(
+                    AgentInstanceConfig {
+                        agent_id: "main".into(),
+                        workspace: tmp.path().join("workspace"),
+                        agent_dir: tmp.path().join("agent"),
+                        ..AgentInstanceConfig::default()
+                    },
+                    store,
+                )
+                .unwrap(),
+            )
+            .await;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let manager = Arc::new(
+            crate::gateway::SessionManager::new(
+                crate::gateway::session_manager::SessionManagerConfig {
+                    db_path: tmp.path().join("sessions.db"),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+        let context = GatewayContext::new(
+            manager,
+            registry,
+            Arc::new(ProvenanceAdapter { seen: tx }),
+            Arc::new(crate::gateway::inter_agent_policy::AgentToAgentPolicy::permissive()),
+        );
+        (SessionsSendTool::with_context(context, "main"), rx, tmp)
+    }
+
+    async fn drain(
+        rx: &mut Seen,
+        n: usize,
+    ) -> Vec<(
+        String,
+        Option<crate::gateway::telecom::TelecomPublicContext>,
+    )> {
+        let mut out = Vec::new();
+        for _ in 0..n {
+            out.push(
+                tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                    .await
+                    .expect("adapter must observe the run")
+                    .expect("channel open"),
+            );
+        }
+        out
+    }
+
+    fn send_args(timeout_seconds: u32) -> SessionsSendArgs {
+        SessionsSendArgs {
+            session_key: None,
+            message: "delegate".to_string(),
+            timeout_seconds,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_public_parents_wait_send_and_auto_continuation_carry_its_origin() {
+        let (tool, mut rx, _tmp) = provenance_tool().await;
+        let ctx = crate::gateway::telecom::run_origin::sample_public_context("b-send-wait");
+        let out = crate::gateway::telecom::run_origin::seed_run_origin(
+            Some(ctx.clone()),
+            AlephTool::call(&tool, send_args(30)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.status, SessionsSendStatus::Ok, "{:?}", out.error);
+        assert_eq!(out.reply.as_deref(), Some("head [output truncatedtail"));
+        let seen = drain(&mut rx, 2).await;
+        assert!(!seen[0].0.ends_with("-continue"));
+        assert!(seen[1].0.ends_with("-continue"), "{seen:?}");
+        assert_eq!(seen[0].1, Some(ctx.clone()), "initial child request");
+        assert_eq!(seen[1].1, Some(ctx), "automatic continuation request");
+    }
+
+    #[tokio::test]
+    async fn a_public_parents_fire_and_forget_send_carries_its_origin_across_the_spawn() {
+        let (tool, mut rx, _tmp) = provenance_tool().await;
+        let ctx = crate::gateway::telecom::run_origin::sample_public_context("b-send-ff");
+        let out = crate::gateway::telecom::run_origin::seed_run_origin(
+            Some(ctx.clone()),
+            AlephTool::call(&tool, send_args(0)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.status, SessionsSendStatus::Accepted);
+        let seen = drain(&mut rx, 1).await;
+        assert_eq!(seen[0].1, Some(ctx), "bare-spawned child request");
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_or_unseeded_parent_send_stays_none() {
+        for timeout in [0u32, 30] {
+            let (tool, mut rx, _tmp) = provenance_tool().await;
+            let out = crate::gateway::telecom::run_origin::seed_run_origin(
+                None,
+                AlephTool::call(&tool, send_args(timeout)),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                out.status,
+                SessionsSendStatus::Ok | SessionsSendStatus::Accepted
+            ));
+            let want = if timeout == 30 { 2 } else { 1 };
+            for (id, origin) in drain(&mut rx, want).await {
+                assert_eq!(origin, None, "ordinary parent, run {id}");
+            }
+            // Unseeded (no run scope at all) is also ordinary.
+            let (tool, mut rx, _tmp) = provenance_tool().await;
+            AlephTool::call(&tool, send_args(timeout)).await.unwrap();
+            for (id, origin) in drain(&mut rx, want).await {
+                assert_eq!(origin, None, "unseeded parent, run {id}");
+            }
+        }
     }
 
     // ============================================================================

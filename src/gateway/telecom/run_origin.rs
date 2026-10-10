@@ -1,11 +1,13 @@
 //! The telecom origin of the run currently executing, as a task-local.
 //!
 //! `RunRequest.telecom_public` is the admitted fact; this module makes it
-//! readable by the two tools that *create* autonomous work (`goal set`,
-//! `loop start`) without ever taking it from a model-writable argument. The
-//! creator's origin is then stored with the goal / loop and is what every later
-//! autonomous run (hook continuation, loop tick, wake) restores — never the
-//! origin of whichever unrelated turn happened to complete last.
+//! readable by the tools that *create* autonomous work (`goal set`,
+//! `loop start`) and by `session_send` (which copies it onto the delegated
+//! child's typed `RunRequest.telecom_public`) without ever taking it from a
+//! model-writable argument. The creator's origin is then stored with the goal
+//! / loop and is what every later autonomous run (hook continuation, loop tick,
+//! wake) restores — never the origin of whichever unrelated turn happened to
+//! complete last.
 //!
 //! Rules
 //! - [`seed_run_origin`] has exactly ONE production caller:
