@@ -14,6 +14,7 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
+mod goal_origin_effects;
 mod goal_origin_race;
 
 /// Test event emitter that collects events
@@ -76,6 +77,11 @@ fn goal_store_global() -> Arc<crate::goal::GoalStore> {
     // `OnceLock<TempDir>` never drops (statics don't), so the directory is
     // registered for removal at process exit instead of abandoned.
     static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    // Every caller re-opens the SAME sqlite file; opening it concurrently from
+    // parallel tests races sqlite's schema setup ("database is locked"), so the
+    // open + install is serialized.
+    static OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
     let dir = DIR.get_or_init(|| {
         crate::utils::scratch::keep_until_exit(tempfile::tempdir().expect("goal store dir"))
     });
