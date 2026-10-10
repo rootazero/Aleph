@@ -266,7 +266,15 @@ where
     let author = request.metadata.get(super::AUTHOR_USER_KEY).cloned();
     crate::scope::with_scope(
         request_scope(request),
-        crate::scope::with_room_author(author, fut),
+        crate::scope::with_room_author(
+            author,
+            // The sole seeding point of the run's telecom origin: it comes
+            // from the admitted request, never from metadata or tool args.
+            crate::gateway::telecom::run_origin::seed_run_origin(
+                request.telecom_public.clone(),
+                fut,
+            ),
+        ),
     )
     .await
 }

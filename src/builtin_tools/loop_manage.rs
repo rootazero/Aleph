@@ -355,7 +355,9 @@ impl LoopTool {
             .with_token_budget(args.token_budget)
             // P1 data isolation: stamp the owning user/scope from the ambient
             // attribution of THIS creating run — mirrors goal.rs's stamp.
-            .with_owner_scope(crate::scope::current_scope().as_ref());
+            .with_owner_scope(crate::scope::current_scope().as_ref())
+            // Creator provenance: server-seeded run origin, never an argument.
+            .with_telecom_origin(crate::gateway::telecom::run_origin::current_run_origin());
         // Honor next_wake on a model-paced start so the model's chosen pace
         // applies from tick 1 instead of the 10-minute fallback; on a fixed
         // cadence it is contradictory — reject with the same guidance as
@@ -1043,6 +1045,79 @@ mod tests {
         let st = reg.get("sess-room").unwrap();
         assert_eq!(st.scope_id.as_deref(), Some("project:p-x"));
         assert_eq!(st.owner_user_id.as_deref(), Some("u-alice"));
+    }
+
+    // ----- telecom origin: creator provenance, server-seeded only -------
+
+    fn start_args(prompt: &str) -> LoopArgs {
+        LoopArgs {
+            action: LoopAction::Start,
+            interval: Some("5m".to_string()),
+            prompt: Some(prompt.to_string()),
+            max_iterations: None,
+            timeout_minutes: None,
+            token_budget: None,
+            next_wake: None,
+            session: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn loop_origin_is_seeded_at_start_survives_update_and_resume_and_is_replaced_on_restart()
+    {
+        use crate::gateway::telecom::run_origin::{sample_public_context, seed_run_origin};
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("sess-o");
+        let ctx = sample_public_context("b-1");
+
+        seed_run_origin(Some(ctx.clone()), tool.run(start_args("watch")))
+            .await
+            .unwrap();
+        assert_eq!(reg.get("sess-o").unwrap().telecom_origin, Some(ctx.clone()));
+
+        // `update` and pause/resume run under a DIFFERENT (ordinary) turn.
+        let mut upd = start_args("watch");
+        upd.action = LoopAction::Update;
+        upd.prompt = None;
+        upd.interval = None;
+        upd.max_iterations = Some(7);
+        seed_run_origin(None, tool.run(upd)).await.unwrap();
+        let mut pause = start_args("x");
+        pause.action = LoopAction::Pause;
+        seed_run_origin(None, tool.run(pause)).await.unwrap();
+        let mut resume = start_args("x");
+        resume.action = LoopAction::Resume;
+        seed_run_origin(None, tool.run(resume)).await.unwrap();
+        let live = reg.get("sess-o").unwrap();
+        assert_eq!(live.max_iterations, Some(7));
+        assert!(live.is_active());
+        assert_eq!(
+            live.telecom_origin,
+            Some(ctx),
+            "a later ordinary turn must not strip the creator's origin"
+        );
+
+        // A fresh `start` under an ordinary run is a new creator.
+        seed_run_origin(None, tool.run(start_args("again")))
+            .await
+            .unwrap();
+        assert_eq!(reg.get("sess-o").unwrap().telecom_origin, None);
+    }
+
+    #[tokio::test]
+    async fn a_loop_started_outside_a_seeded_run_has_no_origin() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("sess-bare");
+        tool.run(start_args("watch")).await.unwrap();
+        assert_eq!(reg.get("sess-bare").unwrap().telecom_origin, None);
+    }
+
+    #[test]
+    fn loop_args_schema_exposes_no_origin_surface() {
+        let schema = serde_json::to_string(&schemars::schema_for!(LoopArgs)).unwrap();
+        for needle in ["telecom", "origin", "region", "binding"] {
+            assert!(!schema.contains(needle), "LoopArgs schema exposes {needle}");
+        }
     }
 
     /// The room-outside twin: no ambient scope ⇒ current (pre-P2) behavior —

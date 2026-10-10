@@ -140,6 +140,31 @@ pub(super) async fn notify_goal_stop(
     true
 }
 
+/// The telecom origin a goal's autonomous runs must restore, from the goal's
+/// own creator record. `Some(origin)` = proceed (`origin` itself `None` for an
+/// ordinary or pre-origin goal); `None` = REFUSE (unreadable / foreign marker,
+/// or the store read failed) - the caller must not run the goal.
+pub(super) fn resolve_goal_origin(
+    store: &crate::goal::GoalStore,
+    goal: &crate::goal::Goal,
+) -> Option<Option<crate::gateway::telecom::TelecomPublicContext>> {
+    use crate::gateway::telecom::MarkerRestore;
+    match store.origin_for(goal) {
+        Ok(MarkerRestore::Public(ctx)) => Some(Some(ctx)),
+        Ok(MarkerRestore::Ordinary | MarkerRestore::LegacyUnproven) => Some(None),
+        Ok(MarkerRestore::Refuse(reason)) => {
+            warn!(session = %goal.session_id, %reason,
+                "goal pursuit: refusing to continue a goal with an untrustworthy telecom origin");
+            None
+        }
+        Err(e) => {
+            warn!(error = %e, session = %goal.session_id,
+                "goal pursuit: goal telecom origin lookup failed; refusing this round");
+            None
+        }
+    }
+}
+
 /// Post-run continuation hook for the session's standing goal. Fires after every
 /// completed run (user turns included); a session with no goal, a passive goal or
 /// a terminal one costs exactly one indexed `SELECT`.
@@ -160,7 +185,6 @@ pub(super) async fn post_run(
     agent: &Arc<AgentInstance>,
     policy_meta: &HashMap<String, String>,
     workspace: Option<&Path>,
-    telecom_public: Option<&crate::gateway::telecom::TelecomPublicContext>,
 ) {
     let Some(store) = crate::goal::global() else {
         return;
@@ -178,6 +202,14 @@ pub(super) async fn post_run(
             return;
         }
     };
+    // The goal CREATOR's telecom origin - never the completing run's. A later
+    // ordinary turn (None) must not launder a public goal, nor a public turn
+    // widen an ordinary one. An unreadable/foreign origin fails closed: no
+    // claim, no continuation.
+    let Some(origin) = resolve_goal_origin(&store, &peek) else {
+        return;
+    };
+    let telecom_public = origin.as_ref();
     let policy_meta = goal_continuation_policy(&peek, policy_meta);
     let gate_configured = deps.gate.is_some() || peek.gate_command.is_some();
     let tokens = live_tokens(session_manager, session_key, &peek).await;

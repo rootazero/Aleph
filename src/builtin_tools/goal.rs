@@ -880,7 +880,15 @@ token_budget. \
                             "goal set: promoted the replaced goal's lessons before overwrite");
                     }
                 }
-                self.store.put(&goal)?;
+                // Record the creating run's telecom origin with the goal, in one
+                // transaction. It comes from the server-seeded run origin (not
+                // from `args`), so a model cannot choose it; a `set` under an
+                // ordinary run records "ordinary" and replaces any previous
+                // public origin.
+                self.store.put_with_origin(
+                    &goal,
+                    crate::gateway::telecom::run_origin::current_run_origin().as_ref(),
+                )?;
                 // Objective-change auto-invalidation (spec §6): if a welded
                 // Strategy exists for this session and it cross-references a
                 // DIFFERENT goal id than the one we just minted, the objective
@@ -1444,6 +1452,104 @@ mod tests {
             .unwrap();
         assert!(out.success);
         assert!(out.message.contains("Ship the goal feature"));
+    }
+
+    // ----- telecom origin: creator provenance, server-seeded only -------
+
+    fn origin_tool(session: &str) -> (GoalTool, Arc<GoalStore>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
+        let handle = Arc::new(RwLock::new(session.to_string()));
+        let tool = GoalTool::new(store.clone()).with_session_key_handle(Some(handle));
+        (tool, store, dir)
+    }
+
+    fn set_args(objective: &str) -> GoalArgs {
+        let mut a = args(GoalAction::Set);
+        a.objective = Some(objective.into());
+        a
+    }
+
+    #[tokio::test]
+    async fn a_goal_set_inside_a_public_run_records_that_run_as_origin() {
+        use crate::gateway::telecom::run_origin::{sample_public_context, seed_run_origin};
+        use crate::gateway::telecom::MarkerRestore;
+        let (tool, store, _d) = origin_tool("sess-pub");
+        let ctx = sample_public_context("b-1");
+        let out = seed_run_origin(Some(ctx.clone()), tool.call(set_args("obj")))
+            .await
+            .unwrap();
+        assert!(out.success);
+        let saved = store.get("sess-pub").unwrap().unwrap();
+        assert_eq!(
+            store.origin_for(&saved).unwrap(),
+            MarkerRestore::Public(ctx)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_goal_set_inside_an_ordinary_run_records_ordinary_origin() {
+        use crate::gateway::telecom::run_origin::seed_run_origin;
+        use crate::gateway::telecom::MarkerRestore;
+        let (tool, store, _d) = origin_tool("sess-ord");
+        seed_run_origin(None, tool.call(set_args("obj")))
+            .await
+            .unwrap();
+        let saved = store.get("sess-ord").unwrap().unwrap();
+        assert_eq!(store.origin_for(&saved).unwrap(), MarkerRestore::Ordinary);
+    }
+
+    #[tokio::test]
+    async fn a_goal_set_outside_any_seeded_run_is_ordinary() {
+        use crate::gateway::telecom::MarkerRestore;
+        let (tool, store, _d) = origin_tool("sess-bare");
+        tool.call(set_args("obj")).await.unwrap();
+        let saved = store.get("sess-bare").unwrap().unwrap();
+        assert_eq!(store.origin_for(&saved).unwrap(), MarkerRestore::Ordinary);
+    }
+
+    #[tokio::test]
+    async fn a_new_objective_set_under_an_ordinary_run_replaces_a_public_origin() {
+        use crate::gateway::telecom::run_origin::{sample_public_context, seed_run_origin};
+        use crate::gateway::telecom::MarkerRestore;
+        let (tool, store, _d) = origin_tool("sess-swap");
+        seed_run_origin(
+            Some(sample_public_context("b-1")),
+            tool.call(set_args("first")),
+        )
+        .await
+        .unwrap();
+        let mut replace = set_args("second");
+        replace.status = None;
+        seed_run_origin(None, tool.call(replace)).await.unwrap();
+        let saved = store.get("sess-swap").unwrap().unwrap();
+        assert_eq!(saved.objective, "second");
+        assert_eq!(store.origin_for(&saved).unwrap(), MarkerRestore::Ordinary);
+    }
+
+    #[tokio::test]
+    async fn goal_args_cannot_carry_an_origin_even_when_a_caller_tries() {
+        use crate::gateway::telecom::MarkerRestore;
+        // A model-authored payload naming every plausible smuggling key.
+        let forged: GoalArgs = serde_json::from_value(serde_json::json!({
+            "action": "set",
+            "objective": "obj",
+            "telecom_public": {"channel": "sms", "region": "r", "binding_ref": "b"},
+            "origin": {"state": "public"},
+            "region": "r",
+            "binding_ref": "b",
+            "metadata": {"telecom": "public"},
+        }))
+        .unwrap();
+        let (tool, store, _d) = origin_tool("sess-forge");
+        tool.call(forged).await.unwrap();
+        let saved = store.get("sess-forge").unwrap().unwrap();
+        assert_eq!(store.origin_for(&saved).unwrap(), MarkerRestore::Ordinary);
+
+        let schema = serde_json::to_string(&schemars::schema_for!(GoalArgs)).unwrap();
+        for needle in ["telecom", "origin", "region", "binding"] {
+            assert!(!schema.contains(needle), "GoalArgs schema exposes {needle}");
+        }
     }
 
     /// Pins the P1/P2 scope stamp (`with_owner_scope` at the `set` creation

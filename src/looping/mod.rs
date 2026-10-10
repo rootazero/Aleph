@@ -541,6 +541,8 @@ impl LoopRegistry {
                 // at creation and never re-derived from a tool snapshot —
                 // same ownership rule as `status`/`stop_reason` above.
                 let (owner_user_id, scope_id) = (live.owner_user_id.clone(), live.scope_id.clone());
+                // The creator's telecom origin is likewise creation-owned.
+                let telecom_origin = live.telecom_origin.clone();
                 let session = next.session_id.clone();
                 // A reschedule discards a still-sleeping tick the same way
                 // `transition` does, so it owes the same refund. `next` carries
@@ -553,6 +555,7 @@ impl LoopRegistry {
                 };
                 next.owner_user_id = owner_user_id;
                 next.scope_id = scope_id;
+                next.telecom_origin = telecom_origin;
                 // Honest accounting: `is_adjustable` accepts an Active loop that
                 // has already hit the iteration cap (Active means "the hook will
                 // look at it", not "the hook will fire it"). Without this, a
@@ -1050,6 +1053,47 @@ mod tests {
         assert_eq!(s.max_iterations, Some(9), "cap change applied");
         assert_eq!(s.owner_user_id.as_deref(), Some("u-alice"));
         assert_eq!(s.scope_id.as_deref(), Some("personal:u-alice"));
+    }
+
+    #[test]
+    fn commit_field_update_never_clobbers_the_telecom_origin() {
+        // A tool-side field update is built from a snapshot that never carries
+        // the creator's origin; it must neither drop it nor let the updating
+        // run's (possibly different) context replace it.
+        let ctx = crate::gateway::telecom::run_origin::sample_public_context("b-1");
+        let reg = LoopRegistry::default();
+        reg.put(st("a").with_telecom_origin(Some(ctx.clone())));
+        let next = st("a").with_max_iterations(Some(9));
+        assert!(reg.commit_field_update(next, true));
+        assert_eq!(reg.get("a").unwrap().telecom_origin, Some(ctx.clone()));
+
+        // And an ordinary loop is not promoted by an update built from a
+        // snapshot that claims one.
+        reg.put(st("b"));
+        let forged = st("b")
+            .with_max_iterations(Some(3))
+            .with_telecom_origin(Some(ctx));
+        assert!(reg.commit_field_update(forged, false));
+        assert_eq!(reg.get("b").unwrap().telecom_origin, None);
+    }
+
+    #[test]
+    fn pause_then_resume_keeps_the_telecom_origin() {
+        let ctx = crate::gateway::telecom::run_origin::sample_public_context("b-1");
+        let reg = LoopRegistry::default();
+        reg.put(st("a").with_telecom_origin(Some(ctx.clone())));
+        reg.transition("a", LoopStatus::Paused, Some("user".into()));
+        reg.transition("a", LoopStatus::Active, None);
+        assert_eq!(reg.get("a").unwrap().telecom_origin, Some(ctx));
+    }
+
+    #[test]
+    fn a_restarted_loop_under_none_replaces_the_old_origin() {
+        let ctx = crate::gateway::telecom::run_origin::sample_public_context("b-1");
+        let reg = LoopRegistry::default();
+        reg.put(st("a").with_telecom_origin(Some(ctx)));
+        reg.put(st("a")); // `put` overwrites the whole session entry
+        assert_eq!(reg.get("a").unwrap().telecom_origin, None);
     }
 
     #[test]

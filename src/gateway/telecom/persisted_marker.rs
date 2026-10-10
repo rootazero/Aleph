@@ -343,7 +343,7 @@ mod tests {
     /// `capture` is the single write entry: outside this file and the journal
     /// payload constructor, nothing may call it.
     #[test]
-    fn capture_has_exactly_one_production_caller() {
+    fn capture_has_exactly_two_production_callers() {
         fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
             for e in std::fs::read_dir(dir).unwrap().flatten() {
                 let p = e.path();
@@ -365,7 +365,8 @@ mod tests {
             &mut hits,
         );
         hits.sort();
-        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits.len(), 2, "{hits:?}");
         assert!(hits[0].ends_with("busy_queue/durable.rs"), "{hits:?}");
+        assert!(hits[1].ends_with("goal/store.rs"), "{hits:?}");
     }
 }

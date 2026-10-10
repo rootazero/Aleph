@@ -159,6 +159,20 @@ impl GoalStore {
             [],
         )
         .map_err(|e| AlephError::other(format!("goal store init: {e}")))?;
+        // Creator provenance (telecom origin), one row per session, validated
+        // against the goal id on read. Deliberately NOT part of the `goals.json`
+        // row: `Goal` is model-visible JSON / JSON Schema and must never carry
+        // region or binding. Written only by `put_with_origin`, removed by
+        // `delete`, in the same transaction as the goal row.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS goal_telecom_origin (
+                 session_id TEXT PRIMARY KEY,
+                 goal_id    TEXT NOT NULL,
+                 marker     TEXT NOT NULL
+             )",
+            [],
+        )
+        .map_err(|e| AlephError::other(format!("goal store init: {e}")))?;
         Ok(Self {
             conn: crate::sync_primitives::Mutex::new(conn),
         })
@@ -182,15 +196,101 @@ impl GoalStore {
         Self::get_locked(&self.lock(), session_id)
     }
 
-    /// Remove the standing goal for `session_id` (no-op if absent).
-    pub fn delete(&self, session_id: &str) -> Result<()> {
+    /// Create (or replace) the session's goal together with its creator's
+    /// telecom origin, atomically under one lock and one transaction.
+    ///
+    /// `origin` is the creating run's public context (`None` = an ordinary run
+    /// and is recorded as such, so a new objective under an ordinary run
+    /// REPLACES a previous public origin instead of inheriting it). It must come
+    /// from the server-seeded run origin, never from tool arguments.
+    pub fn put_with_origin(
+        &self,
+        goal: &Goal,
+        origin: Option<&crate::gateway::telecom::TelecomPublicContext>,
+    ) -> Result<()> {
+        let marker = serde_json::to_string(
+            &crate::gateway::telecom::PersistedTelecomMarker::capture(origin),
+        )
+        .map_err(|e| AlephError::other(format!("goal origin serialize: {e}")))?;
+        let mut guard = self.lock();
+        let tx = guard
+            .transaction()
+            .map_err(|e| AlephError::other(format!("goal put: {e}")))?;
+        Self::put_locked(&tx, goal)?;
+        tx.execute(
+            "INSERT INTO goal_telecom_origin (session_id, goal_id, marker) VALUES (?1, ?2, ?3)
+             ON CONFLICT(session_id) DO UPDATE SET goal_id = excluded.goal_id, marker = excluded.marker",
+            rusqlite::params![goal.session_id, goal.id, marker],
+        )
+        .map_err(|e| AlephError::other(format!("goal origin put: {e}")))?;
+        tx.commit()
+            .map_err(|e| AlephError::other(format!("goal put: {e}")))
+    }
+
+    /// What an autonomous run for `goal` must restore as its telecom origin.
+    ///
+    /// - no row (goal written before origins existed) -> `LegacyUnproven`
+    ///   (restores as `None`; a stated limitation, see `persisted_marker`);
+    /// - row for a different goal id (the goal row was swapped without its
+    ///   origin) -> `Refuse`: the new goal must neither inherit the old origin
+    ///   nor be assumed ordinary;
+    /// - unreadable / unknown marker -> `Refuse`.
+    pub fn origin_for(&self, goal: &Goal) -> Result<crate::gateway::telecom::MarkerRestore> {
+        use crate::gateway::telecom::{MarkerRestore, PersistedTelecomMarker};
+        use rusqlite::OptionalExtension;
+        let row: Option<(String, String)> = self
+            .lock()
+            .query_row(
+                "SELECT goal_id, marker FROM goal_telecom_origin WHERE session_id = ?1",
+                rusqlite::params![goal.session_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| AlephError::other(format!("goal origin get: {e}")))?;
+        let Some((goal_id, marker)) = row else {
+            return Ok(MarkerRestore::LegacyUnproven);
+        };
+        if goal_id != goal.id {
+            return Ok(MarkerRestore::Refuse(
+                "goal telecom origin belongs to a different goal; refusing to run it as ordinary"
+                    .into(),
+            ));
+        }
+        // `Deserialize` never errors: bad input becomes `Corrupt`/`Unknown`.
+        let parsed = serde_json::from_str::<PersistedTelecomMarker>(&marker)
+            .unwrap_or(PersistedTelecomMarker::Corrupt(serde_json::Value::Null));
+        Ok(parsed.restore())
+    }
+
+    /// Test hook: make the stored origin marker unreadable.
+    #[cfg(test)]
+    pub(crate) fn corrupt_origin_marker_for_test(&self, session_id: &str) {
         self.lock()
             .execute(
-                "DELETE FROM goals WHERE session_id = ?1",
+                "UPDATE goal_telecom_origin SET marker = 'not json' WHERE session_id = ?1",
                 rusqlite::params![session_id],
             )
+            .unwrap();
+    }
+
+    /// Remove the standing goal for `session_id` and its origin (no-op if absent).
+    pub fn delete(&self, session_id: &str) -> Result<()> {
+        let mut guard = self.lock();
+        let tx = guard
+            .transaction()
             .map_err(|e| AlephError::other(format!("goal delete: {e}")))?;
-        Ok(())
+        tx.execute(
+            "DELETE FROM goals WHERE session_id = ?1",
+            rusqlite::params![session_id],
+        )
+        .map_err(|e| AlephError::other(format!("goal delete: {e}")))?;
+        tx.execute(
+            "DELETE FROM goal_telecom_origin WHERE session_id = ?1",
+            rusqlite::params![session_id],
+        )
+        .map_err(|e| AlephError::other(format!("goal delete: {e}")))?;
+        tx.commit()
+            .map_err(|e| AlephError::other(format!("goal delete: {e}")))
     }
 
     /// Read a goal under an already-held connection lock (the atomic-claim
@@ -2018,6 +2118,182 @@ mod tests {
             store.get("s").unwrap().unwrap().workspace.as_deref(),
             Some("/proj/x")
         );
+    }
+
+    // ----- telecom origin (creator provenance) -------------------------
+
+    fn public_ctx(binding: &str) -> crate::gateway::telecom::TelecomPublicContext {
+        crate::gateway::telecom::run_origin::sample_public_context(binding)
+    }
+
+    fn origin_rows(store: &GoalStore) -> i64 {
+        store
+            .lock()
+            .query_row("SELECT COUNT(*) FROM goal_telecom_origin", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn public_origin_is_stored_and_survives_field_updates_and_atomic_helpers() {
+        use crate::gateway::telecom::MarkerRestore;
+        let (store, _d) = temp_store();
+        let ctx = public_ctx("b-1");
+        let g = pursuing("s-pub", 5);
+        store.put_with_origin(&g, Some(&ctx)).unwrap();
+        assert_eq!(
+            store
+                .origin_for(&store.get("s-pub").unwrap().unwrap())
+                .unwrap(),
+            MarkerRestore::Public(ctx.clone())
+        );
+
+        // A tool-side field update goes through `commit_field_update`, which
+        // never receives an origin and must not drop or rewrite it.
+        let snap = store.get("s-pub").unwrap().unwrap();
+        let edited = snap.with_note(Some("n".into()), 3_000);
+        store
+            .commit_field_update(&edited, GoalStatus::Active)
+            .unwrap();
+        // A plain `put` (state-machine writers) must not touch it either.
+        let again = store.get("s-pub").unwrap().unwrap();
+        store.put(&again).unwrap();
+        assert_eq!(
+            store
+                .origin_for(&store.get("s-pub").unwrap().unwrap())
+                .unwrap(),
+            MarkerRestore::Public(ctx)
+        );
+        assert_eq!(origin_rows(&store), 1);
+    }
+
+    #[test]
+    fn ordinary_origin_restores_as_ordinary_and_a_missing_row_is_legacy() {
+        use crate::gateway::telecom::MarkerRestore;
+        let (store, _d) = temp_store();
+        let g = pursuing("s-ord", 5);
+        store.put_with_origin(&g, None).unwrap();
+        assert_eq!(store.origin_for(&g).unwrap(), MarkerRestore::Ordinary);
+
+        // A goal written by a pre-origin build (plain `put`, no row).
+        let old = pursuing("s-old", 5);
+        store.put(&old).unwrap();
+        assert_eq!(
+            store.origin_for(&old).unwrap(),
+            MarkerRestore::LegacyUnproven
+        );
+    }
+
+    #[test]
+    fn a_new_objective_under_none_replaces_the_old_public_origin() {
+        use crate::gateway::telecom::MarkerRestore;
+        let (store, _d) = temp_store();
+        let first = pursuing("s-swap", 5);
+        store
+            .put_with_origin(&first, Some(&public_ctx("b-1")))
+            .unwrap();
+        // Same session, different objective => different goal id.
+        let second = Goal::new("s-swap", "a different objective", 0, 2_000);
+        assert_ne!(first.id, second.id);
+        store.put_with_origin(&second, None).unwrap();
+        let live = store.get("s-swap").unwrap().unwrap();
+        assert_eq!(live.id, second.id);
+        assert_eq!(store.origin_for(&live).unwrap(), MarkerRestore::Ordinary);
+        assert_eq!(origin_rows(&store), 1, "replaced, not accumulated");
+    }
+
+    #[test]
+    fn a_new_objective_under_a_different_public_context_replaces_it() {
+        use crate::gateway::telecom::MarkerRestore;
+        let (store, _d) = temp_store();
+        let first = pursuing("s-swap2", 5);
+        store
+            .put_with_origin(&first, Some(&public_ctx("b-1")))
+            .unwrap();
+        let second = Goal::new("s-swap2", "other", 0, 2_000);
+        let other = public_ctx("b-2");
+        store.put_with_origin(&second, Some(&other)).unwrap();
+        assert_eq!(
+            store.origin_for(&second).unwrap(),
+            MarkerRestore::Public(other)
+        );
+    }
+
+    #[test]
+    fn delete_removes_the_origin_row_in_the_same_step() {
+        use crate::gateway::telecom::MarkerRestore;
+        let (store, _d) = temp_store();
+        let g = pursuing("s-del", 5);
+        store.put_with_origin(&g, Some(&public_ctx("b-1"))).unwrap();
+        assert_eq!(origin_rows(&store), 1);
+        store.delete("s-del").unwrap();
+        assert_eq!(origin_rows(&store), 0);
+        // Re-created through a bare `put` must not resurrect the old origin.
+        store.put(&g).unwrap();
+        assert_eq!(store.origin_for(&g).unwrap(), MarkerRestore::LegacyUnproven);
+    }
+
+    #[test]
+    fn an_origin_row_for_a_different_goal_id_fails_closed() {
+        use crate::gateway::telecom::MarkerRestore;
+        let (store, _d) = temp_store();
+        let first = pursuing("s-mis", 5);
+        store
+            .put_with_origin(&first, Some(&public_ctx("b-1")))
+            .unwrap();
+        // A writer that swapped the goal row without touching the origin row
+        // (plain `put` of a different objective) leaves a stale origin: the
+        // new goal must not inherit it, and must not be treated as ordinary.
+        let swapped = Goal::new("s-mis", "swapped via plain put", 0, 3_000);
+        store.put(&swapped).unwrap();
+        assert!(matches!(
+            store.origin_for(&swapped).unwrap(),
+            MarkerRestore::Refuse(_)
+        ));
+    }
+
+    #[test]
+    fn a_corrupt_or_unknown_origin_marker_fails_closed() {
+        use crate::gateway::telecom::MarkerRestore;
+        let (store, _d) = temp_store();
+        let g = pursuing("s-bad", 5);
+        store.put_with_origin(&g, None).unwrap();
+        for bad in ["not json", r#"{"version":99,"state":"public"}"#] {
+            store
+                .lock()
+                .execute(
+                    "UPDATE goal_telecom_origin SET marker = ?1 WHERE session_id = 's-bad'",
+                    rusqlite::params![bad],
+                )
+                .unwrap();
+            assert!(
+                matches!(store.origin_for(&g).unwrap(), MarkerRestore::Refuse(_)),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn goal_json_and_schema_carry_no_telecom_fields() {
+        let (store, _d) = temp_store();
+        let g = pursuing("s-json", 5);
+        store
+            .put_with_origin(&g, Some(&public_ctx("b-secret")))
+            .unwrap();
+        let raw: String = store
+            .lock()
+            .query_row(
+                "SELECT json FROM goals WHERE session_id='s-json'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        for needle in ["b-secret", "binding", "region", "telecom", "origin"] {
+            assert!(!raw.contains(needle), "goal row leaked {needle}: {raw}");
+        }
+        let schema = serde_json::to_string(&schemars::schema_for!(Goal)).unwrap();
+        for needle in ["binding", "region", "telecom"] {
+            assert!(!schema.contains(needle), "Goal schema leaked {needle}");
+        }
     }
 
     #[test]

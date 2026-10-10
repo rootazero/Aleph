@@ -1145,7 +1145,6 @@ where
                         &agent,
                         &policy_meta,
                         workspace,
-                        request.telecom_public.as_ref(),
                     )
                     .await;
 
@@ -1206,7 +1205,10 @@ where
                                         self.session_manager.clone(),
                                         Some(delay_ms),
                                         ContinuationKind::Loop { wake_ms },
-                                        request.telecom_public.clone(),
+                                        // The loop CREATOR's origin, not the
+                                        // completing run's: a later ordinary
+                                        // turn must not launder or narrow it.
+                                        state.telecom_origin.clone(),
                                     );
                                     info!(session = %session_key_str, delay_ms,
                                         "loop: enqueued next tick");

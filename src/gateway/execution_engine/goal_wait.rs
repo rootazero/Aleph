@@ -451,6 +451,15 @@ impl GoalWakeService {
                 "goal wake: agent not registered; wake dropped (confirm_fire will lapse via stale grace)");
             return;
         };
+        // A wake has no completing run: the goal CREATOR's telecom origin is
+        // the only source. Unreadable / foreign origin => drop the wake (the
+        // pending marker lapses via the stale grace, as for the arms above).
+        let Some(origin) = crate::goal::global()
+            .and_then(|store| super::goal_continuation::resolve_goal_origin(&store, goal))
+        else {
+            warn!(session = %session, "goal wake: telecom origin unavailable; wake dropped");
+            return;
+        };
         let policy_meta = rehydrate_owner_scope(goal, wake_identity(&agent, &key).await);
         // Rebuild the wake run in the project the last claiming run recorded
         // (the post-run hook writes it into the goal row); `None` falls back
@@ -474,10 +483,9 @@ impl GoalWakeService {
             session_manager,
             Some(delay_ms),
             ContinuationKind::Goal { wake_ms },
-            // Rebuilt from the goal row, which does not persist the public-
-            // telecom provenance: a hook-less wake carries `None`. Known
-            // residual gap (Task 4 contract-fix report) — never guess one.
-            None,
+            // Restored from the goal's creator record (separate origin table),
+            // never from the goal row JSON and never guessed.
+            origin,
         );
     }
 
