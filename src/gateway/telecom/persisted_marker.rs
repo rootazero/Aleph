@@ -7,8 +7,8 @@
 //!
 //! # Rules
 //!
-//! * The only writer is [`PersistedTelecomMarker::capture`], called from
-//!   `busy_queue::durable::QueuedRunPayload::from_request` (census test below).
+//! * The only writers are the durable queue payload, goal persistence, and
+//!   the harness runner's resume snapshot writer (census test below).
 //!   Nothing builds a marker from a metadata map, a string key, or
 //!   `source_channel`.
 //! * Reading never fails and never guesses: any JSON shape is classified into
@@ -340,10 +340,12 @@ mod tests {
         );
     }
 
-    /// `capture` is the single write entry: outside this file and the journal
-    /// payload constructor, nothing may call it.
+    /// `capture` is restricted to the three server-authored persistence paths:
+    /// durable queue payloads, goal storage, and the harness runner's resume
+    /// snapshot writer. The latter must preserve telecom provenance when a
+    /// resumed run is re-journaled.
     #[test]
-    fn capture_has_exactly_two_production_callers() {
+    fn capture_has_exactly_three_production_callers() {
         fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
             for e in std::fs::read_dir(dir).unwrap().flatten() {
                 let p = e.path();
@@ -365,8 +367,12 @@ mod tests {
             &mut hits,
         );
         hits.sort();
-        assert_eq!(hits.len(), 2, "{hits:?}");
+        assert_eq!(hits.len(), 3, "{hits:?}");
         assert!(hits[0].ends_with("busy_queue/durable.rs"), "{hits:?}");
         assert!(hits[1].ends_with("goal/store.rs"), "{hits:?}");
+        assert!(
+            hits[2].ends_with("orchestrator/harness_bridge/runner_impl.rs"),
+            "{hits:?}"
+        );
     }
 }
