@@ -9,11 +9,13 @@
 //!
 //! Spec: `docs/superpowers/specs/2026-10-09-pstn-sms-thin-relay-design.md` §6, §8.
 
+pub mod persisted_marker;
 pub mod protocol;
 pub mod public_context;
 pub mod sms_inbox;
 pub mod sms_meta;
 
+pub use persisted_marker::{MarkerRestore, PersistedTelecomMarker};
 pub use protocol::{
     accept_event, advance_outcome, dedup_key, expire_unknown, fence_generation, follow_up,
     AcceptContext, Acceptance, DedupKey, DedupLedger, FollowUp, IgnoreReason, OutcomeRecord,

@@ -96,6 +96,20 @@ impl TelecomPublicContext {
         }
     }
 
+    /// Rebuild from a recognised v1 durable marker (busy-queue reinjection).
+    /// `pub(super)`: only the sibling `persisted_marker` module, whose parser
+    /// accepts nothing but the exact versioned shape, can call it.
+    pub(super) fn restore_v1(marker: &super::persisted_marker::PersistedPublicV1) -> Self {
+        Self {
+            provenance: TelecomProvenance {
+                channel: marker.channel(),
+                region: marker.region().to_string(),
+                binding_ref: marker.binding_ref().to_string(),
+                connection_generation: marker.connection_generation(),
+            },
+        }
+    }
+
     pub fn provenance(&self) -> &TelecomProvenance {
         &self.provenance
     }
