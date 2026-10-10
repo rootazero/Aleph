@@ -37,6 +37,10 @@ pub trait SmsRelayPeer: Send + Sync {
 
     /// Submit the operation as-is. `UnknownWriteOutcome` means a frame write
     /// was attempted but the peer could not prove whether it was accepted.
+    ///
+    /// The peer must revalidate `generation` at the last irreversible write.
+    /// Core cannot make disconnect and a remote write atomic; that peer-side
+    /// generation fence is part of the authenticated adapter contract.
     async fn submit(
         &self,
         binding_id: &str,
@@ -94,6 +98,10 @@ pub enum SmsTransportError {
         operation_id: String,
         outcome: TelecomOutcome,
     },
+    #[error("SMS operation {operation_id} is already being submitted")]
+    OperationPending { operation_id: String },
+    #[error("SMS operation {operation_id} conflicts with the stored operation")]
+    OperationConflict { operation_id: String },
     #[error("SMS operation {operation_id} has unknown outcome and cannot be retried")]
     Unknown { operation_id: String },
     #[error(
@@ -120,6 +128,8 @@ pub enum SmsTransportError {
     AuthorizationUnavailable,
     #[error("SMS authorization denied: {0}")]
     AuthorizationDenied(String),
+    #[error("invalid SMS transport configuration: {0}")]
+    InvalidConfiguration(String),
     #[error("Relay peer rejected the operation: {0}")]
     Peer(String),
     #[error("Relay write outcome is unknown for operation {operation_id}")]
@@ -135,11 +145,16 @@ pub enum SmsTransportError {
 }
 
 /// Immutable admission policy applied again to caller-provided operations.
+pub const DEFAULT_UNKNOWN_RETENTION_SECS: u64 = 3_600;
+pub const MAX_UNKNOWN_RETENTION_SECS: u64 = 86_400;
+const TERMINAL_OPERATION_RETENTION_SECS: u64 = 7 * 24 * 3_600;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SmsTransportPolicy {
     pub outbound_enabled: bool,
     pub max_segments: u32,
     pub command_ttl_secs: u64,
+    pub unknown_retention_secs: u64,
 }
 
 impl Default for SmsTransportPolicy {
@@ -148,8 +163,27 @@ impl Default for SmsTransportPolicy {
             outbound_enabled: true,
             max_segments: MAX_SEGMENTS_LIMIT,
             command_ttl_secs: MAX_COMMAND_TTL_SECS,
+            unknown_retention_secs: DEFAULT_UNKNOWN_RETENTION_SECS,
         }
     }
+}
+
+impl SmsTransportPolicy {
+    pub fn with_unknown_retention_secs(mut self, secs: u64) -> Result<Self, SmsTransportError> {
+        if !(1..=MAX_UNKNOWN_RETENTION_SECS).contains(&secs) {
+            return Err(SmsTransportError::InvalidConfiguration(format!(
+                "unknown_retention_secs must be within 1..={MAX_UNKNOWN_RETENTION_SECS}"
+            )));
+        }
+        self.unknown_retention_secs = secs;
+        Ok(self)
+    }
+}
+
+fn valid_policy(policy: &SmsTransportPolicy) -> bool {
+    (1..=MAX_UNKNOWN_RETENTION_SECS).contains(&policy.unknown_retention_secs)
+        && (1..=MAX_SEGMENTS_LIMIT).contains(&policy.max_segments)
+        && (1..=MAX_COMMAND_TTL_SECS).contains(&policy.command_ttl_secs)
 }
 
 impl From<&SmsConfig> for SmsTransportPolicy {
@@ -158,6 +192,7 @@ impl From<&SmsConfig> for SmsTransportPolicy {
             outbound_enabled: config.outbound_enabled,
             max_segments: config.max_segments,
             command_ttl_secs: config.command_ttl_secs,
+            unknown_retention_secs: DEFAULT_UNKNOWN_RETENTION_SECS,
         }
     }
 }
@@ -169,15 +204,24 @@ pub struct RelayLease {
     pub generation: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperationPhase {
+    Authorizing,
+    Submitting,
+    Settled,
+}
+
 #[derive(Clone)]
 struct StoredOperation {
     operation: PendingSmsOperation,
     outcome: Option<OutcomeRecord>,
+    phase: OperationPhase,
 }
 
 struct TransportState {
     next_generation: u64,
     active: Option<RelayLease>,
+    connecting_generation: Option<u64>,
     operations: HashMap<String, StoredOperation>,
 }
 
@@ -215,6 +259,7 @@ pub struct SmsRelayTransport {
     peer: Arc<dyn SmsRelayPeer>,
     authorizer: Arc<dyn SmsSendAuthorizer>,
     policy: SmsTransportPolicy,
+    config_valid: bool,
     connect_lock: tokio::sync::Mutex<()>,
     state: tokio::sync::Mutex<TransportState>,
 }
@@ -227,37 +272,59 @@ impl SmsRelayTransport {
         peer: Arc<dyn SmsRelayPeer>,
         authorizer: Arc<dyn SmsSendAuthorizer>,
     ) -> Self {
-        Self {
-            binding_id: binding_id.into(),
+        Self::new_internal(
+            binding_id.into(),
+            SmsTransportPolicy::default(),
+            true,
             peer,
             authorizer,
-            policy: SmsTransportPolicy::default(),
-            connect_lock: tokio::sync::Mutex::new(()),
-            state: tokio::sync::Mutex::new(TransportState {
-                next_generation: 0,
-                active: None,
-                operations: HashMap::new(),
-            }),
-        }
+        )
+    }
+
+    /// Construct a transport with an explicit retention policy. Invalid
+    /// policy values are retained as a marker and fail closed at submission.
+    pub fn new_with_policy(
+        binding_id: impl Into<String>,
+        policy: SmsTransportPolicy,
+        peer: Arc<dyn SmsRelayPeer>,
+        authorizer: Arc<dyn SmsSendAuthorizer>,
+    ) -> Self {
+        let policy_valid = valid_policy(&policy);
+        Self::new_internal(binding_id.into(), policy, policy_valid, peer, authorizer)
     }
 
     /// Construct a transport whose admission policy is derived from the
-    /// already-validated channel configuration.
+    /// channel configuration. Invalid configuration is retained as a marker
+    /// and fails closed at submission rather than being silently widened.
     pub fn new_with_config(
         binding_id: impl Into<String>,
         config: SmsConfig,
         peer: Arc<dyn SmsRelayPeer>,
         authorizer: Arc<dyn SmsSendAuthorizer>,
     ) -> Self {
+        let policy = SmsTransportPolicy::from(&config);
+        let config_valid = config.validate().is_ok() && valid_policy(&policy);
+        Self::new_internal(binding_id.into(), policy, config_valid, peer, authorizer)
+    }
+
+    fn new_internal(
+        binding_id: String,
+        policy: SmsTransportPolicy,
+        config_valid: bool,
+        peer: Arc<dyn SmsRelayPeer>,
+        authorizer: Arc<dyn SmsSendAuthorizer>,
+    ) -> Self {
         Self {
-            binding_id: binding_id.into(),
+            binding_id,
             peer,
             authorizer,
-            policy: SmsTransportPolicy::from(&config),
+            policy,
+            config_valid,
             connect_lock: tokio::sync::Mutex::new(()),
             state: tokio::sync::Mutex::new(TransportState {
                 next_generation: 0,
                 active: None,
+                connecting_generation: None,
                 operations: HashMap::new(),
             }),
         }
@@ -272,19 +339,35 @@ impl SmsRelayTransport {
                 .checked_add(1)
                 .ok_or(SmsTransportError::GenerationExhausted)?;
             state.next_generation = generation;
+            state.connecting_generation = Some(generation);
             generation
         };
-        self.peer.connect(&self.binding_id, generation).await?;
+        let result = self.peer.connect(&self.binding_id, generation).await;
         let lease = RelayLease {
             binding_id: self.binding_id.clone(),
             generation,
         };
-        self.state.lock().await.active = Some(lease.clone());
+        let mut state = self.state.lock().await;
+        let still_reserved = state.connecting_generation == Some(generation);
+        if still_reserved {
+            state.connecting_generation = None;
+        }
+        if let Err(error) = result {
+            return Err(error);
+        }
+        if !still_reserved || state.next_generation != generation {
+            // An explicit disconnect or a newer reservation invalidated this
+            // attempt; never resurrect the old lease on a late peer response.
+            return Err(SmsTransportError::NotConnected);
+        }
+        state.active = Some(lease.clone());
         Ok(lease)
     }
 
     pub async fn disconnect(&self) {
-        self.state.lock().await.active = None;
+        let mut state = self.state.lock().await;
+        state.active = None;
+        state.connecting_generation = None;
     }
 
     pub async fn lease(&self) -> Option<RelayLease> {
@@ -328,8 +411,17 @@ impl SmsRelayTransport {
         let operation_id = operation.operation_id().to_string();
         let lease = {
             let mut state = self.state.lock().await;
+            prune_operations(&mut state, now, &self.policy, None);
             let lease = current_lease(&state)?;
+            if !self.config_valid {
+                return Err(SmsTransportError::InvalidConfiguration(
+                    "SmsConfig::validate() failed".into(),
+                ));
+            }
             if let Some(existing) = state.operations.get(&operation_id) {
+                if existing.operation != *operation {
+                    return Err(SmsTransportError::OperationConflict { operation_id });
+                }
                 if let Some(record) = existing.outcome {
                     return match record.outcome {
                         TelecomOutcome::Unknown => Err(SmsTransportError::Unknown { operation_id }),
@@ -342,7 +434,7 @@ impl SmsRelayTransport {
                         }),
                     };
                 }
-                return Err(SmsTransportError::UnknownWriteOutcome { operation_id });
+                return Err(SmsTransportError::OperationPending { operation_id });
             }
             validate_operation_admission(&self.policy, &lease, operation, now)?;
             state.operations.insert(
@@ -350,15 +442,83 @@ impl SmsRelayTransport {
                 StoredOperation {
                     operation: operation.clone(),
                     outcome: None,
+                    phase: OperationPhase::Authorizing,
                 },
             );
             lease
         };
 
         if let Err(error) = self.authorizer.authorize(operation).await {
-            self.state.lock().await.operations.remove(&operation_id);
+            let mut state = self.state.lock().await;
+            if state.operations.get(&operation_id).is_some_and(|stored| {
+                stored.operation == *operation
+                    && stored.outcome.is_none()
+                    && stored.phase == OperationPhase::Authorizing
+            }) {
+                state.operations.remove(&operation_id);
+            }
             return Err(error);
         }
+
+        // This is the final Core-side fence before the irreversible peer call.
+        // The authenticated peer must perform its own generation check at the
+        // actual write, because disconnect and a remote write are not atomic.
+        let lease = {
+            let mut state = self.state.lock().await;
+            prune_operations(&mut state, now, &self.policy, None);
+            let current = current_lease(&state);
+            let final_lease = current.and_then(|current| {
+                check_generation(current.generation, lease.generation)?;
+                if current.binding_id != lease.binding_id {
+                    return Err(SmsTransportError::BindingMismatch {
+                        expected: current.binding_id,
+                        claimed: lease.binding_id.clone(),
+                    });
+                }
+                Ok(current)
+            });
+            let result = match final_lease {
+                Ok(current) => {
+                    let stored = state.operations.get_mut(&operation_id).ok_or_else(|| {
+                        SmsTransportError::OperationNotFound {
+                            operation_id: operation_id.clone(),
+                        }
+                    })?;
+                    if stored.operation != *operation {
+                        return Err(SmsTransportError::OperationConflict { operation_id });
+                    }
+                    if let Some(record) = stored.outcome {
+                        return Err(match record.outcome {
+                            TelecomOutcome::Unknown => SmsTransportError::Unknown { operation_id },
+                            TelecomOutcome::OutcomeUnknownExpired => {
+                                SmsTransportError::UnknownExpired { operation_id }
+                            }
+                            outcome => SmsTransportError::AlreadySubmitted {
+                                operation_id,
+                                outcome,
+                            },
+                        });
+                    }
+                    if stored.phase != OperationPhase::Authorizing {
+                        return Err(SmsTransportError::OperationPending { operation_id });
+                    }
+                    stored.phase = OperationPhase::Submitting;
+                    Ok(current)
+                }
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(current) => current,
+                Err(error) => {
+                    if state.operations.get(&operation_id).is_some_and(|stored| {
+                        stored.operation == *operation && stored.outcome.is_none()
+                    }) {
+                        state.operations.remove(&operation_id);
+                    }
+                    return Err(error);
+                }
+            }
+        };
 
         let result = self
             .peer
@@ -367,31 +527,66 @@ impl SmsRelayTransport {
         let mut state = self.state.lock().await;
         match result {
             Ok(outcome) => {
-                if outcome == TelecomOutcome::OutcomeUnknownExpired {
-                    state.operations.remove(&operation_id);
-                    return Err(SmsTransportError::Peer(
-                        "peer cannot report derived outcome_unknown_expired".into(),
-                    ));
-                }
+                let current = state
+                    .operations
+                    .get(&operation_id)
+                    .and_then(|stored| stored.outcome.map(|record| record.outcome));
+                let transition = match advance_outcome(current, outcome) {
+                    Ok(transition) => transition,
+                    Err(error) => {
+                        if state
+                            .operations
+                            .get(&operation_id)
+                            .is_some_and(|stored| stored.outcome.is_none())
+                        {
+                            state.operations.remove(&operation_id);
+                        }
+                        return Err(SmsTransportError::Telecom(error));
+                    }
+                };
                 if let Some(stored) = state.operations.get_mut(&operation_id) {
-                    stored.outcome = Some(OutcomeRecord {
-                        outcome,
-                        entered_at: now,
-                    });
+                    stored.phase = OperationPhase::Settled;
+                    if let OutcomeTransition::Applied { to, .. } = transition {
+                        stored.outcome = Some(OutcomeRecord {
+                            outcome: to,
+                            entered_at: now,
+                        });
+                    }
                 }
                 Ok(outcome)
             }
             Err(SmsTransportError::UnknownWriteOutcome { .. }) => {
-                if let Some(stored) = state.operations.get_mut(&operation_id) {
-                    stored.outcome = Some(OutcomeRecord {
-                        outcome: TelecomOutcome::Unknown,
-                        entered_at: now,
-                    });
+                let current = state
+                    .operations
+                    .get(&operation_id)
+                    .and_then(|stored| stored.outcome.map(|record| record.outcome));
+                match advance_outcome(current, TelecomOutcome::Unknown) {
+                    Ok(OutcomeTransition::Applied { to, .. }) => {
+                        if let Some(stored) = state.operations.get_mut(&operation_id) {
+                            stored.phase = OperationPhase::Settled;
+                            stored.outcome = Some(OutcomeRecord {
+                                outcome: to,
+                                entered_at: now,
+                            });
+                        }
+                    }
+                    Ok(_) => {
+                        if let Some(stored) = state.operations.get_mut(&operation_id) {
+                            stored.phase = OperationPhase::Settled;
+                        }
+                    }
+                    Err(error) => return Err(SmsTransportError::Telecom(error)),
                 }
                 Err(SmsTransportError::Unknown { operation_id })
             }
             Err(error) => {
-                state.operations.remove(&operation_id);
+                if state
+                    .operations
+                    .get(&operation_id)
+                    .is_some_and(|stored| stored.outcome.is_none())
+                {
+                    state.operations.remove(&operation_id);
+                }
                 Err(error)
             }
         }
@@ -403,17 +598,26 @@ impl SmsRelayTransport {
         now: DateTime<Utc>,
     ) -> Result<OutcomeRecord, SmsTransportError> {
         let mut state = self.state.lock().await;
+        prune_operations(&mut state, now, &self.policy, Some(operation_id));
         let stored = state.operations.get_mut(operation_id).ok_or_else(|| {
             SmsTransportError::OperationNotFound {
                 operation_id: operation_id.to_string(),
             }
         })?;
-        let record = stored.outcome.ok_or_else(|| SmsTransportError::Unknown {
-            operation_id: operation_id.to_string(),
-        })?;
-        match expire_unknown(&record, now, Duration::hours(1)) {
+        let record = stored
+            .outcome
+            .ok_or_else(|| SmsTransportError::OperationPending {
+                operation_id: operation_id.to_string(),
+            })?;
+        match expire_unknown(
+            &record,
+            now,
+            Duration::seconds(self.policy.unknown_retention_secs as i64),
+        ) {
             UnknownExpiry::Expired(expired) => {
                 stored.outcome = Some(expired);
+                stored.phase = OperationPhase::Settled;
+                prune_operations(&mut state, now, &self.policy, Some(operation_id));
                 Ok(expired)
             }
             UnknownExpiry::Pending { .. } => Err(SmsTransportError::Unknown {
@@ -454,6 +658,7 @@ impl SmsRelayTransport {
         now: DateTime<Utc>,
     ) -> Result<OutcomeTransition, SmsTransportError> {
         let mut state = self.state.lock().await;
+        prune_operations(&mut state, now, &self.policy, None);
         let lease = current_lease(&state)?;
         fence_envelope(&lease, envelope)?;
         let TelecomKind::Outcome(report) = &envelope.kind else {
@@ -472,7 +677,12 @@ impl SmsRelayTransport {
                 outcome: to,
                 entered_at: now,
             });
+            stored.phase = OperationPhase::Settled;
         }
+        // provider_account_id and provider_event_id are Relay-authenticated
+        // correlation metadata. They are not Core authorization identity;
+        // operation_id remains the unique binding to the stored operation until
+        // a real authenticated Relay adapter supplies an account policy.
         Ok(transition)
     }
 
@@ -521,6 +731,26 @@ impl super::SmsTransport for SmsRelayTransport {
 
 fn current_lease(state: &TransportState) -> Result<RelayLease, SmsTransportError> {
     state.active.clone().ok_or(SmsTransportError::NotConnected)
+}
+
+fn prune_operations(
+    state: &mut TransportState,
+    now: DateTime<Utc>,
+    policy: &SmsTransportPolicy,
+    keep_operation_id: Option<&str>,
+) {
+    state.operations.retain(|operation_id, stored| {
+        if keep_operation_id == Some(operation_id.as_str()) || stored.outcome.is_none() {
+            return true;
+        }
+        let record = stored.outcome.expect("checked above");
+        let horizon_secs = if record.outcome == TelecomOutcome::Unknown {
+            policy.unknown_retention_secs
+        } else {
+            TERMINAL_OPERATION_RETENTION_SECS
+        };
+        now < record.entered_at + Duration::seconds(horizon_secs as i64)
+    });
 }
 
 fn check_generation(active: u64, got: u64) -> Result<(), SmsTransportError> {
@@ -707,6 +937,24 @@ mod tests {
     use tokio::sync::Notify;
 
     struct AllowAll;
+
+    #[derive(Default)]
+    struct BlockingAuthorizer {
+        started: Notify,
+        release: Notify,
+    }
+
+    #[async_trait]
+    impl SmsSendAuthorizer for BlockingAuthorizer {
+        async fn authorize(
+            &self,
+            _operation: &PendingSmsOperation,
+        ) -> Result<(), SmsTransportError> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(())
+        }
+    }
 
     #[async_trait]
     impl SmsSendAuthorizer for AllowAll {
@@ -991,6 +1239,164 @@ mod tests {
             Err(SmsTransportError::CommandTtlExceeded { .. })
         ));
         assert!(peer.submissions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn disconnect_reconnect_during_authorization_never_submits_old_lease() {
+        let peer = Arc::new(InMemorySmsPeer::default());
+        let authorizer = Arc::new(BlockingAuthorizer::default());
+        let transport = Arc::new(SmsRelayTransport::new(
+            "binding",
+            peer.clone(),
+            authorizer.clone(),
+        ));
+        let first = transport.connect().await.unwrap();
+        let operation = test_operation(Utc::now() + Duration::seconds(60));
+        let submit_transport = Arc::clone(&transport);
+        let submit_operation = operation.clone();
+        let submit = tokio::spawn(async move {
+            submit_transport
+                .submit_at(&submit_operation, Utc::now())
+                .await
+        });
+        authorizer.started.notified().await;
+        transport.disconnect().await;
+        let second = transport.connect().await.unwrap();
+        assert!(second.generation > first.generation);
+        authorizer.release.notify_one();
+        assert!(matches!(
+            submit.await.unwrap(),
+            Err(SmsTransportError::StaleGeneration { .. })
+        ));
+        assert!(peer.submissions().is_empty());
+        assert!(transport
+            .operation(operation.operation_id())
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn same_operation_id_with_changed_request_is_a_conflict() {
+        let peer = Arc::new(InMemorySmsPeer::default());
+        let transport = SmsRelayTransport::new("binding", peer, allow_all());
+        transport.connect().await.unwrap();
+        let now = Utc::now();
+        let first = test_operation(now + Duration::seconds(60));
+        transport.submit_at(&first, now).await.unwrap();
+        let mut changed = first.clone();
+        changed.command.body = "changed".into();
+        changed.command.segment_count = 1;
+        assert_eq!(
+            transport.submit_at(&changed, now).await,
+            Err(SmsTransportError::OperationConflict {
+                operation_id: first.operation_id().into()
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn delivered_receipt_before_peer_result_cannot_be_regressed() {
+        let peer = Arc::new(BlockingSmsPeer::default());
+        let transport = Arc::new(SmsRelayTransport::new("binding", peer.clone(), allow_all()));
+        let lease = transport.connect().await.unwrap();
+        let operation = test_operation(Utc::now() + Duration::seconds(60));
+        let submit_transport = Arc::clone(&transport);
+        let submit_operation = operation.clone();
+        let submit = tokio::spawn(async move {
+            submit_transport
+                .submit_at(&submit_operation, Utc::now())
+                .await
+        });
+        peer.started.notified().await;
+        let receipt = outcome_envelope(
+            lease.generation,
+            operation.operation_id(),
+            TelecomOutcome::Delivered,
+        );
+        assert!(matches!(
+            transport.record_outcome(&receipt, Utc::now()).await,
+            Ok(OutcomeTransition::Applied {
+                to: TelecomOutcome::Delivered,
+                ..
+            })
+        ));
+        peer.release.notify_one();
+        assert_eq!(submit.await.unwrap().unwrap(), TelecomOutcome::Accepted);
+        assert_eq!(
+            transport
+                .outcome(operation.operation_id())
+                .await
+                .unwrap()
+                .outcome,
+            TelecomOutcome::Delivered
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_config_fails_closed_without_widening_segment_policy() {
+        let peer = Arc::new(InMemorySmsPeer::default());
+        for max_segments in [0, MAX_SEGMENTS_LIMIT + 1] {
+            let transport = SmsRelayTransport::new_with_config(
+                "binding",
+                test_config(true, max_segments, 30),
+                peer.clone(),
+                allow_all(),
+            );
+            transport.connect().await.unwrap();
+            let operation = test_operation(Utc::now() + Duration::seconds(10));
+            assert!(matches!(
+                transport.submit_at(&operation, Utc::now()).await,
+                Err(SmsTransportError::InvalidConfiguration(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_unknown_retention_controls_expiry() {
+        let peer = Arc::new(InMemorySmsPeer::with_outcomes([Ok(
+            TelecomOutcome::Unknown,
+        )]));
+        let policy = SmsTransportPolicy::default()
+            .with_unknown_retention_secs(5)
+            .unwrap();
+        let transport = SmsRelayTransport::new_with_policy("binding", policy, peer, allow_all());
+        transport.connect().await.unwrap();
+        let now = Utc::now();
+        let operation = test_operation(now + Duration::seconds(60));
+        transport.submit_at(&operation, now).await.unwrap();
+        assert!(matches!(
+            transport
+                .expire_unknown(operation.operation_id(), now + Duration::seconds(4))
+                .await,
+            Err(SmsTransportError::Unknown { .. })
+        ));
+        assert_eq!(
+            transport
+                .expire_unknown(operation.operation_id(), now + Duration::seconds(5))
+                .await
+                .unwrap()
+                .outcome,
+            TelecomOutcome::OutcomeUnknownExpired
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_operation_pruning_is_bounded_and_deterministic() {
+        let peer = Arc::new(InMemorySmsPeer::default());
+        let transport = SmsRelayTransport::new("binding", peer, allow_all());
+        transport.connect().await.unwrap();
+        let base = Utc::now();
+        let old = test_operation(base + Duration::seconds(60));
+        transport.submit_at(&old, base).await.unwrap();
+        assert!(transport.operation(old.operation_id()).await.is_some());
+        let mut fresh = test_operation(base + Duration::days(8) + Duration::seconds(60));
+        fresh.command.operation_id = "fresh-after-prune".into();
+        transport
+            .submit_at(&fresh, base + Duration::days(8))
+            .await
+            .unwrap();
+        assert!(transport.operation(old.operation_id()).await.is_none());
+        assert!(transport.operation(fresh.operation_id()).await.is_some());
     }
 
     #[tokio::test]
