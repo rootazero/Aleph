@@ -13,6 +13,9 @@
 //! derives themselves. If a loop ever does need persisting, the wire type
 //! belongs beside the store that writes it, not here.
 
+/// Source of [`LoopState::instance`]. Starts at 1 so 0 is never a live loop.
+static NEXT_INSTANCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// How the loop picks the delay before its next tick.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cadence {
@@ -101,6 +104,17 @@ impl LoopStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopState {
     pub session_id: String,
+    /// Process-unique identity of THIS loop incarnation, minted by
+    /// [`Self::new`] from a monotonic counter (never a clock). `start`
+    /// builds a fresh `LoopState`, so a stop/restart or replacement under the
+    /// same session key always carries a new `instance`; pause/resume,
+    /// field updates and tick claims keep it. A claimed tick carries the
+    /// `instance` it was claimed for, and every later registry step (fire
+    /// confirm, busy/transient re-arm) re-checks it under the registry lock,
+    /// so a tick can never act on - or with the creator origin of - a loop it
+    /// was not claimed for. `commit_field_update` re-reads it from the live
+    /// row; a tool snapshot can never overwrite it.
+    pub instance: u64,
     /// The fixed prompt re-injected verbatim each tick.
     pub prompt: String,
     pub cadence: Cadence,
@@ -167,6 +181,7 @@ impl LoopState {
     pub fn new(session_id: &str, prompt: &str, cadence: Cadence, now_ms: u64) -> Self {
         Self {
             session_id: session_id.to_string(),
+            instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             prompt: prompt.to_string(),
             cadence,
             next_wake_ms: None,

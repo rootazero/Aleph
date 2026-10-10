@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 
 mod goal_origin_effects;
 mod goal_origin_race;
+mod loop_origin_race;
 
 /// Test event emitter that collects events
 pub(super) struct TestEmitter {

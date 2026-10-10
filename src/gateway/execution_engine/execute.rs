@@ -1148,98 +1148,17 @@ where
                     )
                     .await;
 
-                    // Loop continuation hook: the clock-gated sibling of the
-                    // goal hook above. The whole post-run decision — lazy
-                    // token-baseline capture, in-flight-tick dedupe, cap
-                    // enforcement, counter bump — is ONE atomic registry call
-                    // (`try_claim_tick`), so a stop/update racing this hook can
-                    // never be clobbered, and two completing runs (this hook
-                    // fires after EVERY run in the session, user turns
-                    // included) can never each enqueue a parallel tick chain.
-                    if let Some(loop_reg) = crate::looping::global() {
-                        let session_key_str = request.session_key.to_key_string();
-                        if let Some(state) = loop_reg.get_active(&session_key_str) {
-                            let now_ms = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map_or(0, |d| d.as_millis() as u64);
-
-                            // Live cumulative token total, read (await) BEFORE
-                            // the atomic claim; only needed when the loop
-                            // carries a budget — the common no-budget path
-                            // reads no session state. `None` → budget
-                            // unenforced this tick (iteration/deadline caps
-                            // still apply inside the claim).
-                            let tokens_total = if state.token_budget.is_some() {
-                                match self.session_manager.as_ref() {
-                                    Some(sm) => {
-                                        match sm.get_total_tokens(&request.session_key).await {
-                                            Ok(total) => total,
-                                            Err(e) => {
-                                                warn!(error = %e, session = %session_key_str,
-                                                    "loop: session token read failed; budget unenforced this tick");
-                                                None
-                                            }
-                                        }
-                                    }
-                                    None => None,
-                                }
-                            } else {
-                                None
-                            };
-
-                            match loop_reg.try_claim_tick(&session_key_str, tokens_total, now_ms) {
-                                crate::looping::TickDecision::Fire {
-                                    delay_ms,
-                                    wake_ms,
-                                    prompt,
-                                } => {
-                                    spawn_continuation_run(
-                                        cont_deps.registry.clone(),
-                                        cont_deps.adapter.clone(),
-                                        request.session_key.clone(),
-                                        session_key_str.clone(),
-                                        prompt,
-                                        policy_meta.clone(),
-                                        request.workspace_override.clone(),
-                                        cont_deps.event_bus.clone(),
-                                        self.session_manager.clone(),
-                                        Some(delay_ms),
-                                        ContinuationKind::Loop { wake_ms },
-                                        // The loop CREATOR's origin, not the
-                                        // completing run's: a later ordinary
-                                        // turn must not launder or narrow it.
-                                        state.telecom_origin.clone(),
-                                    );
-                                    info!(session = %session_key_str, delay_ms,
-                                        "loop: enqueued next tick");
-                                }
-                                crate::looping::TickDecision::Exhausted { note } => {
-                                    // The claim already stored Stopped + the
-                                    // stop reason for loop(action='status').
-                                    // Mirror the tool-stop cleanup here too so
-                                    // the stale plan does not bleed into every
-                                    // later turn of this reused session (and a
-                                    // future start can re-plan).
-                                    clear_loop_welded_strategy(&session_key_str, "cap stop");
-                                    // Cap stops were the one silent ending —
-                                    // the failure path already notifies. Tell
-                                    // the origin channel (R5); Panel-only
-                                    // sessions rely on the stored stop_reason.
-                                    let origin = match crate::gateway::event_emitter::origin_fanout::channel_registry() {
-                                        Some(reg) => agent
-                                            .origin_route(&request.session_key)
-                                            .await
-                                            .map(|(ch, conv)| (reg, ch, conv)),
-                                        None => None,
-                                    };
-                                    notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
-                                    info!(session = %session_key_str, note = %note,
-                                        "loop: safety cap reached, loop stopped");
-                                }
-                                crate::looping::TickDecision::Idle => {}
-                            }
-                        }
-                    }
+                    // Loop continuation hook (see `loop_post_run`): the
+                    // clock-gated sibling of the goal hook above.
+                    loop_post_run(
+                        cont_deps,
+                        &self.session_manager,
+                        &request.session_key,
+                        &agent,
+                        &policy_meta,
+                        workspace,
+                    )
+                    .await;
                 }
 
                 Ok(())
@@ -1365,6 +1284,132 @@ where
     }
 }
 
+/// Loop continuation hook, run after EVERY completed run in the session (user
+/// turns included): the clock-gated sibling of `goal_continuation::post_run`.
+///
+/// The whole post-run decision - lazy token-baseline capture, in-flight-tick
+/// dedupe, cap enforcement, counter bump - is ONE atomic registry call
+/// (`try_claim_tick_bound`), so a stop/update racing this hook can never be
+/// clobbered, and two completing runs can never each enqueue a parallel tick
+/// chain. The snapshot read before the (awaited) token gate is only a hint;
+/// the claim re-verifies the loop's identity and returns its live origin.
+pub(super) async fn loop_post_run(
+    cont_deps: &super::ContinuationDeps,
+    session_manager: &Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    session_key: &crate::routing::session_key::SessionKey,
+    agent: &Arc<AgentInstance>,
+    policy_meta: &std::collections::HashMap<String, String>,
+    workspace: Option<&std::path::Path>,
+) {
+    if let Some(loop_reg) = crate::looping::global() {
+        let session_key_str = session_key.to_key_string();
+        if let Some(state) = loop_reg.get_active(&session_key_str) {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64);
+
+            // Live cumulative token total, read (await) BEFORE
+            // the atomic claim; only needed when the loop
+            // carries a budget — the common no-budget path
+            // reads no session state. `None` → budget
+            // unenforced this tick (iteration/deadline caps
+            // still apply inside the claim).
+            let tokens_total = if state.token_budget.is_some() {
+                match session_manager.as_ref() {
+                    Some(sm) => match sm.get_total_tokens(&session_key).await {
+                        Ok(total) => total,
+                        Err(e) => {
+                            warn!(error = %e, session = %session_key_str,
+                                                    "loop: session token read failed; budget unenforced this tick");
+                            None
+                        }
+                    },
+                    None => None,
+                }
+            } else {
+                None
+            };
+
+            // Bound claim: the `state` snapshot above is from
+            // BEFORE the token await, and `stop`+`start` (or a
+            // restart under another origin) can land inside it.
+            // The registry compares the live loop's identity
+            // with the snapshot's, claims, and hands back the
+            // LIVE creator origin under one lock; a replaced
+            // loop is dropped untouched, never claimed.
+            let claimed = match loop_reg.try_claim_tick_bound(&state, tokens_total, now_ms) {
+                crate::looping::BoundTick::Claimed {
+                    decision,
+                    origin,
+                    instance,
+                } => Some((decision, origin, instance)),
+                crate::looping::BoundTick::Replaced => {
+                    info!(session = %session_key_str,
+                                        "loop: replaced/stopped during the post-run token \
+                                         gate; tick dropped");
+                    None
+                }
+            };
+            if let Some((decision, live_origin, instance)) = claimed {
+                match decision {
+                    crate::looping::TickDecision::Fire {
+                        delay_ms,
+                        wake_ms,
+                        prompt,
+                    } => {
+                        spawn_continuation_run(
+                            cont_deps.registry.clone(),
+                            cont_deps.adapter.clone(),
+                            session_key.clone(),
+                            session_key_str.clone(),
+                            prompt,
+                            policy_meta.clone(),
+                            workspace.map(std::path::Path::to_path_buf),
+                            cont_deps.event_bus.clone(),
+                            session_manager.clone(),
+                            Some(delay_ms),
+                            ContinuationKind::Loop { wake_ms, instance },
+                            // The LIVE loop CREATOR's origin as the
+                            // claim returned it (never the pre-await
+                            // snapshot's), not the completing run's:
+                            // a later ordinary turn must not launder
+                            // or narrow it.
+                            live_origin,
+                        );
+                        info!(session = %session_key_str, delay_ms,
+                                        "loop: enqueued next tick");
+                    }
+                    crate::looping::TickDecision::Exhausted { note } => {
+                        // The claim already stored Stopped + the
+                        // stop reason for loop(action='status').
+                        // Mirror the tool-stop cleanup here too so
+                        // the stale plan does not bleed into every
+                        // later turn of this reused session (and a
+                        // future start can re-plan).
+                        clear_loop_welded_strategy(&session_key_str, "cap stop");
+                        // Cap stops were the one silent ending —
+                        // the failure path already notifies. Tell
+                        // the origin channel (R5); Panel-only
+                        // sessions rely on the stored stop_reason.
+                        let origin =
+                            match crate::gateway::event_emitter::origin_fanout::channel_registry() {
+                                Some(reg) => agent
+                                    .origin_route(&session_key)
+                                    .await
+                                    .map(|(ch, conv)| (reg, ch, conv)),
+                                None => None,
+                            };
+                        notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
+                        info!(session = %session_key_str, note = %note,
+                                        "loop: safety cap reached, loop stopped");
+                    }
+                    crate::looping::TickDecision::Idle => {}
+                }
+            }
+        }
+    }
+}
+
 /// Which subsystem scheduled an autonomous continuation. Decides how a *run
 /// failure* is routed: a goal continuation blocks the goal for user guidance,
 /// a loop tick stops the clock-driven loop. Both leave a user-*cancelled* run
@@ -1383,7 +1428,7 @@ pub(super) enum ContinuationKind {
     /// `LoopRegistry::try_claim_tick`; at fire time the tick must
     /// `confirm_fire` with it — a mismatch means the loop was stopped or
     /// replaced during the delay and the tick must not execute.
-    Loop { wake_ms: u64 },
+    Loop { wake_ms: u64, instance: u64 },
 }
 
 /// The session's bound origin channel: `(registry, channel_id, conversation_id)`.
@@ -1616,9 +1661,9 @@ pub(super) fn spawn_continuation_run(
         // fallback for exactly the case where `cont_agent` never shows up).
         let mut goal_out_of_bounds_note: Option<String> = None;
         match kind {
-            ContinuationKind::Loop { wake_ms } => {
+            ContinuationKind::Loop { wake_ms, instance } => {
                 let confirmed = crate::looping::global()
-                    .is_some_and(|reg| reg.confirm_fire(&session_key_str, wake_ms));
+                    .is_some_and(|reg| reg.confirm_fire_for(&session_key_str, wake_ms, instance));
                 if !confirmed {
                     info!(session = %session_key_str,
                         "loop: tick superseded during its delay (loop stopped or replaced); skipping");
@@ -1786,13 +1831,22 @@ pub(super) fn spawn_continuation_run(
                 warn!(session = %session_key_str, kind = ?kind, reason = %reason,
                     "continuation: authority unknown at fire time; re-arming the same step");
                 let rearmed = match kind {
-                    ContinuationKind::Loop { .. } => rearm_loop_after_busy(
+                    ContinuationKind::Loop { instance, .. } => rearm_loop_after_busy(
                         &session_key_str,
+                        instance,
                         origin.as_ref(),
                         "authority unknown",
                     )
                     .await
-                    .map(|(d, w)| (d, ContinuationKind::Loop { wake_ms: w })),
+                    .map(|(d, w)| {
+                        (
+                            d,
+                            ContinuationKind::Loop {
+                                wake_ms: w,
+                                instance,
+                            },
+                        )
+                    }),
                     ContinuationKind::Goal { .. } => {
                         super::goal_continuation::rearm_goal_after_busy(
                             &session_key_str,
@@ -1884,12 +1938,17 @@ pub(super) fn spawn_continuation_run(
                 // failed run never reaches the continuation hook, so nothing
                 // re-armed the goal).
                 let (delay_ms, next_kind) = match kind {
-                    ContinuationKind::Loop { .. } => {
-                        match rearm_loop_after_busy(&session_key_str, origin.as_ref(), "agent busy")
-                            .await
+                    ContinuationKind::Loop { instance, .. } => {
+                        match rearm_loop_after_busy(
+                            &session_key_str,
+                            instance,
+                            origin.as_ref(),
+                            "agent busy",
+                        )
+                        .await
                         {
                             Some((delay_ms, wake_ms)) => {
-                                (Some(delay_ms), ContinuationKind::Loop { wake_ms })
+                                (Some(delay_ms), ContinuationKind::Loop { wake_ms, instance })
                             }
                             None => (None, kind),
                         }
@@ -1925,12 +1984,18 @@ pub(super) fn spawn_continuation_run(
                         )
                         .await;
                     }
-                    ContinuationKind::Loop { .. } => {
-                        match park_loop_on_transient_failure(&session_key_str, &e, origin.as_ref())
-                            .await
+                    ContinuationKind::Loop { instance, .. } => {
+                        match park_loop_on_transient_failure(
+                            &session_key_str,
+                            instance,
+                            &e,
+                            origin.as_ref(),
+                        )
+                        .await
                         {
                             TransientPark::Rearmed { delay_ms, wake_ms } => {
-                                respawn = Some((delay_ms, ContinuationKind::Loop { wake_ms }));
+                                respawn =
+                                    Some((delay_ms, ContinuationKind::Loop { wake_ms, instance }));
                             }
                             // The park path already ended (or found nothing to
                             // end) and said so — stopping again here would push
@@ -1973,8 +2038,18 @@ pub(super) fn spawn_continuation_run(
 /// — so a cap-trip during a busy collision never leaves the loop a silently
 /// dormant `Active` that `loop(action='status')` then misreports. Returns
 /// `(delay_ms, wake_ms)` to re-spawn, else `None`.
+///
+/// `instance` is the loop incarnation the tick was claimed for
+/// ([`crate::looping::LoopState::instance`]): the re-arm runs only against that
+/// incarnation (`rearm_after_busy_for`, checked under the registry lock). A
+/// tick's pending marker is already cleared by the time it can be busy, so a
+/// loop stopped+restarted - possibly under a different telecom origin - during
+/// the busy window looks exactly like "ours, ready to re-arm" without it; the
+/// re-spawned tick would then carry the OLD creator origin onto the NEW loop.
+/// A mismatch is a [`crate::looping::RearmDecision::Drop`]: nothing written.
 pub(super) async fn rearm_loop_after_busy(
     session_key_str: &str,
+    instance: u64,
     origin: Option<&OriginRoute>,
     cause: &'static str,
 ) -> Option<(u64, u64)> {
@@ -1982,7 +2057,7 @@ pub(super) async fn rearm_loop_after_busy(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
-    match reg.rearm_after_busy(session_key_str, now) {
+    match reg.rearm_after_busy_for(session_key_str, now, instance) {
         crate::looping::RearmDecision::Retry { delay_ms, wake_ms } => {
             info!(session = %session_key_str, delay_ms, cause,
                 "loop: tick could not run at fire; re-armed the tick with a retry delay");
@@ -2140,6 +2215,7 @@ const LOOP_TRANSIENT_PARK_MAX_MS: u64 = 600_000;
 ///   provider stays down, which is the intended reading of an unbounded loop.
 async fn park_loop_on_transient_failure(
     session_key_str: &str,
+    instance: u64,
     error: &ExecutionError,
     origin: Option<&OriginRoute>,
 ) -> TransientPark {
@@ -2162,7 +2238,7 @@ async fn park_loop_on_transient_failure(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
-    match reg.rearm_after_interruption(session_key_str, now, delay_ms) {
+    match reg.rearm_after_interruption_for(session_key_str, now, delay_ms, instance) {
         crate::looping::RearmDecision::Retry { delay_ms, wake_ms } => {
             // Deliberately NOT clearing the welded strategy: a provider outage
             // did not invalidate the plan.
@@ -2617,6 +2693,11 @@ mod transient_loop_park_tests {
     /// A claimed tick that has already fired: `confirm_fire` clears the pending
     /// marker before the run executes, which is the state every tick failure
     /// lands in.
+    /// The incarnation a claimed tick of `session` would carry.
+    fn inst_of(session: &str) -> u64 {
+        registry().get(session).expect("loop registered").instance
+    }
+
     fn fired_tick(session: &str) -> LoopState {
         LoopState::new(
             session,
@@ -2649,7 +2730,9 @@ mod transient_loop_park_tests {
         reg.put(fired_tick(session));
 
         let (delay_ms, wake_ms) =
-            match park_loop_on_transient_failure(session, &rate_limited(), None).await {
+            match park_loop_on_transient_failure(session, inst_of(session), &rate_limited(), None)
+                .await
+            {
                 TransientPark::Rearmed { delay_ms, wake_ms } => (delay_ms, wake_ms),
                 _ => panic!("a 429 is transient — the tick must be re-armed, not judged"),
             };
@@ -2689,6 +2772,7 @@ mod transient_loop_park_tests {
 
         let outcome = park_loop_on_transient_failure(
             session,
+            inst_of(session),
             &ExecutionError::Failed("tool 'shell' is not registered for this agent".to_string()),
             None,
         )
@@ -2722,6 +2806,7 @@ mod transient_loop_park_tests {
 
         let outcome = park_loop_on_transient_failure(
             session,
+            inst_of(session),
             &ExecutionError::SpendExhausted {
                 limit: crate::spend::Limit::Total,
                 reset_ms: 1_000,
@@ -2749,7 +2834,8 @@ mod transient_loop_park_tests {
         let now = now_ms();
         reg.put(fired_tick(session).with_deadline_ms(Some(now + 1_000)));
 
-        let outcome = park_loop_on_transient_failure(session, &rate_limited(), None).await;
+        let outcome =
+            park_loop_on_transient_failure(session, inst_of(session), &rate_limited(), None).await;
         assert!(
             matches!(outcome, TransientPark::Ended),
             "the registry already stopped it; a second stop would contradict the notice"
@@ -2772,7 +2858,8 @@ mod transient_loop_park_tests {
         let session = "transient-park/user-stopped";
         reg.put(fired_tick(session).with_status(LoopStatus::Stopped));
 
-        let outcome = park_loop_on_transient_failure(session, &rate_limited(), None).await;
+        let outcome =
+            park_loop_on_transient_failure(session, inst_of(session), &rate_limited(), None).await;
         assert!(matches!(outcome, TransientPark::Ended));
         let state = reg.get(session).expect("still registered");
         assert_eq!(state.status, LoopStatus::Stopped);
@@ -2803,6 +2890,11 @@ mod fire_authority_tests {
 
     /// The shape every tick is in at the gate: claimed (iteration spent),
     /// confirmed (pending cleared).
+    /// The incarnation a claimed tick of `session` would carry.
+    fn inst_of(session: &str) -> u64 {
+        registry().get(session).expect("loop registered").instance
+    }
+
     fn fired_tick(session: &str) -> LoopState {
         LoopState::new(
             session,
@@ -2826,7 +2918,10 @@ mod fire_authority_tests {
         reg.put(fired_tick(session));
 
         halt_on_refused_authority(
-            ContinuationKind::Loop { wake_ms: 0 },
+            ContinuationKind::Loop {
+                wake_ms: 0,
+                instance: 0,
+            },
             session,
             crate::scope::authority::RefusalReason::Deactivated,
             "principal deactivated",
@@ -2863,9 +2958,10 @@ mod fire_authority_tests {
         reg.put(fired_tick(session));
         let used_before = reg.get(session).unwrap().iterations_used;
 
-        let (delay_ms, wake_ms) = rearm_loop_after_busy(session, None, "authority unknown")
-            .await
-            .expect("an Active, confirmed tick must re-arm");
+        let (delay_ms, wake_ms) =
+            rearm_loop_after_busy(session, inst_of(session), None, "authority unknown")
+                .await
+                .expect("an Active, confirmed tick must re-arm");
 
         let state = reg.get(session).unwrap();
         assert_eq!(state.status, LoopStatus::Active);

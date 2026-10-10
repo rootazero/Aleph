@@ -50,6 +50,25 @@ pub enum TickDecision {
     Idle,
 }
 
+/// Outcome of [`LoopRegistry::try_claim_tick_bound`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundTick {
+    /// The live loop is the incarnation the caller pre-read. `decision` is the
+    /// normal claim outcome; `origin` is the creator telecom origin of THAT
+    /// live loop (`None` = ordinary), read under the same lock as the claim,
+    /// and `instance` is the identity the claimed tick must carry into
+    /// [`LoopRegistry::confirm_fire_for`] and the re-arms.
+    Claimed {
+        decision: TickDecision,
+        origin: Option<crate::gateway::telecom::TelecomPublicContext>,
+        instance: u64,
+    },
+    /// The loop was stopped, replaced or restarted since the caller's
+    /// pre-read (or is no longer active). Nothing was written; the caller
+    /// must drop its snapshot-derived work.
+    Replaced,
+}
+
 /// Outcome of [`LoopRegistry::rearm_after_busy`] — the loop sibling of
 /// `goal::RearmDecision` (parallel, not shared, like `commit_field_update`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,6 +350,11 @@ impl LoopRegistry {
     /// stopped mid-await, or two completing runs each enqueuing a tick) are
     /// impossible here. `tokens_total` is the session's live cumulative token
     /// count (`None` → unavailable, budget unenforced this tick).
+    ///
+    /// **Unbound**: claims whatever loop is live for the session right now.
+    /// Production callers that act on a PRE-READ snapshot (its caps, its
+    /// creator telecom origin) must use [`Self::try_claim_tick_bound`] - a
+    /// census in the execution-engine tests pins that.
     #[must_use]
     pub fn try_claim_tick(
         &self,
@@ -338,7 +362,51 @@ impl LoopRegistry {
         tokens_total: Option<u64>,
         now_ms: u64,
     ) -> TickDecision {
+        Self::claim_tick_locked(&mut self.lock(), session_id, tokens_total, now_ms)
+    }
+
+    /// [`Self::try_claim_tick`] for the loop incarnation the caller PRE-READ
+    /// (`expected`), atomically with the read of that loop's creator telecom
+    /// origin.
+    ///
+    /// The post-run hook reads a snapshot, then awaits the live token total
+    /// before it claims; `stop`+`start` (or a restart under another origin)
+    /// can land in that window. Claiming "whatever is live" and spawning the
+    /// tick with the snapshot's origin would pair a new loop with an old
+    /// origin. Here, under ONE lock: the live row must be active and carry the
+    /// same [`LoopState::instance`], else [`BoundTick::Replaced`] with nothing
+    /// written; only then does the claim run, and the origin read from the
+    /// live row is returned WITH the decision - the caller spawns the tick
+    /// from it and from nothing else. No clock is compared.
+    #[must_use]
+    pub fn try_claim_tick_bound(
+        &self,
+        expected: &LoopState,
+        tokens_total: Option<u64>,
+        now_ms: u64,
+    ) -> BoundTick {
         let mut map = self.lock();
+        let (origin, instance) = match map.get(&expected.session_id) {
+            Some(live) if live.is_active() && live.instance == expected.instance => {
+                (live.telecom_origin.clone(), live.instance)
+            }
+            _ => return BoundTick::Replaced,
+        };
+        let decision =
+            Self::claim_tick_locked(&mut map, &expected.session_id, tokens_total, now_ms);
+        BoundTick::Claimed {
+            decision,
+            origin,
+            instance,
+        }
+    }
+
+    fn claim_tick_locked(
+        map: &mut HashMap<String, LoopState>,
+        session_id: &str,
+        tokens_total: Option<u64>,
+        now_ms: u64,
+    ) -> TickDecision {
         let Some(current) = map.get(session_id) else {
             return TickDecision::Idle;
         };
@@ -436,9 +504,28 @@ impl LoopRegistry {
     /// loop is stopped with its reason; the caller clears the welded strategy and
     /// notifies — R5), or [`RearmDecision::Drop`] when the loop is gone/stopped or
     /// another tick was claimed meanwhile.
+    ///
+    /// **Unbound**: re-arms whatever loop is live. A claimed tick re-arming
+    /// across an await must use [`Self::rearm_after_busy_for`].
     #[must_use]
     pub fn rearm_after_busy(&self, session_id: &str, now_ms: u64) -> RearmDecision {
         self.rearm_after_interruption(session_id, now_ms, BUSY_RETRY_DELAY_MS)
+    }
+
+    /// [`Self::rearm_after_busy`] for the tick claimed on loop incarnation
+    /// `instance`: [`RearmDecision::Drop`] unless the live loop still IS that
+    /// incarnation. Once the tick confirmed, its pending marker is cleared, so
+    /// a loop replaced during the busy window looks exactly like "ours, ready
+    /// to re-arm" - the instance is what tells them apart, and with it the
+    /// creator origin the re-spawned tick carries.
+    #[must_use]
+    pub fn rearm_after_busy_for(
+        &self,
+        session_id: &str,
+        now_ms: u64,
+        instance: u64,
+    ) -> RearmDecision {
+        self.rearm_inner(session_id, now_ms, BUSY_RETRY_DELAY_MS, Some(instance))
     }
 
     /// [`rearm_after_busy`](Self::rearm_after_busy) with a caller-chosen delay:
@@ -463,9 +550,36 @@ impl LoopRegistry {
         now_ms: u64,
         delay_ms: u64,
     ) -> RearmDecision {
+        self.rearm_inner(session_id, now_ms, delay_ms, None)
+    }
+
+    /// [`Self::rearm_after_interruption`] bound to loop incarnation
+    /// `instance` (see [`Self::rearm_after_busy_for`]).
+    #[must_use]
+    pub fn rearm_after_interruption_for(
+        &self,
+        session_id: &str,
+        now_ms: u64,
+        delay_ms: u64,
+        instance: u64,
+    ) -> RearmDecision {
+        self.rearm_inner(session_id, now_ms, delay_ms, Some(instance))
+    }
+
+    fn rearm_inner(
+        &self,
+        session_id: &str,
+        now_ms: u64,
+        delay_ms: u64,
+        expected_instance: Option<u64>,
+    ) -> RearmDecision {
         let mut map = self.lock();
         match map.get(session_id) {
-            Some(s) if s.is_active() && s.pending_tick_wake_ms.is_none() => {
+            Some(s)
+                if s.is_active()
+                    && s.pending_tick_wake_ms.is_none()
+                    && expected_instance.is_none_or(|i| s.instance == i) =>
+            {
                 // Deadline may have passed while the collision played out;
                 // token budget is claim-side only (no live counter here). The
                 // retry wake is projected for the same reason `try_claim_tick`
@@ -543,6 +657,9 @@ impl LoopRegistry {
                 let (owner_user_id, scope_id) = (live.owner_user_id.clone(), live.scope_id.clone());
                 // The creator's telecom origin is likewise creation-owned.
                 let telecom_origin = live.telecom_origin.clone();
+                // ...and so is the incarnation identity: a tool snapshot
+                // (possibly of a replaced loop) must never re-label the live row.
+                let instance = live.instance;
                 let session = next.session_id.clone();
                 // A reschedule discards a still-sleeping tick the same way
                 // `transition` does, so it owes the same refund. `next` carries
@@ -556,6 +673,7 @@ impl LoopRegistry {
                 next.owner_user_id = owner_user_id;
                 next.scope_id = scope_id;
                 next.telecom_origin = telecom_origin;
+                next.instance = instance;
                 // Honest accounting: `is_adjustable` accepts an Active loop that
                 // has already hit the iteration cap (Active means "the hook will
                 // look at it", not "the hook will fire it"). Without this, a
@@ -587,11 +705,36 @@ impl LoopRegistry {
     /// `false` means the tick was superseded — the user stopped the loop or
     /// started a new one during the delay — and must NOT execute (the ghost
     /// tick this kills used to burn a full stale LLM turn).
+    ///
+    /// **Unbound** (matches the wake marker only); a tick that will execute
+    /// with a captured creator origin must use [`Self::confirm_fire_for`].
     #[must_use]
     pub fn confirm_fire(&self, session_id: &str, wake_ms: u64) -> bool {
+        self.confirm_fire_inner(session_id, wake_ms, None)
+    }
+
+    /// [`Self::confirm_fire`] for the tick claimed on loop incarnation
+    /// `instance`: also requires the live loop to be that incarnation, so a
+    /// replacement can never be fired as the loop (and with the origin) the
+    /// tick was claimed for, whatever its wake marker happens to be.
+    #[must_use]
+    pub fn confirm_fire_for(&self, session_id: &str, wake_ms: u64, instance: u64) -> bool {
+        self.confirm_fire_inner(session_id, wake_ms, Some(instance))
+    }
+
+    fn confirm_fire_inner(
+        &self,
+        session_id: &str,
+        wake_ms: u64,
+        expected_instance: Option<u64>,
+    ) -> bool {
         let mut map = self.lock();
         match map.get(session_id) {
-            Some(s) if s.is_active() && s.pending_tick_wake_ms == Some(wake_ms) => {
+            Some(s)
+                if s.is_active()
+                    && s.pending_tick_wake_ms == Some(wake_ms)
+                    && expected_instance.is_none_or(|i| s.instance == i) =>
+            {
                 let cleared = s.clone().with_pending_tick(None);
                 map.insert(session_id.to_string(), cleared);
                 true

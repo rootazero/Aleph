@@ -22,18 +22,18 @@ use crate::gateway::telecom::run_origin::sample_public_context;
 use crate::gateway::telecom::TelecomPublicContext;
 use crate::goal::{Goal, PursuitMode};
 
-type Hook = Box<dyn FnOnce() + Send>;
+pub(super) type Hook = Box<dyn FnOnce() + Send>;
 
 /// A session store whose first `get_total_tokens` runs `hook` and then answers
 /// `Some(0)` (a budgeted goal, nowhere near over budget).
-struct ReplaceOnTokenRead {
+pub(super) struct ReplaceOnTokenRead {
     inner: Arc<dyn SessionStore>,
     hook: std::sync::Mutex<Option<Hook>>,
     reads: Arc<AtomicUsize>,
 }
 
 impl ReplaceOnTokenRead {
-    fn new(inner: Arc<dyn SessionStore>, hook: Hook) -> (Arc<Self>, Arc<AtomicUsize>) {
+    pub(super) fn new(inner: Arc<dyn SessionStore>, hook: Hook) -> (Arc<Self>, Arc<AtomicUsize>) {
         let reads = Arc::new(AtomicUsize::new(0));
         (
             Arc::new(Self {
