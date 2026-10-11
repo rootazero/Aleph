@@ -666,9 +666,24 @@ fn production_half(path: &std::path::Path, text: &str) -> String {
 /// test would skip them silently.
 fn constructs_run_request(production: &str) -> bool {
     code_only(production).lines().any(|l| {
-        l.match_indices("RunRequest {")
-            .any(|(at, _)| !l[..at].contains("->"))
+        l.match_indices("RunRequest {").any(|(at, _)| {
+            // Whole identifier only: `PublicRunRequest {` (the isolated
+            // public-telecom run input, no owner scope by construction) is a
+            // different type, not a `RunRequest` producer.
+            let word_start = l[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+            word_start && !l[..at].contains("->")
+        })
     })
+}
+
+#[test]
+fn the_producer_scan_matches_the_whole_identifier_only() {
+    assert!(constructs_run_request("    let r = RunRequest {"));
+    assert!(constructs_run_request("    let r = crate::x::RunRequest {"));
+    assert!(!constructs_run_request("    let r = PublicRunRequest {"));
 }
 
 /// The cut above, pinned on the shape that used to hide producers: an

@@ -1,0 +1,382 @@
+//! Isolated public-telecom text run (public session isolation contract §4).
+//!
+//! A weak public SMS caller must never reach owner state. This module builds
+//! everything the run needs from scratch instead of reusing the owner path:
+//!
+//! - provider: the Core default provider handle only (no per-session model
+//!   preference, no MoA handle, no named-brain lookup);
+//! - prompt: the fixed [`PUBLIC_SYSTEM_PROMPT`] plus the caller's current text
+//!   only (no owner history, memory, profile, project context or skills);
+//! - tools: [`NullToolService`] (nothing offered, nothing callable);
+//! - session: an ephemeral in-memory event store dropped at the end of the run
+//!   (no owner `SessionService` write, no durable journal record);
+//! - no compactor, trace sink, result store, verifier chain, guardrails,
+//!   epoch registrar or tool-signal sink beyond the no-op one.
+//!
+//! The reply is buffered: the caller receives one complete `final_text` (or
+//! an error) and decides whether to deliver it.
+
+use crate::sync_primitives::Arc;
+
+use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
+
+use crate::harness::agent::AgentHarness;
+use crate::harness::callback::NoopHarnessCallback;
+use crate::harness::deps::HarnessDeps;
+use crate::harness::trait_def::HarnessError;
+use crate::orchestrator::dispatch::{
+    FlowOutcome, FlowStreamEvent, PublicRunRequest, PUBLIC_PROMPT_VERSION,
+};
+use crate::orchestrator::errors::FlowError;
+use crate::providers::AiProvider;
+use crate::routing::session_key::SessionKey;
+use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
+use crate::session::in_process::InProcessActorSessionService;
+use crate::session::service::SessionService;
+use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+use crate::tools::null::NullToolService;
+
+use super::AgentHarnessRunner;
+
+/// Fixed system prompt of every public telecom run. Versioned by
+/// [`PUBLIC_PROMPT_VERSION`]; changing the text requires bumping the version.
+pub const PUBLIC_SYSTEM_PROMPT: &str = "You are Aleph answering a text message from an \
+unverified public caller. You have no access to the owner's files, memory, contacts, \
+calendar, accounts, tools or prior conversations, and you must not claim otherwise or \
+reveal anything about the owner. Reply briefly in plain text suitable for SMS, in the \
+caller's language. If the request needs the owner, say the owner will need to follow up.";
+
+/// Iteration cap of a public run. No tools exist, so one Think turn is the
+/// expected shape; the small headroom only absorbs a verifier-free retry.
+const PUBLIC_MAX_ITERATIONS: usize = 2;
+
+impl AgentHarnessRunner {
+    /// Production body of [`crate::orchestrator::dispatch::HarnessRunner::run_public_text`]:
+    /// resolves the Core default provider and nothing else from `self`.
+    pub(super) async fn run_public_text_impl(
+        &self,
+        request: PublicRunRequest,
+        cancel: CancellationToken,
+        events: broadcast::Sender<FlowStreamEvent>,
+    ) -> Result<FlowOutcome, FlowError> {
+        let llm = self.default_provider.current();
+        run_public_with(llm, request, cancel, events).await
+    }
+}
+
+/// Drive one isolated public run against `llm`. Free function so tests can
+/// inject a spy provider without constructing a full runner.
+pub(crate) async fn run_public_with(
+    llm: Arc<dyn AiProvider>,
+    request: PublicRunRequest,
+    cancel: CancellationToken,
+    // Buffered reply: no partial text is streamed to any sink.
+    _events: broadcast::Sender<FlowStreamEvent>,
+) -> Result<FlowOutcome, FlowError> {
+    if request.prompt_version != PUBLIC_PROMPT_VERSION {
+        return Err(FlowError::InvalidConfig(format!(
+            "unknown public prompt version {}",
+            request.prompt_version
+        )));
+    }
+    if cancel.is_cancelled() {
+        return Err(FlowError::Cancelled);
+    }
+
+    let started = std::time::Instant::now();
+    let provider_name = llm.name().to_string();
+    let (session, sid) = ephemeral_session(&request.run_id, &request.text).await?;
+
+    let deps = HarnessDeps {
+        tool_descriptor_lookup: None,
+        session: session.clone(),
+        tools: Arc::new(NullToolService::new()),
+        llm,
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: Some(PUBLIC_SYSTEM_PROMPT.to_string()),
+        system_prompt_parts: None,
+        recall_context: None,
+        guardrails: None,
+        max_iterations: Some(PUBLIC_MAX_ITERATIONS),
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let mut cb = NoopHarnessCallback;
+    match harness.run(&sid, &mut cb, &cancel).await {
+        Ok(()) => {}
+        Err(HarnessError::Cancelled) => return Err(FlowError::Cancelled),
+        Err(e) => return Err(super::error::classify_harness_error(e, &provider_name)),
+    }
+    if cancel.is_cancelled() {
+        return Err(FlowError::Cancelled);
+    }
+
+    let records = session
+        .get_events(&sid, None, None)
+        .await
+        .map_err(|e| FlowError::Internal(format!("public session read failed: {e}")))?;
+    let mut final_text = String::new();
+    let mut iterations: u32 = 0;
+    for r in &records {
+        if let SessionEvent::AssistantMessage { content, .. } = &r.event {
+            iterations += 1;
+            if !content.text.trim().is_empty() {
+                final_text = content.text.clone();
+            }
+        }
+    }
+    let final_text = final_text.trim().to_string();
+    if final_text.is_empty() {
+        return Err(FlowError::Internal("public run produced no reply".into()));
+    }
+
+    Ok(FlowOutcome {
+        final_text,
+        iterations,
+        total_tokens: u32::try_from(harness.total_tokens()).unwrap_or(u32::MAX),
+        duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        ..FlowOutcome::default()
+    })
+}
+
+/// Fresh in-memory session seeded with exactly one user turn: the caller's
+/// current text. Dropped with the run.
+async fn ephemeral_session(
+    run_id: &str,
+    text: &str,
+) -> Result<(Arc<dyn SessionService>, SessionKey), FlowError> {
+    let internal = |e: String| FlowError::Internal(format!("public session setup failed: {e}"));
+    let conn = rusqlite::Connection::open_in_memory().map_err(|e| internal(e.to_string()))?;
+    migrate_add_session_events(&conn).map_err(|e| internal(e.to_string()))?;
+    let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+    let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
+    let sid = SessionKey::ephemeral(&format!("telecom-public-{run_id}"));
+    session
+        .attach(sid.clone())
+        .await
+        .map_err(|e| internal(e.to_string()))?;
+    let turn = uuid::Uuid::new_v4();
+    session
+        .emit_event(
+            &sid,
+            SessionEvent::TurnStarted {
+                turn_id: turn,
+                trigger: TurnTrigger::UserMessage,
+                at: now_ms(),
+            },
+        )
+        .await
+        .map_err(|e| internal(e.to_string()))?;
+    session
+        .emit_event(
+            &sid,
+            SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: text.to_string(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+                synthetic: false,
+                author_user_id: None,
+            },
+        )
+        .await
+        .map_err(|e| internal(e.to_string()))?;
+    Ok((session, sid))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::Result as AlephResult;
+    use crate::providers::adapter::{ProviderResponse, RequestPayload, StopReason};
+    use crate::sync_primitives::Mutex;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    const CANARY: &str = "OWNER-PRIVATE-CANARY-7f3a";
+
+    #[derive(Default)]
+    struct Captured {
+        system: Vec<Option<String>>,
+        messages: Vec<String>,
+        tools_offered: Vec<usize>,
+    }
+
+    struct SpyProvider {
+        reply: &'static str,
+        captured: Arc<Mutex<Captured>>,
+    }
+
+    impl AiProvider for SpyProvider {
+        fn process<'a>(
+            &'a self,
+            payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            {
+                let mut c = self.captured.lock().unwrap();
+                c.system.push(payload.system_prompt.map(str::to_string));
+                c.messages.push(format!("{:?}", payload.messages));
+                c.tools_offered.push(payload.tools.map_or(0, <[_]>::len));
+            }
+            let reply = self.reply;
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    text: Some(reply.to_string()),
+                    stop_reason: StopReason::EndTurn,
+                    truncated_tool_call: None,
+                    provider_error: None,
+                    usage: None,
+                    ..Default::default()
+                })
+            })
+        }
+        fn name(&self) -> &str {
+            "spy"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    fn sample_ctx() -> crate::gateway::telecom::TelecomPublicContext {
+        crate::gateway::telecom::public_context::test_support::sample_public_context("bind-a")
+    }
+
+    fn request(text: &str) -> PublicRunRequest {
+        PublicRunRequest {
+            ctx: sample_ctx(),
+            text: text.to_string(),
+            run_id: "run-1".into(),
+            prompt_version: PUBLIC_PROMPT_VERSION,
+        }
+    }
+
+    fn spy(reply: &'static str) -> (Arc<dyn AiProvider>, Arc<Mutex<Captured>>) {
+        let captured = Arc::new(Mutex::new(Captured::default()));
+        (
+            Arc::new(SpyProvider {
+                reply,
+                captured: captured.clone(),
+            }),
+            captured,
+        )
+    }
+
+    #[tokio::test]
+    async fn provider_sees_only_fixed_prompt_and_current_text_no_tools() {
+        let (llm, captured) = spy("hello caller");
+        let (tx, _rx) = broadcast::channel(4);
+        let out = run_public_with(
+            llm,
+            request("what time is it"),
+            CancellationToken::new(),
+            tx,
+        )
+        .await
+        .expect("public run ok");
+        assert_eq!(out.final_text, "hello caller");
+
+        let c = captured.lock().unwrap();
+        assert!(!c.system.is_empty(), "provider must be called");
+        for s in &c.system {
+            assert_eq!(s.as_deref(), Some(PUBLIC_SYSTEM_PROMPT));
+        }
+        for m in &c.messages {
+            assert!(m.contains("what time is it"));
+            assert!(!m.contains(CANARY));
+        }
+        assert!(c.tools_offered.iter().all(|n| *n == 0), "no tools offered");
+    }
+
+    /// The owner-path runner holds owner history/memory in its own session
+    /// service; the public path must not read it even through the runner.
+    #[tokio::test]
+    async fn runner_public_path_ignores_owner_session_canary() {
+        let (llm, captured) = spy("ok");
+        let (runner, owner) =
+            super::super::tests::runner_with_provider_for_public(llm, CANARY).await;
+        let owner_before = super::super::tests::owner_event_count(&runner, &owner).await;
+        assert!(owner_before > 0, "canary planted");
+        let (tx, _rx) = broadcast::channel(4);
+        let out = crate::orchestrator::dispatch::HarnessRunner::run_public_text(
+            &runner,
+            request("hi there"),
+            CancellationToken::new(),
+            tx,
+        )
+        .await
+        .expect("public run ok");
+        assert_eq!(out.final_text, "ok");
+        assert_eq!(
+            super::super::tests::owner_event_count(&runner, &owner).await,
+            owner_before,
+            "public run must not write the owner session service"
+        );
+        let c = captured.lock().unwrap();
+        for m in c.messages.iter().chain(c.system.iter().flatten()) {
+            assert!(
+                !m.contains(CANARY),
+                "owner canary leaked into provider input"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn pre_cancelled_run_never_calls_provider() {
+        let (llm, captured) = spy("should not appear");
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let (tx, _rx) = broadcast::channel(4);
+        let err = run_public_with(llm, request("hi"), cancel, tx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FlowError::Cancelled));
+        assert!(captured.lock().unwrap().system.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unknown_prompt_version_refused() {
+        let (llm, _c) = spy("x");
+        let mut req = request("hi");
+        req.prompt_version = "other";
+        let (tx, _rx) = broadcast::channel(4);
+        let err = run_public_with(llm, req, CancellationToken::new(), tx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FlowError::InvalidConfig(_)));
+    }
+
+    #[tokio::test]
+    async fn slash_text_is_plain_caller_text() {
+        let (llm, captured) = spy("ok");
+        let (tx, _rx) = broadcast::channel(4);
+        run_public_with(llm, request("/model opus"), CancellationToken::new(), tx)
+            .await
+            .expect("plain text run");
+        let c = captured.lock().unwrap();
+        assert!(c.messages.iter().all(|m| m.contains("/model opus")));
+        assert!(c
+            .system
+            .iter()
+            .all(|s| s.as_deref() == Some(PUBLIC_SYSTEM_PROMPT)));
+    }
+}

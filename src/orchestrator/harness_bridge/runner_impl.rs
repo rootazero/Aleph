@@ -101,6 +101,15 @@ impl HarnessRunner for AgentHarnessRunner {
         self.verifier_chain.clone()
     }
 
+    async fn run_public_text(
+        &self,
+        request: crate::orchestrator::dispatch::PublicRunRequest,
+        cancel: CancellationToken,
+        events: broadcast::Sender<FlowStreamEvent>,
+    ) -> Result<FlowOutcome, FlowError> {
+        self.run_public_text_impl(request, cancel, events).await
+    }
+
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn run(
         &self,

@@ -787,6 +787,68 @@ impl InboundMessageRouter {
     }
 }
 
+/// Channel reply path of a public telecom run: one plain outbound text on the
+/// inbound's own reply route. No emitter, no streaming, no owner run record.
+struct ChannelPublicReplySink<'a> {
+    router: &'a InboundMessageRouter,
+    ctx: &'a InboundContext,
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::telecom::public_run::PublicReplySink for ChannelPublicReplySink<'_> {
+    async fn send_reply(&self, text: String) {
+        let reply = crate::gateway::channel::OutboundMessage::text(
+            self.ctx.reply_route.conversation_id.as_str(),
+            &text,
+        );
+        if let Err(e) = self
+            .router
+            .channel_registry
+            .send(&self.ctx.reply_route.channel_id, reply)
+            .await
+        {
+            error!("[Router] public telecom reply failed: {e}");
+        }
+    }
+}
+
+impl InboundMessageRouter {
+    /// Public telecom isolation branch (contract §3–§6). Runs instead of the
+    /// whole owner pipeline: no hooks, HITL, slash/`/btw`/model commands, busy
+    /// lane, durable journal or owner session. `/stop` cancels this binding's
+    /// public run; every other text is plain caller text.
+    pub(super) async fn handle_public_telecom(
+        &self,
+        ctx: &InboundContext,
+        public: crate::gateway::telecom::TelecomPublicContext,
+    ) -> Result<(), RoutingError> {
+        let registry = crate::gateway::telecom::public_admission::PublicRunRegistry::global();
+        if matches!(
+            super::command_handler::classify_special_slash(&ctx.message.text),
+            Some(super::command_handler::SpecialSlash::Stop)
+        ) {
+            let cancelled = registry.cancel_binding(public.provenance().binding_ref());
+            info!("[Router] public telecom /stop (cancelled={cancelled})");
+            return Ok(());
+        }
+        let harness = self
+            .execution_adapter
+            .as_ref()
+            .and_then(|a| a.public_harness());
+        let sink = ChannelPublicReplySink { router: self, ctx };
+        let disposition = crate::gateway::telecom::public_run::run_public_sms(
+            registry,
+            harness,
+            public,
+            ctx.message.text.clone(),
+            &sink,
+        )
+        .await;
+        info!("[Router] public telecom run: {disposition:?}");
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod permission_wiring_tests {
     use super::channel_run_identity;
@@ -905,8 +967,10 @@ mod permission_wiring_tests {
 /// Derive the public-telecom context from the TYPED `MessageMeta::Sms` the SMS
 /// interface attached to an admitted inbound message. Any other channel yields
 /// `None` (legacy behaviour, unchanged). This is the only production stamp
-/// point of `RunRequest::telecom_public`.
-fn telecom_public_from_message_meta(
+/// point of `RunRequest::telecom_public`, and the router's public-isolation
+/// branch (`InboundMessageRouter::handle_public_telecom`) reads the same
+/// derivation so the two can never disagree.
+pub(super) fn telecom_public_from_message_meta(
     metadata: &[crate::gateway::channel::MessageMeta],
 ) -> Option<crate::gateway::telecom::TelecomPublicContext> {
     metadata.iter().find_map(|m| match m {

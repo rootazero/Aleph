@@ -123,6 +123,32 @@ impl std::fmt::Debug for TelecomPublicContext {
     }
 }
 
+/// Test-only constructors for code outside this module that needs a typed
+/// public context without a real admitted SMS.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use aleph_protocol::telecom_relay::SmsEncoding;
+    use chrono::Utc;
+
+    pub(crate) fn sample_public_context(binding_ref: &str) -> TelecomPublicContext {
+        TelecomPublicContext::from_admitted_sms(&SmsInboundMeta {
+            region: "test-region".into(),
+            binding_ref: binding_ref.into(),
+            provider_account_id: "acct".into(),
+            provider_message_id: "pm".into(),
+            envelope_event_id: "ev".into(),
+            connection_generation: 1,
+            service_address: "+15550000000".into(),
+            peer_address: "+15550000001".into(),
+            encoding: SmsEncoding::Gsm7,
+            segment_count: 1,
+            created_at: Utc::now(),
+            expires_at: Utc::now(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

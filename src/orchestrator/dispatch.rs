@@ -717,6 +717,26 @@ impl Drop for SessionLockGuard {
     }
 }
 
+/// Version tag of the fixed public system prompt. A [`PublicRunRequest`]
+/// naming any other version is refused by the production runner, so a
+/// prompt change is an explicit, reviewable bump.
+pub const PUBLIC_PROMPT_VERSION: &str = "telecom-public-v1";
+
+/// Error text of the default-deny [`HarnessRunner::run_public_text`].
+pub const PUBLIC_RUN_UNSUPPORTED: &str = "runner does not support isolated public telecom runs";
+
+/// Input of [`HarnessRunner::run_public_text`]. Intentionally narrow: typed
+/// public provenance, the caller's current text, the run id and the fixed
+/// prompt version. It has no owner session key, metadata map, workspace,
+/// tool override, model directive or approval reference.
+#[derive(Debug, Clone)]
+pub struct PublicRunRequest {
+    pub ctx: crate::gateway::telecom::TelecomPublicContext,
+    pub text: String,
+    pub run_id: String,
+    pub prompt_version: &'static str,
+}
+
 #[async_trait::async_trait]
 #[allow(clippy::too_many_arguments)] // trait shape driven by Orchestrator::dispatch wiring (Task 2)
 pub trait HarnessRunner: Send + Sync {
@@ -767,6 +787,25 @@ pub trait HarnessRunner: Send + Sync {
         // bind it; readers that narrow on it arrive in later slices.
         telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<FlowOutcome, FlowError>;
+
+    /// Drive one isolated public-telecom text run (public session isolation
+    /// contract §4). Deliberately separate from [`Self::run`]: the request
+    /// carries no owner `SessionKey`, metadata, workspace, tool override or
+    /// model directive, so an implementation cannot reach owner state through
+    /// it by accident.
+    ///
+    /// Default-deny: a runner (test mock, simple engine) that does not
+    /// explicitly implement the isolated path refuses instead of silently
+    /// gaining public capability.
+    async fn run_public_text(
+        &self,
+        request: PublicRunRequest,
+        cancel: CancellationToken,
+        events: broadcast::Sender<FlowStreamEvent>,
+    ) -> Result<FlowOutcome, FlowError> {
+        let _ = (request, cancel, events);
+        Err(FlowError::InvalidConfig(PUBLIC_RUN_UNSUPPORTED.to_string()))
+    }
 
     /// The guardrail registry this runner installs on its own harness, if
     /// any. The gateway threads it into `SubagentTool` so spawned subagents

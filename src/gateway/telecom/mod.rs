@@ -11,7 +11,9 @@
 
 pub mod persisted_marker;
 pub mod protocol;
+pub mod public_admission;
 pub mod public_context;
+pub mod public_run;
 pub mod run_origin;
 pub mod sms_inbox;
 pub mod sms_meta;

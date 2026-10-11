@@ -1109,3 +1109,41 @@ async fn no_sender_outlives_dispatch() {
     // The holder is still alive here — that is the point.
     drop(held_sink);
 }
+
+/// Public isolation contract §4: a runner that never opted into the isolated
+/// public path refuses instead of silently running public text.
+#[tokio::test]
+async fn run_public_text_is_default_deny_for_mock_runners() {
+    use crate::orchestrator::dispatch::{
+        HarnessRunner, PublicRunRequest, PUBLIC_PROMPT_VERSION, PUBLIC_RUN_UNSUPPORTED,
+    };
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    let mock = MockHarness {
+        outcome: crate::orchestrator::dispatch::FlowOutcome::default(),
+        invocations: invocations.clone(),
+    };
+    let (tx, _rx) = broadcast::channel(4);
+    let err = mock
+        .run_public_text(
+            PublicRunRequest {
+                ctx: crate::gateway::telecom::public_context::test_support::sample_public_context(
+                    "bind-deny",
+                ),
+                text: "hi".into(),
+                run_id: "r".into(),
+                prompt_version: PUBLIC_PROMPT_VERSION,
+            },
+            CancellationToken::new(),
+            tx,
+        )
+        .await
+        .unwrap_err();
+    match err {
+        FlowError::InvalidConfig(msg) => assert_eq!(msg, PUBLIC_RUN_UNSUPPORTED),
+        other => panic!("expected default deny, got {other:?}"),
+    }
+    assert!(
+        invocations.lock().unwrap().is_empty(),
+        "owner run must not be invoked"
+    );
+}

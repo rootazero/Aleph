@@ -43,6 +43,7 @@ mod session_seed;
 mod behavior_resolve;
 mod context_blocks;
 mod prompt_build;
+pub mod public_run;
 mod runner_impl;
 
 pub mod context_estimate;

@@ -596,6 +596,16 @@ impl InboundMessageRouter {
                     "[Router] Permission granted for {}:{}",
                     channel_id, ctx.sender_normalized
                 );
+                // Public telecom isolation (contract §3): a typed weak public
+                // inbound branches here, before owner hooks, activity stamp,
+                // HITL, slash parsing, busy lane and durable journal. Only the
+                // typed context decides — never source channel or metadata
+                // heuristics.
+                if let Some(public) =
+                    executor::telecom_public_from_message_meta(&ctx.message.metadata)
+                {
+                    return self.handle_public_telecom(&ctx, public).await;
+                }
                 // A human reached us through a channel — the DreamDaemon idle
                 // sensor's second producer (the first is the gateway's
                 // `build_run_request`). Stamped only on the permission-granted

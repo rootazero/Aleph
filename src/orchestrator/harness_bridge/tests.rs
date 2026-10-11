@@ -1164,6 +1164,16 @@ fn runner_with_failing_provider(
                 "invalid api key".into(),
             )),
     );
+    runner_with_default_provider(session_service, registry, provider)
+}
+
+/// Runner literal shared by fixtures: every optional collaborator `None`,
+/// `provider` as the Core default.
+fn runner_with_default_provider(
+    session_service: std::sync::Arc<dyn SessionService>,
+    registry: std::sync::Arc<AgentRegistry>,
+    provider: std::sync::Arc<dyn AiProvider>,
+) -> AgentHarnessRunner {
     AgentHarnessRunner {
         agent_registry: registry,
         session_service,
@@ -1609,4 +1619,53 @@ async fn the_run_markers_carry_the_engine_run_id() {
         ],
         "one bracket, both markers under the engine's run id"
     );
+}
+
+// -- public telecom run fixture ------------------------------------------
+
+/// Runner whose OWNER session service already holds `canary` in a prior owner
+/// turn, with `provider` as the Core default. Used by
+/// `public_run::tests` to prove the public path never reads owner history.
+pub(super) async fn runner_with_provider_for_public(
+    provider: std::sync::Arc<dyn AiProvider>,
+    canary: &str,
+) -> (AgentHarnessRunner, SessionKey) {
+    let service = fresh_service();
+    let sid = SessionKey::ephemeral("owner-main");
+    service.attach(sid.clone()).await.expect("attach owner");
+    let turn = uuid::Uuid::new_v4();
+    service
+        .emit_event(
+            &sid,
+            crate::session::events::SessionEvent::UserMessage {
+                turn_id: turn,
+                content: crate::session::events::MessageContent {
+                    text: format!("owner secret: {canary}"),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: crate::session::events::now_ms(),
+                synthetic: false,
+                author_user_id: None,
+            },
+        )
+        .await
+        .expect("plant owner canary");
+    let registry = std::sync::Arc::new(AgentRegistry::new());
+    (
+        runner_with_default_provider(service, registry, provider),
+        sid,
+    )
+}
+
+/// Owner session event count for the planted owner key, so a test can assert
+/// a public run wrote nothing to the owner service.
+pub(super) async fn owner_event_count(runner: &AgentHarnessRunner, owner: &SessionKey) -> usize {
+    runner
+        .session_service
+        .get_events(owner, None, None)
+        .await
+        .map(|v| v.len())
+        .unwrap_or(0)
 }
