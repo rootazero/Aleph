@@ -190,6 +190,8 @@ pub enum PublicApprovalError {
     BodyMismatch,
     #[error("disclosure requires a consumed, unexpired private-read approval for the same scope")]
     ReadNotSatisfied,
+    #[error("private disclosure sink reported delivery failure")]
+    DeliveryFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,9 +367,12 @@ impl PublicApprovalLedger {
     ) -> Result<String, PublicApprovalError> {
         check_body(final_body)?;
         let mut records = self.lock();
+        // Prune and capacity-check before claiming the one-shot read. If a
+        // full ledger refuses B, A must remain usable for a later retry.
+        records.retain(|_, r| !r.expired(now) && r.state != State::Retired);
         {
             let read = records
-                .get_mut(read_id)
+                .get(read_id)
                 .ok_or(PublicApprovalError::ReadNotSatisfied)?;
             if read.stage != PublicApprovalStage::PrivateRead
                 || read.state != State::Consumed
@@ -377,16 +382,30 @@ impl PublicApprovalLedger {
             {
                 return Err(PublicApprovalError::ReadNotSatisfied);
             }
-            read.disclosure_claimed = true;
         }
-        Self::insert(
-            &mut records,
-            PublicApprovalStage::Disclosure,
-            scope,
-            final_body.to_string(),
-            Some(read_id.to_string()),
-            now,
-        )
+        if records.len() >= MAX_APPROVAL_RECORDS {
+            return Err(PublicApprovalError::Capacity);
+        }
+
+        let id = Uuid::new_v4().to_string();
+        let expires_at = now + ttl_for(scope.channel());
+        records.insert(
+            id.clone(),
+            Record {
+                stage: PublicApprovalStage::Disclosure,
+                scope,
+                body: final_body.to_string(),
+                expires_at,
+                state: State::Pending,
+                linked_read: Some(read_id.to_string()),
+                disclosure_claimed: false,
+            },
+        );
+        records
+            .get_mut(read_id)
+            .expect("validated read approval must still exist")
+            .disclosure_claimed = true;
+        Ok(id)
     }
 
     /// The full bounded request for operator display; `None` unless pending
@@ -532,12 +551,13 @@ impl PublicApprovalLedger {
 /// Delivery of an approved private answer (the channel reply path in
 /// production, a spy in tests).
 pub trait PrivateDisclosureSink {
-    fn deliver(&self, body: &str);
+    fn deliver(&self, body: &str) -> Result<(), PublicApprovalError>;
 }
 
 /// The effect fence for private disclosure: consume B against the current
 /// context and only then hand the approved body to the sink. Every refusal
-/// returns before the sink is touched.
+/// returns before the sink is touched; a sink delivery failure is propagated
+/// so the caller never reports delivery success without sink acknowledgement.
 pub fn deliver_private_disclosure(
     ledger: &PublicApprovalLedger,
     disclosure_id: &str,
@@ -555,8 +575,7 @@ pub fn deliver_private_disclosure(
         final_body,
         now,
     )?;
-    sink.deliver(&grant.into_body());
-    Ok(())
+    sink.deliver(&grant.into_body())
 }
 
 #[cfg(test)]
@@ -598,8 +617,18 @@ mod tests {
     #[derive(Default)]
     struct SpySink(RefCell<Vec<String>>);
     impl PrivateDisclosureSink for SpySink {
-        fn deliver(&self, body: &str) {
+        fn deliver(&self, body: &str) -> Result<(), PublicApprovalError> {
             self.0.borrow_mut().push(body.to_string());
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FailingSink(RefCell<Vec<String>>);
+    impl PrivateDisclosureSink for FailingSink {
+        fn deliver(&self, body: &str) -> Result<(), PublicApprovalError> {
+            self.0.borrow_mut().push(body.to_string());
+            Err(PublicApprovalError::DeliveryFailed)
         }
     }
 
@@ -954,6 +983,49 @@ mod tests {
             l.request_disclosure(&a, scope, CANARY, t0()),
             Err(PublicApprovalError::ReadNotSatisfied)
         );
+    }
+
+    #[test]
+    fn disclosure_capacity_refusal_does_not_claim_consumed_read() {
+        let (l, _ctx, scope, a) = with_consumed_read();
+        let filler_ctx = sample_public_context("filler-bind");
+        let filler_scope = scope_for(&filler_ctx);
+        for i in 0..(MAX_APPROVAL_RECORDS - 1) {
+            l.request_private_read(filler_scope.clone(), &format!("filler-{i}"), t0())
+                .unwrap();
+        }
+
+        assert_eq!(
+            l.request_disclosure(&a, scope.clone(), CANARY, t0()),
+            Err(PublicApprovalError::Capacity)
+        );
+        assert_eq!(
+            l.cancel_binding(filler_ctx.provenance().binding_ref()),
+            MAX_APPROVAL_RECORDS - 1
+        );
+
+        let b = l
+            .request_disclosure(&a, scope.clone(), CANARY, t0())
+            .expect("capacity refusal must not claim the read approval");
+        l.decide(&b, op(), true, t0()).unwrap();
+        let sink = SpySink::default();
+        deliver_private_disclosure(&l, &b, op(), &scope, CANARY, t0(), &sink).unwrap();
+        assert_eq!(sink.0.borrow().as_slice(), [CANARY]);
+    }
+
+    #[test]
+    fn sink_failure_is_reported_as_failed_delivery() {
+        let (l, _ctx, scope, a) = with_consumed_read();
+        let b = approved_disclosure(&l, &scope, &a, CANARY);
+        let failing = FailingSink::default();
+        let r = deliver_private_disclosure(&l, &b, op(), &scope, CANARY, t0(), &failing);
+        assert_eq!(r, Err(PublicApprovalError::DeliveryFailed));
+        assert_eq!(failing.0.borrow().as_slice(), [CANARY]);
+
+        let success_sink = SpySink::default();
+        let replay = deliver_private_disclosure(&l, &b, op(), &scope, CANARY, t0(), &success_sink);
+        assert_eq!(replay, Err(PublicApprovalError::AlreadyConsumed));
+        assert!(success_sink.0.borrow().is_empty());
     }
 
     #[test]
