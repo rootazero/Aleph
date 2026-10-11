@@ -791,20 +791,20 @@ impl InboundMessageRouter {
 /// inbound's own reply route. No emitter, no streaming, no owner run record.
 struct ChannelPublicReplySink<'a> {
     router: &'a InboundMessageRouter,
-    ctx: &'a InboundContext,
+    msg: &'a crate::gateway::channel::InboundMessage,
 }
 
 #[async_trait::async_trait]
 impl crate::gateway::telecom::public_run::PublicReplySink for ChannelPublicReplySink<'_> {
     async fn send_reply(&self, text: String) {
         let reply = crate::gateway::channel::OutboundMessage::text(
-            self.ctx.reply_route.conversation_id.as_str(),
+            self.msg.conversation_id.as_str(),
             &text,
         );
         if let Err(e) = self
             .router
             .channel_registry
-            .send(&self.ctx.reply_route.channel_id, reply)
+            .send(&self.msg.channel_id, reply)
             .await
         {
             error!("[Router] public telecom reply failed: {e}");
@@ -813,18 +813,22 @@ impl crate::gateway::telecom::public_run::PublicReplySink for ChannelPublicReply
 }
 
 impl InboundMessageRouter {
-    /// Public telecom isolation branch (contract §3–§6). Runs instead of the
+    /// Public telecom isolation branch (contract §3–§6). Called at the very top
+    /// of `handle_message`, before any owner-state operation (route/agent
+    /// resolution, session key/epoch, link access, permission, hooks). It takes
+    /// the raw `InboundMessage` — no `InboundContext` is built, since that
+    /// would resolve an owner session key. Runs instead of the
     /// whole owner pipeline: no hooks, HITL, slash/`/btw`/model commands, busy
     /// lane, durable journal or owner session. `/stop` cancels this binding's
     /// public run; every other text is plain caller text.
     pub(super) async fn handle_public_telecom(
         &self,
-        ctx: &InboundContext,
+        msg: &crate::gateway::channel::InboundMessage,
         public: crate::gateway::telecom::TelecomPublicContext,
     ) -> Result<(), RoutingError> {
         let registry = crate::gateway::telecom::public_admission::PublicRunRegistry::global();
         if matches!(
-            super::command_handler::classify_special_slash(&ctx.message.text),
+            super::command_handler::classify_special_slash(&msg.text),
             Some(super::command_handler::SpecialSlash::Stop)
         ) {
             let cancelled = registry.cancel_binding(public.provenance().binding_ref());
@@ -835,12 +839,12 @@ impl InboundMessageRouter {
             .execution_adapter
             .as_ref()
             .and_then(|a| a.public_harness());
-        let sink = ChannelPublicReplySink { router: self, ctx };
+        let sink = ChannelPublicReplySink { router: self, msg };
         let disposition = crate::gateway::telecom::public_run::run_public_sms(
             registry,
             harness,
             public,
-            ctx.message.text.clone(),
+            msg.text.clone(),
             &sink,
         )
         .await;

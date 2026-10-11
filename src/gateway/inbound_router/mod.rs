@@ -535,6 +535,17 @@ impl InboundMessageRouter {
 
     /// Handle a single inbound message
     pub async fn handle_message(&self, msg: InboundMessage) -> Result<(), RoutingError> {
+        // Public telecom isolation (contract §3, Task #14): a typed weak public
+        // inbound (`MessageMeta::Sms`) branches FIRST — before the approval
+        // callback sink, agent/route resolution, link access, session-key and
+        // epoch lookup, permission check, owner hooks, activity stamp, HITL,
+        // slash parsing, busy lane and durable journal. Only the typed
+        // metadata decides — never source channel, metadata strings or custom
+        // fields. Ordinary (non-SMS) messages fall through unchanged.
+        if let Some(public) = executor::telecom_public_from_message_meta(&msg.metadata) {
+            return self.handle_public_telecom(&msg, public).await;
+        }
+
         let channel_id = msg.channel_id.as_str();
         info!(
             "[Router] Handling message from {}:{} - {}",
@@ -596,16 +607,6 @@ impl InboundMessageRouter {
                     "[Router] Permission granted for {}:{}",
                     channel_id, ctx.sender_normalized
                 );
-                // Public telecom isolation (contract §3): a typed weak public
-                // inbound branches here, before owner hooks, activity stamp,
-                // HITL, slash parsing, busy lane and durable journal. Only the
-                // typed context decides — never source channel or metadata
-                // heuristics.
-                if let Some(public) =
-                    executor::telecom_public_from_message_meta(&ctx.message.metadata)
-                {
-                    return self.handle_public_telecom(&ctx, public).await;
-                }
                 // A human reached us through a channel — the DreamDaemon idle
                 // sensor's second producer (the first is the gateway's
                 // `build_run_request`). Stamped only on the permission-granted
@@ -1520,6 +1521,105 @@ mod tests {
         .with_approval_callback_sink(Arc::new(AlwaysIntercept));
 
         assert!(router.handle_message(cb_message()).await.is_ok());
+    }
+
+    /// Counts approval-callback sink invocations (owner-state probe).
+    struct CountingSink(Arc<std::sync::atomic::AtomicUsize>);
+    #[async_trait::async_trait]
+    impl ApprovalCallbackSink for CountingSink {
+        async fn handle_callback(&self, _d: &str, _u: &str) -> Option<ApprovalCallbackResult> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            None
+        }
+    }
+
+    fn public_sms_message(id: &str) -> InboundMessage {
+        use crate::gateway::telecom::SmsInboundMeta;
+        use aleph_protocol::telecom_relay::SmsEncoding;
+        let mut msg = cb_message();
+        msg.id = MessageId::new(id);
+        msg.channel_id = ChannelId::new("sms");
+        msg.text = "/stop-not-really hello".to_string();
+        msg.metadata = vec![crate::gateway::channel::MessageMeta::Sms(Box::new(
+            SmsInboundMeta {
+                region: "r".into(),
+                binding_ref: "order-test-binding".into(),
+                provider_account_id: "a".into(),
+                provider_message_id: "m".into(),
+                envelope_event_id: "e".into(),
+                connection_generation: 1,
+                service_address: "+15550001111".into(),
+                peer_address: "+15552223333".into(),
+                encoding: SmsEncoding::Gsm7,
+                segment_count: 1,
+                created_at: chrono::Utc::now(),
+                expires_at: chrono::Utc::now(),
+            },
+        ))];
+        msg
+    }
+
+    /// Task #14: a typed public SMS inbound branches BEFORE any owner-state
+    /// operation. Behavior probe: a `cb_`-prefixed SMS id must never reach the
+    /// owner approval-callback sink, while the same id without typed SMS meta
+    /// (ordinary path) still does.
+    #[tokio::test]
+    async fn typed_public_sms_never_reaches_owner_callback_sink() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_approval_callback_sink(Arc::new(CountingSink(calls.clone())));
+
+        assert!(router
+            .handle_message(public_sms_message("cb_public"))
+            .await
+            .is_ok());
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "public SMS must branch before the owner callback sink"
+        );
+
+        // Ordinary path unchanged: same id, no typed Sms meta → sink consulted.
+        let mut ordinary = public_sms_message("cb_ordinary");
+        ordinary.metadata = vec![];
+        assert!(router.handle_message(ordinary).await.is_ok());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// Task #14 source-order guard: inside `handle_message`, the typed public
+    /// branch must textually precede every owner-state operation. Reads this
+    /// file because the ordering IS the contract (execution contract §3).
+    #[test]
+    fn handle_message_branches_public_before_owner_state() {
+        let src = include_str!("mod.rs");
+        let start = src
+            .find("pub async fn handle_message(")
+            .expect("handle_message present");
+        let body = &src[start..];
+        let at = |needle: &str| {
+            body.find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` not found in handle_message"))
+        };
+        let branch = at("telecom_public_from_message_meta(&msg.metadata)");
+        for owner_op in [
+            "CB_MESSAGE_ID_PREFIX",
+            "resolve_agent_id_async(",
+            "get_allowed_links(",
+            "check_link_access(",
+            "build_context_with_agent(",
+            "check_permission(",
+            "record_activity()",
+            "try_intercept_hitl(",
+        ] {
+            assert!(
+                branch < at(owner_op),
+                "public telecom branch must precede `{owner_op}`"
+            );
+        }
     }
 
     /// Two clarify steps parked for ONE session (a parallel layer with two
