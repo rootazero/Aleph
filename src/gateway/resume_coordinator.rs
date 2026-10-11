@@ -973,6 +973,58 @@ fn resume_authority(verdict: crate::gateway::fire_gate::FireVerdict) -> Result<(
     }
 }
 
+/// The telecom-provenance gate, pure: map a restored marker onto either the
+/// public context to re-stamp on the resumed `RunRequest` (`Some`), the
+/// proof that the run was ordinary (`None`), or a fail-closed refusal.
+///
+/// Only an explicit `Ordinary` or `Public` marker may resume. A missing
+/// restore (`None`: no `RunStarted` facts, or an unanswered tail that carries
+/// no typed origin), a pre-marker `Legacy` record, and an `Unknown`/`Corrupt`
+/// marker are all refused: absence is not proof of "ordinary". Refusal text
+/// is generic on purpose (no region / binding / peer details).
+///
+/// Called as early as the marker is known (before authority preflight, the
+/// attempt gate, boundary repair, the intent stamp and the retrigger) so a
+/// refusal is side-effect free; `admit_resume` calls it again as defense in
+/// depth.
+fn gate_provenance(
+    restore: Option<&crate::gateway::telecom::persisted_marker::MarkerRestore>,
+) -> Result<Option<crate::gateway::telecom::public_context::TelecomPublicContext>, ResumeRefusal> {
+    use crate::gateway::telecom::persisted_marker::MarkerRestore;
+    match restore {
+        None => Err(ResumeRefusal::TelecomProvenanceLegacy(
+            "no run provenance marker: cannot prove the run was not telecom-originated".into(),
+        )),
+        Some(MarkerRestore::Ordinary) => Ok(None),
+        Some(MarkerRestore::Public(ctx)) => Ok(Some(ctx.clone())),
+        Some(MarkerRestore::LegacyUnproven) => Err(ResumeRefusal::TelecomProvenanceLegacy(
+            "pre-marker record: cannot prove the run was not telecom-originated; \
+             refusing to resume as ordinary until legacy records are drained"
+                .into(),
+        )),
+        Some(MarkerRestore::Refuse(reason)) => {
+            Err(ResumeRefusal::TelecomProvenanceUnreadable(reason.clone()))
+        }
+    }
+}
+
+/// The provenance of an unanswered-user-message tail: always `None`.
+///
+/// RULING (I1): the seed `UserMessage` carries no typed telecom origin
+/// (`SessionEvent::UserMessage` has no such field; the only stamp point is the
+/// in-memory `RunRequest.telecom_public`, set at `inbound_router::executor`
+/// AFTER the seed), and nothing else in the session is a typed signal
+/// (`source_channel`/metadata/session-key channel ids are user-configurable and
+/// must not be inferred from). So "no `RunStarted` marker" cannot be told
+/// apart from "a telecom inbound that crashed before its `RunStarted`".
+/// Missing provenance is therefore NOT proof of ordinary: the unanswered
+/// resume fails closed (side-effect free, via [`gate_provenance`]) until the
+/// seed carries a server-authored `Ordinary`/`Public` marker; this function is
+/// the single seam that carrier will plug into.
+fn unanswered_provenance() -> Option<crate::gateway::telecom::persisted_marker::MarkerRestore> {
+    None
+}
+
 /// The resumed run's `RunRequest`, built FROM `metadata` as the fire-time
 /// grant for the session `row` admitted it (round 11, N8; ruling b):
 /// `retrigger` executes exactly the request returned here, so the grant can
@@ -991,38 +1043,17 @@ fn admit_resume<R>(
 where
     R: FnOnce(crate::scope::authority::FireSubject<'_>) -> crate::scope::authority::FireAuthority,
 {
+    // Provenance BEFORE authority: defense in depth behind the earlier
+    // `gate_provenance` call in the boot/manual paths. A run whose origin
+    // cannot be proven must never reach (or consume) a fire-time grant.
+    let telecom_public = gate_provenance(plan.telecom_restore.as_ref())?;
+
     resume_authority(crate::gateway::fire_gate::authorize_session_run(
         resolve,
         multi_user,
         row,
         &mut metadata,
     ))?;
-
-    // Enforce fail-closed telecom provenance: only Ordinary and Public may resume.
-    // Legacy/Unknown/Corrupt refuse before any intent/retrigger.
-    let telecom_public = match plan.telecom_restore.as_ref() {
-        None => {
-            // No RunStarted facts exist (writer-side failure ③-D2): cannot prove
-            // provenance, refuse as unproven rather than silently None.
-            return Err(ResumeRefusal::TelecomProvenanceLegacy(
-                "RunStarted marker missing: cannot prove the run was not telecom-originated".into(),
-            ));
-        }
-        Some(crate::gateway::telecom::persisted_marker::MarkerRestore::Ordinary) => None,
-        Some(crate::gateway::telecom::persisted_marker::MarkerRestore::Public(ctx)) => {
-            Some(ctx.clone())
-        }
-        Some(crate::gateway::telecom::persisted_marker::MarkerRestore::LegacyUnproven) => {
-            return Err(ResumeRefusal::TelecomProvenanceLegacy(
-                "pre-marker record: cannot prove the run was not telecom-originated; \
-                 refusing to resume as ordinary until legacy records are drained"
-                    .into(),
-            ));
-        }
-        Some(crate::gateway::telecom::persisted_marker::MarkerRestore::Refuse(reason)) => {
-            return Err(ResumeRefusal::TelecomProvenanceUnreadable(reason.clone()));
-        }
-    };
 
     Ok(RunRequest {
         run_id: uuid::Uuid::new_v4().to_string(),
@@ -1826,6 +1857,32 @@ impl ResumeCoordinator {
             return;
         }
 
+        // ④ Everything the resume replays, derived from the SAME `open_run`
+        // the repair is about to answer against: the project folder, the three
+        // replayable knobs, the tier ceiling and the validated model pin.
+        // Pure, so it runs BEFORE any gate or write: the telecom provenance
+        // marker it restores decides whether this run may resume at all.
+        let plan = plan_resume(
+            reduction.open_run.as_ref(),
+            crate::providers::session_model_handle::pinnable_providers(),
+            &|p| p.is_dir(),
+        );
+
+        // Provenance gate — before authority preflight, the attempt gate,
+        // boundary repair, the intent stamp and the retrigger. A Legacy /
+        // Unknown / Corrupt / missing marker is refused with NOTHING written:
+        // no stamp, no closer, no abandon, no attempt spent. (A too-old run
+        // was already abandoned above, which is how legacy records drain.)
+        if let Err(refusal) = gate_provenance(plan.telecom_restore.as_ref()) {
+            tracing::warn!(
+                session = ?session_id,
+                reason = refusal.reason(),
+                "resume: telecom provenance not provable; leaving the candidate untouched"
+            );
+            report.refused.push((session_id.clone(), refusal));
+            return;
+        }
+
         // Authority, then the cap check (`attempt_gate`). The cap abandons
         // crash-looped runs; it is counted off the intent stamps, so a resume
         // that died before its run's own `RunStarted` still spent one of
@@ -1851,7 +1908,7 @@ impl ResumeCoordinator {
                 self.abandon(
                     session_id,
                     Abandoned::InterruptedRun,
-                    None,
+                    reduction.open_run.as_ref().map(|o| o.run_id.as_str()),
                     "it kept crashing on every resume attempt",
                 )
                 .await;
@@ -1861,14 +1918,6 @@ impl ResumeCoordinator {
             AttemptGate::Stamp(attempt) => attempt,
         };
 
-        // ④ Everything the resume replays, derived from the SAME `open_run`
-        // the repair is about to answer against: the project folder, the three
-        // replayable knobs, the tier ceiling and the validated model pin.
-        let plan = plan_resume(
-            reduction.open_run.as_ref(),
-            crate::providers::session_model_handle::pinnable_providers(),
-            &|p| p.is_dir(),
-        );
         if plan.degraded {
             report.degraded += 1;
         }
@@ -2189,12 +2238,15 @@ impl ResumeCoordinator {
     }
 
     /// `Interrupted` minus the boundary repair: nothing dangled, so nothing is
-    /// owed a receipt; recency is the message's own recording time; the plan
-    /// is empty because no `RunStarted` ever froze an envelope — which is NOT
-    /// `unsnapshotted` (that counter is about markers that exist). The stamp
-    /// names the message and is written BEFORE the retrigger, and the cap
-    /// reads the stamps written after the message, exactly as the interrupted
-    /// arm reads its own.
+    /// owed a receipt; recency is the message's own recording time. No
+    /// `RunStarted` ever froze an envelope or a telecom provenance marker for
+    /// this tail, and the seeded `UserMessage` carries no typed origin, so the
+    /// provenance gate ([`unanswered_provenance`]) has nothing to prove with:
+    /// the candidate is REFUSED (fail closed, I1 ruling) before authority, the
+    /// attempt gate or the stamp, writing nothing. Recency abandon still runs
+    /// first so such tails drain. The post-gate body (stamp BEFORE retrigger,
+    /// cap read off the stamps after the message) is the shape a future typed
+    /// carrier would re-enable.
     async fn handle_unanswered(
         &self,
         session_id: &SessionId,
@@ -2232,6 +2284,25 @@ impl ResumeCoordinator {
             report.abandoned += 1;
             return;
         }
+        // Provenance gate — before authority preflight, the attempt gate, the
+        // intent stamp and the retrigger. An unanswered tail has no
+        // `RunStarted`, hence no marker (see `unanswered_provenance`): it is
+        // refused with nothing written, exactly like a Legacy marker.
+        let restore = unanswered_provenance();
+        if let Err(refusal) = gate_provenance(restore.as_ref()) {
+            tracing::warn!(
+                session = ?session_id,
+                user_seq,
+                reason = refusal.reason(),
+                "resume: unanswered message has no provable telecom provenance; leaving it untouched"
+            );
+            report.refused.push((session_id.clone(), refusal));
+            return;
+        }
+        let plan = ResumePlan {
+            telecom_restore: restore,
+            ..ResumePlan::default()
+        };
         let authority = self.authority_preflight(session_id).await;
         let attempt = match attempt_gate(authority, attempts, self.config.max_attempts) {
             AttemptGate::HoldUnspent(reason) => {
@@ -2277,7 +2348,7 @@ impl ResumeCoordinator {
             ));
             return;
         }
-        match self.retrigger(session_id, &ResumePlan::default()).await {
+        match self.retrigger(session_id, &plan).await {
             Ok(()) => report.resumed += 1,
             Err(refusal) => {
                 tracing::warn!(
@@ -3776,6 +3847,155 @@ mod tests {
             request.metadata.get("resume").map(String::as_str),
             Some("true")
         );
+    }
+
+    fn public_ctx() -> crate::gateway::telecom::TelecomPublicContext {
+        crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(
+            &crate::gateway::telecom::SmsInboundMeta {
+                region: "region-secret".into(),
+                binding_ref: "binding-secret".into(),
+                provider_account_id: "account".into(),
+                provider_message_id: "message".into(),
+                envelope_event_id: "event".into(),
+                connection_generation: 7,
+                service_address: "+15550001111".into(),
+                peer_address: "+15552223333".into(),
+                encoding: aleph_protocol::telecom_relay::SmsEncoding::Gsm7,
+                segment_count: 1,
+                created_at: chrono::Utc::now(),
+                expires_at: chrono::Utc::now(),
+            },
+        )
+    }
+
+    fn marker_from_json(
+        v: serde_json::Value,
+    ) -> crate::gateway::telecom::persisted_marker::PersistedTelecomMarker {
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// The pure provenance gate: only explicit Ordinary / Public pass; absent,
+    /// Legacy, Unknown and Corrupt are refused, and the refusal text never
+    /// carries marker contents.
+    #[test]
+    fn gate_provenance_admits_only_ordinary_and_public() {
+        use crate::gateway::telecom::persisted_marker::{MarkerRestore, PersistedTelecomMarker};
+        assert_eq!(
+            gate_provenance(Some(&MarkerRestore::Ordinary)).unwrap(),
+            None
+        );
+        let ctx = public_ctx();
+        assert_eq!(
+            gate_provenance(Some(&MarkerRestore::Public(ctx.clone()))).unwrap(),
+            Some(ctx)
+        );
+        let secret = serde_json::json!({"version": 9, "state": "x", "region": "region-secret"});
+        let cases = [
+            (None, "telecom_provenance_legacy"),
+            (
+                Some(PersistedTelecomMarker::Legacy.restore()),
+                "telecom_provenance_legacy",
+            ),
+            (
+                Some(marker_from_json(secret.clone()).restore()),
+                "telecom_provenance_unreadable",
+            ),
+            (
+                Some(marker_from_json(serde_json::json!("region-secret")).restore()),
+                "telecom_provenance_unreadable",
+            ),
+        ];
+        for (restore, word) in cases {
+            let refusal = gate_provenance(restore.as_ref()).expect_err("must refuse");
+            assert_eq!(refusal.reason(), word);
+            assert!(
+                !refusal.detail().contains("region-secret"),
+                "refusal must not leak marker contents: {}",
+                refusal.detail()
+            );
+        }
+    }
+
+    /// I1 seam: an unanswered tail has no typed provenance, and the seam says so.
+    #[test]
+    fn an_unanswered_tail_has_no_provenance_and_is_refused() {
+        assert!(unanswered_provenance().is_none());
+        assert!(gate_provenance(unanswered_provenance().as_ref()).is_err());
+    }
+
+    fn admit_with_plan(plan: &ResumePlan) -> Result<RunRequest, ResumeRefusal> {
+        let session_id = crate::routing::session_key::SessionKey::Main {
+            agent_id: "main".to_string(),
+            main_key: crate::routing::session_key::DEFAULT_MAIN_KEY.to_string(),
+            epoch: 0,
+        };
+        admit_resume(
+            |_| unreachable!("authority must not be consulted before provenance is proven"),
+            || false,
+            None,
+            HashMap::new(),
+            &session_id,
+            None,
+            None,
+            plan,
+        )
+    }
+
+    /// Defense in depth: `admit_resume` refuses an unproven marker BEFORE it
+    /// resolves fire-time authority (the resolver here panics if called).
+    #[test]
+    fn admit_resume_refuses_unproven_provenance_before_consulting_authority() {
+        use crate::gateway::telecom::persisted_marker::{MarkerRestore, PersistedTelecomMarker};
+        for restore in [
+            None,
+            Some(PersistedTelecomMarker::Legacy.restore()),
+            Some(marker_from_json(serde_json::json!({"version": 2, "state": "public"})).restore()),
+            Some(marker_from_json(serde_json::json!({"version": 1})).restore()),
+        ] {
+            let plan = ResumePlan {
+                telecom_restore: restore,
+                ..ResumePlan::default()
+            };
+            let err = admit_with_plan(&plan).expect_err("refused");
+            assert!(err.reason().starts_with("telecom_provenance_"), "{err:?}");
+        }
+        let _ = MarkerRestore::Ordinary;
+    }
+
+    /// A restored Public marker lands on the returned `RunRequest`, byte for
+    /// byte the context that was journaled; Ordinary restores `None`.
+    #[test]
+    fn admit_resume_restores_public_into_the_request() {
+        use crate::gateway::telecom::persisted_marker::MarkerRestore;
+        let ctx = public_ctx();
+        let public = ResumePlan {
+            telecom_restore: Some(MarkerRestore::Public(ctx.clone())),
+            ..ResumePlan::default()
+        };
+        // Authority resolves for real in the positive path.
+        let session_id = crate::routing::session_key::SessionKey::Main {
+            agent_id: "main".to_string(),
+            main_key: crate::routing::session_key::DEFAULT_MAIN_KEY.to_string(),
+            epoch: 0,
+        };
+        let go = |plan: &ResumePlan| {
+            admit_resume(
+                |s| crate::scope::authority::resolve_with(None, &s),
+                || false,
+                None,
+                HashMap::new(),
+                &session_id,
+                None,
+                None,
+                plan,
+            )
+        };
+        assert_eq!(go(&public).expect("admitted").telecom_public, Some(ctx));
+        let ordinary = ResumePlan {
+            telecom_restore: Some(MarkerRestore::Ordinary),
+            ..ResumePlan::default()
+        };
+        assert_eq!(go(&ordinary).expect("admitted").telecom_public, None);
     }
 
     #[test]

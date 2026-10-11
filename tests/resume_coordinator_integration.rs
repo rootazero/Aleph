@@ -20,6 +20,7 @@ use alephcore::gateway::execution_adapter::ExecutionAdapter;
 use alephcore::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus};
 use alephcore::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
 use alephcore::gateway::session_store::SessionStore;
+use alephcore::gateway::telecom::{PersistedTelecomMarker, TelecomPublicContext};
 use alephcore::gateway::ResumeCoordinator;
 use alephcore::resilience::{AgentTask, Lane, RiskLevel, StateDatabase, TaskStatus};
 use alephcore::routing::session_key::SessionKey;
@@ -41,6 +42,9 @@ use alephcore::ResumeConfig;
 /// pinned nothing.
 struct RecordingAdapter {
     calls: Arc<Mutex<Vec<Call>>>,
+    /// The `RunRequest.telecom_public` each `execute` received, in call order
+    /// (the resume gate's consumer end: what the engine is actually handed).
+    telecom: Arc<Mutex<Vec<Option<TelecomPublicContext>>>>,
 }
 
 type Call = (
@@ -53,6 +57,7 @@ impl RecordingAdapter {
     fn new() -> Self {
         Self {
             calls: Arc::new(Mutex::new(Vec::new())),
+            telecom: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -65,6 +70,10 @@ impl ExecutionAdapter for RecordingAdapter {
         _agent: Arc<AgentInstance>,
         _emitter: Arc<dyn EventEmitter + Send + Sync>,
     ) -> Result<(), ExecutionError> {
+        self.telecom
+            .lock()
+            .await
+            .push(request.telecom_public.clone());
         self.calls.lock().await.push((
             request.session_key.to_key_string(),
             request.metadata.clone(),
@@ -196,6 +205,18 @@ async fn seed_interrupted_run_with_envelope(
     sid: &SessionKey,
     envelope: Option<alephcore::session::events::RunEnvelopeSnapshot>,
 ) {
+    seed_interrupted_run_with(store, sid, envelope, PersistedTelecomMarker::Ordinary).await;
+}
+
+/// The same crash with the `RunStarted` telecom provenance marker spelled out
+/// — the only way a test can reach the Legacy / Unknown / Corrupt / Public
+/// arms of the resume provenance gate.
+async fn seed_interrupted_run_with(
+    store: &Arc<dyn SessionEventStore>,
+    sid: &SessionKey,
+    envelope: Option<alephcore::session::events::RunEnvelopeSnapshot>,
+    marker: PersistedTelecomMarker,
+) {
     let tid = TurnId::new_v4();
     let at = now_ms();
     let events: Vec<SessionEvent> = vec![
@@ -221,6 +242,7 @@ async fn seed_interrupted_run_with_envelope(
             at: at + 2,
             project_root: None,
             envelope,
+            telecom_provenance: marker,
         },
         SessionEvent::ToolCallRequested {
             identity: None,
@@ -581,6 +603,7 @@ async fn on_demand_resume_of_a_finished_session_is_a_no_op() {
             at,
             project_root: None,
             envelope: None,
+            telecom_provenance: PersistedTelecomMarker::Ordinary,
         },
         SessionEvent::RunFinished {
             run_id: "run-1".into(),
@@ -728,6 +751,7 @@ async fn seed_crash_looped_run(store: &Arc<dyn SessionEventStore>, sid: &Session
                 at,
                 project_root: None,
                 envelope: None,
+                telecom_provenance: PersistedTelecomMarker::Ordinary,
             },
             at,
         )
@@ -1056,6 +1080,7 @@ async fn too_old_candidate_abandons_and_blocks_the_goal() {
                 at: old_at,
                 project_root: None,
                 envelope: None,
+                telecom_provenance: PersistedTelecomMarker::Ordinary,
             },
             old_at,
         )
@@ -1119,6 +1144,7 @@ async fn a_fresh_stamp_does_not_resurrect_a_run_interrupted_too_long_ago() {
                 at: old_at,
                 project_root: None,
                 envelope: None,
+                telecom_provenance: PersistedTelecomMarker::Ordinary,
             },
             old_at,
         )
@@ -1814,13 +1840,14 @@ async fn stamps(store: &Arc<dyn SessionEventStore>, sid: &SessionKey) -> Vec<(Ev
         .collect()
 }
 
-/// §5.2: a seeded message no run ever answered, in a session with no run
-/// marker at all. The marker scan cannot see it; the activity window can —
-/// the session row `execute()` creates before seeding is what puts it there.
-/// The stamp names the message, the retrigger carries `resume`, and nothing
-/// is repaired because nothing dangled.
+/// §5.2 + I1 ruling: a seeded message no run ever answered, in a session with
+/// no run marker at all. The activity window finds it, but the seed carries no
+/// typed telecom origin, so "no marker" cannot be told apart from "a telecom
+/// inbound that crashed before its `RunStarted`". Missing provenance is not
+/// proof of ordinary: the candidate is refused under its provenance word with
+/// NOTHING written (no stamp, no repair, no abandon) and nothing dispatched.
 #[tokio::test]
-async fn an_unanswered_seed_is_stamped_and_retriggered_without_repair() {
+async fn an_unanswered_seed_without_typed_provenance_is_refused_untouched() {
     let store = store();
     let sid = SessionKey::main("unanswered-agent");
     let tid = TurnId::new_v4();
@@ -1857,36 +1884,26 @@ async fn an_unanswered_seed_is_stamped_and_retriggered_without_repair() {
     ));
     let r = c.resume_interrupted_runs().await;
     assert_eq!(
-        (r.scanned, r.resumed, r.unsnapshotted),
-        (1, 1, 0),
-        "not counted as unsnapshotted: there was no RunStarted to snapshot ({r:?})"
+        (r.scanned, r.resumed, r.abandoned, r.unsnapshotted),
+        (1, 0, 0, 0),
+        "refused, not resumed, not abandoned ({r:?})"
     );
-    let calls = calls.lock().await;
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].1.get("resume").map(String::as_str), Some("true"));
+    assert_eq!(r.refused.len(), 1, "{:?}", r.refused);
+    assert_eq!(r.refused[0].0, sid);
+    assert_eq!(r.refused[0].1.reason(), "telecom_provenance_legacy");
+    assert!(calls.lock().await.is_empty(), "nothing dispatched");
     let all = store.load_all_events(&sid).await.unwrap();
-    assert!(matches!(
-        all.last().map(|r| &r.event),
-        Some(SessionEvent::ResumeAttempted {
-            target: 2,
-            attempt: 1
-        })
-    ));
-    assert!(
-        !all.iter()
-            .any(|r| matches!(r.event, SessionEvent::ToolError { .. })),
-        "no boundary repair: nothing dangled"
-    );
+    assert_eq!(all.len(), 2, "log untouched: {all:?}");
+    assert!(stamps(&store, &sid).await.is_empty(), "no intent stamp");
 }
 
-/// The shape the SECOND boot sees: `[.., RunFinished, UserMessage,
-/// ResumeAttempted]`. The stamp is the newest marker, so a read that started
-/// past the last marker would never see the message again — the seed would
-/// hide behind its own stamp forever. The read starts past the last
-/// `RunFinished` instead, and the ratchet climbs: `[1, 2]`, both naming the
-/// message.
+/// The shape the SECOND boot sees: `[.., RunFinished, UserMessage]` after a
+/// finished `Ordinary` run. The finished run's marker is NOT carried over to
+/// the next message (a later message may be a different origin), so the tail
+/// is still refused — on every boot, writing nothing, never stamping — and
+/// stays refused until the recency filter abandons it.
 #[tokio::test]
-async fn an_unanswered_seed_behind_its_own_stamp_is_seen_on_the_next_boot() {
+async fn an_unanswered_seed_after_an_ordinary_run_is_still_refused_on_every_boot() {
     let store = store();
     let sid = SessionKey::main("unanswered-stamped-agent");
     let tid = TurnId::new_v4();
@@ -1897,6 +1914,7 @@ async fn an_unanswered_seed_behind_its_own_stamp_is_seen_on_the_next_boot() {
             at,
             project_root: None,
             envelope: None,
+            telecom_provenance: PersistedTelecomMarker::Ordinary,
         },
         SessionEvent::RunFinished {
             run_id: "run-0".into(),
@@ -1932,25 +1950,28 @@ async fn an_unanswered_seed_behind_its_own_stamp_is_seen_on_the_next_boot() {
         ))
     };
 
-    let first = boot().resume_interrupted_runs().await;
-    assert_eq!((first.scanned, first.resumed), (1, 1), "{first:?}");
-    assert_eq!(stamps(&store, &sid).await, vec![(4, 1)]);
-
-    let second = boot().resume_interrupted_runs().await;
-    assert_eq!(
-        (second.scanned, second.resumed, second.skipped),
-        (1, 1, 0),
-        "the stamped seed is still unanswered, not `skipped`: {second:?}"
-    );
-    assert_eq!(stamps(&store, &sid).await, vec![(4, 1), (4, 2)]);
-    assert_eq!(calls.lock().await.len(), 2);
+    for n in 1..=2 {
+        let r = boot().resume_interrupted_runs().await;
+        assert_eq!(
+            (r.scanned, r.resumed, r.abandoned),
+            (1, 0, 0),
+            "boot {n}: {r:?}"
+        );
+        assert_eq!(r.refused.len(), 1, "boot {n}: {:?}", r.refused);
+        assert_eq!(r.refused[0].1.reason(), "telecom_provenance_legacy");
+        assert!(stamps(&store, &sid).await.is_empty(), "boot {n}: no stamp");
+        assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 4);
+    }
+    assert!(calls.lock().await.is_empty());
 }
 
-/// The cap reads the unanswered ratchet the same way `Interrupted` reads its
-/// own: `max_attempts` stamps already spent ⇒ abandoned, not retriggered, and
-/// the closer pairs with no `RunStarted` (a `FinishWithoutStart` by design).
+/// Ordering witness (C2): an unanswered tail that has ALREADY spent
+/// `max_attempts` stamps would be abandoned by the attempt gate — a log write
+/// plus a user notice. The provenance gate runs first, so it is refused with
+/// the log byte-for-byte as it was: the cap never gets to act on a candidate
+/// whose origin is unproven.
 #[tokio::test]
-async fn an_unanswered_seed_is_capped_by_its_own_stamps() {
+async fn an_unanswered_seed_at_the_cap_is_refused_before_the_attempt_gate() {
     let store = store();
     let sid = SessionKey::main("unanswered-capped-agent");
     let tid = TurnId::new_v4();
@@ -1971,6 +1992,7 @@ async fn an_unanswered_seed_is_capped_by_its_own_stamps() {
             .await
             .unwrap();
     }
+    let before = store.load_all_events(&sid).await.unwrap().len();
     let sessions = sessions();
     sessions.get_or_create(&sid).await.unwrap();
     let adapter = Arc::new(RecordingAdapter::new());
@@ -1985,33 +2007,14 @@ async fn an_unanswered_seed_is_capped_by_its_own_stamps() {
     ))
     .resume_interrupted_runs()
     .await;
-    assert_eq!((r.scanned, r.resumed, r.abandoned), (1, 0, 1), "{r:?}");
-    assert!(
-        calls.lock().await.is_empty(),
-        "capped: nothing re-triggered"
-    );
-    let all = store.load_all_events(&sid).await.unwrap();
-    // The closer is the last MARKER: after every stamp, and nothing but the
-    // coordinator's own note about it follows (the note's position is pinned
-    // by `an_abandoned_run_gets_a_system_note_after_its_closer`).
-    let closer = all
-        .iter()
-        .rposition(|r| {
-            matches!(
-                r.event,
-                SessionEvent::RunFinished {
-                    outcome: RunOutcome::Abandoned,
-                    ..
-                }
-            )
-        })
-        .unwrap_or_else(|| panic!("the abandon closer landed: {all:?}"));
-    assert!(
-        all[closer + 1..]
-            .iter()
-            .all(|r| matches!(r.event, SessionEvent::SystemMessage { .. })),
-        "nothing but the note follows the closer: {:?}",
-        &all[closer + 1..]
+    assert_eq!((r.scanned, r.resumed, r.abandoned), (1, 0, 0), "{r:?}");
+    assert_eq!(r.refused.len(), 1, "{:?}", r.refused);
+    assert_eq!(r.refused[0].1.reason(), "telecom_provenance_legacy");
+    assert!(calls.lock().await.is_empty(), "nothing re-triggered");
+    assert_eq!(
+        store.load_all_events(&sid).await.unwrap().len(),
+        before,
+        "no closer, no note, no further stamp"
     );
 }
 
@@ -2167,10 +2170,10 @@ async fn an_undecodable_marker_row_refuses_only_its_own_session_at_the_resume_fa
 
 /// The verb's second face (criterion #9): `agent.resume` / `aleph-server
 /// resume` on a session with no run marker asks the same §5.2 question and
-/// acts on it — it used to return the zero report ("nothing to resume") for
-/// exactly the session whose user is waiting.
+/// answers it — fail-closed (I1 ruling): a marker-less tail carries no typed
+/// provenance, so the manual verb reports it refused, writing nothing.
 #[tokio::test]
-async fn an_on_demand_resume_of_a_marker_less_unanswered_seed_stamps_and_retriggers() {
+async fn an_on_demand_resume_of_a_marker_less_unanswered_seed_is_refused_untouched() {
     let store = store();
     let sid = SessionKey::main("unanswered-on-demand-agent");
     let tid = TurnId::new_v4();
@@ -2210,19 +2213,15 @@ async fn an_on_demand_resume_of_a_marker_less_unanswered_seed_stamps_and_retrigg
         .await
         .expect("markers readable");
     assert_eq!(
-        (report.scanned, report.resumed, report.skipped),
-        (1, 1, 0),
+        (report.scanned, report.resumed, report.abandoned),
+        (1, 0, 0),
         "{report:?}"
     );
-    assert_eq!(
-        stamps(&store, &sid).await,
-        vec![(2, 1)],
-        "the stamp names the message"
-    );
-    let calls = calls.lock().await;
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, sid.to_key_string());
-    assert_eq!(calls[0].1.get("resume").map(String::as_str), Some("true"));
+    assert_eq!(report.refused.len(), 1, "{:?}", report.refused);
+    assert_eq!(report.refused[0].1.reason(), "telecom_provenance_legacy");
+    assert!(stamps(&store, &sid).await.is_empty(), "no intent stamp");
+    assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 2);
+    assert!(calls.lock().await.is_empty(), "nothing dispatched");
 }
 
 /// An adapter whose `execute` takes real time: every session at least `floor`,
@@ -2582,6 +2581,7 @@ async fn an_abandoned_run_gets_a_system_note_after_its_closer() {
                 at: old_at,
                 project_root: None,
                 envelope: None,
+                telecom_provenance: PersistedTelecomMarker::Ordinary,
             },
             old_at,
         )
@@ -2686,6 +2686,7 @@ async fn a_task_whose_seed_landed_and_whose_run_closed_is_stamped_without_a_noti
             at: at + 1,
             project_root: None,
             envelope: None,
+            telecom_provenance: PersistedTelecomMarker::Ordinary,
         },
         SessionEvent::RunFinished {
             run_id: "r-landed".into(),
@@ -2815,4 +2816,180 @@ async fn a_legacy_spelled_session_key_still_gets_its_lost_input_notice() {
     let notes = system_notes(&store, &key).await;
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert!(notes[0].contains("buy milk"), "{}", notes[0]);
+}
+
+// ---------------------------------------------------------------------------
+// Telecom provenance gate (C2 / I2): refusal happens BEFORE any write.
+// ---------------------------------------------------------------------------
+
+fn marker_json(v: serde_json::Value) -> PersistedTelecomMarker {
+    serde_json::from_value(v).expect("marker deserialises into a variant")
+}
+
+fn public_marker_json() -> PersistedTelecomMarker {
+    marker_json(serde_json::json!({
+        "version": 1, "state": "public", "channel": "sms",
+        "region": "r", "binding_ref": "b", "connection_generation": 7,
+    }))
+}
+
+/// Every marker the gate must refuse, with the reason word it must refuse under.
+fn refused_markers() -> Vec<(&'static str, PersistedTelecomMarker, &'static str)> {
+    vec![
+        (
+            "legacy",
+            PersistedTelecomMarker::Legacy,
+            "telecom_provenance_legacy",
+        ),
+        (
+            "unknown",
+            marker_json(serde_json::json!({"version": 2, "state": "public"})),
+            "telecom_provenance_unreadable",
+        ),
+        (
+            "corrupt",
+            marker_json(serde_json::json!({"version": 1})),
+            "telecom_provenance_unreadable",
+        ),
+    ]
+}
+
+async fn coordinator_with(
+    store: &Arc<dyn SessionEventStore>,
+    sid: &SessionKey,
+) -> (
+    Arc<ResumeCoordinator>,
+    Arc<Mutex<Vec<Call>>>,
+    Arc<Mutex<Vec<Option<TelecomPublicContext>>>>,
+) {
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let telecom = adapter.telecom.clone();
+    let c = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions(),
+        test_bus(),
+    ));
+    (c, calls, telecom)
+}
+
+/// Boot: an interrupted run whose marker cannot prove it ordinary or public is
+/// refused with nothing written — no ToolError repair, no intent stamp, no
+/// closer — and nothing dispatched.
+#[tokio::test]
+async fn boot_refuses_unproven_provenance_before_any_write() {
+    for (name, marker, word) in refused_markers() {
+        let store = store();
+        let sid = SessionKey::main(&format!("prov-boot-{name}"));
+        seed_interrupted_run_with(&store, &sid, None, marker).await;
+        let before = store.load_all_events(&sid).await.unwrap().len();
+        let (c, calls, telecom) = coordinator_with(&store, &sid).await;
+        let r = c.resume_interrupted_runs().await;
+        assert_eq!(
+            (r.scanned, r.resumed, r.abandoned),
+            (1, 0, 0),
+            "{name}: {r:?}"
+        );
+        assert_eq!(r.refused.len(), 1, "{name}: {:?}", r.refused);
+        assert_eq!(r.refused[0].0, sid);
+        assert_eq!(r.refused[0].1.reason(), word, "{name}");
+        assert!(calls.lock().await.is_empty(), "{name}: nothing dispatched");
+        assert!(telecom.lock().await.is_empty());
+        let all = store.load_all_events(&sid).await.unwrap();
+        assert_eq!(all.len(), before, "{name}: log untouched: {all:?}");
+        assert!(stamps(&store, &sid).await.is_empty(), "{name}: no stamp");
+        assert!(
+            !all.iter().any(|r| matches!(
+                r.event,
+                SessionEvent::ToolError { .. } | SessionEvent::RunFinished { .. }
+            )),
+            "{name}: no repair / closer"
+        );
+    }
+}
+
+/// Manual (`resume_session`) path: the same refusal, the same silence.
+#[tokio::test]
+async fn manual_resume_refuses_unproven_provenance_before_any_write() {
+    for (name, marker, word) in refused_markers() {
+        let store = store();
+        let sid = SessionKey::main(&format!("prov-manual-{name}"));
+        seed_interrupted_run_with(&store, &sid, None, marker).await;
+        let before = store.load_all_events(&sid).await.unwrap().len();
+        let (c, calls, _telecom) = coordinator_with(&store, &sid).await;
+        let r = c.resume_session(&sid).await.expect("resume_session");
+        assert_eq!((r.resumed, r.abandoned), (0, 0), "{name}: {r:?}");
+        assert_eq!(r.refused.len(), 1, "{name}: {:?}", r.refused);
+        assert_eq!(r.refused[0].1.reason(), word, "{name}");
+        assert!(calls.lock().await.is_empty(), "{name}: nothing dispatched");
+        assert_eq!(
+            store.load_all_events(&sid).await.unwrap().len(),
+            before,
+            "{name}: log untouched"
+        );
+        assert!(stamps(&store, &sid).await.is_empty(), "{name}: no stamp");
+    }
+}
+
+/// Ordering witness: a legacy run that already spent its whole attempt budget
+/// is REFUSED under the provenance word, not abandoned by the attempt gate —
+/// the gate runs before the counters, so nothing is written to it either.
+#[tokio::test]
+async fn provenance_refusal_precedes_the_attempt_gate() {
+    let store = store();
+    let sid = SessionKey::main("prov-cap");
+    seed_interrupted_run_with(&store, &sid, None, PersistedTelecomMarker::Legacy).await;
+    // RunStarted sits at seq 3 in this seed; three stamps == default cap.
+    let at = now_ms();
+    for attempt in 1..=3u32 {
+        store
+            .append(
+                &sid,
+                4 + u64::from(attempt),
+                &SessionEvent::ResumeAttempted { target: 3, attempt },
+                at + i64::from(attempt),
+            )
+            .await
+            .unwrap();
+    }
+    let before = store.load_all_events(&sid).await.unwrap().len();
+    let (c, calls, _t) = coordinator_with(&store, &sid).await;
+    let r = c.resume_interrupted_runs().await;
+    assert_eq!((r.resumed, r.abandoned), (0, 0), "{r:?}");
+    assert_eq!(r.refused.len(), 1, "{:?}", r.refused);
+    assert_eq!(r.refused[0].1.reason(), "telecom_provenance_legacy");
+    assert!(calls.lock().await.is_empty());
+    assert_eq!(store.load_all_events(&sid).await.unwrap().len(), before);
+}
+
+/// Consumer end: a journaled Public marker is restored into the very
+/// `RunRequest` the adapter receives; an Ordinary marker restores to `None`.
+#[tokio::test]
+async fn resume_restores_public_into_the_dispatched_request() {
+    let store1 = store();
+    let sid = SessionKey::main("prov-public");
+    seed_interrupted_run_with(&store1, &sid, None, public_marker_json()).await;
+    let (c, calls, telecom) = coordinator_with(&store1, &sid).await;
+    let r = c.resume_interrupted_runs().await;
+    assert_eq!((r.resumed, r.abandoned), (1, 0), "{r:?}");
+    assert!(r.refused.is_empty(), "{:?}", r.refused);
+    assert_eq!(calls.lock().await.len(), 1);
+    let seen = telecom.lock().await;
+    assert_eq!(seen.len(), 1);
+    let ctx = seen[0].as_ref().expect("public context restored");
+    assert_eq!(ctx.provenance().region(), "r");
+    assert_eq!(ctx.provenance().binding_ref(), "b");
+    assert_eq!(ctx.provenance().connection_generation(), 7);
+    drop(seen);
+
+    let store2 = store();
+    let sid = SessionKey::main("prov-ordinary");
+    seed_interrupted_run_with(&store2, &sid, None, PersistedTelecomMarker::Ordinary).await;
+    let (c, _calls, telecom) = coordinator_with(&store2, &sid).await;
+    let r = c.resume_interrupted_runs().await;
+    assert_eq!(r.resumed, 1, "{r:?}");
+    assert_eq!(telecom.lock().await.as_slice(), &[None]);
 }

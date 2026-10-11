@@ -467,6 +467,30 @@ mod tests {
         assert_eq!(r.dangling[0].provenance, DanglingProvenance::ThisRestart);
     }
 
+    /// A fast path with no telecom context journals the explicit Ordinary
+    /// marker (never the Legacy default, which resume would refuse).
+    #[tokio::test]
+    async fn ordinary_fast_path_writes_the_explicit_ordinary_marker() {
+        let (svc, store) = svc();
+        let sid = SessionKey::main("fp-ordinary");
+        let j = FastPathJournal::new(svc, sid.clone(), "session_rename");
+        j.open(
+            "/rename x".into(),
+            None,
+            RunEnvelopeSnapshot::default(),
+            serde_json::json!({"topic": "x"}),
+        )
+        .await
+        .unwrap();
+        let log = store.load_all_events(&sid).await.unwrap();
+        match &log[2].event {
+            SessionEvent::RunStarted {
+                telecom_provenance, ..
+            } => assert_eq!(telecom_provenance, &PersistedTelecomMarker::Ordinary),
+            other => panic!("expected RunStarted, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn public_fast_path_writes_the_captured_telecom_marker() {
         let (svc, store) = svc();

@@ -1028,6 +1028,80 @@ mod tests {
         );
     }
 
+    /// The child's opener inherits the parent's telecom provenance marker
+    /// verbatim: Ordinary stays Ordinary, Public stays the exact Public
+    /// context, and a Legacy parent stays Legacy (never upgraded).
+    #[tokio::test]
+    async fn the_child_opener_preserves_the_parents_telecom_provenance() {
+        use crate::gateway::telecom::persisted_marker::PersistedTelecomMarker;
+        let ctx = crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(
+            &crate::gateway::telecom::SmsInboundMeta {
+                region: "region".into(),
+                binding_ref: "binding".into(),
+                provider_account_id: "account".into(),
+                provider_message_id: "message".into(),
+                envelope_event_id: "event".into(),
+                connection_generation: 7,
+                service_address: "+15550001111".into(),
+                peer_address: "+15552223333".into(),
+                encoding: aleph_protocol::telecom_relay::SmsEncoding::Gsm7,
+                segment_count: 1,
+                created_at: chrono::Utc::now(),
+                expires_at: chrono::Utc::now(),
+            },
+        );
+        let markers = [
+            PersistedTelecomMarker::Ordinary,
+            PersistedTelecomMarker::capture(Some(&ctx)),
+            PersistedTelecomMarker::Legacy,
+        ];
+        assert!(matches!(markers[1], PersistedTelecomMarker::Public(_)));
+        for marker in markers {
+            let parent = SessionKey::Main {
+                agent_id: "agent-a".into(),
+                main_key: "main".into(),
+                epoch: 0,
+            };
+            let mut events = parent_log(&["pre-tail", "fresh tail"]);
+            match &mut events[0].event {
+                SessionEvent::RunStarted {
+                    telecom_provenance, ..
+                } => *telecom_provenance = marker.clone(),
+                other => panic!("expected RunStarted, got {other:?}"),
+            }
+            let session = RecordingSessionService::new();
+            let registrar = RecordingRegistrar::new();
+            let compactor = ContextCompactor::new(
+                AlephArc::new(MockProvider::new("S")),
+                CompactorConfig::default(),
+            );
+            perform_session_split(
+                session.as_ref(),
+                registrar.as_ref(),
+                &compactor,
+                &parent,
+                &events,
+                2,
+            )
+            .await
+            .expect("split should succeed");
+            let child = parent.with_next_epoch();
+            let carried: Vec<PersistedTelecomMarker> = session
+                .emitted()
+                .await
+                .into_iter()
+                .filter(|(target, _)| *target == child)
+                .filter_map(|(_, event)| match event {
+                    SessionEvent::RunStarted {
+                        telecom_provenance, ..
+                    } => Some(telecom_provenance),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(carried, vec![marker]);
+        }
+    }
+
     /// No open `RunStarted` in the parent log ⇒ nothing to inherit ⇒ the split
     /// is REFUSED before the summarizer is paid for and before either batch
     /// is written: the parent keeps its log, routing never learns a child,
