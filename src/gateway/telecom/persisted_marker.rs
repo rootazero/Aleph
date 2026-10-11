@@ -346,9 +346,10 @@ mod tests {
     /// durable queue payloads, goal storage, the run-loop hook-stop receipt,
     /// the direct-tool fast path, and the harness runner's resume snapshot
     /// writer. The latter must preserve telecom provenance when a resumed run
-    /// is re-journaled.
+    /// is re-journaled. Counts exact call occurrences per file (comments
+    /// excluded), so a second call site in an allowed file is also caught.
     #[test]
-    fn capture_has_exactly_five_production_callers() {
+    fn capture_has_exactly_five_production_call_sites() {
         fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
             for e in std::fs::read_dir(dir).unwrap().flatten() {
                 let p = e.path();
@@ -365,7 +366,13 @@ mod tests {
                     } else {
                         s.split("#[cfg(test)]").next().unwrap_or("").to_string()
                     };
-                    if prod.contains(concat!("PersistedTelecomMarker", "::capture(")) {
+                    let needle = concat!("PersistedTelecomMarker", "::capture(");
+                    let n = prod
+                        .lines()
+                        .filter(|l| !l.trim_start().starts_with("//"))
+                        .map(|l| l.matches(needle).count())
+                        .sum::<usize>();
+                    for _ in 0..n {
                         hits.push(p.display().to_string());
                     }
                 }
