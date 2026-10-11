@@ -12,6 +12,7 @@
 pub mod persisted_marker;
 pub mod protocol;
 pub mod public_admission;
+pub mod public_approval;
 pub mod public_context;
 pub mod public_history;
 pub mod public_run;
@@ -24,6 +25,11 @@ pub use protocol::{
     accept_event, advance_outcome, dedup_key, expire_unknown, fence_generation, follow_up,
     AcceptContext, Acceptance, DedupKey, DedupLedger, FollowUp, IgnoreReason, OutcomeRecord,
     OutcomeTransition, TelecomError, UnknownExpiry,
+};
+pub use public_approval::{
+    deliver_private_disclosure, ApprovalSource, ConsumedApproval, PrivateDisclosureSink,
+    PublicApprovalError, PublicApprovalLedger, PublicApprovalScope, PublicApprovalStage,
+    PublicApprovalView,
 };
 pub use public_context::{TelecomChannel, TelecomProvenance, TelecomPublicContext};
 pub use public_history::{
