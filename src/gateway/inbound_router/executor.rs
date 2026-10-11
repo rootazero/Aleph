@@ -843,6 +843,7 @@ impl InboundMessageRouter {
         let disposition = crate::gateway::telecom::public_run::run_public_sms(
             registry,
             harness,
+            crate::gateway::telecom::public_history::installed().map(|s| s.as_ref()),
             public,
             msg.text.clone(),
             &sink,

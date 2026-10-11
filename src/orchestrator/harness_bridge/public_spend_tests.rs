@@ -55,6 +55,7 @@ fn request() -> PublicRunRequest {
     PublicRunRequest {
         ctx: crate::gateway::telecom::public_context::test_support::sample_public_context("bind-a"),
         text: "hello".to_string(),
+        history: Vec::new(),
         run_id: "run-spend-1".into(),
         prompt_version: PUBLIC_PROMPT_VERSION,
     }

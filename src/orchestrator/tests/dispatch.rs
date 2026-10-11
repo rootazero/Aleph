@@ -1130,6 +1130,7 @@ async fn run_public_text_is_default_deny_for_mock_runners() {
                     "bind-deny",
                 ),
                 text: "hi".into(),
+                history: Vec::new(),
                 run_id: "r".into(),
                 prompt_version: PUBLIC_PROMPT_VERSION,
             },

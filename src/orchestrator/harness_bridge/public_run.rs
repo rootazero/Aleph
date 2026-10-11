@@ -5,8 +5,10 @@
 //!
 //! - provider: the Core default provider handle only (no per-session model
 //!   preference, no MoA handle, no named-brain lookup);
-//! - prompt: the fixed [`PUBLIC_SYSTEM_PROMPT`] plus the caller's current text
-//!   only (no owner history, memory, profile, project context or skills);
+//! - prompt: the fixed [`PUBLIC_SYSTEM_PROMPT`], the caller's current text and
+//!   the isolated, already-decrypted `request.history` of *completed public
+//!   turns of this binding* (no owner history, memory, profile, project
+//!   context or skills);
 //! - tools: [`NullToolService`] (nothing offered, nothing callable);
 //! - session: an ephemeral in-memory event store dropped at the end of the run
 //!   (no owner `SessionService` write, no durable journal record);
@@ -21,6 +23,7 @@ use crate::sync_primitives::Arc;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
+use crate::gateway::telecom::PublicHistoryTurn;
 use crate::harness::agent::AgentHarness;
 use crate::harness::callback::NoopHarnessCallback;
 use crate::harness::deps::HarnessDeps;
@@ -31,7 +34,7 @@ use crate::orchestrator::dispatch::{
 use crate::orchestrator::errors::FlowError;
 use crate::providers::AiProvider;
 use crate::routing::session_key::SessionKey;
-use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
+use crate::session::events::{now_ms, MessageContent, SessionEvent};
 use crate::session::in_process::InProcessActorSessionService;
 use crate::session::service::SessionService;
 use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
@@ -90,7 +93,8 @@ pub(crate) async fn run_public_with(
 
     let started = std::time::Instant::now();
     let provider_name = llm.name().to_string();
-    let (session, sid) = ephemeral_session(&request.run_id, &request.text).await?;
+    let (session, sid, current_turn) =
+        ephemeral_session(&request.run_id, &request.history, &request.text).await?;
 
     let deps = HarnessDeps {
         tool_descriptor_lookup: None,
@@ -137,7 +141,15 @@ pub(crate) async fn run_public_with(
     let mut final_text = String::new();
     let mut iterations: u32 = 0;
     for r in &records {
-        if let SessionEvent::AssistantMessage { content, .. } = &r.event {
+        // Seeded history turns carry their own assistant rows; only this
+        // run's turn may produce the reply (no stale answer from history).
+        if let SessionEvent::AssistantMessage {
+            turn_id, content, ..
+        } = &r.event
+        {
+            if *turn_id != current_turn {
+                continue;
+            }
             iterations += 1;
             if !content.text.trim().is_empty() {
                 final_text = content.text.clone();
@@ -158,12 +170,14 @@ pub(crate) async fn run_public_with(
     })
 }
 
-/// Fresh in-memory session seeded with exactly one user turn: the caller's
-/// current text. Dropped with the run.
+/// Fresh in-memory session seeded with the isolated completed `history`
+/// turns (oldest first) followed by one open user turn: the caller's current
+/// text. Returns the open turn's id. Dropped with the run.
 async fn ephemeral_session(
     run_id: &str,
+    history: &[PublicHistoryTurn],
     text: &str,
-) -> Result<(Arc<dyn SessionService>, SessionKey), FlowError> {
+) -> Result<(Arc<dyn SessionService>, SessionKey, uuid::Uuid), FlowError> {
     let internal = |e: String| FlowError::Internal(format!("public session setup failed: {e}"));
     let conn = rusqlite::Connection::open_in_memory().map_err(|e| internal(e.to_string()))?;
     migrate_add_session_events(&conn).map_err(|e| internal(e.to_string()))?;
@@ -174,37 +188,41 @@ async fn ephemeral_session(
         .attach(sid.clone())
         .await
         .map_err(|e| internal(e.to_string()))?;
+    let content = |text: &str| MessageContent {
+        text: text.to_string(),
+        blocks: vec![],
+        thinking: None,
+        thinking_signature: None,
+    };
+    for past in history {
+        let past_turn = uuid::Uuid::new_v4();
+        let at = now_ms();
+        let [started, user] = SessionEvent::user_turn(past_turn, content(&past.user), None, at);
+        for event in [
+            started,
+            user,
+            SessionEvent::AssistantMessage {
+                turn_id: past_turn,
+                content: content(&past.assistant),
+                usage: None,
+                at,
+            },
+        ] {
+            session
+                .emit_event(&sid, event)
+                .await
+                .map_err(|e| internal(e.to_string()))?;
+        }
+    }
     let turn = uuid::Uuid::new_v4();
-    session
-        .emit_event(
-            &sid,
-            SessionEvent::TurnStarted {
-                turn_id: turn,
-                trigger: TurnTrigger::UserMessage,
-                at: now_ms(),
-            },
-        )
-        .await
-        .map_err(|e| internal(e.to_string()))?;
-    session
-        .emit_event(
-            &sid,
-            SessionEvent::UserMessage {
-                turn_id: turn,
-                content: MessageContent {
-                    text: text.to_string(),
-                    blocks: vec![],
-                    thinking: None,
-                    thinking_signature: None,
-                },
-                at: now_ms(),
-                synthetic: false,
-                author_user_id: None,
-            },
-        )
-        .await
-        .map_err(|e| internal(e.to_string()))?;
-    Ok((session, sid))
+    let [started, user] = SessionEvent::user_turn(turn, content(text), None, now_ms());
+    for event in [started, user] {
+        session
+            .emit_event(&sid, event)
+            .await
+            .map_err(|e| internal(e.to_string()))?;
+    }
+    Ok((session, sid, turn))
 }
 
 #[cfg(test)]
@@ -269,6 +287,7 @@ mod tests {
         PublicRunRequest {
             ctx: sample_ctx(),
             text: text.to_string(),
+            history: Vec::new(),
             run_id: "run-1".into(),
             prompt_version: PUBLIC_PROMPT_VERSION,
         }
@@ -382,5 +401,50 @@ mod tests {
             .system
             .iter()
             .all(|s| s.as_deref() == Some(PUBLIC_SYSTEM_PROMPT)));
+    }
+
+    #[tokio::test]
+    async fn history_reaches_provider_in_order_before_current_text() {
+        let (llm, captured) = spy("fresh reply");
+        let mut req = request("current question");
+        req.history = vec![
+            PublicHistoryTurn {
+                user: "earlier-user-lilac".into(),
+                assistant: "earlier-assistant-amber".into(),
+            },
+            PublicHistoryTurn {
+                user: "second-user".into(),
+                assistant: "second-assistant".into(),
+            },
+        ];
+        let (tx, _rx) = broadcast::channel(4);
+        let out = run_public_with(llm, req, CancellationToken::new(), tx)
+            .await
+            .expect("public run ok");
+        assert_eq!(out.final_text, "fresh reply");
+        assert_eq!(out.iterations, 1, "history rows are not this run's work");
+        let c = captured.lock().unwrap();
+        let m = &c.messages[0];
+        let pos = |needle: &str| m.find(needle).unwrap_or_else(|| panic!("{needle} missing"));
+        assert!(pos("earlier-user-lilac") < pos("earlier-assistant-amber"));
+        assert!(pos("earlier-assistant-amber") < pos("second-user"));
+        assert!(pos("second-assistant") < pos("current question"));
+        assert!(c.tools_offered.iter().all(|n| *n == 0));
+        assert!(!m.contains(CANARY));
+    }
+
+    #[tokio::test]
+    async fn empty_new_reply_never_resurfaces_a_history_reply() {
+        let (llm, _c) = spy("   ");
+        let mut req = request("current question");
+        req.history = vec![PublicHistoryTurn {
+            user: "old-q".into(),
+            assistant: "STALE-HISTORY-REPLY".into(),
+        }];
+        let (tx, _rx) = broadcast::channel(4);
+        let err = run_public_with(llm, req, CancellationToken::new(), tx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FlowError::Internal(m) if !m.contains("STALE")));
     }
 }

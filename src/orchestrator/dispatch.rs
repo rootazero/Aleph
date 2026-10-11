@@ -729,10 +729,15 @@ pub const PUBLIC_RUN_UNSUPPORTED: &str = "runner does not support isolated publi
 /// public provenance, the caller's current text, the run id and the fixed
 /// prompt version. It has no owner session key, metadata map, workspace,
 /// tool override, model directive or approval reference.
+///
+/// `history` is the already-loaded, decrypted snapshot of *completed* public
+/// turns for this binding (oldest first), taken by the driver before the run.
+/// It is the only cross-turn input; empty when no isolated store is installed.
 #[derive(Debug, Clone)]
 pub struct PublicRunRequest {
     pub ctx: crate::gateway::telecom::TelecomPublicContext,
     pub text: String,
+    pub history: Vec<crate::gateway::telecom::PublicHistoryTurn>,
     pub run_id: String,
     pub prompt_version: &'static str,
 }

@@ -13,6 +13,7 @@ pub mod persisted_marker;
 pub mod protocol;
 pub mod public_admission;
 pub mod public_context;
+pub mod public_history;
 pub mod public_run;
 pub mod run_origin;
 pub mod sms_inbox;
@@ -25,5 +26,9 @@ pub use protocol::{
     OutcomeTransition, TelecomError, UnknownExpiry,
 };
 pub use public_context::{TelecomChannel, TelecomProvenance, TelecomPublicContext};
+pub use public_history::{
+    PublicHistoryAppend, PublicHistoryConfig, PublicHistoryError, PublicHistorySession,
+    PublicHistoryStore, PublicHistoryTurn,
+};
 pub use sms_inbox::{SmsInbox, SmsInboxAdmission, SmsInboxConfig, SmsInboxError, SmsInboxItem};
 pub use sms_meta::SmsInboundMeta;
