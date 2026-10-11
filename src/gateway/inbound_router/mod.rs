@@ -345,6 +345,26 @@ impl InboundMessageRouter {
         Some(handle)
     }
 
+    /// Admit an inbound message to the coalescer, or bypass it.
+    ///
+    /// A typed public SMS (`MessageMeta::Sms`) NEVER enters a coalescing
+    /// buffer: merging keeps only the first fragment's metadata/channel, which
+    /// would drop SMS isolation metadata, let ordinary text ride into a public
+    /// run, and bury a `/stop` inside a merged body. It is returned as-is so it
+    /// reaches `handle_message` individually. Because SMS never enters a
+    /// buffer, the tick/shutdown flush paths can never emit one either. The
+    /// check is the typed derivation, never a channel-string/metadata-text
+    /// inference. Non-SMS messages coalesce exactly as before.
+    fn admit_to_coalescer(&self, msg: InboundMessage) -> Vec<InboundMessage> {
+        if executor::telecom_public_from_message_meta(&msg.metadata).is_some() {
+            return vec![msg];
+        }
+        match self.coalescer {
+            Some(ref coalescer) => coalescer.push(msg),
+            None => vec![msg],
+        }
+    }
+
     /// Main message processing loop
     async fn run_loop(self: Arc<Self>, mut rx: broadcast::Receiver<InboundMessage>) {
         info!("InboundMessageRouter started");
@@ -371,8 +391,8 @@ impl InboundMessageRouter {
                                     continue;
                                 }
 
-                                if let Some(ref coalescer) = self.coalescer {
-                                    let immediate = coalescer.push(msg);
+                                if self.coalescer.is_some() {
+                                    let immediate = self.admit_to_coalescer(msg);
                                     for flushed in immediate {
                                         let router = self.clone();
                                         tokio::spawn(async move {
@@ -1557,6 +1577,94 @@ mod tests {
             },
         ))];
         msg
+    }
+
+    /// Coalescer isolation: typed public SMS bypasses the coalescer — each one
+    /// comes back individually (own id/text/channel/metadata) and nothing is
+    /// buffered, so neither tick nor shutdown flush can merge it with anything.
+    #[test]
+    fn typed_public_sms_bypasses_coalescer_individually() {
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_coalescer(super::super::coalescer::CoalescingConfig {
+            debounce_ms: 0,
+            ..Default::default()
+        });
+
+        let mut stop = public_sms_message("sms-1");
+        stop.text = "/stop".to_string();
+        let mut other = public_sms_message("sms-2");
+        other.text = "hello".to_string();
+        // Ordinary (non-SMS) text in the same conversation/sender must not mix.
+        let mut ordinary = public_sms_message("ord-1");
+        ordinary.metadata = vec![];
+        ordinary.text = "ordinary".to_string();
+
+        let out_stop = router.admit_to_coalescer(stop);
+        let out_other = router.admit_to_coalescer(other);
+        assert_eq!(out_stop.len(), 1);
+        assert_eq!(out_stop[0].text, "/stop", "/stop stays recognizable");
+        assert_eq!(out_stop[0].id.as_str(), "sms-1");
+        assert_eq!(out_stop[0].channel_id.as_str(), "sms");
+        assert!(executor::telecom_public_from_message_meta(&out_stop[0].metadata).is_some());
+        assert_eq!(out_other.len(), 1);
+        assert_eq!(out_other[0].text, "hello");
+        assert_eq!(out_other[0].id.as_str(), "sms-2");
+        assert!(executor::telecom_public_from_message_meta(&out_other[0].metadata).is_some());
+
+        // Ordinary message is buffered (coalesced path), not bypassed.
+        assert!(router.admit_to_coalescer(ordinary).is_empty());
+        let coalescer = router.coalescer.as_ref().unwrap();
+        let flushed = coalescer.tick();
+        assert_eq!(flushed.len(), 1, "only the ordinary message was buffered");
+        assert_eq!(flushed[0].text, "ordinary");
+        assert!(
+            executor::telecom_public_from_message_meta(&flushed[0].metadata).is_none(),
+            "no SMS metadata/text leaked into the ordinary merged message"
+        );
+        assert!(coalescer.flush_all().is_empty());
+    }
+
+    /// Ordinary non-SMS coalescing is unchanged: rapid fragments still merge.
+    #[test]
+    fn ordinary_messages_still_coalesce() {
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_coalescer(super::super::coalescer::CoalescingConfig {
+            debounce_ms: 0,
+            ..Default::default()
+        });
+        let mut a = cb_message();
+        a.id = MessageId::new("a1");
+        a.text = "hello".to_string();
+        let mut b = cb_message();
+        b.id = MessageId::new("a2");
+        b.text = "world".to_string();
+        assert!(router.admit_to_coalescer(a).is_empty());
+        assert!(router.admit_to_coalescer(b).is_empty());
+        let merged = router.coalescer.as_ref().unwrap().tick();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].text, "hello\nworld");
+    }
+
+    /// Source-order guard: the coalescing run-loop push path must go through
+    /// `admit_to_coalescer` (the SMS bypass), never call `coalescer.push` raw.
+    #[test]
+    fn run_loop_routes_through_coalescer_bypass() {
+        let src = include_str!("mod.rs");
+        let start = src.find("async fn run_loop(").expect("run_loop present");
+        let end = src
+            .find("fn pair_loop_check(")
+            .expect("pair_loop_check present");
+        let body = &src[start..end];
+        assert!(body.contains("self.admit_to_coalescer(msg)"));
+        assert!(!body.contains("coalescer.push("));
     }
 
     /// Task #14: a typed public SMS inbound branches BEFORE any owner-state
