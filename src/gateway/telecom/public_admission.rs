@@ -5,22 +5,37 @@
 //!
 //! - at most one live run per telecom binding (`TelecomProvenance::binding_ref`);
 //! - a global cap on concurrent public runs;
-//! - an explicit "telecom public" spend principal with its own token cap —
-//!   never inferred from metadata, never the owner's budget.
+//! - the explicit "telecom public" spend principal
+//!   ([`Principal::TelecomPublic`]) — never inferred from metadata, never the
+//!   owner's budget.
+//!
+//! Spend admission has two modes, chosen per call by the live
+//! `[policies.spend]` policy:
+//!
+//! - **formal ledger** (policy enabled): admission asks `spend::check` about
+//!   `Principal::TelecomPublic` against the process ledger and policy
+//!   (`telecom_public_usd`, falling back to `per_user_usd`, plus the machine
+//!   `total_usd`). The ledger is fed by the public run's
+//!   `MeteringProvider::with_principal(.., Principal::TelecomPublic)` (see
+//!   `providers::metering::metered_public_provider`), not by this registry;
+//! - **bounded fallback** (policy disabled — no ceiling configured, so the
+//!   ledger is neither read nor written): a per-process token counter vs
+//!   `token_cap`. This is a crude safety bound, NOT ledger accounting.
 //!
 //! Busy / over-cap callers receive a fixed notice; nothing is queued.
 
 use std::collections::HashMap;
 
+use crate::config::types::policies::SpendPolicy;
+use crate::spend::{Principal, SpendLedger, Verdict};
 use crate::sync_primitives::{Arc, AtomicU64, Mutex, OnceLock, Ordering};
 use tokio_util::sync::CancellationToken;
 
 use super::TelecomPublicContext;
 
-/// Explicit spend principal of every public telecom run. Kept distinct from
-/// any owner / `Principal::User` id so public spend is never charged to, or
-/// admitted against, the owner's budget.
-pub const TELECOM_PUBLIC_PRINCIPAL: &str = "@telecom-public";
+/// The explicit spend principal of every public telecom run — a typed
+/// variant, never derived from metadata or the ambient owner.
+const PUBLIC_PRINCIPAL: Principal = Principal::TelecomPublic;
 
 /// Fixed notice for a busy binding or a full global public lane.
 pub const PUBLIC_BUSY_NOTICE: &str = "稍后再试 / Please try again later.";
@@ -31,12 +46,45 @@ pub const PUBLIC_OVER_SPEND_NOTICE: &str =
 
 /// Default global concurrent public runs.
 pub const DEFAULT_PUBLIC_GLOBAL_CAP: usize = 4;
-/// Default token cap of the public spend principal per process lifetime.
+/// Default token cap of the bounded fallback (used only while no spend policy
+/// is enabled), per process lifetime.
 pub const DEFAULT_PUBLIC_TOKEN_CAP: u64 = 200_000;
 
 struct Entry {
     id: u64,
     cancel: CancellationToken,
+}
+
+/// Where spend admission reads the public principal's spend from.
+enum SpendGate {
+    /// The process-wide `[policies.spend]` policy and ledger (production).
+    Process,
+    /// Bounded token counter only; never reads the process spend globals.
+    /// Deterministic for tests that do not own the spend serial group.
+    FallbackOnly,
+    /// A caller-supplied policy and ledger (tests), instead of the globals.
+    #[cfg(test)]
+    Injected {
+        policy: SpendPolicy,
+        ledger: Arc<dyn SpendLedger>,
+    },
+}
+
+impl SpendGate {
+    /// The policy/ledger pair when formal ledger admission applies right
+    /// now; `None` selects the bounded fallback.
+    fn formal(&self) -> Option<(SpendPolicy, Arc<dyn SpendLedger>)> {
+        let (policy, ledger) = match self {
+            Self::Process => (
+                crate::spend::current_policy(),
+                crate::spend::global_ledger(),
+            ),
+            Self::FallbackOnly => return None,
+            #[cfg(test)]
+            Self::Injected { policy, ledger } => (policy.clone(), Arc::clone(ledger)),
+        };
+        policy.enabled().then_some((policy, ledger))
+    }
 }
 
 /// In-memory admission state of public telecom runs.
@@ -45,7 +93,9 @@ pub struct PublicRunRegistry {
     next_id: AtomicU64,
     global_cap: usize,
     token_cap: u64,
+    /// Bounded-fallback counter; moves only while no spend policy is enabled.
     tokens_spent: AtomicU64,
+    gate: SpendGate,
 }
 
 /// Outcome of [`PublicRunRegistry::try_admit`].
@@ -55,7 +105,8 @@ pub enum PublicAdmission {
     Busy,
     /// The global public lane is full.
     OverGlobalCap,
-    /// The telecom-public spend principal is over its cap.
+    /// The telecom-public principal is over its ledger cap (or, with no spend
+    /// policy enabled, the bounded fallback token cap).
     OverSpend,
 }
 
@@ -100,26 +151,59 @@ impl Drop for PublicRunPermit {
 }
 
 impl PublicRunRegistry {
-    pub fn new(global_cap: usize, token_cap: u64) -> Arc<Self> {
+    fn with_gate(global_cap: usize, token_cap: u64, gate: SpendGate) -> Arc<Self> {
         Arc::new(Self {
             active: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             global_cap,
             token_cap,
             tokens_spent: AtomicU64::new(0),
+            gate,
         })
     }
 
-    /// Process-wide registry with default caps.
+    /// Registry that uses only the bounded token fallback and never reads the
+    /// process spend ledger/policy. For unit tests and embedders without a
+    /// ledger; production admission is [`Self::global`].
+    pub fn new(global_cap: usize, token_cap: u64) -> Arc<Self> {
+        Self::with_gate(global_cap, token_cap, SpendGate::FallbackOnly)
+    }
+
+    /// Process-wide registry with default caps and formal ledger admission
+    /// whenever `[policies.spend]` is enabled.
     pub fn global() -> &'static Arc<Self> {
         static GLOBAL: OnceLock<Arc<PublicRunRegistry>> = OnceLock::new();
-        GLOBAL.get_or_init(|| Self::new(DEFAULT_PUBLIC_GLOBAL_CAP, DEFAULT_PUBLIC_TOKEN_CAP))
+        GLOBAL.get_or_init(|| {
+            Self::with_gate(
+                DEFAULT_PUBLIC_GLOBAL_CAP,
+                DEFAULT_PUBLIC_TOKEN_CAP,
+                SpendGate::Process,
+            )
+        })
+    }
+
+    /// Whether the public principal is over its spend cap right now: the
+    /// formal ledger verdict when a policy is enabled, else the bounded
+    /// token fallback. Never touches owner metadata or any owner principal.
+    fn over_spend(&self) -> bool {
+        match self.gate.formal() {
+            Some((policy, ledger)) => matches!(
+                crate::spend::check_with(
+                    &PUBLIC_PRINCIPAL,
+                    chrono::Utc::now().timestamp_millis(),
+                    &policy,
+                    &*ledger,
+                ),
+                Verdict::Denied { .. }
+            ),
+            None => self.tokens_spent.load(Ordering::Acquire) >= self.token_cap,
+        }
     }
 
     /// Admit one public run for `ctx`'s binding, or refuse with a reason.
     /// Never queues.
     pub fn try_admit(self: &Arc<Self>, ctx: &TelecomPublicContext) -> PublicAdmission {
-        if self.tokens_spent.load(Ordering::Acquire) >= self.token_cap {
+        if self.over_spend() {
             return PublicAdmission::OverSpend;
         }
         let binding = ctx.provenance().binding_ref().to_string();
@@ -164,11 +248,18 @@ impl PublicRunRegistry {
         self.active.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
-    /// Charge `tokens` to the telecom-public principal.
+    /// Count `tokens` toward the bounded fallback cap. A no-op while formal
+    /// ledger admission applies: the metered provider already recorded the
+    /// run's real cost under [`Principal::TelecomPublic`], and counting it
+    /// again here would be a second, disagreeing ledger.
     pub fn record_spend(&self, tokens: u64) {
-        self.tokens_spent.fetch_add(tokens, Ordering::AcqRel);
+        if self.gate.formal().is_none() {
+            self.tokens_spent.fetch_add(tokens, Ordering::AcqRel);
+        }
     }
 
+    /// Tokens counted by the bounded fallback (stays 0 under formal ledger
+    /// admission).
     pub fn tokens_spent(&self) -> u64 {
         self.tokens_spent.load(Ordering::Acquire)
     }
@@ -223,8 +314,150 @@ mod tests {
         assert!(permit.cancel_token().is_cancelled());
     }
 
+    fn enabled_policy(telecom_public_usd: Option<f64>, per_user_usd: Option<f64>) -> SpendPolicy {
+        SpendPolicy {
+            telecom_public_usd,
+            per_user_usd,
+            ..SpendPolicy::default()
+        }
+    }
+
+    fn registry_with(policy: SpendPolicy) -> (Arc<PublicRunRegistry>, Arc<dyn SpendLedger>) {
+        let ledger: Arc<dyn SpendLedger> = Arc::new(crate::spend::InMemorySpendLedger::default());
+        let reg = PublicRunRegistry::with_gate(
+            4,
+            u64::MAX,
+            SpendGate::Injected {
+                policy,
+                ledger: Arc::clone(&ledger),
+            },
+        );
+        (reg, ledger)
+    }
+
+    fn record_usd(ledger: &Arc<dyn SpendLedger>, policy: &SpendPolicy, who: &Principal, usd: f64) {
+        let start = crate::spend::period::period_start_ms(
+            chrono::Utc::now().timestamp_millis(),
+            policy.period,
+        );
+        ledger
+            .record(who, start, crate::spend::Delta::Usd(usd))
+            .expect("record");
+    }
+
+    /// Formal admission: the public principal's own ledger row, against
+    /// `telecom_public_usd`, refuses with the fixed notice — with no owner
+    /// principal anywhere in play (no scope, no metadata).
     #[test]
-    fn principal_is_not_an_owner_id() {
-        assert!(TELECOM_PUBLIC_PRINCIPAL.starts_with('@'));
+    fn formal_public_cap_refuses_without_any_owner_principal() {
+        let policy = enabled_policy(Some(1.0), Some(1_000.0));
+        let (reg, ledger) = registry_with(policy.clone());
+        let ctx = sample_public_context("bind-a");
+        assert!(matches!(reg.try_admit(&ctx), PublicAdmission::Admitted(_)));
+
+        record_usd(&ledger, &policy, &Principal::TelecomPublic, 1.0);
+        let refused = reg.try_admit(&ctx);
+        assert!(matches!(refused, PublicAdmission::OverSpend));
+        assert_eq!(refused.notice(), Some(PUBLIC_OVER_SPEND_NOTICE));
+    }
+
+    /// The public cap reads the public row only: a blown owner/user row does
+    /// not refuse public callers, and a blown public row does not move
+    /// anyone else's verdict.
+    #[test]
+    fn formal_public_cap_is_independent_of_owner_rows() {
+        let policy = enabled_policy(Some(1.0), Some(1.0));
+        let (reg, ledger) = registry_with(policy.clone());
+        record_usd(&ledger, &policy, &Principal::User("u-owner".into()), 50.0);
+        record_usd(&ledger, &policy, &Principal::Unattributed, 50.0);
+        assert!(matches!(
+            reg.try_admit(&sample_public_context("bind-a")),
+            PublicAdmission::Admitted(_)
+        ));
+        record_usd(&ledger, &policy, &Principal::TelecomPublic, 2.0);
+        let now = chrono::Utc::now().timestamp_millis();
+        assert!(matches!(
+            crate::spend::check_with(&Principal::TelecomPublic, now, &policy, &*ledger),
+            Verdict::Denied { .. }
+        ));
+        assert!(matches!(
+            crate::spend::check_with(&Principal::Unattributed, now, &policy, &*ledger),
+            Verdict::Denied { .. }
+        ));
+    }
+
+    /// With `telecom_public_usd` unset the public line falls back to
+    /// `per_user_usd` — public spend is never unconstrained by an enabled
+    /// per-principal ceiling.
+    #[test]
+    fn unset_public_cap_falls_back_to_per_user_ceiling() {
+        let policy = enabled_policy(None, Some(1.0));
+        let (reg, ledger) = registry_with(policy.clone());
+        record_usd(&ledger, &policy, &Principal::TelecomPublic, 1.0);
+        assert!(matches!(
+            reg.try_admit(&sample_public_context("bind-a")),
+            PublicAdmission::OverSpend
+        ));
+    }
+
+    /// Formal mode: `record_spend` does not feed the fallback counter (the
+    /// metered provider owns the ledger write), and the fallback token cap
+    /// is not consulted.
+    #[test]
+    fn formal_mode_does_not_double_count_in_memory() {
+        let policy = enabled_policy(Some(100.0), None);
+        let ledger: Arc<dyn SpendLedger> = Arc::new(crate::spend::InMemorySpendLedger::default());
+        let reg = PublicRunRegistry::with_gate(4, 1, SpendGate::Injected { policy, ledger });
+        reg.record_spend(10_000);
+        assert_eq!(reg.tokens_spent(), 0);
+        assert!(matches!(
+            reg.try_admit(&sample_public_context("bind-a")),
+            PublicAdmission::Admitted(_)
+        ));
+    }
+
+    /// Disabled policy: the ledger is never read (a ledger that panics on
+    /// any call proves it) and the bounded fallback still refuses.
+    #[test]
+    fn disabled_policy_uses_bounded_fallback_and_never_touches_ledger() {
+        struct PanicLedger;
+        impl SpendLedger for PanicLedger {
+            fn record(&self, _: &Principal, _: i64, _: crate::spend::Delta) -> anyhow::Result<()> {
+                panic!("ledger touched");
+            }
+            fn spent_for(&self, _: &Principal, _: i64) -> anyhow::Result<crate::spend::Spent> {
+                panic!("ledger touched");
+            }
+            fn total_for(&self, _: i64, _: i64) -> anyhow::Result<crate::spend::Spent> {
+                panic!("ledger touched");
+            }
+            fn sweep_before(&self, _: i64) -> anyhow::Result<usize> {
+                panic!("ledger touched");
+            }
+            fn principals_in(
+                &self,
+                _: i64,
+            ) -> anyhow::Result<Vec<(Principal, crate::spend::Spent)>> {
+                panic!("ledger touched");
+            }
+        }
+        let reg = PublicRunRegistry::with_gate(
+            4,
+            100,
+            SpendGate::Injected {
+                policy: SpendPolicy::default(),
+                ledger: Arc::new(PanicLedger),
+            },
+        );
+        assert!(matches!(
+            reg.try_admit(&sample_public_context("bind-a")),
+            PublicAdmission::Admitted(_)
+        ));
+        reg.record_spend(100);
+        assert_eq!(reg.tokens_spent(), 100);
+        assert!(matches!(
+            reg.try_admit(&sample_public_context("bind-b")),
+            PublicAdmission::OverSpend
+        ));
     }
 }

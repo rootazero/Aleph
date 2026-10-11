@@ -56,6 +56,19 @@ mod tests;
 pub enum Principal {
     User(String),
     Unattributed,
+    /// The explicit "telecom public" principal: every dollar spent on behalf
+    /// of an unverified public SMS/PSTN caller, under the owner's ledger but
+    /// in its own row with its own cap (`SpendPolicy::telecom_public_usd`).
+    ///
+    /// A typed variant on purpose, not `Principal::user("@telecom-public")`:
+    /// [`Self::user`] collapses every `@`-prefixed id onto
+    /// [`Self::Unattributed`], so a string-built public principal would
+    /// silently share the unattributed row. It is never produced by
+    /// [`Self::user`], [`Self::from_person`] or `principal_from_metadata`
+    /// (nothing inferred from metadata or the ambient owner); the only
+    /// constructor is naming the variant, which
+    /// `providers::metering::metered_public_provider` does.
+    TelecomPublic,
 }
 
 impl Principal {
@@ -63,6 +76,11 @@ impl Principal {
     /// [`Self::from_key`] can never drift into two different spellings of
     /// "unattributed".
     const UNATTRIBUTED_KEY: &'static str = "@unattributed";
+
+    /// The reserved ledger key of [`Self::TelecomPublic`]. `@`-prefixed, so
+    /// it can never collide with a real `u-` user id, and every `User`
+    /// constructor path already refuses `@` ids.
+    const TELECOM_PUBLIC_KEY: &'static str = "@telecom-public";
 
     /// The safe construction path for a [`Self::User`] principal.
     ///
@@ -113,6 +131,7 @@ impl Principal {
         match self {
             Self::User(id) => id,
             Self::Unattributed => Self::UNATTRIBUTED_KEY,
+            Self::TelecomPublic => Self::TELECOM_PUBLIC_KEY,
         }
     }
 
@@ -123,10 +142,10 @@ impl Principal {
     /// `"@unattributed"` check in the other backend is exactly the kind of
     /// drift this method exists to rule out.
     pub fn from_key(key: &str) -> Self {
-        if key == Self::UNATTRIBUTED_KEY {
-            Self::Unattributed
-        } else {
-            Self::User(key.to_string())
+        match key {
+            Self::UNATTRIBUTED_KEY => Self::Unattributed,
+            Self::TELECOM_PUBLIC_KEY => Self::TelecomPublic,
+            other => Self::User(other.to_string()),
         }
     }
 }
@@ -870,7 +889,16 @@ pub(crate) fn check_with(
         }
     }
 
-    if let Some(per_user_limit) = policy.per_user_usd {
+    // The telecom-public principal has its own line when configured; an
+    // unset `telecom_public_usd` falls back to the ordinary per-principal
+    // line (public spend is never *less* constrained than a user's, and
+    // never silently shares a user's row). Every other principal ignores
+    // `telecom_public_usd`.
+    let principal_limit = match principal {
+        Principal::TelecomPublic => policy.telecom_public_usd.or(policy.per_user_usd),
+        Principal::User(_) | Principal::Unattributed => policy.per_user_usd,
+    };
+    if let Some(per_user_limit) = principal_limit {
         if ceiling_blown(spent.usd, per_user_limit) {
             return Verdict::Denied {
                 limit: Limit::PerUser {

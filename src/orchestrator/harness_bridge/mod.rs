@@ -50,6 +50,8 @@ pub mod context_estimate;
 pub mod replay_adapter;
 
 #[cfg(test)]
+mod public_spend_tests;
+#[cfg(test)]
 mod tests;
 
 // `active_strategy` is called from `gateway::execution_engine::run_loop::inner`

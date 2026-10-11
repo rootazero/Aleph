@@ -60,7 +60,11 @@ impl AgentHarnessRunner {
         cancel: CancellationToken,
         events: broadcast::Sender<FlowStreamEvent>,
     ) -> Result<FlowOutcome, FlowError> {
-        let llm = self.default_provider.current();
+        // The same default provider chain (failover included), wrapped so
+        // every call is floor-checked against and recorded under the
+        // explicit `Principal::TelecomPublic` — not the ambient owner.
+        let llm =
+            crate::providers::metering::metered_public_provider(self.default_provider.current());
         run_public_with(llm, request, cancel, events).await
     }
 }
