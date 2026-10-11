@@ -1841,10 +1841,11 @@ async fn stamps(store: &Arc<dyn SessionEventStore>, sid: &SessionKey) -> Vec<(Ev
 }
 
 /// §5.2 + I1 ruling: a seeded message no run ever answered, in a session with
-/// no run marker at all. The activity window finds it, but the seed carries no
-/// typed telecom origin, so "no marker" cannot be told apart from "a telecom
-/// inbound that crashed before its `RunStarted`". Missing provenance is not
-/// proof of ordinary: the candidate is refused under its provenance word with
+/// no run marker at all AND no `SeedProvenance` carrier (an old-binary seed, a
+/// steered or backfilled message). The activity window finds it, but nothing
+/// typed says where it came from, so "no carrier" cannot be told apart from "a
+/// telecom inbound that crashed before its `RunStarted`". Missing provenance is
+/// not proof of ordinary: the candidate is refused under its provenance word with
 /// NOTHING written (no stamp, no repair, no abandon) and nothing dispatched.
 #[tokio::test]
 async fn an_unanswered_seed_without_typed_provenance_is_refused_untouched() {
@@ -2222,6 +2223,209 @@ async fn an_on_demand_resume_of_a_marker_less_unanswered_seed_is_refused_untouch
     assert!(stamps(&store, &sid).await.is_empty(), "no intent stamp");
     assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 2);
     assert!(calls.lock().await.is_empty(), "nothing dispatched");
+}
+
+// ---- I1 follow-up: the typed seed carrier ---------------------------------
+
+/// `[TurnStarted, (SeedProvenance)?, UserMessage]` — exactly what
+/// `seed_session` leaves when the process dies before `RunStarted`. The
+/// carrier is bound to `carrier_turn` (the seed's own turn unless a test
+/// wants a mismatched one). Returns the user message's seq.
+async fn seed_unanswered_with_carrier(
+    store: &Arc<dyn SessionEventStore>,
+    sid: &SessionKey,
+    carrier: Option<(Option<TurnId>, PersistedTelecomMarker)>,
+) -> EventSeq {
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    let mut events = vec![SessionEvent::TurnStarted {
+        turn_id: tid,
+        trigger: alephcore::session::events::TurnTrigger::UserMessage,
+        at,
+    }];
+    if let Some((bound, telecom_provenance)) = carrier {
+        events.push(SessionEvent::SeedProvenance {
+            turn_id: bound.unwrap_or(tid),
+            telecom_provenance,
+            at: at + 1,
+        });
+    }
+    events.push(seeded_user(tid, "hello?", at + 2));
+    let last = events.len() as EventSeq;
+    for (i, ev) in events.iter().enumerate() {
+        store
+            .append(sid, i as EventSeq + 1, ev, at + i as i64)
+            .await
+            .unwrap();
+    }
+    last
+}
+
+/// [`coordinator_with`] plus the session row `execute()` creates before
+/// seeding — what puts an unanswered seed in the boot scan's activity window.
+async fn unanswered_coordinator(
+    store: &Arc<dyn SessionEventStore>,
+    sid: &SessionKey,
+) -> (
+    Arc<ResumeCoordinator>,
+    Arc<Mutex<Vec<Call>>>,
+    Arc<Mutex<Vec<Option<TelecomPublicContext>>>>,
+) {
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let telecom = adapter.telecom.clone();
+    let sessions = sessions();
+    sessions.get_or_create(sid).await.unwrap();
+    let c = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions,
+        test_bus(),
+    ));
+    (c, calls, telecom)
+}
+
+/// Ordinary current seed: resumes exactly as before the telecom gate —
+/// stamped once, dispatched once, with NO public context.
+#[tokio::test]
+async fn an_unanswered_ordinary_seed_resumes_as_before() {
+    let store = store();
+    let sid = SessionKey::main("carrier-ordinary");
+    let user_seq =
+        seed_unanswered_with_carrier(&store, &sid, Some((None, PersistedTelecomMarker::Ordinary)))
+            .await;
+    let (c, calls, telecom) = unanswered_coordinator(&store, &sid).await;
+    let r = c.resume_interrupted_runs().await;
+    assert_eq!((r.scanned, r.resumed, r.abandoned), (1, 1, 0), "{r:?}");
+    assert!(r.refused.is_empty(), "{:?}", r.refused);
+    assert_eq!(calls.lock().await.len(), 1);
+    assert_eq!(telecom.lock().await.as_slice(), &[None]);
+    assert_eq!(stamps(&store, &sid).await, vec![(user_seq, 1)]);
+}
+
+/// Public current seed: the journaled Public origin is restored into the very
+/// `RunRequest` the adapter receives (boot and manual verb alike).
+#[tokio::test]
+async fn an_unanswered_public_seed_restores_public_into_the_dispatched_request() {
+    for manual in [false, true] {
+        let store = store();
+        let sid = SessionKey::main(&format!("carrier-public-{manual}"));
+        let user_seq =
+            seed_unanswered_with_carrier(&store, &sid, Some((None, public_marker_json()))).await;
+        let (c, calls, telecom) = unanswered_coordinator(&store, &sid).await;
+        let r = if manual {
+            c.resume_session(&sid).await.expect("resume_session")
+        } else {
+            c.resume_interrupted_runs().await
+        };
+        assert_eq!((r.resumed, r.abandoned), (1, 0), "manual={manual}: {r:?}");
+        assert!(r.refused.is_empty(), "{:?}", r.refused);
+        assert_eq!(calls.lock().await.len(), 1);
+        let seen = telecom.lock().await;
+        let ctx = seen[0].as_ref().expect("public context restored");
+        assert_eq!(ctx.provenance().region(), "r");
+        assert_eq!(ctx.provenance().binding_ref(), "b");
+        assert_eq!(ctx.provenance().connection_generation(), 7);
+        drop(seen);
+        assert_eq!(stamps(&store, &sid).await, vec![(user_seq, 1)]);
+    }
+}
+
+/// A carrier that cannot prove the seed — Unknown / Corrupt version, or one
+/// bound to a DIFFERENT turn (a spoof/stale carrier) — is refused with the log
+/// byte-for-byte as it was and nothing dispatched.
+#[tokio::test]
+async fn an_unproven_seed_carrier_refuses_untouched() {
+    let mut cases: Vec<(&str, Option<(Option<TurnId>, PersistedTelecomMarker)>, &str)> = vec![
+        (
+            "other-turn",
+            Some((Some(TurnId::new_v4()), PersistedTelecomMarker::Ordinary)),
+            "telecom_provenance_legacy",
+        ),
+        (
+            "explicit-legacy",
+            Some((None, PersistedTelecomMarker::Legacy)),
+            "telecom_provenance_legacy",
+        ),
+    ];
+    for (name, marker, word) in refused_markers().into_iter().skip(1) {
+        cases.push((name, Some((None, marker)), word));
+    }
+    for (name, carrier, word) in cases {
+        for manual in [false, true] {
+            let store = store();
+            let sid = SessionKey::main(&format!("carrier-refused-{name}-{manual}"));
+            seed_unanswered_with_carrier(&store, &sid, carrier.clone()).await;
+            let before = store.load_all_events(&sid).await.unwrap().len();
+            let (c, calls, telecom) = unanswered_coordinator(&store, &sid).await;
+            let r = if manual {
+                c.resume_session(&sid).await.expect("resume_session")
+            } else {
+                c.resume_interrupted_runs().await
+            };
+            assert_eq!((r.resumed, r.abandoned), (0, 0), "{name}: {r:?}");
+            assert_eq!(r.refused.len(), 1, "{name}: {:?}", r.refused);
+            assert_eq!(r.refused[0].1.reason(), word, "{name}");
+            assert!(calls.lock().await.is_empty(), "{name}: nothing dispatched");
+            assert!(telecom.lock().await.is_empty());
+            assert_eq!(store.load_all_events(&sid).await.unwrap().len(), before);
+            assert!(stamps(&store, &sid).await.is_empty(), "{name}: no stamp");
+        }
+    }
+}
+
+/// The carrier is a seed-time fact, not a standing grant: after an Ordinary
+/// seed resumed and finished, a LATER carrier-less message is still refused.
+#[tokio::test]
+async fn a_carrier_is_not_inherited_by_a_later_carrierless_message() {
+    let store = store();
+    let sid = SessionKey::main("carrier-not-inherited");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    let events = vec![
+        SessionEvent::TurnStarted {
+            turn_id: tid,
+            trigger: alephcore::session::events::TurnTrigger::UserMessage,
+            at,
+        },
+        SessionEvent::SeedProvenance {
+            turn_id: tid,
+            telecom_provenance: PersistedTelecomMarker::Ordinary,
+            at: at + 1,
+        },
+        seeded_user(tid, "first", at + 2),
+        SessionEvent::RunStarted {
+            run_id: "run-0".into(),
+            at: at + 3,
+            project_root: None,
+            envelope: None,
+            telecom_provenance: PersistedTelecomMarker::Ordinary,
+        },
+        SessionEvent::RunFinished {
+            run_id: "run-0".into(),
+            outcome: RunOutcome::Completed,
+            at: at + 4,
+        },
+        seeded_user(TurnId::new_v4(), "second", at + 5),
+    ];
+    for (i, ev) in events.iter().enumerate() {
+        store
+            .append(&sid, i as EventSeq + 1, ev, at + i as i64)
+            .await
+            .unwrap();
+    }
+    let (c, calls, _t) = unanswered_coordinator(&store, &sid).await;
+    let r = c.resume_interrupted_runs().await;
+    assert_eq!((r.resumed, r.abandoned), (0, 0), "{r:?}");
+    assert_eq!(r.refused.len(), 1, "{:?}", r.refused);
+    assert_eq!(r.refused[0].1.reason(), "telecom_provenance_legacy");
+    assert!(calls.lock().await.is_empty());
+    assert_eq!(
+        store.load_all_events(&sid).await.unwrap().len(),
+        events.len()
+    );
 }
 
 /// An adapter whose `execute` takes real time: every session at least `floor`,

@@ -2102,6 +2102,10 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::RunStarted { .. }
         | SessionEvent::RunFinished { .. }
         | SessionEvent::ResumeAttempted { .. }
+        // Marker-class: it names the seed turn it vouches for in its payload
+        // but does not belong to the turn (per-turn replay/trim must not
+        // treat it as one of the turn's events).
+        | SessionEvent::SeedProvenance { .. }
         | SessionEvent::CompactionPerformed { .. }
         | SessionEvent::FoldRecorded { .. } => None,
     }
@@ -2133,6 +2137,7 @@ pub(crate) const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::RunStarted { .. } => "run_started",
         SessionEvent::RunFinished { .. } => "run_finished",
         SessionEvent::ResumeAttempted { .. } => "resume_attempted",
+        SessionEvent::SeedProvenance { .. } => "seed_provenance",
         SessionEvent::TurnStarted { .. } => "turn_started",
         SessionEvent::UserMessage { .. } => "user_message",
         SessionEvent::AssistantMessage { .. } => "assistant_message",

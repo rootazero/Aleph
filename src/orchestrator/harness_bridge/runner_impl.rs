@@ -341,7 +341,18 @@ impl HarnessRunner for AgentHarnessRunner {
         // summaries, so the system prompt can surface `SessionContextGuideLayer`.
         let user_query = last_user_query(&input);
         let has_session_summaries = input.carries_session_summaries();
-        session_seed::seed_session(self.session_service.as_ref(), &session_id, input).await?;
+        // The run's typed origin goes down with the seed so an unanswered tail
+        // (crash before `RunStarted`) can resume with it. Same capture the
+        // `RunStarted` below carries; `None` => `Ordinary`.
+        session_seed::seed_session(
+            self.session_service.as_ref(),
+            &session_id,
+            input,
+            crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::capture(
+                _telecom_public.as_ref(),
+            ),
+        )
+        .await?;
 
         // Phase 4 (F2): resolve the per-run Think→Act iteration cap once
         // here so the same value flows into both the system prompt

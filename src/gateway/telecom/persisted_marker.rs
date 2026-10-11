@@ -9,7 +9,9 @@
 //!
 //! * The only writers are the durable queue payload, goal persistence, the
 //!   run-loop hook-stop receipt, the direct-tool fast path, and the harness
-//!   runner's resume snapshot writer (census test below). Nothing builds a
+//!   runner's resume snapshot writer AND its seed carrier
+//!   (`SessionEvent::SeedProvenance`, the same capture as its `RunStarted`;
+//!   census test below). Nothing builds a
 //!   marker from a metadata map, a string key, or `source_channel`.
 //! * Reading never fails and never guesses: any JSON shape is classified into
 //!   a state. Only an exact, known v1 shape restores a context; everything else

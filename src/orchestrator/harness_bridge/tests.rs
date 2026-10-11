@@ -32,6 +32,7 @@ use super::prompt_build::*;
 use super::runner_impl::*;
 use super::*;
 
+use crate::gateway::telecom::persisted_marker::PersistedTelecomMarker;
 use crate::orchestrator::flow_spec::FlowHistoryTurn;
 use crate::session::events::MessageContent;
 use session_seed::seed_session;
@@ -465,10 +466,15 @@ fn fresh_service() -> std::sync::Arc<dyn SessionService> {
 async fn seed_session_prompt_emits_one_user_message() {
     let service = fresh_service();
     let sid = SessionKey::ephemeral("seed-prompt");
-    super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Prompt("hello".into()))
-        .await
-        // rust-doctor-disable-next-line unwrap-in-production
-        .expect("seed Prompt");
+    super::session_seed::seed_session(
+        service.as_ref(),
+        &sid,
+        FlowInput::Prompt("hello".into()),
+        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+    )
+    .await
+    // rust-doctor-disable-next-line unwrap-in-production
+    .expect("seed Prompt");
 
     // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
@@ -516,6 +522,7 @@ async fn seed_session_history_replays_turns_and_adds_prompt() {
             turns,
             prompt: "q3".into(),
         },
+        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
     )
     .await
     // rust-doctor-disable-next-line unwrap-in-production
@@ -558,10 +565,15 @@ async fn history_input_does_not_reseed_when_log_nonempty() {
     let sid = SessionKey::ephemeral("seed-noreseed");
 
     // Pre-seed ONE user message so the log is non-empty
-    seed_session(service.as_ref(), &sid, FlowInput::Prompt("earlier".into()))
-        .await
-        // rust-doctor-disable-next-line unwrap-in-production
-        .unwrap();
+    seed_session(
+        service.as_ref(),
+        &sid,
+        FlowInput::Prompt("earlier".into()),
+        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+    )
+    .await
+    // rust-doctor-disable-next-line unwrap-in-production
+    .unwrap();
 
     // Then seed History with the SAME history turn + a new prompt
     let turns = vec![FlowHistoryTurn::User(MessageContent {
@@ -577,6 +589,7 @@ async fn history_input_does_not_reseed_when_log_nonempty() {
             turns,
             prompt: "new".into(),
         },
+        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
     )
     .await
     // rust-doctor-disable-next-line unwrap-in-production
@@ -617,10 +630,15 @@ async fn seed_session_multimodal_emits_one_user_per_entry() {
             thinking_signature: None,
         },
     ];
-    super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Multimodal(msgs))
-        .await
-        // rust-doctor-disable-next-line unwrap-in-production
-        .expect("seed Multimodal");
+    super::session_seed::seed_session(
+        service.as_ref(),
+        &sid,
+        FlowInput::Multimodal(msgs),
+        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+    )
+    .await
+    // rust-doctor-disable-next-line unwrap-in-production
+    .expect("seed Multimodal");
 
     // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
@@ -633,6 +651,150 @@ async fn seed_session_multimodal_emits_one_user_per_entry() {
         })
         .collect();
     assert_eq!(users, vec!["m1", "m2"]);
+}
+
+/// The carrier-before-message contract every `FlowInput` shape must keep: the
+/// LAST real `UserMessage` is preceded (earlier seq) by exactly one
+/// `SeedProvenance` naming its exact `turn_id`, carrying the run's origin, and
+/// the reducer reads that origin back. No body ever reaches the marker.
+async fn assert_carrier_binds_last_user(
+    service: &dyn SessionService,
+    sid: &SessionKey,
+    expect: PersistedTelecomMarker,
+) {
+    use crate::session::reduction::{is_disposition_bearing, unanswered_seed_provenance};
+    // rust-doctor-disable-next-line unwrap-in-production
+    let events = service.get_events(sid, None, None).await.unwrap();
+    let (user_seq, user_turn) = events
+        .iter()
+        .rev()
+        .find_map(|r| match &r.event {
+            SessionEvent::UserMessage {
+                turn_id,
+                synthetic: false,
+                ..
+            } => Some((r.seq, *turn_id)),
+            _ => None,
+        })
+        .expect("a real seed UserMessage");
+    let carriers: Vec<_> = events
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::SeedProvenance {
+                turn_id,
+                telecom_provenance,
+                ..
+            } => Some((r.seq, *turn_id, telecom_provenance.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(carriers.len(), 1, "exactly one carrier per seed");
+    assert!(carriers[0].0 < user_seq, "carrier precedes the message");
+    assert_eq!(carriers[0].1, user_turn, "bound by exact turn_id");
+    // Nothing between the carrier and the message but the seed's own framing.
+    assert!(events
+        .iter()
+        .filter(|r| r.seq > carriers[0].0 && r.seq < user_seq)
+        .all(|r| matches!(
+            r.event,
+            SessionEvent::TurnStarted { .. } | SessionEvent::UserMessage { .. }
+        )));
+    let bearing: Vec<_> = events
+        .iter()
+        .filter(|r| is_disposition_bearing(&r.event))
+        .cloned()
+        .collect();
+    let got = unanswered_seed_provenance(&bearing, user_seq);
+    assert_eq!(format!("{got:?}"), format!("{expect:?}"));
+    assert!(!format!("{:?}", carriers[0].2).contains("secret-body"));
+}
+
+fn public_origin() -> PersistedTelecomMarker {
+    // Wire form of a v1 Public marker (the same shape `RunStarted` persists).
+    serde_json::from_value(serde_json::json!({
+        "version": 1, "state": "public", "channel": "sms",
+        "region": "r-secret", "binding_ref": "b-secret", "connection_generation": 3,
+    }))
+    .expect("v1 public marker")
+}
+
+fn text(t: &str) -> MessageContent {
+    MessageContent {
+        text: t.into(),
+        blocks: Vec::new(),
+        thinking: None,
+        thinking_signature: None,
+    }
+}
+
+#[tokio::test]
+async fn seed_carrier_binds_the_last_user_message_for_every_input_shape() {
+    for public in [false, true] {
+        let origin = || {
+            if public {
+                public_origin()
+            } else {
+                PersistedTelecomMarker::Ordinary
+            }
+        };
+        let inputs: Vec<(&str, FlowInput)> = vec![
+            ("prompt", FlowInput::Prompt("secret-body".into())),
+            (
+                "messages",
+                FlowInput::Messages(vec![text("first"), text("secret-body")]),
+            ),
+            (
+                "history",
+                FlowInput::History {
+                    turns: vec![
+                        FlowHistoryTurn::User(text("q1")),
+                        FlowHistoryTurn::Assistant(text("a1")),
+                    ],
+                    prompt: "secret-body".into(),
+                },
+            ),
+            (
+                "multimodal",
+                FlowInput::Multimodal(vec![text("m1"), text("secret-body")]),
+            ),
+        ];
+        for (name, input) in inputs {
+            let service = fresh_service();
+            let sid = SessionKey::ephemeral(&format!("carrier-{name}-{public}"));
+            super::session_seed::seed_session(service.as_ref(), &sid, input, origin())
+                .await
+                .expect(name);
+            assert_carrier_binds_last_user(service.as_ref(), &sid, origin()).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn resume_and_empty_inputs_write_no_carrier() {
+    for (name, input) in [
+        ("resume", FlowInput::Resume),
+        ("messages", FlowInput::Messages(Vec::new())),
+        ("multimodal", FlowInput::Multimodal(Vec::new())),
+    ] {
+        let service = fresh_service();
+        let sid = SessionKey::ephemeral(&format!("nocarrier-{name}"));
+        super::session_seed::seed_session(
+            service.as_ref(),
+            &sid,
+            input,
+            PersistedTelecomMarker::Ordinary,
+        )
+        .await
+        .expect(name);
+        // rust-doctor-disable-next-line unwrap-in-production
+        let events = service.get_events(&sid, None, None).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|r| matches!(r.event, SessionEvent::SeedProvenance { .. })),
+            "{name}: a carrier with nothing to vouch for is noise"
+        );
+    }
 }
 
 // BUG-2/BUG-3 regression coverage — `last_user_query` must round-trip the

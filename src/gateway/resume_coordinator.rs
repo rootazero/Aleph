@@ -38,8 +38,8 @@ use crate::session::events::{
     now_ms, EventSeq, RunOutcome, SessionEvent, SessionEventRecord, Timestamp,
 };
 use crate::session::reduction::{
-    is_disposition_bearing, reduce_disposition, reduce_run, LogContradiction, RunDisposition,
-    RunReduction,
+    is_disposition_bearing, reduce_disposition, reduce_run, unanswered_seed_provenance,
+    LogContradiction, RunDisposition, RunReduction,
 };
 use crate::session::replay::{
     ReplayPrepare, ReplayPreparer, ReplayRequest, REPLAY_MAX_ATTEMPTS_PER_CALL,
@@ -978,8 +978,7 @@ fn resume_authority(verdict: crate::gateway::fire_gate::FireVerdict) -> Result<(
 /// proof that the run was ordinary (`None`), or a fail-closed refusal.
 ///
 /// Only an explicit `Ordinary` or `Public` marker may resume. A missing
-/// restore (`None`: no `RunStarted` facts, or an unanswered tail that carries
-/// no typed origin), a pre-marker `Legacy` record, and an `Unknown`/`Corrupt`
+/// restore (`None`: no `RunStarted` facts), a pre-marker `Legacy` record, and an `Unknown`/`Corrupt`
 /// marker are all refused: absence is not proof of "ordinary". Refusal text
 /// is generic on purpose (no region / binding / peer details).
 ///
@@ -1006,23 +1005,6 @@ fn gate_provenance(
             Err(ResumeRefusal::TelecomProvenanceUnreadable(reason.clone()))
         }
     }
-}
-
-/// The provenance of an unanswered-user-message tail: always `None`.
-///
-/// RULING (I1): the seed `UserMessage` carries no typed telecom origin
-/// (`SessionEvent::UserMessage` has no such field; the only stamp point is the
-/// in-memory `RunRequest.telecom_public`, set at `inbound_router::executor`
-/// AFTER the seed), and nothing else in the session is a typed signal
-/// (`source_channel`/metadata/session-key channel ids are user-configurable and
-/// must not be inferred from). So "no `RunStarted` marker" cannot be told
-/// apart from "a telecom inbound that crashed before its `RunStarted`".
-/// Missing provenance is therefore NOT proof of ordinary: the unanswered
-/// resume fails closed (side-effect free, via [`gate_provenance`]) until the
-/// seed carries a server-authored `Ordinary`/`Public` marker; this function is
-/// the single seam that carrier will plug into.
-fn unanswered_provenance() -> Option<crate::gateway::telecom::persisted_marker::MarkerRestore> {
-    None
 }
 
 /// The resumed run's `RunRequest`, built FROM `metadata` as the fire-time
@@ -2206,6 +2188,10 @@ impl ResumeCoordinator {
         );
         match reduce_disposition(&bearing) {
             Ok(RunDisposition::Unanswered { user_seq, attempts }) => {
+                // The server-authored origin of THIS seed, bound by the
+                // message's exact `turn_id` (see `unanswered_seed_provenance`).
+                // No carrier / a carrier for another turn reads `Legacy`.
+                let restore = unanswered_seed_provenance(&bearing, user_seq).restore();
                 // The message's own recording time dates it. A record this
                 // reducer named but the slice does not hold, or one recorded
                 // at 0, is an unknown age — not "now" and not "forever ago".
@@ -2214,7 +2200,7 @@ impl ResumeCoordinator {
                     .find(|r| r.seq == user_seq)
                     .map(|r| r.created_at_ms)
                     .filter(|&at| at > 0);
-                self.handle_unanswered(session_id, user_seq, user_at, attempts, report)
+                self.handle_unanswered(session_id, user_seq, user_at, attempts, restore, report)
                     .await;
                 true
             }
@@ -2240,19 +2226,21 @@ impl ResumeCoordinator {
     /// `Interrupted` minus the boundary repair: nothing dangled, so nothing is
     /// owed a receipt; recency is the message's own recording time. No
     /// `RunStarted` ever froze an envelope or a telecom provenance marker for
-    /// this tail, and the seeded `UserMessage` carries no typed origin, so the
-    /// provenance gate ([`unanswered_provenance`]) has nothing to prove with:
-    /// the candidate is REFUSED (fail closed, I1 ruling) before authority, the
-    /// attempt gate or the stamp, writing nothing. Recency abandon still runs
-    /// first so such tails drain. The post-gate body (stamp BEFORE retrigger,
-    /// cap read off the stamps after the message) is the shape a future typed
-    /// carrier would re-enable.
+    /// this tail, so the typed origin comes from the seed's own
+    /// [`SessionEvent::SeedProvenance`] carrier (`restore`, derived by
+    /// `unanswered_seed_provenance`): `Ordinary` resumes as before, `Public`
+    /// is re-stamped on the request, and anything unproven (a seed written
+    /// before the carrier existed, an unreadable one) is REFUSED before
+    /// authority, the attempt gate or the stamp, writing nothing. Recency
+    /// abandon still runs first so such tails drain. Past the gate: stamp
+    /// BEFORE retrigger, cap read off the stamps after the message.
     async fn handle_unanswered(
         &self,
         session_id: &SessionId,
         user_seq: EventSeq,
         user_at: Option<Timestamp>,
         attempts: u32,
+        restore: crate::gateway::telecom::persisted_marker::MarkerRestore,
         report: &mut ResumeReport,
     ) {
         if self.defer_if_running(session_id, report) {
@@ -2285,11 +2273,12 @@ impl ResumeCoordinator {
             return;
         }
         // Provenance gate — before authority preflight, the attempt gate, the
-        // intent stamp and the retrigger. An unanswered tail has no
-        // `RunStarted`, hence no marker (see `unanswered_provenance`): it is
-        // refused with nothing written, exactly like a Legacy marker.
-        let restore = unanswered_provenance();
-        if let Err(refusal) = gate_provenance(restore.as_ref()) {
+        // intent stamp and the retrigger. `restore` is what the seed's
+        // `SeedProvenance` carrier proved: `Ordinary` resumes as before,
+        // `Public` re-stamps the context on the request, and no carrier / an
+        // unreadable one is refused with nothing written, exactly like a
+        // Legacy marker.
+        if let Err(refusal) = gate_provenance(Some(&restore)) {
             tracing::warn!(
                 session = ?session_id,
                 user_seq,
@@ -2300,7 +2289,7 @@ impl ResumeCoordinator {
             return;
         }
         let plan = ResumePlan {
-            telecom_restore: restore,
+            telecom_restore: Some(restore),
             ..ResumePlan::default()
         };
         let authority = self.authority_preflight(session_id).await;
@@ -3916,11 +3905,64 @@ mod tests {
         }
     }
 
-    /// I1 seam: an unanswered tail has no typed provenance, and the seam says so.
+    /// I1: the unanswered tail's gate input is the seed's own typed carrier
+    /// (via `unanswered_seed_provenance`), never an inference. Ordinary and
+    /// Public carriers pass; no carrier, an unreadable one, or one for another
+    /// turn refuse; a lookalike `UserMessage` metadata can not matter because
+    /// the reducer never reads it.
     #[test]
-    fn an_unanswered_tail_has_no_provenance_and_is_refused() {
-        assert!(unanswered_provenance().is_none());
-        assert!(gate_provenance(unanswered_provenance().as_ref()).is_err());
+    fn an_unanswered_seed_is_gated_on_its_typed_carrier_only() {
+        use crate::gateway::telecom::persisted_marker::PersistedTelecomMarker as M;
+        let turn = uuid::Uuid::new_v4();
+        let rec = |seq, event| SessionEventRecord {
+            seq,
+            event,
+            created_at_ms: 1,
+        };
+        let user = |turn_id| SessionEvent::UserMessage {
+            turn_id,
+            content: crate::session::events::MessageContent {
+                text: "x".into(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: 1,
+            synthetic: false,
+            author_user_id: None,
+        };
+        let carrier = |turn_id, m| SessionEvent::SeedProvenance {
+            turn_id,
+            telecom_provenance: m,
+            at: 1,
+        };
+        let gate = |log: Vec<SessionEventRecord>| {
+            let restore = unanswered_seed_provenance(&log, 2).restore();
+            gate_provenance(Some(&restore)).map(|ctx| ctx.is_some())
+        };
+        // Ordinary carrier -> resumes, no public context.
+        assert_eq!(
+            gate(vec![rec(1, carrier(turn, M::Ordinary)), rec(2, user(turn))]),
+            Ok(false)
+        );
+        // No carrier (pre-carrier seed) -> refused as legacy.
+        let legacy = gate(vec![rec(2, user(turn))]).expect_err("legacy refuses");
+        assert_eq!(legacy.reason(), "telecom_provenance_legacy");
+        // Carrier naming another turn -> refused, never borrowed.
+        assert!(gate(vec![
+            rec(1, carrier(uuid::Uuid::new_v4(), M::Ordinary)),
+            rec(2, user(turn))
+        ])
+        .is_err());
+        // Unknown / Corrupt carriers -> refused as unreadable.
+        for bad in [
+            serde_json::from_value::<M>(serde_json::json!({"version": 99})).unwrap(),
+            serde_json::from_value::<M>(serde_json::json!("junk")).unwrap(),
+        ] {
+            let r = gate(vec![rec(1, carrier(turn, bad)), rec(2, user(turn))])
+                .expect_err("unreadable refuses");
+            assert_eq!(r.reason(), "telecom_provenance_unreadable");
+        }
     }
 
     fn admit_with_plan(plan: &ResumePlan) -> Result<RunRequest, ResumeRefusal> {
