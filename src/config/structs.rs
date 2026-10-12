@@ -6,10 +6,10 @@ use crate::config::types::{
     AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, ExecutionConfig,
     FallbackProviderToml, FetchConfigInternal, GeneralConfig, GenerationConfig, GroupChatConfig,
     GuardrailsToml, McpConfig, MemoryConfig, PersonaConfig, PoliciesConfig, PrivacyConfig,
-    ProfileConfig, PromptSectionConfig, ProviderConfig, RoutingRuleConfig, SearchConfigInternal,
-    SecretsConfig, ShellSecurityConfig, StabilityToml, StopHookConfig, TeamBroadcastConfigToml,
-    TeamDispatcherConfigToml, TeamMessagesConfigToml, ToolServiceConfig, ToolsConfig,
-    UnifiedToolsConfig, VoiceLocalConfig, VoiceSection,
+    ProfileConfig, PromptSectionConfig, ProviderConfig, PublicHistoryStartupConfig,
+    RoutingRuleConfig, SearchConfigInternal, SecretsConfig, ShellSecurityConfig, StabilityToml,
+    StopHookConfig, TeamBroadcastConfigToml, TeamDispatcherConfigToml, TeamMessagesConfigToml,
+    ToolServiceConfig, ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig, VoiceSection,
 };
 use crate::tasks::cron::CronConfig;
 use crate::tasks::heartbeat::config::HeartbeatConfig;
@@ -168,6 +168,10 @@ pub struct Config {
     /// disk to come back at the next load.
     #[serde(default)]
     pub channels: HashMap<String, serde_json::Value>,
+    /// Dedicated public telecom history. Absent keeps one-turn-only behavior;
+    /// configured keys and retention are applied at startup, not live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telecom_public_history: Option<PublicHistoryStartupConfig>,
     /// A2A protocol configuration
     #[serde(default)]
     pub a2a: crate::a2a::config::A2AConfig,
@@ -420,6 +424,7 @@ impl Default for Config {
             secrets_config: SecretsConfig::default(),
             prompt: PromptSectionConfig::default(),
             channels: HashMap::new(),
+            telecom_public_history: None,
             a2a: crate::a2a::config::A2AConfig::default(),
             mcp_server: crate::gateway::mcp_face::config::McpFaceConfig::default(),
             acp: AcpConfig::default(),

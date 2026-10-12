@@ -821,9 +821,9 @@ mod tests {
         // guard edited green is worse than one that is honestly red).
         assert_eq!(
             raw + slots,
-            53,
+            54,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             53. Never assert either side alone: raw shrinks and slots grows as \
+             54. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \
@@ -2974,9 +2974,10 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         }
 
         assert_eq!(
-            gates, 18,
-            "examined {gates} gated blocks that install a capability; 18 were \
-             measured on 2026-09-24 (17 lexical + the orchestrator gate, which is \
+            gates, 19,
+            "examined {gates} gated blocks that install a capability; 19 were \
+             measured after the opt-in telecom public-history startup gate was \
+             added (2026-10-12); 18 were measured on 2026-09-24 (17 lexical + the orchestrator gate, which is \
              reached only through the one-hop rule). A count that moved without a capability \
              being added or removed means the block reader stopped matching — \
              which is how this guard would report 'all clear' about blocks it \

@@ -581,7 +581,9 @@ pub fn deliver_private_disclosure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::telecom::persisted_marker::{MarkerRestore, PersistedTelecomMarker};
+    use crate::gateway::telecom::persisted_marker::{
+        MarkerRestore, PersistedTelecomMarker, MARKER_VERSION,
+    };
     use crate::gateway::telecom::public_context::test_support::sample_public_context;
     use std::cell::RefCell;
 
@@ -602,9 +604,11 @@ mod tests {
     }
 
     fn voice_ctx() -> TelecomPublicContext {
+        let ctx = sample_public_context("bind-voice");
         let m: PersistedTelecomMarker = serde_json::from_value(serde_json::json!({
-            "version": 1, "state": "public", "channel": "voice",
+            "version": MARKER_VERSION, "state": "public", "channel": "voice",
             "region": "test-region", "binding_ref": "bind-voice",
+            "caller_digest": ctx.provenance().caller_digest().as_str(),
             "connection_generation": 1
         }))
         .unwrap();
@@ -788,8 +792,9 @@ mod tests {
         l.decide(&a, op(), true, t0()).unwrap();
         // Same binding ref, different connection generation.
         let m: PersistedTelecomMarker = serde_json::from_value(serde_json::json!({
-            "version": 1, "state": "public", "channel": "sms",
+            "version": MARKER_VERSION, "state": "public", "channel": "sms",
             "region": "test-region", "binding_ref": "bind-1",
+            "caller_digest": ctx.provenance().caller_digest().as_str(),
             "connection_generation": 2
         }))
         .unwrap();

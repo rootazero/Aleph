@@ -32,7 +32,8 @@ use super::prompt_build::*;
 use super::runner_impl::*;
 use super::*;
 
-use crate::gateway::telecom::persisted_marker::PersistedTelecomMarker;
+use crate::gateway::telecom::persisted_marker::{PersistedTelecomMarker, MARKER_VERSION};
+use crate::gateway::telecom::public_context::test_support::sample_public_context;
 use crate::orchestrator::flow_spec::FlowHistoryTurn;
 use crate::session::events::MessageContent;
 use session_seed::seed_session;
@@ -710,12 +711,14 @@ async fn assert_carrier_binds_last_user(
 }
 
 fn public_origin() -> PersistedTelecomMarker {
-    // Wire form of a v1 Public marker (the same shape `RunStarted` persists).
+    // Wire form of a current Public marker (the same shape `RunStarted` persists).
+    let ctx = sample_public_context("b-secret");
     serde_json::from_value(serde_json::json!({
-        "version": 1, "state": "public", "channel": "sms",
+        "version": MARKER_VERSION, "state": "public", "channel": "sms",
         "region": "r-secret", "binding_ref": "b-secret", "connection_generation": 3,
+        "caller_digest": ctx.provenance().caller_digest().as_str(),
     }))
-    .expect("v1 public marker")
+    .expect("current public marker")
 }
 
 fn text(t: &str) -> MessageContent {

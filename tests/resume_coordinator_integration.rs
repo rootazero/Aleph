@@ -20,6 +20,7 @@ use alephcore::gateway::execution_adapter::ExecutionAdapter;
 use alephcore::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus};
 use alephcore::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
 use alephcore::gateway::session_store::SessionStore;
+use alephcore::gateway::telecom::persisted_marker::MARKER_VERSION;
 use alephcore::gateway::telecom::{PersistedTelecomMarker, TelecomPublicContext};
 use alephcore::gateway::ResumeCoordinator;
 use alephcore::resilience::{AgentTask, Lane, RiskLevel, StateDatabase, TaskStatus};
@@ -3031,9 +3032,13 @@ fn marker_json(v: serde_json::Value) -> PersistedTelecomMarker {
 }
 
 fn public_marker_json() -> PersistedTelecomMarker {
+    // Digest of the admitted +15550000001 sample used by sample_public_context.
+    // That crate-private test helper is unavailable to integration tests.
+    const CALLER_DIGEST: &str = "b901a8dbc358781e7d4bed9877ad8ffabe917cdd0cf6131cb048c6bdfd99572e";
     marker_json(serde_json::json!({
-        "version": 1, "state": "public", "channel": "sms",
+        "version": MARKER_VERSION, "state": "public", "channel": "sms",
         "region": "r", "binding_ref": "b", "connection_generation": 7,
+        "caller_digest": CALLER_DIGEST,
     }))
 }
 

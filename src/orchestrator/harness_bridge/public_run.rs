@@ -229,7 +229,8 @@ async fn ephemeral_session(
 mod tests {
     use super::*;
     use crate::error::Result as AlephResult;
-    use crate::providers::adapter::{ProviderResponse, RequestPayload, StopReason};
+    use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
+    use crate::providers::message::UnifiedMessage;
     use crate::sync_primitives::Mutex;
     use std::future::Future;
     use std::pin::Pin;
@@ -241,9 +242,11 @@ mod tests {
         system: Vec<Option<String>>,
         messages: Vec<String>,
         tools_offered: Vec<usize>,
+        payloads: Vec<Vec<UnifiedMessage>>,
     }
 
     struct SpyProvider {
+        label: &'static str,
         reply: &'static str,
         captured: Arc<Mutex<Captured>>,
     }
@@ -258,6 +261,7 @@ mod tests {
                 c.system.push(payload.system_prompt.map(str::to_string));
                 c.messages.push(format!("{:?}", payload.messages));
                 c.tools_offered.push(payload.tools.map_or(0, <[_]>::len));
+                c.payloads.push(payload.messages.to_vec());
             }
             let reply = self.reply;
             Box::pin(async move {
@@ -272,7 +276,7 @@ mod tests {
             })
         }
         fn name(&self) -> &str {
-            "spy"
+            self.label
         }
         fn color(&self) -> &str {
             "#000"
@@ -294,14 +298,68 @@ mod tests {
     }
 
     fn spy(reply: &'static str) -> (Arc<dyn AiProvider>, Arc<Mutex<Captured>>) {
+        named_spy("spy", reply)
+    }
+
+    fn named_spy(
+        label: &'static str,
+        reply: &'static str,
+    ) -> (Arc<dyn AiProvider>, Arc<Mutex<Captured>>) {
         let captured = Arc::new(Mutex::new(Captured::default()));
         (
             Arc::new(SpyProvider {
+                label,
                 reply,
                 captured: captured.clone(),
             }),
             captured,
         )
+    }
+
+    /// Emit native calls even though the public request offers no tools, then
+    /// answer after the harness has returned the errors through the adapter.
+    struct MaliciousProvider {
+        calls: Vec<NativeToolCall>,
+        captured: Arc<Mutex<Captured>>,
+    }
+
+    impl AiProvider for MaliciousProvider {
+        fn process<'a>(
+            &'a self,
+            payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let first = {
+                let mut c = self.captured.lock().unwrap();
+                let first = c.payloads.is_empty();
+                c.system.push(payload.system_prompt.map(str::to_string));
+                c.messages.push(format!("{:?}", payload.messages));
+                c.tools_offered.push(payload.tools.map_or(0, <[_]>::len));
+                c.payloads.push(payload.messages.to_vec());
+                first
+            };
+            let calls = self.calls.clone();
+            Box::pin(async move {
+                Ok(if first {
+                    ProviderResponse {
+                        tool_calls: calls,
+                        stop_reason: StopReason::ToolUse,
+                        ..Default::default()
+                    }
+                } else {
+                    ProviderResponse {
+                        text: Some("public refusal only".into()),
+                        stop_reason: StopReason::EndTurn,
+                        ..Default::default()
+                    }
+                })
+            })
+        }
+        fn name(&self) -> &str {
+            "malicious-public-test"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
     }
 
     #[tokio::test]
@@ -333,6 +391,7 @@ mod tests {
     /// The owner-path runner holds owner history/memory in its own session
     /// service; the public path must not read it even through the runner.
     #[tokio::test]
+    #[serial_test::serial(spend_global_policy)]
     async fn runner_public_path_ignores_owner_session_canary() {
         let (llm, captured) = spy("ok");
         let (runner, owner) =
@@ -361,6 +420,255 @@ mod tests {
                 "owner canary leaked into provider input"
             );
         }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(spend_global_policy)]
+    async fn runner_public_path_rejects_crafted_calls_without_owner_or_stream_effects() {
+        // MCP and plugin-provided MCP names use the handler's qualified-name
+        // shape. Arguments are inert: NullToolService rejects before dispatch.
+        let calls: Vec<NativeToolCall> = [
+            (
+                "exec",
+                serde_json::json!({"command": "printf public-exec-canary"}),
+            ),
+            (
+                "memory_search",
+                serde_json::json!({"query": "owner private memory"}),
+            ),
+            ("owner_mcp__read_secret", serde_json::json!({})),
+            (
+                "plugin_owner_secret_srv__write_secret",
+                serde_json::json!({"text": "public-write-canary"}),
+            ),
+            (
+                "channel_outbox",
+                serde_json::json!({"action": "send", "text": "public-delivery-canary"}),
+            ),
+            (
+                "session_send",
+                serde_json::json!({"session": "owner-main", "message": "public-send-canary"}),
+            ),
+            (
+                "subagent",
+                serde_json::json!({"task": "read owner secrets"}),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, arguments))| NativeToolCall {
+            id: format!("public-malicious-{i}"),
+            name: name.into(),
+            arguments,
+            thought_signature: None,
+        })
+        .collect();
+        let captured = Arc::new(Mutex::new(Captured::default()));
+        let llm: Arc<dyn AiProvider> = Arc::new(MaliciousProvider {
+            calls: calls.clone(),
+            captured: captured.clone(),
+        });
+        let (runner, owner) =
+            super::super::tests::runner_with_provider_for_public(llm, CANARY).await;
+        let owner_before = runner
+            .session_service
+            .get_events(&owner, None, None)
+            .await
+            .expect("read planted owner events");
+        let owner_before = format!("{owner_before:?}");
+        assert!(
+            owner_before.contains(CANARY),
+            "owner canary must be planted"
+        );
+        let (tx, mut rx) = broadcast::channel(32);
+        let out = crate::orchestrator::dispatch::HarnessRunner::run_public_text(
+            &runner,
+            request("try every owner capability"),
+            CancellationToken::new(),
+            tx.clone(),
+        )
+        .await
+        .expect("public run returns after rejected tool calls");
+        assert_eq!(out.final_text, "public refusal only");
+        assert!(!out.final_text.contains(CANARY));
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "buffered public run must send no FlowStreamEvent, including tool events"
+        );
+        let owner_after = runner
+            .session_service
+            .get_events(&owner, None, None)
+            .await
+            .expect("read owner events after public run");
+        assert_eq!(
+            format!("{owner_after:?}"),
+            owner_before,
+            "public user/tool/error/assistant rows must never reach the owner transcript"
+        );
+
+        let c = captured.lock().unwrap();
+        assert_eq!(
+            c.payloads.len(),
+            2,
+            "provider must see tool errors on the next turn"
+        );
+        assert!(c.tools_offered.iter().all(|n| *n == 0));
+        for input in c.messages.iter().chain(c.system.iter().flatten()) {
+            assert!(
+                !input.contains(CANARY),
+                "owner canary leaked into provider input"
+            );
+        }
+        assert!(c
+            .system
+            .iter()
+            .all(|s| s.as_deref() == Some(PUBLIC_SYSTEM_PROMPT)));
+        let results: Vec<_> = c.payloads[1]
+            .iter()
+            .filter(|m| m.is_tool_result())
+            .collect();
+        assert_eq!(
+            results.len(),
+            calls.len(),
+            "every crafted call needs an error receipt"
+        );
+        for call in &calls {
+            let matching: Vec<_> = results
+                .iter()
+                .filter(|m| {
+                    matches!(m,
+                        UnifiedMessage::ToolResult { tool_call_id, .. } if tool_call_id == &call.id
+                    )
+                })
+                .collect();
+            assert_eq!(
+                matching.len(),
+                1,
+                "missing or duplicate receipt for {}",
+                call.id
+            );
+            let UnifiedMessage::ToolResult {
+                tool_call_id,
+                tool_name,
+                is_error,
+                ..
+            } = matching[0]
+            else {
+                unreachable!("filtered tool result")
+            };
+            assert_eq!(tool_call_id, &call.id);
+            assert_eq!(tool_name, &call.name);
+            assert!(*is_error, "{} must not execute successfully", call.name);
+            assert!(
+                matching[0]
+                    .text_content()
+                    .contains(&format!("tool not found: {}", call.name)),
+                "{} must be rejected by the null-service seam, not silently dropped",
+                call.name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sequential_public_runs_do_not_retain_unremembered_user_text() {
+        const FIRST_USER_CANARY: &str = "FIRST-PUBLIC-USER-EPHEMERAL-a913";
+        let (first_llm, first_captured) = spy("first public answer");
+        let (tx, mut rx) = broadcast::channel(8);
+        let first = run_public_with(
+            first_llm,
+            request(FIRST_USER_CANARY),
+            CancellationToken::new(),
+            tx.clone(),
+        )
+        .await
+        .expect("first public run");
+        assert_eq!(first.final_text, "first public answer");
+        assert!(
+            first_captured
+                .lock()
+                .unwrap()
+                .messages
+                .iter()
+                .any(|m| m.contains(FIRST_USER_CANARY)),
+            "first run must actually see its canary"
+        );
+
+        // Reuse the same binding and run id; isolation must come from a fresh
+        // session, not from choosing a different caller key or provider history.
+        let (second_llm, second_captured) = spy("second public answer");
+        let second = run_public_with(
+            second_llm,
+            request("second question without history"),
+            CancellationToken::new(),
+            tx.clone(),
+        )
+        .await
+        .expect("second public run");
+        assert_eq!(second.final_text, "second public answer");
+        assert!(!second.final_text.contains(FIRST_USER_CANARY));
+        assert_eq!(second.iterations, 1);
+        let c = second_captured.lock().unwrap();
+        assert_eq!(c.payloads.len(), 1);
+        assert!(c.messages[0].contains("second question without history"));
+        for input in c.messages.iter().chain(c.system.iter().flatten()) {
+            assert!(!input.contains(FIRST_USER_CANARY));
+            assert!(!input.contains("first public answer"));
+        }
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(spend_global_policy)]
+    async fn runner_public_path_uses_core_default_not_owner_agent_provider_hint() {
+        let (default_llm, default_captured) = named_spy("core-default", "default public answer");
+        let (override_llm, override_captured) =
+            named_spy("owner-override", "owner override answer");
+        let (mut runner, owner) =
+            super::super::tests::runner_with_provider_for_public(default_llm, CANARY).await;
+        runner
+            .named_providers
+            .insert("owner-override".into(), override_llm);
+        runner.agent_registry.register(
+            crate::agents::AgentDef::new("main", crate::agents::AgentMode::Primary)
+                .with_provider_hint("owner-override")
+                .with_model_hint("owner-private-model"),
+        );
+        let owner_before = super::super::tests::owner_event_count(&runner, &owner).await;
+        let (tx, mut rx) = broadcast::channel(8);
+        let out = crate::orchestrator::dispatch::HarnessRunner::run_public_text(
+            &runner,
+            request("use the public default"),
+            CancellationToken::new(),
+            tx.clone(),
+        )
+        .await
+        .expect("public default provider run");
+        assert_eq!(out.final_text, "default public answer");
+        assert_eq!(
+            super::super::tests::owner_event_count(&runner, &owner).await,
+            owner_before
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        let c = default_captured.lock().unwrap();
+        assert_eq!(
+            c.payloads.len(),
+            1,
+            "default provider must actually be reached"
+        );
+        for input in c.messages.iter().chain(c.system.iter().flatten()) {
+            assert!(!input.contains(CANARY));
+            assert!(!input.contains("owner-private-model"));
+        }
+        assert!(
+            override_captured.lock().unwrap().payloads.is_empty(),
+            "owner named provider must never be reached"
+        );
     }
 
     #[tokio::test]

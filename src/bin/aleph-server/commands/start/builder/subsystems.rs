@@ -196,6 +196,53 @@ pub(in crate::commands::start) async fn initialize_channels(
     };
     use alephcore::gateway::interfaces::register_channel_plugins;
 
+    // Startup-only public telecom history, deliberately independent of the
+    // login vault/shared token. Off/zero-TTL never even resolves the data dir.
+    // Missing/unusable keys leave the public driver without a history store;
+    // ordinary public single-turn execution remains usable, with no fallback.
+    if let Some(history) = app_config
+        .telecom_public_history
+        .as_ref()
+        .filter(|history| history.enabled && history.ttl_secs != 0)
+    {
+        use alephcore::gateway::telecom::public_history_startup::open_configured_history;
+
+        match alephcore::utils::paths::get_data_dir() {
+            Ok(data_dir) => match open_configured_history(history, &data_dir) {
+                Ok(Some(store)) => {
+                    let install_result =
+                        alephcore::gateway::telecom::public_history::install_global(store);
+                    if install_result.is_err() {
+                        tracing::warn!(
+                            "Public telecom history store already installed; configured startup store was not installed. Config/key changes require a process restart"
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    alephcore::gateway::telecom::public_history::decline_global(
+                        "dedicated public history key or private storage unavailable",
+                    );
+                    tracing::warn!(
+                        "Public telecom history startup failed (dedicated key missing/unusable, unsupported platform, or private storage unavailable); persistent history disabled. Ordinary public single-turn execution remains usable"
+                    );
+                }
+            },
+            Err(_) => {
+                alephcore::gateway::telecom::public_history::decline_global(
+                    "public history data directory unavailable",
+                );
+                tracing::warn!(
+                    "Public telecom history data directory unavailable; persistent history disabled. Ordinary public single-turn execution remains usable"
+                );
+            }
+        }
+    } else {
+        alephcore::gateway::telecom::public_history::decline_global(
+            "dedicated public history disabled or not configured",
+        );
+    }
+
     register_channel_plugins();
 
     // Durable outbound delivery queue (opt-in persistence): when an outbound

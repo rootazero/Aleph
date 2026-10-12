@@ -15,6 +15,7 @@ pub mod public_admission;
 pub mod public_approval;
 pub mod public_context;
 pub mod public_history;
+pub mod public_history_startup;
 pub mod public_run;
 pub mod run_origin;
 pub mod sms_inbox;
@@ -36,5 +37,6 @@ pub use public_history::{
     PublicHistoryAppend, PublicHistoryConfig, PublicHistoryError, PublicHistorySession,
     PublicHistoryStore, PublicHistoryTurn,
 };
+pub use public_history_startup::{open_configured_history, PublicHistoryStartupError};
 pub use sms_inbox::{SmsInbox, SmsInboxAdmission, SmsInboxConfig, SmsInboxError, SmsInboxItem};
 pub use sms_meta::SmsInboundMeta;

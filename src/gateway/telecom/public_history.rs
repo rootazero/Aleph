@@ -5,8 +5,8 @@
 //!
 //! A tiny SQLite-backed store that keeps **completed** public turns (caller
 //! text + the reply that was produced for it) so a later public run for the
-//! same binding can see them. It is deliberately *not* the owner session
-//! service, not `session_events`, not memory/profile/global history and not a
+//! same binding and caller principal can see them. It is deliberately *not* the
+//! owner session service, not `session_events`, not memory/profile/global history and not a
 //! journal: it is a separate database with its own dedicated key, handed in by
 //! the caller (no key is derived from login/shared-token credentials and none
 //! is persisted beside the database).
@@ -14,11 +14,12 @@
 //! # Guarantees
 //!
 //! - **Typed key.** A session is addressed only by [`PublicHistorySession`],
-//!   derived from the typed [`TelecomProvenance`] (`region` + `binding_ref`).
-//!   The channel (SMS / voice alias) and `connection_generation` are *not*
-//!   part of the key: aliases share one principal and a lease reconnect must
-//!   not orphan history. The owner session key never appears here. The key is
-//!   stored as a SHA-256 digest, never as the raw binding reference.
+//!   derived from the typed [`TelecomProvenance`] (`region` + `binding_ref` +
+//!   caller digest). The channel (SMS / voice alias) and
+//!   `connection_generation` are *not* part of the key: aliases share one
+//!   principal and a lease reconnect must not orphan history. The owner session
+//!   key never appears here. The key is stored as a SHA-256 digest, never as
+//!   the raw binding reference or raw phone number.
 //! - **Encrypted at rest.** Plaintext lives only inside an AES-256-GCM payload
 //!   ([`SecretsCrypto`]); the payload repeats the session digest and both
 //!   timestamps and they are re-checked on read, so a ciphertext cannot be
@@ -31,14 +32,17 @@
 //!   never spills anywhere else.
 //! - **Fail closed.** A row that fails to decrypt (wrong key, tampering,
 //!   truncation) or whose payload disagrees with its row makes the whole
-//!   [`PublicHistoryStore::load`] fail with an error and deletes that
-//!   session's rows; there is no plaintext fallback and no partial result.
+//!   [`PublicHistoryStore::load`] fail with [`PublicHistoryError::Corrupt`]
+//!   without deleting unexpired rows; there is no plaintext fallback, partial
+//!   result or automatic reset. Restoring the original key can recover valid
+//!   history. Ordinary TTL pruning still deletes expired rows before reading.
 //!
 //! # Non-guarantees
 //!
 //! SQLite WAL / backups may retain deleted ciphertext; logical deletion is not
 //! physical erasure. Ciphertext length leaks approximate turn size. The key is
-//! the caller's responsibility; production does not install a store yet (see
+//! the caller's responsibility; production installs a store only when the
+//! dedicated startup configuration and key pass validation (see
 //! [`install_global`]).
 
 use std::path::Path;
@@ -50,9 +54,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::public_context::TelecomProvenance;
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::secrets::crypto::SecretsCrypto;
 use crate::secrets::types::SecretError;
-use crate::sync_primitives::{Arc, OnceLock};
+use crate::sync_primitives::Arc;
 use crate::utils::sqlite_open::open_sqlite_safe;
 
 /// Ceiling (and default) of a turn's retention.
@@ -119,17 +124,20 @@ impl PublicHistoryConfig {
 }
 
 /// Typed address of one public history. Built only from admitted-ingress
-/// provenance; carries a digest, never the raw binding reference.
+/// provenance; carries a digest, never the raw binding reference or caller
+/// phone number.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct PublicHistorySession(String);
 
 impl PublicHistorySession {
     pub fn from_provenance(p: &TelecomProvenance) -> Self {
         let mut h = Sha256::new();
-        h.update(b"aleph-telecom-public-history-v1\0");
+        h.update(b"aleph-telecom-public-history-v2\0");
         h.update(p.region().as_bytes());
         h.update([0u8]);
         h.update(p.binding_ref().as_bytes());
+        h.update([0u8]);
+        h.update(p.caller_digest().as_str().as_bytes());
         Self(hex::encode(h.finalize()))
     }
 }
@@ -264,7 +272,8 @@ impl PublicHistoryStore {
     }
 
     /// Completed, unexpired turns of `session`, oldest first. Any undecryptable
-    /// or inconsistent row fails the whole call and purges the session.
+    /// or inconsistent row fails the whole call without a partial result or
+    /// deletion of unexpired rows. Ordinary TTL pruning still applies.
     pub fn load(
         &self,
         session: &PublicHistorySession,
@@ -291,18 +300,9 @@ impl PublicHistoryStore {
         };
         let mut turns = Vec::with_capacity(rows.len());
         for row in &rows {
-            match self.decrypt_row(session, row) {
-                Ok(turn) => turns.push(turn),
-                Err(e) => {
-                    // Fail closed: nothing readable is returned, and the
-                    // unusable rows are dropped so the binding recovers.
-                    conn.execute(
-                        "DELETE FROM telecom_public_history WHERE session = ?1",
-                        params![session.0],
-                    )?;
-                    return Err(e);
-                }
-            }
+            // Fail closed without erasing history: a wrong operator key must
+            // not reset the session. `?` discards any earlier readable turns.
+            turns.push(self.decrypt_row(session, row)?);
         }
         Ok(turns)
     }
@@ -489,15 +489,25 @@ fn ms_to_datetime(ms: i64) -> Option<DateTime<Utc>> {
     Utc.timestamp_millis_opt(ms).single()
 }
 
-static INSTALLED: OnceLock<Arc<PublicHistoryStore>> = OnceLock::new();
+static INSTALLED: CapabilitySlot<Arc<PublicHistoryStore>> = CapabilitySlot::new(
+    "gateway/telecom/public_history",
+    MissingSemantics::ConsumerDecides,
+);
 
-/// Install the process-wide store used by the public SMS driver. No
-/// production code calls this yet: there is no dedicated-key provisioning for
-/// it, and without an installed store public runs carry no cross-turn history
-/// (the previous, one-turn-only behaviour). Returns the store back if one is
-/// already installed.
+/// Install the process-wide store used by the public SMS driver. Returns the
+/// store back if one is already installed.
 pub fn install_global(store: Arc<PublicHistoryStore>) -> Result<(), Arc<PublicHistoryStore>> {
-    INSTALLED.set(store)
+    if INSTALLED.install(store.clone()) {
+        Ok(())
+    } else {
+        Err(store)
+    }
+}
+
+/// Record that startup reached the history slot but deliberately did not
+/// install it. The reason is static because it is operator-facing diagnostics.
+pub fn decline_global(because: &'static str) {
+    INSTALLED.decline(because);
 }
 
 /// The installed store, if any.
@@ -505,15 +515,60 @@ pub fn installed() -> Option<&'static Arc<PublicHistoryStore>> {
     INSTALLED.get()
 }
 
+/// Capability census accessor; the store value itself is not exposed here.
+pub(crate) const fn installed_slot() -> &'static dyn SlotStatus {
+    &INSTALLED
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::telecom::public_context::test_support::sample_public_context;
+    use crate::gateway::telecom::persisted_marker::{MarkerRestore, PersistedTelecomMarker};
+    use crate::gateway::telecom::public_context::test_support::{
+        sample_public_context, sample_public_context_for_peer,
+    };
 
     const KEY: &str = "dedicated-public-history-key";
 
+    #[test]
+    fn capability_slot_missing_semantics_is_consumer_decides() {
+        assert!(matches!(
+            INSTALLED.missing(),
+            MissingSemantics::ConsumerDecides
+        ));
+        let slot: &dyn SlotStatus = &INSTALLED;
+        assert_eq!(slot.id(), "gateway/telecom/public_history");
+    }
+
     fn session(binding: &str) -> PublicHistorySession {
         PublicHistorySession::from_provenance(sample_public_context(binding).provenance())
+    }
+
+    fn session_for_peer(binding: &str, peer_address: &str) -> PublicHistorySession {
+        PublicHistorySession::from_provenance(
+            sample_public_context_for_peer(binding, peer_address).provenance(),
+        )
+    }
+
+    fn voice_session_for_same_caller(
+        binding: &str,
+        sms_peer_address: &str,
+    ) -> PublicHistorySession {
+        let sms = sample_public_context_for_peer(binding, sms_peer_address);
+        let marker: PersistedTelecomMarker = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "state": "public",
+            "channel": "voice",
+            "region": sms.provenance().region(),
+            "binding_ref": sms.provenance().binding_ref(),
+            "caller_digest": sms.provenance().caller_digest().as_str(),
+            "connection_generation": 99,
+        }))
+        .unwrap();
+        match marker.restore() {
+            MarkerRestore::Public(ctx) => PublicHistorySession::from_provenance(ctx.provenance()),
+            other => panic!("expected restored voice public context, got {other:?}"),
+        }
     }
 
     fn turn(user: &str, assistant: &str) -> PublicHistoryTurn {
@@ -539,6 +594,37 @@ mod tests {
             .unwrap()
     }
 
+    // Include row identity, metadata and all encrypted bytes so a failed read
+    // cannot silently delete, replace or rewrite retained history.
+    type StoredRowSnapshot = (i64, String, i64, i64, i64, Vec<u8>, Vec<u8>, Vec<u8>);
+
+    fn encrypted_rows(s: &PublicHistoryStore) -> Vec<StoredRowSnapshot> {
+        let conn = s.guard();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, session, created_at, expires_at, plain_bytes, ciphertext, nonce, salt
+                 FROM telecom_public_history ORDER BY id ASC",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        rows
+    }
+
     #[test]
     fn round_trips_in_order_through_api_only() {
         let s = store(PublicHistoryConfig::default());
@@ -562,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_storage_never_contains_plaintext_or_raw_binding() {
+    fn raw_storage_never_contains_plaintext_raw_binding_or_raw_phone() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("public-history.db");
         let s = PublicHistoryStore::open(
@@ -576,7 +662,7 @@ mod tests {
         s.append(&a, &turn(u, r), t0()).unwrap();
         drop(s);
         let bytes = std::fs::read(&path).unwrap();
-        for needle in [u, r, "binding-raw-ref-zzz", "test-region"] {
+        for needle in [u, r, "binding-raw-ref-zzz", "test-region", "+15550000001"] {
             assert!(
                 !bytes.windows(needle.len()).any(|w| w == needle.as_bytes()),
                 "plaintext {needle} found in raw db"
@@ -733,20 +819,25 @@ mod tests {
     }
 
     #[test]
-    fn bindings_are_isolated_and_channel_generation_are_not_part_of_the_key() {
+    fn bindings_and_callers_are_isolated_but_aliases_share_completed_history() {
         let s = store(PublicHistoryConfig::default());
-        let (a, b) = (session("bind-a"), session("bind-b"));
+        let a = session_for_peer("bind-a", "+15550000001");
+        let same_binding_other_caller = session_for_peer("bind-a", "+15550000002");
+        let other_binding_same_caller = session_for_peer("bind-b", "+15550000001");
+        let voice_alias_same_caller = voice_session_for_same_caller("bind-a", "+15550000001");
+
         s.append(&a, &turn("only-a", "a"), t0()).unwrap();
-        assert!(s.load(&b, t0()).unwrap().is_empty());
-        assert_eq!(s.load(&a, t0()).unwrap().len(), 1);
-        // Same binding, same session digest (generation / channel excluded).
-        assert_eq!(a, session("bind-a"));
-        assert_ne!(a, b);
+        assert!(s.load(&same_binding_other_caller, t0()).unwrap().is_empty());
+        assert!(s.load(&other_binding_same_caller, t0()).unwrap().is_empty());
+        assert_eq!(s.load(&voice_alias_same_caller, t0()).unwrap().len(), 1);
+        assert_eq!(a, voice_alias_same_caller);
+        assert_ne!(a, same_binding_other_caller);
+        assert_ne!(a, other_binding_same_caller);
         assert!(!format!("{a:?}").contains(&a.0));
     }
 
     #[test]
-    fn wrong_key_and_tampering_fail_closed_and_purge() {
+    fn wrong_key_repeated_reads_retain_ciphertext_and_original_key_restores_turns() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("h.db");
         let open = |k: &str| {
@@ -754,29 +845,136 @@ mod tests {
                 .unwrap()
         };
         let a = session("bind-a");
+        let original = vec![turn("secret-q-umber-newt-03", "secret-a"), turn("q2", "a2")];
         let s = open(KEY);
-        s.append(&a, &turn("secret-q-umber-newt-03", "secret-a"), t0())
-            .unwrap();
+        for (i, turn) in original.iter().enumerate() {
+            s.append(&a, turn, t0() + Duration::seconds(i as i64))
+                .unwrap();
+        }
+        let before = encrypted_rows(&s);
+        assert_eq!(count(&s), 2);
         drop(s);
+
         let wrong = open("another-key");
-        assert!(matches!(
-            wrong.load(&a, t0()),
-            Err(PublicHistoryError::Corrupt)
-        ));
-        assert_eq!(count(&wrong), 0, "unreadable rows are dropped");
+        for seconds in [2, 3] {
+            assert!(matches!(
+                wrong.load(&a, t0() + Duration::seconds(seconds)),
+                Err(PublicHistoryError::Corrupt)
+            ));
+            assert_eq!(count(&wrong), 2, "wrong key must not reset history");
+            assert_eq!(encrypted_rows(&wrong), before);
+        }
         drop(wrong);
 
-        // Tamper with the ciphertext (same length, all-zero body).
-        let s = open(KEY);
-        s.append(&a, &turn("q", "a"), t0()).unwrap();
+        let restored = open(KEY);
+        assert_eq!(
+            restored.load(&a, t0() + Duration::seconds(4)).unwrap(),
+            original
+        );
+        assert_eq!(count(&restored), 2);
+        assert_eq!(encrypted_rows(&restored), before);
+    }
+
+    #[test]
+    fn corrupt_row_repeated_reads_retain_ciphertext_without_partial_turns() {
+        let s = store(PublicHistoryConfig::default());
+        let a = session("bind-a");
+        s.append(&a, &turn("readable-first", "complete-reply"), t0())
+            .unwrap();
+        s.append(&a, &turn("corrupt-second", "reply"), t0())
+            .unwrap();
+        // Corrupt the second row so an earlier readable turn cannot leak as
+        // a partial result. Keep the corrupt row for explicit operator repair.
         s.guard()
             .execute(
-                "UPDATE telecom_public_history SET ciphertext = zeroblob(length(ciphertext))",
+                "UPDATE telecom_public_history SET ciphertext = zeroblob(length(ciphertext))
+                 WHERE id = (SELECT MAX(id) FROM telecom_public_history)",
                 [],
             )
             .unwrap();
-        assert!(matches!(s.load(&a, t0()), Err(PublicHistoryError::Corrupt)));
-        assert!(s.load(&a, t0()).unwrap().is_empty());
+        let before = encrypted_rows(&s);
+        for seconds in [1, 2] {
+            assert!(matches!(
+                s.load(&a, t0() + Duration::seconds(seconds)),
+                Err(PublicHistoryError::Corrupt)
+            ));
+            assert_eq!(count(&s), 2);
+            assert_eq!(encrypted_rows(&s), before);
+        }
+    }
+
+    #[test]
+    fn plaintext_payload_is_refused_without_fallback_or_deletion() {
+        let s = store(PublicHistoryConfig::default());
+        let a = session("bind-a");
+        s.append(&a, &turn("q", "a"), t0()).unwrap();
+        // A well-formed plaintext payload is not an encrypted row, even if
+        // its session and timestamps agree with the database metadata.
+        let plaintext = serde_json::to_vec(&Payload {
+            version: PAYLOAD_VERSION,
+            session: a.0.clone(),
+            created_at_ms: t0().timestamp_millis(),
+            expires_at_ms: (t0() + PUBLIC_HISTORY_MAX_TTL).timestamp_millis(),
+            user: "q".into(),
+            assistant: "a".into(),
+        })
+        .unwrap();
+        s.guard()
+            .execute(
+                "UPDATE telecom_public_history SET ciphertext = ?1",
+                params![plaintext],
+            )
+            .unwrap();
+        let before = encrypted_rows(&s);
+        for seconds in [1, 2] {
+            assert!(matches!(
+                s.load(&a, t0() + Duration::seconds(seconds)),
+                Err(PublicHistoryError::Corrupt)
+            ));
+            assert_eq!(count(&s), 1);
+            assert_eq!(encrypted_rows(&s), before);
+        }
+    }
+
+    #[test]
+    fn wrong_key_failure_still_prunes_expired_rows_only() {
+        let s = store(PublicHistoryConfig::default());
+        let a = session("bind-a");
+        s.append(&a, &turn("expired", "old-reply"), t0()).unwrap();
+        let retained = turn("unexpired", "new-reply");
+        s.append(&a, &retained, t0() + Duration::hours(1)).unwrap();
+        let before = encrypted_rows(&s);
+        assert_eq!(before.len(), 2);
+        // Reuse the same database with a mistaken key; expired-row pruning
+        // is independent of decryption and must not remove the live row.
+        let conn = s.conn.into_inner().unwrap();
+        let wrong = PublicHistoryStore::init(
+            conn,
+            SecretsCrypto::new("another-key"),
+            PublicHistoryConfig::default(),
+        )
+        .unwrap();
+        let at = t0() + PUBLIC_HISTORY_MAX_TTL;
+        for _ in 0..2 {
+            assert!(matches!(
+                wrong.load(&a, at),
+                Err(PublicHistoryError::Corrupt)
+            ));
+            assert_eq!(count(&wrong), 1);
+            assert_eq!(encrypted_rows(&wrong), before[1..]);
+        }
+        let restored = PublicHistoryStore::init(
+            wrong.conn.into_inner().unwrap(),
+            SecretsCrypto::new(KEY),
+            PublicHistoryConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(restored.load(&a, at).unwrap(), vec![retained]);
+        assert!(restored
+            .load(&a, at + Duration::hours(1))
+            .unwrap()
+            .is_empty());
+        assert_eq!(count(&restored), 0);
     }
 
     #[test]
@@ -791,25 +989,29 @@ mod tests {
                 params![b.0],
             )
             .unwrap();
-        assert!(matches!(s.load(&b, t0()), Err(PublicHistoryError::Corrupt)));
+        let before = encrypted_rows(&s);
+        for _ in 0..2 {
+            assert!(matches!(s.load(&b, t0()), Err(PublicHistoryError::Corrupt)));
+            assert_eq!(count(&s), 1);
+            assert_eq!(encrypted_rows(&s), before);
+        }
 
-        // Tampered plaintext metadata columns disagree with the payload.
-        s.append(&a, &turn("q", "a"), t0()).unwrap();
-        s.guard()
-            .execute(
-                "UPDATE telecom_public_history SET plain_bytes = plain_bytes + 1",
-                [],
-            )
-            .unwrap();
-        assert!(matches!(s.load(&a, t0()), Err(PublicHistoryError::Corrupt)));
-        s.append(&a, &turn("q", "a"), t0()).unwrap();
-        s.guard()
-            .execute(
-                "UPDATE telecom_public_history SET expires_at = expires_at + 3600000",
-                [],
-            )
-            .unwrap();
-        assert!(matches!(s.load(&a, t0()), Err(PublicHistoryError::Corrupt)));
+        // Each metadata mismatch gets an independent fixture: retained corrupt
+        // rows from an earlier case must not mask the next validation check.
+        for sql in [
+            "UPDATE telecom_public_history SET plain_bytes = plain_bytes + 1",
+            "UPDATE telecom_public_history SET expires_at = expires_at + 3600000",
+        ] {
+            let s = store(PublicHistoryConfig::default());
+            s.append(&a, &turn("q", "a"), t0()).unwrap();
+            s.guard().execute(sql, []).unwrap();
+            let before = encrypted_rows(&s);
+            for _ in 0..2 {
+                assert!(matches!(s.load(&a, t0()), Err(PublicHistoryError::Corrupt)));
+                assert_eq!(count(&s), 1);
+                assert_eq!(encrypted_rows(&s), before);
+            }
+        }
     }
 
     #[test]

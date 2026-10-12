@@ -36,6 +36,7 @@ pub mod secrets;
 pub mod security;
 pub mod serde_helpers;
 pub mod stop_hooks;
+pub mod telecom_public_history;
 pub mod tools;
 pub mod voice_local;
 
@@ -65,5 +66,6 @@ pub use search::*;
 pub use secrets::*;
 pub use security::*;
 pub use stop_hooks::*;
+pub use telecom_public_history::*;
 pub use tools::*;
 pub use voice_local::*;

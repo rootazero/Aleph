@@ -37,6 +37,7 @@ use super::pair_loop_guard::{PairLoopFacts, PairLoopGuard, PairLoopGuardConfig};
 use super::pairing_store::PairingStore;
 use super::routing_config::RoutingConfig;
 use crate::command::CommandParser;
+use crate::gateway::telecom::SmsInboundMeta;
 use crate::group_chat::GroupChatExecutor;
 use crate::routing::config::{RouteBinding, SessionConfig};
 
@@ -94,7 +95,7 @@ pub struct InboundMessageRouter {
     pub(super) default_agent_id: String,
     /// Inbound message deduplication tracker
     dedup_tracker: Mutex<InboundDedupTracker>,
-    /// Bot↔bot pair-loop guard (kicks in when `is_bot_authored()` is true).
+    /// Pair-loop guard for explicit bot-authored traffic and bounded public SMS ingress.
     pair_loop_guard: Arc<PairLoopGuard>,
     /// Effective pair-loop-guard config (channel-level overrides may layer on later).
     pair_loop_config: PairLoopGuardConfig,
@@ -303,7 +304,7 @@ impl InboundMessageRouter {
         self
     }
 
-    /// Tune the bot↔bot pair-loop guard. Defaults (20 events / 60s window /
+    /// Tune the pair-loop guard. Defaults (20 events / 60s window /
     /// 60s cooldown, enabled) are applied when this builder is not called.
     pub const fn with_bot_loop_protection(mut self, config: PairLoopGuardConfig) -> Self {
         self.pair_loop_config = config;
@@ -386,7 +387,7 @@ impl InboundMessageRouter {
                                 if !self.dedup_check(&msg).await {
                                     continue;
                                 }
-                                // Bot↔bot pair-loop guard (no-op for human senders)
+                                // Pair-loop guard (no-op for ordinary human senders)
                                 if !self.pair_loop_check(&msg) {
                                     continue;
                                 }
@@ -506,11 +507,47 @@ impl InboundMessageRouter {
         info!("InboundMessageRouter stopped");
     }
 
-    /// Check pair-loop guard for bot-authored inbound messages.
+    /// Check pair-loop guard for explicit loop-prone inbound messages.
     /// Returns `true` when the message is allowed through, `false` when the
     /// pair has been suppressed (drop silently to avoid feeding the loop).
-    /// Non-bot messages bypass the guard entirely.
+    ///
+    /// Public SMS has no reliable typed relay-origin flag. Rather than infer
+    /// identity from text, source channel, raw metadata or custom payload, fail
+    /// closed with the existing bounded in-memory guard keyed only by typed
+    /// `SmsInboundMeta` transport facts: binding + peer + provider account +
+    /// service address. Defaults cap each key at 20 events / 60s with a 60s
+    /// cooldown; distinct bindings, peers, provider accounts or service
+    /// addresses do not share the budget.
     fn pair_loop_check(&self, msg: &InboundMessage) -> bool {
+        if let Some(meta) = SmsInboundMeta::from_message(msg) {
+            // Public cancellation must remain reachable during SMS cooldown.
+            // Use the executor's classifier; do not spend or reset the loop
+            // budget for Stop aliases. Both receive paths still deduplicate first.
+            if matches!(classify_special_slash(&msg.text), Some(SpecialSlash::Stop)) {
+                return true;
+            }
+            let facts = PairLoopFacts {
+                scope_id: meta.binding_ref.as_str(),
+                conversation_id: meta.peer_address.as_str(),
+                sender_id: meta.provider_account_id.as_str(),
+                receiver_id: meta.service_address.as_str(),
+            };
+            let result = self
+                .pair_loop_guard
+                .record_and_check(&facts, &self.pair_loop_config);
+            if result.suppressed {
+                warn!(
+                    binding_ref = %meta.binding_ref,
+                    provider_account_id = %meta.provider_account_id,
+                    retry_after_secs = result.retry_after.map_or(0, |d| d.as_secs()),
+                    reason = %result.reason.as_deref().unwrap_or(""),
+                    "pair-loop guard suppressed public SMS inbound message"
+                );
+                return false;
+            }
+            return true;
+        }
+
         if !msg.is_bot_authored() {
             return true;
         }
@@ -1565,8 +1602,8 @@ mod tests {
                 region: "r".into(),
                 binding_ref: "order-test-binding".into(),
                 provider_account_id: "a".into(),
-                provider_message_id: "m".into(),
-                envelope_event_id: "e".into(),
+                provider_message_id: id.into(),
+                envelope_event_id: format!("e-{id}"),
                 connection_generation: 1,
                 service_address: "+15550001111".into(),
                 peer_address: "+15552223333".into(),
@@ -1576,6 +1613,22 @@ mod tests {
                 expires_at: chrono::Utc::now(),
             },
         ))];
+        msg
+    }
+
+    fn public_sms_message_from_peer(id: &str, peer: &str) -> InboundMessage {
+        let mut msg = public_sms_message(id);
+        msg.conversation_id = ConversationId::new(peer);
+        msg.sender_id = UserId::new(peer);
+        let meta = msg
+            .metadata
+            .iter_mut()
+            .find_map(|m| match m {
+                crate::gateway::channel::MessageMeta::Sms(meta) => Some(meta.as_mut()),
+                _ => None,
+            })
+            .expect("public_sms_message attaches typed SMS metadata");
+        meta.peer_address = peer.to_string();
         msg
     }
 
@@ -1665,6 +1718,29 @@ mod tests {
         let body = &src[start..end];
         assert!(body.contains("self.admit_to_coalescer(msg)"));
         assert!(!body.contains("coalescer.push("));
+    }
+
+    /// Source-order guard: pair-loop admission must happen before public SMS can
+    /// branch into `handle_public_telecom`; a suppressed loop message must not
+    /// reach owner-state or public-run state at all.
+    #[test]
+    fn run_loop_pair_guard_precedes_message_handling() {
+        let src = include_str!("mod.rs");
+        let start = src.find("async fn run_loop(").expect("run_loop present");
+        let end = src
+            .find("fn pair_loop_check(")
+            .expect("pair_loop_check present");
+        let body = &src[start..end];
+        let first_guard = body
+            .find("self.pair_loop_check(&msg)")
+            .expect("run_loop calls pair_loop_check");
+        let first_handle = body
+            .find("router.handle_message")
+            .expect("run_loop calls handle_message");
+        assert!(
+            first_guard < first_handle,
+            "pair-loop guard must run before any message handling path"
+        );
     }
 
     /// Task #14: a typed public SMS inbound branches BEFORE any owner-state
@@ -2578,6 +2654,318 @@ mod tests {
         for _ in 0..1_000 {
             assert!(router.pair_loop_check(&human));
         }
+    }
+
+    /// pair_loop_check: a public SMS sender exceeding the bounded typed
+    /// binding/peer/provider/service budget is suppressed. The metadata does
+    /// not prove whether the peer is a human or an auto-responder, so this is
+    /// deliberately fail-closed after the configured burst limit.
+    #[test]
+    fn pair_loop_check_suppresses_repeated_public_sms_lineage() {
+        let cfg = PairLoopGuardConfig {
+            enabled: true,
+            max_events_per_window: 3,
+            window_seconds: 60,
+            cooldown_seconds: 30,
+        };
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_bot_loop_protection(cfg);
+
+        // First 3 distinct provider messages from the same typed SMS lineage fit.
+        for i in 0..3 {
+            assert!(router.pair_loop_check(&public_sms_message(&format!("sms-{i}"))));
+        }
+        // 4th tips that binding/peer/provider/service key into cooldown.
+        assert!(!router.pair_loop_check(&public_sms_message("sms-3")));
+        // Subsequent attempts during cooldown remain blocked before owner state.
+        assert!(!router.pair_loop_check(&public_sms_message("sms-4")));
+    }
+
+    /// pair_loop_check: separate public SMS peers retain separate budgets, so
+    /// ordinary turns from another caller are not suppressed by the loop guard.
+    #[test]
+    fn pair_loop_check_keeps_distinct_public_sms_peers_separate() {
+        let cfg = PairLoopGuardConfig {
+            enabled: true,
+            max_events_per_window: 3,
+            window_seconds: 60,
+            cooldown_seconds: 30,
+        };
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_bot_loop_protection(cfg);
+
+        for i in 0..4 {
+            let msg = public_sms_message_from_peer(&format!("loop-{i}"), "+15552223333");
+            let allowed = router.pair_loop_check(&msg);
+            assert_eq!(allowed, i < 3, "first peer should hit the SMS loop cap");
+        }
+
+        assert!(
+            router.pair_loop_check(&public_sms_message_from_peer("normal-1", "+15554445555")),
+            "a distinct inbound caller turn must not inherit another peer's cooldown"
+        );
+    }
+
+    /// Only typed public SMS Stop aliases bypass the budget; ordinary caller
+    /// text, approval replies and other slash commands stay suppressed.
+    #[test]
+    fn pair_loop_check_sms_stop_aliases_bypass_without_spending_or_resetting_budget() {
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_bot_loop_protection(PairLoopGuardConfig {
+            enabled: true,
+            max_events_per_window: 1,
+            window_seconds: 60,
+            cooldown_seconds: 30,
+        });
+        let aliases = ["/stop", "/abort", " /StOp@relay now ", "/ABORT@relay"];
+        for text in aliases {
+            let mut msg = public_sms_message(text);
+            msg.text = text.into();
+            assert!(router.pair_loop_check(&msg), "{text}");
+        }
+        assert!(router.pair_loop_check(&public_sms_message("first-turn")));
+        assert!(!router.pair_loop_check(&public_sms_message("trip-cooldown")));
+        for text in aliases {
+            let mut msg = public_sms_message(text);
+            msg.text = text.into();
+            assert!(router.pair_loop_check(&msg), "{text}");
+        }
+        for text in [
+            "hello",
+            "stop",
+            "please /stop",
+            "/stop-not-really",
+            "/abort-not-really",
+            "/approve 1 once",
+            "/deny 1",
+            "/help",
+            "/btw hello",
+        ] {
+            let mut msg = public_sms_message(text);
+            msg.text = text.into();
+            assert!(!router.pair_loop_check(&msg), "{text} must stay suppressed");
+        }
+    }
+
+    /// Ordinary BotAuthored traffic retains its original loop protection,
+    /// even when its text is a canonical Stop alias.
+    #[test]
+    fn pair_loop_check_ordinary_bot_stop_aliases_stay_suppressed() {
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_bot_loop_protection(PairLoopGuardConfig {
+            enabled: true,
+            max_events_per_window: 1,
+            window_seconds: 60,
+            cooldown_seconds: 30,
+        });
+        assert!(router.pair_loop_check(&bot_authored_msg("first-bot")));
+        assert!(!router.pair_loop_check(&bot_authored_msg("trip-bot-cooldown")));
+        for text in ["/stop", "/abort", "/STOP@relay"] {
+            let mut msg = bot_authored_msg(text);
+            msg.text = text.into();
+            assert!(
+                !router.pair_loop_check(&msg),
+                "{text} is not typed public SMS"
+            );
+        }
+    }
+
+    /// Capture actual public refusal replies, so admitting a negative SMS
+    /// during cooldown is observable even though it does not cancel a run.
+    struct SmsCooldownReplyChannel {
+        info: crate::gateway::channel::ChannelInfo,
+        state: crate::gateway::channel::ChannelState,
+        replies: tokio::sync::mpsc::UnboundedSender<OutboundMessage>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::gateway::channel::Channel for SmsCooldownReplyChannel {
+        fn info(&self) -> &crate::gateway::channel::ChannelInfo {
+            &self.info
+        }
+        fn state(&self) -> &crate::gateway::channel::ChannelState {
+            &self.state
+        }
+        async fn start(&mut self) -> crate::gateway::channel::ChannelResult<()> {
+            Ok(())
+        }
+        async fn stop(&mut self) -> crate::gateway::channel::ChannelResult<()> {
+            Ok(())
+        }
+        async fn send(
+            &self,
+            message: OutboundMessage,
+        ) -> crate::gateway::channel::ChannelResult<crate::gateway::channel::SendResult> {
+            self.replies.send(message).expect("reply collector is live");
+            Ok(crate::gateway::channel::SendResult {
+                message_id: MessageId::new("cooldown-reply"),
+                timestamp: chrono::Utc::now(),
+            })
+        }
+    }
+
+    async fn assert_sms_cooldown_run_loop_cancellation(coalescing: bool) {
+        use crate::gateway::channel::{
+            ChannelCapabilities, ChannelInfo, ChannelState, ChannelStatus,
+        };
+        use crate::gateway::telecom::public_admission::{PublicAdmission, PublicRunRegistry};
+
+        let binding = if coalescing {
+            "sms-cooldown-cancel-coalesced"
+        } else {
+            "sms-cooldown-cancel-direct"
+        };
+        let sms = |id: &str, text: &str| {
+            let mut msg = public_sms_message(id);
+            msg.text = text.into();
+            let crate::gateway::channel::MessageMeta::Sms(meta) = &mut msg.metadata[0] else {
+                panic!("SMS fixture must carry typed metadata");
+            };
+            meta.binding_ref = binding.into();
+            msg
+        };
+        let channels = Arc::new(ChannelRegistry::new());
+        let (replies, mut reply_rx) = tokio::sync::mpsc::unbounded_channel();
+        channels
+            .register(Box::new(SmsCooldownReplyChannel {
+                info: ChannelInfo {
+                    id: ChannelId::new("sms"),
+                    name: "SMS cooldown probe".into(),
+                    channel_type: "test".into(),
+                    status: ChannelStatus::Connected,
+                    capabilities: ChannelCapabilities::default(),
+                },
+                state: ChannelState::new(8),
+                replies,
+            }))
+            .await;
+        let mut router = InboundMessageRouter::new(
+            channels,
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_bot_loop_protection(PairLoopGuardConfig {
+            enabled: true,
+            max_events_per_window: 1,
+            window_seconds: 60,
+            cooldown_seconds: 30,
+        });
+        if coalescing {
+            router = router.with_coalescer(super::super::coalescer::CoalescingConfig {
+                debounce_ms: 0,
+                ..Default::default()
+            });
+        }
+        let router = Arc::new(router);
+        let ctx = executor::telecom_public_from_message_meta(&sms("ctx", "hello").metadata)
+            .expect("typed SMS public context");
+        let registry = PublicRunRegistry::global();
+        let PublicAdmission::Admitted(permit) = registry.try_admit(&ctx) else {
+            panic!("isolated test binding must admit a live public run");
+        };
+        let cancel = permit.cancel_token();
+        // Prove the public executor and reply collector are live: without
+        // the receive-path guard, ordinary text on this busy binding replies.
+        router
+            .handle_message(sms("collector-probe", "hello"))
+            .await
+            .unwrap();
+        let probe = tokio::time::timeout(Duration::from_secs(1), reply_rx.recv())
+            .await
+            .expect("public busy reply must reach the collector")
+            .expect("reply collector stays open");
+        assert_eq!(
+            probe.text,
+            crate::gateway::telecom::public_admission::PUBLIC_BUSY_NOTICE
+        );
+        assert!(!cancel.is_cancelled());
+        assert!(router.pair_loop_check(&sms("prime", "hello")));
+        assert!(!router.pair_loop_check(&sms("trip", "hello")));
+
+        // Exercise each real receive branch with negative inputs and a replay
+        // whose text changes to Stop. Dedup must drop it before the bypass.
+        let (tx, rx) = broadcast::channel(32);
+        for (i, text) in [
+            "hello",
+            "stop",
+            "please /stop",
+            "/stop-not-really",
+            "/abort-not-really",
+            "/approve 1 once",
+            "/deny 1",
+            "/help",
+            "/btw hello",
+        ]
+        .iter()
+        .enumerate()
+        {
+            tx.send(sms(&format!("negative-{i}"), text)).unwrap();
+        }
+        tx.send(sms("negative-0", "/stop")).unwrap();
+        drop(tx);
+        router.clone().run_loop(rx).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), reply_rx.recv())
+                .await
+                .is_err(),
+            "suppressed SMS must not reach the public executor or emit a busy reply"
+        );
+        assert!(
+            !cancel.is_cancelled(),
+            "negative/replayed SMS must not cancel"
+        );
+        drop(permit);
+
+        // Hold a real global-registry permit and observe its cancellation
+        // token, not a mock callback or merely pair_loop_check's return value.
+        for (i, text) in [" /StOp@relay now ", "/ABORT"].iter().enumerate() {
+            let PublicAdmission::Admitted(permit) = registry.try_admit(&ctx) else {
+                panic!("previous public permit must release on drop");
+            };
+            let cancel = permit.cancel_token();
+            let (tx, rx) = broadcast::channel(8);
+            tx.send(sms(&format!("cancel-{i}"), text)).unwrap();
+            drop(tx);
+            router.clone().run_loop(rx).await;
+            tokio::time::timeout(Duration::from_secs(1), cancel.cancelled())
+                .await
+                .expect("Stop alias must cancel the real public run during cooldown");
+            assert!(cancel.is_cancelled());
+            assert!(reply_rx.try_recv().is_err(), "Stop must not emit a reply");
+            assert!(
+                !router.pair_loop_check(&sms(&format!("still-cooling-{i}"), "hello")),
+                "cancellation must not clear the SMS cooldown"
+            );
+            drop(permit);
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(spend_global_policy)]
+    async fn run_loop_direct_sms_cooldown_preserves_negatives_dedup_and_cancels_public_run() {
+        assert_sms_cooldown_run_loop_cancellation(false).await;
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(spend_global_policy)]
+    async fn run_loop_coalesced_sms_cooldown_preserves_negatives_dedup_and_cancels_public_run() {
+        assert_sms_cooldown_run_loop_cancellation(true).await;
     }
 
     /// pair_loop_check: a bot-authored sender exceeding the configured budget

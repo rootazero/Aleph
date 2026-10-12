@@ -24,6 +24,8 @@
 //! This slice only defines and propagates the contract. Consumers (history /
 //! memory readers, approval, tool surface) are later slices.
 
+use sha2::{Digest, Sha256};
+
 use super::sms_meta::SmsInboundMeta;
 
 /// Which public telecom line a run came in on.
@@ -33,6 +35,40 @@ pub enum TelecomChannel {
     Voice,
 }
 
+/// Cryptographic fingerprint of the normalised caller identity. It is derived
+/// from the strict E.164 peer address already attached to typed SMS ingress;
+/// the raw phone number is never carried in provenance, markers, or public
+/// history keys.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct CallerDigest(String);
+
+impl CallerDigest {
+    pub(crate) fn from_normalized_e164(peer_address: &str) -> Self {
+        let mut h = Sha256::new();
+        h.update(b"aleph-telecom-caller-digest-v1\0");
+        h.update(peer_address.as_bytes());
+        Self(hex::encode(h.finalize()))
+    }
+
+    pub(super) fn from_marker_hex(hex_digest: &str) -> Option<Self> {
+        let canonical = hex_digest.len() == 64
+            && hex_digest
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        canonical.then(|| Self(hex_digest.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for CallerDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CallerDigest(<redacted>)")
+    }
+}
+
 /// Non-secret facts identifying the admitted telecom ingress. Carries no phone
 /// number, message body, credential or trust decision.
 #[derive(Clone, PartialEq, Eq)]
@@ -40,6 +76,7 @@ pub struct TelecomProvenance {
     channel: TelecomChannel,
     region: String,
     binding_ref: String,
+    caller_digest: CallerDigest,
     connection_generation: u64,
 }
 
@@ -56,6 +93,10 @@ impl TelecomProvenance {
         &self.binding_ref
     }
 
+    pub fn caller_digest(&self) -> &CallerDigest {
+        &self.caller_digest
+    }
+
     pub fn connection_generation(&self) -> u64 {
         self.connection_generation
     }
@@ -69,6 +110,7 @@ impl std::fmt::Debug for TelecomProvenance {
             .field("channel", &self.channel)
             .field("region", &"<redacted>")
             .field("binding_ref", &"<redacted>")
+            .field("caller_digest", &"<redacted>")
             .field("connection_generation", &self.connection_generation)
             .finish()
     }
@@ -91,20 +133,22 @@ impl TelecomPublicContext {
                 channel: TelecomChannel::Sms,
                 region: meta.region.clone(),
                 binding_ref: meta.binding_ref.clone(),
+                caller_digest: CallerDigest::from_normalized_e164(&meta.peer_address),
                 connection_generation: meta.connection_generation,
             },
         }
     }
 
-    /// Rebuild from a recognised v1 durable marker (busy-queue reinjection).
+    /// Rebuild from a recognised v2 durable marker (busy-queue reinjection).
     /// `pub(super)`: only the sibling `persisted_marker` module, whose parser
     /// accepts nothing but the exact versioned shape, can call it.
-    pub(super) fn restore_v1(marker: &super::persisted_marker::PersistedPublicV1) -> Self {
+    pub(super) fn restore_v2(marker: &super::persisted_marker::PersistedPublicV2) -> Self {
         Self {
             provenance: TelecomProvenance {
                 channel: marker.channel(),
                 region: marker.region().to_string(),
                 binding_ref: marker.binding_ref().to_string(),
+                caller_digest: marker.caller_digest().clone(),
                 connection_generation: marker.connection_generation(),
             },
         }
@@ -132,6 +176,13 @@ pub(crate) mod test_support {
     use chrono::Utc;
 
     pub(crate) fn sample_public_context(binding_ref: &str) -> TelecomPublicContext {
+        sample_public_context_for_peer(binding_ref, "+15550000001")
+    }
+
+    pub(crate) fn sample_public_context_for_peer(
+        binding_ref: &str,
+        peer_address: &str,
+    ) -> TelecomPublicContext {
         TelecomPublicContext::from_admitted_sms(&SmsInboundMeta {
             region: "test-region".into(),
             binding_ref: binding_ref.into(),
@@ -140,7 +191,7 @@ pub(crate) mod test_support {
             envelope_event_id: "ev".into(),
             connection_generation: 1,
             service_address: "+15550000000".into(),
-            peer_address: "+15550000001".into(),
+            peer_address: peer_address.into(),
             encoding: SmsEncoding::Gsm7,
             segment_count: 1,
             created_at: Utc::now(),
@@ -180,6 +231,8 @@ mod tests {
         assert_eq!(p.region(), "us-west-secret-region");
         assert_eq!(p.binding_ref(), "binding-secret-ref");
         assert_eq!(p.connection_generation(), 7);
+        assert_eq!(p.caller_digest().as_str().len(), 64);
+        assert_ne!(p.caller_digest().as_str(), "+15552223333");
     }
 
     #[test]
@@ -225,6 +278,7 @@ mod tests {
         }
         assert!(!(&W::<TelecomPublicContext>(std::marker::PhantomData)).is_serde());
         assert!(!(&W::<TelecomProvenance>(std::marker::PhantomData)).is_serde());
+        assert!(!(&W::<CallerDigest>(std::marker::PhantomData)).is_serde());
         assert!((&W::<SmsInboundMeta>(std::marker::PhantomData)).is_serde());
     }
 }

@@ -796,19 +796,41 @@ struct ChannelPublicReplySink<'a> {
 
 #[async_trait::async_trait]
 impl crate::gateway::telecom::public_run::PublicReplySink for ChannelPublicReplySink<'_> {
-    async fn send_reply(&self, text: String) {
+    async fn send_reply(&self, text: String) -> Result<(), crate::gateway::channel::ChannelError> {
         let reply = crate::gateway::channel::OutboundMessage::text(
             self.msg.conversation_id.as_str(),
             &text,
         );
-        if let Err(e) = self
-            .router
+        // The driver's acknowledgment gate needs the actual send result.
+        // Do not stringify transport errors here: they can contain bodies or phones.
+        self.router
             .channel_registry
-            .send(&self.msg.channel_id, reply)
+            .send_public_telecom(&self.msg.channel_id, reply)
             .await
-        {
-            error!("[Router] public telecom reply failed: {e}");
-        }
+            .map(|_| ())
+    }
+
+    async fn send_reply_if_not_cancelled(
+        &self,
+        text: String,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<
+        crate::gateway::telecom::public_run::PublicReplyOutcome,
+        crate::gateway::channel::ChannelError,
+    > {
+        use crate::gateway::telecom::public_run::PublicReplyOutcome;
+        let reply = crate::gateway::channel::OutboundMessage::text(
+            self.msg.conversation_id.as_str(),
+            &text,
+        );
+        self.router
+            .channel_registry
+            .send_public_telecom_if_not_cancelled(&self.msg.channel_id, reply, cancel)
+            .await
+            .map(|ack| match ack {
+                Some(_) => PublicReplyOutcome::Acknowledged,
+                None => PublicReplyOutcome::Cancelled,
+            })
     }
 }
 
@@ -851,6 +873,234 @@ impl InboundMessageRouter {
         .await;
         info!("[Router] public telecom run: {disposition:?}");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod public_reply_sink_tests {
+    use super::*;
+    use crate::gateway::channel::{
+        Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
+        ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId, OutboundMessage,
+        SendResult, UserId,
+    };
+    use crate::gateway::channel_registry::ChannelRegistry;
+    use crate::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore, EnqueueOutcome};
+    use crate::gateway::pairing_store::SqlitePairingStore;
+    use crate::gateway::routing_config::RoutingConfig;
+    use crate::gateway::telecom::public_run::PublicReplySink;
+    use std::sync::Mutex;
+
+    struct SinkTransport {
+        info: ChannelInfo,
+        state: ChannelState,
+        sent: Arc<Mutex<Vec<OutboundMessage>>>,
+        fail: bool,
+    }
+
+    // Default Automatic delivery policy: the sink must isolate itself without
+    // relying on the real SMS adapter's ExplicitOnly policy.
+    #[async_trait::async_trait]
+    impl Channel for SinkTransport {
+        fn info(&self) -> &ChannelInfo {
+            &self.info
+        }
+        fn state(&self) -> &ChannelState {
+            &self.state
+        }
+        async fn start(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn stop(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+            self.sent.lock().unwrap().push(message);
+            if self.fail {
+                Err(ChannelError::RateLimited {
+                    retry_after_secs: 0,
+                })
+            } else {
+                Ok(SendResult {
+                    message_id: MessageId::new("transport-ack"),
+                    timestamp: chrono::Utc::now(),
+                })
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn actual_public_sink_preserves_route_and_result_without_replaying_owner_backlog() {
+        for fail in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let store = Arc::new(
+                DeliveryStore::open(
+                    &temp.path().join("delivery.db"),
+                    DeliveryQueueConfig::default(),
+                )
+                .unwrap(),
+            );
+            let registry = Arc::new(ChannelRegistry::new().with_delivery_store(store.clone()));
+            let sent = Arc::new(Mutex::new(Vec::new()));
+            let channel_id = registry
+                .register(Box::new(SinkTransport {
+                    info: ChannelInfo {
+                        id: ChannelId::new("public-sink-transport"),
+                        name: "test transport".into(),
+                        channel_type: "test".into(),
+                        status: ChannelStatus::Connected,
+                        capabilities: ChannelCapabilities::default(),
+                    },
+                    state: ChannelState::new(8),
+                    sent: sent.clone(),
+                    fail,
+                }))
+                .await;
+            let EnqueueOutcome::Queued(row) = store
+                .enqueue(
+                    channel_id.as_str(),
+                    &OutboundMessage::text("original-conversation", "owner-backlog"),
+                    "down",
+                    0,
+                )
+                .unwrap()
+            else {
+                panic!("fixture must queue");
+            };
+            let router = InboundMessageRouter::new(
+                registry,
+                Arc::new(SqlitePairingStore::in_memory().unwrap()),
+                RoutingConfig::default(),
+            );
+            let msg = InboundMessage {
+                id: MessageId::new("inbound"),
+                channel_id: channel_id.clone(),
+                conversation_id: ConversationId::new("original-conversation"),
+                sender_id: UserId::new("caller"),
+                sender_name: None,
+                text: "question".into(),
+                attachments: Vec::new(),
+                timestamp: chrono::Utc::now(),
+                reply_to: None,
+                is_group: false,
+                raw: None,
+                metadata: Vec::new(),
+            };
+            let sink = ChannelPublicReplySink {
+                router: &router,
+                msg: &msg,
+            };
+
+            // Exercise the actual trait implementation, not a source-string
+            // assertion or a duplicate helper standing in for the sink.
+            let result = sink.send_reply("public-answer".into()).await;
+            if fail {
+                assert!(matches!(
+                    result,
+                    Err(ChannelError::RateLimited {
+                        retry_after_secs: 0
+                    })
+                ));
+            } else {
+                assert!(result.is_ok());
+            }
+            {
+                let messages = sent.lock().unwrap();
+                assert_eq!(messages.len(), 1, "no queued replay or automatic retry");
+                let reply = &messages[0];
+                assert_eq!(reply.conversation_id, msg.conversation_id);
+                assert_eq!(reply.text, "public-answer");
+                assert!(reply.reply_to.is_none());
+                assert!(reply.attachments.is_empty());
+                assert!(reply.metadata.is_empty());
+            }
+            assert_eq!(store.len().unwrap(), 1);
+            let backlog = store
+                .claim_conversation(channel_id.as_str(), msg.conversation_id.as_str(), 10)
+                .unwrap();
+            assert_eq!(backlog.len(), 1);
+            assert_eq!(backlog[0].id, row);
+            assert_eq!(backlog[0].message.text, "owner-backlog");
+            assert_eq!(backlog[0].attempts, 0);
+            assert!(store.recent_dead_letters(10).unwrap().is_empty());
+
+            let mut unknown = msg.clone();
+            unknown.channel_id = ChannelId::new("unregistered-public-transport");
+            let unknown_sink = ChannelPublicReplySink {
+                router: &router,
+                msg: &unknown,
+            };
+            assert!(matches!(
+                unknown_sink.send_reply("unroutable".into()).await,
+                Err(ChannelError::NotConnected(_))
+            ));
+            assert_eq!(sent.lock().unwrap().len(), 1);
+            assert_eq!(store.len().unwrap(), 1);
+            assert!(store.recent_dead_letters(10).unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn actual_public_sink_returns_cancelled_without_transport_send_when_cancelled() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            DeliveryStore::open(
+                &temp.path().join("delivery.db"),
+                DeliveryQueueConfig::default(),
+            )
+            .unwrap(),
+        );
+        let registry = Arc::new(ChannelRegistry::new().with_delivery_store(store));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let channel_id = registry
+            .register(Box::new(SinkTransport {
+                info: ChannelInfo {
+                    id: ChannelId::new("cancelled-public-sink-transport"),
+                    name: "test transport".into(),
+                    channel_type: "test".into(),
+                    status: ChannelStatus::Connected,
+                    capabilities: ChannelCapabilities::default(),
+                },
+                state: ChannelState::new(8),
+                sent: sent.clone(),
+                fail: false,
+            }))
+            .await;
+        let router = InboundMessageRouter::new(
+            registry,
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        );
+        let msg = InboundMessage {
+            id: MessageId::new("cancelled-inbound"),
+            channel_id,
+            conversation_id: ConversationId::new("cancelled-conversation"),
+            sender_id: UserId::new("caller"),
+            sender_name: None,
+            text: "question".into(),
+            attachments: Vec::new(),
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: Vec::new(),
+        };
+        let sink = ChannelPublicReplySink {
+            router: &router,
+            msg: &msg,
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+
+        let result = sink
+            .send_reply_if_not_cancelled("public-answer".into(), &cancel)
+            .await;
+
+        assert!(matches!(
+            result,
+            Ok(crate::gateway::telecom::public_run::PublicReplyOutcome::Cancelled)
+        ));
+        assert!(sent.lock().unwrap().is_empty());
     }
 }
 

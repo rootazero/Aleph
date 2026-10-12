@@ -14,10 +14,12 @@
 //!   census test below). Nothing builds a
 //!   marker from a metadata map, a string key, or `source_channel`.
 //! * Reading never fails and never guesses: any JSON shape is classified into
-//!   a state. Only an exact, known v1 shape restores a context; everything else
-//!   is `Legacy` (field absent), `Unknown` (well-formed but unrecognised
-//!   version/state/channel) or `Corrupt` (unparsable). `Unknown` / `Corrupt`
-//!   keep the raw JSON so a tombstone rewrite does not erase the evidence.
+//!   a state. Only an exact, known v2 public shape restores a context; v1
+//!   public markers lack caller proof and fail closed instead of resuming into
+//!   binding-wide shared history. Everything else is `Legacy` (field absent),
+//!   `Unknown` (well-formed but unrecognised version/state/channel) or
+//!   `Corrupt` (unparsable). `Unknown` / `Corrupt` keep the raw JSON so a
+//!   tombstone rewrite does not erase the evidence.
 //! * There is no integrity tag. The journal is in the same trust domain as the
 //!   session transcript store; a local attacker who can edit it can already
 //!   edit the queued input. This is not an unforgeable marker.
@@ -34,21 +36,23 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, Value};
 
-use super::public_context::{TelecomChannel, TelecomPublicContext};
+use super::public_context::{CallerDigest, TelecomChannel, TelecomPublicContext};
 
 /// Current wire version of the marker.
-pub const MARKER_VERSION: u64 = 1;
+pub const MARKER_VERSION: u64 = 2;
+const LEGACY_PUBLIC_MARKER_VERSION: u64 = 1;
 
-/// Fields of a recognised v1 public marker. Private: only the parser builds it.
+/// Fields of a recognised v2 public marker. Private: only the parser builds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PersistedPublicV1 {
+pub struct PersistedPublicV2 {
     channel: TelecomChannel,
     region: String,
     binding_ref: String,
+    caller_digest: CallerDigest,
     connection_generation: u64,
 }
 
-impl PersistedPublicV1 {
+impl PersistedPublicV2 {
     pub(super) fn channel(&self) -> TelecomChannel {
         self.channel
     }
@@ -57,6 +61,9 @@ impl PersistedPublicV1 {
     }
     pub(super) fn binding_ref(&self) -> &str {
         &self.binding_ref
+    }
+    pub(super) fn caller_digest(&self) -> &CallerDigest {
+        &self.caller_digest
     }
     pub(super) fn connection_generation(&self) -> u64 {
         self.connection_generation
@@ -72,7 +79,7 @@ pub enum PersistedTelecomMarker {
     /// Written by this version for a run with `telecom_public == None`.
     Ordinary,
     /// Written by this version for a run with `telecom_public == Some`.
-    Public(PersistedPublicV1),
+    Public(PersistedPublicV2),
     /// Well-formed JSON object this build does not recognise (newer version,
     /// unknown state or channel). Raw value kept verbatim.
     Unknown(Value),
@@ -121,10 +128,11 @@ impl PersistedTelecomMarker {
             None => Self::Ordinary,
             Some(c) => {
                 let p = c.provenance();
-                Self::Public(PersistedPublicV1 {
+                Self::Public(PersistedPublicV2 {
                     channel: p.channel(),
                     region: p.region().to_string(),
                     binding_ref: p.binding_ref().to_string(),
+                    caller_digest: p.caller_digest().clone(),
                     connection_generation: p.connection_generation(),
                 })
             }
@@ -136,7 +144,7 @@ impl PersistedTelecomMarker {
         match self {
             Self::Ordinary => MarkerRestore::Ordinary,
             Self::Legacy => MarkerRestore::LegacyUnproven,
-            Self::Public(p) => MarkerRestore::Public(TelecomPublicContext::restore_v1(p)),
+            Self::Public(p) => MarkerRestore::Public(TelecomPublicContext::restore_v2(p)),
             Self::Unknown(_) => MarkerRestore::Refuse(
                 "telecom provenance marker has an unrecognised version/state; refusing to run it as ordinary"
                     .into(),
@@ -170,6 +178,7 @@ impl PersistedTelecomMarker {
                 },
                 "region": p.region,
                 "binding_ref": p.binding_ref,
+                "caller_digest": p.caller_digest.as_str(),
                 "connection_generation": p.connection_generation,
             })),
             Self::Unknown(v) | Self::Corrupt(v) => Some(v.clone()),
@@ -183,12 +192,12 @@ impl PersistedTelecomMarker {
         let Some(version) = obj.get("version").and_then(Value::as_u64) else {
             return Self::Corrupt(v);
         };
-        if version != MARKER_VERSION {
-            return Self::Unknown(v);
-        }
-        match obj.get("state").and_then(Value::as_str) {
-            Some("ordinary") => Self::Ordinary,
-            Some("public") => {
+        match (version, obj.get("state").and_then(Value::as_str)) {
+            (MARKER_VERSION, Some("ordinary"))
+            | (LEGACY_PUBLIC_MARKER_VERSION, Some("ordinary")) => Self::Ordinary,
+            (LEGACY_PUBLIC_MARKER_VERSION, Some("public")) => Self::Unknown(v),
+            (vnum, _) if vnum != MARKER_VERSION => Self::Unknown(v),
+            (MARKER_VERSION, Some("public")) => {
                 let channel = match obj.get("channel").and_then(Value::as_str) {
                     Some("sms") => TelecomChannel::Sms,
                     Some("voice") => TelecomChannel::Voice,
@@ -197,19 +206,25 @@ impl PersistedTelecomMarker {
                 };
                 let region = obj.get("region").and_then(Value::as_str);
                 let binding = obj.get("binding_ref").and_then(Value::as_str);
+                let caller_digest = obj
+                    .get("caller_digest")
+                    .and_then(Value::as_str)
+                    .and_then(CallerDigest::from_marker_hex);
                 let generation = obj.get("connection_generation").and_then(Value::as_u64);
-                match (region, binding, generation) {
-                    (Some(r), Some(b), Some(g)) => Self::Public(PersistedPublicV1 {
+                match (region, binding, caller_digest, generation) {
+                    (Some(r), Some(b), Some(d), Some(g)) => Self::Public(PersistedPublicV2 {
                         channel,
                         region: r.to_string(),
                         binding_ref: b.to_string(),
+                        caller_digest: d,
                         connection_generation: g,
                     }),
                     _ => Self::Corrupt(v),
                 }
             }
-            Some(_) => Self::Unknown(v),
-            None => Self::Corrupt(v),
+            (MARKER_VERSION, Some(_)) => Self::Unknown(v),
+            (MARKER_VERSION, None) => Self::Corrupt(v),
+            _ => Self::Unknown(v),
         }
     }
 }
@@ -265,6 +280,10 @@ mod tests {
         serde_json::from_slice(&serde_json::to_vec(m).unwrap()).unwrap()
     }
 
+    fn digest() -> String {
+        ctx().provenance().caller_digest().as_str().to_string()
+    }
+
     #[test]
     fn some_survives_capture_serde_and_restore() {
         let c = ctx();
@@ -299,10 +318,11 @@ mod tests {
     #[test]
     fn unknown_version_state_and_channel_are_refused_and_keep_raw_json() {
         for raw in [
-            json!({"version": 2, "state": "public"}),
-            json!({"version": 1, "state": "quarantine"}),
-            json!({"version": 1, "state": "public", "channel": "fax",
-                   "region": "r", "binding_ref": "b", "connection_generation": 1}),
+            json!({"version": 99, "state": "public"}),
+            json!({"version": 2, "state": "quarantine"}),
+            json!({"version": 2, "state": "public", "channel": "fax",
+                   "region": "r", "binding_ref": "b", "caller_digest": digest(),
+                   "connection_generation": 1}),
         ] {
             let m: PersistedTelecomMarker = serde_json::from_value(raw.clone()).unwrap();
             assert!(matches!(m, PersistedTelecomMarker::Unknown(_)), "{raw}");
@@ -319,17 +339,35 @@ mod tests {
             json!(true),
             json!([]),
             json!({}),
-            json!({"version": "1", "state": "ordinary"}),
-            json!({"version": 1}),
-            json!({"version": 1, "state": "public"}),
-            json!({"version": 1, "state": "public", "channel": "sms", "region": "r"}),
-            json!({"version": 1, "state": "public", "channel": "sms", "region": 1,
-                   "binding_ref": "b", "connection_generation": 1}),
+            json!({"version": "2", "state": "ordinary"}),
+            json!({"version": 2}),
+            json!({"version": 2, "state": "public"}),
+            json!({"version": 2, "state": "public", "channel": "sms", "region": "r"}),
+            json!({"version": 2, "state": "public", "channel": "sms", "region": 1,
+                   "binding_ref": "b", "caller_digest": digest(), "connection_generation": 1}),
+            json!({"version": 2, "state": "public", "channel": "sms", "region": "r",
+                   "binding_ref": "b", "caller_digest": "not-a-digest", "connection_generation": 1}),
         ] {
             let m: PersistedTelecomMarker = serde_json::from_value(raw.clone()).unwrap();
             assert!(matches!(m, PersistedTelecomMarker::Corrupt(_)), "{raw}");
             assert!(matches!(m.restore(), MarkerRestore::Refuse(_)), "{raw}");
         }
+    }
+
+    #[test]
+    fn old_v1_public_marker_without_caller_proof_is_refused() {
+        let raw = json!({
+            "version": 1,
+            "state": "public",
+            "channel": "sms",
+            "region": "r",
+            "binding_ref": "b",
+            "connection_generation": 1,
+        });
+        let m: PersistedTelecomMarker = serde_json::from_value(raw.clone()).unwrap();
+        assert!(matches!(m, PersistedTelecomMarker::Unknown(_)), "{m:?}");
+        assert!(matches!(m.restore(), MarkerRestore::Refuse(_)));
+        assert_eq!(m.to_value(), Some(raw));
     }
 
     #[test]

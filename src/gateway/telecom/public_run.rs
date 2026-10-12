@@ -1,7 +1,7 @@
 //! Public telecom SMS run driver (public session isolation contract §4–§6).
 //!
-//! Admission → (isolated history load) → isolated runner → (history append) →
-//! exactly one buffered reply. Owns no business logic beyond that sequencing:
+//! Admission → (isolated history load) → isolated runner → acknowledged
+//! buffered reply → (history append). Owns no business logic beyond that sequencing:
 //! the reply text comes from the runner, refusals are fixed notices. The
 //! optional [`PublicHistoryStore`] is the only cross-turn state; without one
 //! every run is a single, history-free turn.
@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use super::public_admission::{PublicAdmission, PublicRunRegistry, PUBLIC_BUSY_NOTICE};
 use super::public_history::{PublicHistorySession, PublicHistoryStore, PublicHistoryTurn};
@@ -20,22 +21,48 @@ use crate::orchestrator::dispatch::{
 };
 
 /// Delivery seam of the single public reply (the channel reply path in
-/// production, a spy in tests).
+/// production, a spy in tests). `Ok(())` acknowledges transport acceptance,
+/// not receipt by the caller's handset. An error or timeout may leave the
+/// external outcome unknown; neither is evidence of a completed public turn.
 #[async_trait]
 pub trait PublicReplySink: Send + Sync {
-    async fn send_reply(&self, text: String);
+    async fn send_reply(&self, text: String) -> Result<(), crate::gateway::channel::ChannelError>;
+
+    /// Fence cancellation before submission, then await the transport ACK even
+    /// if cancellation fires. Legacy sinks commit when `send_reply` is first
+    /// polled; sinks with internal pre-submit waits must override this method
+    /// and fence those waits too. Never race cancellation against a committed send.
+    async fn send_reply_if_not_cancelled(
+        &self,
+        text: String,
+        cancel: &CancellationToken,
+    ) -> Result<PublicReplyOutcome, crate::gateway::channel::ChannelError> {
+        if cancel.is_cancelled() {
+            return Ok(PublicReplyOutcome::Cancelled);
+        }
+        self.send_reply(text).await?;
+        Ok(PublicReplyOutcome::Acknowledged)
+    }
+}
+
+/// Cancellation is affirmative evidence of no submission, not a transport error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicReplyOutcome {
+    Acknowledged,
+    Cancelled,
 }
 
 /// What happened to one public inbound.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublicRunDisposition {
-    /// The runner's reply was delivered.
+    /// The sink acknowledged transport acceptance of the runner's reply.
     Replied,
-    /// Refused at admission; the fixed notice was delivered.
+    /// Refused at admission; the sink acknowledged the fixed notice.
     Refused(&'static str),
-    /// Cancelled (`/stop`); nothing delivered.
+    /// Cancelled (`/stop`) before reply submission; no reply submitted.
     Cancelled,
-    /// Runner failed or produced nothing; nothing delivered.
+    /// No acknowledged reply: runner failure, empty reply, sink error or timeout.
+    /// An in-flight send may already have been accepted externally.
     Failed,
 }
 
@@ -52,14 +79,16 @@ pub const PUBLIC_REPLY_DELIVERY_TIMEOUT: Duration = Duration::from_secs(30);
 /// refused with the busy notice rather than falling back to the owner path.
 ///
 /// `history`, when present, supplies the binding's completed public turns
-/// before the run and records this one after its reply is released. A
+/// before the run and records this one only after the sink acknowledges it. A
 /// history that cannot be read (wrong key, corruption) fails the run closed:
 /// the runner is not invoked and nothing is sent. A failed *append* (e.g. the
 /// store is at capacity) only means the turn is not remembered.
 ///
 /// The binding permit is held through reply delivery, and `/stop` is
-/// re-checked immediately before the reply is released, so a cancellation
-/// that lands before the send suppresses the reply and the history append.
+/// fenced by the sink through its pre-submit waits, so a cancellation
+/// observed before the commit boundary suppresses the reply and history append.
+/// Once submitted, `/stop` cannot retract transport acceptance: an eventual
+/// `Ok(())` is still recorded, while an error or timeout is never recorded.
 pub async fn run_public_sms(
     registry: &Arc<PublicRunRegistry>,
     harness: Option<Arc<dyn HarnessRunner>>,
@@ -81,6 +110,38 @@ pub async fn run_public_sms(
     .await
 }
 
+/// Share the acknowledgment boundary across replies and refusal notices.
+/// Do not log channel errors: transport diagnostics can contain bodies or phones.
+async fn send_reply_bounded(
+    sink: &dyn PublicReplySink,
+    text: String,
+    delivery_timeout: Duration,
+    cancel: Option<&CancellationToken>,
+) -> Result<PublicReplyOutcome, ()> {
+    let delivery = async {
+        match cancel {
+            Some(cancel) => sink.send_reply_if_not_cancelled(text, cancel).await,
+            None => sink
+                .send_reply(text)
+                .await
+                .map(|()| PublicReplyOutcome::Acknowledged),
+        }
+    };
+    match tokio::time::timeout(delivery_timeout, delivery).await {
+        Ok(Ok(outcome)) => Ok(outcome),
+        Ok(Err(_)) => {
+            tracing::warn!("[public] reply transport did not acknowledge delivery");
+            Err(())
+        }
+        Err(_) => {
+            tracing::warn!(
+                "[public] reply delivery exceeded {delivery_timeout:?}; outcome unknown"
+            );
+            Err(())
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_public_sms_bounded(
     registry: &Arc<PublicRunRegistry>,
@@ -97,14 +158,28 @@ async fn run_public_sms_bounded(
         PublicAdmission::Admitted(p) => p,
         refused => {
             let notice = refused.notice().unwrap_or(PUBLIC_BUSY_NOTICE);
-            sink.send_reply(notice.to_string()).await;
-            return PublicRunDisposition::Refused(notice);
+            return if send_reply_bounded(sink, notice.to_string(), delivery_timeout, None)
+                .await
+                .is_ok()
+            {
+                PublicRunDisposition::Refused(notice)
+            } else {
+                PublicRunDisposition::Failed
+            };
         }
     };
     let Some(harness) = harness else {
+        let disposition =
+            if send_reply_bounded(sink, PUBLIC_BUSY_NOTICE.to_string(), delivery_timeout, None)
+                .await
+                .is_ok()
+            {
+                PublicRunDisposition::Refused(PUBLIC_BUSY_NOTICE)
+            } else {
+                PublicRunDisposition::Failed
+            };
         drop(permit);
-        sink.send_reply(PUBLIC_BUSY_NOTICE.to_string()).await;
-        return PublicRunDisposition::Refused(PUBLIC_BUSY_NOTICE);
+        return disposition;
     };
     let cancel = permit.cancel_token();
     let history_key = history.map(|_| PublicHistorySession::from_provenance(ctx.provenance()));
@@ -147,18 +222,26 @@ async fn run_public_sms_bounded(
         registry.record_spend(u64::from(outcome.total_tokens));
     }
     // The permit stays held from here through delivery and the history
-    // append: `/stop` keeps finding this run until the reply is released, and
+    // append: `/stop` keeps finding this run until the sink acknowledges, and
     // a follow-up cannot load a stale history snapshot.
     let disposition = match result {
-        // Cancel fence: no await between this check and the send call below.
+        // Early exit only; the sink owns the final pre-submit cancellation fence.
         _ if cancel.is_cancelled() => PublicRunDisposition::Cancelled,
         Ok(outcome) if !outcome.final_text.trim().is_empty() => {
             let reply = outcome.final_text;
-            let delivered = tokio::time::timeout(delivery_timeout, sink.send_reply(reply.clone()));
-            if delivered.await.is_err() {
-                tracing::warn!("[public] reply delivery exceeded {delivery_timeout:?}");
+            match send_reply_bounded(sink, reply.clone(), delivery_timeout, Some(&cancel)).await {
+                Ok(PublicReplyOutcome::Acknowledged) => {}
+                Ok(PublicReplyOutcome::Cancelled) => {
+                    drop(permit);
+                    return PublicRunDisposition::Cancelled;
+                }
+                Err(()) => {
+                    drop(permit);
+                    return PublicRunDisposition::Failed;
+                }
             }
-            // Remember only a turn whose reply was released uncancelled.
+            // Only an explicit sink acknowledgment completes a turn. A `/stop`
+            // after submission cannot undo an externally accepted reply.
             if let (Some(store), Some(key), Some(user)) = (history, &history_key, user_text) {
                 let turn = PublicHistoryTurn {
                     user,
@@ -196,8 +279,30 @@ mod tests {
 
     #[async_trait]
     impl PublicReplySink for SpySink {
-        async fn send_reply(&self, text: String) {
+        async fn send_reply(
+            &self,
+            text: String,
+        ) -> Result<(), crate::gateway::channel::ChannelError> {
             self.sent.lock().unwrap().push(text);
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FailingSink {
+        attempts: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl PublicReplySink for FailingSink {
+        async fn send_reply(
+            &self,
+            text: String,
+        ) -> Result<(), crate::gateway::channel::ChannelError> {
+            self.attempts.lock().unwrap().push(text);
+            Err(crate::gateway::channel::ChannelError::SendFailed(
+                "untrusted diagnostic with body/phone must not be logged".into(),
+            ))
         }
     }
 
@@ -463,6 +568,145 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_delivery_does_not_complete_history_and_releases_admission() {
+        let reg = PublicRunRegistry::new(4, 1_000);
+        let store = history_store("k");
+        let runner = SpyRunner::new(Ok("unacknowledged answer"), None);
+        let sink = FailingSink::default();
+        let d = run_public_sms(
+            &reg,
+            Some(runner.clone() as Arc<dyn HarnessRunner>),
+            Some(&store),
+            sample_public_context("bind-a"),
+            "failed question".into(),
+            &sink,
+        )
+        .await;
+        assert_eq!(d, PublicRunDisposition::Failed);
+        assert_eq!(
+            *sink.attempts.lock().unwrap(),
+            vec!["unacknowledged answer".to_string()],
+            "one attempt, no implicit retry"
+        );
+        assert_eq!(*runner.owner_runs.lock().unwrap(), 0);
+        assert_eq!(reg.active_count(), 0, "failed delivery releases admission");
+        assert_eq!(reg.tokens_spent(), 10, "provider spend still counts");
+        let key =
+            PublicHistorySession::from_provenance(sample_public_context("bind-a").provenance());
+        assert!(store.load(&key, chrono::Utc::now()).unwrap().is_empty());
+
+        let next = SpyRunner::new(Ok("acknowledged answer"), None);
+        let (d, _) = run_with(&reg, &next, Some(&store), "bind-a", "next").await;
+        assert_eq!(d, PublicRunDisposition::Replied, "binding is free again");
+        assert!(next.seen_history.lock().unwrap()[0].is_empty());
+        assert_eq!(
+            store.load(&key, chrono::Utc::now()).unwrap(),
+            vec![PublicHistoryTurn {
+                user: "next".into(),
+                assistant: "acknowledged answer".into(),
+            }],
+            "only the acknowledged next turn is remembered"
+        );
+    }
+
+    #[tokio::test]
+    async fn refusal_send_errors_are_failed_without_history_or_owner_fallback() {
+        // Both the admission refusal and admitted-but-unwired notice use the
+        // same acknowledgment gate; neither can become completed history.
+        for admission_refusal in [true, false] {
+            let reg = PublicRunRegistry::new(4, 1_000);
+            let store = history_store("k");
+            let runner = SpyRunner::new(Ok("must-not-run"), None);
+            let harness = if admission_refusal {
+                reg.record_spend(1_000);
+                Some(runner.clone() as Arc<dyn HarnessRunner>)
+            } else {
+                None
+            };
+            let sink = FailingSink::default();
+            let d = run_public_sms(
+                &reg,
+                harness,
+                Some(&store),
+                sample_public_context("bind-a"),
+                "refused question".into(),
+                &sink,
+            )
+            .await;
+            assert_eq!(d, PublicRunDisposition::Failed);
+            let notice = if admission_refusal {
+                PUBLIC_OVER_SPEND_NOTICE
+            } else {
+                PUBLIC_BUSY_NOTICE
+            };
+            assert_eq!(*sink.attempts.lock().unwrap(), vec![notice.to_string()]);
+            assert_eq!(reg.active_count(), 0);
+            assert!(runner.public_runs.lock().unwrap().is_empty());
+            assert_eq!(*runner.owner_runs.lock().unwrap(), 0);
+            let key =
+                PublicHistorySession::from_provenance(sample_public_context("bind-a").provenance());
+            assert!(store.load(&key, chrono::Utc::now()).unwrap().is_empty());
+
+            let next = SpyRunner::new(Ok("fine"), None);
+            let fresh_reg = PublicRunRegistry::new(4, 1_000);
+            run_with(&fresh_reg, &next, Some(&store), "bind-a", "next").await;
+            assert!(next.seen_history.lock().unwrap()[0].is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn hung_refusal_notices_are_bounded_and_failed_without_history() {
+        for admission_refusal in [true, false] {
+            let reg = PublicRunRegistry::new(4, 1_000);
+            let store = history_store("k");
+            let runner = SpyRunner::new(Ok("must-not-run"), None);
+            let harness = if admission_refusal {
+                reg.record_spend(1_000);
+                Some(runner.clone() as Arc<dyn HarnessRunner>)
+            } else {
+                None
+            };
+            let sink = BlockingSink {
+                entered: Notify::new(),
+                release: Notify::new(),
+                sent: Mutex::new(Vec::new()),
+            };
+            let d = tokio::time::timeout(
+                Duration::from_secs(5),
+                run_public_sms_bounded(
+                    &reg,
+                    harness,
+                    Some(&store),
+                    sample_public_context("bind-a"),
+                    "refused question".into(),
+                    &sink,
+                    Duration::from_secs(5),
+                    Duration::from_millis(50),
+                ),
+            )
+            .await
+            .expect("refusal notice must honor the delivery timeout");
+            assert_eq!(d, PublicRunDisposition::Failed);
+            assert_eq!(reg.active_count(), 0, "no leaked admission");
+            let notice = if admission_refusal {
+                PUBLIC_OVER_SPEND_NOTICE
+            } else {
+                PUBLIC_BUSY_NOTICE
+            };
+            assert_eq!(*sink.sent.lock().unwrap(), vec![notice.to_string()]);
+            assert!(runner.public_runs.lock().unwrap().is_empty());
+            assert_eq!(*runner.owner_runs.lock().unwrap(), 0);
+            let key =
+                PublicHistorySession::from_provenance(sample_public_context("bind-a").provenance());
+            assert!(store.load(&key, chrono::Utc::now()).unwrap().is_empty());
+            let next = SpyRunner::new(Ok("fine"), None);
+            let fresh_reg = PublicRunRegistry::new(4, 1_000);
+            run_with(&fresh_reg, &next, Some(&store), "bind-a", "next").await;
+            assert!(next.seen_history.lock().unwrap()[0].is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn no_store_means_history_free_single_turn() {
         let reg = PublicRunRegistry::new(4, 1_000);
         let r = SpyRunner::new(Ok("a"), None);
@@ -612,7 +856,9 @@ mod tests {
         assert!(next.seen_history.lock().unwrap()[0].is_empty());
     }
 
-    /// Sink that parks inside `send_reply` until released.
+    /// Sink that submits first, then parks until transport acknowledgment.
+    /// Cancellation after `entered` cannot undo submission, but only release
+    /// produces the explicit acknowledgment needed for success/history.
     struct BlockingSink {
         entered: Notify,
         release: Notify,
@@ -621,16 +867,21 @@ mod tests {
 
     #[async_trait]
     impl PublicReplySink for BlockingSink {
-        async fn send_reply(&self, text: String) {
+        async fn send_reply(
+            &self,
+            text: String,
+        ) -> Result<(), crate::gateway::channel::ChannelError> {
             self.sent.lock().unwrap().push(text);
             self.entered.notify_one();
             self.release.notified().await;
+            Ok(())
         }
     }
 
     #[tokio::test]
-    async fn binding_stays_held_through_delivery() {
+    async fn binding_and_history_wait_for_ack_even_after_stop_after_submission() {
         let reg = PublicRunRegistry::new(4, 1_000);
+        let store = Arc::new(history_store("k"));
         let runner = SpyRunner::new(Ok("answer"), None);
         let sink = Arc::new(BlockingSink {
             entered: Notify::new(),
@@ -638,12 +889,13 @@ mod tests {
             sent: Mutex::new(Vec::new()),
         });
         let first = {
-            let (reg, runner, sink) = (reg.clone(), runner.clone(), sink.clone());
+            let (reg, runner, sink, store) =
+                (reg.clone(), runner.clone(), sink.clone(), store.clone());
             tokio::spawn(async move {
                 run_public_sms(
                     &reg,
                     Some(runner as Arc<dyn HarnessRunner>),
-                    None,
+                    Some(store.as_ref()),
                     sample_public_context("bind-a"),
                     "q".into(),
                     sink.as_ref(),
@@ -653,34 +905,61 @@ mod tests {
         };
         sink.entered.notified().await;
         assert_eq!(reg.active_count(), 1, "permit held while reply in flight");
+        assert!(!first.is_finished(), "submission is not acknowledgment");
+        let key =
+            PublicHistorySession::from_provenance(sample_public_context("bind-a").provenance());
+        assert!(store.load(&key, chrono::Utc::now()).unwrap().is_empty());
         assert!(reg.cancel_binding("bind-a"), "/stop still finds the run");
+        assert!(store.load(&key, chrono::Utc::now()).unwrap().is_empty());
         sink.release.notify_one();
         assert_eq!(first.await.unwrap(), PublicRunDisposition::Replied);
         assert_eq!(reg.active_count(), 0);
+        let expected = vec![PublicHistoryTurn {
+            user: "q".into(),
+            assistant: "answer".into(),
+        }];
+        assert_eq!(store.load(&key, chrono::Utc::now()).unwrap(), expected);
+        assert_eq!(*sink.sent.lock().unwrap(), vec!["answer".to_string()]);
+        let next = SpyRunner::new(Ok("fine"), None);
+        run_with(&reg, &next, Some(&store), "bind-a", "next").await;
+        assert_eq!(next.seen_history.lock().unwrap()[0], expected);
     }
 
     #[tokio::test]
-    async fn hung_delivery_is_bounded_and_releases_admission() {
+    async fn hung_delivery_is_failed_without_history_and_releases_admission() {
         let reg = PublicRunRegistry::new(4, 1_000);
+        let store = history_store("k");
         let runner = SpyRunner::new(Ok("answer"), None);
         let sink = BlockingSink {
             entered: Notify::new(),
             release: Notify::new(),
             sent: Mutex::new(Vec::new()),
         };
-        let d = run_public_sms_bounded(
-            &reg,
-            Some(runner as Arc<dyn HarnessRunner>),
-            None,
-            sample_public_context("bind-a"),
-            "q".into(),
-            &sink,
+        let d = tokio::time::timeout(
             Duration::from_secs(5),
-            Duration::from_millis(50),
+            run_public_sms_bounded(
+                &reg,
+                Some(runner as Arc<dyn HarnessRunner>),
+                Some(&store),
+                sample_public_context("bind-a"),
+                "q".into(),
+                &sink,
+                Duration::from_secs(5),
+                Duration::from_millis(50),
+            ),
         )
-        .await;
-        assert_eq!(d, PublicRunDisposition::Replied);
+        .await
+        .expect("normal reply must honor the delivery timeout");
+        assert_eq!(d, PublicRunDisposition::Failed);
         assert_eq!(reg.active_count(), 0);
+        assert_eq!(*sink.sent.lock().unwrap(), vec!["answer".to_string()]);
+        let key =
+            PublicHistorySession::from_provenance(sample_public_context("bind-a").provenance());
+        assert!(store.load(&key, chrono::Utc::now()).unwrap().is_empty());
+        let next = SpyRunner::new(Ok("fine"), None);
+        let (d, _) = run_with(&reg, &next, Some(&store), "bind-a", "next").await;
+        assert_eq!(d, PublicRunDisposition::Replied, "binding is free again");
+        assert!(next.seen_history.lock().unwrap()[0].is_empty());
     }
 
     #[tokio::test]
