@@ -40,6 +40,15 @@ use super::voice::VoiceState;
 /// Type alias for a thread-safe, shareable channel handle
 type ChannelHandle = Arc<RwLock<Box<dyn Channel>>>;
 
+/// Private telecom precommit fence result. An error or timeout is deliberately
+/// not an `Invalid` result: transport acceptance may already have occurred.
+#[derive(Debug)]
+pub(crate) enum ApprovedTelecomSend {
+    Acknowledged(SendResult),
+    Cancelled,
+    Invalid,
+}
+
 /// Actual custody of a fresh message after the transport attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueueDisposition {
@@ -626,6 +635,49 @@ impl ChannelRegistry {
         // poll of send. Once committed, only the caller's delivery timeout can
         // abandon an ACK (with an unknown external outcome, never retracted).
         channel.send(message).await.map(Some)
+    }
+
+    /// Private-only public send: wait for registry and channel locks with the
+    /// same cancellation fence as ordinary public replies, then validate the
+    /// exact outbound text synchronously under the final channel lock. No
+    /// await separates cancellation/validation from the first `send` poll.
+    pub(crate) async fn send_approved_public_telecom(
+        &self,
+        channel_id: &ChannelId,
+        message: OutboundMessage,
+        cancel: &tokio_util::sync::CancellationToken,
+        validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+    ) -> ChannelResult<ApprovedTelecomSend> {
+        if cancel.is_cancelled() {
+            return Ok(ApprovedTelecomSend::Cancelled);
+        }
+        let channel_arc = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(ApprovedTelecomSend::Cancelled),
+            channel = self.get(channel_id) => channel.ok_or_else(|| {
+                ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
+            })?,
+        };
+        let channel = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(ApprovedTelecomSend::Cancelled),
+            channel = channel_arc.read() => channel,
+        };
+        if cancel.is_cancelled() {
+            return Ok(ApprovedTelecomSend::Cancelled);
+        }
+        if !validate(&message.text) {
+            return Ok(ApprovedTelecomSend::Invalid);
+        }
+        if cancel.is_cancelled() {
+            return Ok(ApprovedTelecomSend::Cancelled);
+        }
+        // This is the submission boundary. Neither cancellation nor ledger
+        // locks are held across the transport call; there is no retry/queue.
+        channel
+            .send(message)
+            .await
+            .map(ApprovedTelecomSend::Acknowledged)
     }
 
     /// Send a message through a specific channel.
@@ -1628,6 +1680,129 @@ mod tests {
             .unwrap()
             .is_none());
         assert_eq!(attempts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn approved_telecom_rejects_modified_outbound_bytes_before_send() {
+        use tokio_util::sync::CancellationToken;
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let registry = registry_with(
+            FlakyChannel::new(0, false, attempts.clone()),
+            SendRetryPolicy::default(),
+        )
+        .await;
+        let result = registry
+            .send_approved_public_telecom(
+                &ChannelId::new("flaky"),
+                OutboundMessage::text("c", "altered"),
+                &CancellationToken::new(),
+                &|body| body == "approved",
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, ApprovedTelecomSend::Invalid));
+        assert_eq!(attempts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn approved_telecom_lock_wait_revalidates_retirement_and_expiry_before_submit() {
+        use crate::gateway::telecom::public_approval::{
+            ApprovalSource, PublicApprovalLedger, PublicApprovalScope, PublicApprovalStage,
+            SMS_APPROVAL_TTL_SECS,
+        };
+        use crate::gateway::telecom::public_context::test_support::sample_public_context;
+        use std::future::{poll_fn, Future};
+        use std::task::Poll;
+        use tokio_util::sync::CancellationToken;
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let registry = registry_with(
+            FlakyChannel::new(0, false, attempts.clone()),
+            SendRetryPolicy::default(),
+        )
+        .await;
+        let id = ChannelId::new("flaky");
+        let channel = registry.get(&id).await.unwrap();
+        for (block_lookup, expire) in [(true, false), (false, true)] {
+            let ledger = Arc::new(PublicApprovalLedger::new());
+            let scope = PublicApprovalScope::new(
+                &sample_public_context("precommit-binding"),
+                "core",
+                "agent",
+                "turn",
+                1,
+            );
+            let t0 = Utc::now();
+            let op = ApprovalSource::operator_control_plane();
+            let read = ledger.request_private_read(scope.clone(), "q", t0).unwrap();
+            ledger.decide(&read, op, true, t0).unwrap();
+            ledger
+                .consume(&read, PublicApprovalStage::PrivateRead, op, &scope, "q", t0)
+                .unwrap();
+            let disclosure = ledger
+                .request_disclosure(&read, scope.clone(), "secret", t0)
+                .unwrap();
+            ledger.decide(&disclosure, op, true, t0).unwrap();
+            ledger
+                .consume(
+                    &disclosure,
+                    PublicApprovalStage::Disclosure,
+                    op,
+                    &scope,
+                    "secret",
+                    t0,
+                )
+                .unwrap();
+            let now = Arc::new(Mutex::new(t0));
+            let check = |body: &str| {
+                ledger
+                    .validate_consumed_disclosure(
+                        &disclosure,
+                        &read,
+                        &scope,
+                        body,
+                        *now.lock().unwrap(),
+                    )
+                    .is_ok()
+            };
+            let registry_guard = if block_lookup {
+                Some(registry.channels.write().await)
+            } else {
+                None
+            };
+            let channel_guard = if block_lookup {
+                None
+            } else {
+                Some(channel.write().await)
+            };
+            let cancel = CancellationToken::new();
+            let send = registry.send_approved_public_telecom(
+                &id,
+                OutboundMessage::text("c", "secret"),
+                &cancel,
+                &check,
+            );
+            tokio::pin!(send);
+            poll_fn(|cx| {
+                assert!(send.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            if expire {
+                *now.lock().unwrap() = t0 + chrono::Duration::seconds(SMS_APPROVAL_TTL_SECS);
+            } else {
+                ledger.cancel_binding(scope.binding_ref());
+            }
+            drop(channel_guard);
+            drop(registry_guard);
+            assert!(matches!(send.await.unwrap(), ApprovedTelecomSend::Invalid));
+            assert_eq!(
+                attempts.load(Ordering::SeqCst),
+                0,
+                "invalidated body never submits"
+            );
+        }
     }
 
     #[tokio::test]

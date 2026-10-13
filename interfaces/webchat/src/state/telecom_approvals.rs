@@ -49,6 +49,12 @@ pub struct TelecomApprovalView {
     pub id: String,
     pub stage: TelecomApprovalStage,
     pub channel: TelecomApprovalChannel,
+    /// Operator-only binding identity; never inferred from public SMS text.
+    pub binding_ref: String,
+    pub connection_generation: u64,
+    pub caller_digest: String,
+    pub turn_id: String,
+    pub session_epoch: u64,
     /// Bounded display preview (≤ 256 bytes). Display-only — never sent back.
     pub preview: String,
     /// `true` when `preview` is a strict prefix of the complete body.
@@ -145,6 +151,8 @@ mod tests {
     fn view_json(id: &str, stage: &str) -> serde_json::Value {
         json!({
             "id": id, "stage": stage, "channel": "sms",
+            "binding_ref": "binding-1", "connection_generation": 7,
+            "caller_digest": "digest-1", "turn_id": "turn-1", "session_epoch": 9,
             "preview": "short", "truncated": true, "expires_at_ms": 10_000
         })
     }
@@ -154,6 +162,8 @@ mod tests {
         let list = parse_pending(json!({
             "pending": [view_json("a", "private_read"), {
                 "id": "b", "stage": "disclosure", "channel": "voice",
+                "binding_ref": "binding-2", "connection_generation": 8,
+                "caller_digest": "digest-2", "turn_id": "turn-2", "session_epoch": 10,
                 "preview": "full text", "truncated": false, "expires_at_ms": 5
             }],
             "has_more": false
@@ -163,6 +173,11 @@ mod tests {
         assert_eq!(list[0].preview, "short");
         assert!(list[0].truncated);
         assert_eq!(list[0].stage, TelecomApprovalStage::PrivateRead);
+        assert_eq!(list[0].binding_ref, "binding-1");
+        assert_eq!(list[0].connection_generation, 7);
+        assert_eq!(list[0].caller_digest, "digest-1");
+        assert_eq!(list[0].turn_id, "turn-1");
+        assert_eq!(list[0].session_epoch, 9);
         assert_eq!(list[1].channel, TelecomApprovalChannel::Voice);
         assert!(!list[1].truncated);
     }
@@ -175,6 +190,18 @@ mod tests {
         .unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, "b");
+    }
+
+    #[test]
+    fn missing_identity_fails_closed_in_list_and_review() {
+        let mut raw = view_json("a", "private_read");
+        raw.as_object_mut().unwrap().remove("caller_digest");
+        assert!(parse_pending(json!({"pending": [raw.clone()]}))
+            .unwrap()
+            .is_empty());
+        raw["complete"] = json!(true);
+        raw["body"] = json!("complete");
+        assert!(parse_review(raw, "a").is_err());
     }
 
     #[test]
@@ -214,6 +241,11 @@ mod tests {
         ok["complete"] = json!(true);
         let review = parse_review(ok.clone(), "a").unwrap();
         assert_eq!(review.body, "the complete body");
+        assert_eq!(review.view.binding_ref, "binding-1");
+        assert_eq!(review.view.connection_generation, 7);
+        assert_eq!(review.view.caller_digest, "digest-1");
+        assert_eq!(review.view.turn_id, "turn-1");
+        assert_eq!(review.view.session_epoch, 9);
         assert!(parse_review(ok.clone(), "other").is_err());
 
         let mut incomplete = ok.clone();

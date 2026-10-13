@@ -1133,7 +1133,7 @@ async fn run_public_text_is_default_deny_for_mock_runners() {
                 history: Vec::new(),
                 run_id: "r".into(),
                 prompt_version: PUBLIC_PROMPT_VERSION,
-                scope: None,
+                allow_private_lookup: false,
             },
             CancellationToken::new(),
             tx,

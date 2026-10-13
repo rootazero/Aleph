@@ -44,6 +44,7 @@ mod behavior_resolve;
 mod context_blocks;
 mod prompt_build;
 pub mod public_run;
+mod public_lookup_tool;
 mod runner_impl;
 
 pub mod context_estimate;
@@ -262,33 +263,6 @@ pub struct AgentHarnessRunner {
     /// while the model kept answering in whatever language it inferred.
     /// Session-stable, so the layer (@1600, Stable) rides the cacheable prefix.
     pub response_language: Option<String>,
-
-    /// Private-read driver for the A-stage flow (Task #14, D-step).
-    ///
-    /// `None` means the public run path treats every inbound as having no
-    /// private data: the orchestrator skips the read and the run proceeds
-    /// as a plain public turn. The production default is `None` (no private
-    /// source is enabled); `NullPrivateReadDriver` exists for tests.
-    ///
-    /// When set, the driver is called at most once per public turn, and only
-    /// if the request also carries a [`PublicApprovalScope`]. A `Transient`
-    /// result fails closed (static error, no LLM call) because the operator
-    /// disclosure (B) path is not wired; the body never reaches the reply or
-    /// the encrypted public history.
-    pub private_read_driver:
-        Option<crate::sync_primitives::Arc<dyn crate::gateway::telecom::PrivateReadDriver>>,
-}
-
-impl AgentHarnessRunner {
-    /// Builder for [`Self::private_read_driver`]. The driver is reached from
-    /// [`super::public_run::run_public_with`] once per public turn.
-    pub fn with_private_read_driver(
-        mut self,
-        driver: crate::sync_primitives::Arc<dyn crate::gateway::telecom::PrivateReadDriver>,
-    ) -> Self {
-        self.private_read_driver = Some(driver);
-        self
-    }
 }
 
 /// Hard fallback iteration cap — used only when both the per-flow override

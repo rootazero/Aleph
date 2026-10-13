@@ -501,8 +501,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // implemented — had no writer and users who set `zh-Hans` still got
         // whatever language the model guessed.
         response_language: config.general.language.clone(),
-        // No private source is approved yet, so production wires no driver.
-        private_read_driver: None,
     });
 
     // Clones the same `Arc<AgentRegistry>` that the harness received so

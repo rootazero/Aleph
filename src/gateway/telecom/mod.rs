@@ -10,8 +10,10 @@
 //! Spec: `docs/superpowers/specs/2026-10-09-pstn-sms-thin-relay-design.md` §6, §8.
 
 pub mod operator_control;
+pub mod owner_memory_read;
 pub mod persisted_marker;
 pub mod private_read;
+pub mod private_turn;
 pub mod protocol;
 pub mod public_admission;
 pub mod public_approval;
@@ -23,10 +25,12 @@ pub mod run_origin;
 pub mod sms_inbox;
 pub mod sms_meta;
 
+pub use owner_memory_read::OwnerMemoryReadDriver;
 pub use persisted_marker::{MarkerRestore, PersistedTelecomMarker};
 pub use private_read::{
     NullPrivateReadDriver, PrivateReadDriver, PrivateReadError, PrivateReadResult,
 };
+pub use private_turn::{PrivateTurnOutcome, PrivateTurnWiring};
 pub use protocol::{
     accept_event, advance_outcome, dedup_key, expire_unknown, fence_generation, follow_up,
     AcceptContext, Acceptance, DedupKey, DedupLedger, FollowUp, IgnoreReason, OutcomeRecord,
@@ -35,7 +39,7 @@ pub use protocol::{
 pub use public_approval::{
     deliver_private_disclosure, ApprovalSource, ConsumedApproval, PrivateDisclosureSink,
     PublicApprovalError, PublicApprovalLedger, PublicApprovalScope, PublicApprovalStage,
-    PublicApprovalView,
+    PublicApprovalStatus, PublicApprovalView,
 };
 pub use public_context::{TelecomChannel, TelecomProvenance, TelecomPublicContext};
 pub use public_history::{

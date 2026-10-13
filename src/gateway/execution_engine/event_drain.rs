@@ -1353,6 +1353,7 @@ mod tests {
             context_window: 200_000,
             serving_model: None,
             serving_provider: None,
+            private_lookup: None,
         };
 
         let summary = super::build_run_summary(&outcome, None);

@@ -110,6 +110,15 @@ impl HarnessRunner for AgentHarnessRunner {
         self.run_public_text_impl(request, cancel, events).await
     }
 
+    async fn run_private_draft(
+        &self,
+        request: crate::orchestrator::dispatch::PrivateDraftRequest,
+        cancel: CancellationToken,
+        events: broadcast::Sender<FlowStreamEvent>,
+    ) -> Result<FlowOutcome, FlowError> {
+        self.run_private_draft_impl(request, cancel, events).await
+    }
+
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn run(
         &self,
@@ -1312,6 +1321,8 @@ impl HarnessRunner for AgentHarnessRunner {
             serving_model: Some(gauge_model.clone()),
             // rust-doctor-disable-next-line excessive-clone
             serving_provider: Some(cost_provider.clone()),
+            // Owner runs never offer `request_private_lookup`.
+            private_lookup: None,
         };
 
         // P4: single-source the terminal `Complete(outcome)` emit. The

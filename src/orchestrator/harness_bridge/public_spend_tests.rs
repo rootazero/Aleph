@@ -58,7 +58,7 @@ fn request() -> PublicRunRequest {
         history: Vec::new(),
         run_id: "run-spend-1".into(),
         prompt_version: PUBLIC_PROMPT_VERSION,
-        scope: None,
+        allow_private_lookup: false,
     }
 }
 

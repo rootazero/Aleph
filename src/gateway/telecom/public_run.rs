@@ -14,6 +14,10 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use super::operator_control::{OperatorControl, ScopeGuard};
+use super::private_turn::{
+    run_private_turn, PrivateTurnInput, PrivateTurnOutcome, PrivateTurnWiring,
+    PRIVATE_TURN_ASSISTANT_MARKER, PRIVATE_TURN_USER_MARKER,
+};
 use super::public_admission::{PublicAdmission, PublicRunRegistry, PUBLIC_BUSY_NOTICE};
 use super::public_history::{PublicHistorySession, PublicHistoryStore, PublicHistoryTurn};
 use super::TelecomPublicContext;
@@ -28,6 +32,16 @@ use crate::orchestrator::dispatch::{
 #[async_trait]
 pub trait PublicReplySink: Send + Sync {
     async fn send_reply(&self, text: String) -> Result<(), crate::gateway::channel::ChannelError>;
+
+    /// Private-only path. The implementation MUST invoke `validate` after its
+    /// final async lock wait and before the first transport send poll. A public
+    /// send cannot serve as a fallback here.
+    async fn send_approved_reply(
+        &self,
+        text: String,
+        cancel: &CancellationToken,
+        validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+    ) -> Result<ApprovedReplyOutcome, crate::gateway::channel::ChannelError>;
 
     /// Fence cancellation before submission, then await the transport ACK even
     /// if cancellation fires. Legacy sinks commit when `send_reply` is first
@@ -53,6 +67,15 @@ pub enum PublicReplyOutcome {
     Cancelled,
 }
 
+/// A private reply is invalidated before submit, cancelled before submit, or
+/// acknowledged by the transport. Errors and timeouts remain unknown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovedReplyOutcome {
+    Acknowledged,
+    Cancelled,
+    Invalid,
+}
+
 /// What happened to one public inbound.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublicRunDisposition {
@@ -65,6 +88,9 @@ pub enum PublicRunDisposition {
     /// No acknowledged reply: runner failure, empty reply, sink error or timeout.
     /// An in-flight send may already have been accepted externally.
     Failed,
+    /// The model requested a private lookup and the private turn ended as
+    /// reported (see [`super::private_turn`]).
+    Private(PrivateTurnOutcome),
 }
 
 /// Wall-clock bound of one public runner invocation. A hung provider is
@@ -99,6 +125,36 @@ pub async fn run_public_sms(
     sink: &dyn PublicReplySink,
     operator_control: Option<&Arc<OperatorControl>>,
 ) -> PublicRunDisposition {
+    run_public_sms_with_private_read(
+        registry,
+        harness,
+        history,
+        ctx,
+        text,
+        sink,
+        operator_control,
+        None,
+    )
+    .await
+}
+
+/// [`run_public_sms`] with the optional private turn. `private` is wired
+/// only when `[telecom_private_read]` is enabled; it takes effect only
+/// together with `operator_control` (approvals need the trusted plane).
+/// Then, and only then, the public run offers `request_private_lookup`, and
+/// a recorded request diverts the turn into the A/B private flow instead of
+/// sending the model's public reply.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_public_sms_with_private_read(
+    registry: &Arc<PublicRunRegistry>,
+    harness: Option<Arc<dyn HarnessRunner>>,
+    history: Option<&PublicHistoryStore>,
+    ctx: TelecomPublicContext,
+    text: String,
+    sink: &dyn PublicReplySink,
+    operator_control: Option<&Arc<OperatorControl>>,
+    private: Option<&PrivateTurnWiring>,
+) -> PublicRunDisposition {
     run_public_sms_bounded(
         registry,
         harness,
@@ -109,13 +165,14 @@ pub async fn run_public_sms(
         PUBLIC_RUN_TIMEOUT,
         PUBLIC_REPLY_DELIVERY_TIMEOUT,
         operator_control,
+        private,
     )
     .await
 }
 
 /// Share the acknowledgment boundary across replies and refusal notices.
 /// Do not log channel errors: transport diagnostics can contain bodies or phones.
-async fn send_reply_bounded(
+pub(super) async fn send_reply_bounded(
     sink: &dyn PublicReplySink,
     text: String,
     delivery_timeout: Duration,
@@ -156,6 +213,7 @@ async fn run_public_sms_bounded(
     run_timeout: Duration,
     delivery_timeout: Duration,
     operator_control: Option<&Arc<OperatorControl>>,
+    private: Option<&PrivateTurnWiring>,
 ) -> PublicRunDisposition {
     let admission = registry.try_admit(&ctx);
     let permit = match admission {
@@ -195,10 +253,10 @@ async fn run_public_sms_bounded(
     //
     // The random core/agent/turn ids below exist only to give this
     // turn a unique identity, so an operator-ledger consume is bound to
-    // *this* turn and cannot be replayed against a later one. No driver
-    // consumes the scope in production (no private source is approved),
-    // so these ids are not correlated with any real core/agent/turn.
-    let _scope_guard = operator_control.map(|c| {
+    // *this* turn and cannot be replayed against a later one. They are not
+    // correlated with any owner core/agent/turn: the private turn consumes
+    // the scope only through this guard.
+    let scope_guard = operator_control.map(|c| {
         let scope = super::PublicApprovalScope::new(
             &ctx,
             uuid::Uuid::new_v4().to_string(),
@@ -223,17 +281,18 @@ async fn run_public_sms_bounded(
     };
     let (events, _rx) = flow_event_channel();
     let user_text = history.map(|_| text.clone());
+    // The private turn needs both the trusted approval plane (a live scope
+    // guard) and an enabled read driver; otherwise the model is not even
+    // offered the lookup tool.
+    let private = private.zip(scope_guard.as_ref());
+    let private_inputs = private.map(|_| (ctx.clone(), text.clone(), prior.clone()));
     let request = PublicRunRequest {
         ctx,
         text,
         history: prior,
         run_id: uuid::Uuid::new_v4().to_string(),
         prompt_version: PUBLIC_PROMPT_VERSION,
-        // Production deliberately passes no scope: the user decided not to
-        // open any private source for now, so private-read is unreachable in
-        // production. Wire a scope here only once a concrete source has been
-        // approved.
-        scope: None,
+        allow_private_lookup: private.is_some(),
     };
     let result = match tokio::time::timeout(
         run_timeout,
@@ -245,13 +304,24 @@ async fn run_public_sms_bounded(
         Err(_) => {
             // Hung provider: stop the run, release admission, say nothing.
             tracing::warn!("[public] run exceeded {run_timeout:?}; cancelled, no reply");
+            registry.exhaust_unaccounted_spend();
             cancel.cancel();
             drop(permit);
             return PublicRunDisposition::Failed;
         }
     };
-    if let Ok(outcome) = &result {
-        registry.record_spend(u64::from(outcome.total_tokens));
+    match &result {
+        Ok(outcome) if outcome.total_tokens == 0 && outcome.private_lookup.is_some() => {
+            // A recorded lookup can survive a later harness failure, with no
+            // trustworthy usage total. Never price that provider run at zero.
+            registry.exhaust_unaccounted_spend();
+        }
+        Ok(outcome) => registry.record_spend(u64::from(outcome.total_tokens)),
+        Err(crate::orchestrator::errors::FlowError::Cancelled) if cancel.is_cancelled() => {
+            // Cancellation might have interrupted a paid provider call.
+            registry.exhaust_unaccounted_spend();
+        }
+        Err(_) => registry.exhaust_unaccounted_spend(),
     }
     // The permit stays held from here through delivery and the history
     // append: `/stop` keeps finding this run until the sink acknowledges, and
@@ -259,6 +329,47 @@ async fn run_public_sms_bounded(
     let disposition = match result {
         // Early exit only; the sink owns the final pre-submit cancellation fence.
         _ if cancel.is_cancelled() => PublicRunDisposition::Cancelled,
+        // The model asked for a private lookup: its public reply is
+        // discarded and the turn continues as a private turn.
+        Ok(outcome) if outcome.private_lookup.is_some() => {
+            let (Some((wiring, guard)), Some((ctx, text, prior)), Some(query)) =
+                (private, private_inputs, outcome.private_lookup)
+            else {
+                // Unreachable by construction (the tool is offered only with
+                // the wiring); fail closed without sending anything.
+                drop(permit);
+                return PublicRunDisposition::Failed;
+            };
+            let report = run_private_turn(PrivateTurnInput {
+                wiring,
+                guard,
+                registry,
+                harness: &harness,
+                sink,
+                cancel: &cancel,
+                ctx,
+                text,
+                history: prior,
+                query,
+                run_timeout,
+                delivery_timeout,
+            })
+            .await;
+            // Fixed marker only: neither the question, the query, the lookup
+            // result nor the draft ever reaches public history.
+            if report.caller_saw_turn {
+                if let (Some(store), Some(key)) = (history, &history_key) {
+                    let turn = PublicHistoryTurn {
+                        user: PRIVATE_TURN_USER_MARKER.to_string(),
+                        assistant: PRIVATE_TURN_ASSISTANT_MARKER.to_string(),
+                    };
+                    if let Err(e) = store.append(key, &turn, chrono::Utc::now(), false) {
+                        tracing::warn!("[public] history append skipped: {e}");
+                    }
+                }
+            }
+            PublicRunDisposition::Private(report.outcome)
+        }
         Ok(outcome) if !outcome.final_text.trim().is_empty() => {
             let reply = outcome.final_text;
             match send_reply_bounded(sink, reply.clone(), delivery_timeout, Some(&cancel)).await {
@@ -324,6 +435,22 @@ mod tests {
             self.sent.lock().unwrap().push(text);
             Ok(())
         }
+
+        async fn send_approved_reply(
+            &self,
+            text: String,
+            cancel: &CancellationToken,
+            validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+        ) -> Result<ApprovedReplyOutcome, crate::gateway::channel::ChannelError> {
+            if cancel.is_cancelled() {
+                return Ok(ApprovedReplyOutcome::Cancelled);
+            }
+            if !validate(&text) {
+                return Ok(ApprovedReplyOutcome::Invalid);
+            }
+            self.send_reply(text).await?;
+            Ok(ApprovedReplyOutcome::Acknowledged)
+        }
     }
 
     #[derive(Default)]
@@ -341,6 +468,22 @@ mod tests {
             Err(crate::gateway::channel::ChannelError::SendFailed(
                 "untrusted diagnostic with body/phone must not be logged".into(),
             ))
+        }
+
+        async fn send_approved_reply(
+            &self,
+            text: String,
+            cancel: &CancellationToken,
+            validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+        ) -> Result<ApprovedReplyOutcome, crate::gateway::channel::ChannelError> {
+            if cancel.is_cancelled() {
+                return Ok(ApprovedReplyOutcome::Cancelled);
+            }
+            if !validate(&text) {
+                return Ok(ApprovedReplyOutcome::Invalid);
+            }
+            self.send_reply(text).await?;
+            Ok(ApprovedReplyOutcome::Acknowledged)
         }
     }
 
@@ -730,6 +873,7 @@ mod tests {
                     Duration::from_secs(5),
                     Duration::from_millis(50),
                     None,
+                    None,
                 ),
             )
             .await
@@ -771,7 +915,14 @@ mod tests {
         let (d, sent) = run_with(&reg, &bad, Some(&store), "bind-a", "fails").await;
         assert_eq!(d, PublicRunDisposition::Failed);
         assert!(sent.is_empty());
+        assert_eq!(
+            reg.tokens_spent(),
+            1_000,
+            "unknown failed cost exhausts fallback"
+        );
 
+        // New process-budget seam: the failed call exhausted the old fallback.
+        let reg = PublicRunRegistry::new(4, 1_000);
         let slow = SpyRunner::new(Ok("late"), Some(Arc::new(Notify::new())));
         let handle = {
             let (reg, slow, store) = (reg.clone(), slow.clone(), store.clone());
@@ -789,10 +940,13 @@ mod tests {
                 .await
             })
         };
-        slow.entered.notified().await;
+        tokio::time::timeout(Duration::from_secs(2), slow.entered.notified())
+            .await
+            .expect("admitted runner must enter");
         assert!(reg.cancel_binding("bind-a"));
         assert_eq!(handle.await.unwrap(), PublicRunDisposition::Cancelled);
 
+        let reg = PublicRunRegistry::new(4, 1_000);
         let ok = SpyRunner::new(Ok("fine"), None);
         run_with(&reg, &ok, Some(&store), "bind-a", "next").await;
         assert!(ok.seen_history.lock().unwrap()[0].is_empty());
@@ -926,6 +1080,22 @@ mod tests {
             self.release.notified().await;
             Ok(())
         }
+
+        async fn send_approved_reply(
+            &self,
+            text: String,
+            cancel: &CancellationToken,
+            validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+        ) -> Result<ApprovedReplyOutcome, crate::gateway::channel::ChannelError> {
+            if cancel.is_cancelled() {
+                return Ok(ApprovedReplyOutcome::Cancelled);
+            }
+            if !validate(&text) {
+                return Ok(ApprovedReplyOutcome::Invalid);
+            }
+            self.send_reply(text).await?;
+            Ok(ApprovedReplyOutcome::Acknowledged)
+        }
     }
 
     #[tokio::test]
@@ -998,6 +1168,7 @@ mod tests {
                 Duration::from_secs(5),
                 Duration::from_millis(50),
                 None,
+                None,
             ),
         )
         .await
@@ -1030,12 +1201,17 @@ mod tests {
             Duration::from_millis(50),
             Duration::from_secs(5),
             None,
+            None,
         )
         .await;
         assert_eq!(d, PublicRunDisposition::Failed);
         assert!(sink.sent.lock().unwrap().is_empty());
         assert_eq!(reg.active_count(), 0, "admission released");
-        assert_eq!(reg.tokens_spent(), 0);
+        assert_eq!(
+            reg.tokens_spent(),
+            1_000,
+            "timeout has unknown provider cost"
+        );
         assert!(
             runner
                 .saw_cancel
@@ -1048,7 +1224,12 @@ mod tests {
         );
         let next = SpyRunner::new(Ok("fine"), None);
         let (d2, _) = run_with(&reg, &next, Some(&store), "bind-a", "next").await;
-        assert_eq!(d2, PublicRunDisposition::Replied, "binding is free again");
+        assert_eq!(d2, PublicRunDisposition::Refused(PUBLIC_OVER_SPEND_NOTICE));
+        assert!(next.public_runs.lock().unwrap().is_empty());
+        // Unknown cost refuses reuse of the old budget, not the history itself.
+        let fresh = PublicRunRegistry::new(4, 1_000);
+        let (d3, _) = run_with(&fresh, &next, Some(&store), "bind-a", "next").await;
+        assert_eq!(d3, PublicRunDisposition::Replied);
         assert!(next.seen_history.lock().unwrap()[0].is_empty());
     }
 

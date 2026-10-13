@@ -197,7 +197,12 @@
     "telecom_review_required": "请先审阅完整内容，再批准或拒绝。",
     "telecom_approve": "批准",
     "telecom_deny": "拒绝",
-    "telecom_expired": "已过期"
+    "telecom_expired": "已过期",
+    "telecom_binding": "绑定：",
+    "telecom_generation": "连接代次：",
+    "telecom_caller_digest": "来电者摘要：",
+    "telecom_turn": "回合：",
+    "telecom_session_epoch": "会话代次："
   },
   "dashboard": {
     "title": "系统概览",

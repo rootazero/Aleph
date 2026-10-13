@@ -9,7 +9,10 @@
 //!   the isolated, already-decrypted `request.history` of *completed public
 //!   turns of this binding* (no owner history, memory, profile, project
 //!   context or skills);
-//! - tools: [`NullToolService`] (nothing offered, nothing callable);
+//! - tools: [`NullToolService`] (nothing offered, nothing callable), or —
+//!   only when the owner enabled `[telecom_private_read]` — the single
+//!   effect-free `request_private_lookup` signal tool
+//!   (`super::public_lookup_tool`);
 //! - session: an ephemeral in-memory event store dropped at the end of the run
 //!   (no owner `SessionService` write, no durable journal record);
 //! - no compactor, trace sink, result store, verifier chain, guardrails,
@@ -29,7 +32,7 @@ use crate::harness::callback::NoopHarnessCallback;
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::HarnessError;
 use crate::orchestrator::dispatch::{
-    FlowOutcome, FlowStreamEvent, PublicRunRequest, PUBLIC_PROMPT_VERSION,
+    FlowOutcome, FlowStreamEvent, PrivateDraftRequest, PublicRunRequest, PUBLIC_PROMPT_VERSION,
 };
 use crate::orchestrator::errors::FlowError;
 use crate::providers::AiProvider;
@@ -39,6 +42,9 @@ use crate::session::in_process::InProcessActorSessionService;
 use crate::session::service::SessionService;
 use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
 use crate::tools::null::NullToolService;
+use crate::tools::service::ToolService;
+
+use super::public_lookup_tool::PrivateLookupToolService;
 
 use super::AgentHarnessRunner;
 
@@ -50,8 +56,31 @@ calendar, accounts, tools or prior conversations, and you must not claim otherwi
 reveal anything about the owner. Reply briefly in plain text suitable for SMS, in the \
 caller's language. If the request needs the owner, say the owner will need to follow up.";
 
-/// Iteration cap of a public run. No tools exist, so one Think turn is the
-/// expected shape; the small headroom only absorbs a verifier-free retry.
+/// Appended to [`PUBLIC_SYSTEM_PROMPT`] only when the run offers
+/// `request_private_lookup` (owner enabled `[telecom_private_read]`). Part of
+/// the same [`PUBLIC_PROMPT_VERSION`]: the base text is unchanged and the
+/// addition is a deterministic function of the request flag.
+pub const PUBLIC_LOOKUP_PROMPT_ADDENDUM: &str = " If, and only if, the caller's request \
+cannot be answered without the owner's private notes, call request_private_lookup once \
+with a short search query. It returns no data: the owner's operator must approve any \
+lookup, and the caller is told separately. Never call it for small talk or general \
+questions.";
+
+/// Appended to [`PUBLIC_SYSTEM_PROMPT`] for a private draft (approval A
+/// consumed). The draft is reviewed verbatim by the operator (approval B)
+/// before anything reaches the caller.
+pub const PRIVATE_DRAFT_PROMPT_ADDENDUM: &str = " For this reply only, the owner's operator \
+approved a read-only lookup in the owner's notes; its result follows the caller's \
+message. Use only what is needed to answer the caller, share nothing else from it, and \
+do not mention the lookup or the approval. The operator reviews your exact reply before \
+it is sent.";
+
+/// Prefix of the synthetic same-turn message carrying the approved lookup
+/// result into a private draft.
+const PRIVATE_RESULT_PREFIX: &str = "[Approved private lookup result]\n";
+
+/// Iteration cap of a public run. Without tools one Think turn is the
+/// expected shape; with the lookup tool, one call plus one closing turn.
 const PUBLIC_MAX_ITERATIONS: usize = 2;
 
 impl AgentHarnessRunner {
@@ -68,41 +97,141 @@ impl AgentHarnessRunner {
         // explicit `Principal::TelecomPublic` — not the ambient owner.
         let llm =
             crate::providers::metering::metered_public_provider(self.default_provider.current());
-        run_public_with(
-            llm,
-            request,
-            cancel,
-            events,
-            self.private_read_driver.as_ref(),
-        )
-        .await
+        run_public_with(llm, request, cancel, events).await
+    }
+
+    /// Production body of [`crate::orchestrator::dispatch::HarnessRunner::run_private_draft`]:
+    /// same provider resolution and isolation as the public run.
+    pub(super) async fn run_private_draft_impl(
+        &self,
+        request: PrivateDraftRequest,
+        cancel: CancellationToken,
+        events: broadcast::Sender<FlowStreamEvent>,
+    ) -> Result<FlowOutcome, FlowError> {
+        let llm =
+            crate::providers::metering::metered_public_provider(self.default_provider.current());
+        run_private_draft_with(llm, request, cancel, events).await
     }
 }
 
 /// Drive one isolated public run against `llm`. Free function so tests can
 /// inject a spy provider without constructing a full runner.
 ///
-/// `private_read` is the A-stage driver. It is called exactly once when
-/// both the request carries a [`PublicApprovalScope`] and a driver is
-/// installed on the runner. Production wires neither (the driver is `None`
-/// and `PublicRunRequest.scope` is `None`). A `Transient` result fails
-/// closed: the operator disclosure (B) path that would have to approve any
-/// reply derived from it is not wired, so the body is dropped, the LLM is
-/// not called, and the run ends with a static error.
+/// With `request.allow_private_lookup` the model is offered exactly one
+/// effect-free tool, `request_private_lookup`; a recorded query comes back
+/// in [`FlowOutcome::private_lookup`] and the reply text of such a run is
+/// only advisory (the telecom driver replaces it with a fixed notice).
 pub(crate) async fn run_public_with(
     llm: Arc<dyn AiProvider>,
     request: PublicRunRequest,
     cancel: CancellationToken,
     // Buffered reply: no partial text is streamed to any sink.
     _events: broadcast::Sender<FlowStreamEvent>,
-    private_read: Option<&Arc<dyn crate::gateway::telecom::PrivateReadDriver>>,
 ) -> Result<FlowOutcome, FlowError> {
-    if request.prompt_version != PUBLIC_PROMPT_VERSION {
+    check_version(request.prompt_version)?;
+    let (tools, lookup): (Arc<dyn ToolService>, Option<Arc<PrivateLookupToolService>>) =
+        if request.allow_private_lookup {
+            let svc = Arc::new(PrivateLookupToolService::new());
+            (svc.clone(), Some(svc))
+        } else {
+            (Arc::new(NullToolService::new()), None)
+        };
+    let system_prompt = if lookup.is_some() {
+        format!("{PUBLIC_SYSTEM_PROMPT}{PUBLIC_LOOKUP_PROMPT_ADDENDUM}")
+    } else {
+        PUBLIC_SYSTEM_PROMPT.to_string()
+    };
+    let run = run_isolated(
+        llm,
+        &request.run_id,
+        &request.history,
+        &request.text,
+        None,
+        system_prompt,
+        tools,
+        &cancel,
+    )
+    .await;
+    let private_lookup = lookup.and_then(|svc| svc.take_query());
+    match (run, private_lookup) {
+        // A recorded lookup is the run's result even if the closing turn
+        // produced no text: the driver discards the public reply anyway.
+        (Ok(mut outcome), Some(q)) => {
+            outcome.private_lookup = Some(q);
+            Ok(outcome)
+        }
+        // The closing turn failed after the query was recorded (e.g. the
+        // iteration cap): the request itself still stands; it only asks the
+        // operator. A cancelled run never yields a request.
+        (Err(e), Some(q)) if !matches!(e, FlowError::Cancelled) && !cancel.is_cancelled() => {
+            Ok(FlowOutcome {
+                private_lookup: Some(q),
+                ..FlowOutcome::default()
+            })
+        }
+        (run, _) => {
+            let outcome = run?;
+            if outcome.final_text.is_empty() {
+                return Err(FlowError::Internal("public run produced no reply".into()));
+            }
+            Ok(outcome)
+        }
+    }
+}
+
+/// Draft the reply of an operator-approved private lookup against `llm`.
+/// Same isolation as [`run_public_with`] (no tools at all, ephemeral
+/// session); the lookup result rides one synthetic same-turn message.
+pub(crate) async fn run_private_draft_with(
+    llm: Arc<dyn AiProvider>,
+    request: PrivateDraftRequest,
+    cancel: CancellationToken,
+    _events: broadcast::Sender<FlowStreamEvent>,
+) -> Result<FlowOutcome, FlowError> {
+    check_version(request.prompt_version)?;
+    let carrier = format!(
+        "{PRIVATE_RESULT_PREFIX}query: {}\n{}",
+        request.query, request.private_result
+    );
+    let outcome = run_isolated(
+        llm,
+        &request.run_id,
+        &request.history,
+        &request.text,
+        Some(carrier),
+        format!("{PUBLIC_SYSTEM_PROMPT}{PRIVATE_DRAFT_PROMPT_ADDENDUM}"),
+        Arc::new(NullToolService::new()),
+        &cancel,
+    )
+    .await?;
+    if outcome.final_text.is_empty() {
+        return Err(FlowError::Internal("private draft produced no text".into()));
+    }
+    Ok(outcome)
+}
+
+fn check_version(version: &str) -> Result<(), FlowError> {
+    if version != PUBLIC_PROMPT_VERSION {
         return Err(FlowError::InvalidConfig(format!(
-            "unknown public prompt version {}",
-            request.prompt_version
+            "unknown public prompt version {version}"
         )));
     }
+    Ok(())
+}
+
+/// Shared isolated harness run. Returns the (possibly empty) trimmed reply
+/// of the current turn.
+#[allow(clippy::too_many_arguments)]
+async fn run_isolated(
+    llm: Arc<dyn AiProvider>,
+    run_id: &str,
+    history: &[PublicHistoryTurn],
+    text: &str,
+    same_turn_carrier: Option<String>,
+    system_prompt: String,
+    tools: Arc<dyn ToolService>,
+    cancel: &CancellationToken,
+) -> Result<FlowOutcome, FlowError> {
     if cancel.is_cancelled() {
         return Err(FlowError::Cancelled);
     }
@@ -110,61 +239,13 @@ pub(crate) async fn run_public_with(
     let started = std::time::Instant::now();
     let provider_name = llm.name().to_string();
 
-    // A-stage private read. Fires only when both a scope and a driver are
-    // supplied; production supplies neither. The driver is responsible for
-    // the own-A-window check; we just hand it the scope and let it decide.
-    if let (Some(scope), Some(driver)) = (request.scope.as_ref(), private_read) {
-        let scope_label = scope.binding_ref().to_string();
-        match driver.read(scope, &request.text, &cancel).await {
-            Ok(crate::gateway::telecom::PrivateReadResult::Transient(_body)) => {
-                // Fail closed: a reply built from a private body must pass
-                // the operator disclosure (B) path before it can reach SMS
-                // or history, and that path is not wired. Drop the body
-                // here, never call the LLM, and keep the error text static
-                // so no private content can leak through it.
-                tracing::warn!(
-                    target: "aleph.public.private_read",
-                    binding = %scope_label,
-                    "private-read returned a body but disclosure is not wired; failing closed"
-                );
-                return Err(FlowError::InvalidConfig(
-                    "private-read result requires the operator disclosure path, which is not wired"
-                        .into(),
-                ));
-            }
-            Ok(crate::gateway::telecom::PrivateReadResult::Unavailable) => {}
-            Err(crate::gateway::telecom::PrivateReadError::Denied) => {
-                tracing::info!(
-                    target: "aleph.public.private_read",
-                    binding = %scope_label,
-                    "private-read denied; running public turn as-is"
-                );
-            }
-            Err(crate::gateway::telecom::PrivateReadError::Cancelled) => {
-                tracing::info!(
-                    target: "aleph.public.private_read",
-                    binding = %scope_label,
-                    "private-read cancelled; aborting run"
-                );
-                return Err(FlowError::Cancelled);
-            }
-            Err(crate::gateway::telecom::PrivateReadError::Failed) => {
-                tracing::warn!(
-                    target: "aleph.public.private_read",
-                    binding = %scope_label,
-                    "private-read failed; running public turn as-is"
-                );
-            }
-        }
-    }
-
     let (session, sid, current_turn) =
-        ephemeral_session(&request.run_id, &request.history, &request.text).await?;
+        ephemeral_session(run_id, history, text, same_turn_carrier).await?;
 
     let deps = HarnessDeps {
         tool_descriptor_lookup: None,
         session: session.clone(),
-        tools: Arc::new(NullToolService::new()),
+        tools,
         llm,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -172,7 +253,7 @@ pub(crate) async fn run_public_with(
         context_compactor: None,
         preflight_pipeline: None,
         trace_sink: None,
-        system_prompt: Some(PUBLIC_SYSTEM_PROMPT.to_string()),
+        system_prompt: Some(system_prompt),
         system_prompt_parts: None,
         recall_context: None,
         guardrails: None,
@@ -190,7 +271,7 @@ pub(crate) async fn run_public_with(
     };
     let harness = AgentHarness::new(deps);
     let mut cb = NoopHarnessCallback;
-    match harness.run(&sid, &mut cb, &cancel).await {
+    match harness.run(&sid, &mut cb, cancel).await {
         Ok(()) => {}
         Err(HarnessError::Cancelled) => return Err(FlowError::Cancelled),
         Err(e) => return Err(super::error::classify_harness_error(e, &provider_name)),
@@ -221,13 +302,9 @@ pub(crate) async fn run_public_with(
             }
         }
     }
-    let final_text = final_text.trim().to_string();
-    if final_text.is_empty() {
-        return Err(FlowError::Internal("public run produced no reply".into()));
-    }
 
     Ok(FlowOutcome {
-        final_text,
+        final_text: final_text.trim().to_string(),
         iterations,
         total_tokens: u32::try_from(harness.total_tokens()).unwrap_or(u32::MAX),
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -242,6 +319,7 @@ async fn ephemeral_session(
     run_id: &str,
     history: &[PublicHistoryTurn],
     text: &str,
+    same_turn_carrier: Option<String>,
 ) -> Result<(Arc<dyn SessionService>, SessionKey, uuid::Uuid), FlowError> {
     let internal = |e: String| FlowError::Internal(format!("public session setup failed: {e}"));
     let conn = rusqlite::Connection::open_in_memory().map_err(|e| internal(e.to_string()))?;
@@ -281,7 +359,8 @@ async fn ephemeral_session(
     }
     let turn = uuid::Uuid::new_v4();
     let [started, user] = SessionEvent::user_turn(turn, content(text), None, now_ms());
-    for event in [started, user] {
+    let carrier = same_turn_carrier.map(|c| SessionEvent::synthetic_user(turn, c));
+    for event in [started, user].into_iter().chain(carrier) {
         session
             .emit_event(&sid, event)
             .await
@@ -359,7 +438,7 @@ mod tests {
             history: Vec::new(),
             run_id: "run-1".into(),
             prompt_version: PUBLIC_PROMPT_VERSION,
-            scope: None,
+            allow_private_lookup: false,
         }
     }
 
@@ -437,7 +516,6 @@ mod tests {
             request("what time is it"),
             CancellationToken::new(),
             tx,
-            None,
         )
         .await
         .expect("public run ok");
@@ -646,7 +724,6 @@ mod tests {
             request(FIRST_USER_CANARY),
             CancellationToken::new(),
             tx.clone(),
-            None,
         )
         .await
         .expect("first public run");
@@ -669,7 +746,6 @@ mod tests {
             request("second question without history"),
             CancellationToken::new(),
             tx.clone(),
-            None,
         )
         .await
         .expect("second public run");
@@ -746,7 +822,7 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
         let (tx, _rx) = broadcast::channel(4);
-        let err = run_public_with(llm, request("hi"), cancel, tx, None)
+        let err = run_public_with(llm, request("hi"), cancel, tx)
             .await
             .unwrap_err();
         assert!(matches!(err, FlowError::Cancelled));
@@ -759,7 +835,7 @@ mod tests {
         let mut req = request("hi");
         req.prompt_version = "other";
         let (tx, _rx) = broadcast::channel(4);
-        let err = run_public_with(llm, req, CancellationToken::new(), tx, None)
+        let err = run_public_with(llm, req, CancellationToken::new(), tx)
             .await
             .unwrap_err();
         assert!(matches!(err, FlowError::InvalidConfig(_)));
@@ -769,15 +845,9 @@ mod tests {
     async fn slash_text_is_plain_caller_text() {
         let (llm, captured) = spy("ok");
         let (tx, _rx) = broadcast::channel(4);
-        run_public_with(
-            llm,
-            request("/model opus"),
-            CancellationToken::new(),
-            tx,
-            None,
-        )
-        .await
-        .expect("plain text run");
+        run_public_with(llm, request("/model opus"), CancellationToken::new(), tx)
+            .await
+            .expect("plain text run");
         let c = captured.lock().unwrap();
         assert!(c.messages.iter().all(|m| m.contains("/model opus")));
         assert!(c
@@ -801,7 +871,7 @@ mod tests {
             },
         ];
         let (tx, _rx) = broadcast::channel(4);
-        let out = run_public_with(llm, req, CancellationToken::new(), tx, None)
+        let out = run_public_with(llm, req, CancellationToken::new(), tx)
             .await
             .expect("public run ok");
         assert_eq!(out.final_text, "fresh reply");
@@ -825,120 +895,207 @@ mod tests {
             assistant: "STALE-HISTORY-REPLY".into(),
         }];
         let (tx, _rx) = broadcast::channel(4);
-        let err = run_public_with(llm, req, CancellationToken::new(), tx, None)
+        let err = run_public_with(llm, req, CancellationToken::new(), tx)
             .await
             .unwrap_err();
         assert!(matches!(err, FlowError::Internal(m) if !m.contains("STALE")));
     }
 
-    // -- D-step: private-read driver outcomes. A private body never reaches
-    //    the LLM, the reply, or the public history (fail-closed). --
+    // -- Private lookup (owner enabled `[telecom_private_read]`). --
 
-    use crate::gateway::telecom::private_read::{
-        PrivateReadDriver, PrivateReadError, PrivateReadResult,
-    };
-    use crate::gateway::telecom::public_approval::PublicApprovalScope;
-
-    struct ScriptedDriver {
-        body: Option<Result<PrivateReadResult, PrivateReadError>>,
-    }
-
-    #[async_trait::async_trait]
-    impl PrivateReadDriver for ScriptedDriver {
-        async fn read(
-            &self,
-            _scope: &PublicApprovalScope,
-            _query: &str,
-            _cancel: &CancellationToken,
-        ) -> Result<PrivateReadResult, PrivateReadError> {
-            match &self.body {
-                Some(Ok(v)) => Ok(v.clone()),
-                Some(Err(e)) => Err(match e {
-                    PrivateReadError::Denied => PrivateReadError::Denied,
-                    PrivateReadError::Cancelled => PrivateReadError::Cancelled,
-                    PrivateReadError::Failed => PrivateReadError::Failed,
-                }),
-                None => Ok(PrivateReadResult::Unavailable),
-            }
+    fn lookup_call(id: &str, name: &str, query: &str) -> NativeToolCall {
+        NativeToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments: serde_json::json!({ "query": query }),
+            thought_signature: None,
         }
     }
 
-    fn scripted_scope(bind: &str) -> PublicApprovalScope {
-        let core = uuid::Uuid::new_v4().to_string();
-        let agent = uuid::Uuid::new_v4().to_string();
-        let turn = uuid::Uuid::new_v4().to_string();
-        let ctx =
-            crate::gateway::telecom::public_context::test_support::sample_public_context(bind);
-        PublicApprovalScope::new(&ctx, core, agent, turn, 0)
-    }
-
-    fn request_with_scope(text: &str, scope: Option<PublicApprovalScope>) -> PublicRunRequest {
+    fn lookup_request(text: &str) -> PublicRunRequest {
         let mut r = request(text);
-        r.scope = scope;
+        r.allow_private_lookup = true;
         r
     }
 
-    /// D-1: a Transient private result fails closed. The disclosure (B)
-    /// path is not wired, so the run returns a static error, the LLM is
-    /// never called, and the error text carries no private body.
     #[tokio::test]
-    async fn d_private_transient_fails_closed_without_calling_llm() {
-        const PRIVATE_CANARY: &str = "OWNER-PRIVATE-BODY-77c2";
-        let (llm, captured) = spy("must-not-appear");
-        let (tx, _rx) = broadcast::channel(4);
-        let driver: Arc<dyn PrivateReadDriver> = Arc::new(ScriptedDriver {
-            body: Some(Ok(PrivateReadResult::Transient(PRIVATE_CANARY.into()))),
+    async fn disabled_lookup_offers_no_tool_and_records_nothing() {
+        let captured = Arc::new(Mutex::new(Captured::default()));
+        let llm: Arc<dyn AiProvider> = Arc::new(MaliciousProvider {
+            calls: vec![lookup_call("c1", "request_private_lookup", "dentist")],
+            captured: captured.clone(),
         });
-        let err = run_public_with(
-            llm,
-            request_with_scope("caller's public question", Some(scripted_scope("bind-d-1"))),
-            CancellationToken::new(),
-            tx,
-            Some(&driver),
-        )
-        .await
-        .unwrap_err();
-        match &err {
-            FlowError::InvalidConfig(m) => {
-                assert_eq!(
-                    m,
-                    "private-read result requires the operator disclosure path, which is not wired"
-                );
-            }
-            other => panic!("expected InvalidConfig, got {other:?}"),
-        }
-        assert!(!err.to_string().contains(PRIVATE_CANARY));
-        assert!(!format!("{err:?}").contains(PRIVATE_CANARY));
+        let (tx, _rx) = broadcast::channel(4);
+        let out = run_public_with(llm, request("when is it"), CancellationToken::new(), tx)
+            .await
+            .expect("run ok");
+        assert_eq!(out.private_lookup, None);
         let c = captured.lock().unwrap();
-        assert!(
-            c.system.is_empty() && c.messages.is_empty(),
-            "LLM must not be called when a private body cannot be disclosed"
-        );
+        assert!(c.tools_offered.iter().all(|n| *n == 0));
+        assert!(c
+            .system
+            .iter()
+            .all(|s| s.as_deref() == Some(PUBLIC_SYSTEM_PROMPT)));
+        assert!(c.payloads[1].iter().any(|m| m.is_tool_result()
+            && m.text_content()
+                .contains("tool not found: request_private_lookup")));
     }
 
-    /// D-2: when the driver reports Cancelled, the run aborts with
-    /// FlowError::Cancelled — the caller's request is treated as if
-    /// the run were cancelled upstream. The LLM is NOT called.
     #[tokio::test]
-    async fn d_private_read_cancelled_aborts_run_without_calling_llm() {
-        let (llm, captured) = spy("must-not-appear");
-        let (tx, _rx) = broadcast::channel(4);
-        let driver: Arc<dyn PrivateReadDriver> = Arc::new(ScriptedDriver {
-            body: Some(Err(PrivateReadError::Cancelled)),
+    async fn enabled_lookup_offers_one_tool_and_records_query_only() {
+        let captured = Arc::new(Mutex::new(Captured::default()));
+        let llm: Arc<dyn AiProvider> = Arc::new(MaliciousProvider {
+            calls: vec![
+                lookup_call("c1", "request_private_lookup", "dentist appointment"),
+                lookup_call("c2", "memory_search", "owner private memory"),
+                lookup_call("c3", "exec", "printf canary"),
+            ],
+            captured: captured.clone(),
         });
-        let err = run_public_with(
+        let (tx, mut rx) = broadcast::channel(4);
+        let out = run_public_with(
             llm,
-            request_with_scope("hi", Some(scripted_scope("bind-d-2"))),
+            lookup_request("when is my appointment"),
             CancellationToken::new(),
-            tx,
-            Some(&driver),
+            tx.clone(),
         )
         .await
-        .unwrap_err();
+        .expect("run ok");
+        assert_eq!(out.private_lookup.as_deref(), Some("dentist appointment"));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        let c = captured.lock().unwrap();
+        assert!(c.tools_offered.iter().all(|n| *n == 1));
+        let want = format!("{PUBLIC_SYSTEM_PROMPT}{PUBLIC_LOOKUP_PROMPT_ADDENDUM}");
+        assert!(c.system.iter().all(|s| s.as_deref() == Some(want.as_str())));
+        let results: Vec<_> = c.payloads[1]
+            .iter()
+            .filter(|m| m.is_tool_result())
+            .collect();
+        assert_eq!(results.len(), 3);
+        for (name, ok) in [
+            ("request_private_lookup", true),
+            ("memory_search", false),
+            ("exec", false),
+        ] {
+            let r = results
+                .iter()
+                .find(|m| matches!(m, UnifiedMessage::ToolResult { tool_name, .. } if tool_name == name))
+                .expect("receipt");
+            let UnifiedMessage::ToolResult { is_error, .. } = r else {
+                unreachable!()
+            };
+            assert_eq!(!*is_error, ok, "{name}");
+            if !ok {
+                assert!(r
+                    .text_content()
+                    .contains(&format!("tool not found: {name}")));
+            } else {
+                // The fixed receipt never echoes the query back.
+                assert!(!r.text_content().contains("dentist"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn enabled_lookup_without_call_is_a_plain_public_reply() {
+        let (llm, captured) = spy("just chatting");
+        let (tx, _rx) = broadcast::channel(4);
+        let out = run_public_with(llm, lookup_request("hi"), CancellationToken::new(), tx)
+            .await
+            .expect("run ok");
+        assert_eq!(out.final_text, "just chatting");
+        assert_eq!(out.private_lookup, None);
+        assert_eq!(captured.lock().unwrap().tools_offered, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn cancelled_lookup_run_yields_no_request() {
+        let (llm, captured) = spy("x");
+        let (tx, _rx) = broadcast::channel(4);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let err = run_public_with(llm, lookup_request("hi"), cancel, tx)
+            .await
+            .unwrap_err();
         assert!(matches!(err, FlowError::Cancelled));
+        assert!(captured.lock().unwrap().payloads.is_empty());
+    }
+
+    fn draft_request(result: &str) -> PrivateDraftRequest {
+        PrivateDraftRequest {
+            ctx: sample_ctx(),
+            text: "when is my appointment".into(),
+            history: vec![PublicHistoryTurn {
+                user: "earlier question".into(),
+                assistant: "earlier answer".into(),
+            }],
+            run_id: "run-draft".into(),
+            prompt_version: PUBLIC_PROMPT_VERSION,
+            query: "dentist appointment".into(),
+            private_result: Arc::from(result),
+        }
+    }
+
+    #[tokio::test]
+    async fn private_draft_carries_result_same_turn_with_no_tools() {
+        let (llm, captured) = spy("Tuesday 10:00");
+        let (tx, mut rx) = broadcast::channel(4);
+        let out = run_private_draft_with(
+            llm,
+            draft_request("PRIVATE-RESULT-CANARY dentist Tue 10:00"),
+            CancellationToken::new(),
+            tx.clone(),
+        )
+        .await
+        .expect("draft ok");
+        assert_eq!(out.final_text, "Tuesday 10:00");
+        assert_eq!(out.private_lookup, None);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        let c = captured.lock().unwrap();
+        assert_eq!(c.tools_offered, vec![0]);
+        let want = format!("{PUBLIC_SYSTEM_PROMPT}{PRIVATE_DRAFT_PROMPT_ADDENDUM}");
+        assert_eq!(c.system[0].as_deref(), Some(want.as_str()));
+        let msgs = &c.messages[0];
+        let hist = msgs.find("earlier question").expect("history");
+        let cur = msgs.find("when is my appointment").expect("current text");
+        let res = msgs.find("PRIVATE-RESULT-CANARY").expect("result carrier");
         assert!(
-            captured.lock().unwrap().system.is_empty(),
-            "LLM must not be called when private-read is cancelled"
+            hist < cur && cur < res,
+            "history, then caller text, then result"
         );
+        assert!(msgs.contains("query: dentist appointment"));
+    }
+
+    #[tokio::test]
+    async fn private_draft_empty_text_and_bad_version_fail() {
+        let (llm, _c) = spy("");
+        let (tx, _rx) = broadcast::channel(4);
+        let err = run_private_draft_with(llm, draft_request("r"), CancellationToken::new(), tx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FlowError::Internal(_)));
+        let (llm, c) = spy("x");
+        let (tx, _rx) = broadcast::channel(4);
+        let mut req = draft_request("r");
+        req.prompt_version = "other";
+        assert!(
+            run_private_draft_with(llm, req, CancellationToken::new(), tx)
+                .await
+                .is_err()
+        );
+        assert!(c.lock().unwrap().payloads.is_empty());
+    }
+
+    #[test]
+    fn private_draft_debug_redacts_query_and_result() {
+        let dbg = format!("{:?}", draft_request("PRIVATE-RESULT-CANARY"));
+        assert!(!dbg.contains("PRIVATE-RESULT-CANARY"));
+        assert!(!dbg.contains("dentist"));
     }
 }

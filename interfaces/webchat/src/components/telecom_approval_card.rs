@@ -132,6 +132,13 @@ pub fn TelecomApprovalCard(approval: TelecomApprovalView) -> impl IntoView {
             // reviewed body replaces it, so what is shown is what is resolved.
             {move || match review.get() {
                 Some(r) => view! {
+                    <div class="text-xs text-text-secondary my-1 break-all">
+                        <div><strong>{t!(i18n, notifications.telecom_binding)}" "</strong>{r.view.binding_ref}</div>
+                        <div><strong>{t!(i18n, notifications.telecom_generation)}" "</strong>{r.view.connection_generation}</div>
+                        <div><strong>{t!(i18n, notifications.telecom_caller_digest)}" "</strong>{r.view.caller_digest}</div>
+                        <div><strong>{t!(i18n, notifications.telecom_turn)}" "</strong>{r.view.turn_id}</div>
+                        <div><strong>{t!(i18n, notifications.telecom_session_epoch)}" "</strong>{r.view.session_epoch}</div>
+                    </div>
                     <pre class="font-mono text-sm my-1 text-primary whitespace-pre-wrap break-all max-h-60 overflow-y-auto rounded bg-surface-sunken px-2 py-1">
                         {r.body}
                     </pre>

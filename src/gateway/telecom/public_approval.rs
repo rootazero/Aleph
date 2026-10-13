@@ -23,9 +23,9 @@
 //! - an approval is bound to the exact body, binding/provenance (channel,
 //!   region, binding ref, connection generation), Core, agent, turn and
 //!   session epoch; any difference at consumption refuses;
-//! - [`deliver_private_disclosure`] is the effect fence: the sink is reached
-//!   only after B is consumed against the *current* context, so every refusal
-//!   leaves the private answer undelivered.
+//! - [`deliver_private_disclosure`] consumes B before reaching the sink; the
+//!   production private sink also revalidates A/B and scope at the channel's
+//!   final pre-submit lock boundary.
 //!
 //! # Integration state (read this before relying on it)
 //!
@@ -38,17 +38,11 @@
 //! the full body and call [`PublicApprovalLedger::decide_exact`].
 //! `ExecApprovalManager` is deliberately not reused (no deadline/scope binding).
 //!
-//! NOT wired (product decision: no private source is enabled yet):
-//! - no private-read driver is installed and `PublicRunRequest.scope` is
-//!   `None`, so no approved A record is ever consumed;
-//! - nothing routes a private-draft answer through
-//!   [`deliver_private_disclosure`] (the B sink has no production caller);
-//! - whether the connection generation changes on every rebind, revocation
-//!   or session reset (the `session_epoch` contract) is not yet proven.
-//!
-//! The public run path therefore has no private-read or private disclosure
-//! capability (public default: no tools/derivations/private writeback), which
-//! is the safe state.
+//! The private read and disclosure path is wired only when the optional
+//! `[telecom_private_read]` driver and operator control plane are present.
+//! Without that configuration, public runs have no private-read capability.
+//! Connection-generation updates on every rebind, revocation and reset remain
+//! an integration obligation for the `session_epoch` contract.
 
 use std::collections::HashMap;
 
@@ -199,6 +193,17 @@ pub enum PublicApprovalError {
     DeliveryFailed,
 }
 
+/// What the waiting run driver may learn about its own request: whether the
+/// operator still has to decide, approved it, or it can no longer be used
+/// (denied, expired, cancelled, consumed or unknown — deliberately one
+/// variant, the caller reacts to all of them the same way).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicApprovalStatus {
+    Pending,
+    Approved,
+    Closed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     Pending,
@@ -234,6 +239,11 @@ pub struct PublicApprovalView {
     pub id: String,
     pub stage: PublicApprovalStage,
     pub channel: TelecomChannel,
+    pub binding_ref: String,
+    pub connection_generation: u64,
+    pub caller_digest: String,
+    pub turn_id: String,
+    pub session_epoch: u64,
     pub body: String,
     pub expires_at: DateTime<Utc>,
 }
@@ -423,6 +433,11 @@ impl PublicApprovalLedger {
                 id: id.clone(),
                 stage: r.stage,
                 channel: r.scope.channel(),
+                binding_ref: r.scope.binding_ref().to_string(),
+                connection_generation: r.scope.provenance.connection_generation(),
+                caller_digest: r.scope.provenance.caller_digest().as_str().to_string(),
+                turn_id: r.scope.turn_id.clone(),
+                session_epoch: r.scope.session_epoch,
                 body: r.body.clone(),
                 expires_at: r.expires_at,
             })
@@ -438,6 +453,11 @@ impl PublicApprovalLedger {
             id: id.to_string(),
             stage: r.stage,
             channel: r.scope.channel(),
+            binding_ref: r.scope.binding_ref().to_string(),
+            connection_generation: r.scope.provenance.connection_generation(),
+            caller_digest: r.scope.provenance.caller_digest().as_str().to_string(),
+            turn_id: r.scope.turn_id.clone(),
+            session_epoch: r.scope.session_epoch,
             body: r.body.clone(),
             expires_at: r.expires_at,
         })
@@ -573,6 +593,77 @@ impl PublicApprovalLedger {
         }
     }
 
+    /// Validate a consumed A without extending its original deadline. The
+    /// returned deadline lets the caller bound read and draft work to A's TTL.
+    pub fn validate_consumed_read(
+        &self,
+        read_id: &str,
+        scope: &PublicApprovalScope,
+        body: &str,
+        now: DateTime<Utc>,
+    ) -> Result<DateTime<Utc>, PublicApprovalError> {
+        let records = self.lock();
+        let read = records
+            .get(read_id)
+            .ok_or(PublicApprovalError::ReadNotSatisfied)?;
+        if read.stage != PublicApprovalStage::PrivateRead || read.state != State::Consumed {
+            return Err(PublicApprovalError::ReadNotSatisfied);
+        }
+        if read.expired(now) {
+            return Err(PublicApprovalError::Expired);
+        }
+        if &read.scope != scope {
+            return Err(PublicApprovalError::ScopeMismatch);
+        }
+        if read.body != body {
+            return Err(PublicApprovalError::BodyMismatch);
+        }
+        Ok(read.expires_at)
+    }
+
+    /// Final synchronous pre-submit check for the exact B and its consumed A.
+    /// Neither this validation nor a successful send renews either approval.
+    pub fn validate_consumed_disclosure(
+        &self,
+        disclosure_id: &str,
+        read_id: &str,
+        scope: &PublicApprovalScope,
+        body: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), PublicApprovalError> {
+        let records = self.lock();
+        let disclosure = records
+            .get(disclosure_id)
+            .ok_or(PublicApprovalError::UnknownRequest)?;
+        if disclosure.stage != PublicApprovalStage::Disclosure
+            || disclosure.state != State::Consumed
+            || disclosure.linked_read.as_deref() != Some(read_id)
+        {
+            return Err(PublicApprovalError::ReadNotSatisfied);
+        }
+        if disclosure.expired(now) {
+            return Err(PublicApprovalError::Expired);
+        }
+        if &disclosure.scope != scope {
+            return Err(PublicApprovalError::ScopeMismatch);
+        }
+        if disclosure.body != body {
+            return Err(PublicApprovalError::BodyMismatch);
+        }
+        let read = records
+            .get(read_id)
+            .ok_or(PublicApprovalError::ReadNotSatisfied)?;
+        if read.stage != PublicApprovalStage::PrivateRead
+            || read.state != State::Consumed
+            || read.expired(now)
+            || &read.scope != scope
+            || !read.disclosure_claimed
+        {
+            return Err(PublicApprovalError::ReadNotSatisfied);
+        }
+        Ok(())
+    }
+
     fn verdict(
         r: &Record,
         current_scope: &PublicApprovalScope,
@@ -597,6 +688,21 @@ impl PublicApprovalLedger {
         Ok(())
     }
 
+    /// Non-revealing lifecycle state of one request, for the run driver that
+    /// opened it and waits on the operator. Carries no body.
+    pub fn status(&self, id: &str, now: DateTime<Utc>) -> PublicApprovalStatus {
+        let records = self.lock();
+        match records.get(id) {
+            Some(r) if r.expired(now) && r.state != State::Consumed => PublicApprovalStatus::Closed,
+            Some(r) => match r.state {
+                State::Pending => PublicApprovalStatus::Pending,
+                State::Approved => PublicApprovalStatus::Approved,
+                State::Consumed | State::Retired => PublicApprovalStatus::Closed,
+            },
+            None => PublicApprovalStatus::Closed,
+        }
+    }
+
     /// Retire every live request of a binding (revocation, hang-up,
     /// interruption, Core disconnect, generation change). Returns the count.
     pub fn cancel_binding(&self, binding_ref: &str) -> usize {
@@ -611,17 +717,19 @@ impl PublicApprovalLedger {
     }
 }
 
-/// Delivery of an approved private answer (the channel reply path in
-/// production, a spy in tests).
-pub trait PrivateDisclosureSink {
-    fn deliver(&self, body: &str) -> Result<(), PublicApprovalError>;
+/// Delivery of an approved private answer (the acknowledged public reply
+/// path in production, a spy in tests). `Ok(())` means transport
+/// acknowledgement; anything else must be an error.
+#[async_trait::async_trait]
+pub trait PrivateDisclosureSink: Send + Sync {
+    async fn deliver(&self, body: &str) -> Result<(), PublicApprovalError>;
 }
 
 /// The effect fence for private disclosure: consume B against the current
 /// context and only then hand the approved body to the sink. Every refusal
 /// returns before the sink is touched; a sink delivery failure is propagated
 /// so the caller never reports delivery success without sink acknowledgement.
-pub fn deliver_private_disclosure(
+pub async fn deliver_private_disclosure(
     ledger: &PublicApprovalLedger,
     disclosure_id: &str,
     source: ApprovalSource,
@@ -638,7 +746,7 @@ pub fn deliver_private_disclosure(
         final_body,
         now,
     )?;
-    sink.deliver(&grant.into_body())
+    sink.deliver(&grant.into_body()).await
 }
 
 #[cfg(test)]
@@ -648,7 +756,7 @@ mod tests {
         MarkerRestore, PersistedTelecomMarker, MARKER_VERSION,
     };
     use crate::gateway::telecom::public_context::test_support::sample_public_context;
-    use std::cell::RefCell;
+    use crate::sync_primitives::Mutex;
 
     const CANARY: &str = "PRIVATE-CANARY-vault-code-7731";
 
@@ -681,20 +789,37 @@ mod tests {
         }
     }
 
+    /// Drive the async effect fence to completion in a sync test.
+    fn deliver_now(
+        ledger: &PublicApprovalLedger,
+        id: &str,
+        source: ApprovalSource,
+        scope: &PublicApprovalScope,
+        body: &str,
+        now: DateTime<Utc>,
+        sink: &dyn PrivateDisclosureSink,
+    ) -> Result<(), PublicApprovalError> {
+        futures::executor::block_on(deliver_private_disclosure(
+            ledger, id, source, scope, body, now, sink,
+        ))
+    }
+
     #[derive(Default)]
-    struct SpySink(RefCell<Vec<String>>);
+    struct SpySink(Mutex<Vec<String>>);
+    #[async_trait::async_trait]
     impl PrivateDisclosureSink for SpySink {
-        fn deliver(&self, body: &str) -> Result<(), PublicApprovalError> {
-            self.0.borrow_mut().push(body.to_string());
+        async fn deliver(&self, body: &str) -> Result<(), PublicApprovalError> {
+            self.0.lock().unwrap().push(body.to_string());
             Ok(())
         }
     }
 
     #[derive(Default)]
-    struct FailingSink(RefCell<Vec<String>>);
+    struct FailingSink(Mutex<Vec<String>>);
+    #[async_trait::async_trait]
     impl PrivateDisclosureSink for FailingSink {
-        fn deliver(&self, body: &str) -> Result<(), PublicApprovalError> {
-            self.0.borrow_mut().push(body.to_string());
+        async fn deliver(&self, body: &str) -> Result<(), PublicApprovalError> {
+            self.0.lock().unwrap().push(body.to_string());
             Err(PublicApprovalError::DeliveryFailed)
         }
     }
@@ -747,10 +872,10 @@ mod tests {
         let a2 = l.request_private_read(scope.clone(), CANARY, t0()).unwrap();
         l.decide(&a2, op(), true, t0()).unwrap();
         for id in [&a, &a2] {
-            let r = deliver_private_disclosure(&l, id, op(), &scope, CANARY, t0(), &sink);
+            let r = deliver_now(&l, id, op(), &scope, CANARY, t0(), &sink);
             assert_eq!(r, Err(PublicApprovalError::WrongStage));
         }
-        assert!(sink.0.borrow().is_empty());
+        assert!(sink.0.lock().unwrap().is_empty());
         // And disclosure cannot even be requested from an unconsumed read.
         let r = l.request_disclosure(&a2, scope_for(&ctx), CANARY, t0());
         assert_eq!(r, Err(PublicApprovalError::ReadNotSatisfied));
@@ -771,8 +896,8 @@ mod tests {
         assert_eq!(r.unwrap_err(), PublicApprovalError::WrongStage);
         // B is untouched by the wrong-stage probe and still works for B.
         let sink = SpySink::default();
-        deliver_private_disclosure(&l, &b, op(), &scope, CANARY, t0(), &sink).unwrap();
-        assert_eq!(sink.0.borrow().as_slice(), [CANARY]);
+        deliver_now(&l, &b, op(), &scope, CANARY, t0(), &sink).unwrap();
+        assert_eq!(sink.0.lock().unwrap().as_slice(), [CANARY]);
     }
 
     #[test]
@@ -880,11 +1005,14 @@ mod tests {
         let (l, _ctx, scope, a) = with_consumed_read();
         let b = approved_disclosure(&l, &scope, &a, "approved body");
         let sink = SpySink::default();
-        let r = deliver_private_disclosure(&l, &b, op(), &scope, CANARY, t0(), &sink);
+        let r = deliver_now(&l, &b, op(), &scope, CANARY, t0(), &sink);
         assert_eq!(r, Err(PublicApprovalError::BodyMismatch));
-        let r = deliver_private_disclosure(&l, &b, op(), &scope, "approved body", t0(), &sink);
+        let r = deliver_now(&l, &b, op(), &scope, "approved body", t0(), &sink);
         assert_eq!(r, Err(PublicApprovalError::Retired));
-        assert!(sink.0.borrow().is_empty(), "no private delivery on refusal");
+        assert!(
+            sink.0.lock().unwrap().is_empty(),
+            "no private delivery on refusal"
+        );
     }
 
     #[test]
@@ -949,10 +1077,10 @@ mod tests {
         let (l, _ctx, scope, a) = with_consumed_read();
         let b = approved_disclosure(&l, &scope, &a, CANARY);
         let sink = SpySink::default();
-        deliver_private_disclosure(&l, &b, op(), &scope, CANARY, t0(), &sink).unwrap();
-        let again = deliver_private_disclosure(&l, &b, op(), &scope, CANARY, t0(), &sink);
+        deliver_now(&l, &b, op(), &scope, CANARY, t0(), &sink).unwrap();
+        let again = deliver_now(&l, &b, op(), &scope, CANARY, t0(), &sink);
         assert_eq!(again, Err(PublicApprovalError::AlreadyConsumed));
-        assert_eq!(sink.0.borrow().len(), 1, "delivered exactly once");
+        assert_eq!(sink.0.lock().unwrap().len(), 1, "delivered exactly once");
         // A is one-shot too.
         let r = l.consume(
             &a,
@@ -973,7 +1101,7 @@ mod tests {
         let pending = l
             .request_disclosure(&a, scope.clone(), CANARY, t0())
             .unwrap();
-        let r = deliver_private_disclosure(&l, &pending, op(), &scope, CANARY, t0(), &sink);
+        let r = deliver_now(&l, &pending, op(), &scope, CANARY, t0(), &sink);
         assert_eq!(r, Err(PublicApprovalError::NotApproved));
 
         // Denied (a is already claimed, so use a fresh read).
@@ -992,7 +1120,7 @@ mod tests {
             .request_disclosure(&a2, scope.clone(), CANARY, t0())
             .unwrap();
         l.decide(&denied, op(), false, t0()).unwrap();
-        let r = deliver_private_disclosure(&l, &denied, op(), &scope, CANARY, t0(), &sink);
+        let r = deliver_now(&l, &denied, op(), &scope, CANARY, t0(), &sink);
         assert_eq!(r, Err(PublicApprovalError::Retired));
 
         // Cancelled by hang-up / revocation.
@@ -1009,11 +1137,11 @@ mod tests {
         .unwrap();
         let b3 = approved_disclosure(&l, &scope, &a3, CANARY);
         assert!(l.cancel_binding(ctx.provenance().binding_ref()) >= 1);
-        let r = deliver_private_disclosure(&l, &b3, op(), &scope, CANARY, t0(), &sink);
+        let r = deliver_now(&l, &b3, op(), &scope, CANARY, t0(), &sink);
         assert_eq!(r, Err(PublicApprovalError::Retired));
 
         assert!(
-            sink.0.borrow().is_empty(),
+            sink.0.lock().unwrap().is_empty(),
             "no private delivery on refusals"
         );
     }
@@ -1030,9 +1158,9 @@ mod tests {
         let sink = SpySink::default();
         // +310s: B (expires +500) is live, A (expired +300) is not.
         let at = t0() + Duration::seconds(310);
-        let r = deliver_private_disclosure(&l, &b, op(), &scope, CANARY, at, &sink);
+        let r = deliver_now(&l, &b, op(), &scope, CANARY, at, &sink);
         assert_eq!(r, Err(PublicApprovalError::ReadNotSatisfied));
-        assert!(sink.0.borrow().is_empty());
+        assert!(sink.0.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1077,8 +1205,8 @@ mod tests {
             .expect("capacity refusal must not claim the read approval");
         l.decide(&b, op(), true, t0()).unwrap();
         let sink = SpySink::default();
-        deliver_private_disclosure(&l, &b, op(), &scope, CANARY, t0(), &sink).unwrap();
-        assert_eq!(sink.0.borrow().as_slice(), [CANARY]);
+        deliver_now(&l, &b, op(), &scope, CANARY, t0(), &sink).unwrap();
+        assert_eq!(sink.0.lock().unwrap().as_slice(), [CANARY]);
     }
 
     #[test]
@@ -1086,14 +1214,14 @@ mod tests {
         let (l, _ctx, scope, a) = with_consumed_read();
         let b = approved_disclosure(&l, &scope, &a, CANARY);
         let failing = FailingSink::default();
-        let r = deliver_private_disclosure(&l, &b, op(), &scope, CANARY, t0(), &failing);
+        let r = deliver_now(&l, &b, op(), &scope, CANARY, t0(), &failing);
         assert_eq!(r, Err(PublicApprovalError::DeliveryFailed));
-        assert_eq!(failing.0.borrow().as_slice(), [CANARY]);
+        assert_eq!(failing.0.lock().unwrap().as_slice(), [CANARY]);
 
         let success_sink = SpySink::default();
-        let replay = deliver_private_disclosure(&l, &b, op(), &scope, CANARY, t0(), &success_sink);
+        let replay = deliver_now(&l, &b, op(), &scope, CANARY, t0(), &success_sink);
         assert_eq!(replay, Err(PublicApprovalError::AlreadyConsumed));
-        assert!(success_sink.0.borrow().is_empty());
+        assert!(success_sink.0.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1103,8 +1231,8 @@ mod tests {
         let view = l.operator_view(&b, t0());
         assert!(view.is_none(), "approved request is no longer pending");
         let sink = SpySink::default();
-        deliver_private_disclosure(&l, &b, op(), &scope, CANARY, t0(), &sink).unwrap();
-        assert_eq!(sink.0.borrow().as_slice(), [CANARY]);
+        deliver_now(&l, &b, op(), &scope, CANARY, t0(), &sink).unwrap();
+        assert_eq!(sink.0.lock().unwrap().as_slice(), [CANARY]);
     }
 
     #[test]
@@ -1312,8 +1440,108 @@ mod tests {
         )
         .unwrap();
         let sink = SpySink::default();
-        deliver_private_disclosure(&l, &id, op(), &scope, CANARY, t0(), &sink).unwrap();
-        assert_eq!(sink.0.borrow().as_slice(), [CANARY]);
+        deliver_now(&l, &id, op(), &scope, CANARY, t0(), &sink).unwrap();
+        assert_eq!(sink.0.lock().unwrap().as_slice(), [CANARY]);
+    }
+
+    #[test]
+    fn consumed_validity_checks_scope_body_link_deadlines_and_retirement() {
+        let (l, ctx, scope, read) = with_consumed_read();
+        let body = "approved private body";
+        let disclosure = approved_disclosure(&l, &scope, &read, body);
+        l.consume(
+            &disclosure,
+            PublicApprovalStage::Disclosure,
+            op(),
+            &scope,
+            body,
+            t0(),
+        )
+        .unwrap();
+        let deadline = t0() + Duration::seconds(SMS_APPROVAL_TTL_SECS);
+        assert_eq!(
+            l.validate_consumed_read(&read, &scope, "read: vault notes", t0()),
+            Ok(deadline)
+        );
+        assert_eq!(
+            l.validate_consumed_disclosure(&disclosure, &read, &scope, body, t0()),
+            Ok(())
+        );
+        assert_eq!(
+            l.validate_consumed_disclosure(&disclosure, "other", &scope, body, t0()),
+            Err(PublicApprovalError::ReadNotSatisfied)
+        );
+        assert_eq!(
+            l.validate_consumed_disclosure(&disclosure, &read, &scope, "altered", t0()),
+            Err(PublicApprovalError::BodyMismatch)
+        );
+        let other = PublicApprovalScope::new(&ctx, "other", "agent-1", "turn-1", 1);
+        assert_eq!(
+            l.validate_consumed_disclosure(&disclosure, &read, &other, body, t0()),
+            Err(PublicApprovalError::ScopeMismatch)
+        );
+        assert_eq!(
+            l.validate_consumed_read(&read, &scope, "read: vault notes", deadline),
+            Err(PublicApprovalError::Expired)
+        );
+        assert_eq!(
+            l.validate_consumed_disclosure(&disclosure, &read, &scope, body, deadline),
+            Err(PublicApprovalError::Expired)
+        );
+        l.cancel_binding(scope.binding_ref());
+        assert!(l
+            .validate_consumed_disclosure(&disclosure, &read, &scope, body, t0())
+            .is_err());
+    }
+
+    #[test]
+    fn consumed_disclosure_fails_when_read_expires_before_disclosure() {
+        let (l, _ctx, scope, read) = with_consumed_read();
+        let later = t0() + Duration::seconds(SMS_APPROVAL_TTL_SECS - 1);
+        let body = "approved body";
+        let disclosure = l
+            .request_disclosure(&read, scope.clone(), body, later)
+            .unwrap();
+        l.decide(&disclosure, op(), true, later).unwrap();
+        l.consume(
+            &disclosure,
+            PublicApprovalStage::Disclosure,
+            op(),
+            &scope,
+            body,
+            later,
+        )
+        .unwrap();
+        assert_eq!(
+            l.validate_consumed_disclosure(
+                &disclosure,
+                &read,
+                &scope,
+                body,
+                t0() + Duration::seconds(SMS_APPROVAL_TTL_SECS),
+            ),
+            Err(PublicApprovalError::ReadNotSatisfied)
+        );
+    }
+
+    #[test]
+    fn operator_view_exposes_trusted_scope_identity() {
+        let l = PublicApprovalLedger::new();
+        let ctx = sample_public_context("view-binding");
+        let scope = scope_for(&ctx);
+        let id = l.request_private_read(scope, "q", t0()).unwrap();
+        let view = l.operator_view(&id, t0()).unwrap();
+        assert_eq!(view.binding_ref, "view-binding");
+        assert_eq!(
+            view.connection_generation,
+            ctx.provenance().connection_generation()
+        );
+        assert_eq!(
+            view.caller_digest,
+            ctx.provenance().caller_digest().as_str()
+        );
+        assert_eq!(view.turn_id, "turn-1");
+        assert_eq!(view.session_epoch, 1);
     }
 
     #[test]
@@ -1322,7 +1550,7 @@ mod tests {
         let ctx = sample_public_context("bind-1");
         let scope = scope_for(&ctx);
         let sink = SpySink::default();
-        let r = deliver_private_disclosure(&l, "nope", op(), &scope, CANARY, t0(), &sink);
+        let r = deliver_now(&l, "nope", op(), &scope, CANARY, t0(), &sink);
         assert_eq!(r, Err(PublicApprovalError::UnknownRequest));
         assert_eq!(
             l.decide("nope", op(), true, t0()),

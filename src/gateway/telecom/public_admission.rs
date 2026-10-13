@@ -52,6 +52,7 @@ pub const DEFAULT_PUBLIC_TOKEN_CAP: u64 = 200_000;
 
 struct Entry {
     id: u64,
+    caller_digest: super::public_context::CallerDigest,
     cancel: CancellationToken,
 }
 
@@ -220,6 +221,7 @@ impl PublicRunRegistry {
             binding.clone(),
             Entry {
                 id,
+                caller_digest: ctx.provenance().caller_digest().clone(),
                 cancel: cancel.clone(),
             },
         );
@@ -231,8 +233,21 @@ impl PublicRunRegistry {
         })
     }
 
-    /// `/stop`-equivalent: cancel the live public run of `binding_ref`.
-    /// Returns whether a run was found.
+    /// Caller-originated `/stop`: only the admitted caller can cancel the
+    /// active run of this binding. A shared service number is not authority.
+    pub fn cancel_caller(&self, ctx: &TelecomPublicContext) -> bool {
+        let active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        match active.get(ctx.provenance().binding_ref()) {
+            Some(e) if e.caller_digest == *ctx.provenance().caller_digest() => {
+                e.cancel.cancel();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Trusted control-plane off-switch: cancel the live public run of a
+    /// binding without a caller context. Do not call this from inbound SMS.
     pub fn cancel_binding(&self, binding_ref: &str) -> bool {
         let active = self.active.lock().unwrap_or_else(|e| e.into_inner());
         match active.get(binding_ref) {
@@ -255,6 +270,17 @@ impl PublicRunRegistry {
     pub fn record_spend(&self, tokens: u64) {
         if self.gate.formal().is_none() {
             self.tokens_spent.fetch_add(tokens, Ordering::AcqRel);
+        }
+    }
+
+    /// A failed provider run can consume tokens without returning trustworthy
+    /// usage. With no formal ledger, exhaust the fallback rather than treating
+    /// unknown cost as zero; the next run must use a configured spend policy or
+    /// wait for restart. Formal metering remains the source of truth when on.
+    pub fn exhaust_unaccounted_spend(&self) {
+        if self.gate.formal().is_none() {
+            self.tokens_spent
+                .fetch_max(self.token_cap, Ordering::AcqRel);
         }
     }
 
@@ -300,6 +326,35 @@ mod tests {
         let a = reg.try_admit(&sample_public_context("bind-a"));
         assert!(matches!(a, PublicAdmission::OverSpend));
         assert_eq!(a.notice(), Some(PUBLIC_OVER_SPEND_NOTICE));
+    }
+
+    #[test]
+    fn unknown_provider_cost_exhausts_only_the_fallback() {
+        let reg = PublicRunRegistry::new(4, 100);
+        reg.exhaust_unaccounted_spend();
+        assert_eq!(reg.tokens_spent(), 100);
+        assert!(matches!(
+            reg.try_admit(&sample_public_context("another")),
+            PublicAdmission::OverSpend
+        ));
+        let (formal, _) = registry_with(enabled_policy(Some(1.0), None));
+        formal.exhaust_unaccounted_spend();
+        assert_eq!(formal.tokens_spent(), 0);
+    }
+
+    #[test]
+    fn caller_stop_cannot_cancel_another_caller_on_the_same_binding() {
+        use super::super::public_context::test_support::sample_public_context_for_peer;
+        let reg = PublicRunRegistry::new(4, 1_000);
+        let caller_a = sample_public_context_for_peer("bind-a", "+15550000001");
+        let caller_b = sample_public_context_for_peer("bind-a", "+15550000002");
+        let PublicAdmission::Admitted(permit) = reg.try_admit(&caller_a) else {
+            panic!("admit");
+        };
+        assert!(!reg.cancel_caller(&caller_b));
+        assert!(!permit.cancel_token().is_cancelled());
+        assert!(reg.cancel_caller(&caller_a));
+        assert!(permit.cancel_token().is_cancelled());
     }
 
     #[test]

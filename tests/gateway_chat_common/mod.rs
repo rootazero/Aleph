@@ -227,7 +227,6 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
             alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
         ),
         response_language: None,
-        private_read_driver: None,
     };
 
     Arc::new(Orchestrator::new(

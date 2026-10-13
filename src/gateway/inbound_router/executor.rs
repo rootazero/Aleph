@@ -810,6 +810,32 @@ impl crate::gateway::telecom::public_run::PublicReplySink for ChannelPublicReply
             .map(|_| ())
     }
 
+    async fn send_approved_reply(
+        &self,
+        text: String,
+        cancel: &tokio_util::sync::CancellationToken,
+        validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+    ) -> Result<
+        crate::gateway::telecom::public_run::ApprovedReplyOutcome,
+        crate::gateway::channel::ChannelError,
+    > {
+        use crate::gateway::channel_registry::ApprovedTelecomSend;
+        use crate::gateway::telecom::public_run::ApprovedReplyOutcome;
+        let reply = crate::gateway::channel::OutboundMessage::text(
+            self.msg.conversation_id.as_str(),
+            &text,
+        );
+        self.router
+            .channel_registry
+            .send_approved_public_telecom(&self.msg.channel_id, reply, cancel, validate)
+            .await
+            .map(|result| match result {
+                ApprovedTelecomSend::Acknowledged(_) => ApprovedReplyOutcome::Acknowledged,
+                ApprovedTelecomSend::Cancelled => ApprovedReplyOutcome::Cancelled,
+                ApprovedTelecomSend::Invalid => ApprovedReplyOutcome::Invalid,
+            })
+    }
+
     async fn send_reply_if_not_cancelled(
         &self,
         text: String,
@@ -853,7 +879,7 @@ impl InboundMessageRouter {
             super::command_handler::classify_special_slash(&msg.text),
             Some(super::command_handler::SpecialSlash::Stop)
         ) {
-            let cancelled = registry.cancel_binding(public.provenance().binding_ref());
+            let cancelled = registry.cancel_caller(&public);
             info!("[Router] public telecom /stop (cancelled={cancelled})");
             return Ok(());
         }
@@ -862,7 +888,7 @@ impl InboundMessageRouter {
             .as_ref()
             .and_then(|a| a.public_harness());
         let sink = ChannelPublicReplySink { router: self, msg };
-        let disposition = crate::gateway::telecom::public_run::run_public_sms(
+        let disposition = crate::gateway::telecom::public_run::run_public_sms_with_private_read(
             registry,
             harness,
             crate::gateway::telecom::public_history::installed().map(|s| s.as_ref()),
@@ -872,6 +898,8 @@ impl InboundMessageRouter {
             // The trusted A/B scope is opened only after admission, inside
             // the run driver, and retired with the turn.
             self.operator_control.as_ref(),
+            // Private turn only when `[telecom_private_read]` wired it.
+            self.private_turn.as_ref(),
         )
         .await;
         info!("[Router] public telecom run: {disposition:?}");

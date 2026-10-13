@@ -149,6 +149,9 @@ pub struct InboundMessageRouter {
     /// (the public run still happens, but the A/B scope ledger is not
     /// consulted and the B-stage disclosure path is closed).
     pub(super) operator_control: Option<Arc<OperatorControl>>,
+    /// Private turn of public telecom runs (`[telecom_private_read]`).
+    /// Effective only together with `operator_control`.
+    pub(super) private_turn: Option<crate::gateway::telecom::PrivateTurnWiring>,
 }
 
 impl InboundMessageRouter {
@@ -189,6 +192,7 @@ impl InboundMessageRouter {
             workflow_clarify_store: None,
             dispatch_signal: None,
             operator_control: None,
+            private_turn: None,
         }
     }
 
@@ -338,6 +342,15 @@ impl InboundMessageRouter {
     /// completes normally.
     pub fn with_operator_control(mut self, control: Arc<OperatorControl>) -> Self {
         self.operator_control = Some(control);
+        self
+    }
+
+    /// Enable the public private turn (`[telecom_private_read]`): public SMS
+    /// runs are offered `request_private_lookup`, and an approved lookup
+    /// goes through the A/B operator approvals. Without
+    /// [`Self::with_operator_control`] this has no effect.
+    pub fn with_private_turn(mut self, wiring: crate::gateway::telecom::PrivateTurnWiring) -> Self {
+        self.private_turn = Some(wiring);
         self
     }
 

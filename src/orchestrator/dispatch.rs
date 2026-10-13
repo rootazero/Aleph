@@ -150,6 +150,12 @@ pub struct FlowOutcome {
     pub serving_model: Option<String>,
     /// Provider id behind [`serving_model`](Self::serving_model).
     pub serving_provider: Option<String>,
+    /// Isolated public-telecom runs only: the bounded query the model filed
+    /// through the single `request_private_lookup` tool, when the request
+    /// allowed it ([`PublicRunRequest::allow_private_lookup`]). Recording it
+    /// had no external effect; the telecom driver alone decides what follows
+    /// (operator approval A). Always `None` for every other run.
+    pub private_lookup: Option<String>,
 }
 
 /// Loop-exit cause for an agent run. Each variant corresponds to a distinct
@@ -740,16 +746,44 @@ pub struct PublicRunRequest {
     pub history: Vec<crate::gateway::telecom::PublicHistoryTurn>,
     pub run_id: String,
     pub prompt_version: &'static str,
-    /// Trusted scope for the A-stage private-read, when one is open.
-    ///
-    /// Always `None` in production: no private source is enabled, so the
-    /// public run driver does not hand its live turn scope to the
-    /// orchestrator. When set (tests only today), `run_public_with` passes it
-    /// to the [`crate::gateway::telecom::PrivateReadDriver`] so the driver
-    /// can verify the call is inside an A window. `None` means the driver is
-    /// not called and the run proceeds as a plain public turn.
-    pub scope: Option<crate::gateway::telecom::PublicApprovalScope>,
+    /// Offer the model exactly one effect-free tool, `request_private_lookup`,
+    /// instead of no tools. Set by the telecom driver only when the owner
+    /// enabled `[telecom_private_read]` and the trusted operator plane plus a
+    /// read driver are wired. The tool only records a query into
+    /// [`FlowOutcome::private_lookup`]; no private data is reachable from the
+    /// public run itself.
+    pub allow_private_lookup: bool,
 }
+
+/// Input of [`HarnessRunner::run_private_draft`]: the same isolated public
+/// shape plus one operator-approved (A) private lookup result. Built only by
+/// the telecom private-turn driver after the A approval was consumed.
+#[derive(Clone)]
+pub struct PrivateDraftRequest {
+    pub ctx: crate::gateway::telecom::TelecomPublicContext,
+    /// The caller's text of this turn.
+    pub text: String,
+    /// Completed public turns (never contains private content).
+    pub history: Vec<crate::gateway::telecom::PublicHistoryTurn>,
+    pub run_id: String,
+    pub prompt_version: &'static str,
+    /// The approved lookup query.
+    pub query: String,
+    /// Bounded read-only lookup result; private, never logged.
+    pub private_result: crate::sync_primitives::Arc<str>,
+}
+
+impl std::fmt::Debug for PrivateDraftRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redacted: the query and result are private.
+        f.debug_struct("PrivateDraftRequest")
+            .field("run_id", &self.run_id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Error text of the default-deny [`HarnessRunner::run_private_draft`].
+pub const PRIVATE_DRAFT_UNSUPPORTED: &str = "runner does not support private telecom drafts";
 
 #[async_trait::async_trait]
 #[allow(clippy::too_many_arguments)] // trait shape driven by Orchestrator::dispatch wiring (Task 2)
@@ -819,6 +853,25 @@ pub trait HarnessRunner: Send + Sync {
     ) -> Result<FlowOutcome, FlowError> {
         let _ = (request, cancel, events);
         Err(FlowError::InvalidConfig(PUBLIC_RUN_UNSUPPORTED.to_string()))
+    }
+
+    /// Draft the answer of an operator-approved private lookup (stage A
+    /// consumed) under the same isolation as [`Self::run_public_text`]: no
+    /// tools, no owner session, no streaming. The returned text is only a
+    /// draft; the telecom driver submits it verbatim for approval B and
+    /// sends nothing without it.
+    ///
+    /// Default-deny like the public path.
+    async fn run_private_draft(
+        &self,
+        request: PrivateDraftRequest,
+        cancel: CancellationToken,
+        events: broadcast::Sender<FlowStreamEvent>,
+    ) -> Result<FlowOutcome, FlowError> {
+        let _ = (request, cancel, events);
+        Err(FlowError::InvalidConfig(
+            PRIVATE_DRAFT_UNSUPPORTED.to_string(),
+        ))
     }
 
     /// The guardrail registry this runner installs on its own harness, if

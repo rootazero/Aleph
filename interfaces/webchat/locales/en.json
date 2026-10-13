@@ -197,7 +197,12 @@
     "telecom_review_required": "Review the full content before approving or denying.",
     "telecom_approve": "Approve",
     "telecom_deny": "Deny",
-    "telecom_expired": "Expired"
+    "telecom_expired": "Expired",
+    "telecom_binding": "Binding:",
+    "telecom_generation": "Connection generation:",
+    "telecom_caller_digest": "Caller digest:",
+    "telecom_turn": "Turn:",
+    "telecom_session_epoch": "Session epoch:"
   },
   "dashboard": {
     "title": "System Overview",

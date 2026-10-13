@@ -114,6 +114,7 @@ fn broadcast_callback_on_complete_with_outcome_emits_terminal_event() {
         context_window: 0,
         serving_model: None,
         serving_provider: None,
+        private_lookup: None,
     };
     cb.on_complete_with_outcome(&outcome);
 
@@ -1215,7 +1216,6 @@ fn runner_with_default_provider(
             crate::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
         ),
         response_language: None,
-        private_read_driver: None,
     }
 }
 

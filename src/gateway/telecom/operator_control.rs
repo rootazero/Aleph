@@ -36,6 +36,12 @@ impl OperatorControl {
         }
     }
 
+    /// The shared ledger, for the trusted public run driver's private turn
+    /// (request A/B, wait, consume). Never handed to the public runner.
+    pub fn ledger(&self) -> &Arc<PublicApprovalLedger> {
+        &self.ledger
+    }
+
     /// Integration seam ONLY: trusted driver code supplies the current scope,
     /// never caller-controlled metadata. One live turn per binding is supported.
     /// Replacing a turn retires old approvals before the replacement is visible.
@@ -55,6 +61,29 @@ impl OperatorControl {
         let mut scopes = self.scopes.lock().unwrap_or_else(|e| e.into_inner());
         scopes.remove(binding_ref);
         self.ledger.cancel_binding(binding_ref);
+    }
+
+    /// Whether `scope` is still the live scope of its binding. The private
+    /// turn re-checks this after drafting and before delivery.
+    pub fn is_current(&self, scope: &PublicApprovalScope) -> bool {
+        let scopes = self.scopes.lock().unwrap_or_else(|e| e.into_inner());
+        scopes.get(scope.binding_ref()) == Some(scope)
+    }
+
+    /// Open approval A for the trusted private-turn driver, under the same
+    /// scope lock as [`Self::handle_request`]: a retired or replaced scope
+    /// cannot race a stale request into the ledger.
+    pub(crate) fn request_private_read_for(
+        &self,
+        scope: &PublicApprovalScope,
+        body: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<String, super::PublicApprovalError> {
+        let scopes = self.scopes.lock().unwrap_or_else(|e| e.into_inner());
+        if scopes.get(scope.binding_ref()) != Some(scope) {
+            return Err(super::PublicApprovalError::ScopeMismatch);
+        }
+        self.ledger.request_private_read(scope.clone(), body, now)
     }
 
     /// Retire `scope` only if it is still the live scope for its binding.
@@ -124,7 +153,12 @@ impl OperatorControl {
                 )
             }
         };
-        let limit = p.limit.unwrap_or(32).min(32);
+        // The ledger itself caps live records at 256. Never hide a pending
+        // approval behind an unpageable default list limit.
+        let limit = p
+            .limit
+            .unwrap_or(super::public_approval::MAX_APPROVAL_RECORDS)
+            .min(super::public_approval::MAX_APPROVAL_RECORDS);
         let mut items = self.ledger.operator_views(Utc::now());
         items.sort_by(|a, b| a.expires_at.cmp(&b.expires_at).then(a.id.cmp(&b.id)));
         let has_more = items.len() > limit;
@@ -205,6 +239,16 @@ impl ScopeGuard {
     pub(crate) fn register(control: Arc<OperatorControl>, scope: PublicApprovalScope) -> Self {
         control.register_scope(scope.clone());
         Self { control, scope }
+    }
+
+    /// The live turn scope this guard keeps registered.
+    pub(crate) fn scope(&self) -> &PublicApprovalScope {
+        &self.scope
+    }
+
+    /// The control plane the scope is registered on.
+    pub(crate) fn control(&self) -> &Arc<OperatorControl> {
+        &self.control
     }
 }
 
@@ -311,6 +355,8 @@ fn bounded_preview(body: &str) -> (&str, bool) {
 fn view(v: &super::public_approval::PublicApprovalView, complete: bool) -> serde_json::Value {
     let (preview, truncated) = bounded_preview(&v.body);
     let mut out = json!({"id": v.id, "stage": wire_stage(v.stage), "channel": wire_channel(v.channel),
+        "binding_ref": v.binding_ref, "connection_generation": v.connection_generation,
+        "caller_digest": v.caller_digest, "turn_id": v.turn_id, "session_epoch": v.session_epoch,
         "preview": preview, "truncated": truncated, "expires_at_ms": v.expires_at.timestamp_millis()});
     if complete {
         out["body"] = json!(v.body);
@@ -346,7 +392,9 @@ pub fn register_handlers(registry: &mut HandlerRegistry, control: Arc<OperatorCo
 
 #[cfg(test)]
 mod tests {
-    use super::super::public_approval::{PublicApprovalError, MAX_APPROVAL_BODY_BYTES};
+    use super::super::public_approval::{
+        PublicApprovalError, MAX_APPROVAL_BODY_BYTES, MAX_APPROVAL_RECORDS,
+    };
     use super::*;
     use crate::gateway::telecom::public_context::test_support::sample_public_context;
 
@@ -462,12 +510,29 @@ mod tests {
         assert!(preview.len() <= 256);
         assert_eq!(summary["truncated"], true);
         assert!(summary.get("body").is_none());
+        assert_eq!(summary["binding_ref"], "op-bind");
+        assert_eq!(summary["connection_generation"], 1);
+        assert!(summary["caller_digest"].is_string());
+        assert_eq!(summary["turn_id"], "t");
+        assert_eq!(summary["session_epoch"], 1);
         let review = call(&registry, METHODS[2], json!({"id":id}), Some("operator"))
             .await
             .result
             .unwrap();
         assert_eq!(review["body"], body);
         assert_eq!(review["complete"], true);
+        for field in [
+            "binding_ref",
+            "connection_generation",
+            "caller_digest",
+            "turn_id",
+            "session_epoch",
+        ] {
+            assert_eq!(
+                review[field], summary[field],
+                "review identity drift: {field}"
+            );
+        }
         for approve in [true, false] {
             for (stage, supplied, expected) in [
                 ("disclosure", body.as_str(), PublicApprovalError::WrongStage),
@@ -519,23 +584,23 @@ mod tests {
     async fn pending_page_and_input_bounds_are_enforced() {
         let (ledger, control, registry) = service();
         control.register_scope(scope());
-        for _ in 0..33 {
+        for _ in 0..MAX_APPROVAL_RECORDS {
             ledger
                 .request_private_read(scope(), CANARY, Utc::now())
                 .unwrap();
         }
-        for (limit, n) in [(json!(1000), 32), (json!(1), 1), (json!(0), 0)] {
-            let page = call(
-                &registry,
-                METHODS[1],
-                json!({"limit":limit}),
-                Some("operator"),
-            )
-            .await
-            .result
-            .unwrap();
+        for (params, n, more) in [
+            (json!({}), MAX_APPROVAL_RECORDS, false),
+            (json!({"limit":1000}), MAX_APPROVAL_RECORDS, false),
+            (json!({"limit":1}), 1, true),
+            (json!({"limit":0}), 0, true),
+        ] {
+            let page = call(&registry, METHODS[1], params, Some("operator"))
+                .await
+                .result
+                .unwrap();
             assert_eq!(page["pending"].as_array().unwrap().len(), n);
-            assert_eq!(page["has_more"], true);
+            assert_eq!(page["has_more"], more);
         }
         let id = ledger.operator_views(Utc::now())[0].id.clone();
         for params in [
@@ -555,7 +620,10 @@ mod tests {
         )
         .await;
         assert_eq!(out.error.unwrap().code, INVALID_PARAMS);
-        assert_eq!(ledger.operator_views(Utc::now()).len(), 33);
+        assert_eq!(
+            ledger.operator_views(Utc::now()).len(),
+            MAX_APPROVAL_RECORDS
+        );
     }
 
     #[test]

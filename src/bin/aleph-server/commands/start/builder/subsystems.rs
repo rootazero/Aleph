@@ -657,6 +657,9 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // the way out. `None` keeps the path disabled (the public run still
     // happens — just without the A/B stage attached).
     operator_control: Option<Arc<OperatorControl>>,
+    // `[telecom_private_read]`: built by the caller only when enabled, the
+    // operator control plane is installed and the memory backend exists.
+    private_turn: Option<alephcore::gateway::telecom::PrivateTurnWiring>,
     daemon: bool,
 ) {
     // Single source of truth for dm_scope: the user's [session] block.
@@ -709,6 +712,17 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         inbound_router = inbound_router.with_operator_control(c);
         if !daemon {
             println!("  Inbound router: trusted public-approval scope enabled");
+        }
+    }
+
+    // The private turn rides the same trusted plane; the router ignores it
+    // without `operator_control`.
+    if let Some(wiring) = private_turn {
+        inbound_router = inbound_router.with_private_turn(wiring);
+        if !daemon {
+            println!(
+                "  Inbound router: public private-read turn enabled (owner memory, read-only)"
+            );
         }
     }
 

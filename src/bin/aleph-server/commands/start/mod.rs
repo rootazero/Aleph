@@ -3577,6 +3577,39 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
         None
     };
+    // `[telecom_private_read]`: the public private turn (owner memory,
+    // read-only search, A/B operator approvals). Built only when explicitly
+    // enabled AND the trusted operator plane is installed; the memory
+    // backend is mandatory at this point of startup. Otherwise public runs
+    // keep no tools and no private path.
+    let public_private_turn: Option<alephcore::gateway::telecom::PrivateTurnWiring> = {
+        let enabled = app_config_for_channels
+            .read()
+            .await
+            .telecom_private_read
+            .as_ref()
+            .is_some_and(|section| section.enabled);
+        match (enabled, trusted_operator_control.as_ref()) {
+            (false, _) => None,
+            (true, None) => {
+                tracing::warn!(
+                    "telecom_private_read enabled but the operator approval plane is unavailable; private turn disabled"
+                );
+                None
+            }
+            (true, Some(_)) => {
+                // The SMS channel factory has no production relay transport
+                // instance. An inbound generation is not proof that its lease
+                // is still active after reconnect. Until the same authenticated
+                // transport can revoke and fence A/B, never expose the lookup
+                // tool or read owner memory, even when explicitly configured.
+                tracing::warn!(
+                    "telecom_private_read enabled but no authoritative SMS relay lease is wired; private turn disabled"
+                );
+                None
+            }
+        }
+    };
     {
         use alephcore::approval::adapters::ChannelApprovalBridgeAdapter;
         use alephcore::exec::approval::channel_bridge::ChannelApprovalBridge;
@@ -3885,6 +3918,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.coord_task_store.clone(),
         agent_result.dispatch_signal.clone(),
         trusted_operator_control.clone(),
+        public_private_turn,
         args.daemon,
     )
     .await;

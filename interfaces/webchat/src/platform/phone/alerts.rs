@@ -10,9 +10,8 @@
 //! Reads the same two signals the bell reads (`DashboardState::alerts` and
 //! `::pending_approvals`) through the same two pure helpers
 //! (`visible_alerts` / `unread_count`) and renders approvals with the same
-//! `ApprovalCard`. No new RPC, no new event variant, no second notion of what
-//! counts as unread — a second derivation is how the badge and the list start
-//! disagreeing about how many things are waiting.
+//! `ApprovalCard`. Telecom approvals also use a bounded operator-only list
+//! RPC while mounted, without a new event variant or second notion of unread.
 //!
 //! Route: `/more/alerts`, so `PanelMode::from_path`'s existing
 //! `starts_with("/more")` arm keeps the ••• tab highlighted with no new mode.
@@ -62,11 +61,9 @@ pub fn PhoneAlerts() -> impl IntoView {
 
     let list = Memo::new(move |_| visible_alerts(&alerts.get(), &dismissed.get()));
 
-    // No gateway event announces telecom approvals; refetch on mount.
-    // Failures collapse to an empty list (non-operators).
-    leptos::task::spawn_local(async move {
-        dashboard.refresh_telecom_approvals().await;
-    });
+    // A/B approvals emit no event; poll only while this phone route is mounted.
+    // The initial request is connect-gated, and a non-operator refusal stops it.
+    dashboard.poll_telecom_approvals_while_mounted();
 
     view! {
         <PhoneShell title="Alerts" back="/more" back_label="More">

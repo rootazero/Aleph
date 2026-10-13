@@ -2,8 +2,9 @@
 //!
 //! A bell button anchored to the top-right of the window, with a popover
 //! listing every active alert from [`crate::context::DashboardState::alerts`].
-//! Reads the existing `alerts.**` data stream — no new RPC, no new gateway
-//! event variant. UI-private state lives in
+//! Reads the existing `alerts.**` data stream; telecom approvals use a
+//! bounded operator-only list RPC while mounted, without a new event variant.
+//! UI-private state lives in
 //! [`crate::state::notifications::NotificationsState`].
 //!
 //! Anchoring: fixed-positioned so it survives any view's reflow. z-index
@@ -36,6 +37,9 @@ pub fn NotificationCenter() -> impl IntoView {
     let pending_telecom = dashboard.pending_telecom_approvals;
     let is_open = notif.is_open;
     let dismissed = notif.dismissed;
+
+    // A/B approvals have no event; poll only while this desktop view is mounted.
+    dashboard.poll_telecom_approvals_while_mounted();
 
     // Hide the bell entirely until we've ever connected — otherwise the
     // first-boot user sees a stray icon over the BootCheckGate spinner.
