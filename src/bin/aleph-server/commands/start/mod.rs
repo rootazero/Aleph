@@ -3598,15 +3598,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 None
             }
             (true, Some(_)) => {
-                // The SMS channel factory has no production relay transport
-                // instance. An inbound generation is not proof that its lease
-                // is still active after reconnect. Until the same authenticated
-                // transport can revoke and fence A/B, never expose the lookup
-                // tool or read owner memory, even when explicitly configured.
-                tracing::warn!(
-                    "telecom_private_read enabled but no authoritative SMS relay lease is wired; private turn disabled"
-                );
-                None
+                // This startup path already requires a real memory backend;
+                // initialization failure returns before reaching this block.
+                // Wiring is NOT authority: the router additionally requires a
+                // witness from its concrete registered SMS transport. The
+                // factory still attaches no hosted relay or credentials.
+                Some(alephcore::gateway::telecom::PrivateTurnWiring::new(
+                    Arc::new(alephcore::gateway::telecom::OwnerMemoryReadDriver::new(
+                        memory_db.clone(),
+                    )),
+                ))
             }
         }
     };

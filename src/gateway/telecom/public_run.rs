@@ -10,8 +10,38 @@ use std::time::Duration;
 
 use crate::sync_primitives::Arc;
 
+use crate::gateway::interfaces::sms::PrivateSmsLease;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
+
+/// Turn-local cancellation. Caller stop propagates only DOWN; the bridge never
+/// receives a mutable lease root, and is aborted when its owner future drops.
+pub(super) struct LeaseTurnCancellation {
+    pub token: CancellationToken,
+    bridge: tokio::task::JoinHandle<()>,
+}
+
+impl LeaseTurnCancellation {
+    pub fn new(stop: &CancellationToken, lease: &PrivateSmsLease) -> Self {
+        let token = stop.child_token();
+        if !lease.is_active() {
+            token.cancel();
+        }
+        let cancelled = token.clone();
+        let lease = lease.clone();
+        let bridge = tokio::spawn(async move {
+            lease.revoked().await;
+            cancelled.cancel();
+        });
+        Self { token, bridge }
+    }
+}
+
+impl Drop for LeaseTurnCancellation {
+    fn drop(&mut self) {
+        self.bridge.abort();
+    }
+}
 
 use super::operator_control::{OperatorControl, ScopeGuard};
 use super::private_turn::{
@@ -33,15 +63,23 @@ use crate::orchestrator::dispatch::{
 pub trait PublicReplySink: Send + Sync {
     async fn send_reply(&self, text: String) -> Result<(), crate::gateway::channel::ChannelError>;
 
+    /// No transport witness means no private lookup, even with enabled wiring.
+    async fn private_sms_lease(&self, _ctx: &TelecomPublicContext) -> Option<PrivateSmsLease> {
+        None
+    }
+
     /// Private-only path. The implementation MUST invoke `validate` after its
     /// final async lock wait and before the first transport send poll. A public
     /// send cannot serve as a fallback here.
     async fn send_approved_reply(
         &self,
-        text: String,
-        cancel: &CancellationToken,
-        validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
-    ) -> Result<ApprovedReplyOutcome, crate::gateway::channel::ChannelError>;
+        _text: String,
+        _lease: &PrivateSmsLease,
+        _cancel: &CancellationToken,
+        _validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+    ) -> Result<ApprovedReplyOutcome, crate::gateway::channel::ChannelError> {
+        Ok(ApprovedReplyOutcome::Invalid)
+    }
 
     /// Fence cancellation before submission, then await the transport ACK even
     /// if cancellation fires. Legacy sinks commit when `send_reply` is first
@@ -266,7 +304,25 @@ async fn run_public_sms_bounded(
         );
         ScopeGuard::register(c.clone(), scope)
     });
-    let cancel = permit.cancel_token();
+    let caller_cancel = permit.cancel_token();
+    // Admission precedes capability acquisition. Keep this SAME witness across
+    // public lookup selection and the entire A/B flow; never reacquire a new gen.
+    let lease = if private.is_some() && scope_guard.is_some() {
+        tokio::select! {
+            biased;
+            _ = caller_cancel.cancelled() => return PublicRunDisposition::Cancelled,
+            witness = sink.private_sms_lease(&ctx) => witness.filter(|lease| lease.matches_context(&ctx)),
+        }
+    } else {
+        None
+    };
+    let combined = lease
+        .as_ref()
+        .map(|lease| LeaseTurnCancellation::new(&caller_cancel, lease));
+    let cancel = combined
+        .as_ref()
+        .map(|combined| combined.token.clone())
+        .unwrap_or(caller_cancel);
     let history_key = history.map(|_| PublicHistorySession::from_provenance(ctx.provenance()));
     let prior = match (history, &history_key) {
         (Some(store), Some(key)) => match store.load(key, chrono::Utc::now()) {
@@ -284,7 +340,12 @@ async fn run_public_sms_bounded(
     // The private turn needs both the trusted approval plane (a live scope
     // guard) and an enabled read driver; otherwise the model is not even
     // offered the lookup tool.
-    let private = private.zip(scope_guard.as_ref());
+    let private = private
+        .zip(scope_guard.as_ref())
+        .zip(lease.as_ref())
+        .filter(|((_, guard), lease)| {
+            guard.control().is_current(guard.scope()) && lease.matches_context(&ctx)
+        });
     let private_inputs = private.map(|_| (ctx.clone(), text.clone(), prior.clone()));
     let request = PublicRunRequest {
         ctx,
@@ -294,10 +355,20 @@ async fn run_public_sms_bounded(
         prompt_version: PUBLIC_PROMPT_VERSION,
         allow_private_lookup: private.is_some(),
     };
-    let result = match tokio::time::timeout(
-        run_timeout,
-        harness.run_public_text(request, cancel.clone(), events),
-    )
+    let result = match tokio::time::timeout(run_timeout, async {
+        if let Some(lease) = lease.as_ref() {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => Err(crate::orchestrator::errors::FlowError::Cancelled),
+                _ = lease.revoked() => Err(crate::orchestrator::errors::FlowError::Cancelled),
+                result = harness.run_public_text(request, cancel.clone(), events) => result,
+            }
+        } else {
+            harness
+                .run_public_text(request, cancel.clone(), events)
+                .await
+        }
+    })
     .await
     {
         Ok(result) => result,
@@ -328,11 +399,13 @@ async fn run_public_sms_bounded(
     // a follow-up cannot load a stale history snapshot.
     let disposition = match result {
         // Early exit only; the sink owns the final pre-submit cancellation fence.
-        _ if cancel.is_cancelled() => PublicRunDisposition::Cancelled,
+        _ if cancel.is_cancelled() || lease.as_ref().is_some_and(|lease| !lease.is_active()) => {
+            PublicRunDisposition::Cancelled
+        }
         // The model asked for a private lookup: its public reply is
         // discarded and the turn continues as a private turn.
         Ok(outcome) if outcome.private_lookup.is_some() => {
-            let (Some((wiring, guard)), Some((ctx, text, prior)), Some(query)) =
+            let (Some(((wiring, guard), lease)), Some((ctx, text, prior)), Some(query)) =
                 (private, private_inputs, outcome.private_lookup)
             else {
                 // Unreachable by construction (the tool is offered only with
@@ -347,6 +420,7 @@ async fn run_public_sms_bounded(
                 harness: &harness,
                 sink,
                 cancel: &cancel,
+                lease,
                 ctx,
                 text,
                 history: prior,
@@ -357,7 +431,9 @@ async fn run_public_sms_bounded(
             .await;
             // Fixed marker only: neither the question, the query, the lookup
             // result nor the draft ever reaches public history.
-            if report.caller_saw_turn {
+            if report.caller_saw_turn
+                && (lease.is_active() || report.outcome == PrivateTurnOutcome::Disclosed)
+            {
                 if let (Some(store), Some(key)) = (history, &history_key) {
                     let turn = PublicHistoryTurn {
                         user: PRIVATE_TURN_USER_MARKER.to_string(),
@@ -439,6 +515,7 @@ mod tests {
         async fn send_approved_reply(
             &self,
             text: String,
+            _lease: &PrivateSmsLease,
             cancel: &CancellationToken,
             validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
         ) -> Result<ApprovedReplyOutcome, crate::gateway::channel::ChannelError> {
@@ -473,6 +550,7 @@ mod tests {
         async fn send_approved_reply(
             &self,
             text: String,
+            _lease: &PrivateSmsLease,
             cancel: &CancellationToken,
             validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
         ) -> Result<ApprovedReplyOutcome, crate::gateway::channel::ChannelError> {
@@ -493,6 +571,8 @@ mod tests {
         owner_runs: Mutex<u32>,
         public_runs: Mutex<Vec<String>>,
         seen_history: Mutex<Vec<Vec<PublicHistoryTurn>>>,
+        lookup_allowed: Mutex<Vec<bool>>,
+        lookup: Option<&'static str>,
         gate: Option<Arc<Notify>>,
         entered: Arc<Notify>,
         reply: Result<&'static str, ()>,
@@ -504,6 +584,8 @@ mod tests {
                 owner_runs: Mutex::new(0),
                 public_runs: Mutex::new(Vec::new()),
                 seen_history: Mutex::new(Vec::new()),
+                lookup_allowed: Mutex::new(Vec::new()),
+                lookup: None,
                 gate,
                 entered: Arc::new(Notify::new()),
                 reply,
@@ -544,6 +626,10 @@ mod tests {
             _events: broadcast::Sender<FlowStreamEvent>,
         ) -> Result<FlowOutcome, FlowError> {
             self.public_runs.lock().unwrap().push(request.text.clone());
+            self.lookup_allowed
+                .lock()
+                .unwrap()
+                .push(request.allow_private_lookup);
             self.seen_history
                 .lock()
                 .unwrap()
@@ -559,10 +645,227 @@ mod tests {
                 Ok(t) => Ok(FlowOutcome {
                     final_text: t.to_string(),
                     total_tokens: 10,
+                    private_lookup: self.lookup.map(str::to_owned),
                     ..FlowOutcome::default()
                 }),
                 Err(()) => Err(FlowError::Internal("boom".into())),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn enabled_wiring_without_live_witness_keeps_public_chat_and_denies_lookup_a_read() {
+        use crate::gateway::telecom::private_read::{
+            PrivateReadDriver, PrivateReadError, PrivateReadResult,
+        };
+        use crate::gateway::telecom::public_approval::{PublicApprovalLedger, PublicApprovalScope};
+        struct NoRead;
+        #[async_trait]
+        impl PrivateReadDriver for NoRead {
+            async fn read(
+                &self,
+                _: &PublicApprovalScope,
+                _: &str,
+                _: &CancellationToken,
+            ) -> Result<PrivateReadResult, PrivateReadError> {
+                panic!("configuration/fake sink must not authorize an owner read")
+            }
+        }
+        let reg = PublicRunRegistry::new(4, 1000);
+        let ledger = Arc::new(PublicApprovalLedger::new());
+        let control = Arc::new(OperatorControl::new(ledger.clone()));
+        let runner = SpyRunner::new(Ok("ordinary answer"), None);
+        let gate = Arc::new(Notify::new());
+        // The fake sink exposes no authority, even though it can ordinary-send.
+        let sink = SpySink::default();
+        let private = PrivateTurnWiring::new(Arc::new(NoRead));
+        let runner = Arc::try_unwrap(runner).ok().unwrap();
+        let runner = Arc::new(SpyRunner {
+            gate: Some(gate.clone()),
+            ..runner
+        });
+        let (d, ()) = tokio::join!(
+            run_public_sms_with_private_read(
+                &reg,
+                Some(runner.clone() as Arc<dyn HarnessRunner>),
+                None,
+                sample_public_context("bind-a"),
+                "hello".into(),
+                &sink,
+                Some(&control),
+                Some(&private)
+            ),
+            async {
+                runner.entered.notified().await;
+                assert_eq!(*runner.lookup_allowed.lock().unwrap(), vec![false]);
+                assert!(
+                    ledger.operator_views(chrono::Utc::now()).is_empty(),
+                    "no A approval exists"
+                );
+                for scope in control.list_pending_for_test() {
+                    assert_eq!(scope.binding_ref(), "bind-a");
+                }
+                gate.notify_one();
+            }
+        );
+        assert_eq!(d, PublicRunDisposition::Replied);
+        assert_eq!(*sink.sent.lock().unwrap(), vec!["ordinary answer"]);
+        assert_eq!(*runner.owner_runs.lock().unwrap(), 0);
+        assert_eq!(reg.active_count(), 0);
+        assert!(control.list_pending_for_test().is_empty());
+        let (_transport, lease) =
+            crate::gateway::interfaces::sms::transport::test_private_lease("bind-a").await;
+        assert!(sink
+            .private_sms_lease(&sample_public_context("bind-a"))
+            .await
+            .is_none());
+        // An ordinary-only sink must not synthesize approved-send fallback.
+        struct OrdinaryOnly;
+        #[async_trait]
+        impl PublicReplySink for OrdinaryOnly {
+            async fn send_reply(
+                &self,
+                _: String,
+            ) -> Result<(), crate::gateway::channel::ChannelError> {
+                panic!("private fallback must never call ordinary send")
+            }
+        }
+        assert_eq!(
+            OrdinaryOnly
+                .send_approved_reply("private".into(), &lease, &CancellationToken::new(), &|_| {
+                    true
+                })
+                .await
+                .unwrap(),
+            ApprovedReplyOutcome::Invalid
+        );
+    }
+
+    #[tokio::test]
+    async fn admitted_live_witness_enables_lookup_but_revocation_discards_runner_or_a_and_history()
+    {
+        use crate::gateway::channel::{Channel, OutboundMessage};
+        use crate::gateway::interfaces::sms::{
+            test_private_channel, transport::test_private_context, SmsChannel,
+        };
+        use crate::gateway::telecom::private_read::{
+            PrivateReadDriver, PrivateReadError, PrivateReadResult,
+        };
+        use crate::gateway::telecom::public_approval::{PublicApprovalLedger, PublicApprovalScope};
+        struct NoRead;
+        #[async_trait]
+        impl PrivateReadDriver for NoRead {
+            async fn read(
+                &self,
+                _: &PublicApprovalScope,
+                _: &str,
+                _: &CancellationToken,
+            ) -> Result<PrivateReadResult, PrivateReadError> {
+                panic!("revoked A must not read memory")
+            }
+        }
+        struct LiveSink(SmsChannel);
+        #[async_trait]
+        impl PublicReplySink for LiveSink {
+            async fn send_reply(
+                &self,
+                _: String,
+            ) -> Result<(), crate::gateway::channel::ChannelError> {
+                panic!("private run must not ordinary-send")
+            }
+            async fn private_sms_lease(
+                &self,
+                ctx: &TelecomPublicContext,
+            ) -> Option<PrivateSmsLease> {
+                self.0.private_sms_lease(ctx, "+15550000001").await
+            }
+            async fn send_approved_reply(
+                &self,
+                text: String,
+                lease: &PrivateSmsLease,
+                cancel: &CancellationToken,
+                validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+            ) -> Result<ApprovedReplyOutcome, crate::gateway::channel::ChannelError> {
+                self.0
+                    .send_private_sms(
+                        OutboundMessage::text("+15550000001", text),
+                        lease,
+                        cancel,
+                        validate,
+                    )
+                    .await
+            }
+        }
+        for stage in ["runner", "a"] {
+            let reg = PublicRunRegistry::new(1, 1000);
+            let store = history_store("key");
+            let ctx = test_private_context("binding");
+            let ledger = Arc::new(PublicApprovalLedger::new());
+            let control = Arc::new(OperatorControl::new(ledger.clone()));
+            let (channel, transport, _lease, peer) = test_private_channel("binding").await;
+            let sink = LiveSink(channel);
+            let private = PrivateTurnWiring::new(Arc::new(NoRead));
+            let runner = Arc::try_unwrap(SpyRunner::new(Ok("discarded model output"), None))
+                .ok()
+                .unwrap();
+            let runner = Arc::new(SpyRunner {
+                lookup: Some("owner query"),
+                gate: (stage == "runner").then(|| Arc::new(Notify::new())),
+                ..runner
+            });
+            let (d, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(
+                    run_public_sms_with_private_read(
+                        &reg,
+                        Some(runner.clone() as Arc<dyn HarnessRunner>),
+                        Some(&store),
+                        ctx.clone(),
+                        "private caller question".into(),
+                        &sink,
+                        Some(&control),
+                        Some(&private)
+                    ),
+                    async {
+                        runner.entered.notified().await;
+                        assert_eq!(*runner.lookup_allowed.lock().unwrap(), vec![true]);
+                        if stage == "a" {
+                            loop {
+                                if !ledger.operator_views(chrono::Utc::now()).is_empty() {
+                                    break;
+                                }
+                                tokio::task::yield_now().await;
+                            }
+                            assert_eq!(
+                                peer.submissions().len(),
+                                1,
+                                "checking notice already committed"
+                            );
+                        }
+                        transport.connect().await.unwrap();
+                    }
+                )
+            })
+            .await
+            .expect("revocation must terminate without releasing the provider");
+            assert_eq!(
+                d,
+                if stage == "a" {
+                    PublicRunDisposition::Private(PrivateTurnOutcome::Cancelled)
+                } else {
+                    PublicRunDisposition::Cancelled
+                }
+            );
+            assert!(ledger.operator_views(chrono::Utc::now()).is_empty());
+            assert!(control.list_pending_for_test().is_empty());
+            assert_eq!(reg.active_count(), 0);
+            assert_eq!(*runner.owner_runs.lock().unwrap(), 0);
+            assert_eq!(peer.submissions().len(), usize::from(stage == "a"));
+            assert!(peer.generations().iter().all(|generation| *generation == 1));
+            let key = PublicHistorySession::from_provenance(ctx.provenance());
+            assert!(
+                store.load(&key, chrono::Utc::now()).unwrap().is_empty(),
+                "no stale notice/history question or marker on revoked run"
+            );
         }
     }
 
@@ -1084,6 +1387,7 @@ mod tests {
         async fn send_approved_reply(
             &self,
             text: String,
+            _lease: &PrivateSmsLease,
             cancel: &CancellationToken,
             validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
         ) -> Result<ApprovedReplyOutcome, crate::gateway::channel::ChannelError> {

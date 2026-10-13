@@ -940,6 +940,26 @@ pub trait Channel: Send + Sync {
     /// Send a message through this channel
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult>;
 
+    /// Obtain authority only from a concrete attached SMS transport. A channel
+    /// type string, metadata, or a synthetic scope never grants authority.
+    async fn private_sms_lease(
+        &self,
+        _ctx: &crate::gateway::telecom::TelecomPublicContext,
+        _recipient: &str,
+    ) -> Option<crate::gateway::interfaces::sms::PrivateSmsLease> {
+        None
+    }
+
+    async fn send_private_sms(
+        &self,
+        _message: OutboundMessage,
+        _lease: &crate::gateway::interfaces::sms::PrivateSmsLease,
+        _cancel: &tokio_util::sync::CancellationToken,
+        _validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+    ) -> ChannelResult<crate::gateway::telecom::public_run::ApprovedReplyOutcome> {
+        Ok(crate::gateway::telecom::public_run::ApprovedReplyOutcome::Invalid)
+    }
+
     /// Returns a subscriber receiver for incoming messages. Multiple subscribers
     /// can call this simultaneously — each gets their own broadcast receiver.
     fn inbound_subscribe(&self) -> broadcast::Receiver<InboundMessage> {

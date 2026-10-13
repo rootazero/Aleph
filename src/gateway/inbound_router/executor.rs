@@ -810,30 +810,48 @@ impl crate::gateway::telecom::public_run::PublicReplySink for ChannelPublicReply
             .map(|_| ())
     }
 
+    async fn private_sms_lease(
+        &self,
+        ctx: &crate::gateway::telecom::TelecomPublicContext,
+    ) -> Option<crate::gateway::interfaces::sms::PrivateSmsLease> {
+        // Only typed SMS ingress is eligible; generic metadata cannot mint it.
+        let meta = self.msg.metadata.iter().find_map(|meta| match meta {
+            crate::gateway::channel::MessageMeta::Sms(meta) => Some(meta.as_ref()),
+            _ => None,
+        })?;
+        if crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(meta) != *ctx {
+            return None;
+        }
+        let peer =
+            crate::gateway::interfaces::sms::normalize_e164(self.msg.conversation_id.as_str())
+                .ok()?;
+        if peer != meta.peer_address {
+            return None;
+        }
+        self.router
+            .channel_registry
+            .private_sms_lease(&self.msg.channel_id, ctx, &peer)
+            .await
+    }
+
     async fn send_approved_reply(
         &self,
         text: String,
+        lease: &crate::gateway::interfaces::sms::PrivateSmsLease,
         cancel: &tokio_util::sync::CancellationToken,
         validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
     ) -> Result<
         crate::gateway::telecom::public_run::ApprovedReplyOutcome,
         crate::gateway::channel::ChannelError,
     > {
-        use crate::gateway::channel_registry::ApprovedTelecomSend;
-        use crate::gateway::telecom::public_run::ApprovedReplyOutcome;
         let reply = crate::gateway::channel::OutboundMessage::text(
             self.msg.conversation_id.as_str(),
             &text,
         );
         self.router
             .channel_registry
-            .send_approved_public_telecom(&self.msg.channel_id, reply, cancel, validate)
+            .send_approved_public_telecom(&self.msg.channel_id, reply, lease, cancel, validate)
             .await
-            .map(|result| match result {
-                ApprovedTelecomSend::Acknowledged(_) => ApprovedReplyOutcome::Acknowledged,
-                ApprovedTelecomSend::Cancelled => ApprovedReplyOutcome::Cancelled,
-                ApprovedTelecomSend::Invalid => ApprovedReplyOutcome::Invalid,
-            })
     }
 
     async fn send_reply_if_not_cancelled(

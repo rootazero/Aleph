@@ -37,8 +37,9 @@ use super::public_approval::{
     PublicApprovalStage, PublicApprovalStatus, MAX_APPROVAL_BODY_BYTES,
 };
 use super::public_history::PublicHistoryTurn;
-use super::public_run::{ApprovedReplyOutcome, PublicReplySink};
+use super::public_run::{ApprovedReplyOutcome, LeaseTurnCancellation, PublicReplySink};
 use super::TelecomPublicContext;
+use crate::gateway::interfaces::sms::PrivateSmsLease;
 use crate::orchestrator::dispatch::{
     flow_event_channel, HarnessRunner, PrivateDraftRequest, PUBLIC_PROMPT_VERSION,
 };
@@ -144,6 +145,7 @@ pub(crate) struct PrivateTurnInput<'a> {
     pub harness: &'a Arc<dyn HarnessRunner>,
     pub sink: &'a dyn PublicReplySink,
     pub cancel: &'a CancellationToken,
+    pub lease: &'a PrivateSmsLease,
     pub ctx: TelecomPublicContext,
     pub text: String,
     pub history: Vec<PublicHistoryTurn>,
@@ -169,7 +171,10 @@ fn bounded_private_read_approval_body(query: &str, caller_text: &str) -> Option<
 fn read_remaining(input: &PrivateTurnInput<'_>, id: &str, body: &str) -> Option<Duration> {
     let control = input.guard.control();
     let scope = input.guard.scope();
-    if input.cancel.is_cancelled() || !control.is_current(scope) {
+    if input.cancel.is_cancelled()
+        || !input.lease.matches_context(&input.ctx)
+        || !control.is_current(scope)
+    {
         return None;
     }
     let now = input.wiring.now();
@@ -190,7 +195,10 @@ enum Decision {
 async fn await_decision(input: &PrivateTurnInput<'_>, id: &str) -> Decision {
     let ledger = input.guard.control().ledger();
     loop {
-        if input.cancel.is_cancelled() {
+        if input.cancel.is_cancelled()
+            || !input.lease.is_active()
+            || !input.guard.control().is_current(input.guard.scope())
+        {
             return Decision::Cancelled;
         }
         match ledger.status(id, input.wiring.now()) {
@@ -200,6 +208,7 @@ async fn await_decision(input: &PrivateTurnInput<'_>, id: &str) -> Decision {
         }
         tokio::select! {
             () = input.cancel.cancelled() => return Decision::Cancelled,
+            () = input.lease.revoked() => return Decision::Cancelled,
             () = tokio::time::sleep(input.wiring.poll) => {}
         }
     }
@@ -210,6 +219,7 @@ async fn await_decision(input: &PrivateTurnInput<'_>, id: &str) -> Decision {
 struct ReplyDisclosureSink<'a> {
     sink: &'a dyn PublicReplySink,
     cancel: &'a CancellationToken,
+    lease: &'a PrivateSmsLease,
     delivery_timeout: Duration,
     guard: &'a ScopeGuard,
     wiring: &'a PrivateTurnWiring,
@@ -230,6 +240,7 @@ impl PrivateDisclosureSink for ReplyDisclosureSink<'_> {
             let control = self.guard.control();
             let scope = self.guard.scope();
             candidate == self.draft
+                && self.lease.is_active()
                 && control.is_current(scope)
                 && control
                     .ledger()
@@ -245,7 +256,7 @@ impl PrivateDisclosureSink for ReplyDisclosureSink<'_> {
         match tokio::time::timeout(
             self.delivery_timeout,
             self.sink
-                .send_approved_reply(body.to_string(), self.cancel, &validate),
+                .send_approved_reply(body.to_string(), self.lease, self.cancel, &validate),
         )
         .await
         {
@@ -270,6 +281,11 @@ impl PrivateDisclosureSink for ReplyDisclosureSink<'_> {
 
 /// Run one private turn. Every exit retires this binding's approvals.
 pub(crate) async fn run_private_turn(input: PrivateTurnInput<'_>) -> PrivateTurnReport {
+    let combined = LeaseTurnCancellation::new(input.cancel, input.lease);
+    let input = PrivateTurnInput {
+        cancel: &combined.token,
+        ..input
+    };
     let mut caller_saw_turn = false;
     let outcome = drive(&input, &mut caller_saw_turn).await;
     // No request of this turn may outlive it; a later turn of the binding
@@ -283,7 +299,8 @@ pub(crate) async fn run_private_turn(input: PrivateTurnInput<'_>) -> PrivateTurn
         Step::Done(o) => o,
         Step::Incomplete
             if !input.guard.control().is_current(input.guard.scope())
-                || input.cancel.is_cancelled() =>
+                || input.cancel.is_cancelled()
+                || !input.lease.is_active() =>
         {
             PrivateTurnOutcome::Cancelled
         }
@@ -315,6 +332,7 @@ async fn send_notice_scoped(
 ) -> Result<ApprovedReplyOutcome, ()> {
     let validate = |candidate: &str| {
         candidate == text
+            && input.lease.matches_context(&input.ctx)
             && !input.cancel.is_cancelled()
             && input.guard.control().is_current(input.guard.scope())
     };
@@ -322,7 +340,7 @@ async fn send_notice_scoped(
         input.delivery_timeout,
         input
             .sink
-            .send_approved_reply(text.to_string(), input.cancel, &validate),
+            .send_approved_reply(text.to_string(), input.lease, input.cancel, &validate),
     )
     .await
     {
@@ -339,6 +357,12 @@ async fn drive(input: &PrivateTurnInput<'_>, caller_saw_turn: &mut bool) -> Step
     let ledger = control.ledger();
     let scope = input.guard.scope();
     let source = ApprovalSource::operator_control_plane();
+    if input.cancel.is_cancelled()
+        || !input.lease.matches_context(&input.ctx)
+        || !control.is_current(scope)
+    {
+        return Step::Done(PrivateTurnOutcome::Cancelled);
+    }
 
     // -- Approval A ------------------------------------------------------
     let Some(read_body) = bounded_private_read_approval_body(&input.query, &input.text) else {
@@ -383,13 +407,19 @@ async fn drive(input: &PrivateTurnInput<'_>, caller_saw_turn: &mut bool) -> Step
     let Some(read_timeout) = read_remaining(input, &read_id, &read_body) else {
         return Step::Incomplete;
     };
-    let read = tokio::time::timeout(
-        read_timeout,
-        input.wiring.driver.read(scope, &input.query, input.cancel),
-    )
-    .await;
+    let read = tokio::select! {
+        biased;
+        () = input.cancel.cancelled() => return Step::Done(PrivateTurnOutcome::Cancelled),
+        () = input.lease.revoked() => return Step::Done(PrivateTurnOutcome::Cancelled),
+        result = tokio::time::timeout(
+            read_timeout,
+            input.wiring.driver.read(scope, &input.query, input.cancel),
+        ) => result,
+    };
     let private_result = match read {
-        _ if input.cancel.is_cancelled() => return Step::Done(PrivateTurnOutcome::Cancelled),
+        _ if input.cancel.is_cancelled() || !input.lease.is_active() => {
+            return Step::Done(PrivateTurnOutcome::Cancelled)
+        }
         Ok(Ok(PrivateReadResult::Transient(body))) => body,
         Ok(Err(PrivateReadError::Cancelled)) => return Step::Done(PrivateTurnOutcome::Cancelled),
         Ok(Ok(PrivateReadResult::Unavailable)) | Ok(Err(_)) | Err(_) => {
@@ -412,19 +442,29 @@ async fn drive(input: &PrivateTurnInput<'_>, caller_saw_turn: &mut bool) -> Step
         query: input.query.clone(),
         private_result,
     };
-    let drafted = tokio::time::timeout(
-        draft_timeout,
-        input
-            .harness
-            .run_private_draft(request, input.cancel.clone(), events),
-    )
-    .await;
+    let drafted = tokio::select! {
+        biased;
+        () = input.cancel.cancelled() => {
+            input.registry.exhaust_unaccounted_spend();
+            return Step::Done(PrivateTurnOutcome::Cancelled);
+        }
+        () = input.lease.revoked() => {
+            input.registry.exhaust_unaccounted_spend();
+            return Step::Done(PrivateTurnOutcome::Cancelled);
+        }
+        result = tokio::time::timeout(
+            draft_timeout,
+            input.harness.run_private_draft(request, input.cancel.clone(), events),
+        ) => result,
+    };
     match &drafted {
         Ok(Ok(outcome)) => input.registry.record_spend(u64::from(outcome.total_tokens)),
         _ => input.registry.exhaust_unaccounted_spend(),
     }
     let draft = match drafted {
-        _ if input.cancel.is_cancelled() => return Step::Done(PrivateTurnOutcome::Cancelled),
+        _ if input.cancel.is_cancelled() || !input.lease.is_active() => {
+            return Step::Done(PrivateTurnOutcome::Cancelled)
+        }
         Ok(Ok(outcome)) => outcome.final_text.trim().to_string(),
         Ok(Err(_)) | Err(_) => {
             tracing::warn!("[public] private turn: draft failed");
@@ -455,7 +495,7 @@ async fn drive(input: &PrivateTurnInput<'_>, caller_saw_turn: &mut bool) -> Step
     }
 
     // -- Re-check, consume B, deliver the exact draft -----------------------
-    if input.cancel.is_cancelled() {
+    if input.cancel.is_cancelled() || !input.lease.is_active() {
         return Step::Done(PrivateTurnOutcome::Cancelled);
     }
     if !control.is_current(scope) {
@@ -465,6 +505,7 @@ async fn drive(input: &PrivateTurnInput<'_>, caller_saw_turn: &mut bool) -> Step
     let disclosure_sink = ReplyDisclosureSink {
         sink: input.sink,
         cancel: input.cancel,
+        lease: input.lease,
         delivery_timeout: input.delivery_timeout,
         guard: input.guard,
         wiring: input.wiring,
@@ -505,13 +546,16 @@ async fn drive(input: &PrivateTurnInput<'_>, caller_saw_turn: &mut bool) -> Step
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::channel::ChannelError;
+    use crate::gateway::channel::{Channel, ChannelError, OutboundMessage};
+    use crate::gateway::interfaces::sms::transport::test_private_context;
+    use crate::gateway::interfaces::sms::{
+        test_private_channel, InMemorySmsPeer, SmsChannel, SmsRelayTransport,
+    };
     use crate::gateway::telecom::operator_control::OperatorControl;
     use crate::gateway::telecom::public_admission::{PublicAdmission, PublicRunPermit};
     use crate::gateway::telecom::public_approval::{
         PublicApprovalLedger, PublicApprovalScope, PublicApprovalView,
     };
-    use crate::gateway::telecom::public_context::test_support::sample_public_context;
     use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent};
     use crate::orchestrator::errors::FlowError;
     use crate::orchestrator::flow_spec::{FlowInput, FlowSpec};
@@ -616,6 +660,7 @@ mod tests {
     struct ReplySpy {
         // Attempts cross the transport boundary; acknowledged is a separate fact.
         attempts: Mutex<Vec<String>>,
+        channel: Option<SmsChannel>,
         acknowledged: Mutex<Vec<String>>,
         fail_on: Option<&'static str>,
         wait_before: Option<&'static str>,
@@ -635,6 +680,7 @@ mod tests {
         async fn send_approved_reply(
             &self,
             text: String,
+            lease: &PrivateSmsLease,
             cancel: &CancellationToken,
             validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
         ) -> Result<ApprovedReplyOutcome, ChannelError> {
@@ -646,12 +692,25 @@ mod tests {
             if cancel.is_cancelled() {
                 return Ok(ApprovedReplyOutcome::Cancelled);
             }
-            if !validate(&text) {
+            if !lease.is_active() || !validate(&text) {
                 return Ok(ApprovedReplyOutcome::Invalid);
             }
             self.attempts.lock().unwrap().push(text.clone());
             if self.fail_on == Some(text.as_str()) {
                 return Err(ChannelError::SendFailed("unknown transport outcome".into()));
+            }
+            if let Some(channel) = &self.channel {
+                let result = channel
+                    .send_private_sms(
+                        OutboundMessage::text("+15550000001", &text),
+                        lease,
+                        cancel,
+                        validate,
+                    )
+                    .await?;
+                if result != ApprovedReplyOutcome::Acknowledged {
+                    return Ok(result);
+                }
             }
             if self.wait_for_draft_ack && text == DRAFT {
                 self.submitted.notify_one();
@@ -674,13 +733,18 @@ mod tests {
         reader: Arc<ReadSpy>,
         drafter: Arc<DraftSpy>,
         sink: ReplySpy,
+        transport: Arc<SmsRelayTransport>,
+        lease: PrivateSmsLease,
+        peer: Arc<InMemorySmsPeer>,
         text: String,
         query: String,
     }
 
     impl Fixture {
-        fn new(block_read: bool, block_draft: bool, sink: ReplySpy) -> Self {
-            let ctx = sample_public_context("private-turn-bind");
+        async fn new(block_read: bool, block_draft: bool, mut sink: ReplySpy) -> Self {
+            let ctx = test_private_context("private-turn-bind");
+            let (channel, transport, lease, peer) = test_private_channel("private-turn-bind").await;
+            sink.channel = Some(channel);
             let control = Arc::new(OperatorControl::new(Arc::new(PublicApprovalLedger::new())));
             let scope = PublicApprovalScope::new(&ctx, "core", "agent", "turn", 1);
             let guard = ScopeGuard::register(control.clone(), scope);
@@ -720,6 +784,9 @@ mod tests {
                 reader,
                 drafter,
                 sink,
+                transport,
+                lease,
+                peer,
                 text: CALLER_TEXT.into(),
                 query: QUERY.into(),
             }
@@ -738,6 +805,7 @@ mod tests {
                 harness: &harness,
                 sink: &self.sink,
                 cancel: &self.cancel,
+                lease: &self.lease,
                 ctx: self.ctx.clone(),
                 text: self.text.clone(),
                 history: Vec::new(),
@@ -789,6 +857,16 @@ mod tests {
             let expected: Vec<String> = expected.iter().map(|s| (*s).into()).collect();
             assert_eq!(*self.sink.attempts.lock().unwrap(), expected);
             assert_eq!(*self.sink.acknowledged.lock().unwrap(), expected);
+            let submitted: Vec<_> = self
+                .peer
+                .submissions()
+                .into_iter()
+                .map(|op| op.command.body)
+                .collect();
+            assert_eq!(
+                submitted, expected,
+                "assert actual peer effects, not sink calls"
+            );
         }
 
         fn assert_retired(&self, ids: &[&str]) {
@@ -812,7 +890,8 @@ mod tests {
                 wait_for_draft_ack: true,
                 ..ReplySpy::default()
             },
-        );
+        )
+        .await;
         let completed = AtomicBool::new(false);
         let (report, (a, b)) = bounded(async {
             tokio::join!(
@@ -879,7 +958,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_denial_sends_only_fixed_notices_without_read_or_draft() {
-        let f = Fixture::new(false, false, ReplySpy::default());
+        let f = Fixture::new(false, false, ReplySpy::default()).await;
         let (report, a) = bounded(async {
             tokio::join!(f.run(), async {
                 let a = f.pending(PublicApprovalStage::PrivateRead).await;
@@ -898,7 +977,7 @@ mod tests {
 
     #[tokio::test]
     async fn b_denial_never_sends_the_read_result_or_private_draft() {
-        let f = Fixture::new(false, false, ReplySpy::default());
+        let f = Fixture::new(false, false, ReplySpy::default()).await;
         let (report, (a, b)) = bounded(async {
             tokio::join!(f.run(), async {
                 let a = f.pending(PublicApprovalStage::PrivateRead).await;
@@ -921,7 +1000,7 @@ mod tests {
 
     #[tokio::test]
     async fn scope_retirement_while_waiting_a_cancels_without_another_notice() {
-        let f = Fixture::new(false, false, ReplySpy::default());
+        let f = Fixture::new(false, false, ReplySpy::default()).await;
         let (report, a) = bounded(async {
             tokio::join!(f.run(), async {
                 let a = f.pending(PublicApprovalStage::PrivateRead).await;
@@ -948,7 +1027,7 @@ mod tests {
             PublicApprovalStage::PrivateRead,
             PublicApprovalStage::Disclosure,
         ] {
-            let f = Fixture::new(false, false, ReplySpy::default());
+            let f = Fixture::new(false, false, ReplySpy::default()).await;
             let (report, ids) = bounded(async {
                 tokio::join!(f.run(), async {
                     let a = f.pending(PublicApprovalStage::PrivateRead).await;
@@ -984,7 +1063,7 @@ mod tests {
     #[tokio::test]
     async fn a_expiring_during_read_or_draft_prevents_b_and_private_send() {
         for during_read in [true, false] {
-            let f = Fixture::new(during_read, !during_read, ReplySpy::default());
+            let f = Fixture::new(during_read, !during_read, ReplySpy::default()).await;
             let (report, a) = bounded(async {
                 tokio::join!(f.run(), async {
                     let a = f.pending(PublicApprovalStage::PrivateRead).await;
@@ -1028,7 +1107,8 @@ mod tests {
                     fail_on: Some(fail_on),
                     ..ReplySpy::default()
                 },
-            );
+            )
+            .await;
             let (report, ()) = bounded(async {
                 tokio::join!(f.run(), async {
                     if fail_on == DRAFT {
@@ -1071,7 +1151,8 @@ mod tests {
                     wait_before: Some(PRIVATE_CHECKING_NOTICE),
                     ..ReplySpy::default()
                 },
-            );
+            )
+            .await;
             let (report, ()) = bounded(async {
                 tokio::join!(f.run(), async {
                     bounded(f.sink.entered.notified()).await;
@@ -1103,7 +1184,8 @@ mod tests {
                     wait_before: Some(DRAFT),
                     ..ReplySpy::default()
                 },
-            );
+            )
+            .await;
             let (report, (a, b)) = bounded(async {
                 tokio::join!(f.run(), async {
                     let a = f.pending(PublicApprovalStage::PrivateRead).await;
@@ -1143,7 +1225,7 @@ mod tests {
 
     #[tokio::test]
     async fn bounded_caller_text_and_query_are_reviewed_and_read_without_truncation() {
-        let mut f = Fixture::new(false, false, ReplySpy::default());
+        let mut f = Fixture::new(false, false, ReplySpy::default()).await;
         f.text = "é".repeat(MAX_APPROVAL_CALLER_TEXT_BYTES / 2);
         f.query = "q".repeat(512);
         let (report, ()) = bounded(async {
@@ -1166,13 +1248,113 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_caller_text_fails_before_opening_a_or_reading() {
-        let mut f = Fixture::new(false, false, ReplySpy::default());
+        let mut f = Fixture::new(false, false, ReplySpy::default()).await;
         f.text = "x".repeat(MAX_APPROVAL_CALLER_TEXT_BYTES + 1);
         let report = bounded(f.run()).await;
         assert_eq!(report.outcome, PrivateTurnOutcome::Incomplete);
         assert!(!report.caller_saw_turn);
         f.assert_no_read_or_draft();
         f.assert_sends(&[PRIVATE_INCOMPLETE_NOTICE]);
+        f.assert_retired(&[]);
+    }
+
+    #[tokio::test]
+    async fn real_epoch_revocation_at_a_b_read_or_draft_discards_late_results_and_notices() {
+        for reason in ["connect", "disconnect", "heartbeat"] {
+            for stage in ["a", "b", "read", "draft"] {
+                let f = Fixture::new(stage == "read", stage == "draft", ReplySpy::default()).await;
+                let (report, ()) = bounded(async {
+                    tokio::join!(f.run(), async {
+                        let a = f.pending(PublicApprovalStage::PrivateRead).await;
+                        if stage != "a" {
+                            f.decide(&a, true);
+                            match stage {
+                                "b" => {
+                                    f.pending(PublicApprovalStage::Disclosure).await;
+                                }
+                                "read" => {
+                                    f.reader.entered.notified().await;
+                                }
+                                "draft" => {
+                                    f.drafter.entered.notified().await;
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        match reason {
+                            "connect" => {
+                                f.transport.connect().await.unwrap();
+                            }
+                            "disconnect" => f.transport.disconnect().await,
+                            "heartbeat" => {
+                                f.peer.fail_heartbeat();
+                                assert!(f.transport.heartbeat(1).await.is_err());
+                            }
+                            _ => unreachable!(),
+                        }
+                        assert!(!f.lease.is_active());
+                        // Uncooperative late releases must not create B/a notice.
+                        if let Some(release) = &f.reader.release {
+                            release.notify_one();
+                        }
+                        if let Some(release) = &f.drafter.release {
+                            release.notify_one();
+                        }
+                    })
+                })
+                .await;
+                assert_eq!(
+                    report.outcome,
+                    PrivateTurnOutcome::Cancelled,
+                    "{reason}/{stage}"
+                );
+                assert!(
+                    !f.cancel.is_cancelled(),
+                    "revocation never cancels caller stop root"
+                );
+                f.assert_sends(&[PRIVATE_CHECKING_NOTICE]);
+                f.assert_retired(&[]);
+                assert_eq!(
+                    f.reader.seen.lock().unwrap().len(),
+                    usize::from(stage != "a")
+                );
+                assert_eq!(
+                    f.drafter.seen.lock().unwrap().len(),
+                    usize::from(stage == "b" || stage == "draft")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn caller_stop_during_committed_b_wait_preserves_ack_and_does_not_revoke_lease() {
+        let f = Fixture::new(
+            false,
+            false,
+            ReplySpy {
+                wait_for_draft_ack: true,
+                ..ReplySpy::default()
+            },
+        )
+        .await;
+        let (report, ()) = bounded(async {
+            tokio::join!(f.run(), async {
+                let a = f.pending(PublicApprovalStage::PrivateRead).await;
+                f.decide(&a, true);
+                let b = f.pending(PublicApprovalStage::Disclosure).await;
+                f.decide(&b, true);
+                f.sink.submitted.notified().await;
+                assert_eq!(f.peer.submissions().len(), 2, "already written before stop");
+                assert!(f.registry.cancel_caller(&f.ctx));
+                assert!(f.lease.is_active(), "stop must never cancel the lease root");
+                assert_eq!(f.registry.active_count(), 1, "permit held through ACK");
+                f.sink.ack_release.notify_one();
+            })
+        })
+        .await;
+        assert_eq!(report.outcome, PrivateTurnOutcome::Disclosed);
+        f.assert_sends(&[PRIVATE_CHECKING_NOTICE, DRAFT]);
+        assert_eq!(f.peer.generations(), vec![1, 1]);
         f.assert_retired(&[]);
     }
 

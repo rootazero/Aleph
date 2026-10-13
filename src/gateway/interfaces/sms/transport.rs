@@ -12,6 +12,10 @@ use std::sync::Arc;
 use aleph_protocol::telecom_relay::{EnvelopeError, TelecomEnvelope, TelecomKind, TelecomOutcome};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use tokio_util::sync::CancellationToken;
+
+use crate::gateway::telecom::public_context::{CallerDigest, TelecomChannel, TelecomPublicContext};
+use crate::gateway::telecom::public_run::ApprovedReplyOutcome;
 
 use crate::gateway::channel::{ChannelError, ChannelResult};
 use crate::gateway::telecom::{
@@ -73,6 +77,28 @@ pub struct SmsSubmission {
 pub trait SmsTransport: Send + Sync {
     async fn is_connected(&self) -> bool;
     async fn submit(&self, operation: &PendingSmsOperation) -> ChannelResult<SmsSubmission>;
+
+    /// Legacy/fake transports confer no private authority.
+    async fn private_sms_lease(
+        &self,
+        _ctx: &TelecomPublicContext,
+        _recipient: &str,
+    ) -> Option<PrivateSmsLease> {
+        None
+    }
+
+    async fn submit_private_sms(
+        &self,
+        _operation: &PendingSmsOperation,
+        _lease: &PrivateSmsLease,
+        _cancel: &CancellationToken,
+        _validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+    ) -> ChannelResult<ApprovedReplyOutcome> {
+        Ok(ApprovedReplyOutcome::Invalid)
+    }
+
+    /// Safe default for transports without lease authority.
+    async fn disconnect(&self) {}
 }
 
 /// Errors produced before a transport can truthfully report a submission.
@@ -80,6 +106,10 @@ pub trait SmsTransport: Send + Sync {
 pub enum SmsTransportError {
     #[error("SMS relay lease is not connected")]
     NotConnected,
+    #[error("private SMS authority is invalid or revoked")]
+    PrivateInvalid,
+    #[error("private SMS cancelled before submission")]
+    PrivateCancelled,
     #[error("binding mismatch: lease is bound to {expected}, operation/event claims {claimed}")]
     BindingMismatch { expected: String, claimed: String },
     #[error("stale connection generation {got} (active {active})")]
@@ -204,6 +234,86 @@ pub struct RelayLease {
     pub generation: u64,
 }
 
+/// Opaque authority issued only by a live configured transport. No constructor,
+/// serialization or Debug surface exposes its authority. Clones pin the SAME epoch.
+#[derive(Clone)]
+pub struct PrivateSmsLease {
+    relay: RelayLease,
+    epoch: Arc<CancellationToken>,
+    ctx: TelecomPublicContext,
+}
+
+impl PrivateSmsLease {
+    pub fn is_active(&self) -> bool {
+        !self.epoch.is_cancelled()
+    }
+
+    pub async fn revoked(&self) {
+        self.epoch.cancelled().await;
+    }
+
+    pub(crate) fn matches_context(&self, ctx: &TelecomPublicContext) -> bool {
+        self.is_active() && self.ctx == *ctx
+    }
+
+    pub(crate) fn matches_channel(&self, config: &SmsConfig, recipient: &str) -> bool {
+        self.is_active()
+            && config.validate().is_ok()
+            && self.ctx.provenance().region() == config.region
+            && self.ctx.provenance().binding_ref() == config.binding_ref
+            && self.matches_recipient(recipient)
+    }
+
+    fn matches_recipient(&self, recipient: &str) -> bool {
+        normalize_e164(recipient).is_ok_and(|peer| {
+            *self.ctx.provenance().caller_digest() == CallerDigest::from_normalized_e164(&peer)
+        })
+    }
+}
+
+struct ActiveLease {
+    relay: RelayLease,
+    epoch: Arc<CancellationToken>,
+}
+
+fn revoke_active(state: &mut TransportState) {
+    if let Some(active) = state.active.take() {
+        // Cancellation and removal are one authoritative state-lock transition.
+        active.epoch.cancel();
+    }
+}
+
+struct PinnedGuard<'a> {
+    lease: &'a PrivateSmsLease,
+    cancel: &'a CancellationToken,
+    validate: &'a (dyn for<'s> Fn(&'s str) -> bool + Send + Sync + 'a),
+}
+
+impl PinnedGuard<'_> {
+    fn check(
+        &self,
+        state: &TransportState,
+        operation: &PendingSmsOperation,
+    ) -> Result<(), SmsTransportError> {
+        if self.cancel.is_cancelled() {
+            return Err(SmsTransportError::PrivateCancelled);
+        }
+        let active = state
+            .active
+            .as_ref()
+            .ok_or(SmsTransportError::PrivateInvalid)?;
+        if !self.lease.is_active()
+            || !Arc::ptr_eq(&active.epoch, &self.lease.epoch)
+            || active.relay != self.lease.relay
+            || !self.lease.matches_recipient(&operation.peer_address)
+            || operation.command.recipient_binding_id != self.lease.relay.binding_id
+        {
+            return Err(SmsTransportError::PrivateInvalid);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationPhase {
     Authorizing,
@@ -220,7 +330,7 @@ struct StoredOperation {
 
 struct TransportState {
     next_generation: u64,
-    active: Option<RelayLease>,
+    active: Option<ActiveLease>,
     connecting_generation: Option<u64>,
     operations: HashMap<String, StoredOperation>,
 }
@@ -260,6 +370,7 @@ pub struct SmsRelayTransport {
     authorizer: Arc<dyn SmsSendAuthorizer>,
     policy: SmsTransportPolicy,
     config_valid: bool,
+    private_region: Option<String>,
     connect_lock: tokio::sync::Mutex<()>,
     state: tokio::sync::Mutex<TransportState>,
 }
@@ -306,7 +417,9 @@ impl SmsRelayTransport {
         let policy = SmsTransportPolicy::from(&config);
         let config_valid =
             config.validate().is_ok() && valid_policy(&policy) && config.binding_ref == binding_id;
-        Self::new_internal(binding_id, policy, config_valid, peer, authorizer)
+        let mut transport = Self::new_internal(binding_id, policy, config_valid, peer, authorizer);
+        transport.private_region = Some(config.region);
+        transport
     }
 
     fn new_internal(
@@ -322,6 +435,7 @@ impl SmsRelayTransport {
             authorizer,
             policy,
             config_valid,
+            private_region: None,
             connect_lock: tokio::sync::Mutex::new(()),
             state: tokio::sync::Mutex::new(TransportState {
                 next_generation: 0,
@@ -344,7 +458,7 @@ impl SmsRelayTransport {
             state.connecting_generation = Some(generation);
             // Reserve the generation before awaiting the peer. The old lease
             // remains available only for cleanup/audit, never admission.
-            state.active = None;
+            revoke_active(&mut state);
             generation
         };
         let result = self.peer.connect(&self.binding_id, generation).await;
@@ -365,18 +479,26 @@ impl SmsRelayTransport {
             // attempt; never resurrect the old lease on a late peer response.
             return Err(SmsTransportError::NotConnected);
         }
-        state.active = Some(lease.clone());
+        state.active = Some(ActiveLease {
+            relay: lease.clone(),
+            epoch: Arc::new(CancellationToken::new()),
+        });
         Ok(lease)
     }
 
     pub async fn disconnect(&self) {
         let mut state = self.state.lock().await;
-        state.active = None;
+        revoke_active(&mut state);
         state.connecting_generation = None;
     }
 
     pub async fn lease(&self) -> Option<RelayLease> {
-        self.state.lock().await.active.clone()
+        self.state
+            .lock()
+            .await
+            .active
+            .as_ref()
+            .map(|active| active.relay.clone())
     }
 
     pub async fn fence_generation(&self, generation: u64) -> Result<(), SmsTransportError> {
@@ -399,8 +521,8 @@ impl SmsRelayTransport {
         let mut state = self.state.lock().await;
         match result {
             Err(error) => {
-                if state.active.as_ref().map(|active| active.generation) == Some(lease.generation) {
-                    state.active = None;
+                if state.active.as_ref().map(|active| &active.relay) == Some(&lease) {
+                    revoke_active(&mut state);
                 }
                 Err(error)
             }
@@ -427,9 +549,29 @@ impl SmsRelayTransport {
         operation: &PendingSmsOperation,
         now: DateTime<Utc>,
     ) -> Result<TelecomOutcome, SmsTransportError> {
+        self.submit_impl(operation, now, None).await
+    }
+
+    async fn submit_impl(
+        &self,
+        operation: &PendingSmsOperation,
+        now: DateTime<Utc>,
+        pinned: Option<PinnedGuard<'_>>,
+    ) -> Result<TelecomOutcome, SmsTransportError> {
         let operation_id = operation.operation_id().to_string();
         let lease = {
-            let mut state = self.state.lock().await;
+            let mut state = match &pinned {
+                Some(guard) => tokio::select! {
+                    biased;
+                    _ = guard.cancel.cancelled() => return Err(SmsTransportError::PrivateCancelled),
+                    _ = guard.lease.revoked() => return Err(SmsTransportError::PrivateInvalid),
+                    state = self.state.lock() => state,
+                },
+                None => self.state.lock().await,
+            };
+            if let Some(guard) = &pinned {
+                guard.check(&state, operation)?;
+            }
             prune_operations(&mut state, now, &self.policy, None);
             let lease = current_lease(&state)?;
             if !self.config_valid {
@@ -467,7 +609,16 @@ impl SmsRelayTransport {
             lease
         };
 
-        if let Err(error) = self.authorizer.authorize(operation).await {
+        let authorization = match &pinned {
+            Some(guard) => tokio::select! {
+                biased;
+                _ = guard.cancel.cancelled() => Err(SmsTransportError::PrivateCancelled),
+                _ = guard.lease.revoked() => Err(SmsTransportError::PrivateInvalid),
+                result = self.authorizer.authorize(operation) => result,
+            },
+            None => self.authorizer.authorize(operation).await,
+        };
+        if let Err(error) = authorization {
             let mut state = self.state.lock().await;
             if state.operations.get(&operation_id).is_some_and(|stored| {
                 stored.operation == *operation
@@ -496,36 +647,58 @@ impl SmsRelayTransport {
                 }
                 Ok(current)
             });
-            let result = match final_lease {
-                Ok(current) => {
-                    let stored = state.operations.get_mut(&operation_id).ok_or_else(|| {
-                        SmsTransportError::OperationNotFound {
-                            operation_id: operation_id.clone(),
-                        }
-                    })?;
-                    if stored.operation != *operation {
-                        return Err(SmsTransportError::OperationConflict { operation_id });
+            let result = (|| {
+                let current = final_lease?;
+                if let Some(guard) = &pinned {
+                    guard.check(&state, operation)?;
+                    // The callback is deliberately AFTER the last async state
+                    // lock and authorizer wait, at the local commit transition.
+                    if !(guard.validate)(&operation.command.body) {
+                        return Err(SmsTransportError::PrivateInvalid);
                     }
-                    if let Some(record) = stored.outcome {
-                        return Err(match record.outcome {
-                            TelecomOutcome::Unknown => SmsTransportError::Unknown { operation_id },
-                            TelecomOutcome::OutcomeUnknownExpired => {
-                                SmsTransportError::UnknownExpired { operation_id }
-                            }
-                            outcome => SmsTransportError::AlreadySubmitted {
-                                operation_id,
-                                outcome,
-                            },
-                        });
-                    }
-                    if stored.phase != OperationPhase::Authorizing {
-                        return Err(SmsTransportError::OperationPending { operation_id });
-                    }
-                    stored.phase = OperationPhase::Submitting;
-                    Ok(current)
+                    guard.check(&state, operation)?;
                 }
-                Err(error) => Err(error),
-            };
+                validate_operation_admission(
+                    &self.policy,
+                    &current,
+                    operation,
+                    if pinned.is_some() { Utc::now() } else { now },
+                )?;
+                let stored = state.operations.get_mut(&operation_id).ok_or_else(|| {
+                    SmsTransportError::OperationNotFound {
+                        operation_id: operation_id.clone(),
+                    }
+                })?;
+                if stored.operation != *operation {
+                    return Err(SmsTransportError::OperationConflict {
+                        operation_id: operation_id.clone(),
+                    });
+                }
+                if let Some(record) = stored.outcome {
+                    return Err(match record.outcome {
+                        TelecomOutcome::Unknown => SmsTransportError::Unknown {
+                            operation_id: operation_id.clone(),
+                        },
+                        TelecomOutcome::OutcomeUnknownExpired => {
+                            SmsTransportError::UnknownExpired {
+                                operation_id: operation_id.clone(),
+                            }
+                        }
+                        outcome => SmsTransportError::AlreadySubmitted {
+                            operation_id: operation_id.clone(),
+                            outcome,
+                        },
+                    });
+                }
+                if stored.phase != OperationPhase::Authorizing {
+                    return Err(SmsTransportError::OperationPending {
+                        operation_id: operation_id.clone(),
+                    });
+                }
+                stored.phase = OperationPhase::Submitting;
+                // Never substitute a replacement generation in the payload.
+                Ok(lease.clone())
+            })();
             match result {
                 Ok(current) => current,
                 Err(error) => {
@@ -736,6 +909,72 @@ impl SmsRelayTransport {
 
 #[async_trait]
 impl super::SmsTransport for SmsRelayTransport {
+    async fn disconnect(&self) {
+        SmsRelayTransport::disconnect(self).await;
+    }
+
+    async fn private_sms_lease(
+        &self,
+        ctx: &TelecomPublicContext,
+        recipient: &str,
+    ) -> Option<PrivateSmsLease> {
+        let state = self.state.lock().await;
+        let active = state.active.as_ref()?;
+        let provenance = ctx.provenance();
+        let peer = normalize_e164(recipient).ok()?;
+        if !self.config_valid
+            || provenance.channel() != TelecomChannel::Sms
+            || self.private_region.as_deref() != Some(provenance.region())
+            || provenance.binding_ref() != active.relay.binding_id
+            || provenance.connection_generation() != active.relay.generation
+            || *provenance.caller_digest() != CallerDigest::from_normalized_e164(&peer)
+            || active.epoch.is_cancelled()
+        {
+            return None;
+        }
+        Some(PrivateSmsLease {
+            relay: active.relay.clone(),
+            epoch: active.epoch.clone(),
+            ctx: ctx.clone(),
+        })
+    }
+
+    async fn submit_private_sms(
+        &self,
+        operation: &PendingSmsOperation,
+        lease: &PrivateSmsLease,
+        cancel: &CancellationToken,
+        validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+    ) -> ChannelResult<ApprovedReplyOutcome> {
+        match self
+            .submit_impl(
+                operation,
+                Utc::now(),
+                Some(PinnedGuard {
+                    lease,
+                    cancel,
+                    validate,
+                }),
+            )
+            .await
+        {
+            Ok(
+                TelecomOutcome::Accepted | TelecomOutcome::Submitted | TelecomOutcome::Delivered,
+            ) => Ok(ApprovedReplyOutcome::Acknowledged),
+            Ok(_) => Err(ChannelError::SendFailed(
+                "private SMS outcome unacknowledged; not retried".into(),
+            )),
+            Err(SmsTransportError::PrivateCancelled) => Ok(ApprovedReplyOutcome::Cancelled),
+            Err(
+                SmsTransportError::PrivateInvalid
+                | SmsTransportError::NotConnected
+                | SmsTransportError::StaleGeneration { .. }
+                | SmsTransportError::FutureGeneration { .. },
+            ) => Ok(ApprovedReplyOutcome::Invalid),
+            Err(error) => Err(to_channel_error(error)),
+        }
+    }
+
     async fn is_connected(&self) -> bool {
         self.lease().await.is_some()
     }
@@ -752,7 +991,11 @@ impl super::SmsTransport for SmsRelayTransport {
 }
 
 fn current_lease(state: &TransportState) -> Result<RelayLease, SmsTransportError> {
-    state.active.clone().ok_or(SmsTransportError::NotConnected)
+    state
+        .active
+        .as_ref()
+        .map(|active| active.relay.clone())
+        .ok_or(SmsTransportError::NotConnected)
 }
 
 fn prune_operations(
@@ -887,6 +1130,61 @@ fn to_channel_error(error: SmsTransportError) -> ChannelError {
     }
 }
 
+/// Test witnesses still come from the real connect/acquire state machine, not
+/// from a production constructor or a synthetic approval scope.
+#[cfg(test)]
+pub(crate) fn test_private_context(binding: &str) -> TelecomPublicContext {
+    TelecomPublicContext::from_admitted_sms(&super::SmsInboundMeta {
+        region: "US".into(),
+        binding_ref: binding.into(),
+        provider_account_id: "acct".into(),
+        provider_message_id: "pm".into(),
+        envelope_event_id: "event".into(),
+        connection_generation: 1,
+        service_address: "+15550000000".into(),
+        peer_address: "+15550000001".into(),
+        encoding: aleph_protocol::telecom_relay::SmsEncoding::Gsm7,
+        segment_count: 1,
+        created_at: Utc::now(),
+        expires_at: Utc::now() + Duration::seconds(60),
+    })
+}
+
+#[cfg(test)]
+pub(crate) async fn test_private_lease(binding: &str) -> (Arc<SmsRelayTransport>, PrivateSmsLease) {
+    let (transport, _) = test_private_transport(binding).await;
+    let ctx = test_private_context(binding);
+    let lease = transport
+        .private_sms_lease(&ctx, "+15550000001")
+        .await
+        .unwrap();
+    (transport, lease)
+}
+
+#[cfg(test)]
+pub(crate) async fn test_private_transport(
+    binding: &str,
+) -> (Arc<SmsRelayTransport>, Arc<InMemorySmsPeer>) {
+    let peer = Arc::new(InMemorySmsPeer::default());
+    let config = SmsConfig {
+        region: "US".into(),
+        service_address: "+15550000000".into(),
+        binding_ref: binding.into(),
+        inbound_enabled: true,
+        outbound_enabled: true,
+        max_segments: 10,
+        command_ttl_secs: 60,
+    };
+    let transport = Arc::new(SmsRelayTransport::new_with_config(
+        binding,
+        config,
+        peer.clone(),
+        tests::allow_all(),
+    ));
+    transport.connect().await.unwrap();
+    (transport, peer)
+}
+
 #[cfg(test)]
 #[derive(Default)]
 pub struct InMemorySmsPeer {
@@ -898,6 +1196,7 @@ struct InMemorySmsPeerState {
     connected_generation: Option<u64>,
     outcomes: std::collections::VecDeque<Result<TelecomOutcome, SmsTransportError>>,
     submissions: Vec<PendingSmsOperation>,
+    generations: Vec<u64>,
 }
 
 #[cfg(test)]
@@ -907,6 +1206,7 @@ impl Default for InMemorySmsPeerState {
             connected_generation: None,
             outcomes: std::collections::VecDeque::new(),
             submissions: Vec::new(),
+            generations: Vec::new(),
         }
     }
 }
@@ -925,8 +1225,16 @@ impl InMemorySmsPeer {
         }
     }
 
-    fn submissions(&self) -> Vec<PendingSmsOperation> {
+    pub(crate) fn submissions(&self) -> Vec<PendingSmsOperation> {
         self.inner.lock().unwrap().submissions.clone()
+    }
+
+    pub(crate) fn fail_heartbeat(&self) {
+        self.inner.lock().unwrap().connected_generation = None;
+    }
+
+    pub(crate) fn generations(&self) -> Vec<u64> {
+        self.inner.lock().unwrap().generations.clone()
     }
 }
 
@@ -960,6 +1268,7 @@ impl SmsRelayPeer for InMemorySmsPeer {
             });
         }
         state.submissions.push(operation.clone());
+        state.generations.push(generation);
         state
             .outcomes
             .pop_front()
@@ -1004,7 +1313,7 @@ mod tests {
         }
     }
 
-    fn allow_all() -> Arc<dyn SmsSendAuthorizer> {
+    pub(super) fn allow_all() -> Arc<dyn SmsSendAuthorizer> {
         Arc::new(AllowAll)
     }
 
@@ -1062,6 +1371,7 @@ mod tests {
     #[derive(Default)]
     struct BlockingSmsPeer {
         connected_generation: std::sync::Mutex<Option<u64>>,
+        writes: std::sync::Mutex<Vec<(u64, PendingSmsOperation)>>,
         started: Notify,
         release: Notify,
     }
@@ -1092,9 +1402,20 @@ mod tests {
         async fn submit(
             &self,
             _binding_id: &str,
-            _generation: u64,
-            _operation: &PendingSmsOperation,
+            generation: u64,
+            operation: &PendingSmsOperation,
         ) -> Result<TelecomOutcome, SmsTransportError> {
+            // Fake adapter fences at its write; the later wait is only ACK I/O.
+            {
+                let active = self.connected_generation.lock().unwrap();
+                if *active != Some(generation) {
+                    return Err(SmsTransportError::NotConnected);
+                }
+                self.writes
+                    .lock()
+                    .unwrap()
+                    .push((generation, operation.clone()));
+            }
             self.started.notify_one();
             self.release.notified().await;
             Ok(TelecomOutcome::Accepted)
@@ -1105,6 +1426,7 @@ mod tests {
     struct HeartbeatBlockingPeer {
         heartbeat_started: Notify,
         heartbeat_release: Notify,
+        fail: std::sync::atomic::AtomicBool,
     }
 
     #[async_trait]
@@ -1124,7 +1446,11 @@ mod tests {
         ) -> Result<(), SmsTransportError> {
             self.heartbeat_started.notify_one();
             self.heartbeat_release.notified().await;
-            Ok(())
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                Err(SmsTransportError::NotConnected)
+            } else {
+                Ok(())
+            }
         }
 
         async fn submit(
@@ -1861,7 +2187,10 @@ mod tests {
             binding_id: "other-binding".into(),
             generation: first.generation,
         };
-        transport.state.lock().await.active = Some(replacement.clone());
+        transport.state.lock().await.active = Some(ActiveLease {
+            relay: replacement.clone(),
+            epoch: Arc::new(CancellationToken::new()),
+        });
         peer.heartbeat_release.notify_one();
         assert_eq!(
             heartbeat.await.unwrap(),
@@ -1882,6 +2211,381 @@ mod tests {
             transport.connect().await,
             Err(SmsTransportError::GenerationExhausted)
         );
+    }
+
+    fn private_config() -> SmsConfig {
+        let mut config = test_config(true, 10, 60);
+        config.region = "US".into();
+        config.service_address = "+15550000000".into();
+        config
+    }
+
+    fn private_operation() -> PendingSmsOperation {
+        let mut operation = test_operation(Utc::now() + Duration::seconds(60));
+        operation.peer_address = "+15550000001".into();
+        operation
+    }
+
+    #[tokio::test]
+    async fn private_witness_rejects_binding_region_caller_generation_and_other_transport() {
+        let (transport, peer) = test_private_transport("binding").await;
+        let ctx = test_private_context("binding");
+        let witness = transport
+            .private_sms_lease(&ctx, "+15550000001")
+            .await
+            .unwrap();
+        assert!(transport
+            .private_sms_lease(&ctx, "+15550000002")
+            .await
+            .is_none());
+        assert!(transport
+            .private_sms_lease(&test_private_context("other"), "+15550000001")
+            .await
+            .is_none());
+        let mut meta = super::super::SmsInboundMeta {
+            region: "CN".into(),
+            binding_ref: "binding".into(),
+            provider_account_id: "acct".into(),
+            provider_message_id: "pm".into(),
+            envelope_event_id: "ev".into(),
+            connection_generation: 1,
+            service_address: "+15550000000".into(),
+            peer_address: "+15550000001".into(),
+            encoding: aleph_protocol::telecom_relay::SmsEncoding::Gsm7,
+            segment_count: 1,
+            created_at: Utc::now(),
+            expires_at: Utc::now(),
+        };
+        assert!(transport
+            .private_sms_lease(
+                &TelecomPublicContext::from_admitted_sms(&meta),
+                "+15550000001"
+            )
+            .await
+            .is_none());
+        meta.region = "US".into();
+        meta.connection_generation = 2;
+        assert!(transport
+            .private_sms_lease(
+                &TelecomPublicContext::from_admitted_sms(&meta),
+                "+15550000001"
+            )
+            .await
+            .is_none());
+        meta.connection_generation = 1;
+        meta.peer_address = "+15550000002".into();
+        assert!(transport
+            .private_sms_lease(
+                &TelecomPublicContext::from_admitted_sms(&meta),
+                "+15550000001"
+            )
+            .await
+            .is_none());
+        let (_other, foreign) = test_private_lease("binding").await;
+        assert_eq!(
+            transport
+                .submit_private_sms(
+                    &private_operation(),
+                    &foreign,
+                    &CancellationToken::new(),
+                    &|_| true
+                )
+                .await
+                .unwrap(),
+            ApprovedReplyOutcome::Invalid
+        );
+        assert!(peer.submissions().is_empty());
+        transport.connect().await.unwrap();
+        assert!(!witness.is_active());
+        assert!(
+            transport
+                .private_sms_lease(&ctx, "+15550000001")
+                .await
+                .is_none(),
+            "never refresh an old ctx into a new generation"
+        );
+        assert_eq!(
+            transport
+                .submit_private_sms(
+                    &private_operation(),
+                    &witness,
+                    &CancellationToken::new(),
+                    &|_| true
+                )
+                .await
+                .unwrap(),
+            ApprovedReplyOutcome::Invalid
+        );
+        assert!(peer.submissions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn private_authorizer_wait_rechecks_reconnect_cancel_body_and_expiry_without_writes() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        for invalidate in ["reconnect", "disconnect", "stop", "body", "expiry"] {
+            let peer = Arc::new(InMemorySmsPeer::default());
+            let authorizer = Arc::new(BlockingAuthorizer::default());
+            let transport = Arc::new(SmsRelayTransport::new_with_config(
+                "binding",
+                private_config(),
+                peer.clone(),
+                authorizer.clone(),
+            ));
+            transport.connect().await.unwrap();
+            let lease = transport
+                .private_sms_lease(&test_private_context("binding"), "+15550000001")
+                .await
+                .unwrap();
+            let mut operation = private_operation();
+            if invalidate == "expiry" {
+                operation.command.expires_at = Utc::now() + Duration::milliseconds(100);
+            }
+            let cancel = CancellationToken::new();
+            let valid = AtomicBool::new(true);
+            let validate = |body: &str| body == "hello" && valid.load(Ordering::SeqCst);
+            let submit = transport.submit_private_sms(&operation, &lease, &cancel, &validate);
+            let (result, ()) = tokio::join!(submit, async {
+                authorizer.started.notified().await;
+                match invalidate {
+                    "reconnect" => {
+                        transport.connect().await.unwrap();
+                    }
+                    "disconnect" => transport.disconnect().await,
+                    "stop" => cancel.cancel(),
+                    "body" => valid.store(false, Ordering::SeqCst),
+                    "expiry" => tokio::time::sleep(std::time::Duration::from_millis(150)).await,
+                    _ => unreachable!(),
+                }
+                authorizer.release.notify_one();
+            });
+            if invalidate == "expiry" {
+                assert!(result.is_err());
+            } else {
+                assert!(matches!(
+                    result.unwrap(),
+                    ApprovedReplyOutcome::Invalid | ApprovedReplyOutcome::Cancelled
+                ));
+            }
+            assert!(
+                peer.submissions().is_empty(),
+                "{invalidate}: no irreversible write"
+            );
+            assert!(transport
+                .operation(operation.operation_id())
+                .await
+                .is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn private_callback_runs_only_after_last_state_lock_and_second_cancel_fence() {
+        use std::future::{poll_fn, Future};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::task::Poll;
+        for invalidate in ["body", "cancel_in_callback"] {
+            let peer = Arc::new(InMemorySmsPeer::default());
+            let authorizer = Arc::new(BlockingAuthorizer::default());
+            let transport = SmsRelayTransport::new_with_config(
+                "binding",
+                private_config(),
+                peer.clone(),
+                authorizer.clone(),
+            );
+            transport.connect().await.unwrap();
+            let lease = transport
+                .private_sms_lease(&test_private_context("binding"), "+15550000001")
+                .await
+                .unwrap();
+            let operation = private_operation();
+            let valid = AtomicBool::new(true);
+            let callbacks = AtomicUsize::new(0);
+            let cancel = CancellationToken::new();
+            let validate = |body: &str| {
+                callbacks.fetch_add(1, Ordering::SeqCst);
+                if invalidate == "cancel_in_callback" {
+                    cancel.cancel();
+                }
+                body == "hello" && valid.load(Ordering::SeqCst)
+            };
+            let submit = transport.submit_private_sms(&operation, &lease, &cancel, &validate);
+            tokio::pin!(submit);
+            poll_fn(|cx| {
+                assert!(submit.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            authorizer.started.notified().await;
+            let state = transport.state.lock().await;
+            authorizer.release.notify_one();
+            poll_fn(|cx| {
+                assert!(submit.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            assert_eq!(
+                callbacks.load(Ordering::SeqCst),
+                0,
+                "last async lock not acquired yet"
+            );
+            if invalidate == "body" {
+                valid.store(false, Ordering::SeqCst);
+            }
+            drop(state);
+            assert!(matches!(
+                submit.await.unwrap(),
+                ApprovedReplyOutcome::Invalid | ApprovedReplyOutcome::Cancelled
+            ));
+            assert_eq!(callbacks.load(Ordering::SeqCst), 1);
+            assert!(peer.submissions().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn private_cancel_and_reconnect_after_commit_preserve_ack_and_original_generation() {
+        let peer = Arc::new(BlockingSmsPeer::default());
+        let transport = SmsRelayTransport::new_with_config(
+            "binding",
+            private_config(),
+            peer.clone(),
+            allow_all(),
+        );
+        transport.connect().await.unwrap();
+        let lease = transport
+            .private_sms_lease(&test_private_context("binding"), "+15550000001")
+            .await
+            .unwrap();
+        let operation = private_operation();
+        let cancel = CancellationToken::new();
+        let (result, ()) = tokio::join!(
+            transport.submit_private_sms(&operation, &lease, &cancel, &|_| true),
+            async {
+                peer.started.notified().await;
+                cancel.cancel();
+                transport.disconnect().await;
+                assert_eq!(transport.connect().await.unwrap().generation, 2);
+                assert!(!lease.is_active());
+                peer.release.notify_one();
+            }
+        );
+        assert_eq!(result.unwrap(), ApprovedReplyOutcome::Acknowledged);
+        let writes = peer.writes.lock().unwrap();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0], (1, operation));
+    }
+
+    #[tokio::test]
+    async fn private_unknown_is_not_retried_or_replaced_with_new_lease() {
+        let peer = Arc::new(InMemorySmsPeer::with_outcomes([Err(
+            SmsTransportError::UnknownWriteOutcome {
+                operation_id: "op-1".into(),
+            },
+        )]));
+        let transport = SmsRelayTransport::new_with_config(
+            "binding",
+            private_config(),
+            peer.clone(),
+            allow_all(),
+        );
+        transport.connect().await.unwrap();
+        let lease = transport
+            .private_sms_lease(&test_private_context("binding"), "+15550000001")
+            .await
+            .unwrap();
+        let operation = private_operation();
+        let cancel = CancellationToken::new();
+        assert!(transport
+            .submit_private_sms(&operation, &lease, &cancel, &|_| true)
+            .await
+            .is_err());
+        assert!(transport
+            .submit_private_sms(&operation, &lease, &cancel, &|_| true)
+            .await
+            .is_err());
+        assert_eq!(peer.submissions(), vec![operation.clone()]);
+        assert_eq!(peer.generations(), vec![1]);
+        assert_eq!(
+            transport
+                .outcome(operation.operation_id())
+                .await
+                .unwrap()
+                .outcome,
+            TelecomOutcome::Unknown
+        );
+    }
+
+    #[tokio::test]
+    async fn late_old_heartbeat_failure_never_revokes_replacement_epoch() {
+        let peer = Arc::new(HeartbeatBlockingPeer::default());
+        peer.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        let transport = SmsRelayTransport::new_with_config(
+            "binding",
+            private_config(),
+            peer.clone(),
+            allow_all(),
+        );
+        transport.connect().await.unwrap();
+        let first = transport
+            .private_sms_lease(&test_private_context("binding"), "+15550000001")
+            .await
+            .unwrap();
+        let (heartbeat, replacement) = tokio::join!(transport.heartbeat(1), async {
+            peer.heartbeat_started.notified().await;
+            let relay = transport.connect().await.unwrap();
+            let epoch = transport
+                .state
+                .lock()
+                .await
+                .active
+                .as_ref()
+                .unwrap()
+                .epoch
+                .clone();
+            assert!(!first.is_active());
+            peer.heartbeat_release.notify_one();
+            (relay, epoch)
+        });
+        assert!(heartbeat.is_err());
+        assert_eq!(transport.lease().await, Some(replacement.0));
+        assert!(
+            !replacement.1.is_cancelled(),
+            "old generation failure must not kill replacement"
+        );
+    }
+
+    #[tokio::test]
+    async fn private_epoch_revokes_on_reservation_disconnect_and_current_heartbeat_failure() {
+        let (transport, peer) = test_private_transport("binding").await;
+        let first = transport
+            .private_sms_lease(&test_private_context("binding"), "+15550000001")
+            .await
+            .unwrap();
+        peer.fail_heartbeat();
+        assert!(transport.heartbeat(1).await.is_err());
+        assert!(!first.is_active());
+        assert!(transport.lease().await.is_none());
+        // A connect reservation revokes before the peer connect resolves.
+        let peer = Arc::new(ConnectBlockingPeer::default());
+        let transport = SmsRelayTransport::new_with_config(
+            "binding",
+            private_config(),
+            peer.clone(),
+            allow_all(),
+        );
+        transport.connect().await.unwrap();
+        let first = transport
+            .private_sms_lease(&test_private_context("binding"), "+15550000001")
+            .await
+            .unwrap();
+        peer.block_next_connect();
+        let (second, ()) = tokio::join!(transport.connect(), async {
+            peer.connect_started.notified().await;
+            assert!(!first.is_active());
+            assert!(transport.lease().await.is_none());
+            peer.connect_release.notify_one();
+        });
+        assert_eq!(second.unwrap().generation, 2);
+        transport.disconnect().await;
+        assert!(transport.lease().await.is_none());
     }
 
     #[test]

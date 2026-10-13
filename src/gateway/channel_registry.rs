@@ -42,12 +42,7 @@ type ChannelHandle = Arc<RwLock<Box<dyn Channel>>>;
 
 /// Private telecom precommit fence result. An error or timeout is deliberately
 /// not an `Invalid` result: transport acceptance may already have occurred.
-#[derive(Debug)]
-pub(crate) enum ApprovedTelecomSend {
-    Acknowledged(SendResult),
-    Cancelled,
-    Invalid,
-}
+pub(crate) use super::telecom::public_run::ApprovedReplyOutcome as ApprovedTelecomSend;
 
 /// Actual custody of a fresh message after the transport attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -637,23 +632,38 @@ impl ChannelRegistry {
         channel.send(message).await.map(Some)
     }
 
-    /// Private-only public send: wait for registry and channel locks with the
-    /// same cancellation fence as ordinary public replies, then validate the
-    /// exact outbound text synchronously under the final channel lock. No
-    /// await separates cancellation/validation from the first `send` poll.
+    /// Ask the actual registered channel, never its advertised type string.
+    pub(crate) async fn private_sms_lease(
+        &self,
+        channel_id: &ChannelId,
+        ctx: &super::telecom::TelecomPublicContext,
+        recipient: &str,
+    ) -> Option<super::interfaces::sms::PrivateSmsLease> {
+        let channel = self.get(channel_id).await?;
+        let channel = channel.read().await;
+        channel.private_sms_lease(ctx, recipient).await
+    }
+
+    /// Pinned private send. Registry locks are precommit waits, not the commit
+    /// boundary. Only the concrete transport may commit after its final fence.
     pub(crate) async fn send_approved_public_telecom(
         &self,
         channel_id: &ChannelId,
         message: OutboundMessage,
+        lease: &super::interfaces::sms::PrivateSmsLease,
         cancel: &tokio_util::sync::CancellationToken,
         validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
     ) -> ChannelResult<ApprovedTelecomSend> {
         if cancel.is_cancelled() {
             return Ok(ApprovedTelecomSend::Cancelled);
         }
+        if !lease.is_active() {
+            return Ok(ApprovedTelecomSend::Invalid);
+        }
         let channel_arc = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Ok(ApprovedTelecomSend::Cancelled),
+            _ = lease.revoked() => return Ok(ApprovedTelecomSend::Invalid),
             channel = self.get(channel_id) => channel.ok_or_else(|| {
                 ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
             })?,
@@ -661,6 +671,7 @@ impl ChannelRegistry {
         let channel = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Ok(ApprovedTelecomSend::Cancelled),
+            _ = lease.revoked() => return Ok(ApprovedTelecomSend::Invalid),
             channel = channel_arc.read() => channel,
         };
         if cancel.is_cancelled() {
@@ -672,12 +683,14 @@ impl ChannelRegistry {
         if cancel.is_cancelled() {
             return Ok(ApprovedTelecomSend::Cancelled);
         }
-        // This is the submission boundary. Neither cancellation nor ledger
-        // locks are held across the transport call; there is no retry/queue.
+        if !lease.is_active() {
+            return Ok(ApprovedTelecomSend::Invalid);
+        }
+        // No ordinary-send fallback, observers, persistence, queue or retry.
+        // The pinned transport checks again under its own last async lock.
         channel
-            .send(message)
+            .send_private_sms(message, lease, cancel, validate)
             .await
-            .map(ApprovedTelecomSend::Acknowledged)
     }
 
     /// Send a message through a specific channel.
@@ -1696,6 +1709,9 @@ mod tests {
             .send_approved_public_telecom(
                 &ChannelId::new("flaky"),
                 OutboundMessage::text("c", "altered"),
+                &crate::gateway::interfaces::sms::transport::test_private_lease("binding")
+                    .await
+                    .1,
                 &CancellationToken::new(),
                 &|body| body == "approved",
             )
@@ -1777,9 +1793,12 @@ mod tests {
                 Some(channel.write().await)
             };
             let cancel = CancellationToken::new();
+            let (_transport, lease) =
+                crate::gateway::interfaces::sms::transport::test_private_lease("binding").await;
             let send = registry.send_approved_public_telecom(
                 &id,
                 OutboundMessage::text("c", "secret"),
+                &lease,
                 &cancel,
                 &check,
             );
@@ -1803,6 +1822,161 @@ mod tests {
                 "invalidated body never submits"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn real_private_channel_registry_wait_fences_reconnect_expiry_and_body_changes() {
+        use crate::gateway::interfaces::sms::{
+            test_private_channel, transport::test_private_context,
+        };
+        use std::future::{poll_fn, Future};
+        use std::task::Poll;
+        use tokio_util::sync::CancellationToken;
+        for block_registry in [true, false] {
+            for invalidate in ["reconnect", "expiry", "body"] {
+                let registry = ChannelRegistry::new();
+                let (sms, transport, _lease, peer) = test_private_channel("binding").await;
+                let id = registry.register(Box::new(sms)).await;
+                let lease = registry
+                    .private_sms_lease(&id, &test_private_context("binding"), "+15550000001")
+                    .await
+                    .unwrap();
+                let channel = registry.get(&id).await.unwrap();
+                let current_body = Mutex::new("secret");
+                let deadline = Utc::now() + chrono::Duration::seconds(60);
+                let now = Mutex::new(Utc::now());
+                let check = |body: &str| {
+                    body == *current_body.lock().unwrap() && *now.lock().unwrap() < deadline
+                };
+                let registry_guard = if block_registry {
+                    Some(registry.channels.write().await)
+                } else {
+                    None
+                };
+                let channel_guard = if block_registry {
+                    None
+                } else {
+                    Some(channel.write().await)
+                };
+                let cancel = CancellationToken::new();
+                let send = registry.send_approved_public_telecom(
+                    &id,
+                    OutboundMessage::text("+15550000001", "secret"),
+                    &lease,
+                    &cancel,
+                    &check,
+                );
+                tokio::pin!(send);
+                poll_fn(|cx| {
+                    assert!(send.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                })
+                .await;
+                match invalidate {
+                    "reconnect" => {
+                        transport.connect().await.unwrap();
+                    }
+                    "expiry" => {
+                        *now.lock().unwrap() = deadline;
+                    }
+                    "body" => {
+                        *current_body.lock().unwrap() = "mutated";
+                    }
+                    _ => unreachable!(),
+                }
+                if invalidate == "reconnect" {
+                    assert!(
+                        matches!(send.await.unwrap(), ApprovedTelecomSend::Invalid),
+                        "revocation interrupts even held registry locks"
+                    );
+                    drop(channel_guard);
+                    drop(registry_guard);
+                } else {
+                    drop(channel_guard);
+                    drop(registry_guard);
+                    assert!(matches!(send.await.unwrap(), ApprovedTelecomSend::Invalid));
+                }
+                assert!(
+                    peer.submissions().is_empty(),
+                    "{invalidate}/{block_registry}: no private peer writes"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_requires_concrete_witness_and_uses_private_path_without_ordinary_fallback() {
+        use crate::gateway::interfaces::sms::{
+            test_private_channel, transport::test_private_context,
+        };
+        use tokio_util::sync::CancellationToken;
+        let attempts = Arc::new(AtomicU32::new(0));
+        let mut fake = FlakyChannel::new(0, false, attempts.clone());
+        fake.info.channel_type = "sms".into(); // A type string is still not authority.
+        let registry = registry_with(fake, SendRetryPolicy::default()).await;
+        let ctx = test_private_context("binding");
+        assert!(registry
+            .private_sms_lease(&ChannelId::new("flaky"), &ctx, "+15550000001")
+            .await
+            .is_none());
+        let (sms, transport, lease, peer) = test_private_channel("binding").await;
+        assert!(matches!(
+            registry
+                .send_approved_public_telecom(
+                    &ChannelId::new("flaky"),
+                    OutboundMessage::text("+15550000001", "secret"),
+                    &lease,
+                    &CancellationToken::new(),
+                    &|_| true
+                )
+                .await
+                .unwrap(),
+            ApprovedTelecomSend::Invalid
+        ));
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            0,
+            "no ordinary send fallback"
+        );
+        let id = registry.register(Box::new(sms)).await;
+        let live = registry
+            .private_sms_lease(&id, &ctx, "+15550000001")
+            .await
+            .unwrap();
+        assert!(matches!(
+            registry
+                .send_approved_public_telecom(
+                    &id,
+                    OutboundMessage::text("+15550000001", "secret"),
+                    &live,
+                    &CancellationToken::new(),
+                    &|b| b == "secret"
+                )
+                .await
+                .unwrap(),
+            ApprovedTelecomSend::Acknowledged
+        ));
+        registry
+            .send_public_telecom(&id, OutboundMessage::text("+15550000001", "ordinary"))
+            .await
+            .unwrap();
+        assert_eq!(
+            peer.submissions()
+                .iter()
+                .map(|op| op.command.body.as_str())
+                .collect::<Vec<_>>(),
+            vec!["secret", "ordinary"]
+        );
+        registry.stop_channel(&id).await.unwrap();
+        assert!(
+            !live.is_active(),
+            "SmsChannel::stop disconnects the actual attached transport"
+        );
+        assert!(transport.lease().await.is_none());
+        assert!(registry
+            .private_sms_lease(&id, &ctx, "+15550000001")
+            .await
+            .is_none());
     }
 
     #[tokio::test]
