@@ -9,7 +9,9 @@
 //!
 //! Spec: `docs/superpowers/specs/2026-10-09-pstn-sms-thin-relay-design.md` §6, §8.
 
+pub mod operator_control;
 pub mod persisted_marker;
+pub mod private_read;
 pub mod protocol;
 pub mod public_admission;
 pub mod public_approval;
@@ -22,6 +24,9 @@ pub mod sms_inbox;
 pub mod sms_meta;
 
 pub use persisted_marker::{MarkerRestore, PersistedTelecomMarker};
+pub use private_read::{
+    NullPrivateReadDriver, PrivateReadDriver, PrivateReadError, PrivateReadResult,
+};
 pub use protocol::{
     accept_event, advance_outcome, dedup_key, expire_unknown, fence_generation, follow_up,
     AcceptContext, Acceptance, DedupKey, DedupLedger, FollowUp, IgnoreReason, OutcomeRecord,

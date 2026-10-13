@@ -233,7 +233,7 @@ mod tests {
             let store = open_configured_history(&config, dir.path())
                 .unwrap()
                 .unwrap();
-            store.append(&session, &first, now).unwrap();
+            store.append(&session, &first, now, false).unwrap();
             drop(store);
             // Format differences that encode the same key must not rotate it.
             write_key(
@@ -245,7 +245,7 @@ mod tests {
                 .unwrap();
             assert_eq!(store.load(&session, now).unwrap(), vec![first.clone()]);
             store
-                .append(&session, &second, now + Duration::seconds(1))
+                .append(&session, &second, now + Duration::seconds(1), false)
                 .unwrap();
             drop(store);
             let store = open_configured_history(&config, dir.path())
@@ -432,9 +432,9 @@ mod tests {
             let store = open_configured_history(&settings, dir.path())
                 .unwrap()
                 .unwrap();
-            store.append(&session, &first, now).unwrap();
+            store.append(&session, &first, now, false).unwrap();
             store
-                .append(&session, &second, now + Duration::seconds(1))
+                .append(&session, &second, now + Duration::seconds(1), false)
                 .unwrap();
             assert_eq!(
                 store.load(&session, now + Duration::seconds(2)).unwrap(),
@@ -445,7 +445,7 @@ mod tests {
                 assistant: String::new(),
             };
             assert!(matches!(
-                store.append(&session, &oversized, now + Duration::seconds(2)),
+                store.append(&session, &oversized, now + Duration::seconds(2), false),
                 Err(PublicHistoryError::TurnTooLarge)
             ));
             assert!(store
@@ -458,7 +458,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert!(matches!(
-                store.append(&session, &first, now),
+                store.append(&session, &first, now, false),
                 Err(PublicHistoryError::Capacity)
             ));
             assert!(store.load(&session, now).unwrap().is_empty());
@@ -481,7 +481,7 @@ mod tests {
             let store = open_configured_history(&settings, dir.path())
                 .unwrap()
                 .unwrap();
-            store.append(&session, &turn, now).unwrap();
+            store.append(&session, &turn, now, false).unwrap();
             drop(store);
             write_key(&key_file, "b".repeat(64).as_bytes());
             let wrong = open_configured_history(&settings, dir.path())

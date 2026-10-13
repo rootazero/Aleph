@@ -13,6 +13,7 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
+use super::operator_control::{OperatorControl, ScopeGuard};
 use super::public_admission::{PublicAdmission, PublicRunRegistry, PUBLIC_BUSY_NOTICE};
 use super::public_history::{PublicHistorySession, PublicHistoryStore, PublicHistoryTurn};
 use super::TelecomPublicContext;
@@ -96,6 +97,7 @@ pub async fn run_public_sms(
     ctx: TelecomPublicContext,
     text: String,
     sink: &dyn PublicReplySink,
+    operator_control: Option<&Arc<OperatorControl>>,
 ) -> PublicRunDisposition {
     run_public_sms_bounded(
         registry,
@@ -106,6 +108,7 @@ pub async fn run_public_sms(
         sink,
         PUBLIC_RUN_TIMEOUT,
         PUBLIC_REPLY_DELIVERY_TIMEOUT,
+        operator_control,
     )
     .await
 }
@@ -152,6 +155,7 @@ async fn run_public_sms_bounded(
     sink: &dyn PublicReplySink,
     run_timeout: Duration,
     delivery_timeout: Duration,
+    operator_control: Option<&Arc<OperatorControl>>,
 ) -> PublicRunDisposition {
     let admission = registry.try_admit(&ctx);
     let permit = match admission {
@@ -181,6 +185,29 @@ async fn run_public_sms_bounded(
         drop(permit);
         return disposition;
     };
+    // Trusted A/B scope lifecycle: only an ADMITTED run with a harness opens
+    // a PublicApprovalScope under this binding. Registering a binding cancels
+    // any outstanding approvals of the prior scope, so a message refused
+    // above (busy, over-spend, global cap, no harness) must never reach this
+    // point: it would wipe the live turn's pending requests. The guard is
+    // dropped on every exit path of this function, i.e. together with the
+    // permit, after delivery and the history append.
+    //
+    // The random core/agent/turn ids below exist only to give this
+    // turn a unique identity, so an operator-ledger consume is bound to
+    // *this* turn and cannot be replayed against a later one. No driver
+    // consumes the scope in production (no private source is approved),
+    // so these ids are not correlated with any real core/agent/turn.
+    let _scope_guard = operator_control.map(|c| {
+        let scope = super::PublicApprovalScope::new(
+            &ctx,
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            ctx.provenance().connection_generation(),
+        );
+        ScopeGuard::register(c.clone(), scope)
+    });
     let cancel = permit.cancel_token();
     let history_key = history.map(|_| PublicHistorySession::from_provenance(ctx.provenance()));
     let prior = match (history, &history_key) {
@@ -202,6 +229,11 @@ async fn run_public_sms_bounded(
         history: prior,
         run_id: uuid::Uuid::new_v4().to_string(),
         prompt_version: PUBLIC_PROMPT_VERSION,
+        // Production deliberately passes no scope: the user decided not to
+        // open any private source for now, so private-read is unreachable in
+        // production. Wire a scope here only once a concrete source has been
+        // approved.
+        scope: None,
     };
     let result = match tokio::time::timeout(
         run_timeout,
@@ -242,12 +274,18 @@ async fn run_public_sms_bounded(
             }
             // Only an explicit sink acknowledgment completes a turn. A `/stop`
             // after submission cannot undo an externally accepted reply.
+            //
+            // The `private_result` argument is the wall behind the public
+            // history contract: the call site at this depth only ever passes
+            // `false`: public history only ever stores the original caller
+            // text and the public reply, so a private body cannot leak
+            // through the normal-run append path.
             if let (Some(store), Some(key), Some(user)) = (history, &history_key, user_text) {
                 let turn = PublicHistoryTurn {
                     user,
                     assistant: reply.trim().to_string(),
                 };
-                if let Err(e) = store.append(key, &turn, chrono::Utc::now()) {
+                if let Err(e) = store.append(key, &turn, chrono::Utc::now(), false) {
                     tracing::warn!("[public] history append skipped: {e}");
                 }
             }
@@ -397,6 +435,7 @@ mod tests {
             sample_public_context("bind-a"),
             "/btw hello".into(),
             &sink,
+            None,
         )
         .await;
         assert_eq!(d, PublicRunDisposition::Replied);
@@ -423,6 +462,7 @@ mod tests {
             sample_public_context("bind-a"),
             "hi".into(),
             &sink,
+            None,
         )
         .await;
         assert_eq!(d, PublicRunDisposition::Failed);
@@ -448,6 +488,7 @@ mod tests {
                     sample_public_context("bind-a"),
                     "first".into(),
                     sink.as_ref(),
+                    None,
                 )
                 .await
             })
@@ -461,6 +502,7 @@ mod tests {
             sample_public_context("bind-a"),
             "second".into(),
             sink.as_ref(),
+            None,
         )
         .await;
         assert_eq!(second, PublicRunDisposition::Refused(PUBLIC_BUSY_NOTICE));
@@ -488,6 +530,7 @@ mod tests {
             sample_public_context("bind-a"),
             "hi".into(),
             &sink,
+            None,
         )
         .await;
         assert_eq!(d, PublicRunDisposition::Refused(PUBLIC_OVER_SPEND_NOTICE));
@@ -505,6 +548,7 @@ mod tests {
             sample_public_context("bind-a"),
             "hi".into(),
             &sink,
+            None,
         )
         .await;
         assert_eq!(d, PublicRunDisposition::Refused(PUBLIC_BUSY_NOTICE));
@@ -534,6 +578,7 @@ mod tests {
             sample_public_context(binding),
             text.into(),
             &sink,
+            None,
         )
         .await;
         let sent = sink.sent.lock().unwrap().clone();
@@ -580,6 +625,7 @@ mod tests {
             sample_public_context("bind-a"),
             "failed question".into(),
             &sink,
+            None,
         )
         .await;
         assert_eq!(d, PublicRunDisposition::Failed);
@@ -631,6 +677,7 @@ mod tests {
                 sample_public_context("bind-a"),
                 "refused question".into(),
                 &sink,
+                None,
             )
             .await;
             assert_eq!(d, PublicRunDisposition::Failed);
@@ -682,6 +729,7 @@ mod tests {
                     &sink,
                     Duration::from_secs(5),
                     Duration::from_millis(50),
+                    None,
                 ),
             )
             .await
@@ -736,6 +784,7 @@ mod tests {
                     sample_public_context("bind-a"),
                     "cancelled".into(),
                     &sink,
+                    None,
                 )
                 .await
             })
@@ -846,6 +895,7 @@ mod tests {
             sample_public_context("bind-a"),
             "q".into(),
             &sink,
+            None,
         )
         .await;
         assert_eq!(d, PublicRunDisposition::Cancelled);
@@ -899,6 +949,7 @@ mod tests {
                     sample_public_context("bind-a"),
                     "q".into(),
                     sink.as_ref(),
+                    None,
                 )
                 .await
             })
@@ -946,6 +997,7 @@ mod tests {
                 &sink,
                 Duration::from_secs(5),
                 Duration::from_millis(50),
+                None,
             ),
         )
         .await
@@ -977,6 +1029,7 @@ mod tests {
             &sink,
             Duration::from_millis(50),
             Duration::from_secs(5),
+            None,
         )
         .await;
         assert_eq!(d, PublicRunDisposition::Failed);
@@ -997,5 +1050,87 @@ mod tests {
         let (d2, _) = run_with(&reg, &next, Some(&store), "bind-a", "next").await;
         assert_eq!(d2, PublicRunDisposition::Replied, "binding is free again");
         assert!(next.seen_history.lock().unwrap()[0].is_empty());
+    }
+
+    /// A busy refusal on the same binding must not touch the operator ledger:
+    /// the live turn's scope and its pending private-read request survive, and
+    /// only the admitted turn's own exit retires them.
+    #[tokio::test]
+    async fn busy_refusal_keeps_live_turn_scope_and_pending_request() {
+        use crate::gateway::telecom::public_approval::PublicApprovalLedger;
+
+        let reg = PublicRunRegistry::new(4, 1_000);
+        let ledger = Arc::new(PublicApprovalLedger::new());
+        let control = Arc::new(OperatorControl::new(ledger.clone()));
+        let gate = Arc::new(Notify::new());
+        let runner = SpyRunner::new(Ok("first answer"), Some(gate.clone()));
+        let sink = Arc::new(SpySink::default());
+
+        let first = {
+            let reg = reg.clone();
+            let runner = runner.clone();
+            let sink = sink.clone();
+            let control = control.clone();
+            tokio::spawn(async move {
+                run_public_sms(
+                    &reg,
+                    Some(runner as Arc<dyn HarnessRunner>),
+                    None,
+                    sample_public_context("bind-a"),
+                    "first".into(),
+                    sink.as_ref(),
+                    Some(&control),
+                )
+                .await
+            })
+        };
+        runner.entered.notified().await;
+
+        let live: Vec<_> = control
+            .list_pending_for_test()
+            .into_iter()
+            .filter(|s| s.binding_ref() == "bind-a")
+            .collect();
+        assert_eq!(live.len(), 1, "admitted turn registers exactly one scope");
+        let live = live.into_iter().next().unwrap();
+        let now = chrono::Utc::now();
+        let id = ledger
+            .request_private_read(live.clone(), "owner files", now)
+            .expect("pending private-read request");
+
+        let second = run_public_sms(
+            &reg,
+            Some(runner.clone() as Arc<dyn HarnessRunner>),
+            None,
+            sample_public_context("bind-a"),
+            "second".into(),
+            sink.as_ref(),
+            Some(&control),
+        )
+        .await;
+        assert_eq!(second, PublicRunDisposition::Refused(PUBLIC_BUSY_NOTICE));
+        assert!(
+            ledger.operator_view(&id, chrono::Utc::now()).is_some(),
+            "a busy refusal must not cancel the live turn's pending request"
+        );
+        assert!(
+            control.list_pending_for_test().iter().any(|s| s == &live),
+            "a busy refusal must not replace the live turn's scope"
+        );
+
+        gate.notify_one();
+        assert_eq!(first.await.unwrap(), PublicRunDisposition::Replied);
+        assert!(
+            control
+                .list_pending_for_test()
+                .iter()
+                .all(|s| s.binding_ref() != "bind-a"),
+            "the finished turn retires its scope"
+        );
+        assert!(
+            ledger.operator_view(&id, chrono::Utc::now()).is_none(),
+            "retiring the scope cancels its pending request"
+        );
+        assert_eq!(reg.active_count(), 0);
     }
 }

@@ -3545,6 +3545,38 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     //     shared with the `clarification.*` RPC handlers (the Panel's only way
     //     to answer — its traffic never traverses the inbound router).
     let clarification_manager = Arc::new(alephcore::clarification::ClarificationManager::new());
+    // F-step: trusted A/B scope lifecycle. One `PublicApprovalLedger` is the
+    // process-global capability-slot instance (A-step). The `OperatorControl`
+    // wraps it and exposes the JSON-RPC surface an operator-tier connection
+    // uses to grant or deny A-stage reads (registered in the block below).
+    // The inbound router (E-step) takes the same `Arc` so the scope opened at
+    // run entry matches the one the operator resolves against. Created here,
+    // outside the handler-registration block, so it is still in scope when
+    // `initialize_inbound_router` runs.
+    let public_approval_ledger =
+        Arc::new(alephcore::gateway::telecom::public_approval::PublicApprovalLedger::new());
+    // Fail closed when the ledger cannot be installed: the capability slot
+    // would then report a different ledger than the one the operator RPC and
+    // the inbound router use. Without an OperatorControl, no operator handler
+    // is registered and the router opens no A/B scope.
+    let trusted_operator_control: Option<
+        Arc<alephcore::gateway::telecom::operator_control::OperatorControl>,
+    > = if alephcore::gateway::telecom::public_approval::install_global(
+        public_approval_ledger.clone(),
+    )
+    .is_ok()
+    {
+        Some(Arc::new(
+            alephcore::gateway::telecom::operator_control::OperatorControl::new(
+                public_approval_ledger.clone(),
+            ),
+        ))
+    } else {
+        tracing::warn!(
+            "telecom public-approval ledger already installed; operator approval surface disabled"
+        );
+        None
+    };
     {
         use alephcore::approval::adapters::ChannelApprovalBridgeAdapter;
         use alephcore::exec::approval::channel_bridge::ChannelApprovalBridge;
@@ -3579,6 +3611,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             clarification_manager.clone(),
             session_store.clone(),
         );
+
+        // F-step: register the operator JSON-RPC surface over the
+        // `trusted_operator_control` created above this block, only when the
+        // ledger was actually installed.
+        if let Some(control) = trusted_operator_control.as_ref() {
+            alephcore::gateway::telecom::operator_control::register_handlers(
+                server.handlers_mut(),
+                control.clone(),
+            );
+            if !args.daemon {
+                println!("  Telecom public-approval ledger installed (A/B scope ready)");
+            }
+        }
 
         use alephcore::approval::adapters::FallbackApprovalRequester;
         use alephcore::approval::operator_requester::OperatorApprovalRequester;
@@ -3839,6 +3884,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         clarification_manager.clone(),
         agent_result.coord_task_store.clone(),
         agent_result.dispatch_signal.clone(),
+        trusted_operator_control.clone(),
         args.daemon,
     )
     .await;

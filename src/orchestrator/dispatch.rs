@@ -740,6 +740,15 @@ pub struct PublicRunRequest {
     pub history: Vec<crate::gateway::telecom::PublicHistoryTurn>,
     pub run_id: String,
     pub prompt_version: &'static str,
+    /// Trusted scope for the A-stage private-read, when one is open.
+    ///
+    /// Always `None` in production: no private source is enabled, so the
+    /// public run driver does not hand its live turn scope to the
+    /// orchestrator. When set (tests only today), `run_public_with` passes it
+    /// to the [`crate::gateway::telecom::PrivateReadDriver`] so the driver
+    /// can verify the call is inside an A window. `None` means the driver is
+    /// not called and the run proceeds as a plain public turn.
+    pub scope: Option<crate::gateway::telecom::PublicApprovalScope>,
 }
 
 #[async_trait::async_trait]

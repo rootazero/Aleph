@@ -38,6 +38,7 @@ pub mod sidebar;
 pub mod team_chat_entry;
 pub mod team_participants;
 pub mod team_task_strip;
+pub mod telecom_approval_card;
 pub mod theme_toggle;
 pub mod token_wall;
 pub mod tool_card;

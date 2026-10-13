@@ -21,6 +21,7 @@ use alephcore::gateway::interfaces::telegram::parse_telegram_channel_config;
 use alephcore::gateway::interfaces::IMessageChannel;
 use alephcore::gateway::interfaces::IMessageConfig;
 use alephcore::gateway::interfaces::TelegramChannel;
+use alephcore::gateway::telecom::operator_control::OperatorControl;
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig};
 
@@ -651,6 +652,11 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // and wakes the dispatcher to unblock the dependents.
     workflow_clarify_store: Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>>,
     dispatch_signal: Option<Arc<tokio::sync::Notify>>,
+    // Trusted A/B scope lifecycle: when set, the inbound router opens a
+    // `PublicApprovalScope` for every public SMS run and retires it on
+    // the way out. `None` keeps the path disabled (the public run still
+    // happens — just without the A/B stage attached).
+    operator_control: Option<Arc<OperatorControl>>,
     daemon: bool,
 ) {
     // Single source of truth for dm_scope: the user's [session] block.
@@ -692,6 +698,17 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         inbound_router = inbound_router.with_approval_callback_sink(sink);
         if !daemon {
             println!("  Inbound router: exec-approval callback dispatch enabled");
+        }
+    }
+
+    // Wire the trusted A/B scope lifecycle (E-step). The
+    // `InboundMessageRouter::handle_public_telecom` branch is the only
+    // place that opens a scope, so this single injection point is
+    // sufficient to light the whole path.
+    if let Some(c) = operator_control {
+        inbound_router = inbound_router.with_operator_control(c);
+        if !daemon {
+            println!("  Inbound router: trusted public-approval scope enabled");
         }
     }
 

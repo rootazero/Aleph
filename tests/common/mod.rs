@@ -200,6 +200,7 @@ impl OrchestratorFixture {
                 alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
             ),
             response_language: None,
+            private_read_driver: None,
         });
 
         let orchestrator = Orchestrator::new(

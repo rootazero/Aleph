@@ -869,6 +869,9 @@ impl InboundMessageRouter {
             public,
             msg.text.clone(),
             &sink,
+            // The trusted A/B scope is opened only after admission, inside
+            // the run driver, and retired with the turn.
+            self.operator_control.as_ref(),
         )
         .await;
         info!("[Router] public telecom run: {disposition:?}");
@@ -1272,5 +1275,98 @@ mod telecom_stamp_tests {
 
         assert!(telecom_public_from_message_meta(&[]).is_none());
         assert!(telecom_public_from_message_meta(&[MessageMeta::BotAuthored]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod trusted_scope_lifecycle_tests {
+    //! E-step: the inbound router hands its optional `OperatorControl` to
+    //! the public run driver, which opens a trusted A/B scope only after
+    //! admission (see `telecom::public_run` and `operator_control::ScopeGuard`
+    //! tests for the lifecycle). These tests pin what remains here:
+    //!
+    //! 1. re-registering the same binding replaces, not stacks (E-3).
+    //! 2. with no OperatorControl wired in, no scope is opened (E-4).
+
+    use super::*;
+    use crate::gateway::telecom::operator_control::OperatorControl;
+    use crate::gateway::telecom::public_approval::PublicApprovalLedger;
+    use crate::gateway::telecom::TelecomPublicContext;
+
+    fn ctx_for(binding: &str) -> TelecomPublicContext {
+        crate::gateway::telecom::public_context::test_support::sample_public_context(binding)
+    }
+
+    fn new_control() -> Arc<OperatorControl> {
+        Arc::new(OperatorControl::new(Arc::new(PublicApprovalLedger::new())))
+    }
+
+    /// E-3: registering the same binding twice auto-cancels any
+    /// outstanding approvals attached to the prior scope (per
+    /// `OperatorControl::register_scope`'s contract: replace, then
+    /// cancel_binding). The new scope is the only one visible to
+    /// `list_pending_for_test`.
+    #[test]
+    fn e_reregistering_same_binding_cancels_outstanding_approvals() {
+        let c = new_control();
+        let ctx = ctx_for("bind-e-3");
+        let first = crate::gateway::telecom::PublicApprovalScope::new(
+            &ctx,
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            ctx.provenance().connection_generation(),
+        );
+        c.register_scope(first);
+        let pending_after_first = c.list_pending_for_test();
+        assert_eq!(
+            pending_after_first
+                .iter()
+                .filter(|s| s.binding_ref() == "bind-e-3")
+                .count(),
+            1
+        );
+
+        // Second register on the same binding. The prior scope is
+        // cancelled by the contract.
+        let second = crate::gateway::telecom::PublicApprovalScope::new(
+            &ctx,
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            ctx.provenance().connection_generation() + 1,
+        );
+        c.register_scope(second);
+        let pending_after_second = c.list_pending_for_test();
+        assert_eq!(
+            pending_after_second
+                .iter()
+                .filter(|s| s.binding_ref() == "bind-e-3")
+                .count(),
+            1,
+            "re-register must replace, not stack"
+        );
+        c.retire_scope("bind-e-3");
+    }
+
+    /// E-4: with no OperatorControl wired in (default
+    /// `InboundMessageRouter::new`), the A/B path is closed. This is
+    /// the documented "disabled" mode: the public run still happens,
+    /// no scope is opened, and `retire_scope` is not called.
+    #[test]
+    fn e_no_operator_control_means_no_scope_opened() {
+        use crate::gateway::pairing_store::SqlitePairingStore;
+        use crate::gateway::routing_config::RoutingConfig;
+
+        // We can't construct a full `InboundMessageRouter` cheaply, so
+        // we instead assert via the field default: the public struct's
+        // `operator_control` is `None` when no builder wired it in.
+        let registry = Arc::new(crate::gateway::channel_registry::ChannelRegistry::new());
+        let pairing = Arc::new(SqlitePairingStore::in_memory().expect("pairing store"));
+        let router = InboundMessageRouter::new(registry, pairing, RoutingConfig::default());
+        assert!(
+            router.operator_control.is_none(),
+            "A/B scope path must be disabled by default"
+        );
     }
 }

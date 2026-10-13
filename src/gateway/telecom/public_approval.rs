@@ -27,23 +27,28 @@
 //!   only after B is consumed against the *current* context, so every refusal
 //!   leaves the private answer undelivered.
 //!
-//! # Integration seam (NOT wired — read this before relying on it)
+//! # Integration state (read this before relying on it)
 //!
-//! This is the policy/capability core only. Nothing yet:
+//! Wired: startup installs one ledger, registers the operator service
+//! (`super::operator_control`, `telecom.approval.*`) over it, and hands the
+//! same instance to the inbound router. The public run driver opens a live
+//! turn scope only after admission (random core/agent/turn ids, session epoch
+//! from the connection generation) and retires it compare-and-retire when the
+//! turn ends, which cancels that binding's pending records. Operators review
+//! the full body and call [`PublicApprovalLedger::decide_exact`].
+//! `ExecApprovalManager` is deliberately not reused (no deadline/scope binding).
 //!
-//! - renders [`PublicApprovalView`] on the authenticated operator control plane
-//!   or turns an operator's click into `decide(.., ApprovalSource::operator_control_plane(), ..)`
-//!   (`ExecApprovalManager` is a single-flight oneshot with no deadline or
-//!   scope binding, so it is deliberately not reused as the store);
-//! - supplies `core_id` / `agent_id` / `turn_id` / `session_epoch` from the
-//!   run (the epoch must change on rebind, revocation or session reset);
-//! - calls [`PublicApprovalLedger::request_private_read`] /
-//!   [`PublicApprovalLedger::cancel_binding`] from the public run driver, or
-//!   routes a private-draft answer through [`deliver_private_disclosure`].
+//! NOT wired (product decision: no private source is enabled yet):
+//! - no private-read driver is installed and `PublicRunRequest.scope` is
+//!   `None`, so no approved A record is ever consumed;
+//! - nothing routes a private-draft answer through
+//!   [`deliver_private_disclosure`] (the B sink has no production caller);
+//! - whether the connection generation changes on every rebind, revocation
+//!   or session reset (the `session_epoch` contract) is not yet proven.
 //!
-//! Until those exist the public run path has no private-read or private
-//! disclosure capability at all (public default: no tools/derivations/private
-//! writeback), which is the safe state.
+//! The public run path therefore has no private-read or private disclosure
+//! capability (public default: no tools/derivations/private writeback), which
+//! is the safe state.
 
 use std::collections::HashMap;
 
@@ -51,7 +56,8 @@ use chrono::{DateTime, Duration, Utc};
 use uuid::Uuid;
 
 use super::public_context::{TelecomChannel, TelecomProvenance, TelecomPublicContext};
-use crate::sync_primitives::Mutex;
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
+use crate::sync_primitives::{Arc, Mutex};
 
 /// Approval lifetime for SMS, counted from request creation.
 pub const SMS_APPROVAL_TTL_SECS: i64 = 300;
@@ -139,8 +145,7 @@ pub struct ApprovalSource(SourceKind);
 
 impl ApprovalSource {
     /// The authenticated operator control plane (integration seam).
-    /// Unused outside tests until the operator transport is wired.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The operator service uses this only after its role check.
     pub(crate) fn operator_control_plane() -> Self {
         Self(SourceKind::OperatorControlPlane)
     }
@@ -408,6 +413,22 @@ impl PublicApprovalLedger {
         Ok(id)
     }
 
+    /// Snapshot all pending, unexpired records for the authenticated control plane.
+    pub fn operator_views(&self, now: DateTime<Utc>) -> Vec<PublicApprovalView> {
+        let records = self.lock();
+        records
+            .iter()
+            .filter(|(_, r)| r.state == State::Pending && !r.expired(now))
+            .map(|(id, r)| PublicApprovalView {
+                id: id.clone(),
+                stage: r.stage,
+                channel: r.scope.channel(),
+                body: r.body.clone(),
+                expires_at: r.expires_at,
+            })
+            .collect()
+    }
+
     /// The full bounded request for operator display; `None` unless pending
     /// and unexpired.
     pub fn operator_view(&self, id: &str, now: DateTime<Utc>) -> Option<PublicApprovalView> {
@@ -447,6 +468,48 @@ impl PublicApprovalLedger {
             return Err(PublicApprovalError::AlreadyDecided);
         }
         // Deadline stays `expires_at`: approving never renews it.
+        r.state = if approve {
+            State::Approved
+        } else {
+            State::Retired
+        };
+        Ok(())
+    }
+
+    /// Decide a pending request only when the operator supplied the exact
+    /// stage and complete body shown by the control-plane review surface.
+    /// Truncated previews can therefore never approve a different payload.
+    pub fn decide_exact(
+        &self,
+        id: &str,
+        stage: PublicApprovalStage,
+        body: &str,
+        source: ApprovalSource,
+        approve: bool,
+        now: DateTime<Utc>,
+    ) -> Result<(), PublicApprovalError> {
+        // Authenticate before inspecting the record; check and transition under
+        // one lock so cancellation or a competing decision cannot race the view.
+        if !source.is_operator() {
+            return Err(PublicApprovalError::NotOperator);
+        }
+        let mut records = self.lock();
+        let r = records
+            .get_mut(id)
+            .ok_or(PublicApprovalError::UnknownRequest)?;
+        if r.expired(now) {
+            r.state = State::Retired;
+            return Err(PublicApprovalError::Expired);
+        }
+        if r.state != State::Pending {
+            return Err(PublicApprovalError::AlreadyDecided);
+        }
+        if r.stage != stage {
+            return Err(PublicApprovalError::WrongStage);
+        }
+        if r.body != body {
+            return Err(PublicApprovalError::BodyMismatch);
+        }
         r.state = if approve {
             State::Approved
         } else {
@@ -1084,6 +1147,176 @@ mod tests {
     }
 
     #[test]
+    fn exact_decision_rejects_wrong_stage_and_body_without_deciding() {
+        let l = PublicApprovalLedger::new();
+        let scope = scope_for(&sample_public_context("exact-bind"));
+        let body = "x".repeat(MAX_APPROVAL_BODY_BYTES);
+        let id = l.request_private_read(scope.clone(), &body, t0()).unwrap();
+        let expiry = l.operator_view(&id, t0()).unwrap().expires_at;
+        for approve in [true, false] {
+            assert_eq!(
+                l.decide_exact(
+                    &id,
+                    PublicApprovalStage::Disclosure,
+                    &body,
+                    op(),
+                    approve,
+                    t0()
+                ),
+                Err(PublicApprovalError::WrongStage)
+            );
+            for wrong in [&body[..256], "different body"] {
+                assert_eq!(
+                    l.decide_exact(
+                        &id,
+                        PublicApprovalStage::PrivateRead,
+                        wrong,
+                        op(),
+                        approve,
+                        t0()
+                    ),
+                    Err(PublicApprovalError::BodyMismatch)
+                );
+            }
+            assert_eq!(l.operator_view(&id, t0()).unwrap().body, body);
+        }
+        let later = t0() + Duration::seconds(299);
+        l.decide_exact(
+            &id,
+            PublicApprovalStage::PrivateRead,
+            &body,
+            op(),
+            true,
+            later,
+        )
+        .unwrap();
+        assert_eq!(l.lock().get(&id).unwrap().expires_at, expiry);
+        assert_eq!(
+            l.decide_exact(
+                &id,
+                PublicApprovalStage::PrivateRead,
+                &body,
+                op(),
+                true,
+                later
+            ),
+            Err(PublicApprovalError::AlreadyDecided)
+        );
+        assert_eq!(
+            l.consume(
+                &id,
+                PublicApprovalStage::PrivateRead,
+                op(),
+                &scope,
+                &body,
+                later
+            )
+            .unwrap()
+            .into_body(),
+            body
+        );
+    }
+
+    #[test]
+    fn exact_decision_auth_denial_expiry_and_cancel_are_fail_closed() {
+        let l = PublicApprovalLedger::new();
+        let scope = scope_for(&sample_public_context("exact-bind"));
+        let id = l.request_private_read(scope.clone(), CANARY, t0()).unwrap();
+        // No unauthenticated body/stage oracle, even for unknown IDs.
+        for candidate in [&id[..], "unknown"] {
+            assert_eq!(
+                l.decide_exact(
+                    candidate,
+                    PublicApprovalStage::Disclosure,
+                    "wrong",
+                    ApprovalSource::unauthenticated(),
+                    true,
+                    t0()
+                ),
+                Err(PublicApprovalError::NotOperator)
+            );
+        }
+        assert!(l.operator_view(&id, t0()).is_some());
+        l.decide_exact(
+            &id,
+            PublicApprovalStage::PrivateRead,
+            CANARY,
+            op(),
+            false,
+            t0(),
+        )
+        .unwrap();
+        assert_eq!(
+            l.consume(
+                &id,
+                PublicApprovalStage::PrivateRead,
+                op(),
+                &scope,
+                CANARY,
+                t0()
+            )
+            .unwrap_err(),
+            PublicApprovalError::Retired
+        );
+        let expired = l.request_private_read(scope.clone(), CANARY, t0()).unwrap();
+        assert_eq!(
+            l.decide_exact(
+                &expired,
+                PublicApprovalStage::PrivateRead,
+                CANARY,
+                op(),
+                true,
+                t0() + Duration::seconds(SMS_APPROVAL_TTL_SECS)
+            ),
+            Err(PublicApprovalError::Expired)
+        );
+        let cancelled = l.request_private_read(scope, CANARY, t0()).unwrap();
+        l.cancel_binding("exact-bind");
+        assert_eq!(
+            l.decide_exact(
+                &cancelled,
+                PublicApprovalStage::PrivateRead,
+                CANARY,
+                op(),
+                true,
+                t0()
+            ),
+            Err(PublicApprovalError::AlreadyDecided)
+        );
+    }
+
+    #[test]
+    fn exact_disclosure_decision_still_requires_consumed_read_and_exact_body() {
+        let (l, _ctx, scope, read) = with_consumed_read();
+        let id = l
+            .request_disclosure(&read, scope.clone(), CANARY, t0())
+            .unwrap();
+        assert_eq!(
+            l.decide_exact(
+                &id,
+                PublicApprovalStage::PrivateRead,
+                CANARY,
+                op(),
+                true,
+                t0()
+            ),
+            Err(PublicApprovalError::WrongStage)
+        );
+        l.decide_exact(
+            &id,
+            PublicApprovalStage::Disclosure,
+            CANARY,
+            op(),
+            true,
+            t0(),
+        )
+        .unwrap();
+        let sink = SpySink::default();
+        deliver_private_disclosure(&l, &id, op(), &scope, CANARY, t0(), &sink).unwrap();
+        assert_eq!(sink.0.borrow().as_slice(), [CANARY]);
+    }
+
+    #[test]
     fn unknown_ids_refuse() {
         let l = PublicApprovalLedger::new();
         let ctx = sample_public_context("bind-1");
@@ -1096,4 +1329,81 @@ mod tests {
             Err(PublicApprovalError::UnknownRequest)
         );
     }
+}
+
+// ============================================================================
+// Process-global slot (Task #14, A-step). The ledger is the registry shared
+// between the public run driver and the operator control plane; the slot makes
+// its install-or-decline observable to `core/capability-wiring` like every
+// other subsystem, so a startup that skipped wiring it shows up as a
+// `declined` reason instead of a silent no-op. The value is reached through
+// `installed()`; the slot itself is reachable only through `installed_slot()`
+// for the roster.
+// ============================================================================
+
+static INSTALLED: CapabilitySlot<Arc<PublicApprovalLedger>> = CapabilitySlot::new(
+    "gateway/telecom/public_approval",
+    MissingSemantics::ConsumerDecides,
+);
+
+/// Install the process-wide ledger. Returns the ledger back if a different
+/// instance is already installed (first-writer-wins; the test asserts that a
+/// double install is a hard error rather than a silent overwrite).
+pub fn install_global(ledger: Arc<PublicApprovalLedger>) -> Result<(), Arc<PublicApprovalLedger>> {
+    if INSTALLED.install(ledger.clone()) {
+        Ok(())
+    } else {
+        Err(ledger)
+    }
+}
+
+/// Record that startup reached this slot but deliberately did not install it.
+/// Static reason because it surfaces in operator diagnostics.
+pub fn decline_global(because: &'static str) {
+    INSTALLED.decline(because);
+}
+
+/// The installed ledger, if any. None means "the public run driver must not
+/// attempt A/B flow".
+pub fn installed() -> Option<&'static Arc<PublicApprovalLedger>> {
+    INSTALLED.get()
+}
+
+/// Capability census accessor; the ledger value itself is not exposed here.
+pub(crate) const fn installed_slot() -> &'static dyn SlotStatus {
+    &INSTALLED
+}
+
+#[cfg(test)]
+mod installed_slot_tests {
+    use super::*;
+
+    /// Per-test handle into the static's `Option<&T>` is the only way to
+    /// observe a value the test owns; the static is shared with other tests in
+    /// the binary, so each test only asserts the round-trip it can prove
+    /// without racy ordering assumptions.
+    #[test]
+    fn installed_slot_default_is_consumer_decides_with_no_value() {
+        // Use the slot's static ID and missing semantics, not its value, to
+        // assert the contract; the value may be installed by parallel tests.
+        assert!(matches!(
+            INSTALLED.missing(),
+            MissingSemantics::ConsumerDecides
+        ));
+        let slot: &dyn SlotStatus = &INSTALLED;
+        assert_eq!(slot.id(), "gateway/telecom/public_approval");
+    }
+
+    #[test]
+    fn installed_slot_accessor_is_static() {
+        // The accessor is a `const fn` returning `&'static dyn SlotStatus`,
+        // which is what `ALL_SLOTS` and the census consume; pin the signature.
+        let slot: &'static dyn SlotStatus = installed_slot();
+        assert_eq!(slot.id(), "gateway/telecom/public_approval");
+    }
+
+    // Install/decline round-trips are deliberately not tested here: the slot
+    // is a process-wide static shared with every other test in the binary
+    // (including the capability census), so writing it from a unit test would
+    // pollute global state. Only read-only id/missing semantics are pinned.
 }

@@ -68,18 +68,34 @@ impl AgentHarnessRunner {
         // explicit `Principal::TelecomPublic` — not the ambient owner.
         let llm =
             crate::providers::metering::metered_public_provider(self.default_provider.current());
-        run_public_with(llm, request, cancel, events).await
+        run_public_with(
+            llm,
+            request,
+            cancel,
+            events,
+            self.private_read_driver.as_ref(),
+        )
+        .await
     }
 }
 
 /// Drive one isolated public run against `llm`. Free function so tests can
 /// inject a spy provider without constructing a full runner.
+///
+/// `private_read` is the A-stage driver. It is called exactly once when
+/// both the request carries a [`PublicApprovalScope`] and a driver is
+/// installed on the runner. Production wires neither (the driver is `None`
+/// and `PublicRunRequest.scope` is `None`). A `Transient` result fails
+/// closed: the operator disclosure (B) path that would have to approve any
+/// reply derived from it is not wired, so the body is dropped, the LLM is
+/// not called, and the run ends with a static error.
 pub(crate) async fn run_public_with(
     llm: Arc<dyn AiProvider>,
     request: PublicRunRequest,
     cancel: CancellationToken,
     // Buffered reply: no partial text is streamed to any sink.
     _events: broadcast::Sender<FlowStreamEvent>,
+    private_read: Option<&Arc<dyn crate::gateway::telecom::PrivateReadDriver>>,
 ) -> Result<FlowOutcome, FlowError> {
     if request.prompt_version != PUBLIC_PROMPT_VERSION {
         return Err(FlowError::InvalidConfig(format!(
@@ -93,6 +109,55 @@ pub(crate) async fn run_public_with(
 
     let started = std::time::Instant::now();
     let provider_name = llm.name().to_string();
+
+    // A-stage private read. Fires only when both a scope and a driver are
+    // supplied; production supplies neither. The driver is responsible for
+    // the own-A-window check; we just hand it the scope and let it decide.
+    if let (Some(scope), Some(driver)) = (request.scope.as_ref(), private_read) {
+        let scope_label = scope.binding_ref().to_string();
+        match driver.read(scope, &request.text, &cancel).await {
+            Ok(crate::gateway::telecom::PrivateReadResult::Transient(_body)) => {
+                // Fail closed: a reply built from a private body must pass
+                // the operator disclosure (B) path before it can reach SMS
+                // or history, and that path is not wired. Drop the body
+                // here, never call the LLM, and keep the error text static
+                // so no private content can leak through it.
+                tracing::warn!(
+                    target: "aleph.public.private_read",
+                    binding = %scope_label,
+                    "private-read returned a body but disclosure is not wired; failing closed"
+                );
+                return Err(FlowError::InvalidConfig(
+                    "private-read result requires the operator disclosure path, which is not wired"
+                        .into(),
+                ));
+            }
+            Ok(crate::gateway::telecom::PrivateReadResult::Unavailable) => {}
+            Err(crate::gateway::telecom::PrivateReadError::Denied) => {
+                tracing::info!(
+                    target: "aleph.public.private_read",
+                    binding = %scope_label,
+                    "private-read denied; running public turn as-is"
+                );
+            }
+            Err(crate::gateway::telecom::PrivateReadError::Cancelled) => {
+                tracing::info!(
+                    target: "aleph.public.private_read",
+                    binding = %scope_label,
+                    "private-read cancelled; aborting run"
+                );
+                return Err(FlowError::Cancelled);
+            }
+            Err(crate::gateway::telecom::PrivateReadError::Failed) => {
+                tracing::warn!(
+                    target: "aleph.public.private_read",
+                    binding = %scope_label,
+                    "private-read failed; running public turn as-is"
+                );
+            }
+        }
+    }
+
     let (session, sid, current_turn) =
         ephemeral_session(&request.run_id, &request.history, &request.text).await?;
 
@@ -294,6 +359,7 @@ mod tests {
             history: Vec::new(),
             run_id: "run-1".into(),
             prompt_version: PUBLIC_PROMPT_VERSION,
+            scope: None,
         }
     }
 
@@ -371,6 +437,7 @@ mod tests {
             request("what time is it"),
             CancellationToken::new(),
             tx,
+            None,
         )
         .await
         .expect("public run ok");
@@ -579,6 +646,7 @@ mod tests {
             request(FIRST_USER_CANARY),
             CancellationToken::new(),
             tx.clone(),
+            None,
         )
         .await
         .expect("first public run");
@@ -601,6 +669,7 @@ mod tests {
             request("second question without history"),
             CancellationToken::new(),
             tx.clone(),
+            None,
         )
         .await
         .expect("second public run");
@@ -677,7 +746,7 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
         let (tx, _rx) = broadcast::channel(4);
-        let err = run_public_with(llm, request("hi"), cancel, tx)
+        let err = run_public_with(llm, request("hi"), cancel, tx, None)
             .await
             .unwrap_err();
         assert!(matches!(err, FlowError::Cancelled));
@@ -690,7 +759,7 @@ mod tests {
         let mut req = request("hi");
         req.prompt_version = "other";
         let (tx, _rx) = broadcast::channel(4);
-        let err = run_public_with(llm, req, CancellationToken::new(), tx)
+        let err = run_public_with(llm, req, CancellationToken::new(), tx, None)
             .await
             .unwrap_err();
         assert!(matches!(err, FlowError::InvalidConfig(_)));
@@ -700,9 +769,15 @@ mod tests {
     async fn slash_text_is_plain_caller_text() {
         let (llm, captured) = spy("ok");
         let (tx, _rx) = broadcast::channel(4);
-        run_public_with(llm, request("/model opus"), CancellationToken::new(), tx)
-            .await
-            .expect("plain text run");
+        run_public_with(
+            llm,
+            request("/model opus"),
+            CancellationToken::new(),
+            tx,
+            None,
+        )
+        .await
+        .expect("plain text run");
         let c = captured.lock().unwrap();
         assert!(c.messages.iter().all(|m| m.contains("/model opus")));
         assert!(c
@@ -726,7 +801,7 @@ mod tests {
             },
         ];
         let (tx, _rx) = broadcast::channel(4);
-        let out = run_public_with(llm, req, CancellationToken::new(), tx)
+        let out = run_public_with(llm, req, CancellationToken::new(), tx, None)
             .await
             .expect("public run ok");
         assert_eq!(out.final_text, "fresh reply");
@@ -750,9 +825,120 @@ mod tests {
             assistant: "STALE-HISTORY-REPLY".into(),
         }];
         let (tx, _rx) = broadcast::channel(4);
-        let err = run_public_with(llm, req, CancellationToken::new(), tx)
+        let err = run_public_with(llm, req, CancellationToken::new(), tx, None)
             .await
             .unwrap_err();
         assert!(matches!(err, FlowError::Internal(m) if !m.contains("STALE")));
+    }
+
+    // -- D-step: private-read driver outcomes. A private body never reaches
+    //    the LLM, the reply, or the public history (fail-closed). --
+
+    use crate::gateway::telecom::private_read::{
+        PrivateReadDriver, PrivateReadError, PrivateReadResult,
+    };
+    use crate::gateway::telecom::public_approval::PublicApprovalScope;
+
+    struct ScriptedDriver {
+        body: Option<Result<PrivateReadResult, PrivateReadError>>,
+    }
+
+    #[async_trait::async_trait]
+    impl PrivateReadDriver for ScriptedDriver {
+        async fn read(
+            &self,
+            _scope: &PublicApprovalScope,
+            _query: &str,
+            _cancel: &CancellationToken,
+        ) -> Result<PrivateReadResult, PrivateReadError> {
+            match &self.body {
+                Some(Ok(v)) => Ok(v.clone()),
+                Some(Err(e)) => Err(match e {
+                    PrivateReadError::Denied => PrivateReadError::Denied,
+                    PrivateReadError::Cancelled => PrivateReadError::Cancelled,
+                    PrivateReadError::Failed => PrivateReadError::Failed,
+                }),
+                None => Ok(PrivateReadResult::Unavailable),
+            }
+        }
+    }
+
+    fn scripted_scope(bind: &str) -> PublicApprovalScope {
+        let core = uuid::Uuid::new_v4().to_string();
+        let agent = uuid::Uuid::new_v4().to_string();
+        let turn = uuid::Uuid::new_v4().to_string();
+        let ctx =
+            crate::gateway::telecom::public_context::test_support::sample_public_context(bind);
+        PublicApprovalScope::new(&ctx, core, agent, turn, 0)
+    }
+
+    fn request_with_scope(text: &str, scope: Option<PublicApprovalScope>) -> PublicRunRequest {
+        let mut r = request(text);
+        r.scope = scope;
+        r
+    }
+
+    /// D-1: a Transient private result fails closed. The disclosure (B)
+    /// path is not wired, so the run returns a static error, the LLM is
+    /// never called, and the error text carries no private body.
+    #[tokio::test]
+    async fn d_private_transient_fails_closed_without_calling_llm() {
+        const PRIVATE_CANARY: &str = "OWNER-PRIVATE-BODY-77c2";
+        let (llm, captured) = spy("must-not-appear");
+        let (tx, _rx) = broadcast::channel(4);
+        let driver: Arc<dyn PrivateReadDriver> = Arc::new(ScriptedDriver {
+            body: Some(Ok(PrivateReadResult::Transient(PRIVATE_CANARY.into()))),
+        });
+        let err = run_public_with(
+            llm,
+            request_with_scope("caller's public question", Some(scripted_scope("bind-d-1"))),
+            CancellationToken::new(),
+            tx,
+            Some(&driver),
+        )
+        .await
+        .unwrap_err();
+        match &err {
+            FlowError::InvalidConfig(m) => {
+                assert_eq!(
+                    m,
+                    "private-read result requires the operator disclosure path, which is not wired"
+                );
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+        assert!(!err.to_string().contains(PRIVATE_CANARY));
+        assert!(!format!("{err:?}").contains(PRIVATE_CANARY));
+        let c = captured.lock().unwrap();
+        assert!(
+            c.system.is_empty() && c.messages.is_empty(),
+            "LLM must not be called when a private body cannot be disclosed"
+        );
+    }
+
+    /// D-2: when the driver reports Cancelled, the run aborts with
+    /// FlowError::Cancelled — the caller's request is treated as if
+    /// the run were cancelled upstream. The LLM is NOT called.
+    #[tokio::test]
+    async fn d_private_read_cancelled_aborts_run_without_calling_llm() {
+        let (llm, captured) = spy("must-not-appear");
+        let (tx, _rx) = broadcast::channel(4);
+        let driver: Arc<dyn PrivateReadDriver> = Arc::new(ScriptedDriver {
+            body: Some(Err(PrivateReadError::Cancelled)),
+        });
+        let err = run_public_with(
+            llm,
+            request_with_scope("hi", Some(scripted_scope("bind-d-2"))),
+            CancellationToken::new(),
+            tx,
+            Some(&driver),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, FlowError::Cancelled));
+        assert!(
+            captured.lock().unwrap().system.is_empty(),
+            "LLM must not be called when private-read is cancelled"
+        );
     }
 }

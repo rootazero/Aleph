@@ -1215,6 +1215,7 @@ fn runner_with_default_provider(
             crate::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
         ),
         response_language: None,
+        private_read_driver: None,
     }
 }
 

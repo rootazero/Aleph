@@ -37,6 +37,7 @@ use super::pair_loop_guard::{PairLoopFacts, PairLoopGuard, PairLoopGuardConfig};
 use super::pairing_store::PairingStore;
 use super::routing_config::RoutingConfig;
 use crate::command::CommandParser;
+use crate::gateway::telecom::operator_control::OperatorControl;
 use crate::gateway::telecom::SmsInboundMeta;
 use crate::group_chat::GroupChatExecutor;
 use crate::routing::config::{RouteBinding, SessionConfig};
@@ -142,6 +143,12 @@ pub struct InboundMessageRouter {
     /// Wakes the team dispatcher after a clarify reply completes its task, so the
     /// now-unblocked dependents are picked up without waiting for the next tick.
     pub(super) dispatch_signal: Option<Arc<tokio::sync::Notify>>,
+    /// Trusted A/B scope lifecycle: a public turn opens a
+    /// [`PublicApprovalScope`] under this binding and retires it when the
+    /// run finishes, regardless of disposition. `None` → A/B path disabled
+    /// (the public run still happens, but the A/B scope ledger is not
+    /// consulted and the B-stage disclosure path is closed).
+    pub(super) operator_control: Option<Arc<OperatorControl>>,
 }
 
 impl InboundMessageRouter {
@@ -181,6 +188,7 @@ impl InboundMessageRouter {
             clarification_manager: None,
             workflow_clarify_store: None,
             dispatch_signal: None,
+            operator_control: None,
         }
     }
 
@@ -317,6 +325,19 @@ impl InboundMessageRouter {
         sink: Arc<dyn approval_callback::ApprovalCallbackSink>,
     ) -> Self {
         self.approval_callback_sink = Some(sink);
+        self
+    }
+
+    /// Wire the trusted A/B scope lifecycle. While the inbound router is
+    /// the only place that opens a [`PublicApprovalScope`] for an
+    /// incoming public SMS, this single hook lets the binary inject
+    /// the same `OperatorControl` used by the JSON-RPC handlers
+    /// (registered through
+    /// [`crate::gateway::telecom::operator_control::register_handlers`]).
+    /// `None` keeps the A/B path disabled and the public run still
+    /// completes normally.
+    pub fn with_operator_control(mut self, control: Arc<OperatorControl>) -> Self {
+        self.operator_control = Some(control);
         self
     }
 

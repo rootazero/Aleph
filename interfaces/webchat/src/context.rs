@@ -1,4 +1,5 @@
 use crate::api::ExecApprovalApi;
+use crate::api::TelecomApprovalApi;
 use crate::components::sidebar::SystemAlert;
 use crate::state::notifications::{PendingApprovalView, PendingAskView};
 use futures::channel::{mpsc, oneshot};
@@ -543,6 +544,13 @@ pub struct DashboardState {
     /// (see `setup_approval_subscriptions`).
     pub pending_approvals: RwSignal<Vec<PendingApprovalView>>,
 
+    /// Pending telecom A/B approvals (`telecom.approval.pending`), rendered as
+    /// `TelecomApprovalCard`s next to the exec approvals. Operator-only on the
+    /// server; any fetch failure (e.g. `AUTH_REQUIRED` for a non-operator)
+    /// collapses to an empty list rather than an error surface.
+    pub pending_telecom_approvals:
+        RwSignal<Vec<crate::state::telecom_approvals::TelecomApprovalView>>,
+
     /// Approval subscription ID for cleanup.
     approval_subscription_id: StoredValue<Option<usize>>,
 
@@ -809,6 +817,7 @@ impl DashboardState {
             alerts: RwSignal::new(HashMap::new()),
             alert_subscription_id: StoredValue::new(None),
             pending_approvals: RwSignal::new(Vec::new()),
+            pending_telecom_approvals: RwSignal::new(Vec::new()),
             approval_subscription_id: StoredValue::new(None),
             pending_clarifications: RwSignal::new(Vec::new()),
             needs_token: RwSignal::new(false),
@@ -1760,6 +1769,16 @@ impl DashboardState {
         Ok(())
     }
 
+    /// Refetch pending telecom approvals. Failures are silent and yield an
+    /// empty list: non-operators get `AUTH_REQUIRED` here by design, which is
+    /// not an error worth surfacing.
+    pub async fn refresh_telecom_approvals(&self) {
+        let list = TelecomApprovalApi::list_pending(self)
+            .await
+            .unwrap_or_default();
+        self.pending_telecom_approvals.set(list);
+    }
+
     /// Subscribe to `approval.**` events so the `NotificationCenter` can render
     /// inline operator approval cards. The `ApprovalRequested` event is sparse
     /// (ids only), so `exec.approvals.pending` is the source of truth: any
@@ -1772,6 +1791,7 @@ impl DashboardState {
         if let Ok(list) = ExecApprovalApi::list_pending(self).await {
             self.pending_approvals.set(list);
         }
+        self.refresh_telecom_approvals().await;
 
         let state = *self;
         let subscription_id =
@@ -1785,6 +1805,7 @@ impl DashboardState {
                         if let Ok(list) = ExecApprovalApi::list_pending(&state).await {
                             state.pending_approvals.set(list);
                         }
+                        state.refresh_telecom_approvals().await;
                     });
                 }
                 _ => {}

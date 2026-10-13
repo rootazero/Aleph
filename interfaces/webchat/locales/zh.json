@@ -185,7 +185,19 @@
     "approval_allow_always_hint": "永久允许这一次调用，直到你在「设置 → 策略」里撤销。",
     "approval_deny": "拒绝",
     "approval_deny_with_reason": "拒绝并说明理由…",
-    "approval_deny_reason_placeholder": "告诉模型应该怎么做"
+    "approval_deny_reason_placeholder": "告诉模型应该怎么做",
+    "telecom_header": "电话/短信审批",
+    "telecom_stage_private_read": "A · 私有读取",
+    "telecom_stage_disclosure": "B · 最终披露",
+    "telecom_channel_sms": "短信",
+    "telecom_channel_voice": "电话",
+    "telecom_preview_truncated": "（预览已截断）",
+    "telecom_review": "审阅完整内容",
+    "telecom_reviewing": "正在加载完整内容…",
+    "telecom_review_required": "请先审阅完整内容，再批准或拒绝。",
+    "telecom_approve": "批准",
+    "telecom_deny": "拒绝",
+    "telecom_expired": "已过期"
   },
   "dashboard": {
     "title": "系统概览",

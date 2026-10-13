@@ -192,6 +192,14 @@ pub enum PublicHistoryError {
     Capacity,
     #[error("public history is corrupt, undecryptable or does not match its row")]
     Corrupt,
+    /// A caller asked the encrypted public history to absorb a private
+    /// result. The store refuses by design: a decrypted owner body must
+    /// never land in a store that is keyed to a public principal and that
+    /// would otherwise be read by a later, unprivileged public run. The
+    /// orchestrator's job is to keep the transient body in the ephemeral
+    /// session; this arm is the wall behind that contract.
+    #[error("private result is not permitted to land in the public history")]
+    PrivateResultRefused,
     #[error(transparent)]
     Crypto(#[from] SecretError),
     #[error(transparent)]
@@ -308,12 +316,23 @@ impl PublicHistoryStore {
     }
 
     /// Store one completed turn finishing at `now`.
+    ///
+    /// `private_result` is a one-way refusal gate, not a flag the store
+    /// stores: when `true`, the call returns
+    /// [`PublicHistoryError::PrivateResultRefused`] *before* any disk
+    /// work, so a private body can never enter the encrypted public
+    /// history. A normal public run passes `false`; the orchestrator
+    /// passes `true` only when the body's source is a private read.
     pub fn append(
         &self,
         session: &PublicHistorySession,
         turn: &PublicHistoryTurn,
         now: DateTime<Utc>,
+        private_result: bool,
     ) -> Result<PublicHistoryAppend, PublicHistoryError> {
+        if private_result {
+            return Err(PublicHistoryError::PrivateResultRefused);
+        }
         if self.config.ttl.is_zero() {
             return Ok(PublicHistoryAppend::Disabled);
         }
@@ -629,12 +648,13 @@ mod tests {
     fn round_trips_in_order_through_api_only() {
         let s = store(PublicHistoryConfig::default());
         let a = session("bind-a");
-        s.append(&a, &turn("q1 lilac-heron-91", "a1"), t0())
+        s.append(&a, &turn("q1 lilac-heron-91", "a1"), t0(), false)
             .unwrap();
         s.append(
             &a,
             &turn("q2", "a2 amber-quokka-17"),
             t0() + Duration::seconds(5),
+            false,
         )
         .unwrap();
         let got = s.load(&a, t0() + Duration::seconds(10)).unwrap();
@@ -659,7 +679,7 @@ mod tests {
         .unwrap();
         let a = session("binding-raw-ref-zzz");
         let (u, r) = ("caller-canary-violet-otter-42", "reply-canary-teal-lynx-77");
-        s.append(&a, &turn(u, r), t0()).unwrap();
+        s.append(&a, &turn(u, r), t0(), false).unwrap();
         drop(s);
         let bytes = std::fs::read(&path).unwrap();
         for needle in [u, r, "binding-raw-ref-zzz", "test-region", "+15550000001"] {
@@ -682,8 +702,8 @@ mod tests {
     fn ttl_expires_each_turn_independently_and_physically_deletes() {
         let s = store(PublicHistoryConfig::default());
         let a = session("bind-a");
-        s.append(&a, &turn("old", "old"), t0()).unwrap();
-        s.append(&a, &turn("new", "new"), t0() + Duration::hours(10))
+        s.append(&a, &turn("old", "old"), t0(), false).unwrap();
+        s.append(&a, &turn("new", "new"), t0() + Duration::hours(10), false)
             .unwrap();
         // Exact expiry boundary of the first turn: gone; second still there.
         let at = t0() + PUBLIC_HISTORY_MAX_TTL;
@@ -700,7 +720,7 @@ mod tests {
         let s = store(cfg);
         let a = session("bind-a");
         assert_eq!(
-            s.append(&a, &turn("q", "a"), t0()).unwrap(),
+            s.append(&a, &turn("q", "a"), t0(), false).unwrap(),
             PublicHistoryAppend::Disabled
         );
         assert_eq!(count(&s), 0);
@@ -735,6 +755,7 @@ mod tests {
                 &a,
                 &turn(&format!("u{i}"), &format!("r{i}")),
                 t0() + Duration::seconds(i),
+                false,
             )
             .unwrap();
         }
@@ -754,6 +775,7 @@ mod tests {
                 &a,
                 &turn(&half, &format!("{i}")),
                 t0() + Duration::seconds(i),
+                false,
             )
             .unwrap();
         }
@@ -768,7 +790,7 @@ mod tests {
         // and does not disturb stored history.
         let huge = "y".repeat(PUBLIC_HISTORY_MAX_SESSION_BYTES);
         assert!(matches!(
-            s.append(&a, &turn(&huge, "z"), t0() + Duration::seconds(11)),
+            s.append(&a, &turn(&huge, "z"), t0() + Duration::seconds(11), false),
             Err(PublicHistoryError::TurnTooLarge)
         ));
         assert_eq!(s.load(&a, t0() + Duration::seconds(12)).unwrap().len(), 3);
@@ -778,7 +800,9 @@ mod tests {
     fn total_cap_refuses_without_evicting_anything() {
         // Tiny global cap: one small turn fits, a second session's does not.
         let probe = store(PublicHistoryConfig::default());
-        probe.append(&session("p"), &turn("u", "r"), t0()).unwrap();
+        probe
+            .append(&session("p"), &turn("u", "r"), t0(), false)
+            .unwrap();
         let one: i64 = probe
             .guard()
             .query_row(
@@ -791,9 +815,9 @@ mod tests {
         let s =
             store(PublicHistoryConfig::with_limits(Duration::hours(1), 32, 65536, cap).unwrap());
         let (a, b) = (session("bind-a"), session("bind-b"));
-        s.append(&a, &turn("u", "r"), t0()).unwrap();
+        s.append(&a, &turn("u", "r"), t0(), false).unwrap();
         assert!(matches!(
-            s.append(&b, &turn("u", "r"), t0()),
+            s.append(&b, &turn("u", "r"), t0(), false),
             Err(PublicHistoryError::Capacity)
         ));
         assert_eq!(s.load(&a, t0()).unwrap(), vec![turn("u", "r")]);
@@ -802,19 +826,20 @@ mod tests {
         // (the planned eviction is rolled back).
         let cfg = PublicHistoryConfig::with_limits(Duration::hours(1), 1, 65536, cap).unwrap();
         let s2 = store(cfg);
-        s2.append(&a, &turn("u", "r"), t0()).unwrap();
+        s2.append(&a, &turn("u", "r"), t0(), false).unwrap();
         assert!(matches!(
             s2.append(
                 &a,
                 &turn("uuuuuuuuuuuuuuuuuuuuuuuu", "rrrrrrrrrrrrrrrr"),
-                t0()
+                t0(),
+                false
             ),
             Err(PublicHistoryError::Capacity)
         ));
         assert_eq!(s2.load(&a, t0()).unwrap(), vec![turn("u", "r")]);
         // Expired rows free capacity first.
         assert!(s
-            .append(&b, &turn("u", "r"), t0() + Duration::hours(2))
+            .append(&b, &turn("u", "r"), t0() + Duration::hours(2), false)
             .is_ok());
     }
 
@@ -826,7 +851,7 @@ mod tests {
         let other_binding_same_caller = session_for_peer("bind-b", "+15550000001");
         let voice_alias_same_caller = voice_session_for_same_caller("bind-a", "+15550000001");
 
-        s.append(&a, &turn("only-a", "a"), t0()).unwrap();
+        s.append(&a, &turn("only-a", "a"), t0(), false).unwrap();
         assert!(s.load(&same_binding_other_caller, t0()).unwrap().is_empty());
         assert!(s.load(&other_binding_same_caller, t0()).unwrap().is_empty());
         assert_eq!(s.load(&voice_alias_same_caller, t0()).unwrap().len(), 1);
@@ -848,7 +873,7 @@ mod tests {
         let original = vec![turn("secret-q-umber-newt-03", "secret-a"), turn("q2", "a2")];
         let s = open(KEY);
         for (i, turn) in original.iter().enumerate() {
-            s.append(&a, turn, t0() + Duration::seconds(i as i64))
+            s.append(&a, turn, t0() + Duration::seconds(i as i64), false)
                 .unwrap();
         }
         let before = encrypted_rows(&s);
@@ -879,9 +904,9 @@ mod tests {
     fn corrupt_row_repeated_reads_retain_ciphertext_without_partial_turns() {
         let s = store(PublicHistoryConfig::default());
         let a = session("bind-a");
-        s.append(&a, &turn("readable-first", "complete-reply"), t0())
+        s.append(&a, &turn("readable-first", "complete-reply"), t0(), false)
             .unwrap();
-        s.append(&a, &turn("corrupt-second", "reply"), t0())
+        s.append(&a, &turn("corrupt-second", "reply"), t0(), false)
             .unwrap();
         // Corrupt the second row so an earlier readable turn cannot leak as
         // a partial result. Keep the corrupt row for explicit operator repair.
@@ -907,7 +932,7 @@ mod tests {
     fn plaintext_payload_is_refused_without_fallback_or_deletion() {
         let s = store(PublicHistoryConfig::default());
         let a = session("bind-a");
-        s.append(&a, &turn("q", "a"), t0()).unwrap();
+        s.append(&a, &turn("q", "a"), t0(), false).unwrap();
         // A well-formed plaintext payload is not an encrypted row, even if
         // its session and timestamps agree with the database metadata.
         let plaintext = serde_json::to_vec(&Payload {
@@ -940,9 +965,11 @@ mod tests {
     fn wrong_key_failure_still_prunes_expired_rows_only() {
         let s = store(PublicHistoryConfig::default());
         let a = session("bind-a");
-        s.append(&a, &turn("expired", "old-reply"), t0()).unwrap();
+        s.append(&a, &turn("expired", "old-reply"), t0(), false)
+            .unwrap();
         let retained = turn("unexpired", "new-reply");
-        s.append(&a, &retained, t0() + Duration::hours(1)).unwrap();
+        s.append(&a, &retained, t0() + Duration::hours(1), false)
+            .unwrap();
         let before = encrypted_rows(&s);
         assert_eq!(before.len(), 2);
         // Reuse the same database with a mistaken key; expired-row pruning
@@ -981,7 +1008,7 @@ mod tests {
     fn ciphertext_moved_across_session_or_metadata_is_refused() {
         let s = store(PublicHistoryConfig::default());
         let (a, b) = (session("bind-a"), session("bind-b"));
-        s.append(&a, &turn("a-private", "a"), t0()).unwrap();
+        s.append(&a, &turn("a-private", "a"), t0(), false).unwrap();
         // Re-label a's row as b's: AEAD payload still names a.
         s.guard()
             .execute(
@@ -1003,7 +1030,7 @@ mod tests {
             "UPDATE telecom_public_history SET expires_at = expires_at + 3600000",
         ] {
             let s = store(PublicHistoryConfig::default());
-            s.append(&a, &turn("q", "a"), t0()).unwrap();
+            s.append(&a, &turn("q", "a"), t0(), false).unwrap();
             s.guard().execute(sql, []).unwrap();
             let before = encrypted_rows(&s);
             for _ in 0..2 {
@@ -1025,5 +1052,60 @@ mod tests {
         ));
         let t = turn("canary-user-text", "canary-reply-text");
         assert!(!format!("{t:?}").contains("canary"));
+    }
+
+    // -----------------------------------------------------------------
+    // Task #14 B-step: the encrypted public history must refuse any
+    // private result (A-stage or otherwise). A private body, even one
+    // the orchestrator produced by mistake, must never be appended: a
+    // later public run on the same binding would otherwise be able to
+    // read it back as a "completed public turn". The wall behind this
+    // contract is `private_result: bool` on `append`.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn private_result_append_is_refused_before_any_disk_work() {
+        let s = store(PublicHistoryConfig::default());
+        let a = session("priv-refuse");
+        // Pre-condition: store is empty, capacity is the full default.
+        assert_eq!(encrypted_rows(&s).len(), 0);
+        // Action: a `private_result=true` append is refused with the
+        // dedicated error variant, not with a generic capacity / corrupt.
+        let turn = PublicHistoryTurn {
+            user: "caller-text".into(),
+            assistant: "owner-private-text".into(),
+        };
+        let r = s.append(&a, &turn, t0(), true);
+        assert!(matches!(r, Err(PublicHistoryError::PrivateResultRefused)));
+    }
+
+    #[test]
+    fn private_result_refusal_does_not_consume_capacity() {
+        let s = store(PublicHistoryConfig::default());
+        let a = session("priv-no-cost");
+        // First a normal public turn to make the row count and bytes
+        // observable; the store is otherwise empty so a refusal can
+        // hide its no-op behind zero usage.
+        s.append(&a, &turn("u1", "a1"), t0(), false).unwrap();
+        let before_rows = encrypted_rows(&s).len();
+        // Now an attempted private append; must NOT add a row and must
+        // NOT charge any bytes against the global cap.
+        let r = s.append(
+            &a,
+            &turn("owner-private-very-long", &"x".repeat(4096)),
+            t0() + Duration::seconds(1),
+            true,
+        );
+        assert!(matches!(r, Err(PublicHistoryError::PrivateResultRefused)));
+        assert_eq!(
+            encrypted_rows(&s).len(),
+            before_rows,
+            "row count must not change"
+        );
+        // A subsequent normal public append still works — the store is
+        // not in a poisoned state after a refused private append.
+        s.append(&a, &turn("u2", "a2"), t0() + Duration::seconds(2), false)
+            .unwrap();
+        assert_eq!(s.load(&a, t0() + Duration::seconds(3)).unwrap().len(), 2);
     }
 }
