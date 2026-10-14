@@ -1,0 +1,70 @@
+   Compiling aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
+   Compiling aleph-desktop v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\shared)
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+   Compiling aleph-client v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\client)
+   Compiling aleph-desktop-windows v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\windows)
+   Compiling shared-ui-logic v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\ui_logic)
+warning: unused import: `super::*`
+   --> src\gateway\execution_engine\run_loop\project_context.rs:223:9
+    |
+223 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::Duration`
+ --> src\gateway\execution_engine\slash_command_body\tests.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FileSessionStoreConfig` and `FileSessionStore`
+  --> src\gateway\session_store\hook_transcripts.rs:42:55
+   |
+42 |     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+   |                                                       ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `with_consent` is never used
+   --> src\builtin_tools\skill_reader\read.rs:157:19
+    |
+101 | impl ReadSkillTool {
+    | ------------------ method in this implementation
+...
+157 |     pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `parked_len` is never used
+   --> src\gateway\server\browser_viewer_route.rs:197:8
+    |
+121 | impl BrowserViewerRouteState {
+    | ---------------------------- method in this implementation
+...
+197 |     fn parked_len(&self) -> usize {
+    |        ^^^^^^^^^^
+
+warning: `alephcore` (lib test) generated 5 warnings (run `cargo fix --lib -p alephcore --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 2m 58s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 16 tests
+test gateway::security::device_token_manager::tests::expired_ticket_cannot_be_exchanged ... ok
+test gateway::security::device_token_manager::tests::exchange_ticket_issues_device_token ... ok
+test gateway::security::device_token_manager::tests::revoke_panel_device_refuses_cluster_node ... ok
+test gateway::security::device_token_manager::tests::revoke_panel_device_does_not_widen_to_nodes_or_unknown ... ok
+test gateway::security::device_token_manager::tests::create_ticket_returns_valid_format ... ok
+test gateway::security::device_token_manager::tests::revoke_all_panel_devices_spares_nodes_and_kills_tokens ... ok
+test gateway::security::device_token_manager::tests::pairing_refuses_to_adopt_a_cluster_node_device_id ... ok
+test gateway::security::device_token_manager::tests::pairing_refuses_untyped_device_rows ... ok
+test gateway::security::device_token_manager::tests::revoke_device_bool_contract_for_unknown_and_already_revoked ... ok
+test gateway::security::device_token_manager::tests::repairing_revoked_device_is_listable_and_revocable_again ... ok
+test gateway::security::device_token_manager::tests::unbound_ticket_defaults_device_to_owner ... ok
+test gateway::security::device_token_manager::tests::ticket_bound_to_user_stamps_device_user ... ok
+test gateway::security::device_token_manager::tests::repairing_does_not_silently_reassign_device_user ... ok
+test gateway::security::device_token_manager::tests::revoke_device_is_atomic_when_device_write_fails ... ok
+test gateway::security::device_token_manager::tests::list_panel_devices_excludes_cluster_nodes ... ok
+test gateway::security::device_token_manager::tests::revoked_device_token_invalidated ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 20660 filtered out; finished in 0.15s
+

@@ -1,0 +1,187 @@
+   Compiling aleph-desktop-shell v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\shell)
+warning: function `nix_like_geteuid` is never used
+   --> desktop\shell\src\connection.rs:952:8
+    |
+952 |     fn nix_like_geteuid() -> u32 {
+    |        ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aleph-desktop-shell` (bin "aleph-desktop-shell" test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 7.78s
+     Running unittests src\main.rs (target\debug\deps\aleph_desktop_shell-aba8ba9d6bc5a92c.exe)
+
+running 152 tests
+test cert_trust::adapter_windows::tests::host_key_from_uri_rejects_non_url ... ok
+test cert_trust::fingerprint::tests::parse_cert_info_on_malformed_der_is_empty_not_panic ... ok
+test cert_trust::pending::tests::take_matching_rejects_wrong_fingerprint_and_preserves_record ... ok
+test cert_trust::pending::tests::take_matching_rejects_wrong_host_and_preserves_record ... ok
+test cert_trust::pending::tests::take_matching_returns_record_on_exact_match ... ok
+test cert_trust::adapter_windows::tests::pem_to_der_on_garbage_is_none_not_panic ... ok
+test cert_trust::adapter_windows::tests::host_key_from_uri_keeps_explicit_port ... ok
+test cert_trust::store::tests::overwrite_replaces_fingerprint ... ok
+test cert_trust::tests::changed_fp_warns ... ok
+test cert_trust::fingerprint::tests::fingerprint_is_colon_grouped_uppercase_hex_32_bytes ... ok
+test cert_trust::adapter_windows::tests::pem_to_der_round_trips_leaf_der ... ok
+test cert_trust::fingerprint::tests::parse_cert_info_extracts_ip_san ... ok
+test cert_trust::tests::matching_fp_allows ... ok
+test connect_setup::tests::ipv4_formats_bare ... ok
+test connect_setup::tests::ipv6_is_bracketed ... ok
+test connection::tests::a_bare_host_still_gets_the_aleph_default_port ... ok
+test connection::tests::a_hostname_cannot_truncate_the_reason ... ok
+test cert_trust::tests::unknown_host_prompts ... ok
+test connection::tests::an_empty_message_leaves_the_connect_page_url_untouched ... ok
+test cert_trust::pending::tests::fingerprint_change_during_review_is_rejected_not_bypassed ... ok
+test connection::tests::bare_host_gets_http_and_default_port ... ok
+test connection::tests::credential_from_url_falls_back_to_legacy_token ... ok
+test connection::tests::cert_trust_page_url_is_platform_correct_and_parses ... ok
+test connection::tests::connect_page_url_is_platform_correct_and_parses ... ok
+test connection::tests::empty_and_local_parse_to_local ... ok
+test connection::tests::a_persisted_target_round_trips_its_port ... ok
+test connection::tests::credential_from_url_reads_bootstrap_ticket_first ... ok
+test connection::tests::credential_from_url_none_without_credential ... ok
+test connection::tests::a_typed_https_url_keeps_the_schemes_own_port ... ok
+test connection::tests::explicit_port_followed_by_hash_is_respected ... ok
+test connection::tests::explicit_port_followed_by_path_is_respected ... ok
+test connection::tests::explicit_port_followed_by_query_string_is_respected ... ok
+test connection::tests::host_port_gets_http ... ok
+test connection::tests::explicit_scheme_preserved ... ok
+test connection::tests::ipv6_with_port_keeps_user_port ... ok
+test connection::tests::ipv6_without_port_gets_default_port ... ok
+test connection::tests::lite_flag_matches_build_variant ... ok
+test connection::tests::serves_origin_matches_only_the_target_origin ... ok
+test deeplink::tests::deep_link_script_escapes_control_chars ... ok
+test connection::tests::the_reason_survives_the_url_round_trip ... ok
+test connection::tests::unsupported_scheme_rejected ... ok
+test connection::tests::set_connection_target_is_gated_end_to_end ... ok
+test connection::tests::target_change_signal_reaches_multiple_subscribers ... ok
+test connection::tests::target_change_signal_publishes_a_tick ... ok
+test deeplink::tests::redacted_for_log_strips_query_fragment_and_path ... ok
+test deeplink::tests::deep_link_script_escapes_quotes_and_backslashes ... ok
+test external_link::tests::artifact_bytes_are_external_even_on_a_trusted_origin ... ok
+test external_link::tests::bundled_asset_schemes_are_internal ... ok
+test external_link::tests::data_urls_are_not_internal ... ok
+test connection::tests::overlapping_target_switches_run_whole_transactions_in_order ... ok
+test external_link::tests::different_scheme_or_port_on_remote_host_stays_external ... ok
+test cert_trust::store::tests::roundtrip_insert_lookup_save_load ... ok
+test external_link::tests::loopback_panel_origins_are_internal ... ok
+test external_link::tests::outside_origins_are_external ... ok
+test external_link::tests::remote_origin_becomes_internal_when_set ... ok
+test external_link::tests::route_rejects_dangerous_pseudo_schemes ... ok
+test external_link::tests::route_allows_internal_without_side_effects ... ok
+test gateway_probe::tests::a_local_target_reports_the_loopback_gateway ... ok
+test cert_trust::pending::tests::persist_pending_happy_path_clears_state_and_writes_store ... ok
+test gateway_probe::tests::probe_endpoint_keeps_the_targets_scheme ... ok
+test gateway_probe::tests::probe_endpoint_local_is_loopback ... ok
+test gateway_probe::tests::probe_endpoint_remote_default_port ... ok
+test gateway_probe::tests::probe_endpoint_remote_uses_url_host_port ... ok
+test cert_trust::store::tests::corrupt_file_loads_empty_not_panic ... ok
+test gateway_probe::tests::the_message_names_the_port_the_shell_filled_in_not_the_one_typed ... ok
+test gateway_probe::tests::the_unreachable_message_names_the_origin_it_probed ... ok
+test hotkey::tests::resolve_hotkey_prefers_a_non_empty_override ... ok
+test cert_trust::pending::tests::persist_pending_no_pending_record_returns_err ... ok
+test keyring_bridge::tests::backend_failure_is_fixed_and_secret_free ... ok
+test keyring_bridge::tests::a_to_b_to_a_switch_is_caught_by_epoch ... ok
+test keyring_bridge::tests::denied_load_still_revokes_prior_lease ... ok
+test keyring_bridge::tests::deny_wins_and_unparsable_deny_fails_closed ... ok
+test keyring_bridge::tests::empty_allow_list_is_denied ... ok
+test keyring_bridge::tests::epoch_overflow_fails_closed_before_any_io ... ok
+test cert_trust::pending::tests::persist_pending_rejects_wrong_fingerprint_and_preserves_record ... ok
+test keyring_bridge::tests::blank_credential_is_invalid_before_any_io ... ok
+test keyring_bridge::tests::external_native_mutation_during_io_discards_the_result ... ok
+test keyring_bridge::tests::foreign_origin_scope_is_denied ... ok
+test keyring_bridge::tests::lease_id_overflow_fails_closed ... ok
+test keyring_bridge::tests::load_save_delete_round_trip ... ok
+test keyring_bridge::tests::native_config_switch_makes_local_scope_foreign ... ok
+test gateway_probe::tests::a_non_gateway_http_responder_is_not_reachable ... ok
+test keyring_bridge::tests::manifest_permissions_and_capabilities_agree ... ok
+test gateway_probe::tests::a_gateway_answering_ready_is_reachable ... ok
+test keyring_bridge::tests::post_io_target_change_error_does_not_undo_the_committed_save ... ok
+test keyring_bridge::tests::recheck_after_a_to_b_to_a_rejects_the_old_load_result ... ok
+test keyring_bridge::tests::recheck_denied_post_request_clears_only_its_own_lease ... ok
+test keyring_bridge::tests::recheck_rejects_a_superseded_lease_and_keeps_the_newer_one ... ok
+test keyring_bridge::tests::recheck_passes_for_the_live_lease ... ok
+test keyring_bridge::tests::rewriting_the_same_target_still_kills_older_leases ... ok
+test keyring_bridge::tests::scope_rejects_unknown_fields ... ok
+test keyring_bridge::tests::save_and_delete_without_lease_are_rejected ... ok
+test keyring_bridge::tests::poisoned_gate_never_blocks_the_target_write_and_fails_the_bridge_closed ... ok
+test keyring_bridge::tests::superseded_and_zero_leases_are_rejected ... ok
+test keyring_bridge::tests::scope_with_path_or_garbage_never_matches ... ok
+test keyring_bridge::tests::switch_committed_before_save_or_delete_never_reaches_the_backend ... ok
+test keyring_bridge::tests::wrong_label_or_foreign_webview_url_is_denied ... ok
+test notify::tests::connect_request_is_well_formed ... ok
+test keyring_bridge::tests::target_change_invalidates_lease ... ok
+test notify::tests::focused_window_never_notifies ... ok
+test notify::tests::handshake_error_flags_connect_and_subscribe_failures ... ok
+test notify::tests::resolve_event_ignores_rpc_responses ... ok
+test notify::tests::resolve_event_reads_streaming_frame_shape ... ok
+test notify::tests::handshake_error_ignores_events_and_success ... ok
+test notify::tests::resolve_event_reads_topic_event_shape ... ok
+test notify::tests::connect_request_local_carries_no_token ... ok
+test connection::tests::remove_gateway_token_is_ok_when_marker_missing ... ok
+test notify::tests::subscribe_request_carries_notify_topics ... ok
+test notify::tests::surface_approval_falls_back_on_missing_fields ... ok
+test notify::tests::surface_approval_renders_core_supplied_title_body ... ok
+test notify::tests::surface_approval_suppressed_when_focused ... ok
+test notify::tests::surface_notify_falls_back_on_missing_fields ... ok
+test notify::tests::surface_notify_renders_core_supplied_title_body ... ok
+test notify::tests::ws_url_https_remote_on_443_keeps_port ... ok
+test notify::tests::ws_url_http_remote_uses_ws_scheme ... ok
+test notify::tests::ws_url_https_remote_uses_wss_scheme ... ok
+test notify::tests::ws_url_local_is_the_loopback_constant ... ok
+test tests::rearm_to_reachable_target_is_idle_not_spurious_reload ... ok
+test tests::rearm_to_unreachable_target_acts_on_first_tick ... ok
+test tests::remote_supervisor_declares_down_and_shows_connection_page ... ok
+test tests::remote_supervisor_recovers_without_relaunch ... ok
+test tests::supervisor_declares_down_after_sustained_failure ... ok
+test tests::supervisor_backs_off_between_relaunches_then_gives_up ... ok
+test tests::supervisor_local_behaviour_unchanged ... ok
+test tests::every_reroute_navigation_is_probe_gated ... ok
+test tests::supervisor_rearms_relaunch_budget_after_recovery ... ok
+test tests::supervisor_remote_reloads_on_recovery ... ok
+test tests::supervisor_remote_shows_error_instead_of_relaunch ... ok
+test tests::supervisor_stays_idle_while_the_daemon_is_healthy ... ok
+test tests::supervisor_spaces_relaunches_with_idle_backoff ... ok
+test tests::supervisor_reloads_the_panel_on_recovery ... ok
+test tests::supervisor_tolerates_a_brief_stall ... ok
+test update::tests::banner_script_package_manager_offers_howto_not_restart ... ok
+test update::tests::banner_script_escapes_a_hostile_version ... ok
+test update::tests::banner_script_does_not_launder_placeholder_tokens_in_version ... ok
+test update::tests::banner_script_self_install_offers_restart_and_sentinels ... ok
+test update::tests::control_action_ignores_ordinary_urls ... ok
+test tests::boot_treats_a_remote_target_exactly_as_a_runtime_switch_does ... ok
+test update::tests::control_action_matches_apply_even_with_query ... ok
+test update::tests::control_action_recognises_the_apply_sentinel_on_the_panel_origin ... ok
+test update::tests::apply_latch_refuses_a_concurrent_apply_and_releases ... ok
+test update::tests::control_action_recognises_the_dismiss_sentinel_on_the_remote_origin ... ok
+test update::tests::control_action_rejects_the_sentinel_on_a_foreign_origin ... ok
+test update::tests::manual_update_label_names_the_version ... ok
+test update::tests::restart_label_names_the_version ... ok
+test tests::boot_honours_a_persisted_remote_target ... ok
+test gateway_probe::tests::a_socket_that_accepts_but_serves_no_http_is_not_reachable ... ok
+test gateway_probe::tests::target_reachable_rejects_a_socket_that_serves_no_http ... ok
+test gateway_probe::tests::probe_unreachable_port_times_out_false ... ok
+test keyring_bridge::tests::target_writer_cannot_commit_in_the_middle_of_backend_io ... ok
+test connection::tests::persist_credential_from_url_returns_err_on_corrupt_home ... FAILED
+test connection::tests::remove_gateway_token_deletes_existing_marker ... FAILED
+
+failures:
+
+---- connection::tests::persist_credential_from_url_returns_err_on_corrupt_home stdout ----
+
+thread 'connection::tests::persist_credential_from_url_returns_err_on_corrupt_home' (2464) panicked at desktop\shell\src\connection.rs:1005:14:
+no credential + unwritable store → Err: ()
+
+---- connection::tests::remove_gateway_token_deletes_existing_marker stdout ----
+
+thread 'connection::tests::remove_gateway_token_deletes_existing_marker' (1740) panicked at desktop\shell\src\connection.rs:876:43:
+write seed: "create .aleph dir: 当文件已存在时，无法创建该文件。 (os error 183)"
+
+
+failures:
+    connection::tests::persist_credential_from_url_returns_err_on_corrupt_home
+    connection::tests::remove_gateway_token_deletes_existing_marker
+
+test result: FAILED. 150 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.57s
+
+error: test failed, to rerun pass `-p aleph-desktop-shell --bin aleph-desktop-shell`

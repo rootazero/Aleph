@@ -1,0 +1,34 @@
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+    Finished `test` profile [unoptimized] target(s) in 2m 26s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 26 tests
+test builtin_tools::browser_tools::companion::process::tests::ready_reader_limits_are_the_protocol_limits ... ok
+test builtin_tools::browser_tools::companion::process::tests::launcher_without_managed_spawn_is_unsupported ... ok
+test builtin_tools::browser_tools::companion::protocol::tests::challenge_url_is_the_fixed_route_on_the_configured_origin ... ok
+test builtin_tools::browser_tools::companion::protocol::tests::canonical_endpoint_accepts_only_the_canonical_loopback_spelling ... ok
+test builtin_tools::browser_tools::companion::protocol::tests::launch_line_carries_the_secret_only_on_the_stdin_line_and_debug_redacts_it ... ok
+test builtin_tools::browser_tools::companion::protocol::tests::ready_line_round_trips_and_binds_to_the_launch_secret ... ok
+test builtin_tools::browser_tools::companion::protocol::tests::ready_line_rejects_malformed_oversize_wrong_endpoint_and_wrong_nonce ... ok
+test builtin_tools::browser_tools::companion::protocol::tests::challenge_response_must_be_bound_to_secret_endpoint_and_this_challenge ... ok
+test builtin_tools::browser_tools::companion::tool::tests::description_names_no_unverified_capability ... ok
+test builtin_tools::browser_tools::companion::tool::tests::args_deny_unknown_fields_and_pid_or_target_addressing ... ok
+test builtin_tools::browser_tools::companion::tool::tests::start_request_is_structured_and_bounded ... ok
+test builtin_tools::browser_tools::companion::tool::tests::status_and_stop_need_an_id_and_unknown_ids_look_identical ... ok
+test builtin_tools::browser_tools::companion::tool::tests::start_without_publication_or_sandbox_fails_closed_without_launching ... ok
+test builtin_tools::browser_tools::companion::manager::tests::unsupported_launcher_fails_before_any_launch ... ok
+test builtin_tools::browser_tools::companion::manager::tests::proof_failure_rolls_back_without_publishing_or_opening_a_tab ... ok
+test builtin_tools::browser_tools::companion::manager::tests::missing_producer_launches_nothing ... ok
+test builtin_tools::browser_tools::companion::manager::tests::open_tab_failure_rolls_back_the_child ... ok
+test builtin_tools::browser_tools::companion::manager::tests::rollback_reports_an_unconfirmed_reap ... ok
+test builtin_tools::browser_tools::companion::process::tests::supervisor_cancel_returns_reaped_only_after_wait_and_natural_exit_is_observed ... ok
+test builtin_tools::browser_tools::companion::manager::tests::publish_failure_closes_the_tab_then_reaps_the_child ... ok
+test builtin_tools::browser_tools::companion::manager::tests::start_publishes_a_managed_design_companion_with_the_driver_pid ... ok
+test builtin_tools::browser_tools::companion::manager::tests::status_and_stop_require_the_starting_caller ... ok
+test builtin_tools::browser_tools::companion::manager::tests::stop_closes_the_resource_then_the_tab_then_reaps_the_process ... ok
+test builtin_tools::browser_tools::companion::manager::tests::stop_with_unconfirmed_exit_fails_closed_and_is_retryable ... ok
+test builtin_tools::browser_tools::companion::manager::tests::shutdown_all_uses_the_same_close_then_kill_order ... ok
+test builtin_tools::browser_tools::companion::manager::tests::natural_exit_closes_the_resource_and_stops ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 20694 filtered out; finished in 0.11s
+

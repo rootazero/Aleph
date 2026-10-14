@@ -17,12 +17,13 @@ use tracing::info;
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
-    BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool, BrowserDragTool,
-    BrowserEmulateTool, BrowserEvaluateTool, BrowserExecTool, BrowserFillFormTool,
-    BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool, BrowserOpenTool, BrowserPdfTool,
-    BrowserPressKeyTool, BrowserProfileTool, BrowserQaTool, BrowserRecordTool, BrowserResizeTool,
-    BrowserScreenshotTool, BrowserScrollTool, BrowserSelectTool, BrowserSessionTool,
-    BrowserSnapshotTool, BrowserTabsTool, BrowserTypeTool, BrowserUploadTool, BrowserWaitForTool,
+    BrowserClickTool, BrowserCompanionTool, BrowserConsoleTool, BrowserCookiesTool,
+    BrowserDialogTool, BrowserDragTool, BrowserEmulateTool, BrowserEvaluateTool, BrowserExecTool,
+    BrowserFillFormTool, BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool,
+    BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool, BrowserProfileTool, BrowserQaTool,
+    BrowserRecordTool, BrowserResizeTool, BrowserScreenshotTool, BrowserScrollTool,
+    BrowserSelectTool, BrowserSessionTool, BrowserSnapshotTool, BrowserTabsTool, BrowserTypeTool,
+    BrowserUploadTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::{
     ApplyPatchTool, AutomationTool, BashExecTool, CodeCheckTool, CodeExecTool, DesktopTool,
@@ -598,8 +599,21 @@ impl BuiltinToolRegistry {
         let pdf_generate_tool = pdf_generate_tool
             .with_playwright_config(browser_profile_manager.playwright_cli_config().clone())
             .with_browser_runtime(browser_profile_manager.runtime_config().clone());
+        // The registry's own producer (shared resource/grant stores + event bus),
+        // or None: boot leaves it unset, so tools publish nothing by default.
+        let browser_live_producer = config.browser_live_producer().ok();
         let browser_open_tool = BrowserOpenTool::new(Arc::clone(&browser_profile_manager))
-            .with_approval_policy(Arc::clone(&approval_policy));
+            .with_approval_policy(Arc::clone(&approval_policy))
+            .with_live_producer(browser_live_producer.clone());
+        // Managed companion: spawns ONLY through the registry's workspace
+        // sandbox (the same approval/profile path as bash) and publishes ONLY
+        // through the registry's producer; without either it fails closed.
+        let browser_companion_tool = BrowserCompanionTool::new(
+            Arc::clone(&browser_profile_manager),
+            config.sandbox.clone(),
+            browser_live_producer.clone(),
+        )
+        .with_approval_policy(Arc::clone(&approval_policy));
         let browser_click_tool = BrowserClickTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_type_tool = BrowserTypeTool::new(Arc::clone(&browser_profile_manager))
@@ -612,7 +626,8 @@ impl BuiltinToolRegistry {
                 .with_vision_bridge(Arc::clone(&vision_bridge));
         let browser_snapshot_tool = BrowserSnapshotTool::new(Arc::clone(&browser_profile_manager));
         let browser_navigate_tool = BrowserNavigateTool::new(Arc::clone(&browser_profile_manager))
-            .with_approval_policy(Arc::clone(&approval_policy));
+            .with_approval_policy(Arc::clone(&approval_policy))
+            .with_live_producer(browser_live_producer);
         let browser_tabs_tool = BrowserTabsTool::new(Arc::clone(&browser_profile_manager));
         let browser_select_tool = BrowserSelectTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
@@ -807,6 +822,7 @@ impl BuiltinToolRegistry {
             use crate::tools::AlephTool;
             let browser_tool_defs = [
                 browser_open_tool.definition(),
+                browser_companion_tool.definition(),
                 browser_click_tool.definition(),
                 browser_type_tool.definition(),
                 browser_screenshot_tool.definition(),
@@ -1338,6 +1354,7 @@ impl BuiltinToolRegistry {
             // executing the turn. See `build_flag_user_correction`.
             flag_user_correction_db: config.memory_db.clone(),
             browser_open_tool,
+            browser_companion_tool,
             browser_click_tool,
             browser_type_tool,
             browser_screenshot_tool,

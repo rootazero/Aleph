@@ -6,6 +6,8 @@ use clap::Parser;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+mod pairing;
+
 use aleph_tui::{CliConfig, CliResult};
 
 /// Aleph TUI - Interactive Terminal Chat
@@ -50,6 +52,27 @@ struct Args {
     /// Configuration file path
     #[arg(short, long)]
     config: Option<String>,
+
+    /// Authenticate with the device credential previously saved in the OS
+    /// keyring for this server
+    ///
+    /// A pure switch: it takes no value, so no secret can appear in argv or
+    /// shell history. Fails (does not fall back to an unauthenticated session)
+    /// if the keyring cannot be read or holds no credential for the server.
+    #[arg(long)]
+    paired: bool,
+
+    /// Pair this device for the first time: prompt (hidden, TTY only) for the
+    /// one-time pairing ticket from `aleph-server pair`, exchange it for a
+    /// long-lived device token, save that token to the OS keyring, then start
+    ///
+    /// A pure switch: no value form, so the ticket never appears in argv, an
+    /// environment variable, the config file or shell history. Fails (no
+    /// fallback to an unauthenticated or `--paired` session) if stdin is not a
+    /// terminal, the ticket is blank, the exchange fails, or the token cannot
+    /// be saved. Mutually exclusive with `--paired`.
+    #[arg(long, conflicts_with = "paired")]
+    pair: bool,
 }
 
 #[tokio::main]
@@ -77,15 +100,39 @@ async fn main() -> CliResult<()> {
 
     let server_url = args.server.clone().unwrap_or_else(|| config.server.clone());
 
-    aleph_tui::run(
-        &server_url,
-        None,
-        args.session.as_deref(),
-        args.continue_last,
-        &config,
-        args.verbose,
-    )
-    .await
+    if args.pair {
+        // Prompt BEFORE connecting: a non-TTY / blank / cancelled prompt never
+        // touches the network, and never falls back to `run` / `--paired`.
+        let credential = pairing::prompt_bootstrap_credential().await?;
+        aleph_tui::run_with_device_credential(
+            &server_url,
+            credential,
+            args.session.as_deref(),
+            args.continue_last,
+            &config,
+            args.verbose,
+        )
+        .await
+    } else if args.paired {
+        aleph_tui::run_with_stored_device_credential(
+            &server_url,
+            args.session.as_deref(),
+            args.continue_last,
+            &config,
+            args.verbose,
+        )
+        .await
+    } else {
+        aleph_tui::run(
+            &server_url,
+            None,
+            args.session.as_deref(),
+            args.continue_last,
+            &config,
+            args.verbose,
+        )
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -105,5 +152,40 @@ mod tests {
     #[test]
     fn the_cli_definition_is_valid() {
         Args::command().debug_assert();
+    }
+
+    #[test]
+    fn paired_is_a_value_less_flag_and_defaults_off() {
+        use clap::Parser;
+        assert!(!Args::try_parse_from(["aleph-tui"]).unwrap().paired);
+        assert!(Args::try_parse_from(["aleph-tui", "--paired"]).unwrap().paired);
+        // No value form: a secret cannot be passed through this flag.
+        assert!(Args::try_parse_from(["aleph-tui", "--paired=secret"]).is_err());
+        // And no flag takes a token / ticket / password / credential.
+        let cmd = Args::command();
+        for arg in cmd.get_arguments() {
+            let id = arg.get_id().as_str();
+            assert!(
+                !["token", "ticket", "password", "credential"]
+                    .iter()
+                    .any(|w| id.contains(w)),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn pair_is_a_value_less_flag_defaults_off_and_excludes_paired() {
+        use clap::Parser;
+        assert!(!Args::try_parse_from(["aleph-tui"]).unwrap().pair);
+        assert!(Args::try_parse_from(["aleph-tui", "--pair"]).unwrap().pair);
+        // No value form: the ticket can never be passed on the command line.
+        assert!(Args::try_parse_from(["aleph-tui", "--pair=secret"]).is_err());
+        assert!(Args::try_parse_from(["aleph-tui", "--pair", "secret"]).is_err());
+        // Mutually exclusive with --paired.
+        assert!(Args::try_parse_from(["aleph-tui", "--pair", "--paired"]).is_err());
+        assert!(Args::try_parse_from(["aleph-tui", "--paired", "--pair"]).is_err());
+        // Combines with ordinary options.
+        assert!(Args::try_parse_from(["aleph-tui", "--pair", "-s", "ws://h/ws"]).is_ok());
     }
 }

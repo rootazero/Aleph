@@ -9,9 +9,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use aleph_cdp::methods::fetch;
-use aleph_cdp::{CdpConnection, EventStream, SessionId};
+use aleph_cdp::{CdpConnection, SessionId};
 
 use crate::browser::error::BrowserError;
+use crate::browser::live::{FetchFeed, LiveProfileOwner};
 use crate::browser::network_policy::BrowserSsrfGuard;
 
 use super::{map_cdp_err, CdpBackend};
@@ -319,8 +320,28 @@ impl RouteRegistry {
         self.refresh_active();
     }
 
-    /// Remove and return the loop's kill switch. Called by the loop itself on
-    /// exit AND by `stop_intercept_loop_if_idle`; both removing is fine.
+    /// Remove the entry only if it still belongs to the task `id` — the loop's
+    /// own exit path. A stopped (or crashed) loop finishing late must never
+    /// remove the entry of the loop that re-armed the tab after it.
+    pub(crate) fn take_own_loop(&self, profile: &str, tab_id: &str, id: tokio::task::Id) -> bool {
+        let key = (profile.to_string(), tab_id.to_string());
+        let removed = {
+            let mut loops = lock(&self.loops);
+            if loops.get(&key).is_some_and(|h| h.id() == id) {
+                loops.remove(&key);
+                true
+            } else {
+                false
+            }
+        };
+        self.refresh_active();
+        removed
+    }
+
+    /// Remove and return the loop's kill switch, whoever owns it. Only the
+    /// disarm path (`stop_intercept_loop_if_idle`) and the dead-loop reaper
+    /// call this, both under `start_lock`; the loop's own exit uses
+    /// [`Self::take_own_loop`].
     pub(crate) fn take_loop(
         &self,
         profile: &str,
@@ -371,38 +392,42 @@ impl RouteRegistry {
 const ANSWER_FAILURE_LIMIT: u32 = 3;
 
 /// Per-tab consumer of `Fetch.requestPaused`: decide in strict order — SSRF
-/// first, rules second (spec §3) — and answer. `events` was subscribed by the
-/// caller BEFORE `Fetch.enable` was sent (a connection's broadcast starts at
-/// subscription, so subscribing inside the task would open a gap).
+/// first, rules second (spec §3) — and answer. `feed` is this tab's
+/// `Fetch.requestPaused` lane of the profile's one live owner, registered by
+/// the caller BEFORE `Fetch.enable` was sent (so an event caused by the enable
+/// finds its slot). The loop never subscribes to the raw event stream: the
+/// owner's dispatcher is the connection's single consumer.
 ///
 /// Exit paths, all clean: answers fail [`ANSWER_FAILURE_LIMIT`] times in a
-/// row, or the event stream closes. The FIRST is the real detector and covers
-/// both deaths named in Review Focus #2 — a dead session rejects every
-/// answer, and a dead ENGINE fails every answer too. The second is nominal,
-/// never observed in practice: the broadcast's sender lives in the
-/// connection's `Shared`, which this loop's own `conn` clone keeps alive, so
-/// `EventStream::next() == None` is unreachable here (recording.rs's
-/// `engine_gone` watch names the same fact from the other side — the close
-/// watch, not the event stream, is the only socket-death signal a subscriber
-/// can observe). Either way the
-/// registry entry is removed on the way out, so a later `ensure` re-arms
+/// row, or the feed closes (the owner dropped this tab's slot). The FIRST is
+/// the real detector and covers both deaths named in Review Focus #2 — a dead
+/// session rejects every answer, and a dead ENGINE fails every answer too.
+/// Either way the feed slot is released and the registry entry is removed on the way out, so a later `ensure` re-arms
 /// instead of mistaking a corpse for a running loop.
 async fn run_loop(
+    owner: Arc<LiveProfileOwner>,
     conn: CdpConnection,
-    mut events: EventStream,
+    mut feed: FetchFeed,
     session: SessionId,
     profile: String,
     tab_id: String,
     registry: Arc<RouteRegistry>,
     ssrf: Arc<BrowserSsrfGuard>,
 ) {
+    // The `owner` Arc is the loop's lifetime anchor: `CdpBackend` is rebuilt
+    // per call, so the only thing keeping the dispatcher (and this feed's
+    // sender) alive across the navigation is this parameter. Drop it and
+    // `feed.rx` returns `None` on the next `recv`, the loop exits, and
+    // `routes.take_own_loop` clears this loop's entry — so a later `ensure`
+    // re-arms instead of finding a corpse.
+    let _owner = owner;
     let mut last_lagged = 0u64;
     let mut answer_failures = 0u32;
-    while let Some(ev) = events.next().await {
-        let lagged = events.lagged();
+    while let Some(ev) = feed.rx.recv().await {
+        let lagged = feed.dropped.load(Ordering::Relaxed);
         if lagged > last_lagged {
             // Deliberate deviation from spec §3's "对积压 requestId 批量 continue
-            // 排干": a lagged broadcast has already dropped the event BODIES, so
+            // 排干": the owner's bounded feed dropped the event when full, so
             // the requestIds are unknowable and there is nothing to drain. The
             // honest behaviour is the audit trail; the dropped requests end on
             // the engine's own timeout.
@@ -413,9 +438,6 @@ async fn run_loop(
                  the engine's own timeout ends them"
             );
             last_lagged = lagged;
-        }
-        if ev.method != "Fetch.requestPaused" || ev.session.as_ref() != Some(&session) {
-            continue;
         }
         let paused = match fetch::request_paused(&ev.params) {
             Ok(p) => p,
@@ -537,7 +559,12 @@ async fn run_loop(
             break;
         }
     }
-    registry.take_loop(&profile, &tab_id);
+    // Identity-safe: only this task's own entry. `try_id` is `None` only when
+    // `run_loop` is driven outside a spawned task (never in production); then
+    // there is no entry of ours to remove.
+    if let Some(id) = tokio::task::try_id() {
+        registry.take_own_loop(&profile, &tab_id, id);
+    }
 }
 
 impl CdpBackend {
@@ -575,13 +602,16 @@ impl CdpBackend {
             return Ok(());
         }
         let handle = self.handle().await?;
-        let events = handle.conn.events();
-        fetch::enable(&handle.conn, Some(session))
-            .await
-            .map_err(|e| map_cdp_err(self.engine(), "Fetch.enable", e))?;
+        let owner = handle.live_owner();
+        let feed = owner.register_fetch(tab_id, session).await;
+        if let Err(e) = fetch::enable(&handle.conn, Some(session)).await {
+            // Dropping `feed` unhooks this attempt's slot.
+            return Err(map_cdp_err(self.engine(), "Fetch.enable", e));
+        }
         let task = tokio::spawn(run_loop(
+            owner.clone(),
             handle.conn.clone(),
-            events,
+            feed,
             session.clone(),
             profile.clone(),
             tab_id.to_string(),
@@ -602,6 +632,9 @@ impl CdpBackend {
     /// makes the disable moot, and the loop's own session-death exit covers
     /// the rest.
     pub(crate) async fn stop_intercept_loop_if_idle(&self, tab_id: &str) {
+        // Same lock as `ensure_intercept_loop`: a disarm must not interleave
+        // with a re-arm of the same tab (it would take the NEW loop's entry).
+        let _serial = self.routes.start_lock().await;
         let profile = self.profile_name();
         let tab_alive = match self.handle().await {
             Ok(handle) => handle.ensure_tab(tab_id).await.ok(),
@@ -618,6 +651,7 @@ impl CdpBackend {
                 let _ = fetch::disable(&handle.conn, Some(&session)).await;
             }
         }
+        // Aborting drops the loop's feed, which unhooks its (and only its) slot.
         abort.abort();
     }
 
@@ -807,21 +841,40 @@ mod tests {
 
     /// A live loop driving a real connection to `server`. The test owns the
     /// JoinHandle, so "the loop exited" is an awaitable fact, not a guess.
-    fn spawn_loop(
+    async fn spawn_loop(
         conn: &CdpConnection,
         registry: &Arc<RouteRegistry>,
         guard: Arc<crate::browser::network_policy::BrowserSsrfGuard>,
     ) -> tokio::task::JoinHandle<()> {
-        let events = conn.events();
-        let handle = tokio::spawn(run_loop(
+        // One owner per test connection, as in production: it takes the
+        // connection's event subscription here, before the test pushes events.
+        let resolver: crate::browser::live::SessionResolver =
+            Arc::new(|tab| Box::pin(async move { Err(BrowserError::TabNotFound(tab)) }));
+        let owner = crate::browser::live::LiveProfileOwner::new(
+            "p",
+            crate::browser::engine::Engine::Chromium,
             conn.clone(),
-            events,
-            SessionId("S1".to_string()),
-            "p".to_string(),
-            "t1".to_string(),
-            registry.clone(),
-            guard,
-        ));
+            resolver,
+        );
+        let feed = owner
+            .register_fetch("t1", &SessionId("S1".to_string()))
+            .await;
+        let (reg, conn2) = (registry.clone(), conn.clone());
+        let handle = tokio::spawn(async move {
+            // Production keeps the owner alive through the EngineHandle; here
+            // the task does — by moving the Arc into `run_loop`.
+            run_loop(
+                owner,
+                conn2,
+                feed,
+                SessionId("S1".to_string()),
+                "p".to_string(),
+                "t1".to_string(),
+                reg,
+                guard,
+            )
+            .await;
+        });
         registry.register_loop("p", "t1", handle.abort_handle());
         handle
     }
@@ -1203,7 +1256,7 @@ mod tests {
         let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
         let conn = connect(&server).await;
         let registry = Arc::new(RouteRegistry::new());
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
 
         server.push_event(paused("r1", "http://93.184.216.34/api/x", "GET", "S1"));
         assert!(
@@ -1233,7 +1286,7 @@ mod tests {
                 None,
             )
             .expect("add");
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
 
         server.push_event(paused("r7", "http://93.184.216.34/api/users", "GET", "S1"));
         assert!(
@@ -1272,7 +1325,7 @@ mod tests {
                 None,
             )
             .expect("add");
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
 
         server.push_event(paused("r8", "http://93.184.216.34/ads.js", "GET", "S1"));
         assert!(
@@ -1304,7 +1357,7 @@ mod tests {
                 None,
             )
             .expect("add");
-        let task = spawn_loop(&conn, &registry, default_guard());
+        let task = spawn_loop(&conn, &registry, default_guard()).await;
 
         server.push_event(paused(
             "r9",
@@ -1348,7 +1401,7 @@ mod tests {
         .await;
         let conn = connect(&server).await;
         let registry = Arc::new(RouteRegistry::new());
-        let task = spawn_loop(&conn, &registry, default_guard());
+        let task = spawn_loop(&conn, &registry, default_guard()).await;
 
         server.push_event(paused("r1", "http://169.254.169.254/latest", "GET", "S1"));
         assert!(
@@ -1373,6 +1426,62 @@ mod tests {
     /// Review Focus #2: the tab dies mid-decision; every answer errors. The
     /// loop must recognise the dead session and EXIT — an error-spinning task
     /// would burn the runtime for the rest of the profile's life.
+    /// I2: a loop that was stopped and replaced (re-arm) and only THEN finishes
+    /// must not remove the replacement's registry entry — the exit path is
+    /// identity-safe (task id), not keyed by `(profile, tab)` alone.
+    #[tokio::test]
+    async fn a_late_exiting_old_loop_never_removes_the_replacement_entry() {
+        let dead = Responder::Error {
+            code: -32001,
+            message: "Session with given id not found".to_string(),
+        };
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![
+            ("Fetch.fulfillRequest", dead.clone()),
+            ("Fetch.continueRequest", dead),
+        ]))
+        .await;
+        let conn = connect(&server).await;
+        let registry = Arc::new(RouteRegistry::new());
+        registry
+            .add(
+                "p",
+                "t1",
+                "/api/",
+                None,
+                mock_json(200, "x"),
+                RouteScope::Tab,
+                None,
+            )
+            .expect("add");
+        let old = spawn_loop(&conn, &registry, open_guard()).await;
+        // The re-arm: a fresh loop takes the same `(profile, tab)` slot while
+        // the old one is still winding down.
+        let replacement = tokio::spawn(std::future::pending::<()>());
+        registry.register_loop("p", "t1", replacement.abort_handle());
+
+        for i in 1..=3 {
+            server.push_event(paused(
+                &format!("r{i}"),
+                "http://93.184.216.34/api/x",
+                "GET",
+                "S1",
+            ));
+        }
+        tokio::time::timeout(Duration::from_secs(2), old)
+            .await
+            .expect("the old loop exits within the strike budget")
+            .expect("old loop task");
+        assert!(
+            registry.loop_running("p", "t1"),
+            "the old loop's exit must leave the replacement's entry in place"
+        );
+        assert!(
+            registry.list("p")[0].active,
+            "the replacement still serves the rule"
+        );
+        replacement.abort();
+    }
+
     #[tokio::test]
     async fn the_loop_exits_when_its_session_dies_mid_decision() {
         let dead = Responder::Error {
@@ -1397,7 +1506,7 @@ mod tests {
                 None,
             )
             .expect("add");
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
         assert!(
             registry.list("p")[0].active,
             "a live loop means the rule reads active"
@@ -1441,7 +1550,7 @@ mod tests {
         );
         let conn = connect(&server).await;
         let registry = Arc::new(RouteRegistry::new());
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
 
         server.push_event(paused("orphan", "http://93.184.216.34/a", "GET", "S1"));
         assert!(
@@ -1491,7 +1600,7 @@ mod tests {
                 None,
             )
             .expect("add");
-        let task = spawn_loop(&conn, &registry, open_guard());
+        let task = spawn_loop(&conn, &registry, open_guard()).await;
 
         server.push_event(paused("r5", "http://93.184.216.34/api/x", "GET", "S1"));
         assert!(

@@ -1,0 +1,149 @@
+{
+  "bundled_version": "26.9.1",
+  "skills": {
+    "api-design": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "architecture": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "ci-cd": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "code-review": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "computer-use-book-flight": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "computer-use-book-hotel": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "computer-use-draw": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "computer-use-uitars-format": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "data-pipeline": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "database": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "debug": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "deploy": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "doc": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "email": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "emergency": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "git": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "github": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "http-client": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "knowledge": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "mcp-dev": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "media-tools": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "notification": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "performance": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "plan": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "playwright": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "refactor": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "regex": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "search": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "security": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "self": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "shell": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "skill-creator": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "ssh": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "test": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "typeset": {
+      "source": "official",
+      "version": "26.9.1"
+    },
+    "web-scraper": {
+      "source": "official",
+      "version": "26.9.1"
+    }
+  }
+}

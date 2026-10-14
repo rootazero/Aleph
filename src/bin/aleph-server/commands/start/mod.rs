@@ -30,14 +30,15 @@ mod builder;
 use builder::{
     initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
     register_agent_handlers, register_agents_handlers, register_artifact_handlers,
-    register_canvas_handlers, register_config_handlers, register_core_handlers,
-    register_cron_handlers, register_daemon_handlers, register_extensions_handlers,
-    register_extensions_install_handlers, register_fs_handlers, register_graph_handlers,
-    register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
-    register_mcp_config_handlers, register_mcp_handlers, register_memory_handlers,
-    register_oauth_handlers, register_projects_handlers, register_pty_handlers,
-    register_session_handlers, register_teams_handlers, register_voice_capability_handlers,
-    register_workspace_handlers, setup_config_watcher, start_webchat_server,
+    register_browser_viewer_handlers, register_canvas_handlers, register_config_handlers,
+    register_core_handlers, register_cron_handlers, register_daemon_handlers,
+    register_extensions_handlers, register_extensions_install_handlers, register_fs_handlers,
+    register_graph_handlers, register_group_chat_handlers, register_heartbeat_handlers,
+    register_identity_handlers, register_mcp_config_handlers, register_mcp_handlers,
+    register_memory_handlers, register_oauth_handlers, register_projects_handlers,
+    register_pty_handlers, register_session_handlers, register_teams_handlers,
+    register_voice_capability_handlers, register_workspace_handlers, setup_config_watcher,
+    start_webchat_server,
 };
 
 mod orchestrator_init;
@@ -260,7 +261,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // ownership tree is the single runtime owner authority shared by the
     // facade and host; no request-local or second registry is created.
     let diagnostics_enabled = diagnostics_enabled_from_env(
-        std::env::var("ALEPH_CAPABILITY_DIAGNOSTICS").ok().as_deref(),
+        std::env::var("ALEPH_CAPABILITY_DIAGNOSTICS")
+            .ok()
+            .as_deref(),
     );
     let ownership_tree = Arc::new(OwnershipTree::new());
     let projection_host = ProjectionHost::mount_with_diagnostics(
@@ -706,15 +709,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         let rotate_bus = event_bus.clone();
         let rotate_devices = device_token_mgr.clone();
+        let rotate_connections = server.connections.clone();
         server
             .handlers_mut()
             .register("gateway.token.rotate", move |req| {
                 let bus = rotate_bus.clone();
                 let devices = rotate_devices.clone();
+                let conns = rotate_connections.clone();
+                let kick_bus = bus.clone();
                 async move {
                     let resp = alephcore::gateway::handlers::gateway_token::handle_token_rotate(
                         req,
                         Some(devices),
+                        conns,
+                        kick_bus,
                     )
                     .await;
                     // Only broadcast when rotation succeeded — don't kick sessions on failure.
@@ -873,6 +881,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // get below — deactivation withdraws the channel credential from
             // the store those two actually read.
             pairing: channel_pairing_store.clone(),
+            // Late-bound: the browser live runtime installs on this same
+            // `server` later in boot; deactivation then revokes viewer grants.
+            browser_viewer_grants: server.browser_viewer_grant_revocation(),
         };
         let s = users_store.clone();
         server.handlers_mut().register("users.me", move |req| {
@@ -2236,6 +2247,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         args.daemon,
     );
     register_daemon_handlers(&mut server, start_time, args.daemon);
+    // Explicit denying seam until the real browser backend/registry/public
+    // origin composition root is supplied. No bind-address origin inference.
+    register_browser_viewer_handlers(&mut server);
     // `pty.spawn` needs the live config to read `[policies.terminal]` (the
     // session gate, and the scrollback/session-cap values) — its siblings
     // are already registered stateless in `HandlerRegistry::new()`. See
@@ -4073,6 +4087,25 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // counterexample. Idempotent, so the wedged-shutdown failsafe in
     // `helpers.rs` may call it again for free; the awaits that follow give the
     // runtime the scheduler pass it needs to drop each aborted task's `Child`.
+    //
+    // Managed `browser_companion` children are deliberately skipped by that
+    // reaper (it would kill them without closing their published resource
+    // first), so they are drained here: resource closed, grants revoked, then
+    // kill and wait for the real exit. Bounded, because a child that will not
+    // die must not wedge the shutdown (the failsafe in `helpers.rs` follows).
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        alephcore::builtin_tools::browser_tools::companion::shutdown_all_companions(),
+    )
+    .await
+    {
+        Ok(0) => {}
+        Ok(unconfirmed) => tracing::warn!(
+            unconfirmed,
+            "managed companion exit was not confirmed on shutdown"
+        ),
+        Err(_) => tracing::warn!("managed companion shutdown timed out"),
+    }
     let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
     if reaped > 0 {
         tracing::info!(count = reaped, "reaped background bash jobs on shutdown");
@@ -4485,12 +4518,9 @@ mod tests {
             // it): every non-exact value must be decided "disabled".
             let enabled = diagnostics_enabled_from_env(value);
             assert!(!enabled, "{value:?} must not enable diagnostics");
-            let control = startup_diagnostics_control(
-                Arc::clone(&host),
-                Arc::clone(&other_tree),
-                enabled,
-            )
-            .expect("disabled values must not construct a mismatched control");
+            let control =
+                startup_diagnostics_control(Arc::clone(&host), Arc::clone(&other_tree), enabled)
+                    .expect("disabled values must not construct a mismatched control");
             assert!(
                 control.is_none(),
                 "diagnostics must be disabled for env value {value:?}"
@@ -4503,8 +4533,8 @@ mod tests {
             Arc::clone(&tree),
             diagnostics_enabled_from_env(Some("1")),
         )
-            .expect("the canonical host/tree pair must construct successfully")
-            .expect("exactly `1` must enable diagnostics");
+        .expect("the canonical host/tree pair must construct successfully")
+        .expect("exactly `1` must enable diagnostics");
         assert_eq!(
             control.status().unwrap().lifecycle,
             alephcore::capability::diagnostic_control::DiagnosticLifecycle::Active
@@ -4642,20 +4672,16 @@ mod tests {
         );
         let production = alephcore::utils::source_scan::code_text(&production);
 
-        let close_at = production
-            .find("close_and_await(")
-            .expect(
-                "start/mod.rs must call close_and_await in production — \
+        let close_at = production.find("close_and_await(").expect(
+            "start/mod.rs must call close_and_await in production — \
                  the host retains its Arc in a process slot, so without \
                  an explicit close the orderly/fatal shutdown funnel leaks \
                  the source and applier workers for the rest of the process",
-            );
-        let scope_take_at = production
-            .find("builtin_registration_scope.take()")
-            .expect(
-                "builtin_registration_scope.take() must exist in production — \
+        );
+        let scope_take_at = production.find("builtin_registration_scope.take()").expect(
+            "builtin_registration_scope.take() must exist in production — \
                  the sibling builtin-scope dispose census depends on it",
-            );
+        );
         assert!(
             close_at < scope_take_at,
             "close_and_await must run BEFORE builtin_registration_scope.take() — \

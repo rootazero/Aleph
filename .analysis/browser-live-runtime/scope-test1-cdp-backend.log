@@ -1,0 +1,202 @@
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+warning: unused import: `super::*`
+   --> src\gateway\execution_engine\run_loop\project_context.rs:223:9
+    |
+223 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::Duration`
+ --> src\gateway\execution_engine\slash_command_body\tests.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FileSessionStoreConfig` and `FileSessionStore`
+  --> src\gateway\session_store\hook_transcripts.rs:42:55
+   |
+42 |     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+   |                                                       ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `with_consent` is never used
+   --> src\builtin_tools\skill_reader\read.rs:157:19
+    |
+101 | impl ReadSkillTool {
+    | ------------------ method in this implementation
+...
+157 |     pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `alephcore` (lib test) generated 4 warnings (run `cargo fix --lib -p alephcore --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 7m 28s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 158 tests
+test browser::cdp_backend::actions::tests::a_chord_is_not_silently_truncated_to_one_key ... ok
+test browser::cdp_backend::actions::tests::a_fill_the_page_acknowledged_is_verified ... ok
+test browser::cdp_backend::actions::tests::a_select_option_value_cannot_forge_a_ref_token ... ok
+test browser::cdp_backend::actions::tests::a_ref_whose_document_the_last_capture_did_not_see_is_refused_as_stale ... ok
+test browser::cdp_backend::actions::tests::a_page_thrown_error_in_the_hit_test_cannot_forge_a_ref_token ... ok
+test browser::cdp_backend::actions::tests::a_blocker_class_cannot_forge_a_ref_token ... ok
+test browser::cdp_backend::actions::tests::a_protocol_error_from_resolve_node_is_a_stale_ref_whatever_it_says ... ok
+test browser::cdp_backend::actions::tests::a_coordinate_click_is_converted_from_page_space_to_the_viewport ... ok
+test browser::cdp_backend::actions::tests::a_ref_in_another_frame_is_refused_and_names_the_driver_that_can ... ok
+test browser::cdp_backend::actions::tests::a_coordinate_click_has_no_node_to_probe_and_says_so ... ok
+test browser::cdp_backend::actions::tests::a_page_that_throws_from_is_connected_is_not_blamed_on_the_engine ... ok
+test browser::cdp_backend::actions::tests::a_ref_whose_node_left_the_document_is_stale_not_a_protocol_error ... ok
+test browser::cdp_backend::actions::tests::a_liveness_answer_that_is_not_a_bool_refuses_without_claiming_staleness ... ok
+test browser::cdp_backend::actions::tests::a_page_thrown_error_in_a_value_setter_cannot_forge_a_ref_token ... ok
+test browser::cdp_backend::actions::tests::a_click_the_engine_accepted_but_the_page_never_saw_is_effect_not_delivered ... ok
+test browser::cdp_backend::actions::tests::a_click_the_page_saw_is_verified_and_the_probe_is_installed_before_dispatch ... ok
+test browser::cdp_backend::actions::tests::a_click_that_opens_a_dialog_answers_on_the_event_not_the_budget ... ok
+test browser::cdp_backend::actions::tests::probe_js_marks_only_the_target_element ... ok
+test browser::cdp_backend::actions::tests::a_readback_failure_marks_the_action_skipped_not_failed ... ok
+test browser::cdp_backend::actions::tests::skipped_is_an_honest_label_not_a_success ... ok
+test browser::cdp_backend::actions::tests::the_dialog_gate_records_every_verb_as_gated_or_not ... ok
+test browser::cdp_backend::actions::tests::drag_refuses_when_the_table_says_the_engine_cannot ... ok
+test browser::cdp_backend::actions::tests::upload_refuses_when_the_table_says_the_engine_cannot ... ok
+test browser::cdp_backend::actions::tests::an_unparseable_resolve_node_reply_is_not_a_stale_ref ... ok
+test browser::cdp_backend::actions::tests::a_verb_on_a_tab_with_an_open_dialog_refuses_by_name ... ok
+test browser::cdp_backend::actions::tests::a_selector_shaped_ref_is_refused_as_unrecognised_not_as_stale ... ok
+test browser::cdp_backend::actions::tests::click_by_ref_after_a_loader_change_is_a_stale_ref ... ok
+test browser::cdp_backend::actions::tests::a_covered_element_is_refused_by_name_and_no_mouse_event_is_sent ... ok
+test browser::cdp_backend::actions::tests::fill_form_is_gated_per_field_on_a_cdp_profile ... ok
+test browser::cdp_backend::actions::tests::an_engine_that_answers_without_the_key_still_names_the_engine ... ok
+test browser::cdp_backend::actions::tests::the_key_refusal_names_the_keys_that_work ... ok
+test browser::cdp_backend::cookies::tests::no_tab_is_a_named_refusal_not_an_empty_jar ... ok
+test browser::cdp_backend::evaluate::tests::an_exception_that_does_not_echo_the_script_is_passed_through ... ok
+test browser::cdp_backend::evaluate::tests::an_exception_that_echoes_only_a_fragment_is_still_withheld ... ok
+test browser::cdp_backend::evaluate::tests::an_exception_that_echoes_the_script_is_withheld ... ok
+test browser::cdp_backend::evaluate::tests::the_wrapper_calls_a_function_and_leaves_an_expression_alone ... ok
+test browser::cdp_backend::evaluate::tests::values_render_as_the_json_the_tool_layer_parses ... ok
+test browser::cdp_backend::dialog::tests::handle_dialog_refuses_when_the_table_says_the_engine_cannot ... ok
+test browser::cdp_backend::events::tests::a_frame_navigated_with_no_loader_id_is_ignored ... ok
+test browser::cdp_backend::events::tests::a_main_frame_navigation_the_page_started_retires_the_tabs_refs ... ok
+test browser::cdp_backend::actions::tests::an_engine_without_the_probe_capability_is_honestly_skipped ... ok
+test browser::cdp_backend::events::tests::a_ring_the_pump_dropped_events_into_says_so ... ok
+test browser::cdp_backend::dialog::tests::a_dialog_call_reaches_the_engine_even_when_the_latch_says_there_is_none ... ok
+test browser::cdp_backend::events::tests::a_subframe_navigation_changes_nothing_and_leaves_the_refs_alone ... ok
+test browser::cdp_backend::actions::tests::type_text_falls_back_to_per_character_keys_when_it_cannot ... ok
+test browser::cdp_backend::events::tests::an_empty_ring_says_whether_anyone_was_listening ... ok
+test browser::cdp_backend::actions::tests::type_text_uses_insert_text_when_the_table_says_it_can ... ok
+test browser::cdp_backend::events::tests::an_event_for_an_unknown_session_is_dropped_not_misattributed ... ok
+test browser::cdp_backend::events::tests::the_dialog_latch_sets_and_clears ... ok
+test browser::cdp_backend::dialog::tests::the_engines_own_answer_is_what_says_there_is_no_dialog ... ok
+test browser::cdp_backend::events::tests::the_pump_slot_is_claimed_exactly_once ... ok
+test browser::cdp_backend::events::tests::the_same_loader_announced_twice_is_not_a_new_document ... ok
+test browser::cdp_backend::dialog::tests::accepting_a_pending_dialog_clears_the_latch ... ok
+test browser::cdp_backend::events::tests::a_ring_read_through_the_verb_reports_an_observation ... ok
+test browser::cdp_backend::events::tests::the_gap_note_is_this_tabs_window_not_the_connections_whole_life ... ok
+test browser::cdp_backend::events::tests::a_popup_is_adopted_only_when_its_opener_is_a_tab_we_own ... ok
+test browser::cdp_backend::events::tests::the_console_ring_keeps_the_newest_entries_not_the_first_ones ... ok
+test browser::cdp_backend::navigate::tests::a_dropped_event_is_named_in_the_timeout_and_silence_costs_nothing ... ok
+test browser::cdp_backend::cookies::tests::a_restore_script_that_throws_is_not_reported_as_a_loaded_session ... ok
+test browser::cdp_backend::cookies::tests::a_domainless_cookie_is_attached_to_the_pages_url ... ok
+test browser::cdp_backend::migration::tests::a_cookie_export_failure_is_an_error_and_touches_no_target ... ok
+test browser::cdp_backend::cookies::tests::with_no_active_marker_the_tab_is_the_one_the_ordered_listing_names ... ok
+test browser::cdp_backend::migration::tests::a_local_storage_failure_is_a_warning_not_an_abort ... ok
+test browser::cdp_backend::migration::tests::export_reads_cookies_tabs_and_local_storage_from_the_source ... ok
+test browser::cdp_backend::cookies::tests::a_saved_state_is_put_back_on_the_wire_when_it_is_loaded ... ok
+test browser::cdp_backend::operation::tests::distinct_owners_yield_distinct_browser_sessions ... ok
+test browser::cdp_backend::navigate::tests::an_error_text_on_a_successful_call_is_still_a_failed_navigation ... ok
+test browser::cdp_backend::events::tests::popup_adoption_still_works_with_the_destroyed_arm_installed ... ok
+test browser::cdp_backend::operation::tests::record_binds_the_pinned_owner_session_and_target ... ok
+test browser::cdp_backend::events::tests::a_destroyed_target_folds_the_tab_and_later_calls_answer_tab_gone ... ok
+test browser::cdp_backend::events::tests::a_tab_we_closed_is_not_left_marked_gone_by_its_own_death_event ... ok
+test browser::cdp_backend::operation::tests::failed_navigation_produces_no_record ... ok
+test browser::cdp_backend::routes::tests::a_rule_that_cannot_be_armed_fails_the_navigation_loudly ... ok
+test browser::cdp_backend::routes::tests::add_rejects_an_empty_url_contains ... ok
+test browser::cdp_backend::cookies::tests::an_unreadable_origin_is_absent_from_the_saved_state_not_empty ... ok
+test browser::cdp_backend::routes::tests::a_paused_request_matching_no_rule_is_continued_verbatim ... ok
+test browser::cdp_backend::routes::tests::a_paused_request_matching_an_abort_rule_is_failed ... ok
+test browser::cdp_backend::routes::tests::a_paused_request_matching_a_mock_rule_is_fulfilled ... ok
+test browser::cdp_backend::routes::tests::a_fulfill_that_errors_fails_open_to_continue ... ok
+test browser::cdp_backend::routes::tests::clear_tab_and_clear_profile_remove_only_their_own_scope ... ok
+test browser::cdp_backend::routes::tests::has_rules_for_sees_tab_and_profile_rules ... ok
+test browser::cdp_backend::routes::tests::hits_are_counted_on_the_rule_that_matched ... ok
+test browser::cdp_backend::routes::tests::list_reports_kind_label_scope_hits_and_active ... ok
+test browser::cdp_backend::routes::tests::method_filter_narrows_and_substring_matches_anywhere ... ok
+test browser::cdp_backend::routes::tests::matching_is_lifo_and_tab_rules_beat_profile_rules ... ok
+test browser::cdp_backend::routes::tests::a_tab_rule_for_another_tab_does_not_arm_this_tab ... ok
+test browser::cdp_backend::routes::tests::profile_rules_do_not_leak_across_profiles ... ok
+test browser::cdp_backend::routes::tests::route_add_is_refused_on_an_engine_the_table_says_cannot_serve_it ... ok
+test browser::cdp_backend::routes::tests::route_add_on_a_live_tab_arms_it_without_a_navigate ... ok
+test browser::cdp_backend::routes::tests::route_add_rolls_the_rule_back_when_the_engine_refuses_fetch ... ok
+test browser::cdp_backend::routes::tests::route_clear_scopes_and_reports_counts ... ok
+test browser::cdp_backend::routes::tests::route_add_with_profile_scope_arms_every_live_tab_of_the_profile ... ok
+test browser::cdp_backend::routes::tests::profile_rules_are_armed_before_the_tabs_first_navigation ... ok
+test browser::cdp_backend::routes::tests::rule_ids_are_monotonic_and_never_reused ... ok
+test browser::cdp_backend::routes::tests::route_remove_of_an_unknown_id_fails_loudly ... ok
+test browser::cdp_backend::routes::tests::route_remove_of_the_last_applicable_rule_disarms_the_tab ... ok
+test browser::cdp_backend::navigate::tests::history_records_the_landed_url_as_the_tabs_last_observation ... ok
+test browser::cdp_backend::operation::tests::navigate_with_record_names_the_navigated_tab ... ok
+test browser::cdp_backend::operation::tests::open_tab_with_record_names_the_created_tab ... ok
+test browser::cdp_backend::routes::tests::removing_the_last_rule_disarms_the_tab ... ok
+test browser::cdp_backend::routes::tests::closing_a_tab_drops_its_rules_and_its_loop ... ok
+test browser::cdp_backend::routes::tests::the_loop_exits_when_its_session_dies_mid_decision ... ok
+test browser::cdp_backend::screenshot::tests::the_axis_map_covers_every_field_of_emulate_options ... ok
+test browser::cdp_backend::screenshot::tests::pdf_refuses_when_the_table_says_the_engine_cannot ... ok
+test browser::cdp_backend::screenshot::tests::a_colour_scheme_override_reaches_the_engine_as_an_emulated_media_feature ... ok
+test browser::cdp_backend::screenshot::tests::a_resize_sends_the_requested_metrics ... ok
+test browser::cdp_backend::screenshot::tests::emulate_sends_every_axis_to_its_own_cdp_method ... ok
+test browser::cdp_backend::snapshot::tests::a_presented_snapshot_on_a_tab_with_an_open_dialog_refuses_before_the_wire ... ok
+test browser::cdp_backend::routes::tests::ssrf_veto_beats_a_matching_mock_rule ... ok
+test browser::cdp_backend::routes::tests::zero_rules_means_no_fetch_enable_and_no_loop ... ok
+test browser::cdp_backend::snapshot::engine_arm_census::every_engine_arm_in_the_read_path_reaches_a_fetcher ... ok
+test browser::cdp_backend::screenshot::tests::pdf_reaches_the_wire_when_the_table_says_the_engine_can ... ok
+test browser::cdp_backend::snapshot::tests::a_snapshot_on_a_tab_with_an_open_dialog_refuses_before_the_wire ... ok
+test browser::cdp_backend::snapshot::tests::a_cross_origin_frames_content_is_captured_and_placed_at_its_owner ... ok
+test browser::cdp_backend::snapshot::tests::a_child_renderers_own_top_layer_reaches_the_page_state ... ok
+test browser::cdp_backend::tabs::tests::a_refused_close_leaves_the_tab_in_the_table ... ok
+test browser::cdp_backend::tabs::tests::a_switched_tab_is_the_one_the_listing_marks_selected ... ok
+test browser::cdp_backend::snapshot::tests::an_unreachable_child_is_confessed_rather_than_rendered_as_an_empty_frame ... ok
+test browser::cdp_backend::tabs::tests::a_tab_we_closed_is_forgotten_and_a_vanished_one_is_gone ... ok
+test browser::cdp_backend::tabs::tests::list_tabs_records_every_tab_in_the_table ... ok
+test browser::cdp_backend::tabs::tests::open_tab_records_identity_even_when_the_navigation_is_refused ... ok
+test browser::cdp_backend::tabs::tests::switch_tab_records_the_identity_without_a_url_claim ... ok
+test browser::cdp_backend::routes::tests::an_orphan_paused_event_after_disable_is_tolerated ... ok
+test browser::cdp_backend::tests::a_blocked_navigation_produces_no_cdp_message_at_all ... ok
+test browser::cdp_backend::tabs::tests::the_listing_is_ordered_whatever_order_the_tabs_were_inserted_in ... ok
+test browser::cdp_backend::tests::a_global_scope_covers_nested_mutations_on_the_same_owner ... ok
+test browser::cdp_backend::tests::a_nested_mutation_on_another_target_is_refused_unpolled ... ok
+test browser::cdp_backend::tests::a_nested_global_mutation_under_a_single_target_is_refused_unpolled ... ok
+test browser::cdp_backend::tests::a_nested_mutation_on_the_same_target_runs_under_the_outer_scope ... ok
+test browser::cdp_backend::tests::a_nested_recorded_mutation_on_another_target_is_refused_unpolled ... ok
+test browser::cdp_backend::tests::a_nested_recorded_mutation_on_the_same_target_yields_an_exact_receipt ... ok
+test browser::cdp_backend::tests::a_pinned_handle_for_another_engine_is_refused_unpolled ... ok
+test browser::cdp_backend::tests::a_read_verb_never_brings_an_engine_into_existence ... ok
+test browser::cdp_backend::actions::tests::fill_forms_exemption_holds_because_this_backend_does_not_override_it ... ok
+test browser::cdp_backend::tests::a_pinned_handle_for_another_profile_is_refused_unpolled ... ok
+test browser::cdp_backend::tests::a_recorded_mutation_that_acted_outside_its_scope_mints_no_receipt ... ok
+test browser::cdp_backend::tests::cdp_errors_map_to_three_distinct_browser_errors ... ok
+test browser::cdp_backend::tests::an_arrow_function_script_is_called_not_merely_evaluated ... ok
+test browser::cdp_backend::routes::tests::an_ssrf_veto_never_falls_back_to_continue ... ok
+test browser::cdp_backend::tests::backend_profile_and_registry_key_are_one_spelling ... ok
+test browser::cdp_backend::tests::the_permit_and_construction_recognisers_match_what_they_claim_to ... ok
+test browser::cdp_backend::tests::evaluate_returns_the_value_and_never_the_script ... ok
+test browser::cdp_backend::snapshot::tests::a_presented_snapshot_within_budget_is_the_full_render ... ok
+test browser::cdp_backend::tests::no_verb_is_left_unwired ... ok
+test browser::cdp_backend::snapshot::tests::the_viewport_is_read_from_layout_metrics_and_not_from_the_snapshot ... ok
+test browser::cdp_backend::snapshot::tests::a_single_renderer_page_costs_no_child_enumeration ... ok
+test browser::cdp_backend::snapshot::tests::a_presented_snapshot_over_budget_names_omitted_controls_and_carries_the_full_text ... ok
+test browser::cdp_backend::snapshot::tests::a_snapshot_carries_structured_state_and_bumps_the_generation ... ok
+test browser::cdp_backend::actions::tests::a_timeout_resolving_the_node_is_a_busy_engine_not_a_stale_ref ... ok
+test browser::cdp_backend::dialog::tests::an_engine_timeout_keeps_the_gate_up ... ok
+test browser::cdp_backend::migration::tests::an_engine_barrier_during_export_is_engine_busy_not_engine_failure ... ok
+test browser::cdp_backend::navigate::tests::a_new_loader_id_resets_the_tabs_ref_table ... ok
+test browser::cdp_backend::navigate::tests::a_navigation_that_times_out_still_runs_the_landing_audit ... ok
+test browser::cdp_backend::tabs::tests::an_empty_target_enumeration_does_not_hide_the_tab_we_created ... ok
+test browser::cdp_backend::tabs::tests::open_tab_records_the_tabs_identity_and_landed_url ... ok
+test browser::cdp_backend::dialog::tests::an_engine_timeout_leaves_the_door_open ... ok
+test browser::cdp_backend::migration::tests::import_sets_the_same_cookies_and_reopens_every_tab_on_the_target ... ok
+test browser::cdp_backend::tests::the_dead_code_permit_is_gone_once_production_constructs_this_backend ... ok
+
+test result: ok. 158 passed; 0 failed; 0 ignored; 0 measured; 20527 filtered out; finished in 7.08s
+
+
+real	7m37.004s
+user	0m0.015s
+sys	0m0.015s

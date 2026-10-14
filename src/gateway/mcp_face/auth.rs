@@ -90,13 +90,18 @@ pub fn authorize(
         .and_then(|v| v.to_str().ok())
         .and_then(extract_bearer_token);
 
+    // Loopback on this stateless face stays the zero-config operator whatever
+    // bearer rides along: the bearer is NOT a paired-device credential claim
+    // there, and `resolve_connect_auth` now validates (and refuses on failure)
+    // any device credential a loopback peer presents. Keep the device slot
+    // empty for loopback so this face's behaviour is unchanged.
     let outcome = resolve_connect_auth(
         client.local,
-        bearer, // shared_token slot
-        bearer, // device_token slot
-        None,   // no bootstrap ticket on the stateless HTTP path
-        None,   // device_id not supplied via headers
-        None,   // device_name not supplied via headers
+        bearer,                                   // shared_token slot
+        if client.local { None } else { bearer }, // device_token slot
+        None,                                     // no bootstrap ticket on the stateless HTTP path
+        None,                                     // device_id not supplied via headers
+        None,                                     // device_name not supplied via headers
         |t| validate_shared(t),
         device_tokens,
     );

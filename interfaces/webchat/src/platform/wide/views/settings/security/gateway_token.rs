@@ -122,6 +122,16 @@ fn format_stamp(ms: i64) -> Option<String> {
     })
 }
 
+/// The "Online" status label, extended with the server's `connected_since`
+/// stamp when present (the start of the device's current uninterrupted
+/// online span). Absent or out-of-range stamps degrade to the bare label.
+fn online_label(online: &str, connected_since: Option<i64>) -> String {
+    match connected_since.and_then(format_stamp) {
+        Some(stamp) => format!("{online} · {stamp}"),
+        None => online.to_string(),
+    }
+}
+
 #[component]
 #[must_use]
 #[allow(clippy::too_many_lines)]
@@ -454,7 +464,10 @@ pub fn GatewayTokenSection() -> impl IntoView {
                                 let id = d.device_id.clone();
                                 let confirm_id = d.device_id.clone();
                                 let status = if d.connected {
-                                    t_string!(i18n, common.gateway_devices_online).to_string()
+                                    online_label(
+                                        t_string!(i18n, common.gateway_devices_online),
+                                        d.connected_since,
+                                    )
                                 } else {
                                     d.last_seen_at
                                         .and_then(format_stamp)
@@ -592,8 +605,22 @@ pub fn GatewayTokenSection() -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_pairing_urls, decode_devices, is_loopback_origin};
+    use super::{
+        choose_pairing_urls, decode_devices, format_stamp, is_loopback_origin, online_label,
+    };
     use serde_json::json;
+
+    #[test]
+    fn online_label_renders_connected_since_when_the_server_reports_it() {
+        let ms = 1_760_000_000_000;
+        let stamp = format_stamp(ms).unwrap();
+        assert_eq!(
+            online_label("Online", Some(ms)),
+            format!("Online · {stamp}")
+        );
+        assert_eq!(online_label("Online", None), "Online");
+        assert_eq!(online_label("Online", Some(i64::MAX)), "Online");
+    }
 
     #[test]
     fn server_urls_win_over_the_page_origin() {

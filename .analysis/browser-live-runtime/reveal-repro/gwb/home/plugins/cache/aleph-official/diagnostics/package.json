@@ -1,0 +1,10 @@
+{
+  "name": "@aleph/diagnostics",
+  "version": "0.1.0",
+  "description": "Aleph plugin — system health monitoring and performance diagnostics",
+  "main": "src/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js"
+  }
+}

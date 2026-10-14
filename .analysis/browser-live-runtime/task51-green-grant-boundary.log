@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:78:5 › grant-boundary: fragment credential is scrubbed from the address bar and never enters the document (3.0s)
+
+  1 passed (3.8s)

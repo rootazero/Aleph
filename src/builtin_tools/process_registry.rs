@@ -49,7 +49,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
-use tokio::sync::Notify;
+use tokio::sync::{oneshot, watch, Notify};
 use tokio::task::AbortHandle;
 
 use crate::builtin_tools::code_exec::CodeExecOutput;
@@ -117,6 +117,66 @@ struct ProcEntry {
     /// read `wait` returns through, so both faces stamp it without a second
     /// call site to forget.
     reported: bool,
+    /// `Some` only for an owner-supervised (managed) child: the controlled
+    /// cancel + reap-ack link. Plain background jobs keep `None` and every
+    /// existing code path is byte-identical for them.
+    managed: Option<ManagedLink>,
+}
+
+/// Registry side of a managed child's cancel + reap link. The supervisor task
+/// owns the `Child` itself; `cancel` asks it to terminate and `reaped` flips to
+/// `true` only AFTER `Child::wait` returned (real OS exit observed).
+struct ManagedLink {
+    cancel: Option<oneshot::Sender<()>>,
+    reaped: watch::Receiver<bool>,
+}
+
+/// Supervisor side of the link, handed to the task that owns the managed
+/// `Child`. See [`managed_link`].
+pub struct ManagedSupervisorEnd {
+    /// Resolves when someone asked the supervisor to terminate the child.
+    pub cancel: oneshot::Receiver<()>,
+    reaped: watch::Sender<bool>,
+}
+
+impl ManagedSupervisorEnd {
+    /// Mark the child as reaped. Call ONLY after `Child::wait` returned.
+    pub fn ack_reaped(&self) {
+        let _ = self.reaped.send(true);
+    }
+}
+
+/// Build the two ends of a managed cancel + reap link.
+#[must_use]
+pub fn managed_link() -> (ManagedLinkEnd, ManagedSupervisorEnd) {
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let (reaped_tx, reaped_rx) = watch::channel(false);
+    (
+        ManagedLinkEnd(ManagedLink {
+            cancel: Some(cancel_tx),
+            reaped: reaped_rx,
+        }),
+        ManagedSupervisorEnd {
+            cancel: cancel_rx,
+            reaped: reaped_tx,
+        },
+    )
+}
+
+/// Opaque registry-side half of [`managed_link`], consumed by
+/// [`ProcessRegistry::register_managed`].
+pub struct ManagedLinkEnd(ManagedLink);
+
+/// Result of [`ProcessRegistry::cancel_managed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedCancelOutcome {
+    /// The supervisor acknowledged that `Child::wait` returned.
+    Reaped,
+    /// Cancel was delivered but no reap ack arrived in time: the child may
+    /// still be alive. NOT a success.
+    TimedOut,
+    /// Unknown id / other session / not a managed entry.
+    NotFound,
 }
 
 impl ProcEntry {
@@ -149,6 +209,10 @@ pub enum KillOutcome {
     Killed,
     AlreadyFinished,
     NotFound,
+    /// A managed (owner-supervised) child: the generic kill is refused, because
+    /// aborting its supervisor would drop the child before the owner closed the
+    /// resource it publishes. Stop it through its owning tool.
+    Managed,
 }
 
 /// Outcome of [`ProcessRegistry::register_running`].
@@ -265,6 +329,62 @@ impl ProcessRegistry {
         session_label: Option<String>,
         abort: AbortHandle,
     ) -> RegisterOutcome {
+        self.register_inner(command.into(), session_label, abort, None)
+    }
+
+    /// Register an owner-supervised (managed) child in the SAME table, with the
+    /// same caps and journaling as a background job, plus a controlled
+    /// cancel + reap-ack link ([`cancel_managed`](Self::cancel_managed)).
+    pub fn register_managed(
+        &self,
+        command: impl Into<String>,
+        session_label: Option<String>,
+        abort: AbortHandle,
+        link: ManagedLinkEnd,
+    ) -> RegisterOutcome {
+        self.register_inner(command.into(), session_label, abort, Some(link.0))
+    }
+
+    /// Ask the supervisor of managed entry `id` (owned by `caller`) to
+    /// terminate its child, then wait up to `budget` for the reap ack.
+    /// `Reaped` is returned only after the supervisor observed the OS wait;
+    /// the generic [`kill`](Self::kill) never provides that proof.
+    pub async fn cancel_managed(
+        &self,
+        id: u64,
+        caller: Option<&str>,
+        budget: Duration,
+    ) -> ManagedCancelOutcome {
+        let (cancel, mut reaped) = {
+            let mut procs = self.lock();
+            match procs.get_mut(&id) {
+                Some(entry) if owns(entry, caller) => match entry.managed.as_mut() {
+                    Some(link) => (link.cancel.take(), link.reaped.clone()),
+                    None => return ManagedCancelOutcome::NotFound,
+                },
+                _ => return ManagedCancelOutcome::NotFound,
+            }
+        };
+        if let Some(cancel) = cancel {
+            // The supervisor may already be gone (natural exit); a closed
+            // receiver is fine - the reap flag below is the only proof read.
+            let _ = cancel.send(());
+        }
+        let outcome = match tokio::time::timeout(budget, reaped.wait_for(|reaped| *reaped)).await {
+            Ok(Ok(_)) => ManagedCancelOutcome::Reaped,
+            // Sender dropped without ack: the supervisor died unobserved.
+            Ok(Err(_)) | Err(_) => ManagedCancelOutcome::TimedOut,
+        };
+        outcome
+    }
+
+    fn register_inner(
+        &self,
+        command: String,
+        session_label: Option<String>,
+        abort: AbortHandle,
+        managed: Option<ManagedLink>,
+    ) -> RegisterOutcome {
         let (id, preview) = {
             let mut procs = self.lock();
             // BT-D-R4-17: count BOTH per-session and global running jobs in
@@ -324,7 +444,7 @@ impl ProcessRegistry {
             if self.journaled {
                 process_journal::reserve_id(id);
             }
-            let preview = truncate_preview(command.into());
+            let preview = truncate_preview(command);
             evict_if_needed(&mut procs);
             procs.insert(
                 id,
@@ -336,6 +456,7 @@ impl ProcessRegistry {
                     state: ProcState::Running,
                     live: None,
                     reported: false,
+                    managed,
                 },
             );
             (id, preview)
@@ -504,6 +625,16 @@ impl ProcessRegistry {
         let (outcome, live) = {
             let mut procs = self.lock();
             match procs.get_mut(&id) {
+                Some(entry) if owns(entry, caller) && entry.managed.is_some() => {
+                    // Managed children are stopped by their owner, never aborted
+                    // here (no close-first ordering, no reap proof).
+                    let outcome = if matches!(entry.state, ProcState::Running) {
+                        KillOutcome::Managed
+                    } else {
+                        KillOutcome::AlreadyFinished
+                    };
+                    (outcome, None)
+                }
                 Some(entry) if owns(entry, caller) => match entry.state {
                     ProcState::Running => {
                         entry.abort.abort();
@@ -612,7 +743,9 @@ impl ProcessRegistry {
             let mut procs = self.lock();
             let mut reaped = Vec::new();
             for (id, entry) in procs.iter_mut() {
-                if matches!(entry.state, ProcState::Running) {
+                // Managed children are reaped by their owner's own shutdown
+                // (close resource first, then cancel + wait), never aborted here.
+                if matches!(entry.state, ProcState::Running) && entry.managed.is_none() {
                     entry.abort.abort();
                     // Take the tail before `retire` releases it (see `kill`).
                     let live = entry.live.clone();
@@ -1477,5 +1610,88 @@ mod tests {
              one entry per job it has ever run"
         );
         process_journal::disable_for_test();
+    }
+
+    // ---- managed (owner-supervised) entries --------------------------------
+
+    /// Registers a managed entry whose supervisor acks only when told to.
+    fn managed_entry(reg: &ProcessRegistry, owner: &str) -> (u64, ManagedSupervisorEnd) {
+        let (end, sup) = managed_link();
+        // A parked task: a real AbortHandle that nothing here aborts.
+        let abort = tokio::spawn(std::future::pending::<()>()).abort_handle();
+        let id = unwrap_id(reg.register_managed("svc", Some(owner.into()), abort, end));
+        (id, sup)
+    }
+
+    #[tokio::test]
+    async fn kill_never_aborts_a_managed_entry() {
+        let reg = ProcessRegistry::new();
+        let (id, _sup) = managed_entry(&reg, "owner");
+        assert!(matches!(reg.kill(id, Some("owner")), KillOutcome::Managed));
+        // Still Running: kill neither retired it nor released its slot.
+        assert!(matches!(
+            reg.poll(id, Some("owner")),
+            PollOutcome::Running { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn shutdown_skips_managed_entries() {
+        let reg = ProcessRegistry::new();
+        let (id, _sup) = managed_entry(&reg, "owner");
+        assert_eq!(reg.shutdown(), 0, "the companion owner drains its own");
+        assert!(matches!(
+            reg.poll(id, Some("owner")),
+            PollOutcome::Running { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancel_managed_is_reaped_only_after_the_supervisor_acks() {
+        let reg = Arc::new(ProcessRegistry::new());
+        let (id, mut sup) = managed_entry(&reg, "owner");
+        // The supervisor receives the cancel, "waits", and only then acks.
+        let acked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let acked2 = Arc::clone(&acked);
+        tokio::spawn(async move {
+            let _ = (&mut sup.cancel).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            acked2.store(true, std::sync::atomic::Ordering::SeqCst);
+            sup.ack_reaped();
+        });
+        let outcome = reg
+            .cancel_managed(id, Some("owner"), Duration::from_secs(5))
+            .await;
+        assert_eq!(outcome, ManagedCancelOutcome::Reaped);
+        assert!(
+            acked.load(std::sync::atomic::Ordering::SeqCst),
+            "Reaped must not be reported before the supervisor's wait ack"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_managed_times_out_when_no_exit_is_confirmed() {
+        let reg = ProcessRegistry::new();
+        let (id, _sup) = managed_entry(&reg, "owner");
+        let outcome = reg
+            .cancel_managed(id, Some("owner"), Duration::from_millis(80))
+            .await;
+        assert_eq!(outcome, ManagedCancelOutcome::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn cancel_managed_is_owner_scoped_and_unknown_ids_are_not_found() {
+        let reg = ProcessRegistry::new();
+        let (id, _sup) = managed_entry(&reg, "owner");
+        assert_eq!(
+            reg.cancel_managed(id, Some("intruder"), Duration::from_millis(50))
+                .await,
+            ManagedCancelOutcome::NotFound
+        );
+        assert_eq!(
+            reg.cancel_managed(9_999, Some("owner"), Duration::from_millis(50))
+                .await,
+            ManagedCancelOutcome::NotFound
+        );
     }
 }

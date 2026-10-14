@@ -1,0 +1,27 @@
+{
+  "key": "agent:main:lifecycle-target-destroy-1791772315745",
+  "agent_id": "main",
+  "session_type": "main",
+  "created_at": 1791772315,
+  "last_active_at": 1791772317,
+  "message_count": 5,
+  "total_tokens": 4,
+  "auto_reset_at": null,
+  "state": "idle",
+  "identity_meta": {
+    "role": "owner",
+    "identity_id": "owner",
+    "source_channel": "unknown",
+    "topic": "mock reply (0)"
+  },
+  "input_tokens": 2,
+  "output_tokens": 2,
+  "model": "mock-model",
+  "model_provider": "mock",
+  "owner_user_id": "u-owner",
+  "scope_id": "personal:u-owner",
+  "compaction_count": 0,
+  "derived_title": "OPEN_FIXTURE:http://127.0.0.1:18791/page",
+  "last_message_preview": "Fixture opened.",
+  "estimated_cost_usd": 0.0
+}

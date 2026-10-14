@@ -378,7 +378,10 @@ mod tests {
 
             assert!(registry.get_tool(NAME).is_none(), "absent from runtime map");
             assert!(!registry.has_tool(NAME), "has_tool must be false");
-            assert!(registry.get_tool_schema(NAME).is_none(), "no advertised schema");
+            assert!(
+                registry.get_tool_schema(NAME).is_none(),
+                "no advertised schema"
+            );
             assert!(
                 registry.unified_tools().all(|t| t.name != NAME),
                 "absent from the provider-facing tool iterator"
@@ -413,7 +416,10 @@ mod tests {
             let registry = BuiltinToolRegistry::with_config(config).await.unwrap();
 
             assert!(registry.get_tool(NAME).is_some(), "present in runtime map");
-            assert!(registry.get_tool_schema(NAME).is_some(), "schema advertised");
+            assert!(
+                registry.get_tool_schema(NAME).is_some(),
+                "schema advertised"
+            );
             assert!(registry.unified_tools().any(|t| t.name == NAME));
 
             // No ambient operator/loopback/conn identity in this test, so the

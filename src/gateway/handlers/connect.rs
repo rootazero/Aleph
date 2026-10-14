@@ -68,11 +68,20 @@ pub enum ConnectAuthOutcome {
 /// Resolve authorization for a `connect` handshake.
 ///
 /// Priority:
-/// 1. loopback ⇒ authorized
-/// 2. `device_token` valid ⇒ authorized
+/// 1. loopback **without** an explicit `device_token` / `bootstrap_ticket` ⇒
+///    authorized (zero-config operator, unchanged)
+/// 2. `device_token` valid ⇒ authorized (bound to that paired device)
 /// 3. `bootstrap_ticket` valid ⇒ authorized + issue new device token
-/// 4. legacy `shared_token` valid ⇒ authorized
+/// 4. legacy `shared_token` valid ⇒ authorized (remote only)
 /// 5. otherwise ⇒ unauthorized
+///
+/// A loopback peer that *presents* a device credential has asked to be
+/// identified as that paired device, so the credential is verified like any
+/// remote one and a bad credential is refused — it never silently falls back
+/// to the credential-less operator path (that would let a wrong or revoked
+/// token read as "owner", the fail-closed-answer-consumed-as-permission
+/// shape). Loopback itself, a `device_name`, and a client-asserted
+/// `device_id` never identify a user; only a validated credential does.
 #[must_use]
 pub fn resolve_connect_auth(
     is_loopback: bool,
@@ -84,7 +93,11 @@ pub fn resolve_connect_auth(
     validate_shared_token: impl Fn(&str) -> bool,
     device_token_mgr: &DeviceTokenManager,
 ) -> ConnectAuthOutcome {
-    if is_loopback {
+    let presents_credential = [device_token, bootstrap_ticket]
+        .into_iter()
+        .flatten()
+        .any(|c| !c.is_empty());
+    if is_loopback && !presents_credential {
         return ConnectAuthOutcome::Authorized { device_id: None };
     }
 
@@ -130,6 +143,12 @@ pub fn resolve_connect_auth(
         }
     }
 
+    // A loopback peer that presented a credential which did not validate is
+    // refused outright: no shared-token and no operator fallback.
+    if is_loopback {
+        return ConnectAuthOutcome::Unauthorized;
+    }
+
     // 3. Legacy shared token.
     if let Some(token) = shared_token {
         if !token.is_empty() && validate_shared_token(token) {
@@ -162,7 +181,9 @@ pub fn connect_authorized(
 /// Resolve the (user, caller_role) pair for an authorized connection.
 ///
 /// Rules (spec §4):
-/// - loopback ⇒ implicit owner, operator (zero-config, unchanged)
+/// - loopback with no validated device ⇒ implicit owner, operator
+///   (zero-config, unchanged); loopback with a credential-validated device
+///   follows the device binding below
 /// - device token bound to a user ⇒ that user; role admin⇒"operator",
 ///   member⇒"member"; deactivated ⇒ walled ("guest", no user)
 /// - authorized but unbound (legacy shared token, pre-v14 device — the device
@@ -182,7 +203,11 @@ pub fn resolve_connection_identity(
 ) -> (Option<String>, &'static str) {
     use crate::gateway::security::store::{UserStatus, OWNER_USER_ID};
 
-    if is_loopback {
+    // Credential-less loopback is the implicit owner. A loopback connection
+    // that authenticated as a paired device (`device_id` came from a validated
+    // credential, never from the client's own claim) resolves through that
+    // device's user binding like any other device-bound connection.
+    if is_loopback && device_id.is_none() {
         return (Some(OWNER_USER_ID.to_string()), "operator");
     }
 
@@ -543,5 +568,175 @@ mod tests {
         assert!(!crate::gateway::method_admin::method_requires_admin(
             "chat.send"
         ));
+    }
+
+    // ── Task 27: loopback + explicit device credential ───────────────────────
+
+    /// Manager + store pair sharing one in-memory store, so a ticket exchanged
+    /// through the manager is visible to `resolve_connection_identity`.
+    fn mgr_and_store() -> (DeviceTokenManager, Arc<SecurityStore>) {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        (DeviceTokenManager::new(Arc::clone(&store)), store)
+    }
+
+    #[test]
+    fn loopback_valid_device_token_resolves_the_bound_user_not_the_owner() {
+        let (mgr, store) = mgr_and_store();
+        store
+            .create_user("u-member", "Member", UserRole::Member)
+            .unwrap();
+        let ticket = mgr.create_bootstrap_ticket(None, Some("u-member")).unwrap();
+        let ConnectAuthOutcome::BootstrapExchanged {
+            device_token,
+            device_id,
+        } = resolve_connect_auth(
+            true,
+            None,
+            None,
+            Some(&ticket),
+            Some("dev-lb"),
+            Some("TUI"),
+            |_| false,
+            &mgr,
+        )
+        else {
+            panic!("loopback bootstrap ticket must exchange and bind a device");
+        };
+        assert_eq!(device_id, "dev-lb");
+        assert!(device_token.starts_with("aleph-dt-"));
+
+        // Reconnect on loopback with the issued token: validated, device-bound.
+        let outcome = resolve_connect_auth(
+            true,
+            None,
+            Some(&device_token),
+            None,
+            None,
+            Some("TUI"),
+            |_| false,
+            &mgr,
+        );
+        let ConnectAuthOutcome::Authorized {
+            device_id: Some(authed),
+        } = outcome
+        else {
+            panic!("expected device-bound Authorized, got {outcome:?}");
+        };
+        assert_eq!(
+            authed, "dev-lb",
+            "device id is server-derived from the token"
+        );
+
+        let (user, role) = resolve_connection_identity(true, Some(&authed), &store);
+        assert_eq!(user.as_deref(), Some("u-member"));
+        assert_eq!(role, "member");
+    }
+
+    #[test]
+    fn loopback_invalid_credential_is_denied_with_no_operator_or_owner_fallback() {
+        let mgr = mgr();
+        for (token, ticket) in [
+            (Some("aleph-dt-not-a-real-token"), None),
+            (None, Some("aleph-bt-not-a-real-ticket")),
+        ] {
+            let outcome = resolve_connect_auth(
+                true,
+                // A valid-looking shared token must not rescue a bad credential.
+                Some("aleph-good"),
+                token,
+                ticket,
+                Some("dev-x"),
+                Some("TUI"),
+                |_| true,
+                &mgr,
+            );
+            assert!(
+                matches!(outcome, ConnectAuthOutcome::Unauthorized),
+                "bad loopback credential must be refused, got {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn loopback_revoked_device_token_is_denied() {
+        let (mgr, _store) = mgr_and_store();
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
+        let ConnectAuthOutcome::BootstrapExchanged {
+            device_token,
+            device_id,
+        } = resolve_connect_auth(
+            true,
+            None,
+            None,
+            Some(&ticket),
+            Some("dev-rev"),
+            None,
+            |_| false,
+            &mgr,
+        )
+        else {
+            panic!("exchange");
+        };
+        assert!(mgr.revoke_device(&device_id).unwrap());
+        assert!(matches!(
+            resolve_connect_auth(
+                true,
+                None,
+                Some(&device_token),
+                None,
+                None,
+                None,
+                |_| false,
+                &mgr
+            ),
+            ConnectAuthOutcome::Unauthorized
+        ));
+    }
+
+    #[test]
+    fn loopback_without_credential_keeps_the_operator_path_even_with_device_claims() {
+        let mgr = mgr();
+        // device_id / device_name are client claims: they never identify anyone.
+        let outcome = resolve_connect_auth(
+            true,
+            None,
+            None,
+            None,
+            Some("dev-claimed"),
+            Some("Pretend Owner"),
+            |_| false,
+            &mgr,
+        );
+        assert!(matches!(
+            outcome,
+            ConnectAuthOutcome::Authorized { device_id: None }
+        ));
+        // Empty-string credentials count as absent.
+        let outcome =
+            resolve_connect_auth(true, None, Some(""), Some(""), None, None, |_| false, &mgr);
+        assert!(matches!(
+            outcome,
+            ConnectAuthOutcome::Authorized { device_id: None }
+        ));
+        let store = seeded_store();
+        let (user, role) = resolve_connection_identity(true, None, &store);
+        assert_eq!(
+            user.as_deref(),
+            Some(crate::gateway::security::store::OWNER_USER_ID)
+        );
+        assert_eq!(role, "operator");
+    }
+
+    #[test]
+    fn loopback_device_bound_to_deactivated_user_is_walled() {
+        let store = seeded_store();
+        store.create_user("u-off", "Off", UserRole::Member).unwrap();
+        upsert_panel_device(&store, "dev-off", "u-off");
+        store
+            .update_user("u-off", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        let (user, role) = resolve_connection_identity(true, Some("dev-off"), &store);
+        assert_eq!(user, None);
+        assert_eq!(role, "guest");
     }
 }

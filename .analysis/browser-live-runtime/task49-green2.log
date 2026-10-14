@@ -1,0 +1,27 @@
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+    Finished `test` profile [unoptimized] target(s) in 3m 26s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 19 tests
+test browser::cdp_backend::recording::tests::codec_args_follow_the_extension_and_a_missing_one_is_refused ... ok
+test browser::cdp_backend::recording::tests::ffmpeg_resolution_prefers_env_then_path_then_playwright_cache ... ok
+test browser::cdp_backend::recording::tests::the_default_path_lands_under_the_managed_dir_with_profile_and_tab ... ok
+test browser::cdp_backend::recording::tests::uniquify_only_moves_aside_for_a_real_collision ... ok
+test browser::cdp_backend::recording::tests::resolve_ffmpeg_finds_the_one_on_this_machines_path ... ok
+test browser::cdp_backend::recording::tests::the_backend_carries_the_shared_registry ... ok
+test browser::cdp_backend::recording::tests::start_without_extension_is_refused_before_any_engine_call ... ok
+test browser::cdp_backend::recording::tests::start_on_an_unwritable_path_fails_fast_without_residue ... ok
+test browser::cdp_backend::recording::tests::a_second_start_on_the_same_tab_is_refused_with_the_existing_id ... ok
+test browser::cdp_backend::recording::tests::a_destroyed_event_for_another_tab_leaves_the_recording_running ... ok
+test browser::cdp_backend::recording::tests::a_preexisting_stale_file_is_never_reported_complete ... ok
+test browser::cdp_backend::recording::tests::start_then_frames_then_stop_produces_a_playable_file_and_an_honest_receipt ... ok
+test browser::cdp_backend::recording::tests::a_target_destroyed_event_finalizes_the_recording_while_the_engine_lives ... ok
+test browser::cdp_backend::recording::tests::tab_death_mid_recording_auto_finalizes_a_truncated_receipt ... ok
+test browser::cdp_backend::recording::tests::a_nonzero_encoder_exit_is_never_reported_as_complete ... ok
+test browser::cdp_backend::recording::tests::ffmpeg_death_mid_recording_is_detected_on_the_next_frame_write ... ok
+test browser::cdp_backend::recording::tests::stop_kills_a_wedged_ffmpeg_and_says_so ... ok
+test browser::cdp_backend::recording::tests::a_slow_encoder_drops_frames_instead_of_buffering_them ... ok
+test browser::cdp_backend::recording::tests::ack_is_sent_only_after_the_frame_is_written ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 20666 filtered out; finished in 3.57s
+

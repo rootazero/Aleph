@@ -554,9 +554,15 @@ mod tests {
         assert!(!tree.is_revoked(&late_id), "UnknownTool must not tombstone");
 
         reg.register(desc("late"), fake("late")).unwrap();
-        await_status(&ctrl, |s| s.applied_tool_ids.iter().any(|t| t.name == "late")).await;
+        await_status(&ctrl, |s| {
+            s.applied_tool_ids.iter().any(|t| t.name == "late")
+        })
+        .await;
 
-        assert!(ctrl.revoke_tool("a").unwrap(), "bound tool: this call revoked it");
+        assert!(
+            ctrl.revoke_tool("a").unwrap(),
+            "bound tool: this call revoked it"
+        );
         assert!(!ctrl.revoke_tool("a").unwrap(), "repeat is idempotent");
         let a_id = CapabilityId {
             namespace: crate::capability::backend::TOOL_NAMESPACE.to_string(),

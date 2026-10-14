@@ -1,0 +1,97 @@
+
+running 48 tests
+test gateway::method_admin::tests::a_member_cannot_rename_or_archive_the_operators_workspace ... ok
+test gateway::method_admin::tests::prefix_match_requires_the_trailing_dot ... ok
+test gateway::method_admin::tests::every_admin_method_names_a_verb_inside_an_open_family ... ok
+test gateway::method_admin::tests::credential_and_config_methods_require_admin ... ok
+test gateway::method_admin::tests::member_daily_methods_stay_open ... ok
+test gateway::method_admin::tests::no_admin_method_is_also_a_carve_out ... ok
+test gateway::method_admin::tests::run_concurrency_is_carved_open_but_its_gateway_siblings_stay_gated ... ok
+test gateway::method_admin::tests::a_member_may_resolve_their_own_parked_tool_call ... ok
+test gateway::method_admin::tests::the_server_global_maintenance_verbs_are_admin_only ... ok
+test gateway::method_admin::tests::the_curated_tables_list_nothing_twice ... ok
+test gateway::method_admin::tests::the_tool_permissions_read_is_carved_open_but_its_write_sibling_is_not ... ok
+test gateway::method_admin::tests::the_two_trace_carve_outs_are_open_and_their_siblings_stay_gated ... ok
+test gateway::method_admin::tests::the_workspace_family_has_no_member_carve_out ... ok
+test gateway::method_admin::tests::tools_invoke_is_carved_open_but_its_siblings_stay_gated ... ok
+test gateway::method_authz::tests::chat_safe_tools_stay_open ... ok
+test gateway::method_authz::tests::config_tools_have_a_model_pick_branch ... ok
+test gateway::method_admin::tests::the_member_daily_memory_surface_stays_open ... ok
+test gateway::method_authz::tests::config_tools_require_operator ... ok
+test gateway::method_authz::tests::operator_tools_has_no_duplicates ... ok
+test gateway::method_visibility::tests::addressed_key_methods_are_key_checked ... ok
+test gateway::method_visibility::tests::agent_run_is_key_checked_like_its_chat_send_twin ... ok
+test gateway::method_visibility::tests::admin_gated_trace_siblings_are_deliberately_absent ... ok
+test gateway::method_visibility::tests::canvas_methods_are_registered ... ok
+test gateway::method_visibility::tests::every_projects_method_is_registered_or_deliberately_absent ... ok
+test gateway::method_visibility::tests::every_scoped_method_stays_open_to_members_in_method_admin ... ok
+test gateway::method_visibility::tests::every_session_addressed_method_is_registered ... ok
+test gateway::method_visibility::tests::every_task_7_method_is_registered ... ok
+test gateway::method_visibility::tests::every_teams_method_is_registered_or_deliberately_absent ... ok
+test gateway::method_visibility::tests::final_review_agent_id_siblings_are_registered ... ok
+test gateway::method_visibility::tests::final_review_families_are_registered ... ok
+test gateway::method_visibility::tests::kanban_list_methods_are_registered_and_list_filtered ... ok
+test gateway::method_visibility::tests::list_methods_are_list_filtered_not_key_checked ... ok
+test gateway::method_visibility::tests::org_shared_entries_all_carry_reasons ... ok
+test gateway::method_visibility::tests::task_7_addressed_key_methods_are_key_checked ... ok
+test gateway::method_visibility::tests::task_7_fix_round_1_methods_are_registered_and_partition_checked ... ok
+test gateway::method_visibility::tests::task_7_fix_round_2_methods_are_registered_and_partition_checked ... ok
+test gateway::method_visibility::tests::task_7_list_methods_are_list_filtered ... ok
+test gateway::method_visibility::tests::task_7_partition_methods_are_partition_checked ... ok
+test gateway::method_visibility::tests::the_admin_gated_channel_binding_verbs_are_deliberately_absent ... ok
+test gateway::method_visibility::tests::the_admin_gated_workspace_family_is_deliberately_absent ... ok
+test gateway::method_visibility::tests::the_formerly_ungated_scoped_rpcs_are_registered ... ok
+test gateway::method_visibility::tests::the_running_set_gauge_is_list_filtered_and_member_reachable ... ok
+test gateway::method_visibility::tests::unregistered_method_reads_as_none_not_a_default_treatment ... ok
+test gateway::method_census::tests::the_role_tables_have_no_ghost_entries ... ok
+test gateway::method_authz::tests::every_tool_face_of_an_admin_rpc_family_is_operator_gated ... ok
+test gateway::method_census::tests::every_dotless_registered_method_is_explicitly_lane_classified ... ok
+test gateway::method_census::tests::every_registered_rpc_method_has_a_recorded_ruling ... ok
+test gateway::method_census::tests::the_scanner_classifies_every_receiver_it_meets ... ok
+
+test result: ok. 48 passed; 0 failed; 0 ignored; 0 measured; 20488 filtered out; finished in 7.68s
+
+
+warning: unused import: `super::*`
+   --> src\gateway\execution_engine\run_loop\project_context.rs:223:9
+    |
+223 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::Duration`
+ --> src\gateway\execution_engine\slash_command_body\tests.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FileSessionStoreConfig` and `FileSessionStore`
+  --> src\gateway\session_store\hook_transcripts.rs:42:55
+   |
+42 |     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+   |                                                       ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `with_consent` is never used
+   --> src\builtin_tools\skill_reader\read.rs:157:19
+    |
+101 | impl ReadSkillTool {
+    | ------------------ method in this implementation
+...
+157 |     pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `parked_len` is never used
+   --> src\gateway\server\browser_viewer_route.rs:197:8
+    |
+121 | impl BrowserViewerRouteState {
+    | ---------------------------- method in this implementation
+...
+197 |     fn parked_len(&self) -> usize {
+    |        ^^^^^^^^^^
+
+warning: `alephcore` (lib test) generated 5 warnings (run `cargo fix --lib -p alephcore --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 1.16s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-8fa026bb9f4d089e.exe)

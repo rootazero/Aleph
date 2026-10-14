@@ -124,4 +124,30 @@ impl SecurityStore {
         )?;
         Ok(rows > 0)
     }
+
+    /// Revoke every active token of a device AND the device row in ONE SQLite
+    /// transaction on a single connection guard.
+    ///
+    /// Two independent writes (`revoke_device_tokens` then `revoke_device`) let
+    /// a failure of the second leave the tokens dead but the device still
+    /// `approved` (a half revocation that callers cannot tell apart from a
+    /// clean one, because the `?` returns before any live-session cleanup).
+    /// Here an error at either step drops the transaction, which rolls both
+    /// back. The returned `bool` has the same meaning as
+    /// [`Self::revoke_device`]: `true` iff the device row was newly revoked.
+    pub fn revoke_device_with_tokens(&self, device_id: &str) -> SqliteResult<bool> {
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = current_timestamp_ms();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE tokens SET revoked_at = ?1 WHERE device_id = ?2 AND revoked_at IS NULL",
+            params![now, device_id],
+        )?;
+        let rows = tx.execute(
+            "UPDATE devices SET revoked_at = ?1 WHERE device_id = ?2 AND revoked_at IS NULL",
+            params![now, device_id],
+        )?;
+        tx.commit()?;
+        Ok(rows > 0)
+    }
 }

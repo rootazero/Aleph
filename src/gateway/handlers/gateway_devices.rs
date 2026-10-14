@@ -80,7 +80,20 @@ pub(crate) async fn revoke_device_and_kick(
         .store()
         .device_user(device_id)
         .unwrap_or(None);
+    // Hold the connection-map write guard across the store write AND the
+    // downgrade: the `connect` handshake finalizes its verdict under this same
+    // lock, so it either runs before (and is cleared below) or after (and sees
+    // the device revoked) — never between and restores a verified identity.
+    // The store calls are synchronous, so no store lock spans an await; the
+    // guard is dropped before the audit `.await`.
+    let mut conns = connections.write().await;
     let revoked = device_token_mgr.revoke_panel_device(device_id)?;
+    let downgraded = if revoked {
+        crate::gateway::server::invalidate_device_sessions_locked(&mut conns, device_id)
+    } else {
+        0
+    };
+    drop(conns);
     if revoked {
         // Authority change: minting a device credential
         // (`gateway.ticket.create`) has been audited since round-5 and its
@@ -110,8 +123,6 @@ pub(crate) async fn revoke_device_and_kick(
             ))
             .await;
         }
-        let downgraded =
-            crate::gateway::server::invalidate_device_sessions(connections, device_id).await;
         if downgraded > 0 {
             tracing::info!(
                 device_id = %device_id,
@@ -122,6 +133,29 @@ pub(crate) async fn revoke_device_and_kick(
         let _ = event_bus.publish_frame(&GatewayEventFrame::DeviceRevoked {
             device_id: device_id.to_string(),
         });
+    }
+    Ok(revoked)
+}
+
+/// Revoke every paired Panel device through the single-device pipeline
+/// ([`revoke_device_and_kick`]) so each one also clears its live sessions
+/// (loopback-paired included) and publishes `DeviceRevoked`. The "revoke all
+/// remotes" face of the verb — `gateway.token.rotate` — uses this instead of the
+/// raw store `revoke_all_panel_devices`, which would leave live verified
+/// sessions standing. Cluster nodes stay untouched (`list_panel_devices`
+/// excludes them). Returns how many devices were actually revoked.
+pub(crate) async fn revoke_all_panel_devices_and_kick(
+    device_token_mgr: &DeviceTokenManager,
+    connections: &Arc<RwLock<HashMap<String, ConnectionState>>>,
+    event_bus: &GatewayEventBus,
+) -> Result<usize, DeviceTokenError> {
+    let mut revoked = 0usize;
+    for device in device_token_mgr.list_panel_devices()? {
+        if revoke_device_and_kick(device_token_mgr, connections, event_bus, &device.device_id)
+            .await?
+        {
+            revoked += 1;
+        }
     }
     Ok(revoked)
 }
@@ -160,12 +194,20 @@ pub async fn handle_devices_list(
         }
     };
 
-    let online: std::collections::HashSet<String> = ctx
-        .presence
-        .list()
-        .into_iter()
-        .filter_map(|e| e.device_id)
-        .collect();
+    // device_id -> oldest live connection start (epoch ms). Membership is the
+    // `connected` flag; the value is `connected_since`. One join, one map: the
+    // two fields cannot disagree about which devices are online.
+    let mut online: HashMap<String, i64> = HashMap::new();
+    for entry in ctx.presence.list() {
+        let Some(device_id) = entry.device_id else {
+            continue;
+        };
+        let at = entry.connected_at.timestamp_millis();
+        online
+            .entry(device_id)
+            .and_modify(|since| *since = (*since).min(at))
+            .or_insert(at);
+    }
 
     // Built FROM the shared contract type, not hand-assembled next to it:
     // parsing a literal can only ever prove the server sends a superset, which
@@ -175,7 +217,8 @@ pub async fn handle_devices_list(
     let list: Vec<PairedDeviceRow> = devices
         .into_iter()
         .map(|d| PairedDeviceRow {
-            connected: online.contains(&d.device_id),
+            connected: online.contains_key(&d.device_id),
+            connected_since: online.get(&d.device_id).copied(),
             device_id: d.device_id,
             device_name: d.device_name,
             last_seen_at: d.last_seen_at,
@@ -340,6 +383,66 @@ mod tests {
         assert!(!flag("panel-offline"));
     }
 
+    /// `connected_since` is the MINIMUM presence `connected_at` over the
+    /// device's live connections, and null when none is live. A strictly
+    /// greater value on a later read is therefore proof that every earlier
+    /// connection closed and a newer one is bound — the reconnect witness a
+    /// sampled `connected` flag misses when the gap is shorter than the poll.
+    #[tokio::test]
+    async fn connected_since_is_the_oldest_live_connection_and_null_when_offline() {
+        use crate::gateway::presence::{ConnectionRole, PresenceEntry};
+        use chrono::TimeZone;
+        let ctx = ctx();
+        for id in ["panel-online", "panel-offline"] {
+            let t = ctx
+                .device_token_mgr
+                .create_bootstrap_ticket(None, None)
+                .unwrap();
+            ctx.device_token_mgr
+                .exchange_bootstrap_ticket(&t, Some(id.to_string()), None, None)
+                .unwrap();
+        }
+        let entry = |conn: &str, device: &str, at_ms: i64| PresenceEntry {
+            conn_id: conn.to_string(),
+            device_id: Some(device.to_string()),
+            device_name: "panel".to_string(),
+            platform: "desktop".to_string(),
+            role: ConnectionRole::User,
+            connected_at: chrono::Utc.timestamp_millis_opt(at_ms).unwrap(),
+            last_heartbeat: chrono::Utc.timestamp_millis_opt(at_ms).unwrap(),
+        };
+        // Two live connections for the same device: the older one wins.
+        ctx.presence
+            .upsert("conn-new".into(), entry("conn-new", "panel-online", 2_000));
+        ctx.presence
+            .upsert("conn-old".into(), entry("conn-old", "panel-online", 1_000));
+
+        let since = |ctx: Arc<DevicesHandlerContext>| async move {
+            let req = JsonRpcRequest::with_id("gateway.devices.list", None, json!(1));
+            let list: PairedDeviceList =
+                serde_json::from_value(handle_devices_list(req, ctx).await.result.unwrap())
+                    .unwrap();
+            list.devices
+                .into_iter()
+                .map(|d| (d.device_id, (d.connected, d.connected_since)))
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        let rows = since(ctx.clone()).await;
+        assert_eq!(rows["panel-online"], (true, Some(1_000)));
+        assert_eq!(rows["panel-offline"], (false, None));
+
+        // The old connection closes: the witness advances strictly.
+        assert!(ctx.presence.remove("conn-old").is_some());
+        assert_eq!(
+            since(ctx.clone()).await["panel-online"],
+            (true, Some(2_000))
+        );
+
+        // Every connection closes: offline and null, never a stale start.
+        assert!(ctx.presence.remove("conn-new").is_some());
+        assert_eq!(since(ctx).await["panel-online"], (false, None));
+    }
+
     #[tokio::test]
     async fn revoke_requires_device_id() {
         let req = JsonRpcRequest::with_id("gateway.devices.revoke", Some(json!({})), json!(1));
@@ -375,6 +478,224 @@ mod tests {
             .is_none());
     }
 
+    // ── Real-effect: revoke clears live verified sessions (single + bulk) ──
+
+    use crate::gateway::security::store::{DeviceUpsertData, UserRole, OWNER_USER_ID as OWNER};
+    use crate::gateway::server::connection::auth::finalize_handshake_identity;
+
+    /// A connection stamped by the REAL handshake verdict function.
+    fn live_conn(store: &SecurityStore, device: Option<&str>, local: bool) -> ConnectionState {
+        let ip = if local { "127.0.0.1" } else { "203.0.113.7" };
+        let mut cs = ConnectionState::new(ip.parse().unwrap(), local);
+        let (user, role, verified) =
+            finalize_handshake_identity(true, local, device, device, Some(store));
+        cs.caller_user = user;
+        cs.caller_role = role.to_string();
+        cs.verified_user = verified;
+        cs.device_id = device.map(String::from);
+        cs.permissions = vec!["*".to_string()];
+        cs
+    }
+
+    struct Fixture {
+        store: Arc<SecurityStore>,
+        mgr: Arc<DeviceTokenManager>,
+        conns: Arc<RwLock<HashMap<String, ConnectionState>>>,
+        bus: Arc<GatewayEventBus>,
+        tokens: HashMap<&'static str, String>,
+    }
+
+    fn pair(mgr: &DeviceTokenManager, user: Option<&str>, id: &str) -> String {
+        let t = mgr.create_bootstrap_ticket(None, user).unwrap();
+        mgr.exchange_bootstrap_ticket(&t, Some(id.to_string()), None, None)
+            .unwrap()
+            .device_token
+    }
+
+    /// Owner + member Panel devices, each with a loopback and a remote live
+    /// session, plus a cluster node session and a credential-less compat
+    /// loopback session.
+    async fn fixture() -> Fixture {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        let mgr = Arc::new(DeviceTokenManager::new(store.clone()));
+        let mut tokens = HashMap::new();
+        tokens.insert("panel-owner", pair(&mgr, None, "panel-owner"));
+        tokens.insert("panel-alice", pair(&mgr, Some("u-alice"), "panel-alice"));
+        store
+            .upsert_device(&DeviceUpsertData {
+                device_id: "node-1",
+                device_name: "node",
+                device_type: Some("node"),
+                public_key: &[2u8; 32],
+                fingerprint: "node-1",
+                role: "node",
+                scopes: &[],
+                user_id: None,
+            })
+            .unwrap();
+        let mut map = HashMap::new();
+        map.insert(
+            "owner-loop".to_string(),
+            live_conn(&store, Some("panel-owner"), true),
+        );
+        map.insert(
+            "owner-remote".to_string(),
+            live_conn(&store, Some("panel-owner"), false),
+        );
+        map.insert(
+            "alice-loop".to_string(),
+            live_conn(&store, Some("panel-alice"), true),
+        );
+        map.insert(
+            "alice-remote".to_string(),
+            live_conn(&store, Some("panel-alice"), false),
+        );
+        map.insert("node".to_string(), live_conn(&store, Some("node-1"), false));
+        map.insert("compat".to_string(), live_conn(&store, None, true));
+        Fixture {
+            store,
+            mgr,
+            conns: Arc::new(RwLock::new(map)),
+            bus: Arc::new(GatewayEventBus::new()),
+            tokens,
+        }
+    }
+
+    #[tokio::test]
+    async fn fixture_sessions_start_verified() {
+        let f = fixture().await;
+        let m = f.conns.read().await;
+        for c in ["owner-loop", "owner-remote"] {
+            assert_eq!(m[c].verified_user.as_deref(), Some(OWNER), "{c}");
+        }
+        for c in ["alice-loop", "alice-remote"] {
+            assert_eq!(m[c].verified_user.as_deref(), Some("u-alice"), "{c}");
+        }
+        assert_eq!(m["compat"].verified_user, None);
+        assert_eq!(m["compat"].caller_user.as_deref(), Some(OWNER));
+    }
+
+    #[tokio::test]
+    async fn bulk_revoke_clears_every_panel_session_and_rejects_tokens() {
+        let f = fixture().await;
+        let mut rx = f.bus.subscribe_typed();
+        let node_before = {
+            let m = f.conns.read().await;
+            (m["node"].caller_role.clone(), m["node"].caller_user.clone())
+        };
+
+        let n = revoke_all_panel_devices_and_kick(&f.mgr, &f.conns, &f.bus)
+            .await
+            .unwrap();
+        assert_eq!(n, 2, "both Panel devices revoked; node untouched");
+
+        // Tokens really rejected.
+        for (id, tok) in &f.tokens {
+            assert!(
+                f.mgr.validate_device_token(tok).unwrap().is_none(),
+                "{id} token must be rejected"
+            );
+        }
+        assert!(!f.store.is_device_approved("panel-owner").unwrap());
+        assert!(!f.store.is_device_approved("panel-alice").unwrap());
+        assert!(
+            f.store.is_device_approved("node-1").unwrap(),
+            "node untouched"
+        );
+
+        let m = f.conns.read().await;
+        for c in ["owner-loop", "owner-remote", "alice-loop", "alice-remote"] {
+            assert_eq!(m[c].caller_role, "guest", "{c}");
+            assert_eq!(m[c].caller_user, None, "{c}");
+            assert_eq!(m[c].verified_user, None, "{c}");
+            assert!(m[c].permissions.is_empty(), "{c}");
+        }
+        // Nodes and credential-less compat sessions are not device-bound
+        // Panel sessions: untouched.
+        assert_eq!(m["node"].caller_role, node_before.0);
+        assert_eq!(m["node"].caller_user, node_before.1);
+        assert_ne!(m["node"].caller_role, "guest");
+        assert_eq!(m["compat"].caller_user.as_deref(), Some(OWNER));
+        assert_ne!(m["compat"].caller_role, "guest");
+        assert!(!m["compat"].permissions.is_empty());
+
+        // One DeviceRevoked per revoked Panel device, none for the node.
+        let mut revoked = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            if let GatewayEventFrame::DeviceRevoked { device_id } = frame {
+                revoked.push(device_id);
+            }
+        }
+        revoked.sort();
+        assert_eq!(
+            revoked,
+            vec!["panel-alice".to_string(), "panel-owner".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn single_revoke_clears_only_that_device_and_final_handshake_cannot_restore() {
+        let f = fixture().await;
+        assert!(
+            revoke_device_and_kick(&f.mgr, &f.conns, &f.bus, "panel-alice")
+                .await
+                .unwrap()
+        );
+        {
+            let m = f.conns.read().await;
+            for c in ["alice-loop", "alice-remote"] {
+                assert_eq!(m[c].caller_role, "guest");
+                assert_eq!(m[c].verified_user, None);
+                assert_eq!(m[c].caller_user, None);
+            }
+            assert_eq!(m["owner-remote"].verified_user.as_deref(), Some(OWNER));
+        }
+        // A handshake whose credential check passed BEFORE the revoke runs its
+        // final verdict AFTER it: it must not restore the identity.
+        let (u, role, v) = finalize_handshake_identity(
+            true,
+            false,
+            Some("panel-alice"),
+            Some("panel-alice"),
+            Some(&f.store),
+        );
+        assert_eq!((u, role, v), (None, "guest", None));
+        // And a second revoke is a no-op reporting false.
+        assert!(
+            !revoke_device_and_kick(&f.mgr, &f.conns, &f.bus, "panel-alice")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn stamp_before_revoke_is_still_cleared() {
+        // Order B: the handshake stamp lands first, the revoke second.
+        let f = fixture().await;
+        let stamped = live_conn(&f.store, Some("panel-owner"), false);
+        assert_eq!(stamped.verified_user.as_deref(), Some(OWNER));
+        f.conns.write().await.insert("late".to_string(), stamped);
+        revoke_device_and_kick(&f.mgr, &f.conns, &f.bus, "panel-owner")
+            .await
+            .unwrap();
+        let m = f.conns.read().await;
+        assert_eq!(m["late"].verified_user, None);
+        assert_eq!(m["late"].caller_role, "guest");
+    }
+
+    #[tokio::test]
+    async fn bulk_revoke_with_no_panel_devices_is_a_counted_no_op() {
+        let c = ctx();
+        let n =
+            revoke_all_panel_devices_and_kick(&c.device_token_mgr, &c.connections, &c.event_bus)
+                .await
+                .unwrap();
+        assert_eq!(n, 0);
+    }
+
     /// The inventory is the surface an operator revokes a credential from, so
     /// what it sends is a contract. Nothing pinned the key set before this
     /// test, which is why `created_at` — sent since the list shipped, rendered
@@ -405,6 +726,7 @@ mod tests {
             keys,
             vec![
                 "connected",
+                "connected_since",
                 "device_id",
                 "device_name",
                 "display_name",

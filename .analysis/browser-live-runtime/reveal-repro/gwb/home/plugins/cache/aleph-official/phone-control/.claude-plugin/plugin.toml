@@ -1,0 +1,10 @@
+name = "phone-control"
+version = "0.1.0"
+description = "Android phone control via ADB — screenshots, taps, swipes, shell commands and file transfer"
+
+[aleph]
+runtime = "mcp"
+
+[aleph.permissions]
+shell = true
+filesystem = "read"

@@ -5,9 +5,14 @@ use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
+use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+use windows_sys::Win32::System::JobObjects::JobObjectBasicAccountingInformation;
 use windows_sys::Win32::System::JobObjects::JobObjectBasicUIRestrictions;
 use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
+use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
 use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
+use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_ACCOUNTING_INFORMATION;
 use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_UI_RESTRICTIONS;
 use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
 use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
@@ -35,6 +40,9 @@ pub struct SandboxJob {
 }
 
 unsafe impl Send for SandboxJob {}
+// SAFETY: every `&self` method is a single thread-safe kernel call on the
+// job handle (query / assign / terminate); the handle is closed only in Drop.
+unsafe impl Sync for SandboxJob {}
 
 impl SandboxJob {
     /// Create a new sandbox job with default restrictions.
@@ -124,6 +132,71 @@ impl SandboxJob {
                 "AssignProcessToJobObject failed: {}",
                 GetLastError()
             ));
+        }
+        Ok(())
+    }
+
+    /// Managed single-process job: `ActiveProcessLimit == 1` so the service
+    /// cannot fork around the kill/wait contract (`managed_spawn_fork`).
+    /// Kill-on-close, UI limits and the optional memory ceiling are the same
+    /// as [`SandboxJob::new`].
+    #[allow(dead_code)] // consumed by the managed launcher once its production API exists
+    pub(crate) fn new_single_process(max_memory_mb: Option<u64>) -> Result<Self, String> {
+        // SAFETY: the returned job owns its handle and closes it on Drop.
+        unsafe { Self::new(1, max_memory_mb) }
+    }
+
+    /// Kernel readback: is `process` a member of THIS job? (`IsProcessInJob`.)
+    /// An invalid handle is an `Err`, never `Ok(false)`.
+    #[allow(dead_code)]
+    pub(crate) fn contains_process(&self, process: HANDLE) -> Result<bool, String> {
+        let mut result: windows_sys::core::BOOL = 0;
+        // SAFETY: `result` is a valid out-pointer; handles are only read by the kernel.
+        let ok = unsafe { IsProcessInJob(process, self.handle, &mut result) };
+        if ok == 0 {
+            // SAFETY: thread-local error read.
+            return Err(format!("IsProcessInJob failed: {}", unsafe {
+                GetLastError()
+            }));
+        }
+        Ok(result != 0)
+    }
+
+    /// Kernel readback of `ActiveProcesses` for this job.
+    #[allow(dead_code)]
+    pub(crate) fn active_process_count(&self) -> Result<u32, String> {
+        // SAFETY: zeroed POD out-struct, correctly sized.
+        let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `info` is a valid buffer of the stated length.
+        let ok = unsafe {
+            QueryInformationJobObject(
+                self.handle,
+                JobObjectBasicAccountingInformation,
+                &mut info as *mut _ as *mut c_void,
+                std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            // SAFETY: thread-local error read.
+            return Err(format!(
+                "QueryInformationJobObject(BasicAccounting) failed: {}",
+                unsafe { GetLastError() }
+            ));
+        }
+        Ok(info.ActiveProcesses)
+    }
+
+    /// Terminate every process in the job. Success only means the request was
+    /// accepted; callers must still wait and read [`Self::active_process_count`].
+    #[allow(dead_code)]
+    pub(crate) fn terminate(&self, exit_code: u32) -> Result<(), String> {
+        // SAFETY: `self.handle` is a valid job handle owned by `self`.
+        if unsafe { TerminateJobObject(self.handle, exit_code) } == 0 {
+            // SAFETY: thread-local error read.
+            return Err(format!("TerminateJobObject failed: {}", unsafe {
+                GetLastError()
+            }));
         }
         Ok(())
     }
@@ -217,4 +290,41 @@ pub(crate) fn kill_on_this_process_exit(pid: u32) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::windows::io::AsRawHandle;
+
+    /// Kernel readback primitives used by the managed launcher: membership,
+    /// active-process count, terminate. Spawns `ping` (loopback only; no HOME,
+    /// keyring or network state is touched).
+    #[test]
+    fn single_process_job_readback_and_terminate() {
+        let job = SandboxJob::new_single_process(None).expect("job");
+        assert_eq!(job.active_process_count().unwrap(), 0);
+
+        let mut child = std::process::Command::new("ping.exe")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn ping");
+        let handle = child.as_raw_handle() as HANDLE;
+        assert!(!job.contains_process(handle).unwrap(), "not yet assigned");
+        // SAFETY: `handle` is the live child handle owned by `child`.
+        unsafe { job.assign_process(handle) }.expect("assign");
+        assert!(job.contains_process(handle).unwrap());
+        assert_eq!(job.active_process_count().unwrap(), 1);
+
+        job.terminate(1).expect("terminate");
+        let _ = child.wait();
+        for _ in 0..100 {
+            if job.active_process_count().unwrap() == 0 {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("job did not become empty after terminate");
+    }
 }

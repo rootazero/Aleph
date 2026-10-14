@@ -12,7 +12,7 @@
     "windows": [],
     "security": {
       "csp": null,
-      "capabilities": ["default"]
+      "capabilities": ["default", "legacy-local-ipc"]
     }
   },
   "bundle": {

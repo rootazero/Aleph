@@ -554,6 +554,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             None
         };
 
+        // Browser live runtime: composed (and the viewer backend mounted) only
+        // for an explicit, valid `[gateway] browser_viewer_origin`; otherwise
+        // `None`, the viewer stays deny-only and the browser tools publish
+        // nothing. The guard is built from the same `[general.browser].policy`
+        // the ProfileManager below uses.
+        let browser_live_producer = server.install_browser_live_runtime(
+            full_config.gateway.browser_viewer_origin.as_deref(),
+            alephcore::browser::network_policy::BrowserSsrfGuard::new(
+                app_config.general.browser.policy.clone(),
+            ),
+        );
+
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
@@ -591,6 +603,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     app_config.general.browser.clone(),
                 ),
             )),
+            browser_live_producer,
             // Spec 4 Task 11: thread capture-filter registry into session_complete tool.
             capture_registry: Some(memory_ext_registry.clone()),
             // Spec 5 Task 12: wiki orientation tools.

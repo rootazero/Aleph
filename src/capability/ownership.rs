@@ -298,7 +298,10 @@ impl OwnershipTree {
     }
 
     fn lifetime_disposed(inner: &OwnershipInner, lifetime: LifetimeScope) -> bool {
-        inner.disposed.iter().any(|scope| rank(lifetime) <= rank(*scope))
+        inner
+            .disposed
+            .iter()
+            .any(|scope| rank(lifetime) <= rank(*scope))
     }
 
     /// Shared authority for the two refusal gates: a revoked id or a disposed
@@ -437,7 +440,11 @@ impl OwnershipTree {
         binding
             .claims
             .insert(fence, (binding.generation, binding.owner.clone()));
-        Some(EffectClaim { request_id, fence, owner })
+        Some(EffectClaim {
+            request_id,
+            fence,
+            owner,
+        })
     }
 
     pub fn claim_state(
@@ -466,11 +473,19 @@ impl OwnershipTree {
     }
 
     pub fn is_revoked(&self, capability: &CapabilityId) -> bool {
-        self.inner.lock().expect("ownership mutex poisoned").revoked.contains(capability)
+        self.inner
+            .lock()
+            .expect("ownership mutex poisoned")
+            .revoked
+            .contains(capability)
     }
 
     pub fn is_disposed(&self, scope: LifetimeScope) -> bool {
-        self.inner.lock().expect("ownership mutex poisoned").disposed.contains(&scope)
+        self.inner
+            .lock()
+            .expect("ownership mutex poisoned")
+            .disposed
+            .contains(&scope)
     }
 
     pub fn bump(&self, scope: LifetimeScope) -> OwnerGeneration {
@@ -486,7 +501,9 @@ impl OwnershipTree {
         // Emit AFTER the state mutation, still under the same mutex: a
         // subscriber that observes the event therefore reads the post-bump
         // state on its next lock acquisition.
-        let _ = inner.changes.send(OwnershipChange::Bumped { generation, scope });
+        let _ = inner
+            .changes
+            .send(OwnershipChange::Bumped { generation, scope });
         generation
     }
 
@@ -510,7 +527,11 @@ impl OwnershipTree {
         if inner.revoked.contains(capability) {
             return BoundRevoke::AlreadyRevoked;
         }
-        if !inner.bindings.keys().any(|key| &key.capability == capability) {
+        if !inner
+            .bindings
+            .keys()
+            .any(|key| &key.capability == capability)
+        {
             return BoundRevoke::NotBound;
         }
         let removed = Self::revoke_locked(&mut inner, capability);
@@ -520,7 +541,9 @@ impl OwnershipTree {
 
     fn revoke_locked(inner: &mut OwnershipInner, capability: &CapabilityId) -> bool {
         let before = inner.bindings.len();
-        inner.bindings.retain(|key, _| &key.capability != capability);
+        inner
+            .bindings
+            .retain(|key, _| &key.capability != capability);
         let new_tombstone = inner.revoked.insert(capability.clone());
         let bindings_removed = before != inner.bindings.len();
         if new_tombstone || bindings_removed {
@@ -537,7 +560,9 @@ impl OwnershipTree {
     pub fn dispose(&self, scope: LifetimeScope) -> bool {
         let mut inner = self.inner.lock().expect("ownership mutex poisoned");
         let before = inner.bindings.len();
-        inner.bindings.retain(|_, binding| rank(binding.lifetime) > rank(scope));
+        inner
+            .bindings
+            .retain(|_, binding| rank(binding.lifetime) > rank(scope));
         let new_tombstone = inner.disposed.insert(scope);
         let bindings_released = before != inner.bindings.len();
         if new_tombstone || bindings_released {
@@ -562,7 +587,9 @@ pub enum BoundRevoke {
 }
 
 impl Default for OwnershipTree {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -677,8 +704,13 @@ mod tests {
         let tree = OwnershipTree::new();
         let cap = cap_id("revoke");
         let vis = full_vis();
-        tree.register(cap.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis.clone())
-            .expect("register");
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register");
         tree.revoke(&cap);
         assert_eq!(
             tree.register(cap, OwnerRef::Runtime, LifetimeScope::Runtime, vis),
@@ -703,9 +735,16 @@ mod tests {
         let tree = OwnershipTree::new();
         let cap = cap_id("parent");
         let vis = full_vis();
-        tree.register(cap.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis.clone())
-            .expect("register");
-        let claim = tree.claim(&cap, &vis, OwnerRef::Runtime, "parent".into()).expect("claim");
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register");
+        let claim = tree
+            .claim(&cap, &vis, OwnerRef::Runtime, "parent".into())
+            .expect("claim");
         tree.bump(LifetimeScope::Task);
         assert_eq!(tree.claim_state(&claim, &cap, &vis), ClaimState::Active);
     }
@@ -715,9 +754,21 @@ mod tests {
         let tree = OwnershipTree::new();
         let cap = cap_id("child");
         let vis = full_vis();
-        tree.register(cap.clone(), OwnerRef::Task(TaskId("t".into())), LifetimeScope::Task, vis.clone())
-            .expect("register");
-        let claim = tree.claim(&cap, &vis, OwnerRef::Task(TaskId("t".into())), "child".into()).expect("claim");
+        tree.register(
+            cap.clone(),
+            OwnerRef::Task(TaskId("t".into())),
+            LifetimeScope::Task,
+            vis.clone(),
+        )
+        .expect("register");
+        let claim = tree
+            .claim(
+                &cap,
+                &vis,
+                OwnerRef::Task(TaskId("t".into())),
+                "child".into(),
+            )
+            .expect("claim");
         tree.bump(LifetimeScope::Runtime);
         assert_eq!(tree.claim_state(&claim, &cap, &vis), ClaimState::Unknown);
     }
@@ -739,7 +790,10 @@ mod tests {
             .claim(&cap, &vis, OwnerRef::Runtime, "r1".to_string())
             .expect("claim");
 
-        assert!(tree.revoke(&cap), "first revoke actually removes the binding");
+        assert!(
+            tree.revoke(&cap),
+            "first revoke actually removes the binding"
+        );
         assert!(
             tree.resolve(&cap, &vis).is_none(),
             "resolve returns None after revoke"
@@ -749,10 +803,7 @@ mod tests {
             ClaimState::Unknown,
             "active claim transitions to Unknown on revoke"
         );
-        assert!(
-            tree.is_revoked(&cap),
-            "id is marked revoked (irreversible)"
-        );
+        assert!(tree.is_revoked(&cap), "id is marked revoked (irreversible)");
 
         // Second revoke: still unsuccessful at removing (nothing left to drop),
         // and the irreversibility is preserved.
@@ -792,7 +843,8 @@ mod tests {
             "scope is marked disposed (irreversible)"
         );
         assert!(
-            tree2.claim(&cap, &vis, OwnerRef::Runtime, "r3".to_string())
+            tree2
+                .claim(&cap, &vis, OwnerRef::Runtime, "r3".to_string())
                 .is_none(),
             "no new claim against a disposed scope"
         );
@@ -1306,8 +1358,11 @@ mod tests {
         let cap_a_obs = cap_a.clone();
         let cap_b_obs = cap_b.clone();
         let vis_obs = vis.clone();
-        let (tx, rx_chan) =
-            mpsc::channel::<(OwnershipChange, Option<OwnerGeneration>, Option<OwnerGeneration>)>();
+        let (tx, rx_chan) = mpsc::channel::<(
+            OwnershipChange,
+            Option<OwnerGeneration>,
+            Option<OwnerGeneration>,
+        )>();
         let observer = std::thread::spawn(move || {
             let change = wait_for_change(&mut rx, TEST_WAIT);
             // Read the protected state from a fresh lock acquisition
@@ -1333,15 +1388,18 @@ mod tests {
                     "event reports the generation bump produced"
                 );
                 assert_eq!(
-                    scope, LifetimeScope::Runtime,
+                    scope,
+                    LifetimeScope::Runtime,
                     "event reports the scope bumped"
                 );
                 assert_eq!(
-                    observed_gen_a, Some(new_gen),
+                    observed_gen_a,
+                    Some(new_gen),
                     "observer sees cap_a at the generation the event claims"
                 );
                 assert_eq!(
-                    observed_gen_b, Some(new_gen),
+                    observed_gen_b,
+                    Some(new_gen),
                     "observer sees cap_b at the generation the event claims"
                 );
             }
@@ -1412,7 +1470,8 @@ mod tests {
         match change3 {
             OwnershipChange::Disposed { scope } => {
                 assert_eq!(
-                    scope, LifetimeScope::Task,
+                    scope,
+                    LifetimeScope::Task,
                     "event identifies disposed lifetime scope"
                 );
                 assert!(
@@ -1478,7 +1537,8 @@ mod tests {
         match change2 {
             OwnershipChange::Disposed { scope } => {
                 assert_eq!(
-                    scope, LifetimeScope::Task,
+                    scope,
+                    LifetimeScope::Task,
                     "dispose event names the exact lifetime scope passed in"
                 );
             }
@@ -1499,7 +1559,8 @@ mod tests {
                     "bumped event carries the generation just minted"
                 );
                 assert_eq!(
-                    scope, LifetimeScope::Runtime,
+                    scope,
+                    LifetimeScope::Runtime,
                     "bumped event names the scope that was bumped"
                 );
             }
@@ -1674,7 +1735,8 @@ mod tests {
         match change {
             OwnershipChange::Disposed { scope } => {
                 assert_eq!(
-                    scope, LifetimeScope::Session,
+                    scope,
+                    LifetimeScope::Session,
                     "event identifies the empty scope we tombstoned"
                 );
             }
@@ -1769,8 +1831,13 @@ mod tests {
         assert_eq!(tree.revoke_bound(&cap), BoundRevoke::NotBound);
         assert!(!tree.is_revoked(&cap), "NotBound must not tombstone");
         assert_no_change(&mut rx, TEST_QUIET);
-        tree.register(cap.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis.clone())
-            .expect("register after NotBound must succeed");
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register after NotBound must succeed");
         assert_eq!(tree.resolve(&cap, &vis), Some(()));
     }
 
@@ -1784,8 +1851,13 @@ mod tests {
         let cap = cap_id("bound");
         let vis = full_vis();
         let restricted = restricted_vis("ws");
-        tree.register(cap.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis.clone())
-            .expect("register runtime");
+        tree.register(
+            cap.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register runtime");
         tree.register(
             cap.clone(),
             OwnerRef::Task(TaskId("t".into())),
@@ -1809,7 +1881,12 @@ mod tests {
         }
         assert_no_change(&mut rx, TEST_QUIET);
         assert_eq!(
-            tree.register(cap.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis.clone()),
+            tree.register(
+                cap.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                vis.clone()
+            ),
             Err(RegisterError::Revoked)
         );
 

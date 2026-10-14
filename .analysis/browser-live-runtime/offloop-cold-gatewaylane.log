@@ -1,0 +1,28 @@
+    Finished `test` profile [unoptimized] target(s) in 1.47s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-1792a2b7cdaace99.exe)
+
+running 21 tests
+test gateway::lane::tests::acquire_timeout_returns_congested_when_both_pools_full ... ok
+test gateway::lane::tests::bot_cannot_borrow_from_desktop_pool ... ok
+test gateway::lane::tests::bot_saturation_does_not_block_desktop_execute ... ok
+test gateway::lane::tests::desktop_overflow_queues_on_shared_pool ... ok
+test gateway::lane::tests::explicit_overrides_win_over_heuristic ... ok
+test gateway::lane::tests::extensions_installed_is_query_but_its_write_twins_are_not ... ok
+test gateway::lane::tests::lane_config_round_trips_through_toml ... ok
+test gateway::lane::tests::legacy_method_mappings_preserved ... ok
+test gateway::lane::tests::new_rpc_defaults_to_mutate ... ok
+test gateway::lane::tests::query_lane_is_shared_across_channel_classes ... ok
+test gateway::lane::tests::snapshot_reports_per_lane_occupancy_in_fixed_order ... ok
+test gateway::lane::tests::test_acquire_query_lane ... ok
+test gateway::lane::tests::test_different_lanes_independent ... ok
+test gateway::lane::tests::test_execute_lane_saturation ... ok
+test gateway::lane::tests::test_lane_for_method ... ok
+test gateway::lane::tests::test_needs_idempotency ... ok
+test gateway::lane::tests::the_handshake_is_never_gated_by_the_mutation_hardening_flag ... ok
+test gateway::lane::tests::the_in_flight_diagnostic_is_query_lane ... ok
+test gateway::lane::tests::the_panes_read_rpcs_are_query_lane ... ok
+test gateway::lane::tests::the_remaining_verified_reads_are_query_lane ... ok
+test gateway::lane::tests::unknown_method_with_no_suffix_defaults_to_mutate ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 20777 filtered out; finished in 4.12s
+

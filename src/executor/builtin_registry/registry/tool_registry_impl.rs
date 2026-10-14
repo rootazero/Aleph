@@ -569,6 +569,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
 
             // Browser tools
+            "browser_companion" => {
+                Box::pin(async move { self.browser_companion_tool.call_json(arguments).await })
+            }
             "browser_open" => {
                 Box::pin(async move { self.browser_open_tool.call_json(arguments).await })
             }

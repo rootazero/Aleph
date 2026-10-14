@@ -2998,9 +2998,7 @@ mod tests {
         })
         .await
         .expect("source worker never queued the final replacement");
-        assert!(host
-            .current_snapshot()
-            .is_none_or(|s| s.entries.len() < 10));
+        assert!(host.current_snapshot().is_none_or(|s| s.entries.len() < 10));
         assert!(host.diagnostic_status().replacement_count > 0);
 
         host.diagnostic_release();

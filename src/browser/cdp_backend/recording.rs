@@ -109,12 +109,98 @@ pub(crate) fn resolve_ffmpeg_labeled() -> Option<(PathBuf, String)> {
 
 /// `which(1)` by hand: the first executable named `name` on PATH. (The `which`
 /// crate is not a dependency and pulling one in for a PATH scan would be R3.)
+///
+/// Reads PATH / PATHEXT but never mutates them; the decision itself lives in
+/// [`find_executable_in`], which takes both as explicit inputs so tests can
+/// exercise it without touching process-global env.
 fn which_on_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|dir| dir.join(name))
-            .find(|p| is_executable(p))
-    })
+    let path = std::env::var_os("PATH")?;
+    let pathext = if cfg!(windows) {
+        Some(std::env::var_os("PATHEXT"))
+    } else {
+        None
+    };
+    find_executable_in(&path, pathext.as_ref().map(|e| e.as_deref()), name)
+}
+
+/// The Windows default when PATHEXT is unset or yields nothing usable.
+const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+
+/// Parse a PATHEXT value into normalized suffixes: `;`-separated, trimmed,
+/// empty entries dropped, a missing leading `.` added, case-insensitive
+/// duplicates removed (first occurrence keeps its position). An unset or
+/// effectively empty value falls back to [`DEFAULT_PATHEXT`].
+fn parse_pathext(pathext: Option<&std::ffi::OsStr>) -> Vec<String> {
+    fn parse(raw: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for entry in raw.split(';') {
+            let entry = entry.trim();
+            if entry.is_empty() || entry == "." {
+                continue;
+            }
+            let ext = if entry.starts_with('.') {
+                entry.to_string()
+            } else {
+                format!(".{entry}")
+            };
+            if !out.iter().any(|e| e.eq_ignore_ascii_case(&ext)) {
+                out.push(ext);
+            }
+        }
+        out
+    }
+    let parsed = pathext
+        .map(|v| parse(&v.to_string_lossy()))
+        .unwrap_or_default();
+    if parsed.is_empty() {
+        parse(DEFAULT_PATHEXT)
+    } else {
+        parsed
+    }
+}
+
+/// The file names to probe in each PATH directory for `name`.
+///
+/// - `suffixes == None` (non-Windows): exactly `name`.
+/// - Windows, `name` already carries an extension (`ffmpeg.exe`): probe it
+///   as-is first, then with each suffix appended (cmd.exe's order).
+/// - Windows, bare `name` (`ffmpeg`): only `name + suffix` for each suffix —
+///   an extensionless file is not something Windows can launch.
+fn executable_names(name: &str, suffixes: Option<&[String]>) -> Vec<String> {
+    let Some(suffixes) = suffixes else {
+        return vec![name.to_string()];
+    };
+    let mut out = Vec::with_capacity(suffixes.len() + 1);
+    if Path::new(name).extension().is_some() {
+        out.push(name.to_string());
+    }
+    out.extend(suffixes.iter().map(|ext| format!("{name}{ext}")));
+    out
+}
+
+/// Directory-major candidate order: every name in the first PATH directory
+/// before any name in the second, matching how a shell resolves. Empty PATH
+/// entries are skipped — they would silently mean "the current directory".
+fn path_probe_candidates(path: &std::ffi::OsStr, names: &[String]) -> Vec<PathBuf> {
+    std::env::split_paths(path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
+        .collect()
+}
+
+/// The pure resolver behind [`which_on_path`]: `pathext` is `None` on
+/// non-Windows (no suffix probing) and `Some(PATHEXT value)` on Windows.
+/// Only an existing regular file (plus the exec bit on unix) is accepted.
+fn find_executable_in(
+    path: &std::ffi::OsStr,
+    pathext: Option<Option<&std::ffi::OsStr>>,
+    name: &str,
+) -> Option<PathBuf> {
+    let suffixes = pathext.map(parse_pathext);
+    let names = executable_names(name, suffixes.as_deref());
+    path_probe_candidates(path, &names)
+        .into_iter()
+        .find(|p| is_executable(p))
 }
 
 #[cfg(unix)]
@@ -254,7 +340,7 @@ fn probe_writable(dir: &Path) -> std::io::Result<()> {
 }
 
 // =============================================================================
-// The pipeline: frames → bounded channel → ffmpeg stdin, with ack pacing
+// The pipeline: owner tap (bounded) → ffmpeg stdin, with ack pacing
 // =============================================================================
 
 use std::collections::HashMap;
@@ -262,19 +348,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
-use aleph_cdp::methods::screencast::{self, ScreencastFormat};
-use aleph_cdp::{CdpConnection, EventStream, SessionId};
-use serde_json::Value;
+use aleph_cdp::methods::screencast::ScreencastFormat;
+use aleph_cdp::SessionId;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, watch};
 
-use crate::browser::error::BrowserError;
+use crate::browser::live::session::{EndReason, FrameAcker, RecordingTap};
+use crate::browser::live::stream_hub::LiveFrame;
+use crate::browser::live::LiveProfileOwner;
 
-/// Frames buffered between the event loop and the encoder's stdin. 32 is a
-/// few seconds of screencast at the default cap; past it the encoder is
-/// genuinely behind and frames are DROPPED (counted, acked) rather than
-/// buffered — the 16GB-memory clause of Review Focus #1.
-const CHANNEL_CAPACITY: usize = 32;
+use crate::browser::error::BrowserError;
 
 /// What a finished recording reports. `complete` is a DERIVED verdict (see the
 /// module doc), never a claim the encoder made about itself.
@@ -347,11 +430,15 @@ impl Default for RecordStartOptions {
     }
 }
 
-#[derive(Default)]
+/// `captured` and `dropped` are the owner's counters (shared with the tap: the
+/// owner counts a frame at the moment it routes it, and counts a drop when the
+/// bounded tap is full — 32 frames is a few seconds of screencast at the
+/// default cap, and past it the encoder is genuinely behind). `encoded` is the
+/// writer's own.
 struct Counters {
-    captured: AtomicU64,
+    captured: Arc<AtomicU64>,
     encoded: AtomicU64,
-    dropped: AtomicU64,
+    dropped: Arc<AtomicU64>,
 }
 
 /// The receipt a supervisor mints exactly once at the end of a recording.
@@ -376,10 +463,10 @@ struct ActiveRecording {
     stop_tx: watch::Sender<bool>,
     join: Mutex<Option<tokio::task::JoinHandle<()>>>,
     slot: Arc<ReceiptSlot>,
-    /// Kept so `stop` can send `Page.stopScreencast` itself (best-effort —
-    /// the tab may already be dead, which is often WHY stop is called).
-    conn: CdpConnection,
-    session: SessionId,
+    /// Kept so `stop` can release the tap (and, absent a viewer, the engine
+    /// screencast) — best-effort, the tab may already be dead.
+    owner: Arc<LiveProfileOwner>,
+    tab_id: String,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -420,14 +507,14 @@ impl RecordingRegistry {
     /// Start recording `tab_id`. The order is the plan's seven steps and every
     /// step fails fast without residue: ffmpeg resolution → path extension +
     /// measured writability → disk floor → event subscription (BEFORE the
-    /// cause) → `Page.startScreencast` → encoder spawn (rolled back via
-    /// `stopScreencast` on failure) → registration + supervisor task.
-    pub async fn start(
+    /// cause) → owner tap + `Page.startScreencast` (the owner's, shared with any
+    /// viewer) → encoder spawn (rolled back via `release_recording` on failure) → registration + supervisor task.
+    pub(crate) async fn start(
         self: &Arc<Self>,
         profile: &str,
         tab_id: &str,
         session: &SessionId,
-        conn: &CdpConnection,
+        owner: &Arc<LiveProfileOwner>,
         options: RecordStartOptions,
     ) -> Result<RecordingStatus, RecordStartError> {
         let _serial = self.start_lock.lock().await;
@@ -492,23 +579,23 @@ impl RecordingRegistry {
             }
         }
 
-        // 4. Subscribe BEFORE the cause: a broadcast starts at subscription,
-        // so subscribing after `startScreencast` could miss the first frames
-        // (events.rs module doc; C1 InterceptLoop 同款纪律).
-        let events = conn.events();
-
-        // 5. Start the frame stream.
+        // 4+5. Observe the tab's frames through the profile's one live owner.
+        // The owner already holds the connection's single event subscription
+        // (taken before any screencast it starts), and starts the engine
+        // screencast only if a viewer has not. Recording never subscribes to
+        // the raw event stream or starts a screencast of its own.
         let wire = ScreencastFormat::Jpeg {
             quality: options.quality,
         };
-        screencast::start_screencast(conn, Some(session), wire, None, None, None).await?;
+        let tap = owner.observe_recording(tab_id, session, wire).await?;
+        let tap_captured = tap.captured.clone();
 
-        // 6. Spawn the encoder; a failure here rolls the stream back so the
-        // engine is not left streaming into nothing.
+        // 6. Spawn the encoder; a failure here releases the tap so the engine
+        // is not left streaming into nothing.
         let child = match spawn_ffmpeg(&ffmpeg, &path, options.fps_cap, wire, &codec_args) {
             Ok(child) => child,
             Err(e) => {
-                let _ = screencast::stop_screencast(conn, Some(session)).await;
+                owner.release_recording(tab_id, &tap_captured).await;
                 return Err(e.into());
             }
         };
@@ -516,7 +603,11 @@ impl RecordingRegistry {
         // 7. Register, then supervise. The entry exists in the map BEFORE the
         // task starts so a stop racing the first frame still finds it.
         let id = format!("rec{}", self.counter.fetch_add(1, Ordering::Relaxed) + 1);
-        let counters = Arc::new(Counters::default());
+        let counters = Arc::new(Counters {
+            captured: tap.captured.clone(),
+            encoded: AtomicU64::new(0),
+            dropped: tap.dropped.clone(),
+        });
         let (stop_tx, stop_rx) = watch::channel(false);
         let slot = Arc::new(ReceiptSlot::default());
         let entry = Arc::new(ActiveRecording {
@@ -528,14 +619,13 @@ impl RecordingRegistry {
             stop_tx,
             join: Mutex::new(None),
             slot: slot.clone(),
-            conn: conn.clone(),
-            session: session.clone(),
+            owner: owner.clone(),
+            tab_id: tab_id.to_string(),
         });
         lock(&self.live).insert(key.clone(), entry.clone());
         let join = tokio::spawn(run_recording(RunParams {
-            conn: conn.clone(),
-            session: session.clone(),
-            events,
+            owner: owner.clone(),
+            tap,
             child,
             counters,
             stop_rx,
@@ -618,11 +708,16 @@ impl RecordingRegistry {
         &self,
         entry: Arc<ActiveRecording>,
     ) -> Result<RecordingReceipt, BrowserError> {
-        // Best-effort: a dead tab makes this call fail, and that death is
-        // often why stop was called. The four-check receipt below is the
-        // honesty layer, not this frame.
-        let _ = screencast::stop_screencast(&entry.conn, Some(&entry.session)).await;
+        // `stop_tx` goes BEFORE the release: releasing closes the tap, and a
+        // supervisor that sees its frame channel close must already be able to
+        // tell a deliberate stop from a stream that died. Best-effort release:
+        // a dead tab is often why stop was called. The four-check receipt
+        // below is the honesty layer, not this call.
         let _ = entry.stop_tx.send(true);
+        entry
+            .owner
+            .release_recording(&entry.tab_id, &entry.counters.captured)
+            .await;
         let join = lock(&entry.join).take();
         if let Some(join) = join {
             // The supervisor's own work is budget-bounded; the margin here is
@@ -652,9 +747,8 @@ enum Break {
 }
 
 struct RunParams {
-    conn: CdpConnection,
-    session: SessionId,
-    events: EventStream,
+    owner: Arc<LiveProfileOwner>,
+    tap: RecordingTap,
     child: tokio::process::Child,
     counters: Arc<Counters>,
     stop_rx: watch::Receiver<bool>,
@@ -668,18 +762,18 @@ struct RunParams {
     started: Instant,
 }
 
-/// The supervisor: consume `Page.screencastFrame` events into the bounded
-/// channel (acking drops itself), watch for stop and for the writer's death,
-/// then finalize into exactly one receipt. Delivery is two-lane — the slot
-/// (for a stop that took the entry) and the registry's `finished` map (for an
-/// ending nobody asked for) — and the lanes cannot both fire, because filing
-/// into `finished` requires REMOVING the live entry, which only one side can
-/// do first.
+/// The supervisor: take frames from the owner's bounded tap, hand them to the
+/// writer, watch for stop and for the writer's death, then finalize into
+/// exactly one receipt. The owner counts captures and drops and acks every
+/// frame the tap could not take; this loop only writes (the writer acks after
+/// write). Delivery is two-lane — the slot (for a stop that took the entry) and
+/// the registry's `finished` map (for an ending nobody asked for) — and the
+/// lanes cannot both fire, because filing into `finished` requires REMOVING
+/// the live entry, which only one side can do first.
 async fn run_recording(p: RunParams) {
     let RunParams {
-        conn,
-        session,
-        mut events,
+        owner,
+        tap,
         mut child,
         counters,
         mut stop_rx,
@@ -692,96 +786,58 @@ async fn run_recording(p: RunParams) {
         recording_id,
         started,
     } = p;
+    // The tap's private `_guard` cannot be named from here. The `..` pattern
+    // only moves the listed fields out, so the partially-moved `tap` (and the
+    // guard inside it) stays alive until `run_recording`'s scope ends on every
+    // exit path; there its `Drop` acks any frames still pending and marks the
+    // tap closed.
+    let RecordingTap {
+        frames,
+        mut end,
+        acker,
+        ..
+    } = tap;
 
     let child_stdin = child.stdin.take().expect("ffmpeg stdin is piped");
-    let (tx, rx) = mpsc::channel::<screencast::ScreencastFrame>(CHANNEL_CAPACITY);
-    // The engine-death signal. NOT the event stream: `events_tx` lives inside
-    // the connection's `Shared`, which our own clones keep alive, so the
-    // broadcast never closes while we hold them — `fail_all` setting this
-    // watch is the only "the socket died" a subscriber can observe.
-    let mut engine_gone = conn.closed();
-    let mut writer = tokio::spawn(write_frames(
-        rx,
-        child_stdin,
-        conn.clone(),
-        session.clone(),
-        counters.clone(),
-    ));
+    // The writer reads the owner's bounded tap directly: the tap IS the
+    // pacing queue (past its capacity the owner drops and acks), so there is
+    // no second buffer here to grow or to block this loop's stop handling.
+    let mut writer = tokio::spawn(write_frames(frames, child_stdin, acker, counters.clone()));
 
-    let mut writer_result: Option<std::io::Result<()>> = None;
-    let mut last_lagged = 0u64;
-    let break_kind = loop {
-        tokio::select! {
-            ev = events.next() => {
-                let Some(ev) = ev else { break Break::StreamClosed };
-                let lagged = events.lagged();
-                if lagged > last_lagged {
-                    tracing::warn!(
-                        lagged,
-                        "recording event stream lagged — frames were dropped by the broadcast, \
-                         not by the encoder"
-                    );
-                    last_lagged = lagged;
-                }
-                // The tab-death arm: browser-level (no session), so it must be
-                // matched BEFORE the session filter below. The tab id of a cdp
-                // backend IS the CDP targetId, so the event names this
-                // recording's tab directly. The pump's own destroyed arm is
-                // the other half of the detector; the supervisor watches the
-                // same broadcast itself rather than taking a callback, because
-                // the event is already here and a second wire would be a
-                // second thing to keep alive.
-                if ev.method == "Target.targetDestroyed"
-                    && ev.params["targetId"].as_str() == Some(key.1.as_str())
-                {
-                    break Break::TabDestroyed;
-                }
-                if ev.method != "Page.screencastFrame" || ev.session.as_ref() != Some(&session) {
-                    continue;
-                }
-                match screencast::screencast_frame(&ev.params) {
-                    Ok(frame) => {
-                        counters.captured.fetch_add(1, Ordering::Relaxed);
-                        match tx.try_send(frame) {
-                            Ok(()) => {}
-                            Err(mpsc::error::TrySendError::Full(frame)) => {
-                                counters.dropped.fetch_add(1, Ordering::Relaxed);
-                                // Dropped is also "dealt with": an un-acked
-                                // frame stops the engine's stream, and a stall
-                                // here is a frozen page, not a smaller file.
-                                let _ = screencast::screencast_frame_ack(
-                                    &conn,
-                                    Some(&session),
-                                    frame.session_id,
-                                )
-                                .await;
-                            }
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
-                                break Break::WriterDied
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // The frame counter is all an ack needs — take it even
-                        // off an event whose data would not decode.
-                        if let Some(sid) = ev.params.get("sessionId").and_then(Value::as_u64) {
-                            let _ =
-                                screencast::screencast_frame_ack(&conn, Some(&session), sid).await;
-                        }
-                        tracing::debug!("undecodable screencastFrame, acked and skipped: {e}");
-                    }
-                }
-            }
-            _ = stop_rx.changed() => break Break::Stop,
-            _ = engine_gone.changed() => break Break::StreamClosed,
-            res = &mut writer => {
-                writer_result = Some(res.unwrap_or_else(|je| Err(std::io::Error::other(je))));
-                break Break::WriterDied;
-            }
+    // Why a CLEAN writer end happened: our own stop (signalled before the
+    // release that closes the tap), else the owner ending the stream (its
+    // reason is set before the tap closes).
+    let end_kind = |stop: &watch::Receiver<bool>, end: &watch::Receiver<Option<EndReason>>| {
+        if *stop.borrow() {
+            Break::Stop
+        } else if *end.borrow() == Some(EndReason::TabDestroyed) {
+            Break::TabDestroyed
+        } else {
+            Break::StreamClosed
         }
     };
-    drop(tx);
 
+    let mut writer_result: Option<std::io::Result<()>> = None;
+    let break_kind = tokio::select! {
+        _ = stop_rx.changed() => Break::Stop,
+        _ = end.changed() => end_kind(&stop_rx, &end),
+        res = &mut writer => {
+            let res = res.unwrap_or_else(|je| Err(std::io::Error::other(je)));
+            let kind = if res.is_ok() {
+                end_kind(&stop_rx, &end)
+            } else {
+                Break::WriterDied
+            };
+            writer_result = Some(res);
+            kind
+        }
+    };
+    // A recording that ended on its own (encoder death) must release its tap
+    // BEFORE it files itself out of the live map, or a viewer-less engine
+    // screencast would outlive its only observer. A stop() released already;
+    // the release is keyed by this tap's identity, so it can never close a
+    // later recording's tap.
+    owner.release_recording(&key.1, &counters.captured).await;
     // Drain the writer (its return drops stdin, closing the pipe), then wait
     // the encoder out — one budget per stage, so the whole finalize is
     // bounded even when both stages stall.
@@ -792,6 +848,10 @@ async fn run_recording(p: RunParams) {
             }
             Err(_) => {
                 writer.abort();
+                // Settle the aborted task before the tap guard runs: any frame
+                // it held is then either acked (detached send) or still in
+                // `pending` for the guard — never in limbo.
+                let _ = writer.await;
                 writer_result = Some(Err(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
                     "encoder stopped reading; writer aborted",
@@ -839,20 +899,17 @@ async fn run_recording(p: RunParams) {
 /// The encoder-feeding half. THE pacing rule: a frame's ack leaves only AFTER
 /// its bytes reached the encoder's stdin — ack-before-write would let a slow
 /// encoder turn into unbounded in-memory buffering (Review Focus #1). Dropped
-/// frames never reach this task; the event loop acks those itself.
+/// frames never reach this task; the live owner acks those itself.
 async fn write_frames(
-    mut rx: mpsc::Receiver<screencast::ScreencastFrame>,
+    mut rx: mpsc::Receiver<Arc<LiveFrame>>,
     mut stdin: tokio::process::ChildStdin,
-    conn: CdpConnection,
-    session: SessionId,
+    acker: FrameAcker,
     counters: Arc<Counters>,
 ) -> std::io::Result<()> {
     while let Some(frame) = rx.recv().await {
         stdin.write_all(&frame.data).await?;
         counters.encoded.fetch_add(1, Ordering::Relaxed);
-        if let Err(e) =
-            screencast::screencast_frame_ack(&conn, Some(&session), frame.session_id).await
-        {
+        if let Err(e) = acker.ack(frame.engine_ack_id).await {
             // A failed ack does not stop the encode — the engine's own
             // guillotine ends the stream; the file stays honest.
             tracing::debug!("screencastFrameAck failed ({e}); continuing the encode");
@@ -1009,7 +1066,13 @@ impl super::CdpBackend {
         let handle = self.handle().await?;
         let session = handle.ensure_tab(tab_id).await?;
         self.recording_registry()
-            .start(self.profile_name(), tab_id, &session, &handle.conn, options)
+            .start(
+                self.profile_name(),
+                tab_id,
+                &session,
+                &handle.live_owner(),
+                options,
+            )
             .await
             .map_err(|e| match e {
                 // A mid-sequence engine refusal keeps its three-class
@@ -1100,6 +1163,89 @@ mod tests {
         assert_eq!(
             pick_ffmpeg(&[("env".into(), None), ("path".into(), None)]),
             None,
+        );
+    }
+
+    #[test]
+    fn pathext_parsing_normalizes_and_falls_back_to_the_default() {
+        use std::ffi::OsStr;
+        let default: Vec<String> = [".COM", ".EXE", ".BAT", ".CMD"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(parse_pathext(None), default, "unset -> default");
+        assert_eq!(parse_pathext(Some(OsStr::new(""))), default);
+        assert_eq!(parse_pathext(Some(OsStr::new(" ; ;."))), default);
+        assert_eq!(
+            parse_pathext(Some(OsStr::new(" .exe ; CMD;;.EXE;.Ps1 "))),
+            vec![".exe".to_string(), ".CMD".to_string(), ".Ps1".to_string()],
+            "trimmed, dot-prefixed, case-insensitively deduped, order kept"
+        );
+    }
+
+    #[test]
+    fn executable_names_follow_platform_suffix_rules() {
+        let sfx = vec![".COM".to_string(), ".EXE".to_string()];
+        // Non-Windows: the bare name only.
+        assert_eq!(executable_names("ffmpeg", None), vec!["ffmpeg"]);
+        // Windows bare name: suffixes only, never the extensionless file.
+        assert_eq!(
+            executable_names("ffmpeg", Some(&sfx)),
+            vec!["ffmpeg.COM", "ffmpeg.EXE"]
+        );
+        // Windows explicit extension: as-is first, then appended suffixes.
+        assert_eq!(
+            executable_names("ffmpeg.exe", Some(&sfx)),
+            vec!["ffmpeg.exe", "ffmpeg.exe.COM", "ffmpeg.exe.EXE"]
+        );
+    }
+
+    #[test]
+    fn path_probe_candidates_are_directory_major_and_skip_empty_entries() {
+        let a = PathBuf::from("dir_a");
+        let b = PathBuf::from("dir_b");
+        let joined = std::env::join_paths([a.clone(), PathBuf::new(), b.clone()]).unwrap();
+        let names = vec!["x.COM".to_string(), "x.EXE".to_string()];
+        assert_eq!(
+            path_probe_candidates(&joined, &names),
+            vec![
+                a.join("x.COM"),
+                a.join("x.EXE"),
+                b.join("x.COM"),
+                b.join("x.EXE"),
+            ]
+        );
+    }
+
+    /// The real resolver against a temp dir, with PATH/PATHEXT passed in
+    /// explicitly (process env is never touched). Reproduces the scoop shim
+    /// shape: PATH holds `ffmpeg.exe`, the lookup asks for `ffmpeg`.
+    #[cfg(windows)]
+    #[test]
+    fn windows_resolver_finds_suffixed_file_and_requires_a_real_file() {
+        use std::ffi::OsStr;
+        let decoy = tempfile::tempdir().unwrap();
+        let real = tempfile::tempdir().unwrap();
+        // A DIRECTORY named like the target must not satisfy the probe.
+        std::fs::create_dir(decoy.path().join("ffmpeg.exe")).unwrap();
+        // An extensionless file must not satisfy a Windows bare-name lookup.
+        std::fs::write(decoy.path().join("ffmpeg"), b"").unwrap();
+        std::fs::write(real.path().join("ffmpeg.exe"), b"").unwrap();
+        let path =
+            std::env::join_paths([decoy.path().to_path_buf(), real.path().to_path_buf()]).unwrap();
+
+        let hit = find_executable_in(&path, Some(Some(OsStr::new(".COM;.EXE"))), "ffmpeg");
+        assert_eq!(hit, Some(real.path().join("ffmpeg.EXE")));
+        assert!(hit.unwrap().is_file());
+
+        // Explicit extension in the requested name also resolves.
+        let hit = find_executable_in(&path, Some(None), "ffmpeg.exe");
+        assert_eq!(hit, Some(real.path().join("ffmpeg.exe")));
+
+        // PATHEXT without .EXE -> not found (PATHEXT is honored, not ignored).
+        assert_eq!(
+            find_executable_in(&path, Some(Some(OsStr::new(".CMD"))), "ffmpeg"),
+            None
         );
     }
 
@@ -1239,7 +1385,7 @@ mod tests {
         }
     }
 
-    async fn recording_server() -> (FakeCdpServer, CdpConnection) {
+    async fn recording_server() -> (FakeCdpServer, Arc<LiveProfileOwner>) {
         let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![
             ("Page.startScreencast", Responder::Reply(json!({}))),
             ("Page.stopScreencast", Responder::Reply(json!({}))),
@@ -1254,7 +1400,17 @@ mod tests {
         )
         .await
         .expect("the fake server accepts a websocket");
-        (server, conn)
+        // Recording only observes through the owner; the resolver serves
+        // `attach_target`, which these tests never call.
+        let resolver: crate::browser::live::SessionResolver =
+            Arc::new(|tab| Box::pin(async move { Err(BrowserError::TabNotFound(tab)) }));
+        let owner = LiveProfileOwner::new(
+            "p",
+            crate::browser::engine::Engine::Chromium,
+            conn,
+            resolver,
+        );
+        (server, owner)
     }
 
     fn frame_event(n: u64, data_b64: &str) -> serde_json::Value {
@@ -1269,9 +1425,51 @@ mod tests {
         })
     }
 
-    fn shell_stub(dir: &tempfile::TempDir, name: &str, body: &str) -> PathBuf {
-        let path = dir.path().join(name);
-        std::fs::write(&path, body).expect("write stub");
+    /// The native fake encoder, compiled ONCE per test process. The source is
+    /// `recording_test_encoder.rs` (std-only, include_str!-ed, not a module);
+    /// `rustc` builds it shell-free into an owned temp dir and only the bytes
+    /// are kept, so no `sh`/`cmd` and no pre-built artifact are involved.
+    fn encoder_image() -> &'static [u8] {
+        static IMAGE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        IMAGE.get_or_init(|| {
+            let work = tempfile::tempdir().expect("encoder build dir");
+            let src = work.path().join("recording_test_encoder.rs");
+            let exe = work
+                .path()
+                .join(format!("encoder{}", std::env::consts::EXE_SUFFIX));
+            assert!(src.starts_with(work.path()) && exe.starts_with(work.path()));
+            std::fs::write(&src, include_str!("recording_test_encoder.rs")).expect("write src");
+            let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+            let out = std::process::Command::new(rustc)
+                // The manifest dir is only the toolchain anchor (rustup
+                // proxies resolve overrides from the cwd); nothing is
+                // written there — source and output are absolute temp paths.
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .args(["--edition", "2021", "-C", "debuginfo=0", "-o"])
+                .arg(&exe)
+                .arg(&src)
+                .output()
+                .expect("spawn rustc for the test encoder");
+            assert!(
+                out.status.success(),
+                "compiling the test encoder failed:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            std::fs::read(&exe).expect("read compiled encoder")
+        })
+    }
+
+    /// Materialise the fake encoder for `mode` as `<dir>/<mode>[.exe]`; the
+    /// encoder picks its behaviour from its own file stem (see
+    /// `recording_test_encoder.rs`). Everything stays inside the owned dir.
+    fn encoder_stub(dir: &tempfile::TempDir, mode: &str) -> PathBuf {
+        const MODES: [&str; 5] = ["wedged", "slow", "failing", "short-lived", "no-touch"];
+        assert!(MODES.contains(&mode), "unknown test encoder mode `{mode}`");
+        let path = dir
+            .path()
+            .join(format!("{mode}{}", std::env::consts::EXE_SUFFIX));
+        assert!(path.starts_with(dir.path()), "stub escapes its owned dir");
+        std::fs::write(&path, encoder_image()).expect("write stub");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1334,7 +1532,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_start_on_the_same_tab_is_refused_with_the_existing_id() {
-        let (_server, conn) = recording_server().await;
+        let (_server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
         let registry = registry(Duration::from_secs(10));
 
@@ -1343,7 +1541,7 @@ mod tests {
                 "p",
                 "T1",
                 &session_id(),
-                &conn,
+                &owner,
                 opts(dir.path().join("a.webm")),
             )
             .await
@@ -1353,7 +1551,7 @@ mod tests {
                 "p",
                 "T1",
                 &session_id(),
-                &conn,
+                &owner,
                 opts(dir.path().join("b.webm")),
             )
             .await
@@ -1370,7 +1568,7 @@ mod tests {
                 "p",
                 "T2",
                 &session_id(),
-                &conn,
+                &owner,
                 opts(dir.path().join("c.webm")),
             )
             .await
@@ -1381,7 +1579,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_without_extension_is_refused_before_any_engine_call() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
         let registry = registry(Duration::from_secs(10));
 
@@ -1390,7 +1588,7 @@ mod tests {
                 "p",
                 "T1",
                 &session_id(),
-                &conn,
+                &owner,
                 opts(dir.path().join("noext")),
             )
             .await
@@ -1411,7 +1609,7 @@ mod tests {
     /// residue, and a later good start is not poisoned.
     #[tokio::test]
     async fn start_on_an_unwritable_path_fails_fast_without_residue() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
         let registry = registry(Duration::from_secs(10));
 
@@ -1420,7 +1618,7 @@ mod tests {
                 "p",
                 "T1",
                 &session_id(),
-                &conn,
+                &owner,
                 opts(dir.path().join("missing-dir").join("out.webm")),
             )
             .await
@@ -1439,7 +1637,7 @@ mod tests {
                 "p",
                 "T1",
                 &session_id(),
-                &conn,
+                &owner,
                 opts(dir.path().join("good.webm")),
             )
             .await
@@ -1449,13 +1647,13 @@ mod tests {
 
     #[tokio::test]
     async fn start_then_frames_then_stop_produces_a_playable_file_and_an_honest_receipt() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
         let out = dir.path().join("session.webm");
         let registry = registry(Duration::from_secs(15));
 
         let status = registry
-            .start("p", "T1", &session_id(), &conn, opts(out.clone()))
+            .start("p", "T1", &session_id(), &owner, opts(out.clone()))
             .await
             .expect("start");
         // spec §4's `ffmpeg_source`: start's answer names WHERE the encoder
@@ -1511,15 +1709,17 @@ mod tests {
 
     /// Review Focus #1, direction pin: an ack is sent only AFTER the frame's
     /// bytes reached the encoder's stdin. The stub never reads, so the writer
-    /// blocks inside `write_all` once the OS pipe is full — frame 1 is 2MB,
+    /// blocks inside `write_all` once the OS pipe is full — frame 1 is 4MB,
     /// larger than any default pipe capacity (/proc/sys/fs/pipe-max-size is
     /// 1MB here). If the ack for frame 1 ever arrives, the ack went out before
-    /// the write.
+    /// the write. 4MB rather than "just over the pipe": on Windows tokio's
+    /// child stdin is a blocking-io wrapper whose 2MiB internal buffer absorbs
+    /// a smaller write instantly, so a 2MB frame was acked with no encoder read.
     #[tokio::test]
     async fn ack_is_sent_only_after_the_frame_is_written() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
-        let stub = shell_stub(&dir, "wedged-encoder", "#!/bin/sh\nexec sleep 3600\n");
+        let stub = encoder_stub(&dir, "wedged");
         let registry = registry(Duration::from_secs(1));
 
         registry
@@ -1527,12 +1727,12 @@ mod tests {
                 "p",
                 "T1",
                 &session_id(),
-                &conn,
+                &owner,
                 opts_with_ffmpeg(dir.path().join("out.webm"), stub),
             )
             .await
             .expect("start");
-        let big = base64::engine::general_purpose::STANDARD.encode(vec![0x41u8; 2_000_000]);
+        let big = base64::engine::general_purpose::STANDARD.encode(vec![0x41u8; 4_000_000]);
         server.push_event(frame_event(1, &big));
         // Let the writer pick frame 1 up and block on the full pipe.
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1569,13 +1769,9 @@ mod tests {
     /// and every one of those is acked, so the page never stalls waiting.
     #[tokio::test]
     async fn a_slow_encoder_drops_frames_instead_of_buffering_them() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
-        let stub = shell_stub(
-            &dir,
-            "slow-encoder",
-            "#!/bin/sh\nwhile true; do dd bs=1024 count=1 of=/dev/null 2>/dev/null || break; sleep 0.05; done\n",
-        );
+        let stub = encoder_stub(&dir, "slow");
         let registry = registry(Duration::from_secs(1));
 
         registry
@@ -1583,7 +1779,7 @@ mod tests {
                 "p",
                 "T1",
                 &session_id(),
-                &conn,
+                &owner,
                 opts_with_ffmpeg(dir.path().join("out.webm"), stub),
             )
             .await
@@ -1638,8 +1834,8 @@ mod tests {
         assert_eq!(
             acked,
             receipt.encoded_frames + receipt.dropped_frames,
-            "acks == encoded + dropped (buffered-at-kill frames are acked to nobody): \
-             {acked} acks, {receipt:?}"
+            "acks == encoded + dropped (buffered-at-kill frames are acked by the dropped \
+             RecordingTap's TapGuard, not by the registry): {acked} acks, {receipt:?}"
         );
     }
 
@@ -1648,13 +1844,13 @@ mod tests {
     /// stop collects a TRUNCATED receipt — never a complete one.
     #[tokio::test]
     async fn tab_death_mid_recording_auto_finalizes_a_truncated_receipt() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
         let out = dir.path().join("truncated.webm");
         let registry = registry(Duration::from_secs(15));
 
         registry
-            .start("p", "T1", &session_id(), &conn, opts(out.clone()))
+            .start("p", "T1", &session_id(), &owner, opts(out.clone()))
             .await
             .expect("start");
         for n in 1..=10 {
@@ -1668,10 +1864,9 @@ mod tests {
         .await;
 
         // The tab dies: the SOCKET is dropped, which is the connection-death
-        // arm — `fail_all` sets the close watch (`engine_gone` above), and
-        // THAT is what the supervisor observes. The event stream itself never
-        // closes (its sender lives in the connection's `Shared`, kept alive by
-        // this loop's own `conn` clones — see the `engine_gone` comment).
+        // arm — `fail_all` sets the close watch (the owner's `conn.closed` watch), and
+        // THAT is what the supervisor observes. The owner then ends every
+        // stream with `EngineGone`, which the supervisor reads as truncation.
         // The OTHER death shape — a tab dying while the ENGINE lives — is the
         // `Target.targetDestroyed` arm's job since C3 Task 1, pinned by
         // `a_target_destroyed_event_finalizes_the_recording_while_the_engine_lives`
@@ -1721,13 +1916,9 @@ mod tests {
     /// Review Focus #3: exit 1 with a non-empty file on disk is NOT complete.
     #[tokio::test]
     async fn a_nonzero_encoder_exit_is_never_reported_as_complete() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
-        let stub = shell_stub(
-            &dir,
-            "failing-encoder",
-            "#!/bin/sh\nfor last; do :; done\ncat > \"$last\"\nexit 1\n",
-        );
+        let stub = encoder_stub(&dir, "failing");
         let registry = registry(Duration::from_secs(10));
 
         let status = registry
@@ -1735,7 +1926,7 @@ mod tests {
                 "p",
                 "T1",
                 &session_id(),
-                &conn,
+                &owner,
                 opts_with_ffmpeg(dir.path().join("out.webm"), stub),
             )
             .await
@@ -1778,9 +1969,9 @@ mod tests {
     /// it, the bounded wait expires, and the receipt says `killed`.
     #[tokio::test]
     async fn stop_kills_a_wedged_ffmpeg_and_says_so() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
-        let stub = shell_stub(&dir, "wedged-encoder", "#!/bin/sh\nexec sleep 3600\n");
+        let stub = encoder_stub(&dir, "wedged");
         let registry = registry(Duration::from_secs(1));
 
         registry
@@ -1788,7 +1979,7 @@ mod tests {
                 "p",
                 "T1",
                 &session_id(),
-                &conn,
+                &owner,
                 opts_with_ffmpeg(dir.path().join("out.webm"), stub),
             )
             .await
@@ -1811,13 +2002,9 @@ mod tests {
     /// truncated, because the exit code is only one of four checks.
     #[tokio::test]
     async fn ffmpeg_death_mid_recording_is_detected_on_the_next_frame_write() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
-        let stub = shell_stub(
-            &dir,
-            "short-lived-encoder",
-            "#!/bin/sh\nhead -c 256 >/dev/null\nexit 0\n",
-        );
+        let stub = encoder_stub(&dir, "short-lived");
         let registry = registry(Duration::from_secs(10));
 
         registry
@@ -1825,7 +2012,7 @@ mod tests {
                 "p",
                 "T1",
                 &session_id(),
-                &conn,
+                &owner,
                 opts_with_ffmpeg(dir.path().join("out.webm"), stub),
             )
             .await
@@ -1865,7 +2052,7 @@ mod tests {
     /// file at the path) is a silent complete-lie.
     #[tokio::test]
     async fn a_preexisting_stale_file_is_never_reported_complete() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
         let out = dir.path().join("stale.webm");
         std::fs::write(&out, b"old content from an earlier run").expect("seed file");
@@ -1875,11 +2062,7 @@ mod tests {
             .expect("open")
             .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
             .expect("backdate mtime");
-        let stub = shell_stub(
-            &dir,
-            "no-touch-encoder",
-            "#!/bin/sh\ncat >/dev/null\nexit 0\n",
-        );
+        let stub = encoder_stub(&dir, "no-touch");
         let registry = registry(Duration::from_secs(10));
 
         registry
@@ -1887,7 +2070,7 @@ mod tests {
                 "p",
                 "T1",
                 &session_id(),
-                &conn,
+                &owner,
                 opts_with_ffmpeg(out.clone(), stub),
             )
             .await
@@ -1941,13 +2124,13 @@ mod tests {
     /// filed receipt is a truncation, collectable by `stop_by_id`.
     #[tokio::test]
     async fn a_target_destroyed_event_finalizes_the_recording_while_the_engine_lives() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
         let out = dir.path().join("tabdied.webm");
         let registry = registry(Duration::from_secs(15));
 
         registry
-            .start("p", "T1", &session_id(), &conn, opts(out.clone()))
+            .start("p", "T1", &session_id(), &owner, opts(out.clone()))
             .await
             .expect("start");
         for n in 1..=5 {
@@ -2006,13 +2189,13 @@ mod tests {
     /// measure the scheduler, not the filter.
     #[tokio::test]
     async fn a_destroyed_event_for_another_tab_leaves_the_recording_running() {
-        let (server, conn) = recording_server().await;
+        let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
         let out = dir.path().join("stillalive.webm");
         let registry = registry(Duration::from_secs(15));
 
         registry
-            .start("p", "T1", &session_id(), &conn, opts(out.clone()))
+            .start("p", "T1", &session_id(), &owner, opts(out.clone()))
             .await
             .expect("start");
         for n in 1..=5 {

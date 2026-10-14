@@ -30,6 +30,15 @@
 
 pub mod driver;
 mod job;
+// Strict managed-service launch contract (#53/#48) and its production pieces:
+// the parent-side suspended AppContainer launcher and the per-run WFP backend.
+// The driver still refuses managed spawns until the confinement capabilities
+// are verified (see `managed_launch::CURRENT_CAPABILITIES`).
+mod launcher;
+mod managed_launch;
+mod wfp;
+// Read-only process-token elevation probe (no state changes).
+mod elevation;
 
 pub use driver::WindowsSandboxDriver;
 // See the `#[allow(dead_code)]` rationale on `job::kill_on_this_process_exit`:

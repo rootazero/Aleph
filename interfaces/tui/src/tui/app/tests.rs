@@ -3366,3 +3366,84 @@ fn a_single_tool_run_gets_no_summary_row_but_still_closes() {
         state.messages.last()
     );
 }
+
+// ---- browser-live resource catalog wiring -------------------------------
+
+fn browser_resource_json(id: &str, revision: u64) -> serde_json::Value {
+    use aleph_protocol::browser_live::*;
+    let resource = PreviewResource {
+        resource_id: id.into(),
+        revision,
+        binding: ResourceBinding::Browser {
+            viewer: ViewerBinding {
+                principal: IssuerIdentity::User {
+                    user_id: "u1".into(),
+                },
+                task: ConversationBinding {
+                    session_key: "agent:main:main".into(),
+                    run_id: "run-1".into(),
+                },
+                target: BrowserTargetBinding {
+                    profile: "default".into(),
+                    browser_session_id: "bs-1".into(),
+                    target_id: "t1".into(),
+                },
+            },
+        },
+        kind: PreviewKind::Page,
+        display: DisplayPolicy::ExplicitOnly,
+        source: PreviewSource::BrowserTool,
+        provenance: PreviewProvenance::NotManaged,
+        expires_at_ms: 2_000,
+        redaction: RedactionStatus::Pending,
+        companion_candidates: Vec::new(),
+    };
+    serde_json::json!({"type": "browser_live_resource", "resource": resource})
+}
+
+#[test]
+fn browser_resource_topic_populates_catalog_and_stale_revision_is_ignored() {
+    use aleph_protocol::browser_live::RESOURCE_TOPIC;
+    let mut state = AppState::new("s".into(), "m".into());
+
+    state.handle_topic_event(RESOURCE_TOPIC, browser_resource_json("res_a", 2));
+    assert_eq!(state.browser_resources.get("res_a").unwrap().revision, 2);
+
+    state.handle_topic_event(RESOURCE_TOPIC, browser_resource_json("res_a", 1));
+    assert_eq!(
+        state.browser_resources.get("res_a").unwrap().revision,
+        2,
+        "an older revision must not replace the stored one"
+    );
+}
+
+#[test]
+fn browser_closed_topic_removes_resource_and_malformed_frames_are_no_ops() {
+    use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
+    let mut state = AppState::new("s".into(), "m".into());
+    let data = browser_resource_json("res_a", 1);
+    let binding = data["resource"]["binding"].clone();
+
+    state.handle_topic_event(RESOURCE_TOPIC, serde_json::json!({"resource": 7}));
+    state.handle_topic_event(CLOSED_TOPIC, serde_json::json!({}));
+    assert!(state.browser_resources.is_empty());
+
+    state.handle_topic_event(RESOURCE_TOPIC, data);
+    state.handle_topic_event(RESOURCE_TOPIC, serde_json::json!({"resource": "garbage"}));
+    assert_eq!(state.browser_resources.len(), 1);
+
+    state.handle_topic_event(
+        CLOSED_TOPIC,
+        serde_json::json!({
+            "type": "browser_live_closed",
+            "closed": {
+                "resource_id": "res_a",
+                "binding": binding,
+                "reason": "target_closed",
+                "at_ms": 1000
+            }
+        }),
+    );
+    assert!(state.browser_resources.get("res_a").is_none());
+    assert!(state.browser_resources.is_closed("res_a"));
+}

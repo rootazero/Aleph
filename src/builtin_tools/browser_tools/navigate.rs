@@ -59,6 +59,8 @@ impl BrowserNavigateOutput {
 pub struct BrowserNavigateTool {
     manager: Arc<ProfileManager>,
     approval_policy: Option<Arc<dyn ApprovalPolicy>>,
+    /// Shared browser-live producer; `None` (the default) publishes nothing.
+    live_producer: Option<super::present::BrowserLiveProducer>,
 }
 
 impl BrowserNavigateTool {
@@ -66,7 +68,19 @@ impl BrowserNavigateTool {
         Self {
             manager,
             approval_policy: None,
+            live_producer: None,
         }
+    }
+
+    /// Install the registry's EXISTING browser-live producer (never a second
+    /// store). After a successful CDP navigate/history it publishes
+    /// best-effort; a publication failure never changes this tool's output.
+    pub fn with_live_producer(
+        mut self,
+        producer: Option<super::present::BrowserLiveProducer>,
+    ) -> Self {
+        self.live_producer = producer;
+        self
     }
 
     /// Gate navigation behind a user-defined approval policy (allow/deny/ask
@@ -127,7 +141,14 @@ impl AlephTool for BrowserNavigateTool {
         if let NavigateAction::Goto { url } = &args.action {
             return Ok(
                 match super::make_backend_and_tab(&self.manager, &args.profile).await {
-                    Ok((backend, tab_id)) => match backend.navigate(&tab_id, url).await {
+                    Ok((backend, tab_id)) => match super::operation_publish::navigate_and_present(
+                        backend.as_ref(),
+                        self.live_producer.as_ref(),
+                        &tab_id,
+                        url,
+                    )
+                    .await
+                    {
                         Ok(()) => BrowserNavigateOutput {
                             success: true,
                             message: Some(format!(
@@ -159,7 +180,14 @@ impl AlephTool for BrowserNavigateTool {
             NavigateAction::Goto { .. } => unreachable!("Goto handled above"),
         };
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
-            Ok((backend, tab_id)) => match backend.history(&tab_id, nav).await {
+            Ok((backend, tab_id)) => match super::operation_publish::history_and_present(
+                backend.as_ref(),
+                self.live_producer.as_ref(),
+                &tab_id,
+                nav,
+            )
+            .await
+            {
                 Ok(_) => Ok(BrowserNavigateOutput {
                     success: true,
                     message: Some(format!("Navigated {nav:?} in profile '{}'", args.profile)),

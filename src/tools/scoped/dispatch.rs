@@ -4,7 +4,9 @@
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::extension::hooks::{budget_hook_contexts, HookContext, HookExecutor, PermissionDecision};
+use crate::extension::hooks::{
+    budget_hook_contexts, HookContext, HookExecutor, PermissionDecision,
+};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant, GrantScope};
@@ -1514,7 +1516,10 @@ impl ScopedToolService {
         let approval_source = decision.approval_source();
         let denial_reason = decision.denial_reason().map(str::to_owned);
         let memo = match rule {
-            Some(rule) => format!("{} [gate: {rule}] (fingerprint: {fingerprint})", decision.detail()),
+            Some(rule) => format!(
+                "{} [gate: {rule}] (fingerprint: {fingerprint})",
+                decision.detail()
+            ),
             None => format!("{} (fingerprint: {fingerprint})", decision.detail()),
         };
         crate::session::call_log::emit_approval_decision_batch(
@@ -1811,10 +1816,7 @@ impl ScopedToolService {
     /// `phase`. Clones the shared executor so the sink never leaks back into
     /// the service's long-lived executor.
     fn hook_executor_for_memo(&self, phase: &'static str) -> Option<Arc<HookExecutor>> {
-        let base = self
-            .hook_executor
-            .as_ref()
-            .filter(|e| e.hook_count() > 0)?;
+        let base = self.hook_executor.as_ref().filter(|e| e.hook_count() > 0)?;
         let session = self
             .turn_context
             .as_ref()

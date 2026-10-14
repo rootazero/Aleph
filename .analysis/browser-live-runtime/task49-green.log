@@ -1,0 +1,72 @@
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+warning: unused import: `super::*`
+   --> src\gateway\execution_engine\run_loop\project_context.rs:223:9
+    |
+223 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::Duration`
+ --> src\gateway\execution_engine\slash_command_body\tests.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FileSessionStoreConfig` and `FileSessionStore`
+  --> src\gateway\session_store\hook_transcripts.rs:42:55
+   |
+42 |     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+   |                                                       ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `with_consent` is never used
+   --> src\builtin_tools\skill_reader\read.rs:157:19
+    |
+101 | impl ReadSkillTool {
+    | ------------------ method in this implementation
+...
+157 |     pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `alephcore` (lib test) generated 4 warnings (run `cargo fix --lib -p alephcore --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 6m 42s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 19 tests
+test browser::cdp_backend::recording::tests::codec_args_follow_the_extension_and_a_missing_one_is_refused ... ok
+test browser::cdp_backend::recording::tests::ffmpeg_resolution_prefers_env_then_path_then_playwright_cache ... ok
+test browser::cdp_backend::recording::tests::the_default_path_lands_under_the_managed_dir_with_profile_and_tab ... ok
+test browser::cdp_backend::recording::tests::uniquify_only_moves_aside_for_a_real_collision ... ok
+test browser::cdp_backend::recording::tests::resolve_ffmpeg_finds_the_one_on_this_machines_path ... ok
+test browser::cdp_backend::recording::tests::the_backend_carries_the_shared_registry ... ok
+test browser::cdp_backend::recording::tests::start_without_extension_is_refused_before_any_engine_call ... ok
+test browser::cdp_backend::recording::tests::start_on_an_unwritable_path_fails_fast_without_residue ... ok
+test browser::cdp_backend::recording::tests::a_second_start_on_the_same_tab_is_refused_with_the_existing_id ... ok
+test browser::cdp_backend::recording::tests::a_destroyed_event_for_another_tab_leaves_the_recording_running ... ok
+test browser::cdp_backend::recording::tests::a_preexisting_stale_file_is_never_reported_complete ... ok
+test browser::cdp_backend::recording::tests::a_target_destroyed_event_finalizes_the_recording_while_the_engine_lives ... ok
+test browser::cdp_backend::recording::tests::tab_death_mid_recording_auto_finalizes_a_truncated_receipt ... ok
+test browser::cdp_backend::recording::tests::start_then_frames_then_stop_produces_a_playable_file_and_an_honest_receipt ... ok
+test browser::cdp_backend::recording::tests::a_nonzero_encoder_exit_is_never_reported_as_complete ... ok
+test browser::cdp_backend::recording::tests::ffmpeg_death_mid_recording_is_detected_on_the_next_frame_write ... ok
+test browser::cdp_backend::recording::tests::ack_is_sent_only_after_the_frame_is_written ... FAILED
+test browser::cdp_backend::recording::tests::stop_kills_a_wedged_ffmpeg_and_says_so ... ok
+test browser::cdp_backend::recording::tests::a_slow_encoder_drops_frames_instead_of_buffering_them ... ok
+
+failures:
+
+---- browser::cdp_backend::recording::tests::ack_is_sent_only_after_the_frame_is_written stdout ----
+
+thread 'browser::cdp_backend::recording::tests::ack_is_sent_only_after_the_frame_is_written' (8364) panicked at src\browser\cdp_backend\recording.rs:1574:9:
+frame 1 is blocked in the encoder's pipe; an ack for it is ack-before-write: [1]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    browser::cdp_backend::recording::tests::ack_is_sent_only_after_the_frame_is_written
+
+test result: FAILED. 18 passed; 1 failed; 0 ignored; 0 measured; 20666 filtered out; finished in 3.17s
+
+error: test failed, to rerun pass `-p alephcore --lib`

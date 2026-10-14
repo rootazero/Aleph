@@ -32,7 +32,9 @@ pub(crate) async fn resolve_hosts_in_capabilities(
     caps: &mut SandboxCapabilities,
 ) -> Result<(), SandboxError> {
     let hosts = match &mut caps.network {
-        NetworkPolicy::None | NetworkPolicy::AllowAll => return Ok(()),
+        NetworkPolicy::None | NetworkPolicy::AllowAll | NetworkPolicy::LoopbackPorts { .. } => {
+            return Ok(())
+        }
         NetworkPolicy::AllowHosts { hosts } => hosts,
     };
     if hosts.is_empty() {

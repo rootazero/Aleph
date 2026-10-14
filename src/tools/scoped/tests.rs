@@ -4786,7 +4786,10 @@ async fn an_answered_gate_leaves_park_then_decision_in_the_session_log() {
     // exit fact, and the durable memo the decision leaves behind (§6.1 plus
     // the atomic memo batch — the memo rides the decision's `emit_batch`, not
     // a separate park).
-    assert_eq!(kinds, ["tool_call_parked", "tool_call_denied", "approval_memo"]);
+    assert_eq!(
+        kinds,
+        ["tool_call_parked", "tool_call_denied", "approval_memo"]
+    );
     assert!(
         matches!(
             &rows[0].event,

@@ -1,0 +1,51 @@
+[[agents.list]]
+default = true
+id = "main"
+name = "Main Agent"
+
+[[agents.list]]
+id = "main__u-owner"
+name = "main__u-owner"
+
+[gateway]
+bind = "127.0.0.1"
+browser_viewer_origin = "http://127.0.0.1:18792"
+port = 18792
+
+[general]
+default_provider = "mock"
+
+[general.browser.policy]
+block_private = false
+blocked_domains = []
+
+[playwright_cli]
+headless = true
+
+[profiles.default]
+browser = "chrome"
+driver = "managed"
+
+[providers.minimax]
+base_url = "https://api.minimaxi.com/anthropic"
+color = "#808080"
+enabled = false
+models = ["MiniMax-M3"]
+protocol = "anthropic"
+timeout_seconds = 300
+verified = false
+
+[providers.minimax.server_context_editing]
+enabled = false
+
+[providers.mock]
+base_url = "http://127.0.0.1:18791/v1"
+color = "#808080"
+enabled = true
+models = ["mock-model"]
+protocol = "openai"
+timeout_seconds = 60
+verified = false
+
+[providers.mock.server_context_editing]
+enabled = false

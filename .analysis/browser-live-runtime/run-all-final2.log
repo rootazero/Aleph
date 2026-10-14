@@ -1,0 +1,28 @@
+grant issued AdllqPh4iPFzlsfwcTRkpkjU6l9fsxqMg0zMYxedJCc url origin+path http://
+CASE stream exit=0
+  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:29:5 › stream: authenticated viewer receives a real JPEG frame (1.1s)
+  1 passed (1.9s)
+grant issued SARAurmQ4nplyTgUkSFSaryKgu50TH6xFwOzUqqdd-k url origin+path http://
+CASE control-all-entries exit=0
+  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:34:5 › control-all-entries: viewer remains read-only (1.2s)
+  1 passed (1.9s)
+grant issued rH2NsWe66m5bBPqCLvfcr424Z6ilMNAyBXWTCHkBH0E url origin+path http://
+CASE standalone-same-target exit=0
+  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:40:5 › standalone-same-target: viewer transport is same-origin and frame-backed (1.1s)
+  1 passed (2.0s)
+grant issued KgYzFAbATDJtqEl_0xFIeoyTsRqthN96OPwdDMbuakA url origin+path http://
+CASE grant-boundary exit=0
+  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:68:5 › grant-boundary: fragment credential never enters the rendered document (1.1s)
+  1 passed (1.9s)
+grant issued iqp_R8gwASQkCEzrM84qnLDEB6LZH7NYN73ptMxiCi0 url origin+path http://
+grant issued 6q6pLTCoTmMnKbbSkBJ5Jn2TBHfb0ljlvg2CY0Gq2O0 url origin+path http://
+CASE binding-switch exit=0
+  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:48:5 › binding-switch: a second Gateway-issued viewer remains independently frame-backed (2.3s)
+  1 passed (3.1s)
+revoke {"revoked":true}
+grant issued Gy1WFG0Ec1Oued3H_t3gQpDdlGj1uL5p_NSXU_ERIx0 url origin+path http://
+CASE reap exit=0
+  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:77:5 › reap: revoked or expired viewer closes without presenting a stale frame (1.1s)
+  1 passed (1.9s)
+CASE managed-companion exit=1 ALEPH_BROWSER_LIVE_MANAGED_VIEWER_URL must be a real managed-companion viewer URL
+script_exit=0

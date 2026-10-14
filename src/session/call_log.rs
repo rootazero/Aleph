@@ -42,11 +42,8 @@ static DROPPED_FOR_MISSING_IDENTITY: AtomicU64 = AtomicU64::new(0);
 /// `site` and `what` are log context only — the event carries no tool name
 /// (the dispatch it pairs with owns it). `site` is the tool name where the
 /// caller knows it and the parking function's path where it does not.
-pub async fn emit_approval_decision_batch<F>(
-    session: &SessionId,
-    site: &str,
-    make: F,
-) where
+pub async fn emit_approval_decision_batch<F>(session: &SessionId, site: &str, make: F)
+where
     F: FnOnce(TurnId, String) -> (SessionEvent, SessionEvent),
 {
     let Some(svc) = global_session_service() else {

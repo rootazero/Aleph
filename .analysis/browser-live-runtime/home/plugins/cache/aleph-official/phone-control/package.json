@@ -1,0 +1,10 @@
+{
+  "name": "@aleph/phone-control",
+  "version": "0.1.0",
+  "description": "Aleph plugin — Android phone control via ADB",
+  "main": "src/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js"
+  }
+}

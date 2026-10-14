@@ -1,0 +1,7 @@
+Pairing ticket for u-owner (single use, expires in 10 min):
+
+  aleph-bt-dc709143-f502-44ae-a490-183c0c4716f6
+
+This core is bound to 127.0.0.1 — reachable only from this machine, so there is
+no LAN URL to hand out. Set `[gateway] host = "0.0.0.0"` to open it to
+the local network, or paste the ticket above into the Panel's authorize box.

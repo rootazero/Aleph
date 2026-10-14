@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clear-connection-target"
+description = "Enables the clear_connection_target command without any pre-configured scope."
+commands.allow = ["clear_connection_target"]
+
+[[permission]]
+identifier = "deny-clear-connection-target"
+description = "Denies the clear_connection_target command without any pre-configured scope."
+commands.deny = ["clear_connection_target"]
