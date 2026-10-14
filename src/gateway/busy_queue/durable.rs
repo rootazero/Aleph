@@ -1032,7 +1032,7 @@ mod tests {
             ("spawn.rs", include_str!("spawn.rs")),
             ("executor.rs", include_str!("../inbound_router/executor.rs")),
         ] {
-            let prod = src.split("#[cfg(test)]").next().unwrap();
+            let prod = crate::utils::source_scan::production_prefix(src);
             assert!(
                 prod.contains("QueuedRunPayload::from_request"),
                 "{name} must journal via from_request"

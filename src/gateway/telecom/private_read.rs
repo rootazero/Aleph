@@ -251,10 +251,7 @@ mod tests {
         // Scan only the production half: this test names the forbidden
         // identifiers itself, so the whole file would always match.
         let full = include_str!("private_read.rs");
-        let source = full
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first part");
+        let source = crate::utils::source_scan::production_prefix(&full);
         for forbidden in [
             "owner_memory",
             "owner_workspace",

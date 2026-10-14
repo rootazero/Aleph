@@ -396,14 +396,10 @@ mod tests {
                 } else if p.extension().is_some_and(|x| x == "rs") {
                     let s = std::fs::read_to_string(&p).unwrap();
                     // Most modules keep tests after production code. The run
-                    // loop declares an out-of-line test module at the top,
-                    // so remove only that declaration rather than truncating
-                    // the production hook-stop writer below it.
-                    let prod = if p.ends_with("gateway/execution_engine/run_loop/mod.rs") {
-                        s.replace("#[cfg(test)]\nmod tests;\n", "")
-                    } else {
-                        s.split("#[cfg(test)]").next().unwrap_or("").to_string()
-                    };
+                    // loop declares an out-of-line test module at the top;
+                    // `production_text` also handles whole-file test modules
+                    // declared by a parent under `#[cfg(test)]`.
+                    let prod = crate::utils::source_scan::production_text(&p, &s);
                     let needle = concat!("PersistedTelecomMarker", "::capture(");
                     let n = prod
                         .lines()

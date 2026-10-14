@@ -1204,7 +1204,7 @@ mod tests {
     /// non-streaming and the streaming arm.
     #[tokio::test]
     #[serial_test::serial(spend_global_policy)]
-    async fn explicit_public_principal_records_under_public_row_not_ambient_owner() {
+    async fn explicit_public_principal_records_under_public_row_not_ambient_person() {
         install_test_spend_globals();
         let owner = crate::spend::Principal::User("u-metering-public-owner".to_string());
         let attr = crate::scope::ScopeAttribution::personal("u-metering-public-owner");

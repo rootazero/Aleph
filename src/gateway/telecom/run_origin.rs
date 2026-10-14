@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn the_run_hook_reads_creator_origin_not_the_completing_requests() {
         let src = include_str!("../execution_engine/execute.rs");
-        let prod = src.split("#[cfg(test)]").next().unwrap();
+        let prod = crate::utils::source_scan::production_prefix(src);
         let hook_reads: Vec<&str> = prod
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))

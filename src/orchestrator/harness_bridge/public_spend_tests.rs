@@ -84,7 +84,7 @@ fn spent_now(principal: &Principal) -> Spent {
 /// row) alone.
 #[tokio::test]
 #[serial_test::serial(spend_global_policy)]
-async fn public_run_meters_under_telecom_public_not_the_ambient_owner() {
+async fn public_run_meters_under_telecom_public_not_the_ambient_person() {
     install_policy(SpendPolicy {
         per_user_usd: Some(1_000_000.0),
         period: SpendPeriod::Month,
