@@ -1,0 +1,13 @@
+    Checking aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
+   Compiling aleph-desktop-shell v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\shell)
+error: failed to run custom build command for `aleph-desktop-shell v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\shell)`
+
+Caused by:
+  process didn't exit successfully: `D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\target\debug\build\aleph-desktop-shell-6a37d4d4dc7cbd03\build-script-build` (exit code: 1)
+  --- stdout
+  cargo:rerun-if-env-changed=TAURI_CONFIG
+  cargo:rustc-check-cfg=cfg(desktop)
+  cargo:rustc-cfg=desktop
+  cargo:rustc-check-cfg=cfg(mobile)
+  cargo:rerun-if-changed=D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\shell\tauri.conf.json
+  expected value at line 1 column 1

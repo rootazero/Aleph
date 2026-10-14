@@ -1,6 +1,7 @@
 pub mod agent_trace;
 pub mod agent_trace_model;
 pub mod agents;
+pub mod browser;
 pub mod canvas;
 pub mod chat;
 pub mod cron;

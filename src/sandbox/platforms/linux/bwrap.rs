@@ -189,6 +189,14 @@ impl BubblewrapDriver {
                     ),
                 });
             }
+            NetworkPolicy::LoopbackPorts(_) => {
+                return Err(SandboxError::UnsupportedPolicy {
+                    platform: "linux/bwrap",
+                    feature: "NetworkPolicy::LoopbackPorts".into(),
+                    reason: "per-port loopback confinement is only implemented by the                              Windows managed launcher; bwrap cannot enforce it"
+                        .into(),
+                });
+            }
         }
 
         self.add_fs_args(&mut args, &policy.filesystem, cwd)?;

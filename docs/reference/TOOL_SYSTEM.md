@@ -227,6 +227,16 @@ generates description text at runtime (`AlephTool::DESCRIPTION` is a `const`). T
 switching for. `qa/browser_dual/run.sh caps` probes every row against the real binaries **by
 effect**, which is that table's expiry check rather than a second copy of it.
 
+#### Browser live resources: producer discovery · 生产者发现
+<!-- browser-live-docs:begin -->
+`browser_open` / `browser_navigate` remain the active agent tools (not removed); they feed `operation_publish` (`src/builtin_tools/browser_tools/operation_publish.rs`) and the explicit `BrowserLiveProducer` seam (`src/builtin_tools/browser_tools/present.rs`), which publishes `PreviewResource` records under the turn context and announces them with the gateway events `browser.live.resource` / `browser.live.closed`. A producer can never publish `Safe`: `Safe` is clamped to `Pending`, `Pending` is kept, `Refused` fails closed (close + revoke). `Safe` is set only by `browser.viewer.resource.decide` (explicit user decision, revision CAS). Contract and status: [BROWSER_LIVE_VIEWER.md](BROWSER_LIVE_VIEWER.md).
+
+browser 工具产出「资源」而非 URL；production 批准路径只有用户决策 CAS。
+
+- **共同边界 / Shared boundary**：Gateway 独占 CDP（Gateway owns CDP）；Panel/TUI 仅 I/O only 呈现；仅显式合法 `[gateway] browser_viewer_origin` 才 opt-in，默认（None / 非法）deny-only；producer 的 `Safe` 被钳为 `Pending`，`Safe` 只来自用户经 `browser.viewer.resource.decide` 的 revision CAS；绑定走精确 binding / owner / generation；#27 TUI paired/browser 已接线，Windows Credential Manager standalone probe 1/1 已通过；macOS/Linux provider 与真实 pairing/browser E2E 仍 blocked；`NetworkContextGrant` / proxy 未触碰；**not production ready**。
+Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[gateway] browser_viewer_origin`, default deny-only; producer `Safe` is clamped to `Pending` and `Safe` comes only from the user's decision CAS; exact binding/owner/generation; #27 TUI paired/browser wiring is implemented; the Windows Credential Manager standalone probe passed 1/1; macOS/Linux providers and real pairing/browser E2E remain blocked; network grants untouched; not production ready.
+<!-- browser-live-docs:end -->
+
 ### Generation
 
 | Tool | Description | Args |

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reject-cert"
+description = "Enables the reject_cert command without any pre-configured scope."
+commands.allow = ["reject_cert"]
+
+[[permission]]
+identifier = "deny-reject-cert"
+description = "Denies the reject_cert command without any pre-configured scope."
+commands.deny = ["reject_cert"]

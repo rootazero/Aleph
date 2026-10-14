@@ -35,11 +35,14 @@ use tokio::sync::broadcast;
 // `super::connection::*`; see `connection/mod.rs`.
 #[allow(unused_imports)] // re-exports consumed by `mod tests` via `use super::*;`
 pub use super::connection::{
-    connect_verdict, device_revoked_id, device_revoked_should_close, dispatch_with_caller_context,
-    event_wire_form, extract_topic_and_data, forward_bus_to_client, is_token_rotated_frame,
-    node_connect_claim, overflow_warning_frame, parse_trusted_ips, process_request,
-    refuse_insecure_remote, resolve_stamped_identity, rotated_should_close_remote, wall_admits,
-    ws_upgrade_handler, DEVICE_REVOKED_TOPIC, TOKEN_ROTATED_TOPIC,
+    connect_auth_without_device_manager, connect_verdict, device_revoked_id,
+    device_revoked_should_close, dispatch_for_connection, dispatch_with_caller_context,
+    event_wire_form, extract_topic_and_data, forward_bus_to_client,
+    has_presented_device_credential, idempotency_principal, is_browser_viewer_method,
+    is_token_rotated_frame, node_connect_claim, overflow_warning_frame, parse_trusted_ips,
+    process_request, refuse_insecure_remote, resolve_stamped_identity, revalidate_for_dispatch,
+    rotated_should_close_remote, viewer_denied_response, viewer_principal, wall_admits,
+    ws_upgrade_handler, CallerSnapshot, DEVICE_REVOKED_TOPIC, TOKEN_ROTATED_TOPIC,
 };
 
 #[cfg(test)]
@@ -622,6 +625,38 @@ mod tests {
     }
 
     #[test]
+    fn no_device_manager_fails_closed_on_explicit_device_credential() {
+        use crate::gateway::handlers::connect::ConnectAuthOutcome;
+        assert!(has_presented_device_credential(Some("aleph-dt-x"), None));
+        assert!(has_presented_device_credential(None, Some("aleph-bt-x")));
+        assert!(!has_presented_device_credential(None, None));
+        assert!(!has_presented_device_credential(Some(""), Some("")));
+
+        // Even when the legacy path would authorize (loopback), an explicit
+        // device credential must NOT fall through to it (and must not even
+        // consult it).
+        for (dt, bt) in [(Some("aleph-dt-x"), None), (None, Some("aleph-bt-x"))] {
+            let outcome = connect_auth_without_device_manager(dt, bt, || {
+                panic!("legacy path must not be consulted")
+            });
+            assert!(matches!(outcome, ConnectAuthOutcome::Unauthorized));
+        }
+        // Credential-less connects keep the legacy behavior in both directions.
+        assert!(matches!(
+            connect_auth_without_device_manager(None, None, || true),
+            ConnectAuthOutcome::Authorized { device_id: None }
+        ));
+        assert!(matches!(
+            connect_auth_without_device_manager(Some(""), Some(""), || true),
+            ConnectAuthOutcome::Authorized { device_id: None }
+        ));
+        assert!(matches!(
+            connect_auth_without_device_manager(None, None, || false),
+            ConnectAuthOutcome::Unauthorized
+        ));
+    }
+
+    #[test]
     fn node_shape_connect_registers_and_disconnect_deregisters() {
         let registry = crate::cluster::NodeRegistry::new();
         let (tx, _rx) = tokio::sync::mpsc::channel::<String>(8);
@@ -838,6 +873,7 @@ mod tests {
             Some("u-alice".to_string()),
             false,
             None,
+            None,
         )
         .await;
         assert!(
@@ -890,6 +926,7 @@ mod tests {
             Some("u-x".to_string()),
             true,
             None,
+            None,
         )
         .await;
         assert!(
@@ -938,9 +975,16 @@ mod tests {
         );
         let text = r#"{"jsonrpc":"2.0","id":1,"method":"probe.scope","params":{}}"#;
 
-        let resp =
-            dispatch_with_caller_context(text, &mc, Some("operator".to_string()), None, true, None)
-                .await;
+        let resp = dispatch_with_caller_context(
+            text,
+            &mc,
+            Some("operator".to_string()),
+            None,
+            true,
+            None,
+            None,
+        )
+        .await;
         assert!(
             resp.contains("\"owner_user_id\":null"),
             "no caller_user must mean no scope attribution: {resp}"
@@ -976,12 +1020,567 @@ mod tests {
             None,
             true,
             Some("127.0.0.1:9999".to_string()),
+            None,
         )
         .await;
         assert!(
             resp.contains("\"conn_id\":\"127.0.0.1:9999\""),
             "conn id must be observable inside process_request's dispatch: {resp}"
         );
+    }
+
+    // ── viewer-source gate (verified user) around dispatch ───────────────
+    // The viewer methods' identity gate lives in `connection::dispatch` and is
+    // shared by every real dispatch path (`do_lane_dispatch` after the lane
+    // permit, the idempotency `Proceed` arm, and the Cached/Waiting returns via
+    // `revalidate_for_dispatch`). The WS loop has no injectable seam, so these
+    // tests drive the same helpers against real `ConnectionState` maps and a
+    // probe handler whose invocation counter proves the handler was (not) reached.
+
+    const VIEWER_ISSUE: &str = "browser.viewer.grant.issue";
+
+    type ViewerConns = Arc<
+        tokio::sync::RwLock<
+            std::collections::HashMap<String, crate::gateway::server::ConnectionState>,
+        >,
+    >;
+
+    fn viewer_conns(role: &str, user: Option<&str>, verified: Option<&str>) -> ViewerConns {
+        let mut state =
+            crate::gateway::server::ConnectionState::new("203.0.113.7".parse().unwrap(), false);
+        state.caller_role = role.to_string();
+        state.caller_user = user.map(str::to_string);
+        state.verified_user = verified.map(str::to_string);
+        let mut map = std::collections::HashMap::new();
+        map.insert("c1".to_string(), state);
+        Arc::new(tokio::sync::RwLock::new(map))
+    }
+
+    fn viewer_probe_chain() -> (MiddlewareChain, Arc<std::sync::atomic::AtomicUsize>) {
+        use crate::gateway::handlers::HandlerRegistry;
+        use crate::gateway::rate_limiter::RateLimitConfig;
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut registry = HandlerRegistry::new();
+        let seen = hits.clone();
+        registry.register(VIEWER_ISSUE, move |req| {
+            let seen = seen.clone();
+            async move {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let v = crate::gateway::caller_identity::current_caller_verified_user();
+                JsonRpcResponse::success(req.id, serde_json::json!({ "verified": v }))
+            }
+        });
+        let mc = MiddlewareChain::new(
+            Arc::new(registry),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        (mc, hits)
+    }
+
+    const VIEWER_REQ: &str =
+        r#"{"jsonrpc":"2.0","id":7,"method":"browser.viewer.grant.issue","params":{}}"#;
+
+    fn is_generic_denial(resp: &str) -> bool {
+        resp.contains("\"message\":\"denied\"")
+            && !resp.contains("u-alice")
+            && !resp.contains("\"result\"")
+    }
+
+    fn snap(role: Option<&str>, user: Option<&str>, v: Option<&str>) -> CallerSnapshot {
+        CallerSnapshot {
+            role: role.map(str::to_string),
+            user: user.map(str::to_string),
+            verified_user: v.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn viewer_principal_requires_member_or_operator_and_equal_nonempty_verified() {
+        for role in ["member", "operator"] {
+            assert_eq!(
+                viewer_principal(&snap(Some(role), Some("u-alice"), Some("u-alice"))),
+                Some("u-alice".to_string())
+            );
+        }
+        // Credentialless implicit owner / shared token: stamped user, no verified.
+        assert_eq!(
+            viewer_principal(&snap(Some("operator"), Some("owner"), None)),
+            None
+        );
+        // Mismatch, empty, whitespace, guest, missing role/user.
+        assert_eq!(
+            viewer_principal(&snap(Some("member"), Some("u-alice"), Some("u-bob"))),
+            None
+        );
+        assert_eq!(
+            viewer_principal(&snap(Some("member"), Some(""), Some(""))),
+            None
+        );
+        assert_eq!(
+            viewer_principal(&snap(Some("member"), Some(" "), Some(" "))),
+            None
+        );
+        assert_eq!(
+            viewer_principal(&snap(Some("guest"), Some("u-alice"), Some("u-alice"))),
+            None
+        );
+        assert_eq!(
+            viewer_principal(&snap(None, Some("u-alice"), Some("u-alice"))),
+            None
+        );
+        assert_eq!(
+            viewer_principal(&snap(Some("member"), None, Some("u-alice"))),
+            None
+        );
+    }
+
+    #[test]
+    fn viewer_idempotency_principal_is_verified_scoped_and_other_methods_unchanged() {
+        let verified = snap(Some("member"), Some("u-alice"), Some("u-alice"));
+        let unverified = snap(Some("member"), Some("u-alice"), None);
+        assert_eq!(idempotency_principal(VIEWER_ISSUE, &verified), "v:u-alice");
+        assert_eq!(idempotency_principal(VIEWER_ISSUE, &unverified), "v:<none>");
+        // Disjoint from the plain-user keyspace of every other method.
+        assert_eq!(idempotency_principal("config.patch", &verified), "u-alice");
+        assert_eq!(
+            idempotency_principal("config.patch", &unverified),
+            "u-alice"
+        );
+        assert_eq!(
+            idempotency_principal("config.patch", &snap(None, None, None)),
+            "<anon>"
+        );
+        for m in [
+            "browser.viewer.grant.issue",
+            "browser.viewer.grant.revoke",
+            "browser.viewer.resource.decide",
+            "browser.viewer.resource.list",
+        ] {
+            assert!(is_browser_viewer_method(m));
+        }
+        assert!(!is_browser_viewer_method("browser.viewer.grant.list"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_for_connection_runs_viewer_handler_only_for_live_verified_principal() {
+        let rid = || Some(serde_json::json!(7));
+        let (mc, hits) = viewer_probe_chain();
+        let conns = viewer_conns("member", Some("u-alice"), Some("u-alice"));
+        let start = CallerSnapshot::read(&conns, "c1", false).await;
+        let resp = dispatch_for_connection(
+            VIEWER_REQ,
+            &mc,
+            &conns,
+            "c1",
+            false,
+            VIEWER_ISSUE,
+            rid(),
+            &start,
+        )
+        .await;
+        assert!(resp.contains("\"verified\":\"u-alice\""), "{resp}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // Credentialless (stamped, never verified): start snapshot already denies.
+        let (mc, hits) = viewer_probe_chain();
+        let conns = viewer_conns("operator", Some("u-alice"), None);
+        let start = CallerSnapshot::read(&conns, "c1", false).await;
+        let resp = dispatch_for_connection(
+            VIEWER_REQ,
+            &mc,
+            &conns,
+            "c1",
+            false,
+            VIEWER_ISSUE,
+            rid(),
+            &start,
+        )
+        .await;
+        assert!(is_generic_denial(&resp), "{resp}");
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "handler must be unreachable"
+        );
+
+        // Missing connection state: remote guest, never verified.
+        let empty: ViewerConns =
+            Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+        let start = CallerSnapshot::read(&empty, "gone", false).await;
+        assert_eq!(viewer_principal(&start), None);
+        let resp = dispatch_for_connection(
+            VIEWER_REQ,
+            &mc,
+            &empty,
+            "gone",
+            false,
+            VIEWER_ISSUE,
+            rid(),
+            &start,
+        )
+        .await;
+        assert!(is_generic_denial(&resp), "{resp}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        // Loopback missing state: implicit owner, still not verified.
+        let start = CallerSnapshot::read(&empty, "gone", true).await;
+        assert_eq!(
+            start.user.as_deref(),
+            Some(crate::gateway::security::store::OWNER_USER_ID)
+        );
+        assert_eq!(viewer_principal(&start), None);
+    }
+
+    #[tokio::test]
+    async fn cached_and_waiting_viewer_results_are_gated_on_live_state() {
+        // The Cached / Waiting arms return a stored payload without running
+        // process_request; they call revalidate_for_dispatch first. A payload
+        // may only be returned while the live connection still holds the SAME
+        // verified principal.
+        let conns = viewer_conns("member", Some("u-alice"), Some("u-alice"));
+        let start = CallerSnapshot::read(&conns, "c1", false).await;
+        assert!(
+            revalidate_for_dispatch(&conns, "c1", false, VIEWER_ISSUE, &start)
+                .await
+                .is_some()
+        );
+
+        // Device invalidation (revoke / deactivate) between request start and return.
+        conns.write().await.get_mut("c1").unwrap().device_id = Some("dev-1".into());
+        assert_eq!(
+            crate::gateway::server::invalidate_device_sessions(&conns, "dev-1").await,
+            1
+        );
+        assert!(
+            revalidate_for_dispatch(&conns, "c1", false, VIEWER_ISSUE, &start)
+                .await
+                .is_none()
+        );
+
+        // User switch on the same connection (re-connect as someone else).
+        let conns = viewer_conns("member", Some("u-alice"), Some("u-alice"));
+        let start = CallerSnapshot::read(&conns, "c1", false).await;
+        {
+            let mut map = conns.write().await;
+            let s = map.get_mut("c1").unwrap();
+            s.caller_user = Some("u-bob".into());
+            s.verified_user = Some("u-bob".into());
+        }
+        assert!(
+            revalidate_for_dispatch(&conns, "c1", false, VIEWER_ISSUE, &start)
+                .await
+                .is_none()
+        );
+
+        // Disconnect (state removed) denies too.
+        let conns = viewer_conns("member", Some("u-alice"), Some("u-alice"));
+        let start = CallerSnapshot::read(&conns, "c1", false).await;
+        conns.write().await.remove("c1");
+        assert!(
+            revalidate_for_dispatch(&conns, "c1", false, VIEWER_ISSUE, &start)
+                .await
+                .is_none()
+        );
+
+        // Non-viewer methods are untouched: start snapshot passes straight through.
+        let stale = snap(Some("member"), Some("u-alice"), None);
+        assert_eq!(
+            revalidate_for_dispatch(&conns, "c1", false, "config.get", &stale).await,
+            Some(stale)
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_snapshot_after_bulk_revoke_is_denied_and_handler_unreached() {
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::security::store::{SecurityStore, UserRole};
+        use crate::gateway::security::DeviceTokenManager;
+
+        // Real store + real pairing: the connection is stamped by the real
+        // handshake verdict, then ALL panel devices are revoked through the
+        // same pipeline `gateway.token.rotate` uses.
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        let dtm = Arc::new(DeviceTokenManager::new(store.clone()));
+        let ticket = dtm.create_bootstrap_ticket(None, Some("u-alice")).unwrap();
+        dtm.exchange_bootstrap_ticket(&ticket, Some("panel-alice".into()), None, None)
+            .unwrap();
+        let (user, role, verified) =
+            crate::gateway::server::connection::auth::finalize_handshake_identity(
+                true,
+                false,
+                Some("panel-alice"),
+                Some("panel-alice"),
+                Some(&store),
+            );
+        assert_eq!(verified.as_deref(), Some("u-alice"));
+        let conns = viewer_conns(role, user.as_deref(), verified.as_deref());
+        conns.write().await.get_mut("c1").unwrap().device_id = Some("panel-alice".into());
+
+        let (mc, hits) = viewer_probe_chain();
+        let start = CallerSnapshot::read(&conns, "c1", false).await;
+        assert_eq!(viewer_principal(&start).as_deref(), Some("u-alice"));
+        // Control: the live, un-revoked session reaches the handler.
+        let ok = dispatch_for_connection(
+            VIEWER_REQ,
+            &mc,
+            &conns,
+            "c1",
+            false,
+            VIEWER_ISSUE,
+            Some(serde_json::json!(7)),
+            &start,
+        )
+        .await;
+        assert!(!is_generic_denial(&ok), "{ok}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let bus = GatewayEventBus::new();
+        let n = crate::gateway::handlers::gateway_devices::revoke_all_panel_devices_and_kick(
+            &dtm, &conns, &bus,
+        )
+        .await
+        .unwrap();
+        assert_eq!(n, 1);
+
+        // The pre-revoke snapshot is stale: dispatch must deny without
+        // reaching the handler.
+        let resp = dispatch_for_connection(
+            VIEWER_REQ,
+            &mc,
+            &conns,
+            "c1",
+            false,
+            VIEWER_ISSUE,
+            Some(serde_json::json!(7)),
+            &start,
+        )
+        .await;
+        assert!(is_generic_denial(&resp), "{resp}");
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "handler must not run again after the bulk revoke"
+        );
+        assert!(
+            revalidate_for_dispatch(&conns, "c1", false, VIEWER_ISSUE, &start)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_viewer_request_invalidated_before_permit_never_reaches_handler() {
+        use crate::gateway::lane::{ChannelClass, LaneConfig, LaneManager};
+        let (mc, hits) = viewer_probe_chain();
+        let conns = viewer_conns("member", Some("u-alice"), Some("u-alice"));
+        let lm = Arc::new(LaneManager::new(LaneConfig {
+            query_concurrency: 1,
+            system_concurrency: 1,
+            desktop_execute_concurrency: 1,
+            shared_execute_concurrency: 1,
+            desktop_mutate_concurrency: 1,
+            shared_mutate_concurrency: 1,
+            acquire_timeout_secs: 30,
+        }));
+        // Occupy the only slot of the viewer method's lane so the request queues.
+        let blocker = lm
+            .acquire(VIEWER_ISSUE, ChannelClass::Bot)
+            .await
+            .expect("first permit");
+        let start = CallerSnapshot::read(&conns, "c1", false).await;
+        assert!(viewer_principal(&start).is_some(), "valid when queued");
+
+        let task = {
+            let (lm, conns) = (lm.clone(), conns.clone());
+            tokio::spawn(async move {
+                // Same sequence as do_lane_dispatch: acquire, THEN dispatch_for_connection.
+                let _permit = lm
+                    .acquire(VIEWER_ISSUE, ChannelClass::Bot)
+                    .await
+                    .expect("queued permit");
+                dispatch_for_connection(
+                    VIEWER_REQ,
+                    &mc,
+                    &conns,
+                    "c1",
+                    false,
+                    VIEWER_ISSUE,
+                    Some(serde_json::json!(7)),
+                    &start,
+                )
+                .await
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(
+            !task.is_finished(),
+            "request must still be queued behind the held permit"
+        );
+        // Invalidate while queued, then grant the permit.
+        {
+            let mut map = conns.write().await;
+            let s = map.get_mut("c1").unwrap();
+            s.caller_role = "guest".into();
+            s.caller_user = None;
+            s.verified_user = None;
+        }
+        drop(blocker);
+        let resp = task.await.unwrap();
+        assert!(is_generic_denial(&resp), "{resp}");
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "stale snapshot must not carry the request through"
+        );
+    }
+
+    // ── Off-loop admin RPCs re-read live authority at dispatch (Task #56 D3) ──
+
+    const OFF_LOOP_ADMIN: &str = "extensions.installed";
+    const OFF_LOOP_REQ: &str =
+        r#"{"jsonrpc":"2.0","id":9,"method":"extensions.installed","params":{}}"#;
+
+    fn off_loop_probe_chain() -> (MiddlewareChain, Arc<std::sync::atomic::AtomicUsize>) {
+        use crate::gateway::handlers::HandlerRegistry;
+        use crate::gateway::rate_limiter::RateLimitConfig;
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut registry = HandlerRegistry::new();
+        let seen = hits.clone();
+        registry.register(OFF_LOOP_ADMIN, move |req| {
+            let seen = seen.clone();
+            async move {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                JsonRpcResponse::success(req.id, serde_json::json!({ "admin": "data" }))
+            }
+        });
+        let mc = MiddlewareChain::new(
+            Arc::new(registry),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        (mc, hits)
+    }
+
+    async fn demote(conns: &ViewerConns, role: &str) {
+        conns.write().await.get_mut("c1").unwrap().caller_role = role.into();
+    }
+
+    async fn dispatch_off_loop_with_stale_operator(
+        mc: &MiddlewareChain,
+        conns: &ViewerConns,
+    ) -> JsonRpcResponse {
+        // Arrival snapshot: operator. The live state may differ by dispatch.
+        let stale = snap(Some("operator"), Some("u-op"), None);
+        let raw = dispatch_for_connection(
+            OFF_LOOP_REQ,
+            mc,
+            conns,
+            "c1",
+            false,
+            OFF_LOOP_ADMIN,
+            Some(serde_json::json!(9)),
+            &stale,
+        )
+        .await;
+        serde_json::from_str(&raw).unwrap()
+    }
+
+    #[test]
+    fn off_loop_probe_method_is_admin_and_off_loop() {
+        assert!(crate::gateway::method_admin::method_requires_admin(
+            OFF_LOOP_ADMIN
+        ));
+        assert!(crate::gateway::server::connection::off_loop::dispatches_off_loop(OFF_LOOP_ADMIN));
+    }
+
+    #[tokio::test]
+    async fn off_loop_admin_rpc_uses_live_operator_role() {
+        let (mc, hits) = off_loop_probe_chain();
+        let conns = viewer_conns("operator", Some("u-op"), None);
+        let resp = dispatch_off_loop_with_stale_operator(&mc, &conns).await;
+        assert!(resp.is_success(), "{resp:?}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn off_loop_admin_rpc_demoted_to_member_while_queued_is_refused() {
+        let (mc, hits) = off_loop_probe_chain();
+        let conns = viewer_conns("operator", Some("u-op"), None);
+        demote(&conns, "member").await;
+        let resp = dispatch_off_loop_with_stale_operator(&mc, &conns).await;
+        assert!(!resp.is_success());
+        assert_eq!(resp.id, Some(serde_json::json!(9)));
+        let err = resp.error.expect("error body");
+        assert_eq!(err.code, crate::gateway::protocol::AUTH_REQUIRED);
+        assert_eq!(
+            err.message,
+            crate::gateway::protocol::ADMIN_REQUIRED_MESSAGE
+        );
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a member must not receive admin data via a stale operator snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn off_loop_rpc_demoted_below_the_wall_while_queued_is_refused() {
+        let (mc, hits) = off_loop_probe_chain();
+        let conns = viewer_conns("operator", Some("u-op"), None);
+        demote(&conns, "guest").await;
+        let resp = dispatch_off_loop_with_stale_operator(&mc, &conns).await;
+        assert_eq!(resp.id, Some(serde_json::json!(9)));
+        let err = resp.error.expect("error body");
+        assert_eq!(err.code, crate::gateway::protocol::AUTH_REQUIRED);
+        assert_eq!(
+            err.message,
+            crate::gateway::server::connection::auth::LOGIN_WALL_MESSAGE
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// Queue-then-demote through a real held lane permit, mirroring
+    /// `do_lane_dispatch` (acquire, THEN `dispatch_for_connection`).
+    #[tokio::test]
+    async fn queued_off_loop_admin_rpc_demoted_before_permit_never_reaches_handler() {
+        use crate::gateway::lane::{ChannelClass, LaneConfig, LaneManager};
+        let (mc, hits) = off_loop_probe_chain();
+        let conns = viewer_conns("operator", Some("u-op"), None);
+        let lm = Arc::new(LaneManager::new(LaneConfig {
+            query_concurrency: 1,
+            system_concurrency: 1,
+            desktop_execute_concurrency: 1,
+            shared_execute_concurrency: 1,
+            desktop_mutate_concurrency: 1,
+            shared_mutate_concurrency: 1,
+            acquire_timeout_secs: 30,
+        }));
+        let blocker = lm
+            .acquire(OFF_LOOP_ADMIN, ChannelClass::Bot)
+            .await
+            .expect("first permit");
+        let task = {
+            let (lm, conns) = (lm.clone(), conns.clone());
+            tokio::spawn(async move {
+                let _permit = lm
+                    .acquire(OFF_LOOP_ADMIN, ChannelClass::Bot)
+                    .await
+                    .expect("queued permit");
+                dispatch_off_loop_with_stale_operator(&mc, &conns).await
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished(), "must be queued behind the held permit");
+        demote(&conns, "member").await;
+        drop(blocker);
+        let resp = task.await.unwrap();
+        assert_eq!(resp.id, Some(serde_json::json!(9)));
+        assert_eq!(
+            resp.error.expect("error body").message,
+            crate::gateway::protocol::ADMIN_REQUIRED_MESSAGE
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     // ── extract_topic_and_data — wire-envelope tests (P1 fix round 1) ─────

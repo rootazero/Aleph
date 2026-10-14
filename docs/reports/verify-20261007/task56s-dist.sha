@@ -1,0 +1,20 @@
+f6a53f7befd94c08aed9bc1669c3592402bee04b0288c2c89f181adc188d6a1c *interfaces/webchat/dist/aleph_panel.js
+   mtime 2026-10-12 17:13:06
+ce0b0b683767d44c3751a3bcf7335c7984d595e8591a2cc3bb8e64003b374c1b *interfaces/webchat/dist/aleph_panel_bg.wasm
+   mtime 2026-10-12 17:13:52
+f6dc82e58464f9b34870f9030def59c2721fed35242ecbb7404202e4d677dbaf *interfaces/webchat/dist/index.html
+   mtime 2026-10-12 17:13:53
+7bec2d98fee29b05fcd5915c78fedbb0deb8522d2fd8121aa0ec0107cd0d2ede *interfaces/webchat/dist/tailwind.css
+   mtime 2026-10-10 23:04:12
+181f5319f4ffba76ae7051ae2cf60e5cc274236407a6a8c11481cb0038d993b8 *desktop/shell/src/main.rs
+   mtime 2026-10-12 16:41:53
+61d6a13a8226f6b65d137af5207d8650ded830121eb6a557a5f2dbe5757215af *interfaces/webchat/src/components/layout_toggle.rs
+   mtime 2026-10-12 16:41:53
+cda015f0f2244b0a1b242b5964fc6d14dde9e011c1e727747d27da4c7fd75b31 *interfaces/webchat/src/components/workspace_panel.rs
+   mtime 2026-10-12 16:41:53
+86112c4cccd245ed79d42a8d250f1985d0e4fbaf72208237bbfad82053f97124 *desktop/shell/tauri.qa.conf.json
+   mtime 2026-10-12 09:32:43
+
+# selectors in QA_MONITOR_JS (main.rs SEL) vs fresh wasm strings (grep -a count): layout-toggle=2 workspace-panel=1 workspace-tab-browser=1
+# logs: task56s-clippy.log exit=0 ; task56s-build.log exit=0 ; task56s-wasm.log exit=0 (just wasm, CARGO_NET_OFFLINE=true)
+# debug exe: target/debug/aleph-desktop-shell.exe mtime 2026-10-12 17:05:04 (built after main.rs 16:41:53)

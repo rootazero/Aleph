@@ -1,0 +1,61 @@
+
+running 12 tests
+test browser::live::resource::tests::managed_provenance_must_pair_with_managed_source ... ok
+test browser::live::resource::tests::expired_resources_are_never_active_and_sweep_emits_expired_once ... ok
+test browser::live::resource::tests::binding_source_and_provenance_cannot_change_across_revisions ... ok
+test browser::live::resource::tests::close_emits_exact_event_once_and_leaves_a_tombstone ... ok
+test browser::live::resource::tests::owner_scoped_lookup_is_generic_for_other_principals ... ok
+test browser::live::resource::tests::companion_candidates_are_design_companion_only_and_bounded ... ok
+test browser::live::resource::tests::invalid_refused_artifact_and_empty_drafts_fail_closed ... ok
+test browser::live::resource::tests::revisions_are_monotonic_per_resource_and_stale_cas_loses ... ok
+test browser::live::resource::tests::refused_draft_closes_the_live_resource_in_the_same_step ... ok
+test browser::live::resource::tests::refusal_event_drives_grant_revocation ... ok
+test browser::live::resource::tests::resource_ids_are_opaque_and_serialization_has_no_url_or_secret ... ok
+test browser::live::resource::tests::caps_fail_closed_and_tombstones_make_room ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 20524 filtered out; finished in 0.03s
+
+
+warning: unused import: `super::*`
+   --> src\gateway\execution_engine\run_loop\project_context.rs:223:9
+    |
+223 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::Duration`
+ --> src\gateway\execution_engine\slash_command_body\tests.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FileSessionStoreConfig` and `FileSessionStore`
+  --> src\gateway\session_store\hook_transcripts.rs:42:55
+   |
+42 |     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+   |                                                       ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `with_consent` is never used
+   --> src\builtin_tools\skill_reader\read.rs:157:19
+    |
+101 | impl ReadSkillTool {
+    | ------------------ method in this implementation
+...
+157 |     pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `parked_len` is never used
+   --> src\gateway\server\browser_viewer_route.rs:197:8
+    |
+121 | impl BrowserViewerRouteState {
+    | ---------------------------- method in this implementation
+...
+197 |     fn parked_len(&self) -> usize {
+    |        ^^^^^^^^^^
+
+warning: `alephcore` (lib test) generated 5 warnings (run `cargo fix --lib -p alephcore --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 1.24s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-8fa026bb9f4d089e.exe)

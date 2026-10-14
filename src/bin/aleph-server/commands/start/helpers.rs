@@ -554,6 +554,13 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // when a long `cargo build` is most likely to be in flight, so this
         // is the case where orphans are most likely, not least. Idempotent
         // with the `start_server` call site.
+        // Managed companions are skipped by the bash reaper; drain them with a
+        // short bound (resource closed first, then kill + wait).
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            alephcore::builtin_tools::browser_tools::companion::shutdown_all_companions(),
+        )
+        .await;
         let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
         // Another thing the skipped destructors would have done: `main`'s
         // `InstanceLock` removes its holder sidecar in `Drop`, and `Drop` is

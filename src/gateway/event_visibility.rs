@@ -296,9 +296,54 @@ pub enum SessionIdentity {
     /// standing claim on another operator's raw terminal, unlike an
     /// approval card written for them to act on.
     ByPtySession(String),
+    /// A `browser.live.resource` / `browser.live.closed` frame whose binding
+    /// is a Browser `ViewerBinding` issued to an `IssuerIdentity::User`
+    /// (`aleph_protocol::browser_live`). The frame carries its own scope — no
+    /// index is read to find it — and the admit arm requires ALL of:
+    /// the caller's authenticated user equals `user_id` (no admin/operator
+    /// carve-out: a live browser page is the principal's own work), the
+    /// binding's `run_id` resolves (via the run index) to the binding's
+    /// `session_key` (a forged or stale pairing denies), and the caller may
+    /// see that session ([`EventVisibilityIndex::session_admits`]).
+    ByBrowserLiveScope {
+        user_id: String,
+        session_key: String,
+        run_id: String,
+    },
+    /// A frame that must reach NO ONE through this plane. Deliberately not
+    /// `Unattributed` / `OperatorOnly`, both of which admit some callers.
+    /// Used for browser-live frames the delivery API cannot scope exactly:
+    /// an `Artifact` binding (not a live-browser scope), an
+    /// `IssuerIdentity::Connection` principal (the delivery predicate is given
+    /// a user id and role, never a connection id, so it cannot be matched),
+    /// or a binding that is missing, malformed or has empty identity fields.
+    Withheld,
     /// Unattributable to any one session — org-level infrastructure, or
     /// already covered by a different gate (see module doc).
     Global,
+}
+
+/// Scope of a browser-live frame from its `binding` payload member
+/// (`ResourceBinding`). Fail closed: anything but a Browser binding with a
+/// `User` principal and non-empty identity fields is [`SessionIdentity::Withheld`].
+fn browser_live_scope(binding: Option<&Value>) -> SessionIdentity {
+    use aleph_protocol::browser_live::{IssuerIdentity, ResourceBinding};
+    let Some(Ok(ResourceBinding::Browser { viewer })) =
+        binding.map(|b| serde_json::from_value::<ResourceBinding>(b.clone()))
+    else {
+        return SessionIdentity::Withheld;
+    };
+    let IssuerIdentity::User { user_id } = viewer.principal else {
+        return SessionIdentity::Withheld;
+    };
+    if user_id.is_empty() || viewer.task.session_key.is_empty() || viewer.task.run_id.is_empty() {
+        return SessionIdentity::Withheld;
+    }
+    SessionIdentity::ByBrowserLiveScope {
+        user_id,
+        session_key: viewer.task.session_key,
+        run_id: viewer.task.run_id,
+    }
 }
 
 /// The one topic this module PROJECTS rather than admits/denies, and the one
@@ -595,6 +640,16 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
             owner: str_field(data, "owner_user_id"),
             project: str_field(data, "project_id"),
         },
+
+        // Browser-live resource / closed frames. The binding is nested under
+        // `resource` / `closed`; see `browser_live_scope` for the fail-closed
+        // rules.
+        aleph_protocol::browser_live::RESOURCE_TOPIC => browser_live_scope(
+            data.and_then(|d| d.pointer("/resource/binding")),
+        ),
+        aleph_protocol::browser_live::CLOSED_TOPIC => {
+            browser_live_scope(data.and_then(|d| d.pointer("/closed/binding")))
+        }
 
         // A project room's roster-visible state changed
         // (`GatewayEventFrame::ProjectsChanged`). `project_id` is always
@@ -990,6 +1045,23 @@ impl EventVisibilityIndex {
                     caller_user,
                 )
             }
+            // Exact principal match plus the run→session pairing plus the
+            // ordinary session predicate. Every missing piece denies.
+            SessionIdentity::ByBrowserLiveScope {
+                user_id,
+                session_key,
+                run_id,
+            } => {
+                if caller_user != Some(user_id.as_str()) {
+                    return false;
+                }
+                if self.session_key_for_run(&run_id).await.as_deref() != Some(session_key.as_str())
+                {
+                    return false;
+                }
+                self.session_admits(&session_key, &user_id, store).await
+            }
+            SessionIdentity::Withheld => false,
             // Only delegation, same ruling as the canvas arm above: the
             // roster predicate is the single authority for "who can see this
             // room", and this event face must resolve it rather than
@@ -2940,6 +3012,273 @@ mod tests {
         }
     }
 
+    // ---- browser-live frame fixtures ----------------------------------
+
+    use aleph_protocol::browser_live as bl;
+
+    fn bl_task(session_key: &str, run_id: &str) -> bl::ConversationBinding {
+        bl::ConversationBinding {
+            session_key: session_key.into(),
+            run_id: run_id.into(),
+        }
+    }
+
+    fn bl_binding_for(
+        principal: bl::IssuerIdentity,
+        session_key: &str,
+        run_id: &str,
+    ) -> bl::ResourceBinding {
+        bl::ResourceBinding::Browser {
+            viewer: bl::ViewerBinding {
+                principal,
+                task: bl_task(session_key, run_id),
+                target: bl::BrowserTargetBinding {
+                    profile: "default".into(),
+                    browser_session_id: "browser-session-3".into(),
+                    target_id: "target-9".into(),
+                },
+            },
+        }
+    }
+
+    fn bl_user_binding(user: &str) -> bl::ResourceBinding {
+        bl_binding_for(
+            bl::IssuerIdentity::User {
+                user_id: user.into(),
+            },
+            "agent:operator:browser",
+            "run-7",
+        )
+    }
+
+    fn bl_connection_binding() -> bl::ResourceBinding {
+        bl_binding_for(
+            bl::IssuerIdentity::Connection {
+                connection_id: "conn-1".into(),
+            },
+            "agent:operator:browser",
+            "run-7",
+        )
+    }
+
+    fn bl_artifact_binding() -> bl::ResourceBinding {
+        bl::ResourceBinding::Artifact {
+            artifact: bl::ArtifactBinding {
+                principal: bl::IssuerIdentity::User {
+                    user_id: "u-alice".into(),
+                },
+                task: bl_task("agent:operator:browser", "run-7"),
+                artifact_id: "artifact-1".into(),
+            },
+        }
+    }
+
+    fn bl_resource(binding: bl::ResourceBinding) -> bl::PreviewResource {
+        let artifact = matches!(binding, bl::ResourceBinding::Artifact { .. });
+        bl::PreviewResource {
+            resource_id: "resource-5".into(),
+            revision: 2,
+            binding,
+            kind: if artifact {
+                bl::PreviewKind::Artifact
+            } else {
+                bl::PreviewKind::Page
+            },
+            display: bl::DisplayPolicy::AutoRevealCurrentRun,
+            source: bl::PreviewSource::BrowserTool,
+            provenance: bl::PreviewProvenance::NotManaged,
+            expires_at_ms: 1_799_000_060_000,
+            redaction: bl::RedactionStatus::Safe,
+            companion_candidates: vec![],
+        }
+    }
+
+    fn bl_closed(binding: bl::ResourceBinding) -> bl::BrowserLiveClosed {
+        bl::BrowserLiveClosed {
+            resource_id: "resource-5".into(),
+            binding,
+            reason: bl::ClosedReason::TargetClosed,
+            at_ms: 1_799_000_000_000,
+        }
+    }
+
+    fn expected_browser_live(binding: &bl::ResourceBinding) -> SessionIdentity {
+        match binding {
+            bl::ResourceBinding::Browser { viewer } => match &viewer.principal {
+                bl::IssuerIdentity::User { user_id } => SessionIdentity::ByBrowserLiveScope {
+                    user_id: user_id.clone(),
+                    session_key: viewer.task.session_key.clone(),
+                    run_id: viewer.task.run_id.clone(),
+                },
+                bl::IssuerIdentity::Connection { .. } => SessionIdentity::Withheld,
+            },
+            bl::ResourceBinding::Artifact { .. } => SessionIdentity::Withheld,
+        }
+    }
+
+    fn bl_frames(binding: bl::ResourceBinding) -> [GatewayEventFrame; 2] {
+        [
+            GatewayEventFrame::BrowserLiveResource {
+                resource: bl_resource(binding.clone()),
+            },
+            GatewayEventFrame::BrowserLiveClosed {
+                closed: bl_closed(binding),
+            },
+        ]
+    }
+
+    async fn bl_admits(
+        index: &EventVisibilityIndex,
+        store: &Arc<dyn SessionStore>,
+        frame: &GatewayEventFrame,
+        caller: Option<&str>,
+        role: &str,
+    ) -> bool {
+        let topic = frame.topic_name();
+        let data = serde_json::to_value(frame).unwrap();
+        index
+            .event_admits_for(&topic, Some(&data), caller, Some(role), store, None)
+            .await
+    }
+
+    /// Same-scope vs foreign-scope delivery for BOTH browser-live topics,
+    /// plus every fail-closed shape: Connection principal, Artifact binding,
+    /// unscoped caller, operator who is not the principal, an unseeded or
+    /// mismatched run, empty identity fields, and malformed / missing bindings.
+    #[tokio::test]
+    async fn browser_live_frames_admit_only_the_bound_principal_session_and_run() {
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-browser-live");
+        stamp_owner(&store, &key, "u-alice").await;
+        let sk = key.to_key_string();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+        index
+            .note_frame(
+                "stream.run_accepted",
+                Some(&serde_json::json!({"run_id": "run-7", "session_key": sk})),
+            )
+            .await;
+
+        let user = |u: &str, run: &str, session: &str| {
+            bl_binding_for(bl::IssuerIdentity::User { user_id: u.into() }, session, run)
+        };
+
+        // Same scope: principal == caller, run pairs with the session.
+        for f in bl_frames(user("u-alice", "run-7", &sk)) {
+            assert!(
+                bl_admits(&index, &store, &f, Some("u-alice"), "member").await,
+                "same scope"
+            );
+            assert!(
+                !bl_admits(&index, &store, &f, Some("u-bob"), "member").await,
+                "foreign user"
+            );
+            assert!(
+                !bl_admits(&index, &store, &f, Some("u-bob"), "operator").await,
+                "no operator carve-out"
+            );
+            assert!(
+                !bl_admits(&index, &store, &f, None, "operator").await,
+                "unscoped caller"
+            );
+        }
+        // Principal is bob but the session/run belong to alice: bob is the
+        // principal, yet the session predicate must still refuse him.
+        for f in bl_frames(user("u-bob", "run-7", &sk)) {
+            assert!(
+                !bl_admits(&index, &store, &f, Some("u-bob"), "member").await,
+                "foreign session"
+            );
+            assert!(
+                !bl_admits(&index, &store, &f, Some("u-alice"), "member").await,
+                "not the principal"
+            );
+        }
+        // Run not seeded / paired with a different session.
+        for f in bl_frames(user("u-alice", "run-unknown", &sk)) {
+            assert!(
+                !bl_admits(&index, &store, &f, Some("u-alice"), "member").await,
+                "unseeded run"
+            );
+        }
+        for f in bl_frames(user("u-alice", "run-7", "agent:main:other")) {
+            assert!(
+                !bl_admits(&index, &store, &f, Some("u-alice"), "member").await,
+                "run/session mismatch"
+            );
+        }
+        // Empty identity fields.
+        for b in [
+            user("", "run-7", &sk),
+            user("u-alice", "", &sk),
+            user("u-alice", "run-7", ""),
+        ] {
+            for f in bl_frames(b) {
+                assert!(
+                    !bl_admits(&index, &store, &f, Some("u-alice"), "member").await,
+                    "empty field"
+                );
+                assert!(
+                    !bl_admits(&index, &store, &f, None, "operator").await,
+                    "empty field, unscoped"
+                );
+            }
+        }
+        // Connection principal and Artifact binding: nobody, ever.
+        for b in [bl_connection_binding(), bl_artifact_binding()] {
+            for f in bl_frames(b) {
+                for (caller, role) in [
+                    (Some("u-alice"), "member"),
+                    (Some("u-alice"), "operator"),
+                    (None, "operator"),
+                    (None, "member"),
+                ] {
+                    assert!(
+                        !bl_admits(&index, &store, &f, caller, role).await,
+                        "withheld: {caller:?}/{role}"
+                    );
+                }
+            }
+        }
+        // Missing / malformed binding on the raw wire shape.
+        for (topic, data) in [
+            (
+                bl::RESOURCE_TOPIC,
+                serde_json::json!({"type": "browser_live_resource"}),
+            ),
+            (
+                bl::CLOSED_TOPIC,
+                serde_json::json!({"type": "browser_live_closed", "closed": {}}),
+            ),
+            (
+                bl::RESOURCE_TOPIC,
+                serde_json::json!({"resource": {"binding": {"binding_type": "browser"}}}),
+            ),
+        ] {
+            assert_eq!(
+                session_identity_of(topic, Some(&data)),
+                SessionIdentity::Withheld
+            );
+            assert!(
+                !index
+                    .event_admits_for(
+                        topic,
+                        Some(&data),
+                        Some("u-alice"),
+                        Some("operator"),
+                        &store,
+                        None
+                    )
+                    .await
+            );
+        }
+        assert_eq!(
+            session_identity_of(bl::RESOURCE_TOPIC, None),
+            SessionIdentity::Withheld
+        );
+    }
+
     #[test]
     fn every_frame_variant_is_classified() {
         fn expected(frame: &GatewayEventFrame) -> SessionIdentity {
@@ -3044,6 +3383,15 @@ mod tests {
                     project_id: project_id.clone(),
                     affected_user: affected_user.clone(),
                 },
+                // Browser-live frames: expected value spelled out from the
+                // typed binding (not via `browser_live_scope`) so the test
+                // is an independent derivation.
+                GatewayEventFrame::BrowserLiveResource { resource } => {
+                    expected_browser_live(&resource.binding)
+                }
+                GatewayEventFrame::BrowserLiveClosed { closed } => {
+                    expected_browser_live(&closed.binding)
+                }
             }
         }
 
@@ -3298,6 +3646,18 @@ mod tests {
                 project_id: "p-room".into(),
                 change: ChangeKind::Updated,
                 affected_user: Some("u-mallory".into()),
+            },
+            GatewayEventFrame::BrowserLiveResource {
+                resource: bl_resource(bl_user_binding("u-alice")),
+            },
+            GatewayEventFrame::BrowserLiveResource {
+                resource: bl_resource(bl_connection_binding()),
+            },
+            GatewayEventFrame::BrowserLiveClosed {
+                closed: bl_closed(bl_user_binding("u-alice")),
+            },
+            GatewayEventFrame::BrowserLiveClosed {
+                closed: bl_closed(bl_artifact_binding()),
             },
         ];
 

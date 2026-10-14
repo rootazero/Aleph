@@ -203,7 +203,131 @@ impl Sandbox for WorkspaceSandbox {
     }
 
     // rust-doctor-disable-next-line high-cyclomatic-complexity
-    async fn execute(&self, mut cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
+    async fn execute(&self, cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
+        // Shared admission (hooks, cwd containment, approval, proxy, DNS, profile)
+        // lives in `prepare_command` so the managed spawn path cannot diverge.
+        let PreparedCommand {
+            cmd,
+            cwd,
+            profile,
+            timeout,
+            active_proxy,
+        } = self.prepare_command(cmd).await?;
+        let mut output = self
+            .os_driver
+            .run(
+                &cmd.program,
+                &cmd.args,
+                &cmd.env,
+                cmd.stdin.as_deref(),
+                &cwd,
+                &profile,
+                timeout,
+                self.max_output_bytes,
+            )
+            .await;
+
+        // Keep the managed proxy (and Linux host bridge) alive across the OS
+        // driver `run` and only shut it down here (drop = shutdown + UDS dir
+        // cleanup). Explicit binding is required because `active_proxy` is
+        // declared early in the function for scope but not consumed by any
+        // sub-call.
+        drop(active_proxy);
+
+        // Label a possible OS-level denial while the driver that produced the
+        // bytes is still in hand — downstream every consumer holds a plain
+        // `SandboxOutput` and cannot tell which backend ran, so a denial in
+        // seatbelt's dialect would be indistinguishable from one in bwrap's.
+        // Advisory only: `SandboxDenialHint` is evidence, not a verdict, and
+        // nothing in this pipeline branches on it.
+        if let Ok(ref mut out) = output {
+            out.denial_hint = SandboxDenialHint::detect(
+                self.os_driver.platform(),
+                self.os_driver.denial_signatures(),
+                &out.stderr,
+            );
+        }
+
+        // Command-output content floor (secret redaction + block-class gate +
+        // invisible/bidi neutralization) before any downstream consumer touches
+        // stdout/stderr. Shared with `WorktreeSandbox` via the single source of
+        // truth in `scrub::scrub_and_gate_output`, so the two execution paths
+        // cannot silently diverge on what they redact or refuse.
+        let output_blocked: Vec<&'static str> = if let Ok(ref mut out) = output {
+            crate::sandbox::scrub::scrub_and_gate_output(out)
+        } else {
+            Vec::new()
+        };
+
+        // Block-class secret floor: a catastrophic secret (e.g. a PEM private
+        // key) in command output is never legitimate — fail closed rather than
+        // return the already-redacted output to the model. Shell-output analogue
+        // of clawshell's `DlpAction::Block`, mirroring the always-on hard-filter
+        // posture of the default command policy.
+        if !output_blocked.is_empty() {
+            tracing::warn!(
+                target: "shell_security",
+                session_id = ?cmd.session_id,
+                program = %cmd.program,
+                blocked = ?output_blocked,
+                "command output blocked: catastrophic secret material detected"
+            );
+            output = Err(SandboxError::Other(format!(
+                "command output blocked: catastrophic secret material detected ({})",
+                output_blocked.join(", ")
+            )));
+        }
+
+        match &output {
+            Ok(out) => {
+                tracing::info!(
+                    target: "capability_ledger",
+                    session_id = ?cmd.session_id,
+                    program = %cmd.program,
+                    caps = ?cmd.capabilities,
+                    exit = ?out.exit_code,
+                    signal = ?out.signal,
+                    duration_ms = out.duration_ms,
+                    "sandbox.execute"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "capability_ledger",
+                    session_id = ?cmd.session_id,
+                    program = %cmd.program,
+                    caps = ?cmd.capabilities,
+                    error = %e,
+                    "sandbox.execute failed"
+                );
+            }
+        }
+
+        output
+    }
+
+    fn managed(&self) -> Option<&dyn crate::sandbox::managed::ManagedSandbox> {
+        Some(self)
+    }
+}
+
+/// Everything `execute` / `spawn_managed` need after the one shared admission
+/// pass: the (possibly proxy/DNS-rewritten) command, the checked cwd, the OS
+/// profile and the effective timeout. `active_proxy` must outlive the child.
+struct PreparedCommand {
+    cmd: SandboxCommand,
+    cwd: PathBuf,
+    profile: crate::sandbox::driver::OsSandboxProfile,
+    timeout: Duration,
+    active_proxy: Option<ActiveProxy>,
+}
+
+impl WorkspaceSandbox {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
+    async fn prepare_command(
+        &self,
+        mut cmd: SandboxCommand,
+    ) -> Result<PreparedCommand, SandboxError> {
         // Hook context is created on-demand at each call site rather than
         // once at the top: it borrows `&cmd`, which would block the SP-4
         // DNS step from acquiring `&mut cmd.capabilities`. Per-call ctx
@@ -580,97 +704,85 @@ impl Sandbox for WorkspaceSandbox {
             .timeout
             .or_else(|| cmd.capabilities.timeout_secs.map(Duration::from_secs))
             .unwrap_or(self.default_timeout);
-        let mut output = self
+        Ok(PreparedCommand {
+            cmd,
+            cwd,
+            profile,
+            timeout,
+            active_proxy,
+        })
+    }
+}
+
+impl WorkspaceSandbox {
+    /// A managed service is a single process: only the child PID is
+    /// supervised and reaped, so a policy that lets it fork (or spawn
+    /// subprocesses) would leave descendants nobody can prove stopped.
+    fn refuse_managed_fork(&self, cmd: &SandboxCommand) -> Result<(), SandboxError> {
+        if cmd.capabilities.spawn_subprocess {
+            return Err(SandboxError::UnsupportedPolicy {
+                platform: self.os_driver.platform(),
+                feature: "managed_spawn_fork".into(),
+                reason: "a managed service must be a single process: the supervisor reaps                          only the service PID and has no process-tree kill, so a request                          that allows fork/subprocesses is refused"
+                    .into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::sandbox::managed::ManagedSandbox for WorkspaceSandbox {
+    /// Same admission as `execute` (`prepare_command`: hooks, cwd containment,
+    /// approval request, second cwd revalidation, proxy/DNS, profile), then the
+    /// OS driver spawns and the live child is returned to the owner instead of
+    /// being drained. The proxy guard rides along in `keepalive`.
+    fn preflight(&self) -> Result<(), SandboxError> {
+        self.os_driver.managed_spawn_preflight()
+    }
+
+    async fn spawn_managed(
+        &self,
+        cmd: SandboxCommand,
+    ) -> Result<crate::sandbox::managed::ManagedSpawn, SandboxError> {
+        if cmd.stdin.is_some() {
+            return Err(SandboxError::Other(
+                "managed spawn takes no pre-baked stdin: the owner writes the launch secret".into(),
+            ));
+        }
+        // Single-process contract: nothing here can prove that forked
+        // descendants die with the service (no tree kill exists), so a
+        // managed request that permits fork is refused BEFORE approval is
+        // even asked, and again on the prepared command below.
+        self.refuse_managed_fork(&cmd)?;
+        // Fail closed BEFORE admission: a driver that can never hand over the
+        // live service child must not make the user approve an elevation card
+        // for a spawn that is then refused. Callers also preflight, but this
+        // seam must not depend on that.
+        self.os_driver.managed_spawn_preflight()?;
+        let PreparedCommand {
+            cmd,
+            cwd,
+            profile,
+            timeout: _,
+            active_proxy,
+        } = self.prepare_command(cmd).await?;
+        self.refuse_managed_fork(&cmd)?;
+        let spawned = self
             .os_driver
-            .run(
-                &cmd.program,
-                &cmd.args,
-                &cmd.env,
-                cmd.stdin.as_deref(),
-                &cwd,
-                &profile,
-                timeout,
-                self.max_output_bytes,
-            )
-            .await;
-
-        // Keep the managed proxy (and Linux host bridge) alive across the OS
-        // driver `run` and only shut it down here (drop = shutdown + UDS dir
-        // cleanup). Explicit binding is required because `active_proxy` is
-        // declared early in the function for scope but not consumed by any
-        // sub-call.
-        drop(active_proxy);
-
-        // Label a possible OS-level denial while the driver that produced the
-        // bytes is still in hand — downstream every consumer holds a plain
-        // `SandboxOutput` and cannot tell which backend ran, so a denial in
-        // seatbelt's dialect would be indistinguishable from one in bwrap's.
-        // Advisory only: `SandboxDenialHint` is evidence, not a verdict, and
-        // nothing in this pipeline branches on it.
-        if let Ok(ref mut out) = output {
-            out.denial_hint = SandboxDenialHint::detect(
-                self.os_driver.platform(),
-                self.os_driver.denial_signatures(),
-                &out.stderr,
-            );
+            .spawn_managed(&cmd.program, &cmd.args, &cmd.env, &cwd, &profile)
+            .await?;
+        let mut keepalive: Vec<Box<dyn std::any::Any + Send>> = Vec::new();
+        if let Some(driver_keep) = spawned.keepalive {
+            keepalive.push(driver_keep);
         }
-
-        // Command-output content floor (secret redaction + block-class gate +
-        // invisible/bidi neutralization) before any downstream consumer touches
-        // stdout/stderr. Shared with `WorktreeSandbox` via the single source of
-        // truth in `scrub::scrub_and_gate_output`, so the two execution paths
-        // cannot silently diverge on what they redact or refuse.
-        let output_blocked: Vec<&'static str> = if let Ok(ref mut out) = output {
-            crate::sandbox::scrub::scrub_and_gate_output(out)
-        } else {
-            Vec::new()
-        };
-
-        // Block-class secret floor: a catastrophic secret (e.g. a PEM private
-        // key) in command output is never legitimate — fail closed rather than
-        // return the already-redacted output to the model. Shell-output analogue
-        // of clawshell's `DlpAction::Block`, mirroring the always-on hard-filter
-        // posture of the default command policy.
-        if !output_blocked.is_empty() {
-            tracing::warn!(
-                target: "shell_security",
-                session_id = ?cmd.session_id,
-                program = %cmd.program,
-                blocked = ?output_blocked,
-                "command output blocked: catastrophic secret material detected"
-            );
-            output = Err(SandboxError::Other(format!(
-                "command output blocked: catastrophic secret material detected ({})",
-                output_blocked.join(", ")
-            )));
+        if let Some(proxy) = active_proxy {
+            keepalive.push(Box::new(proxy));
         }
-
-        match &output {
-            Ok(out) => {
-                tracing::info!(
-                    target: "capability_ledger",
-                    session_id = ?cmd.session_id,
-                    program = %cmd.program,
-                    caps = ?cmd.capabilities,
-                    exit = ?out.exit_code,
-                    signal = ?out.signal,
-                    duration_ms = out.duration_ms,
-                    "sandbox.execute"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    target: "capability_ledger",
-                    session_id = ?cmd.session_id,
-                    program = %cmd.program,
-                    caps = ?cmd.capabilities,
-                    error = %e,
-                    "sandbox.execute failed"
-                );
-            }
-        }
-
-        output
+        Ok(crate::sandbox::managed::ManagedSpawn {
+            process: spawned.process,
+            keepalive,
+        })
     }
 }
 
@@ -1879,6 +1991,303 @@ mod tests {
             reason.contains("do not re-request"),
             "live denial reason must carry the agent hint; got: {reason}"
         );
+    }
+
+    /// Driver that supports managed spawn and counts how many children it
+    /// started. The child is a real trivial process so `ManagedChild` is real.
+    struct ManagedFakeDriver {
+        spawned: Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    #[async_trait]
+    impl OsSandboxDriverTrait for ManagedFakeDriver {
+        fn platform(&self) -> &'static str {
+            "fake-managed"
+        }
+
+        fn is_supported(&self) -> bool {
+            true
+        }
+
+        fn profile_for(
+            &self,
+            _capabilities: &SandboxCapabilities,
+            _cwd: &Path,
+        ) -> Result<OsSandboxProfile, SandboxError> {
+            Ok(OsSandboxProfile {
+                contents: String::new(),
+                max_memory_mb: None,
+                linux_init_policy: None,
+                windows_init_policy: None,
+            })
+        }
+
+        fn managed_spawn_preflight(&self) -> Result<(), SandboxError> {
+            Ok(())
+        }
+
+        async fn spawn_managed(
+            &self,
+            _program: &str,
+            _args: &[String],
+            _env: &HashMap<String, String>,
+            cwd: &Path,
+            _profile: &OsSandboxProfile,
+        ) -> Result<crate::sandbox::managed::ManagedChild, SandboxError> {
+            self.spawned
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            #[cfg(windows)]
+            let mut command = {
+                let mut c = tokio::process::Command::new("cmd");
+                c.args(["/C", "exit 0"]);
+                c
+            };
+            #[cfg(not(windows))]
+            let mut command = tokio::process::Command::new("true");
+            let child = command
+                .current_dir(cwd)
+                .kill_on_drop(true)
+                .spawn()
+                .map_err(|e| SandboxError::Io(e.to_string()))?;
+            Ok(crate::sandbox::managed::ManagedChild {
+                process: Box::new(crate::sandbox::managed::TokioManagedProcess::new(child)?),
+                keepalive: None,
+            })
+        }
+
+        async fn run(
+            &self,
+            _program: &str,
+            _args: &[String],
+            _env: &HashMap<String, String>,
+            _stdin: Option<&[u8]>,
+            _cwd: &Path,
+            _profile: &OsSandboxProfile,
+            _timeout: Duration,
+            _max_output_bytes: usize,
+        ) -> Result<SandboxOutput, SandboxError> {
+            Ok(SandboxOutput::default())
+        }
+    }
+
+    fn managed_command(capabilities: SandboxCapabilities) -> SandboxCommand {
+        SandboxCommand {
+            session_id: sid(),
+            tool_name: "browser_companion".into(),
+            program: "dev-server".into(),
+            args: vec![],
+            env: HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities,
+            timeout: None,
+        }
+    }
+
+    /// The managed seam runs the SAME elevation approval as `execute`: a
+    /// denied approval means the driver never spawns anything.
+    #[tokio::test]
+    async fn managed_spawn_goes_through_the_same_approval_and_denial_spawns_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spawned = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(ManagedFakeDriver {
+            spawned: Arc::clone(&spawned),
+        });
+        let sandbox = build_sandbox(
+            &tmp,
+            driver,
+            build_gate_with(ApprovalOutcome::Denied),
+            SandboxHooks::new(),
+        );
+        let elevated = SandboxCapabilities {
+            network: NetworkPolicy::AllowAll,
+            ..SandboxCapabilities::strict()
+        };
+        let managed = Sandbox::managed(&sandbox).expect("workspace sandbox is managed-capable");
+        let err = managed
+            .spawn_managed(managed_command(elevated))
+            .await
+            .map(|_| ())
+            .expect_err("denied approval must refuse");
+        assert!(
+            matches!(err, SandboxError::CapabilityDenied { .. }),
+            "{err:?}"
+        );
+        assert_eq!(spawned.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn managed_spawn_after_approval_returns_the_driver_vouched_pid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spawned = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(ManagedFakeDriver {
+            spawned: Arc::clone(&spawned),
+        });
+        let sandbox = build_sandbox(
+            &tmp,
+            driver,
+            build_gate_with(ApprovalOutcome::Approved),
+            SandboxHooks::new(),
+        );
+        let elevated = SandboxCapabilities {
+            network: NetworkPolicy::AllowAll,
+            ..SandboxCapabilities::strict()
+        };
+        let managed = Sandbox::managed(&sandbox).expect("managed-capable");
+        let mut spawn = managed
+            .spawn_managed(managed_command(elevated))
+            .await
+            .expect("approved spawn");
+        assert_eq!(spawned.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(spawn.process.service_pid() > 0);
+        let _ = spawn.process.wait().await;
+        // Pre-baked stdin is refused: only the owner writes the launch secret.
+        let mut with_stdin = managed_command(SandboxCapabilities::strict());
+        with_stdin.stdin = Some(b"secret".to_vec());
+        assert!(managed.spawn_managed(with_stdin).await.is_err());
+    }
+
+    /// A managed service is a single process (no tree kill exists): a request
+    /// that allows fork/subprocesses is refused before approval and nothing
+    /// is spawned, while the same request without it still works.
+    #[tokio::test]
+    async fn managed_spawn_refuses_a_forking_policy_and_spawns_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spawned = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(ManagedFakeDriver {
+            spawned: Arc::clone(&spawned),
+        });
+        let sandbox = build_sandbox(
+            &tmp,
+            driver,
+            build_gate_with(ApprovalOutcome::Approved),
+            SandboxHooks::new(),
+        );
+        let managed = Sandbox::managed(&sandbox).expect("managed-capable");
+        let forking = SandboxCapabilities {
+            spawn_subprocess: true,
+            ..SandboxCapabilities::strict()
+        };
+        let err = managed
+            .spawn_managed(managed_command(forking))
+            .await
+            .map(|_| ())
+            .expect_err("fork must be refused");
+        assert!(
+            matches!(&err, SandboxError::UnsupportedPolicy { feature, .. } if feature == "managed_spawn_fork"),
+            "{err:?}"
+        );
+        assert_eq!(spawned.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let mut ok = managed
+            .spawn_managed(managed_command(SandboxCapabilities::strict()))
+            .await
+            .expect("single-process request is admitted");
+        assert_eq!(spawned.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let _ = ok.process.wait().await;
+    }
+
+    /// A driver that cannot report the service PID (default / Windows wrapper)
+    /// refuses at preflight and at spawn; nothing runs.
+    #[tokio::test]
+    async fn managed_spawn_is_unsupported_for_a_driver_without_service_pid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
+        let sandbox = build_sandbox(
+            &tmp,
+            driver,
+            build_gate_with(ApprovalOutcome::Approved),
+            SandboxHooks::new(),
+        );
+        let managed = Sandbox::managed(&sandbox).expect("seam present");
+        assert!(matches!(
+            managed.preflight(),
+            Err(SandboxError::UnsupportedPolicy { .. })
+        ));
+        let err = managed
+            .spawn_managed(managed_command(SandboxCapabilities::strict()))
+            .await
+            .map(|_| ())
+            .expect_err("unsupported");
+        assert!(
+            matches!(err, SandboxError::UnsupportedPolicy { .. }),
+            "{err:?}"
+        );
+    }
+
+    /// An unsupported driver must be refused BEFORE the approval gate: an
+    /// elevated request against it asks nobody anything and spawns nothing.
+    #[tokio::test]
+    async fn managed_spawn_on_unsupported_driver_never_raises_an_approval() {
+        let tmp = tempfile::tempdir().unwrap();
+        let requester = Arc::new(FixedRequester::new(ApprovalOutcome::Approved));
+        let calls = Arc::clone(&requester.calls);
+        let gate = Arc::new(ApprovalGate::new(Some(requester)));
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
+        let sandbox = build_sandbox(&tmp, driver, gate, SandboxHooks::new());
+        let elevated = SandboxCapabilities {
+            network: NetworkPolicy::AllowAll,
+            ..SandboxCapabilities::strict()
+        };
+        let managed = Sandbox::managed(&sandbox).expect("seam present");
+        let err = managed
+            .spawn_managed(managed_command(elevated))
+            .await
+            .map(|_| ())
+            .expect_err("unsupported driver must refuse");
+        assert!(
+            matches!(&err, SandboxError::UnsupportedPolicy { feature, .. } if feature == "managed_spawn"),
+            "{err:?}"
+        );
+        assert_eq!(
+            *calls.read().await,
+            0,
+            "no approval card for an unsupported host"
+        );
+    }
+
+    /// The real Windows driver through the real workspace seam: refused with
+    /// the typed blocker report, no approval raised, no process started.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_driver_managed_spawn_is_refused_before_approval() {
+        let tmp = tempfile::tempdir().unwrap();
+        let requester = Arc::new(FixedRequester::new(ApprovalOutcome::Approved));
+        let calls = Arc::clone(&requester.calls);
+        let gate = Arc::new(ApprovalGate::new(Some(requester)));
+        let driver: Arc<dyn OsSandboxDriverTrait> =
+            Arc::new(crate::sandbox::platforms::windows::driver::WindowsSandboxDriver::new());
+        let sandbox = build_sandbox(&tmp, driver, gate, SandboxHooks::new());
+        let managed = Sandbox::managed(&sandbox).expect("seam present");
+        for caps in [
+            SandboxCapabilities::strict(),
+            SandboxCapabilities {
+                network: NetworkPolicy::AllowAll,
+                ..SandboxCapabilities::strict()
+            },
+        ] {
+            for err in [
+                managed
+                    .preflight()
+                    .expect_err("windows preflight must refuse"),
+                managed
+                    .spawn_managed(managed_command(caps))
+                    .await
+                    .map(|_| ())
+                    .expect_err("windows spawn must refuse"),
+            ] {
+                match err {
+                    SandboxError::UnsupportedPolicy {
+                        feature, reason, ..
+                    } => {
+                        assert_eq!(feature, "managed_spawn");
+                        assert!(!reason.contains("wrapper PID"), "{reason}");
+                        assert!(reason.contains("blocker(s)"), "{reason}");
+                    }
+                    other => panic!("expected UnsupportedPolicy, got {other:?}"),
+                }
+            }
+        }
+        assert_eq!(*calls.read().await, 0, "no approval card on Windows");
     }
 
     /// Denial ledger circuit breaker: after the first denial is recorded, an

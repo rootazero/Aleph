@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized] target(s) in 0.47s
+     Running tests\events.rs (target\debug\deps\events-76a9edf9aaa8bd9e.exe)
+
+running 5 tests
+test a_subscriber_created_after_an_event_does_not_see_it ... ok
+test a_subscriber_that_falls_behind_is_told_exactly_how_many_events_it_missed ... ok
+test an_event_without_a_session_id_is_browser_scoped_not_an_invented_session ... ok
+test one_event_reaches_two_independent_subscribers_with_its_session_attached ... ok
+test the_event_stream_ends_when_the_connection_is_gone ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

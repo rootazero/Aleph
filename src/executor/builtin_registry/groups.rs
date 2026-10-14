@@ -154,6 +154,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         name: "浏览器",
         tools: &[
             "browser_open",
+            "browser_companion",
             "browser_click",
             "browser_type",
             "browser_screenshot",

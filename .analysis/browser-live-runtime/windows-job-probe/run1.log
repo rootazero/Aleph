@@ -1,0 +1,58 @@
+probe exe=D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\.analysis\browser-live-runtime\windows-job-probe\job_probe.exe pid=2068 base=C:\Users\zou\AppData\Local\Temp\aleph-jobprobe-2068-1791771896545344100
+SCOPE: anonymous Job Object limit semantics with std surrogate wrapper/service; NOT sandbox-init, NOT AppContainer, NOT production proof.
+--- scenario L1: ActiveProcessLimit=1 + KILL_ON_JOB_CLOSE, root=C:\Users\zou\AppData\Local\Temp\aleph-jobprobe-2068-1791771896545344100\L1
+  [PASS] limit read-back :: ActiveProcessLimit=1 flags=0x2008
+  [PASS] wrapper blocked pre-assignment (ready, no GO yet) :: wrapper pid=Some("11312")
+  [PASS] wrapper NOT in job before assign :: IsProcessInJob=false
+  [PASS] wrapper not yet spawned anything :: no wrapper-result before GO
+  [PASS] AssignProcessToJobObject(wrapper) :: ok
+  [PASS] wrapper in job after assign :: Active=1 Total=1
+  [PASS] parent (probe) NOT in job :: IsProcessInJob(self)=false
+  wrapper observed: Some("target: REFUSED os_error=1816 (配额不足，无法处理此命令。 (os error 1816))")
+  [PASS] L1 target spawn refused :: target: REFUSED os_error=1816 (配额不足，无法处理此命令。 (os error 1816))
+  job accounting after: Total=1 Active=0 TotalTerminated=0
+  [PASS] L1 no extra process ever entered job :: TotalProcesses=1
+--- scenario L2A: ActiveProcessLimit=2 + KILL_ON_JOB_CLOSE, root=C:\Users\zou\AppData\Local\Temp\aleph-jobprobe-2068-1791771896545344100\L2A
+  [PASS] limit read-back :: ActiveProcessLimit=2 flags=0x2008
+  [PASS] wrapper blocked pre-assignment (ready, no GO yet) :: wrapper pid=Some("13600")
+  [PASS] wrapper NOT in job before assign :: IsProcessInJob=false
+  [PASS] wrapper not yet spawned anything :: no wrapper-result before GO
+  [PASS] AssignProcessToJobObject(wrapper) :: ok
+  [PASS] wrapper in job after assign :: Active=1 Total=1
+  [PASS] parent (probe) NOT in job :: IsProcessInJob(self)=false
+  [PASS] L2A wrapper spawned service (slot 2) :: service-spawn: OK pid=3732
+  [PASS] OpenProcess(service pid: QUERY_LIMITED|SYNCHRONIZE|TERMINATE) by parent :: pid=3732 handle ok (NORMAL, non-AppContainer service only)
+  [PASS] service handle IsProcessInJob :: member of parent-owned job
+  [PASS] GetProcessTimes creation time :: creation_filetime=134362454967108254
+  [PASS] GetExitCodeProcess while alive == STILL_ACTIVE :: 259
+  [PASS] WaitForSingleObject(0) while alive == WAIT_TIMEOUT :: 0x102
+  [PASS] L2A service's further child refused (wrapper alive) :: REFUSED os_error=1816 (配额不足，无法处理此命令。 (os error 1816))
+  [FAIL] L2A job Active==2 Total==2 :: Active=3 Total=3
+  [PASS] TerminateProcess(service owner handle) :: ok
+  [PASS] service wait observable + exit code :: wait=0x0 exit=0x4a4a
+  [PASS] L2A wrapper observed service kill and finished :: service-exited-or-killed
+  job accounting after kill: Total=3 Active=0 TotalTerminated=0
+--- scenario L2B: ActiveProcessLimit=2 + KILL_ON_JOB_CLOSE, root=C:\Users\zou\AppData\Local\Temp\aleph-jobprobe-2068-1791771896545344100\L2B
+  [PASS] limit read-back :: ActiveProcessLimit=2 flags=0x2008
+  [PASS] wrapper blocked pre-assignment (ready, no GO yet) :: wrapper pid=Some("11340")
+  [PASS] wrapper NOT in job before assign :: IsProcessInJob=false
+  [PASS] wrapper not yet spawned anything :: no wrapper-result before GO
+  [PASS] AssignProcessToJobObject(wrapper) :: ok
+  [PASS] wrapper in job after assign :: Active=1 Total=1
+  [PASS] parent (probe) NOT in job :: IsProcessInJob(self)=false
+  [PASS] L2B wrapper spawned service (slot 2) :: service-spawn: OK pid=6504
+  [PASS] OpenProcess(service pid: QUERY_LIMITED|SYNCHRONIZE|TERMINATE) by parent :: pid=6504 handle ok (NORMAL, non-AppContainer service only)
+  [PASS] service handle IsProcessInJob :: member of parent-owned job
+  [PASS] GetProcessTimes creation time :: creation_filetime=134362454971688869
+  [PASS] GetExitCodeProcess while alive == STILL_ACTIVE :: 259
+  [PASS] WaitForSingleObject(0) while alive == WAIT_TIMEOUT :: 0x102
+  [PASS] L2B attempt BEFORE wrapper exit refused :: REFUSED os_error=1816 (配额不足，无法处理此命令。 (os error 1816))
+  [PASS] wrapper exited (parent still owns job) :: wait=0x0
+  [FAIL] job Active==1 (service only) after wrapper exit, service alive :: Active=2 Total=3
+  [PASS] L2B attempt AFTER wrapper exit SUCCEEDS (slot freed => L2 is not a no-fork guarantee) :: SPAWNED pid=6964 exit_code=0x0
+  job accounting: Total=5 Active=2 TotalTerminated=0
+  [PASS] TerminateProcess(service owner handle) :: ok
+  [PASS] service wait observable + exit code :: wait=0x0 exit=0x4a4a
+cleanup: fixture root removed=true exists_now=false
+RESULT: FAILURES (fails=2)
+exit=1

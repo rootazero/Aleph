@@ -1,0 +1,15 @@
+   Compiling aleph-panel v0.2.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\interfaces\webchat)
+    Checking aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
+    Checking shared-ui-logic v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\ui_logic)
+warning: deref which would be done by auto-deref
+    --> interfaces\webchat\src\context.rs:1413:23
+     |
+1413 |                 auth: &*auth,
+     |                       ^^^^^^ help: try: `&auth`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#explicit_auto_deref
+     = note: `#[warn(clippy::explicit_auto_deref)]` on by default
+
+warning: `aleph-panel` (lib test) generated 1 warning (run `cargo clippy --fix --lib -p aleph-panel --tests -- ` to apply 1 suggestion)
+warning: `aleph-panel` (lib) generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized] target(s) in 5m 47s

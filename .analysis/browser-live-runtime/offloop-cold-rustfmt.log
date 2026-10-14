@@ -1,0 +1,1061 @@
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\companion\process.rs:510:
+     fn network_grant_refuses_anything_but_exact_loopback_literals() {
+         for endpoint in ["http://localhost:5173/", "http://127.0.0.2:5173/"] {
+             let err = managed_network(&request(endpoint)).expect_err(endpoint);
+[31m-            assert!(matches!(err, LaunchError::Refused(_)), "{endpoint}: {err:?}");
+[0m[32m+            assert!(
+[0m[32m+                matches!(err, LaunchError::Refused(_)),
+[0m[32m+                "{endpoint}: {err:?}"
+[0m[32m+            );
+[0m             assert!(capabilities(&request(endpoint)).is_err());
+         }
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\companion\process.rs:510:
+     fn network_grant_refuses_anything_but_exact_loopback_literals() {
+         for endpoint in ["http://localhost:5173/", "http://127.0.0.2:5173/"] {
+             let err = managed_network(&request(endpoint)).expect_err(endpoint);
+[31m-            assert!(matches!(err, LaunchError::Refused(_)), "{endpoint}: {err:?}");
+[0m[32m+            assert!(
+[0m[32m+                matches!(err, LaunchError::Refused(_)),
+[0m[32m+                "{endpoint}: {err:?}"
+[0m[32m+            );
+[0m             assert!(capabilities(&request(endpoint)).is_err());
+         }
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\companion\process.rs:510:
+     fn network_grant_refuses_anything_but_exact_loopback_literals() {
+         for endpoint in ["http://localhost:5173/", "http://127.0.0.2:5173/"] {
+             let err = managed_network(&request(endpoint)).expect_err(endpoint);
+[31m-            assert!(matches!(err, LaunchError::Refused(_)), "{endpoint}: {err:?}");
+[0m[32m+            assert!(
+[0m[32m+                matches!(err, LaunchError::Refused(_)),
+[0m[32m+                "{endpoint}: {err:?}"
+[0m[32m+            );
+[0m             assert!(capabilities(&request(endpoint)).is_err());
+         }
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\present.rs:280:
+         Ok(PublishedPreview {
+             producer: self.clone(),
+             resource,
+[31m-            route: route.and_then(|(owners, lease, fresh)| {
+[0m[31m-                fresh.then(|| (owners.clone(), lease.clone()))
+[0m[31m-            }),
+[0m[32m+            route: route
+[0m[32m+                .and_then(|(owners, lease, fresh)| fresh.then(|| (owners.clone(), lease.clone()))),
+[0m         })
+     }
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\present_tests.rs:9:
+ use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+ use aleph_protocol::browser_live::{
+     CompanionArrangement, CompanionLayout, CompanionScreen, CompanionStateHint,
+[31m-    IssueViewerGrantRequest, ResourceBinding, ResourceDecision, ViewerOrigin, ViewerPermission, ViewportCssPx,
+[0m[32m+    IssueViewerGrantRequest, ResourceBinding, ResourceDecision, ViewerOrigin, ViewerPermission,
+[0m[32m+    ViewportCssPx,
+[0m };
+ use tokio::sync::broadcast::error::TryRecvError;
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\present_tests.rs:331:
+     let initial = published.resource().clone();
+     assert_eq!(read_resource(&mut rx), initial);
+     assert_empty(&mut rx); // Exactly one publication for an explicit present.
+[31m-    // `metadata()` asks for Safe; a producer can only publish Pending.
+[0m[32m+                           // `metadata()` asks for Safe; a producer can only publish Pending.
+[0m     assert_eq!(initial.redaction, RedactionStatus::Pending);
+     let event: serde_json::Value = serde_json::from_str(&raw.try_recv().unwrap()).unwrap();
+     assert_eq!(event["topic"], aleph_protocol::browser_live::RESOURCE_TOPIC);
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\present.rs:280:
+         Ok(PublishedPreview {
+             producer: self.clone(),
+             resource,
+[31m-            route: route.and_then(|(owners, lease, fresh)| {
+[0m[31m-                fresh.then(|| (owners.clone(), lease.clone()))
+[0m[31m-            }),
+[0m[32m+            route: route
+[0m[32m+                .and_then(|(owners, lease, fresh)| fresh.then(|| (owners.clone(), lease.clone()))),
+[0m         })
+     }
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\present_tests.rs:9:
+ use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+ use aleph_protocol::browser_live::{
+     CompanionArrangement, CompanionLayout, CompanionScreen, CompanionStateHint,
+[31m-    IssueViewerGrantRequest, ResourceBinding, ResourceDecision, ViewerOrigin, ViewerPermission, ViewportCssPx,
+[0m[32m+    IssueViewerGrantRequest, ResourceBinding, ResourceDecision, ViewerOrigin, ViewerPermission,
+[0m[32m+    ViewportCssPx,
+[0m };
+ use tokio::sync::broadcast::error::TryRecvError;
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\present_tests.rs:331:
+     let initial = published.resource().clone();
+     assert_eq!(read_resource(&mut rx), initial);
+     assert_empty(&mut rx); // Exactly one publication for an explicit present.
+[31m-    // `metadata()` asks for Safe; a producer can only publish Pending.
+[0m[32m+                           // `metadata()` asks for Safe; a producer can only publish Pending.
+[0m     assert_eq!(initial.redaction, RedactionStatus::Pending);
+     let event: serde_json::Value = serde_json::from_str(&raw.try_recv().unwrap()).unwrap();
+     assert_eq!(event["topic"], aleph_protocol::browser_live::RESOURCE_TOPIC);
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\present_tests.rs:9:
+ use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+ use aleph_protocol::browser_live::{
+     CompanionArrangement, CompanionLayout, CompanionScreen, CompanionStateHint,
+[31m-    IssueViewerGrantRequest, ResourceBinding, ResourceDecision, ViewerOrigin, ViewerPermission, ViewportCssPx,
+[0m[32m+    IssueViewerGrantRequest, ResourceBinding, ResourceDecision, ViewerOrigin, ViewerPermission,
+[0m[32m+    ViewportCssPx,
+[0m };
+ use tokio::sync::broadcast::error::TryRecvError;
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\present_tests.rs:331:
+     let initial = published.resource().clone();
+     assert_eq!(read_resource(&mut rx), initial);
+     assert_empty(&mut rx); // Exactly one publication for an explicit present.
+[31m-    // `metadata()` asks for Safe; a producer can only publish Pending.
+[0m[32m+                           // `metadata()` asks for Safe; a producer can only publish Pending.
+[0m     assert_eq!(initial.redaction, RedactionStatus::Pending);
+     let event: serde_json::Value = serde_json::from_str(&raw.try_recv().unwrap()).unwrap();
+     assert_eq!(event["topic"], aleph_protocol::browser_live::RESOURCE_TOPIC);
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\companion\process.rs:510:
+     fn network_grant_refuses_anything_but_exact_loopback_literals() {
+         for endpoint in ["http://localhost:5173/", "http://127.0.0.2:5173/"] {
+             let err = managed_network(&request(endpoint)).expect_err(endpoint);
+[31m-            assert!(matches!(err, LaunchError::Refused(_)), "{endpoint}: {err:?}");
+[0m[32m+            assert!(
+[0m[32m+                matches!(err, LaunchError::Refused(_)),
+[0m[32m+                "{endpoint}: {err:?}"
+[0m[32m+            );
+[0m             assert!(capabilities(&request(endpoint)).is_err());
+         }
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\present.rs:280:
+         Ok(PublishedPreview {
+             producer: self.clone(),
+             resource,
+[31m-            route: route.and_then(|(owners, lease, fresh)| {
+[0m[31m-                fresh.then(|| (owners.clone(), lease.clone()))
+[0m[31m-            }),
+[0m[32m+            route: route
+[0m[32m+                .and_then(|(owners, lease, fresh)| fresh.then(|| (owners.clone(), lease.clone()))),
+[0m         })
+     }
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\present_tests.rs:9:
+ use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+ use aleph_protocol::browser_live::{
+     CompanionArrangement, CompanionLayout, CompanionScreen, CompanionStateHint,
+[31m-    IssueViewerGrantRequest, ResourceBinding, ResourceDecision, ViewerOrigin, ViewerPermission, ViewportCssPx,
+[0m[32m+    IssueViewerGrantRequest, ResourceBinding, ResourceDecision, ViewerOrigin, ViewerPermission,
+[0m[32m+    ViewportCssPx,
+[0m };
+ use tokio::sync::broadcast::error::TryRecvError;
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\browser_tools\present_tests.rs:331:
+     let initial = published.resource().clone();
+     assert_eq!(read_resource(&mut rx), initial);
+     assert_empty(&mut rx); // Exactly one publication for an explicit present.
+[31m-    // `metadata()` asks for Safe; a producer can only publish Pending.
+[0m[32m+                           // `metadata()` asks for Safe; a producer can only publish Pending.
+[0m     assert_eq!(initial.redaction, RedactionStatus::Pending);
+     let event: serde_json::Value = serde_json::from_str(&raw.try_recv().unwrap()).unwrap();
+     assert_eq!(event["topic"], aleph_protocol::browser_live::RESOURCE_TOPIC);
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\mod.rs:154:
+ pub use bash_exec::{BashExecArgs, BashExecTool};
+ pub use browser_tools::{
+     BrowserClickArgs, BrowserClickOutput, BrowserClickTool, BrowserCompanionArgs,
+[31m-    BrowserCompanionOutput, BrowserCompanionTool, BrowserConsoleArgs,
+[0m[31m-    BrowserConsoleOutput, BrowserConsoleTool, BrowserCookiesArgs, BrowserCookiesOutput,
+[0m[31m-    BrowserCookiesTool, BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool, BrowserDragArgs,
+[0m[31m-    BrowserDragOutput, BrowserDragTool, BrowserEmulateArgs, BrowserEmulateOutput,
+[0m[31m-    BrowserEmulateTool, BrowserEvaluateArgs, BrowserEvaluateOutput, BrowserEvaluateTool,
+[0m[31m-    BrowserExecArgs, BrowserExecOutput, BrowserExecTool, BrowserFillFormArgs,
+[0m[31m-    BrowserFillFormOutput, BrowserFillFormTool, BrowserHoverArgs, BrowserHoverOutput,
+[0m[31m-    BrowserHoverTool, BrowserNavigateArgs, BrowserNavigateOutput, BrowserNavigateTool,
+[0m[31m-    BrowserNetworkArgs, BrowserNetworkOutput, BrowserNetworkTool, BrowserOpenArgs,
+[0m[31m-    BrowserOpenOutput, BrowserOpenTool, BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool,
+[0m[31m-    BrowserPressKeyArgs, BrowserPressKeyOutput, BrowserPressKeyTool, BrowserProfileArgs,
+[0m[31m-    BrowserProfileOutput, BrowserProfileTool, BrowserQaArgs, BrowserQaOutput, BrowserQaTool,
+[0m[31m-    BrowserRecordArgs, BrowserRecordOutput, BrowserRecordTool, BrowserResizeArgs,
+[0m[31m-    BrowserResizeOutput, BrowserResizeTool, BrowserScreenshotArgs, BrowserScreenshotOutput,
+[0m[31m-    BrowserScreenshotTool, BrowserScrollArgs, BrowserScrollOutput, BrowserScrollTool,
+[0m[31m-    BrowserSelectArgs, BrowserSelectOutput, BrowserSelectTool, BrowserSessionArgs,
+[0m[31m-    BrowserSessionOutput, BrowserSessionTool, BrowserSnapshotArgs, BrowserSnapshotOutput,
+[0m[31m-    BrowserSnapshotTool, BrowserTabsArgs, BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs,
+[0m[31m-    BrowserTypeOutput, BrowserTypeTool, BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool,
+[0m[31m-    BrowserWaitForArgs, BrowserWaitForOutput, BrowserWaitForTool,
+[0m[32m+    BrowserCompanionOutput, BrowserCompanionTool, BrowserConsoleArgs, BrowserConsoleOutput,
+[0m[32m+    BrowserConsoleTool, BrowserCookiesArgs, BrowserCookiesOutput, BrowserCookiesTool,
+[0m[32m+    BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool, BrowserDragArgs, BrowserDragOutput,
+[0m[32m+    BrowserDragTool, BrowserEmulateArgs, BrowserEmulateOutput, BrowserEmulateTool,
+[0m[32m+    BrowserEvaluateArgs, BrowserEvaluateOutput, BrowserEvaluateTool, BrowserExecArgs,
+[0m[32m+    BrowserExecOutput, BrowserExecTool, BrowserFillFormArgs, BrowserFillFormOutput,
+[0m[32m+    BrowserFillFormTool, BrowserHoverArgs, BrowserHoverOutput, BrowserHoverTool,
+[0m[32m+    BrowserNavigateArgs, BrowserNavigateOutput, BrowserNavigateTool, BrowserNetworkArgs,
+[0m[32m+    BrowserNetworkOutput, BrowserNetworkTool, BrowserOpenArgs, BrowserOpenOutput, BrowserOpenTool,
+[0m[32m+    BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool, BrowserPressKeyArgs, BrowserPressKeyOutput,
+[0m[32m+    BrowserPressKeyTool, BrowserProfileArgs, BrowserProfileOutput, BrowserProfileTool,
+[0m[32m+    BrowserQaArgs, BrowserQaOutput, BrowserQaTool, BrowserRecordArgs, BrowserRecordOutput,
+[0m[32m+    BrowserRecordTool, BrowserResizeArgs, BrowserResizeOutput, BrowserResizeTool,
+[0m[32m+    BrowserScreenshotArgs, BrowserScreenshotOutput, BrowserScreenshotTool, BrowserScrollArgs,
+[0m[32m+    BrowserScrollOutput, BrowserScrollTool, BrowserSelectArgs, BrowserSelectOutput,
+[0m[32m+    BrowserSelectTool, BrowserSessionArgs, BrowserSessionOutput, BrowserSessionTool,
+[0m[32m+    BrowserSnapshotArgs, BrowserSnapshotOutput, BrowserSnapshotTool, BrowserTabsArgs,
+[0m[32m+    BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs, BrowserTypeOutput, BrowserTypeTool,
+[0m[32m+    BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool, BrowserWaitForArgs,
+[0m[32m+    BrowserWaitForOutput, BrowserWaitForTool,
+[0m };
+ pub use canvas::{CanvasTool, CanvasToolAction, CanvasToolArgs};
+ pub use channel_directory::{
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\process_registry.rs:370:
+             // receiver is fine - the reap flag below is the only proof read.
+             let _ = cancel.send(());
+         }
+[31m-        let outcome = match tokio::time::timeout(budget, reaped.wait_for(|reaped| *reaped)).await
+[0m[31m-        {
+[0m[32m+        let outcome = match tokio::time::timeout(budget, reaped.wait_for(|reaped| *reaped)).await {
+[0m             Ok(Ok(_)) => ManagedCancelOutcome::Reaped,
+             // Sender dropped without ack: the supervisor died unobserved.
+             Ok(Err(_)) | Err(_) => ManagedCancelOutcome::TimedOut,
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\process_registry.rs:1616:
+     // ---- managed (owner-supervised) entries --------------------------------
+ 
+     /// Registers a managed entry whose supervisor acks only when told to.
+[31m-    fn managed_entry(
+[0m[31m-        reg: &ProcessRegistry,
+[0m[31m-        owner: &str,
+[0m[31m-    ) -> (u64, ManagedSupervisorEnd) {
+[0m[32m+    fn managed_entry(reg: &ProcessRegistry, owner: &str) -> (u64, ManagedSupervisorEnd) {
+[0m         let (end, sup) = managed_link();
+         // A parked task: a real AbortHandle that nothing here aborts.
+         let abort = tokio::spawn(std::future::pending::<()>()).abort_handle();
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\process_registry.rs:370:
+             // receiver is fine - the reap flag below is the only proof read.
+             let _ = cancel.send(());
+         }
+[31m-        let outcome = match tokio::time::timeout(budget, reaped.wait_for(|reaped| *reaped)).await
+[0m[31m-        {
+[0m[32m+        let outcome = match tokio::time::timeout(budget, reaped.wait_for(|reaped| *reaped)).await {
+[0m             Ok(Ok(_)) => ManagedCancelOutcome::Reaped,
+             // Sender dropped without ack: the supervisor died unobserved.
+             Ok(Err(_)) | Err(_) => ManagedCancelOutcome::TimedOut,
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\builtin_tools\process_registry.rs:1616:
+     // ---- managed (owner-supervised) entries --------------------------------
+ 
+     /// Registers a managed entry whose supervisor acks only when told to.
+[31m-    fn managed_entry(
+[0m[31m-        reg: &ProcessRegistry,
+[0m[31m-        owner: &str,
+[0m[31m-    ) -> (u64, ManagedSupervisorEnd) {
+[0m[32m+    fn managed_entry(reg: &ProcessRegistry, owner: &str) -> (u64, ManagedSupervisorEnd) {
+[0m         let (end, sup) = managed_link();
+         // A parked task: a real AbortHandle that nothing here aborts.
+         let abort = tokio::spawn(std::future::pending::<()>()).abort_handle();
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\executor\builtin_registry\builder\constructor\mod.rs:17:
+ 
+ use super::{BuiltinToolConfig, BuiltinToolRegistry};
+ use crate::builtin_tools::browser_tools::{
+[31m-    BrowserClickTool, BrowserCompanionTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool, BrowserDragTool,
+[0m[31m-    BrowserEmulateTool, BrowserEvaluateTool, BrowserExecTool, BrowserFillFormTool,
+[0m[31m-    BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool, BrowserOpenTool, BrowserPdfTool,
+[0m[31m-    BrowserPressKeyTool, BrowserProfileTool, BrowserQaTool, BrowserRecordTool, BrowserResizeTool,
+[0m[31m-    BrowserScreenshotTool, BrowserScrollTool, BrowserSelectTool, BrowserSessionTool,
+[0m[31m-    BrowserSnapshotTool, BrowserTabsTool, BrowserTypeTool, BrowserUploadTool, BrowserWaitForTool,
+[0m[32m+    BrowserClickTool, BrowserCompanionTool, BrowserConsoleTool, BrowserCookiesTool,
+[0m[32m+    BrowserDialogTool, BrowserDragTool, BrowserEmulateTool, BrowserEvaluateTool, BrowserExecTool,
+[0m[32m+    BrowserFillFormTool, BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool,
+[0m[32m+    BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool, BrowserProfileTool, BrowserQaTool,
+[0m[32m+    BrowserRecordTool, BrowserResizeTool, BrowserScreenshotTool, BrowserScrollTool,
+[0m[32m+    BrowserSelectTool, BrowserSessionTool, BrowserSnapshotTool, BrowserTabsTool, BrowserTypeTool,
+[0m[32m+    BrowserUploadTool, BrowserWaitForTool,
+[0m };
+ use crate::builtin_tools::{
+     ApplyPatchTool, AutomationTool, BashExecTool, CodeCheckTool, CodeExecTool, DesktopTool,
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\executor\builtin_registry\definitions.rs:1299:
+         // approval gate — a security-relevant half-assembly — so they fall
+         // through to `None`.
+         "browser_open" | "browser_companion" | "browser_click" | "browser_type"
+[31m-        | "browser_screenshot"
+[0m[31m-        | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
+[0m[31m-        | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
+[0m[31m-        | "browser_exec" | "browser_console" | "browser_hover" | "browser_scroll"
+[0m[31m-        | "browser_pdf" | "browser_record" | "browser_qa" | "browser_network"
+[0m[31m-        | "browser_dialog" | "browser_drag" | "browser_upload" | "browser_resize"
+[0m[31m-        | "browser_emulate" | "browser_cookies" | "browser_session" | "browser_profile" => None,
+[0m[32m+        | "browser_screenshot" | "browser_snapshot" | "browser_navigate" | "browser_tabs"
+[0m[32m+        | "browser_select" | "browser_evaluate" | "browser_fill_form" | "browser_press_key"
+[0m[32m+        | "browser_wait_for" | "browser_exec" | "browser_console" | "browser_hover"
+[0m[32m+        | "browser_scroll" | "browser_pdf" | "browser_record" | "browser_qa"
+[0m[32m+        | "browser_network" | "browser_dialog" | "browser_drag" | "browser_upload"
+[0m[32m+        | "browser_resize" | "browser_emulate" | "browser_cookies" | "browser_session"
+[0m[32m+        | "browser_profile" => None,
+[0m         // Skill management tools — always available
+         // Phase 2: share the process-wide initialized SkillSystem so
+         // skill_status/install/manage see the same registry as the gateway.
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\handlers\connect.rs:622:
+         else {
+             panic!("expected device-bound Authorized, got {outcome:?}");
+         };
+[31m-        assert_eq!(authed, "dev-lb", "device id is server-derived from the token");
+[0m[32m+        assert_eq!(
+[0m[32m+            authed, "dev-lb",
+[0m[32m+            "device id is server-derived from the token"
+[0m[32m+        );
+[0m 
+         let (user, role) = resolve_connection_identity(true, Some(&authed), &store);
+         assert_eq!(user.as_deref(), Some("u-member"));
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\handlers\connect.rs:676:
+         };
+         assert!(mgr.revoke_device(&device_id).unwrap());
+         assert!(matches!(
+[31m-            resolve_connect_auth(true, None, Some(&device_token), None, None, None, |_| false, &mgr),
+[0m[32m+            resolve_connect_auth(
+[0m[32m+                true,
+[0m[32m+                None,
+[0m[32m+                Some(&device_token),
+[0m[32m+                None,
+[0m[32m+                None,
+[0m[32m+                None,
+[0m[32m+                |_| false,
+[0m[32m+                &mgr
+[0m[32m+            ),
+[0m             ConnectAuthOutcome::Unauthorized
+         ));
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\handlers\connect.rs:700:
+             ConnectAuthOutcome::Authorized { device_id: None }
+         ));
+         // Empty-string credentials count as absent.
+[31m-        let outcome = resolve_connect_auth(
+[0m[31m-            true,
+[0m[31m-            None,
+[0m[31m-            Some(""),
+[0m[31m-            Some(""),
+[0m[31m-            None,
+[0m[31m-            None,
+[0m[31m-            |_| false,
+[0m[31m-            &mgr,
+[0m[31m-        );
+[0m[32m+        let outcome =
+[0m[32m+            resolve_connect_auth(true, None, Some(""), Some(""), None, None, |_| false, &mgr);
+[0m         assert!(matches!(
+             outcome,
+             ConnectAuthOutcome::Authorized { device_id: None }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\handlers\connect.rs:726:
+     #[test]
+     fn loopback_device_bound_to_deactivated_user_is_walled() {
+         let store = seeded_store();
+[31m-        store
+[0m[31m-            .create_user("u-off", "Off", UserRole::Member)
+[0m[31m-            .unwrap();
+[0m[32m+        store.create_user("u-off", "Off", UserRole::Member).unwrap();
+[0m         upsert_panel_device(&store, "dev-off", "u-off");
+         store
+             .update_user("u-off", None, None, Some(UserStatus::Deactivated))
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\handlers\connect.rs:622:
+         else {
+             panic!("expected device-bound Authorized, got {outcome:?}");
+         };
+[31m-        assert_eq!(authed, "dev-lb", "device id is server-derived from the token");
+[0m[32m+        assert_eq!(
+[0m[32m+            authed, "dev-lb",
+[0m[32m+            "device id is server-derived from the token"
+[0m[32m+        );
+[0m 
+         let (user, role) = resolve_connection_identity(true, Some(&authed), &store);
+         assert_eq!(user.as_deref(), Some("u-member"));
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\handlers\connect.rs:676:
+         };
+         assert!(mgr.revoke_device(&device_id).unwrap());
+         assert!(matches!(
+[31m-            resolve_connect_auth(true, None, Some(&device_token), None, None, None, |_| false, &mgr),
+[0m[32m+            resolve_connect_auth(
+[0m[32m+                true,
+[0m[32m+                None,
+[0m[32m+                Some(&device_token),
+[0m[32m+                None,
+[0m[32m+                None,
+[0m[32m+                None,
+[0m[32m+                |_| false,
+[0m[32m+                &mgr
+[0m[32m+            ),
+[0m             ConnectAuthOutcome::Unauthorized
+         ));
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\handlers\connect.rs:700:
+             ConnectAuthOutcome::Authorized { device_id: None }
+         ));
+         // Empty-string credentials count as absent.
+[31m-        let outcome = resolve_connect_auth(
+[0m[31m-            true,
+[0m[31m-            None,
+[0m[31m-            Some(""),
+[0m[31m-            Some(""),
+[0m[31m-            None,
+[0m[31m-            None,
+[0m[31m-            |_| false,
+[0m[31m-            &mgr,
+[0m[31m-        );
+[0m[32m+        let outcome =
+[0m[32m+            resolve_connect_auth(true, None, Some(""), Some(""), None, None, |_| false, &mgr);
+[0m         assert!(matches!(
+             outcome,
+             ConnectAuthOutcome::Authorized { device_id: None }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\handlers\connect.rs:726:
+     #[test]
+     fn loopback_device_bound_to_deactivated_user_is_walled() {
+         let store = seeded_store();
+[31m-        store
+[0m[31m-            .create_user("u-off", "Off", UserRole::Member)
+[0m[31m-            .unwrap();
+[0m[32m+        store.create_user("u-off", "Off", UserRole::Member).unwrap();
+[0m         upsert_panel_device(&store, "dev-off", "u-off");
+         store
+             .update_user("u-off", None, None, Some(UserStatus::Deactivated))
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\mcp_face\auth.rs:97:
+     // empty for loopback so this face's behaviour is unchanged.
+     let outcome = resolve_connect_auth(
+         client.local,
+[31m-        bearer, // shared_token slot
+[0m[32m+        bearer,                                   // shared_token slot
+[0m         if client.local { None } else { bearer }, // device_token slot
+[31m-        None,   // no bootstrap ticket on the stateless HTTP path
+[0m[31m-        None,   // device_id not supplied via headers
+[0m[31m-        None,   // device_name not supplied via headers
+[0m[32m+        None,                                     // no bootstrap ticket on the stateless HTTP path
+[0m[32m+        None,                                     // device_id not supplied via headers
+[0m[32m+        None,                                     // device_name not supplied via headers
+[0m         |t| validate_shared(t),
+         device_tokens,
+     );
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\browser_live_runtime.rs:214:
+             BrowserSsrfGuard::default(),
+         )
+         .expect("valid origin composes");
+[31m-        let sweeper = runtime.ttl_sweeper.expect("sweeper spawned under a runtime");
+[0m[32m+        let sweeper = runtime
+[0m[32m+            .ttl_sweeper
+[0m[32m+            .expect("sweeper spawned under a runtime");
+[0m         assert!(!sweeper.is_finished());
+         sweeper.abort();
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\browser_viewer_route.rs:192:
+         }
+         Some(entry.prepared)
+     }
+[31m-
+[0m }
+ 
+ /// The viewer routes, ready to `merge` into the gateway router BEFORE the
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:821:
+         };
+         let old_params = json!({ "device_token": old_tok });
+         assert_eq!(
+[31m-            final_verdict(&outcome, &old_params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&outcome, &old_params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+         let new_tok = revoke_and_repair(&mgr, &store, &did);
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:833:
+         // A fresh handshake with the new token binds the active user.
+         let new_params = json!({ "device_token": new_tok });
+         assert_eq!(
+[31m-            final_verdict(&outcome, &new_params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&outcome, &new_params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:848:
+         };
+         let params = json!({ "bootstrap_ticket": "spent" });
+         assert_eq!(
+[31m-            final_verdict(&outcome, &params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&outcome, &params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+         let new_tok = revoke_and_repair(&mgr, &store, &did);
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:861:
+             device_token: new_tok,
+         };
+         assert_eq!(
+[31m-            final_verdict(&fresh, &params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&fresh, &params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:821:
+         };
+         let old_params = json!({ "device_token": old_tok });
+         assert_eq!(
+[31m-            final_verdict(&outcome, &old_params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&outcome, &old_params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+         let new_tok = revoke_and_repair(&mgr, &store, &did);
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:833:
+         // A fresh handshake with the new token binds the active user.
+         let new_params = json!({ "device_token": new_tok });
+         assert_eq!(
+[31m-            final_verdict(&outcome, &new_params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&outcome, &new_params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:848:
+         };
+         let params = json!({ "bootstrap_ticket": "spent" });
+         assert_eq!(
+[31m-            final_verdict(&outcome, &params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&outcome, &params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+         let new_tok = revoke_and_repair(&mgr, &store, &did);
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:861:
+             device_token: new_tok,
+         };
+         assert_eq!(
+[31m-            final_verdict(&fresh, &params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&fresh, &params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\browser_live_runtime.rs:214:
+             BrowserSsrfGuard::default(),
+         )
+         .expect("valid origin composes");
+[31m-        let sweeper = runtime.ttl_sweeper.expect("sweeper spawned under a runtime");
+[0m[32m+        let sweeper = runtime
+[0m[32m+            .ttl_sweeper
+[0m[32m+            .expect("sweeper spawned under a runtime");
+[0m         assert!(!sweeper.is_finished());
+         sweeper.abort();
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\browser_viewer_route.rs:192:
+         }
+         Some(entry.prepared)
+     }
+[31m-
+[0m }
+ 
+ /// The viewer routes, ready to `merge` into the gateway router BEFORE the
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:821:
+         };
+         let old_params = json!({ "device_token": old_tok });
+         assert_eq!(
+[31m-            final_verdict(&outcome, &old_params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&outcome, &old_params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+         let new_tok = revoke_and_repair(&mgr, &store, &did);
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:833:
+         // A fresh handshake with the new token binds the active user.
+         let new_params = json!({ "device_token": new_tok });
+         assert_eq!(
+[31m-            final_verdict(&outcome, &new_params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&outcome, &new_params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:848:
+         };
+         let params = json!({ "bootstrap_ticket": "spent" });
+         assert_eq!(
+[31m-            final_verdict(&outcome, &params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&outcome, &params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+         let new_tok = revoke_and_repair(&mgr, &store, &did);
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\gateway\server\connection\auth.rs:861:
+             device_token: new_tok,
+         };
+         assert_eq!(
+[31m-            final_verdict(&fresh, &params, &mgr, &store, Some(&did)).2.as_deref(),
+[0m[32m+            final_verdict(&fresh, &params, &mgr, &store, Some(&did))
+[0m[32m+                .2
+[0m[32m+                .as_deref(),
+[0m             Some("u-alice")
+         );
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\managed.rs:94:
+     /// Fails when the child has no PID (already reaped), so a zero or stale
+     /// PID can never be reported as the service PID.
+     pub fn new(child: tokio::process::Child) -> Result<Self, SandboxError> {
+[31m-        let service_pid = child.id().ok_or_else(|| {
+[0m[31m-            SandboxError::ExecutionFailed("spawned child reported no pid".into())
+[0m[31m-        })?;
+[0m[32m+        let service_pid = child
+[0m[32m+            .id()
+[0m[32m+            .ok_or_else(|| SandboxError::ExecutionFailed("spawned child reported no pid".into()))?;
+[0m         Ok(Self { child, service_pid })
+     }
+ }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\managed.rs:110:
+     fn take_stdio(&mut self) -> ManagedStdio {
+         ManagedStdio {
+             stdin: self.child.stdin.take().map(|p| Box::new(p) as ManagedStdin),
+[31m-            stdout: self.child.stdout.take().map(|p| Box::new(p) as ManagedOutput),
+[0m[31m-            stderr: self.child.stderr.take().map(|p| Box::new(p) as ManagedOutput),
+[0m[32m+            stdout: self
+[0m[32m+                .child
+[0m[32m+                .stdout
+[0m[32m+                .take()
+[0m[32m+                .map(|p| Box::new(p) as ManagedOutput),
+[0m[32m+            stderr: self
+[0m[32m+                .child
+[0m[32m+                .stderr
+[0m[32m+                .take()
+[0m[32m+                .map(|p| Box::new(p) as ManagedOutput),
+[0m         }
+     }
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\managed.rs:94:
+     /// Fails when the child has no PID (already reaped), so a zero or stale
+     /// PID can never be reported as the service PID.
+     pub fn new(child: tokio::process::Child) -> Result<Self, SandboxError> {
+[31m-        let service_pid = child.id().ok_or_else(|| {
+[0m[31m-            SandboxError::ExecutionFailed("spawned child reported no pid".into())
+[0m[31m-        })?;
+[0m[32m+        let service_pid = child
+[0m[32m+            .id()
+[0m[32m+            .ok_or_else(|| SandboxError::ExecutionFailed("spawned child reported no pid".into()))?;
+[0m         Ok(Self { child, service_pid })
+     }
+ }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\managed.rs:110:
+     fn take_stdio(&mut self) -> ManagedStdio {
+         ManagedStdio {
+             stdin: self.child.stdin.take().map(|p| Box::new(p) as ManagedStdin),
+[31m-            stdout: self.child.stdout.take().map(|p| Box::new(p) as ManagedOutput),
+[0m[31m-            stderr: self.child.stderr.take().map(|p| Box::new(p) as ManagedOutput),
+[0m[32m+            stdout: self
+[0m[32m+                .child
+[0m[32m+                .stdout
+[0m[32m+                .take()
+[0m[32m+                .map(|p| Box::new(p) as ManagedOutput),
+[0m[32m+            stderr: self
+[0m[32m+                .child
+[0m[32m+                .stderr
+[0m[32m+                .take()
+[0m[32m+                .map(|p| Box::new(p) as ManagedOutput),
+[0m         }
+     }
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\elevation.rs:5:
+ //! elevation, changes a token, or touches any other OS state.
+ 
+ use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
+[31m-use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+[0m[32m+use windows_sys::Win32::Security::{
+[0m[32m+    GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+[0m[32m+};
+[0m use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+ 
+ /// `Ok(true)` when the current process token is elevated. Errors are
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\elevation.rs:17:
+     let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
+     if opened == 0 {
+         // SAFETY: plain thread-local error read.
+[31m-        return Err(format!("OpenProcessToken failed: {:#010x}", unsafe { GetLastError() }));
+[0m[32m+        return Err(format!("OpenProcessToken failed: {:#010x}", unsafe {
+[0m[32m+            GetLastError()
+[0m[32m+        }));
+[0m     }
+     let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+     let mut returned: u32 = 0;
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\elevation.rs:32:
+         )
+     };
+     // SAFETY: read the error before CloseHandle can overwrite it; close the handle we opened.
+[31m-    let err = if ok == 0 { unsafe { GetLastError() } } else { 0 };
+[0m[32m+    let err = if ok == 0 {
+[0m[32m+        unsafe { GetLastError() }
+[0m[32m+    } else {
+[0m[32m+        0
+[0m[32m+    };
+[0m     unsafe { CloseHandle(token) };
+     if ok == 0 {
+[31m-        return Err(format!("GetTokenInformation(TokenElevation) failed: {err:#010x}"));
+[0m[32m+        return Err(format!(
+[0m[32m+            "GetTokenInformation(TokenElevation) failed: {err:#010x}"
+[0m[32m+        ));
+[0m     }
+     Ok(elevation.TokenIsElevated != 0)
+ }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\job.rs:7:
+ use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
+ use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+ use windows_sys::Win32::System::JobObjects::JobObjectBasicAccountingInformation;
+[31m-use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
+[0m[31m-use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+[0m[31m-use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_ACCOUNTING_INFORMATION;
+[0m use windows_sys::Win32::System::JobObjects::JobObjectBasicUIRestrictions;
+ use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
+[32m+use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
+[0m use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
+[32m+use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+[0m[32m+use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_ACCOUNTING_INFORMATION;
+[0m use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_UI_RESTRICTIONS;
+ use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
+ use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\job.rs:155:
+         let ok = unsafe { IsProcessInJob(process, self.handle, &mut result) };
+         if ok == 0 {
+             // SAFETY: thread-local error read.
+[31m-            return Err(format!("IsProcessInJob failed: {}", unsafe { GetLastError() }));
+[0m[32m+            return Err(format!("IsProcessInJob failed: {}", unsafe {
+[0m[32m+                GetLastError()
+[0m[32m+            }));
+[0m         }
+         Ok(result != 0)
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\job.rs:192:
+         // SAFETY: `self.handle` is a valid job handle owned by `self`.
+         if unsafe { TerminateJobObject(self.handle, exit_code) } == 0 {
+             // SAFETY: thread-local error read.
+[31m-            return Err(format!("TerminateJobObject failed: {}", unsafe { GetLastError() }));
+[0m[32m+            return Err(format!("TerminateJobObject failed: {}", unsafe {
+[0m[32m+                GetLastError()
+[0m[32m+            }));
+[0m         }
+         Ok(())
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\policy.rs:97:
+             CapNetworkPolicy::AllowAll => NetworkPolicy::AllowAll,
+             // rust-doctor-disable-next-line excessive-clone
+             CapNetworkPolicy::AllowHosts { hosts } => NetworkPolicy::AllowHosts(hosts.clone()),
+[31m-            CapNetworkPolicy::LoopbackPorts { ports } => NetworkPolicy::LoopbackPorts(ports.clone()),
+[0m[32m+            CapNetworkPolicy::LoopbackPorts { ports } => {
+[0m[32m+                NetworkPolicy::LoopbackPorts(ports.clone())
+[0m[32m+            }
+[0m         };
+ 
+         let process = ProcessPolicy {
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:747:
+     ) -> Result<crate::sandbox::managed::ManagedSpawn, SandboxError> {
+         if cmd.stdin.is_some() {
+             return Err(SandboxError::Other(
+[31m-                "managed spawn takes no pre-baked stdin: the owner writes the launch secret"
+[0m[31m-                    .into(),
+[0m[32m+                "managed spawn takes no pre-baked stdin: the owner writes the launch secret".into(),
+[0m             ));
+         }
+         // Single-process contract: nothing here can prove that forked
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2110:
+             .await
+             .map(|_| ())
+             .expect_err("denied approval must refuse");
+[31m-        assert!(matches!(err, SandboxError::CapabilityDenied { .. }), "{err:?}");
+[0m[32m+        assert!(
+[0m[32m+            matches!(err, SandboxError::CapabilityDenied { .. }),
+[0m[32m+            "{err:?}"
+[0m[32m+        );
+[0m         assert_eq!(spawned.load(std::sync::atomic::Ordering::SeqCst), 0);
+     }
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2206:
+             .await
+             .map(|_| ())
+             .expect_err("unsupported");
+[31m-        assert!(matches!(err, SandboxError::UnsupportedPolicy { .. }), "{err:?}");
+[0m[32m+        assert!(
+[0m[32m+            matches!(err, SandboxError::UnsupportedPolicy { .. }),
+[0m[32m+            "{err:?}"
+[0m[32m+        );
+[0m     }
+ 
+     /// An unsupported driver must be refused BEFORE the approval gate: an
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2233:
+             matches!(&err, SandboxError::UnsupportedPolicy { feature, .. } if feature == "managed_spawn"),
+             "{err:?}"
+         );
+[31m-        assert_eq!(*calls.read().await, 0, "no approval card for an unsupported host");
+[0m[32m+        assert_eq!(
+[0m[32m+            *calls.read().await,
+[0m[32m+            0,
+[0m[32m+            "no approval card for an unsupported host"
+[0m[32m+        );
+[0m     }
+ 
+     /// The real Windows driver through the real workspace seam: refused with
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2257:
+             },
+         ] {
+             for err in [
+[31m-                managed.preflight().expect_err("windows preflight must refuse"),
+[0m                 managed
+[32m+                    .preflight()
+[0m[32m+                    .expect_err("windows preflight must refuse"),
+[0m[32m+                managed
+[0m                     .spawn_managed(managed_command(caps))
+                     .await
+                     .map(|_| ())
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2265:
+                     .expect_err("windows spawn must refuse"),
+             ] {
+                 match err {
+[31m-                    SandboxError::UnsupportedPolicy { feature, reason, .. } => {
+[0m[32m+                    SandboxError::UnsupportedPolicy {
+[0m[32m+                        feature, reason, ..
+[0m[32m+                    } => {
+[0m                         assert_eq!(feature, "managed_spawn");
+                         assert!(!reason.contains("wrapper PID"), "{reason}");
+                         assert!(reason.contains("blocker(s)"), "{reason}");
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\elevation.rs:5:
+ //! elevation, changes a token, or touches any other OS state.
+ 
+ use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
+[31m-use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+[0m[32m+use windows_sys::Win32::Security::{
+[0m[32m+    GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+[0m[32m+};
+[0m use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+ 
+ /// `Ok(true)` when the current process token is elevated. Errors are
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\elevation.rs:17:
+     let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
+     if opened == 0 {
+         // SAFETY: plain thread-local error read.
+[31m-        return Err(format!("OpenProcessToken failed: {:#010x}", unsafe { GetLastError() }));
+[0m[32m+        return Err(format!("OpenProcessToken failed: {:#010x}", unsafe {
+[0m[32m+            GetLastError()
+[0m[32m+        }));
+[0m     }
+     let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+     let mut returned: u32 = 0;
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\elevation.rs:32:
+         )
+     };
+     // SAFETY: read the error before CloseHandle can overwrite it; close the handle we opened.
+[31m-    let err = if ok == 0 { unsafe { GetLastError() } } else { 0 };
+[0m[32m+    let err = if ok == 0 {
+[0m[32m+        unsafe { GetLastError() }
+[0m[32m+    } else {
+[0m[32m+        0
+[0m[32m+    };
+[0m     unsafe { CloseHandle(token) };
+     if ok == 0 {
+[31m-        return Err(format!("GetTokenInformation(TokenElevation) failed: {err:#010x}"));
+[0m[32m+        return Err(format!(
+[0m[32m+            "GetTokenInformation(TokenElevation) failed: {err:#010x}"
+[0m[32m+        ));
+[0m     }
+     Ok(elevation.TokenIsElevated != 0)
+ }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\job.rs:7:
+ use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
+ use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+ use windows_sys::Win32::System::JobObjects::JobObjectBasicAccountingInformation;
+[31m-use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
+[0m[31m-use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+[0m[31m-use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_ACCOUNTING_INFORMATION;
+[0m use windows_sys::Win32::System::JobObjects::JobObjectBasicUIRestrictions;
+ use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
+[32m+use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
+[0m use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
+[32m+use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+[0m[32m+use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_ACCOUNTING_INFORMATION;
+[0m use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_UI_RESTRICTIONS;
+ use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
+ use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\job.rs:155:
+         let ok = unsafe { IsProcessInJob(process, self.handle, &mut result) };
+         if ok == 0 {
+             // SAFETY: thread-local error read.
+[31m-            return Err(format!("IsProcessInJob failed: {}", unsafe { GetLastError() }));
+[0m[32m+            return Err(format!("IsProcessInJob failed: {}", unsafe {
+[0m[32m+                GetLastError()
+[0m[32m+            }));
+[0m         }
+         Ok(result != 0)
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\job.rs:192:
+         // SAFETY: `self.handle` is a valid job handle owned by `self`.
+         if unsafe { TerminateJobObject(self.handle, exit_code) } == 0 {
+             // SAFETY: thread-local error read.
+[31m-            return Err(format!("TerminateJobObject failed: {}", unsafe { GetLastError() }));
+[0m[32m+            return Err(format!("TerminateJobObject failed: {}", unsafe {
+[0m[32m+                GetLastError()
+[0m[32m+            }));
+[0m         }
+         Ok(())
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\elevation.rs:5:
+ //! elevation, changes a token, or touches any other OS state.
+ 
+ use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
+[31m-use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+[0m[32m+use windows_sys::Win32::Security::{
+[0m[32m+    GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+[0m[32m+};
+[0m use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+ 
+ /// `Ok(true)` when the current process token is elevated. Errors are
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\elevation.rs:17:
+     let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
+     if opened == 0 {
+         // SAFETY: plain thread-local error read.
+[31m-        return Err(format!("OpenProcessToken failed: {:#010x}", unsafe { GetLastError() }));
+[0m[32m+        return Err(format!("OpenProcessToken failed: {:#010x}", unsafe {
+[0m[32m+            GetLastError()
+[0m[32m+        }));
+[0m     }
+     let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+     let mut returned: u32 = 0;
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\elevation.rs:32:
+         )
+     };
+     // SAFETY: read the error before CloseHandle can overwrite it; close the handle we opened.
+[31m-    let err = if ok == 0 { unsafe { GetLastError() } } else { 0 };
+[0m[32m+    let err = if ok == 0 {
+[0m[32m+        unsafe { GetLastError() }
+[0m[32m+    } else {
+[0m[32m+        0
+[0m[32m+    };
+[0m     unsafe { CloseHandle(token) };
+     if ok == 0 {
+[31m-        return Err(format!("GetTokenInformation(TokenElevation) failed: {err:#010x}"));
+[0m[32m+        return Err(format!(
+[0m[32m+            "GetTokenInformation(TokenElevation) failed: {err:#010x}"
+[0m[32m+        ));
+[0m     }
+     Ok(elevation.TokenIsElevated != 0)
+ }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\job.rs:7:
+ use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
+ use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+ use windows_sys::Win32::System::JobObjects::JobObjectBasicAccountingInformation;
+[31m-use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
+[0m[31m-use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+[0m[31m-use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_ACCOUNTING_INFORMATION;
+[0m use windows_sys::Win32::System::JobObjects::JobObjectBasicUIRestrictions;
+ use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
+[32m+use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
+[0m use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
+[32m+use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+[0m[32m+use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_ACCOUNTING_INFORMATION;
+[0m use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_UI_RESTRICTIONS;
+ use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
+ use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\job.rs:155:
+         let ok = unsafe { IsProcessInJob(process, self.handle, &mut result) };
+         if ok == 0 {
+             // SAFETY: thread-local error read.
+[31m-            return Err(format!("IsProcessInJob failed: {}", unsafe { GetLastError() }));
+[0m[32m+            return Err(format!("IsProcessInJob failed: {}", unsafe {
+[0m[32m+                GetLastError()
+[0m[32m+            }));
+[0m         }
+         Ok(result != 0)
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\job.rs:192:
+         // SAFETY: `self.handle` is a valid job handle owned by `self`.
+         if unsafe { TerminateJobObject(self.handle, exit_code) } == 0 {
+             // SAFETY: thread-local error read.
+[31m-            return Err(format!("TerminateJobObject failed: {}", unsafe { GetLastError() }));
+[0m[32m+            return Err(format!("TerminateJobObject failed: {}", unsafe {
+[0m[32m+                GetLastError()
+[0m[32m+            }));
+[0m         }
+         Ok(())
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\policy.rs:97:
+             CapNetworkPolicy::AllowAll => NetworkPolicy::AllowAll,
+             // rust-doctor-disable-next-line excessive-clone
+             CapNetworkPolicy::AllowHosts { hosts } => NetworkPolicy::AllowHosts(hosts.clone()),
+[31m-            CapNetworkPolicy::LoopbackPorts { ports } => NetworkPolicy::LoopbackPorts(ports.clone()),
+[0m[32m+            CapNetworkPolicy::LoopbackPorts { ports } => {
+[0m[32m+                NetworkPolicy::LoopbackPorts(ports.clone())
+[0m[32m+            }
+[0m         };
+ 
+         let process = ProcessPolicy {
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:747:
+     ) -> Result<crate::sandbox::managed::ManagedSpawn, SandboxError> {
+         if cmd.stdin.is_some() {
+             return Err(SandboxError::Other(
+[31m-                "managed spawn takes no pre-baked stdin: the owner writes the launch secret"
+[0m[31m-                    .into(),
+[0m[32m+                "managed spawn takes no pre-baked stdin: the owner writes the launch secret".into(),
+[0m             ));
+         }
+         // Single-process contract: nothing here can prove that forked
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2110:
+             .await
+             .map(|_| ())
+             .expect_err("denied approval must refuse");
+[31m-        assert!(matches!(err, SandboxError::CapabilityDenied { .. }), "{err:?}");
+[0m[32m+        assert!(
+[0m[32m+            matches!(err, SandboxError::CapabilityDenied { .. }),
+[0m[32m+            "{err:?}"
+[0m[32m+        );
+[0m         assert_eq!(spawned.load(std::sync::atomic::Ordering::SeqCst), 0);
+     }
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2206:
+             .await
+             .map(|_| ())
+             .expect_err("unsupported");
+[31m-        assert!(matches!(err, SandboxError::UnsupportedPolicy { .. }), "{err:?}");
+[0m[32m+        assert!(
+[0m[32m+            matches!(err, SandboxError::UnsupportedPolicy { .. }),
+[0m[32m+            "{err:?}"
+[0m[32m+        );
+[0m     }
+ 
+     /// An unsupported driver must be refused BEFORE the approval gate: an
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2233:
+             matches!(&err, SandboxError::UnsupportedPolicy { feature, .. } if feature == "managed_spawn"),
+             "{err:?}"
+         );
+[31m-        assert_eq!(*calls.read().await, 0, "no approval card for an unsupported host");
+[0m[32m+        assert_eq!(
+[0m[32m+            *calls.read().await,
+[0m[32m+            0,
+[0m[32m+            "no approval card for an unsupported host"
+[0m[32m+        );
+[0m     }
+ 
+     /// The real Windows driver through the real workspace seam: refused with
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2257:
+             },
+         ] {
+             for err in [
+[31m-                managed.preflight().expect_err("windows preflight must refuse"),
+[0m                 managed
+[32m+                    .preflight()
+[0m[32m+                    .expect_err("windows preflight must refuse"),
+[0m[32m+                managed
+[0m                     .spawn_managed(managed_command(caps))
+                     .await
+                     .map(|_| ())
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2265:
+                     .expect_err("windows spawn must refuse"),
+             ] {
+                 match err {
+[31m-                    SandboxError::UnsupportedPolicy { feature, reason, .. } => {
+[0m[32m+                    SandboxError::UnsupportedPolicy {
+[0m[32m+                        feature, reason, ..
+[0m[32m+                    } => {
+[0m                         assert_eq!(feature, "managed_spawn");
+                         assert!(!reason.contains("wrapper PID"), "{reason}");
+                         assert!(reason.contains("blocker(s)"), "{reason}");

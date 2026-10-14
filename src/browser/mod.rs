@@ -6,6 +6,7 @@ pub(crate) mod chromium_resolve;
 mod discovery;
 pub mod engine;
 pub mod error;
+pub(crate) mod live;
 pub mod manager;
 pub mod network_policy;
 pub mod page_state;

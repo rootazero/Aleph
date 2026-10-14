@@ -1,0 +1,27 @@
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+    Finished `test` profile [unoptimized] target(s) in 7m 20s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 19 tests
+test builtin_tools::browser_tools::companion::manager::tests::cancelled_start_after_launch_reaps_the_child_and_publishes_nothing ... ok
+test builtin_tools::browser_tools::companion::manager::tests::open_tab_failure_rolls_back_the_child ... ok
+test builtin_tools::browser_tools::companion::manager::tests::rollback_reports_an_unconfirmed_reap ... ok
+test builtin_tools::browser_tools::companion::manager::tests::proof_failure_rolls_back_without_publishing_or_opening_a_tab ... ok
+test builtin_tools::browser_tools::companion::manager::tests::missing_producer_launches_nothing ... ok
+test builtin_tools::browser_tools::companion::manager::tests::capacity_is_reserved_atomically_before_launch ... ok
+test builtin_tools::browser_tools::companion::manager::tests::cancelled_start_during_proof_reaps_the_child ... ok
+test builtin_tools::browser_tools::companion::manager::tests::unsupported_launcher_fails_before_any_launch ... ok
+test builtin_tools::browser_tools::companion::manager::tests::publish_failure_closes_the_tab_then_reaps_the_child ... ok
+test builtin_tools::browser_tools::companion::manager::tests::shutdown_all_closes_an_in_flight_start_and_it_does_not_publish ... ok
+test builtin_tools::browser_tools::companion::manager::tests::resource_close_failure_fails_closed_and_the_retry_finishes_in_order ... ok
+test builtin_tools::browser_tools::companion::manager::tests::stop_with_unconfirmed_exit_fails_closed_and_is_retryable ... ok
+test builtin_tools::browser_tools::companion::manager::tests::tab_close_failure_fails_closed_reaps_the_child_and_the_retry_closes_the_tab ... ok
+test builtin_tools::browser_tools::companion::manager::tests::start_publishes_a_managed_design_companion_with_the_driver_pid ... ok
+test builtin_tools::browser_tools::companion::manager::tests::shutdown_all_uses_the_same_close_then_kill_order ... ok
+test builtin_tools::browser_tools::companion::manager::tests::status_and_stop_require_the_starting_caller ... ok
+test builtin_tools::browser_tools::companion::manager::tests::stop_closes_the_resource_then_the_tab_then_reaps_the_process ... ok
+test builtin_tools::browser_tools::companion::manager::tests::natural_exit_closes_the_resource_and_stops ... ok
+test builtin_tools::browser_tools::companion::manager::tests::watcher_retries_a_failed_close_before_reaping ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 20710 filtered out; finished in 0.39s
+

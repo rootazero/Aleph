@@ -168,6 +168,15 @@ impl Lane {
             // "what is running right now" — the one call you want when things
             // are stuck.
             "tools.in_flight" => Some(Self::Query),
+            // extensions.installed is the live reconciled read of every
+            // extension backend (`collect_installed`, same read family as
+            // `extensions.catalog` / `skills.status`) and mutates nothing. The
+            // `.installed` suffix matches no Query token, so it landed in
+            // Mutate and could not leave the connection's select loop (it
+            // shares the cold shared-skill-system init with the catalog).
+            // Its write twins `extensions.install` / `.toggle` / `.uninstall`
+            // keep their System / Mutate classification.
+            "extensions.installed" => Some(Self::Query),
             // agent.resume re-triggers an interrupted run — it starts agent
             // execution exactly like agent.run, it just supplies the input from
             // the session log instead of the request. The `.resume` suffix
@@ -691,6 +700,17 @@ mod tests {
 
     /// `tools.in_flight` only reads the in-flight registry; its mutating twin
     /// is `tools.cancel_call`, which correctly stays on Mutate.
+    #[test]
+    fn extensions_installed_is_query_but_its_write_twins_are_not() {
+        assert_eq!(Lane::for_method("extensions.installed"), Lane::Query);
+        assert!(!Lane::for_method("extensions.installed").needs_idempotency());
+        assert_eq!(Lane::for_method("extensions.catalog"), Lane::Query);
+        assert_eq!(Lane::for_method("skills.status"), Lane::Query);
+        assert_eq!(Lane::for_method("extensions.install"), Lane::System);
+        assert_eq!(Lane::for_method("extensions.uninstall"), Lane::System);
+        assert_eq!(Lane::for_method("extensions.toggle"), Lane::Mutate);
+    }
+
     #[test]
     fn the_in_flight_diagnostic_is_query_lane() {
         assert_eq!(Lane::for_method("tools.in_flight"), Lane::Query);

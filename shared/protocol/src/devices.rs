@@ -73,6 +73,19 @@ pub struct PairedDeviceRow {
     #[serde(default)]
     pub last_seen_at: Option<i64>,
 
+    /// Epoch millis at which the OLDEST connection currently bound to this
+    /// device was established (the presence roster's `connected_at`), or
+    /// `None` when no live connection is bound (`connected == false`).
+    ///
+    /// Read-only and server-derived. It answers "since when has this device
+    /// been online without a gap" — the operator sees it as "Connected since".
+    /// Because it is the MINIMUM over live connections, a strictly greater
+    /// value on a later read proves every connection that was live at the
+    /// earlier read has closed and a newer one is bound (a reconnect), which a
+    /// sampled `connected` flag can miss when the gap is shorter than the poll.
+    #[serde(default)]
+    pub connected_since: Option<i64>,
+
     /// The principal this device speaks as.
     ///
     /// `None` for a legacy row that was never adopted; every live pairing path
@@ -144,6 +157,7 @@ mod tests {
             device_name: "iPhone".to_string(),
             connected: true,
             last_seen_at: Some(1_760_000_000_000),
+            connected_since: Some(1_760_000_000_500),
             user_id: Some("u-bob".to_string()),
             display_name: Some("Bob".to_string()),
         }
@@ -165,6 +179,7 @@ mod tests {
             keys,
             vec![
                 "connected",
+                "connected_since",
                 "device_id",
                 "device_name",
                 "display_name",
@@ -199,6 +214,10 @@ mod tests {
         .expect("extra server-side fields must not break a client");
         assert_eq!(parsed.device_id, "panel-1");
         assert!(parsed.last_seen_at.is_none());
+        assert!(
+            parsed.connected_since.is_none(),
+            "an older server that never said `connected_since` reads as unknown"
+        );
         assert!(parsed.user_id.is_none());
     }
 

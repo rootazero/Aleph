@@ -1,0 +1,8 @@
+grant issued u_I0t5YP0sH03roXep2OsugG2lQey5nQI_ti4SpqiME url
+CASE revoke-live exit=0 driver=0 driver revoke-live: {"revoked":true}
+  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:104:5 › revoke-live: revoking a streaming grant removes the frame (1.4s)
+  1 passed (2.3s)
+grant issued uGAoPL1NIza_CMzp14_XuIujstbPXIE88NzbxQQx6kE url
+CASE navigate-fence exit=0 driver=0 driver navigate-fence: {"ok":true,"result":{"message":"Navigated to http://127.0.0.1:18791/page?after=navigation in profile 'default'","success":true},"tool_name":"browser_navigate"}
+  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:111:5 › navigate-fence: owner navigation of the target fences the streaming viewer (1.5s)
+  1 passed (2.2s)

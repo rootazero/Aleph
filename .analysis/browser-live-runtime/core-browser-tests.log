@@ -1,0 +1,766 @@
+   Compiling aleph-desktop v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\shared)
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+   Compiling aleph-client v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\client)
+   Compiling aleph-desktop-windows v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\windows)
+   Compiling shared-ui-logic v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\ui_logic)
+warning: unused import: `super::*`
+   --> src\gateway\execution_engine\run_loop\project_context.rs:223:9
+    |
+223 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::Duration`
+ --> src\gateway\execution_engine\slash_command_body\tests.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FileSessionStoreConfig` and `FileSessionStore`
+  --> src\gateway\session_store\hook_transcripts.rs:42:55
+   |
+42 |     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+   |                                                       ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `with_consent` is never used
+   --> src\builtin_tools\skill_reader\read.rs:157:19
+    |
+101 | impl ReadSkillTool {
+    | ------------------ method in this implementation
+...
+157 |     pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `alephcore` (lib test) generated 4 warnings (run `cargo fix --lib -p alephcore --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 6m 50s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 617 tests
+test browser::cdp_backend::actions::tests::a_chord_is_not_silently_truncated_to_one_key ... ok
+test browser::cdp_backend::actions::tests::a_protocol_error_from_resolve_node_is_a_stale_ref_whatever_it_says ... ok
+test browser::cdp_backend::actions::tests::a_page_that_throws_from_is_connected_is_not_blamed_on_the_engine ... ok
+test browser::cdp_backend::actions::tests::a_ref_whose_document_the_last_capture_did_not_see_is_refused_as_stale ... ok
+test browser::cdp_backend::actions::tests::a_coordinate_click_is_converted_from_page_space_to_the_viewport ... ok
+test browser::cdp_backend::actions::tests::a_coordinate_click_has_no_node_to_probe_and_says_so ... ok
+test browser::cdp_backend::actions::tests::a_select_option_value_cannot_forge_a_ref_token ... ok
+test browser::cdp_backend::actions::tests::a_page_thrown_error_in_the_hit_test_cannot_forge_a_ref_token ... ok
+test browser::cdp_backend::actions::tests::a_ref_in_another_frame_is_refused_and_names_the_driver_that_can ... ok
+test browser::cdp_backend::actions::tests::a_fill_the_page_acknowledged_is_verified ... ok
+test browser::cdp_backend::actions::tests::a_liveness_answer_that_is_not_a_bool_refuses_without_claiming_staleness ... ok
+test browser::cdp_backend::actions::tests::a_blocker_class_cannot_forge_a_ref_token ... ok
+test browser::cdp_backend::actions::tests::a_ref_whose_node_left_the_document_is_stale_not_a_protocol_error ... ok
+test browser::cdp_backend::actions::tests::a_page_thrown_error_in_a_value_setter_cannot_forge_a_ref_token ... ok
+test browser::cdp_backend::actions::tests::a_click_the_engine_accepted_but_the_page_never_saw_is_effect_not_delivered ... ok
+test browser::cdp_backend::actions::tests::a_click_that_opens_a_dialog_answers_on_the_event_not_the_budget ... ok
+test browser::cdp_backend::actions::tests::a_readback_failure_marks_the_action_skipped_not_failed ... ok
+test browser::cdp_backend::actions::tests::probe_js_marks_only_the_target_element ... ok
+test browser::cdp_backend::actions::tests::a_click_the_page_saw_is_verified_and_the_probe_is_installed_before_dispatch ... ok
+test browser::cdp_backend::actions::tests::skipped_is_an_honest_label_not_a_success ... ok
+test browser::cdp_backend::actions::tests::the_dialog_gate_records_every_verb_as_gated_or_not ... ok
+test browser::cdp_backend::actions::tests::drag_refuses_when_the_table_says_the_engine_cannot ... ok
+test browser::cdp_backend::actions::tests::a_selector_shaped_ref_is_refused_as_unrecognised_not_as_stale ... ok
+test browser::cdp_backend::actions::tests::upload_refuses_when_the_table_says_the_engine_cannot ... ok
+test browser::cdp_backend::actions::tests::a_verb_on_a_tab_with_an_open_dialog_refuses_by_name ... ok
+test browser::cdp_backend::actions::tests::click_by_ref_after_a_loader_change_is_a_stale_ref ... ok
+test browser::cdp_backend::actions::tests::the_key_refusal_names_the_keys_that_work ... ok
+test browser::cdp_backend::actions::tests::an_unparseable_resolve_node_reply_is_not_a_stale_ref ... ok
+test browser::cdp_backend::actions::tests::a_covered_element_is_refused_by_name_and_no_mouse_event_is_sent ... ok
+test browser::cdp_backend::actions::tests::fill_form_is_gated_per_field_on_a_cdp_profile ... ok
+test browser::cdp_backend::actions::tests::an_engine_that_answers_without_the_key_still_names_the_engine ... ok
+test browser::cdp_backend::evaluate::tests::an_exception_that_does_not_echo_the_script_is_passed_through ... ok
+test browser::cdp_backend::actions::tests::an_engine_without_the_probe_capability_is_honestly_skipped ... ok
+test browser::cdp_backend::evaluate::tests::an_exception_that_echoes_only_a_fragment_is_still_withheld ... ok
+test browser::cdp_backend::evaluate::tests::an_exception_that_echoes_the_script_is_withheld ... ok
+test browser::cdp_backend::actions::tests::type_text_uses_insert_text_when_the_table_says_it_can ... ok
+test browser::cdp_backend::evaluate::tests::the_wrapper_calls_a_function_and_leaves_an_expression_alone ... ok
+test browser::cdp_backend::evaluate::tests::values_render_as_the_json_the_tool_layer_parses ... ok
+test browser::cdp_backend::actions::tests::type_text_falls_back_to_per_character_keys_when_it_cannot ... ok
+test browser::cdp_backend::events::tests::a_frame_navigated_with_no_loader_id_is_ignored ... ok
+test browser::cdp_backend::dialog::tests::handle_dialog_refuses_when_the_table_says_the_engine_cannot ... ok
+test browser::cdp_backend::events::tests::a_main_frame_navigation_the_page_started_retires_the_tabs_refs ... ok
+test browser::cdp_backend::cookies::tests::no_tab_is_a_named_refusal_not_an_empty_jar ... ok
+test browser::cdp_backend::events::tests::a_subframe_navigation_changes_nothing_and_leaves_the_refs_alone ... ok
+test browser::cdp_backend::events::tests::a_ring_the_pump_dropped_events_into_says_so ... ok
+test browser::cdp_backend::cookies::tests::a_domainless_cookie_is_attached_to_the_pages_url ... ok
+test browser::cdp_backend::events::tests::an_empty_ring_says_whether_anyone_was_listening ... ok
+test browser::cdp_backend::events::tests::an_event_for_an_unknown_session_is_dropped_not_misattributed ... ok
+test browser::cdp_backend::dialog::tests::a_dialog_call_reaches_the_engine_even_when_the_latch_says_there_is_none ... ok
+test browser::cdp_backend::dialog::tests::accepting_a_pending_dialog_clears_the_latch ... ok
+test browser::cdp_backend::events::tests::the_dialog_latch_sets_and_clears ... ok
+test browser::cdp_backend::events::tests::the_pump_slot_is_claimed_exactly_once ... ok
+test browser::cdp_backend::events::tests::the_same_loader_announced_twice_is_not_a_new_document ... ok
+test browser::cdp_backend::events::tests::a_ring_read_through_the_verb_reports_an_observation ... ok
+test browser::cdp_backend::events::tests::the_console_ring_keeps_the_newest_entries_not_the_first_ones ... ok
+test browser::cdp_backend::events::tests::a_popup_is_adopted_only_when_its_opener_is_a_tab_we_own ... ok
+test browser::cdp_backend::events::tests::the_gap_note_is_this_tabs_window_not_the_connections_whole_life ... ok
+test browser::cdp_backend::navigate::tests::a_dropped_event_is_named_in_the_timeout_and_silence_costs_nothing ... ok
+test browser::cdp_backend::cookies::tests::a_restore_script_that_throws_is_not_reported_as_a_loaded_session ... ok
+test browser::cdp_backend::cookies::tests::with_no_active_marker_the_tab_is_the_one_the_ordered_listing_names ... ok
+test browser::cdp_backend::dialog::tests::the_engines_own_answer_is_what_says_there_is_no_dialog ... ok
+test browser::cdp_backend::migration::tests::a_local_storage_failure_is_a_warning_not_an_abort ... ok
+test browser::cdp_backend::migration::tests::a_cookie_export_failure_is_an_error_and_touches_no_target ... ok
+test browser::cdp_backend::migration::tests::export_reads_cookies_tabs_and_local_storage_from_the_source ... ok
+test browser::cdp_backend::operation::tests::distinct_owners_yield_distinct_browser_sessions ... ok
+test browser::cdp_backend::navigate::tests::an_error_text_on_a_successful_call_is_still_a_failed_navigation ... ok
+test browser::cdp_backend::operation::tests::record_binds_the_pinned_owner_session_and_target ... ok
+test browser::cdp_backend::operation::tests::failed_navigation_produces_no_record ... ok
+test browser::cdp_backend::events::tests::a_destroyed_target_folds_the_tab_and_later_calls_answer_tab_gone ... ok
+test browser::cdp_backend::events::tests::popup_adoption_still_works_with_the_destroyed_arm_installed ... ok
+test browser::cdp_backend::events::tests::a_tab_we_closed_is_not_left_marked_gone_by_its_own_death_event ... ok
+test browser::cdp_backend::recording::tests::a_second_start_on_the_same_tab_is_refused_with_the_existing_id ... FAILED
+test browser::cdp_backend::recording::tests::a_destroyed_event_for_another_tab_leaves_the_recording_running ... FAILED
+test browser::cdp_backend::cookies::tests::a_saved_state_is_put_back_on_the_wire_when_it_is_loaded ... ok
+test browser::cdp_backend::recording::tests::codec_args_follow_the_extension_and_a_missing_one_is_refused ... ok
+test browser::cdp_backend::cookies::tests::an_unreadable_origin_is_absent_from_the_saved_state_not_empty ... ok
+test browser::cdp_backend::recording::tests::ffmpeg_resolution_prefers_env_then_path_then_playwright_cache ... ok
+test browser::cdp_backend::recording::tests::resolve_ffmpeg_finds_the_one_on_this_machines_path ... FAILED
+test browser::cdp_backend::recording::tests::a_target_destroyed_event_finalizes_the_recording_while_the_engine_lives ... FAILED
+test browser::cdp_backend::recording::tests::start_on_an_unwritable_path_fails_fast_without_residue ... FAILED
+test browser::cdp_backend::recording::tests::a_nonzero_encoder_exit_is_never_reported_as_complete ... FAILED
+test browser::cdp_backend::recording::tests::start_then_frames_then_stop_produces_a_playable_file_and_an_honest_receipt ... FAILED
+test browser::cdp_backend::recording::tests::start_without_extension_is_refused_before_any_engine_call ... FAILED
+test browser::cdp_backend::recording::tests::a_preexisting_stale_file_is_never_reported_complete ... FAILED
+test browser::cdp_backend::recording::tests::the_default_path_lands_under_the_managed_dir_with_profile_and_tab ... ok
+test browser::cdp_backend::recording::tests::the_backend_carries_the_shared_registry ... ok
+test browser::cdp_backend::navigate::tests::history_records_the_landed_url_as_the_tabs_last_observation ... ok
+test browser::cdp_backend::recording::tests::uniquify_only_moves_aside_for_a_real_collision ... ok
+test browser::cdp_backend::recording::tests::tab_death_mid_recording_auto_finalizes_a_truncated_receipt ... FAILED
+test browser::cdp_backend::recording::tests::a_slow_encoder_drops_frames_instead_of_buffering_them ... FAILED
+test browser::cdp_backend::routes::tests::a_rule_that_cannot_be_armed_fails_the_navigation_loudly ... ok
+test browser::cdp_backend::recording::tests::ack_is_sent_only_after_the_frame_is_written ... FAILED
+test browser::cdp_backend::routes::tests::add_rejects_an_empty_url_contains ... ok
+test browser::cdp_backend::recording::tests::ffmpeg_death_mid_recording_is_detected_on_the_next_frame_write ... FAILED
+test browser::cdp_backend::operation::tests::open_tab_with_record_names_the_created_tab ... ok
+test browser::cdp_backend::operation::tests::navigate_with_record_names_the_navigated_tab ... ok
+test browser::cdp_backend::recording::tests::stop_kills_a_wedged_ffmpeg_and_says_so ... FAILED
+test browser::cdp_backend::routes::tests::clear_tab_and_clear_profile_remove_only_their_own_scope ... ok
+test browser::cdp_backend::routes::tests::has_rules_for_sees_tab_and_profile_rules ... ok
+test browser::cdp_backend::routes::tests::hits_are_counted_on_the_rule_that_matched ... ok
+test browser::cdp_backend::routes::tests::list_reports_kind_label_scope_hits_and_active ... ok
+test browser::cdp_backend::routes::tests::matching_is_lifo_and_tab_rules_beat_profile_rules ... ok
+test browser::cdp_backend::routes::tests::method_filter_narrows_and_substring_matches_anywhere ... ok
+test browser::cdp_backend::routes::tests::profile_rules_do_not_leak_across_profiles ... ok
+test browser::cdp_backend::routes::tests::a_paused_request_matching_an_abort_rule_is_failed ... ok
+test browser::cdp_backend::routes::tests::a_paused_request_matching_no_rule_is_continued_verbatim ... ok
+test browser::cdp_backend::routes::tests::a_fulfill_that_errors_fails_open_to_continue ... ok
+test browser::cdp_backend::routes::tests::a_paused_request_matching_a_mock_rule_is_fulfilled ... ok
+test browser::cdp_backend::routes::tests::a_tab_rule_for_another_tab_does_not_arm_this_tab ... ok
+test browser::cdp_backend::routes::tests::route_add_is_refused_on_an_engine_the_table_says_cannot_serve_it ... ok
+test browser::cdp_backend::routes::tests::route_add_on_a_live_tab_arms_it_without_a_navigate ... ok
+test browser::cdp_backend::routes::tests::route_add_rolls_the_rule_back_when_the_engine_refuses_fetch ... ok
+test browser::cdp_backend::routes::tests::rule_ids_are_monotonic_and_never_reused ... ok
+test browser::cdp_backend::routes::tests::route_clear_scopes_and_reports_counts ... ok
+test browser::cdp_backend::routes::tests::route_remove_of_an_unknown_id_fails_loudly ... ok
+test browser::cdp_backend::routes::tests::route_add_with_profile_scope_arms_every_live_tab_of_the_profile ... ok
+test browser::cdp_backend::routes::tests::route_remove_of_the_last_applicable_rule_disarms_the_tab ... ok
+test browser::cdp_backend::screenshot::tests::a_colour_scheme_override_reaches_the_engine_as_an_emulated_media_feature ... ok
+test browser::cdp_backend::screenshot::tests::a_resize_sends_the_requested_metrics ... ok
+test browser::cdp_backend::screenshot::tests::emulate_sends_every_axis_to_its_own_cdp_method ... ok
+test browser::cdp_backend::screenshot::tests::pdf_refuses_when_the_table_says_the_engine_cannot ... ok
+test browser::cdp_backend::routes::tests::profile_rules_are_armed_before_the_tabs_first_navigation ... ok
+test browser::cdp_backend::screenshot::tests::the_axis_map_covers_every_field_of_emulate_options ... ok
+test browser::cdp_backend::routes::tests::removing_the_last_rule_disarms_the_tab ... ok
+test browser::cdp_backend::routes::tests::closing_a_tab_drops_its_rules_and_its_loop ... ok
+test browser::cdp_backend::routes::tests::the_loop_exits_when_its_session_dies_mid_decision ... ok
+test browser::cdp_backend::actions::tests::fill_forms_exemption_holds_because_this_backend_does_not_override_it ... ok
+test browser::cdp_backend::snapshot::tests::a_presented_snapshot_on_a_tab_with_an_open_dialog_refuses_before_the_wire ... ok
+test browser::cdp_backend::screenshot::tests::pdf_reaches_the_wire_when_the_table_says_the_engine_can ... ok
+test browser::cdp_backend::snapshot::engine_arm_census::every_engine_arm_in_the_read_path_reaches_a_fetcher ... ok
+test browser::cdp_backend::snapshot::tests::a_snapshot_on_a_tab_with_an_open_dialog_refuses_before_the_wire ... ok
+test browser::cdp_backend::routes::tests::ssrf_veto_beats_a_matching_mock_rule ... ok
+test browser::cdp_backend::routes::tests::zero_rules_means_no_fetch_enable_and_no_loop ... ok
+test browser::cdp_backend::tabs::tests::a_refused_close_leaves_the_tab_in_the_table ... ok
+test browser::cdp_backend::snapshot::tests::a_child_renderers_own_top_layer_reaches_the_page_state ... ok
+test browser::cdp_backend::snapshot::tests::a_cross_origin_frames_content_is_captured_and_placed_at_its_owner ... ok
+test browser::cdp_backend::tabs::tests::a_switched_tab_is_the_one_the_listing_marks_selected ... ok
+test browser::cdp_backend::tabs::tests::a_tab_we_closed_is_forgotten_and_a_vanished_one_is_gone ... ok
+test browser::cdp_backend::tabs::tests::list_tabs_records_every_tab_in_the_table ... ok
+test browser::cdp_backend::snapshot::tests::an_unreachable_child_is_confessed_rather_than_rendered_as_an_empty_frame ... ok
+test browser::cdp_backend::tabs::tests::open_tab_records_identity_even_when_the_navigation_is_refused ... ok
+test browser::cdp_backend::tabs::tests::switch_tab_records_the_identity_without_a_url_claim ... ok
+test browser::cdp_backend::tests::a_blocked_navigation_produces_no_cdp_message_at_all ... ok
+test browser::cdp_backend::tests::a_read_verb_never_brings_an_engine_into_existence ... ok
+test browser::cdp_backend::tabs::tests::the_listing_is_ordered_whatever_order_the_tabs_were_inserted_in ... ok
+test browser::cdp_backend::tests::an_arrow_function_script_is_called_not_merely_evaluated ... ok
+test browser::cdp_backend::tests::cdp_errors_map_to_three_distinct_browser_errors ... ok
+test browser::cdp_backend::tests::backend_profile_and_registry_key_are_one_spelling ... ok
+test browser::cdp_backend::tests::no_verb_is_left_unwired ... FAILED
+test browser::cdp_backend::tests::evaluate_returns_the_value_and_never_the_script ... ok
+test browser::cdp_backend::tests::the_permit_and_construction_recognisers_match_what_they_claim_to ... ok
+test browser::cdp_backend::routes::tests::an_orphan_paused_event_after_disable_is_tolerated ... ok
+test browser::live::attachment_tests::cancelled_acquire_leaks_no_reference_or_stream ... ok
+test browser::live::attachment_tests::dropping_the_last_prepared_viewer_releases_attachment_and_control ... ok
+test browser::live::attachment_tests::cancelled_first_prepare_does_not_close_the_shared_attachment ... ok
+test browser::live::attachment_tests::foreign_session_or_profile_is_rejected_without_side_effects ... ok
+test browser::live::attachment_tests::last_lease_release_leaves_the_recording_running ... ok
+test browser::live::attachment_tests::lease_release_does_not_tear_down_a_legacy_attachment ... ok
+test browser::live::attachment_tests::legacy_attach_adopts_an_attachment_whose_release_is_pending ... ok
+test browser::live::attachment_tests::n_prepared_viewers_share_one_attachment_and_the_last_out_closes_it ... ok
+test browser::live::attachment_tests::release_recheck_under_lifecycle_lock_spares_a_concurrent_reacquire ... ok
+test browser::live::attachment_tests::stale_lease_after_close_and_reacquire_releases_nothing ... ok
+test browser::live::control::tests::all_agent_mutations_hold_bound_permit ... ok
+test browser::live::control::tests::cede_keeps_frames_but_whole_revoke_closes_lease_and_purges ... ok
+test browser::live::control::tests::backend_mutation_entry_table_refuses_human_before_any_cdp_write ... ok
+test browser::live::control::tests::dispatch_permit_spans_entire_backend_future_and_summary_is_factual ... ok
+test browser::live::control::tests::dispatch_rechecks_every_axis_and_does_not_start_after_revoke ... ok
+test browser::cdp_backend::routes::tests::an_ssrf_veto_never_falls_back_to_continue ... ok
+test browser::live::control::tests::out_of_order_dispatch_cannot_apply_an_older_sequence_after_a_newer_one ... ok
+test browser::live::control::tests::permission_loss_retains_frames_and_failed_summary_closes_control ... ok
+test browser::live::control::tests::queue_is_64_and_cancel_releases_slot_without_replaying_seq ... ok
+test browser::live::control::tests::stale_agent_waiter_cannot_write_after_handoff_and_destroy_ends_control_once ... ok
+test browser::live::control::tests::stale_input_is_never_replayed ... ok
+test browser::live::grant::tests::dropped_attempt_aborts_without_burning_the_secret ... ok
+test browser::live::grant::tests::inflight_cap_rejects_the_ninth_attempt ... ok
+test browser::live::grant::tests::nonce_and_ticket_are_single_use_and_expire ... ok
+test browser::live::grant::tests::revocation_closes_frame_and_input ... ok
+test browser::live::grant::tests::revoke_resource_revokes_only_that_resources_grants ... ok
+test browser::live::grant::tests::rotation_commits_once_and_consumed_secret_replay_revokes ... ok
+test browser::live::grant::tests::viewer_credential_cannot_cross_scope ... ok
+test browser::live::issuer::tests::absolute_store_expiry_never_extends_and_invalid_ttls_deny ... ok
+test browser::live::issuer::tests::foreign_unknown_closed_expired_connection_artifact_and_refused_deny ... ok
+test browser::live::issuer::tests::issue_recheck_revokes_minted_grant_on_close_or_revision_change ... ok
+test browser::live::issuer::tests::owned_issue_uses_exact_registry_binding_and_fragment_only ... ok
+test browser::live::issuer::tests::pending_redaction_resource_cannot_be_issued ... ok
+test browser::live::issuer::tests::permissions_narrow_without_implicitly_adding_frames_and_ttl_clamps ... ok
+test browser::live::issuer::tests::revoke_only_original_issuer_and_never_reports_unknown_or_expired ... ok
+test browser::live::issuer::tests::trusted_origin_is_explicit_and_rejects_authority_or_url_extras ... ok
+test browser::cdp_backend::snapshot::tests::a_presented_snapshot_over_budget_names_omitted_controls_and_carries_the_full_text ... ok
+test browser::live::lifecycle::tests::close_session_closes_whole_batch_revokes_and_isolates_sessions ... ok
+test browser::live::lifecycle::tests::close_binding_revokes_and_emits_target_closed_once ... ok
+test browser::live::lifecycle::tests::close_target_closes_only_that_exact_target_revokes_and_emits_once ... ok
+test browser::live::lifecycle::tests::close_twice_revokes_and_emits_once ... ok
+test browser::cdp_backend::snapshot::tests::a_presented_snapshot_within_budget_is_the_full_render ... ok
+test browser::live::lifecycle::tests::missing_bus_close_binding_still_closes_and_revokes ... ok
+test browser::live::lifecycle::tests::missing_bus_close_still_closes_and_revokes ... ok
+test browser::live::lifecycle::tests::expiry_sweep_revokes_and_emits_once_and_expired_revision_sweeps ... ok
+test browser::live::lifecycle::tests::missing_bus_publish_creates_nothing ... ok
+test browser::live::lifecycle::tests::missing_bus_close_target_and_session_still_close_and_revoke ... ok
+test browser::live::lifecycle::tests::missing_bus_republish_refusal_expiry_and_success_fail_closed ... ok
+test browser::live::lifecycle::tests::missing_bus_sweep_still_expires_and_revokes_whole_batch ... ok
+test browser::live::lifecycle::tests::publish_and_republish_to_pending_revoke_existing_grant ... ok
+test browser::live::lifecycle::tests::safe_republish_shortening_expiry_revokes_but_extending_keeps ... ok
+test browser::live::lifecycle::tests::safe_revision_keeps_existing_grant ... ok
+test browser::live::lifecycle::tests::refusal_closes_revokes_and_emits_exactly_once ... ok
+test browser::live::lifecycle::tests::terminal_sink_maps_target_destroyed_and_owner_ended_to_closes ... ok
+test browser::live::navigation_gate_tests::hub_receiver_is_pinned_to_the_generation_it_was_approved_under ... ok
+test browser::live::navigation_gate_tests::agent_navigation_declares_the_boundary_before_returning ... ok
+test browser::live::navigation_gate_tests::event_gap_fails_closed ... ok
+test browser::live::navigation_gate_tests::human_navigate_input_declares_the_boundary_first ... ok
+test browser::cdp_backend::snapshot::tests::the_viewport_is_read_from_layout_metrics_and_not_from_the_snapshot ... ok
+test browser::live::navigation_gate_tests::malformed_navigation_event_fails_closed ... ok
+test browser::live::navigation_gate_tests::navigation_of_one_target_leaves_the_other_target_approved ... ok
+test browser::live::navigation_gate_tests::registry_demotion_is_exact_about_session_and_target ... ok
+test browser::cdp_backend::snapshot::tests::a_single_renderer_page_costs_no_child_enumeration ... ok
+test browser::live::navigation_gate_tests::registering_an_operation_installs_the_registry_sink_on_its_owner ... ok
+test browser::live::control::tests::expiry_closes_without_waiting_for_another_input_and_errors_never_report_success ... ok
+test browser::live::navigation_gate_tests::sub_frame_navigation_is_not_a_page_boundary ... ok
+test browser::live::navigation_gate_tests::unattributable_navigation_events_fail_closed_for_every_target_of_the_session ... ok
+test browser::live::navigation_gate_tests::same_document_navigation_demotes_and_fences ... ok
+test browser::live::navigation_gate_tests::obscura_stale_loader_navigation_still_fences ... ok
+test browser::live::navigation_gate_tests::top_level_frame_navigated_demotes_safe_revokes_grants_and_fences_viewer ... ok
+test browser::live::navigation_gate_tests::same_document_navigation_of_a_known_other_frame_is_ignored ... ok
+test browser::live::owner_registry::tests::ended_owner_rejects_registration_lookup_and_prepared_lease ... ok
+test browser::live::owner_registry::tests::old_registration_and_late_callbacks_fail_closed_after_replacement ... ok
+test browser::live::owner_registry::tests::destroyed_target_rejects_record_and_lease_without_affecting_other_targets ... ok
+test browser::live::owner_registry::tests::strong_owner_and_engine_lifetime_survives_per_call_record_drop ... ok
+test browser::live::resource::tests::binding_source_and_provenance_cannot_change_across_revisions ... ok
+test browser::live::owner_registry::tests::same_profile_and_target_different_sessions_do_not_cross_route ... ok
+test browser::live::resource::tests::close_emits_exact_event_once_and_leaves_a_tombstone ... ok
+test browser::live::resource::tests::close_target_and_session_are_exact_about_profile_session_and_target ... ok
+test browser::live::resource::tests::expired_resources_are_never_active_and_sweep_emits_expired_once ... ok
+test browser::live::resource::tests::companion_candidates_are_design_companion_only_and_bounded ... ok
+test browser::live::resource::tests::invalid_refused_artifact_and_empty_drafts_fail_closed ... ok
+test browser::live::resource::tests::owner_scoped_lookup_is_generic_for_other_principals ... ok
+test browser::live::resource::tests::managed_provenance_must_pair_with_managed_source ... ok
+test browser::live::resource::tests::refusal_event_drives_grant_revocation ... ok
+test browser::live::resource::tests::refused_draft_closes_the_live_resource_in_the_same_step ... ok
+test browser::live::resource::tests::revisions_are_monotonic_per_resource_and_stale_cas_loses ... ok
+test browser::live::stream_hub::tests::dropping_hub_terminates_receiver ... ok
+test browser::live::stream_hub::tests::late_subscriber_gets_current_frame_immediately ... ok
+test browser::live::owner_registry::tests::tombstones_are_bounded_and_old_tokens_stay_dead_after_eviction ... ok
+test browser::live::stream_hub::tests::slow_subscriber_sees_only_latest_and_counts_skipped ... ok
+test browser::live::resource::tests::resource_ids_are_opaque_and_serialization_has_no_url_or_secret ... ok
+test browser::live::stream_hub::tests::publish_without_subscribers_never_blocks_and_resubscribe_gets_latest ... ok
+test browser::live::tests::an_old_fetch_feed_going_away_does_not_unhook_its_replacement ... ok
+test browser::live::tests::cede_keeps_shared_consumers_but_owner_retirement_closes_them ... ok
+test browser::live::tests::a_dropped_recording_tap_stops_a_screencast_nobody_else_holds ... ok
+test browser::live::tests::concurrent_attaches_elect_exactly_one_owner ... ok
+test browser::cdp_backend::snapshot::tests::a_snapshot_carries_structured_state_and_bumps_the_generation ... ok
+test browser::live::resource::tests::caps_fail_closed_and_tombstones_make_room ... ok
+test browser::live::tests::full_fetch_feed_closes_its_target_instead_of_leaving_paused_requests ... ok
+test browser::live::tests::claimed_but_unacked_frames_are_acked_when_the_recording_tap_goes_away ... ok
+test browser::live::tests::lag_close_target_is_suppressed_when_a_fresh_fetch_slot_is_registered ... ok
+test browser::live::tests::lag_terminates_streams_and_closes_fetch_targets_without_continuing_requests ... ok
+test browser::cdp_backend::actions::tests::a_timeout_resolving_the_node_is_a_busy_engine_not_a_stale_ref ... ok
+test browser::live::tests::retired_owner_refuses_attach_and_never_claims_ownership ... ok
+test browser::live::tests::target_aware_stop_helper_skips_a_re_armed_screencast_for_the_same_target ... ok
+test browser::cdp_backend::dialog::tests::an_engine_timeout_keeps_the_gate_up ... ok
+test browser::live::tests::target_destroyed_after_start_completes_stops_the_orphan_screencast ... ok
+test browser::cdp_backend::navigate::tests::a_new_loader_id_resets_the_tabs_ref_table ... ok
+test browser::cdp_backend::migration::tests::an_engine_barrier_during_export_is_engine_busy_not_engine_failure ... ok
+test browser::live::tests::target_destroyed_closes_control_recording_fetch_and_viewer_together ... ok
+test browser::live::viewer_backend::tests::control_key_is_the_exact_session_and_target_pair ... ok
+test browser::live::tests::terminal_sink_registered_before_owner_end_is_told_exactly_once ... ok
+test browser::live::tests::terminal_sink_registered_after_owner_end_gets_the_end_replayed ... ok
+test browser::live::viewer_backend::tests::control_for_rebinds_after_a_dead_map_entry_but_reuses_a_live_one ... ok
+test browser::live::viewer_backend::tests::foreign_session_same_target_id_never_reuses_or_evicts_the_owners_control ... ok
+test browser::live::viewer_backend::tests::no_exact_registration_or_token_means_no_attach_or_dispatch ... ok
+test browser::live::viewer_backend::tests::prepare_uses_the_registry_resource_and_rejects_bad_resources_before_attach ... ok
+test browser::live::viewer_backend::tests::prepare_failure_after_attach_closes_only_the_screencast_it_started ... ok
+test builtin_tools::browser_tools::click::tests::a_cdp_profile_lowers_a_coordinate_double_click_instead_of_refusing_it ... ok
+test builtin_tools::browser_tools::approval_wiring_census::every_browser_module_is_in_the_census ... ok
+test browser::live::viewer_backend::tests::prepared_exact_routes_dispatch_only_to_their_owner_and_retire_fail_closed ... ok
+test builtin_tools::browser_tools::click::tests::double_click_by_coordinates_is_refused_before_the_approval_gate ... ok
+test builtin_tools::browser_tools::click::tests::test_click_malformed_call_does_not_consume_approval ... ok
+test builtin_tools::browser_tools::click::tests::test_click_no_target_is_graceful_failure ... ok
+test builtin_tools::browser_tools::click::tests::test_click_with_coordinates ... ok
+test builtin_tools::browser_tools::click::tests::test_click_with_ref_id ... ok
+test builtin_tools::browser_tools::click::tests::the_description_names_the_driver_that_supports_a_coordinate_double_click ... ok
+test builtin_tools::browser_tools::click::tests::test_double_click_with_ref_id ... ok
+test builtin_tools::browser_tools::click::tests::a_coordinate_double_click_reaches_the_page_on_a_cdp_profile ... ok
+test builtin_tools::browser_tools::cookies::tests::test_cookies_malformed_set_does_not_consume_approval ... ok
+test builtin_tools::browser_tools::console::tests::test_console_read ... ok
+test builtin_tools::browser_tools::cookies::tests::test_to_op_get_and_delete_require_name ... ok
+test builtin_tools::browser_tools::cookies::tests::test_cookies_set_without_value_fails_before_backend ... ok
+test builtin_tools::browser_tools::cookies::tests::test_to_op_set_requires_name_and_value ... ok
+test builtin_tools::browser_tools::cookies::tests::test_cookies_list_degrades_without_browser ... ok
+test builtin_tools::browser_tools::dialog::tests::test_dialog_accept_degrades_without_browser ... ok
+test builtin_tools::browser_tools::dialog::tests::test_dialog_clean_prompt_text_not_blocked ... ok
+test builtin_tools::browser_tools::drag::tests::test_drag_degrades_without_browser ... ok
+test builtin_tools::browser_tools::dialog::tests::test_dialog_blocks_secret_prompt_text ... ok
+test builtin_tools::browser_tools::emulate::tests::approval_target_names_headers_but_never_their_values ... ok
+test builtin_tools::browser_tools::emulate::tests::test_empty_options_is_rejected_without_browser ... ok
+test builtin_tools::browser_tools::emulate::tests::test_args_flatten_deserialization ... ok
+test builtin_tools::browser_tools::emulate::tests::test_out_of_range_cpu_throttle_is_rejected ... ok
+test builtin_tools::browser_tools::emulate::tests::test_presentation_only_overrides_skip_the_gate ... ok
+test builtin_tools::browser_tools::emulate::tests::test_secret_bearing_header_is_blocked_before_approval ... ok
+test browser::live::navigation_gate_tests::receiver_taken_after_a_boundary_never_sees_the_previous_documents_frame ... ok
+test builtin_tools::browser_tools::emulate::tests::test_valid_options_degrade_without_browser ... ok
+test builtin_tools::browser_tools::emulate::tests::the_description_excepts_exactly_the_axes_the_default_engine_refuses ... ok
+test builtin_tools::browser_tools::approval_wiring_census::every_gated_browser_tool_is_constructed_with_the_approval_policy ... ok
+test builtin_tools::browser_tools::evaluate::tests::process_evaluate_result_wraps_json_object ... ok
+test builtin_tools::browser_tools::evaluate::tests::process_evaluate_result_wraps_json_primitives ... ok
+test builtin_tools::browser_tools::evaluate::tests::process_evaluate_result_wraps_non_json_text ... ok
+test builtin_tools::browser_tools::evaluate::tests::process_evaluate_result_redacts_nested_secret_in_json_object ... ok
+test builtin_tools::browser_tools::evaluate::tests::process_evaluate_result_wraps_prompt_injection_in_json_array_value ... ok
+test builtin_tools::browser_tools::evaluate::tests::process_evaluate_result_wraps_prompt_injection_in_json_string ... ok
+test builtin_tools::browser_tools::evaluate::tests::test_evaluate_empty_script ... ok
+test builtin_tools::browser_tools::evaluate::tests::test_evaluate_script ... ok
+test builtin_tools::browser_tools::evaluate::tests::test_evaluate_blocks_secret_bearing_script ... ok
+test builtin_tools::browser_tools::exec::tests::a_blocked_navigate_step_aborts_the_procedure ... ok
+test builtin_tools::browser_tools::evaluate::tests::test_evaluate_secret_scan_precedes_approval ... ok
+test builtin_tools::browser_tools::exec::tests::a_dialog_accept_latches_refs_and_a_dismiss_does_not ... ok
+test builtin_tools::browser_tools::exec::tests::a_dialog_step_answers_the_page_without_echoing_the_prompt_text ... ok
+test builtin_tools::browser_tools::exec::tests::a_dialog_prompt_carrying_a_credential_is_refused_before_any_execution ... ok
+test builtin_tools::browser_tools::exec::tests::a_presented_truncated_snapshot_step_emits_the_controls_section_within_budget ... ok
+test builtin_tools::browser_tools::exec::tests::a_failing_write_step_redacts_the_backend_error ... ok
+test builtin_tools::browser_tools::exec::tests::a_read_on_a_blocked_page_aborts_before_the_read ... ok
+test builtin_tools::browser_tools::exec::tests::a_repeat_inside_a_repeat_is_refused_at_any_depth ... ok
+test builtin_tools::browser_tools::exec::tests::a_read_step_output_is_redacted_and_fenced ... ok
+test builtin_tools::browser_tools::exec::tests::a_screenshot_step_arrives_as_a_viewable_image_not_shredded_base64 ... ok
+test builtin_tools::browser_tools::exec::tests::a_snapshot_step_clears_the_ref_latch ... ok
+test browser::live::control::tests::dispatch_busy_at_250ms_and_cancelled_dispatch_has_no_effect ... ok
+test builtin_tools::browser_tools::exec::tests::a_truncated_snapshot_step_cuts_on_a_line_boundary_without_splitting_a_ref ... ok
+test builtin_tools::browser_tools::exec::tests::an_evaluate_step_masks_a_credential_the_page_returned ... ok
+test builtin_tools::browser_tools::exec::tests::approval_is_decided_and_recorded_only_for_steps_that_run ... ok
+test builtin_tools::browser_tools::exec::tests::both_faces_of_the_dialog_verb_hand_the_matcher_the_same_target ... ok
+test builtin_tools::browser_tools::exec::tests::condition_requires_exactly_one_field ... ok
+test builtin_tools::browser_tools::exec::tests::execution_aborts_at_the_first_failure ... ok
+test builtin_tools::browser_tools::exec::tests::if_counts_the_larger_arm_against_the_cap ... ok
+test builtin_tools::browser_tools::exec::tests::if_condition_error_aborts_the_procedure ... ok
+test builtin_tools::browser_tools::exec::tests::if_runs_the_arm_the_condition_selects ... ok
+test builtin_tools::browser_tools::exec::tests::invalid_action_list_is_graceful_failure ... ok
+test builtin_tools::browser_tools::exec::tests::nested_steps_keep_the_existing_approval_mapping ... ok
+test builtin_tools::browser_tools::exec::tests::one_call_carries_a_navigate_act_read_procedure ... ok
+test builtin_tools::browser_tools::exec::tests::plan_actions_expands_repeat_and_enforces_cap ... ok
+test builtin_tools::browser_tools::exec::tests::plan_actions_rejects_a_targetless_type ... ok
+test builtin_tools::browser_tools::exec::tests::plan_actions_rejects_an_oversized_evaluate_script ... ok
+test builtin_tools::browser_tools::exec::tests::plan_actions_rejects_bad_wait_combo ... ok
+test builtin_tools::browser_tools::exec::tests::plan_actions_rejects_empty_action_list ... ok
+test builtin_tools::browser_tools::exec::tests::plan_actions_rejects_oversized_action_list ... ok
+test builtin_tools::browser_tools::exec::tests::plan_actions_rejects_targetless_click ... ok
+test builtin_tools::browser_tools::exec::tests::plan_actions_resolves_targets_and_waits ... ok
+test builtin_tools::browser_tools::exec::tests::ref_step_after_navigate_is_refused_before_dispatch ... ok
+test builtin_tools::browser_tools::exec::tests::repeat_iterations_are_hard_capped_at_twenty ... ok
+test builtin_tools::browser_tools::exec::tests::repeat_with_until_already_true_runs_zero_iterations ... ok
+test builtin_tools::browser_tools::exec::tests::repeat_runs_until_the_condition_holds ... ok
+test builtin_tools::browser_tools::exec::tests::resolve_wait_maps_each_single_condition ... ok
+test builtin_tools::browser_tools::exec::tests::resolve_wait_rejects_zero_and_multiple_conditions ... ok
+test builtin_tools::browser_tools::exec::tests::the_log_reads_are_redacted_and_fenced_like_every_other_page_read ... ok
+test builtin_tools::browser_tools::exec::tests::secret_pre_scan_refuses_before_any_execution ... ok
+test builtin_tools::browser_tools::exec::tests::until_condition_error_aborts_not_continues ... ok
+test builtin_tools::browser_tools::fill_form::tests::an_empty_batch_is_refused_before_the_approval_gate ... ok
+test builtin_tools::browser_tools::fill_form::tests::test_fill_form_blocks_secret_value ... ok
+test builtin_tools::browser_tools::fill_form::tests::test_fill_form_clean_values_not_blocked ... ok
+test builtin_tools::browser_tools::fill_form::tests::test_fill_form_empty_fields ... ok
+test builtin_tools::browser_tools::fill_form::tests::test_fill_form_multiple_fields ... ok
+test builtin_tools::browser_tools::fill_form::tests::test_fill_form_unaddressable_field_does_not_consume_approval ... ok
+test builtin_tools::browser_tools::hover::tests::no_target_degrades_with_the_contract_instead_of_erroring ... ok
+test builtin_tools::browser_tools::hover::tests::test_hover_with_ref_id ... ok
+test builtin_tools::browser_tools::navigate::tests::ssrf_refusal_precedes_the_approval_gate ... ok
+test builtin_tools::browser_tools::navigate::tests::test_navigate_back ... ok
+test builtin_tools::browser_tools::navigate::tests::test_navigate_blocked_by_approval_policy ... ok
+test builtin_tools::browser_tools::navigate::tests::test_navigate_forward ... ok
+test builtin_tools::browser_tools::driver_claim_census::no_browser_tool_claims_a_cdp_served_verb_is_managed_only ... ok
+test builtin_tools::browser_tools::navigate::tests::test_navigate_goto_blocks_ssrf ... ok
+test builtin_tools::browser_tools::navigate::tests::test_navigate_goto_allows_public_url ... ok
+test builtin_tools::browser_tools::navigate::tests::test_navigate_refresh ... ok
+test builtin_tools::browser_tools::network::tests::an_abort_rule_carries_no_response_material ... ok
+test builtin_tools::browser_tools::network::tests::mock_add_rejects_a_body_over_256_kib ... ok
+test builtin_tools::browser_tools::network::tests::mock_add_rejects_an_empty_url_contains ... ok
+test builtin_tools::browser_tools::network::tests::mock_add_validates_before_the_approval_gate ... ok
+test builtin_tools::browser_tools::network::tests::mock_clear_requires_an_explicit_scope ... ok
+test builtin_tools::browser_tools::network::tests::mock_list_degrades_without_a_browser ... ok
+test builtin_tools::browser_tools::network::tests::mock_remove_requires_a_rule_id ... ok
+test builtin_tools::browser_tools::network::tests::test_network_read_degrades_without_browser ... ok
+test builtin_tools::browser_tools::network::tests::the_default_action_is_log_so_existing_calls_are_unchanged ... ok
+test browser::live::tests::a_cancelled_attach_leaves_no_stream_and_no_screencast ... ok
+test browser::live::tests::slow_or_hidden_viewer_does_not_stop_recording ... ok
+test builtin_tools::browser_tools::open::tests::an_engine_override_against_a_live_other_engine_names_switch_engine ... ok
+test builtin_tools::browser_tools::open::tests::test_browser_open_allows_public ... ok
+test builtin_tools::browser_tools::open::tests::test_browser_open_blocks_ssrf_private_ip ... ok
+test builtin_tools::browser_tools::open::tests::test_browser_open_ssrf_blocks_private ... ok
+test browser::live::tests::one_profile_has_one_connection_and_per_target_streams ... ok
+test builtin_tools::browser_tools::operation_publish::tests::failed_navigation_publishes_nothing_and_keeps_its_error ... ok
+test builtin_tools::browser_tools::emulate::tests::test_user_agent_override_is_gated ... ok
+test builtin_tools::browser_tools::emulate::tests::test_extra_http_headers_are_gated_before_the_backend ... ok
+test builtin_tools::browser_tools::network::tests::a_denied_mock_add_never_reaches_the_backend ... ok
+test browser::cdp_backend::tabs::tests::an_empty_target_enumeration_does_not_hide_the_tab_we_created ... ok
+test browser::cdp_backend::tabs::tests::open_tab_records_the_tabs_identity_and_landed_url ... ok
+test browser::live::tests::destroying_a_target_during_start_does_not_report_a_successful_attach ... ok
+test builtin_tools::browser_tools::operation_publish::tests::cdp_navigation_publishes_the_exact_session_and_target ... ok
+test builtin_tools::browser_tools::present::tests::a_connection_scope_is_never_an_identity ... ok
+test builtin_tools::browser_tools::present::tests::browser_present_safe_input_publishes_pending_and_issues_no_grant ... ok
+test builtin_tools::browser_tools::present::tests::browser_present_with_a_live_owner_route_publishes ... ok
+test builtin_tools::browser_tools::open::tests::test_browser_open_blocked_domain_list ... ok
+test builtin_tools::browser_tools::present::tests::foreign_caller_user_cannot_override_the_run_principal ... ok
+test builtin_tools::browser_tools::present::tests::foreign_principal_or_turn_cannot_revise_or_refuse_resource ... ok
+test builtin_tools::browser_tools::present::tests::missing_turn_session_run_target_or_bus_publishes_nothing ... ok
+test builtin_tools::browser_tools::present::tests::present_identity_comes_only_from_the_run_scope ... ok
+test builtin_tools::browser_tools::present::tests::producer_redaction_never_yields_safe ... ok
+test builtin_tools::browser_tools::present::tests::present_producer_preserves_turn_binding_and_service_exit ... ok
+test builtin_tools::browser_tools::present::tests::pre_existing_registration_is_not_retired_when_the_route_is_lost ... ok
+test builtin_tools::browser_tools::present::tests::refusal_publish_and_revision_close_and_revoke_without_resource_event ... ok
+test builtin_tools::browser_tools::pdf::tests::test_pdf_degrades_without_browser ... ok
+test builtin_tools::browser_tools::present::tests::run_scope_principal_publishes_without_any_caller_identity ... ok
+test builtin_tools::browser_tools::present::tests::revise_safe_input_is_pending_revokes_grants_and_issues_none ... ok
+test builtin_tools::browser_tools::present::tests::unattached_verdict_has_no_publishable_principal ... ok
+test builtin_tools::browser_tools::pdf::tests::test_pdf_refuses_a_protected_output_path ... ok
+test builtin_tools::browser_tools::present::tests::route_lost_after_publish_closes_the_resource_and_reports_owner_gone ... ok
+test builtin_tools::browser_tools::present::tests::single_user_run_without_attached_person_publishes_as_the_owner ... ok
+test builtin_tools::browser_tools::principal_profile_census::a_run_with_no_person_selects_no_profile_on_a_server_with_users ... ok
+test builtin_tools::browser_tools::present::tests::with_event_bus_does_not_rebind_an_already_bound_producer ... ok
+test builtin_tools::browser_tools::press_key::tests::test_press_key ... ok
+test builtin_tools::browser_tools::principal_profile_census::a_room_run_without_a_speaker_gets_no_one_s_browser ... ok
+test builtin_tools::browser_tools::present::tests::runtime_owner_registration_failure_is_owner_gone_not_not_configured ... ok
+test builtin_tools::browser_tools::principal_profile_census::the_raw_key_scan_sees_a_raw_profile_handed_to_backend_for_key ... ok
+test builtin_tools::browser_tools::principal_profile_census::the_tool_face_composes_the_ambient_principal ... ok
+test builtin_tools::browser_tools::profile_tool::tests::a_member_lists_configured_names_with_its_own_liveness ... ok
+test builtin_tools::browser_tools::profile_tool::tests::test_profile_get_state_existing ... ok
+test builtin_tools::browser_tools::profile_tool::tests::test_profile_get_state_missing ... ok
+test builtin_tools::browser_tools::profile_tool::tests::test_profile_list ... ok
+test builtin_tools::browser_tools::principal_profile_census::the_backend_helpers_drive_the_callers_own_profile ... ok
+test builtin_tools::browser_tools::qa::tests::a_met_expectation_with_all_checks_off_passes_cleanly ... ok
+test builtin_tools::browser_tools::qa::tests::a_passing_run_takes_no_evidence_screenshot ... ok
+test builtin_tools::browser_tools::qa::tests::a_run_with_nothing_to_check_is_refused ... ok
+test builtin_tools::browser_tools::qa::tests::a_selector_that_stays_fails_gone_selector ... ok
+test builtin_tools::browser_tools::qa::tests::actionable_network_failures_fail_and_benign_ones_warn ... ok
+test builtin_tools::browser_tools::principal_profile_census::every_backend_helper_starts_from_the_callers_resolved_key ... ok
+test builtin_tools::browser_tools::qa::tests::call_degrades_without_a_browser ... ok
+test builtin_tools::browser_tools::qa::tests::description_stays_within_the_80_byte_discipline ... ok
+test builtin_tools::browser_tools::qa::tests::empty_expectations_are_refused ... ok
+test builtin_tools::browser_tools::qa::tests::error_lines_have_exactly_one_owner ... ok
+test builtin_tools::browser_tools::qa::tests::expected_text_arrays_are_capped ... ok
+test builtin_tools::browser_tools::qa::tests::expected_text_parses_both_spellings ... ok
+test builtin_tools::browser_tools::qa::tests::failed_expectations_return_a_successful_tool_result_with_passed_false ... ok
+test builtin_tools::browser_tools::qa::tests::matched_error_lines_are_unverified_not_pass ... ok
+test builtin_tools::browser_tools::qa::tests::new_error_lines_fail_check_errors ... ok
+test builtin_tools::browser_tools::qa::tests::new_warn_lines_warn_without_failing ... ok
+test builtin_tools::browser_tools::qa::tests::off_cdp_every_enabled_buffer_check_is_unverified ... ok
+test builtin_tools::browser_tools::qa::tests::qa_on_a_dead_tab_answers_tab_gone_immediately ... ok
+test builtin_tools::browser_tools::qa::tests::the_n_plus_1th_error_fails_and_the_allowance_stays_unconfirmed ... ok
+test builtin_tools::browser_tools::qa::tests::the_wire_shape_matches_the_spec ... ok
+test builtin_tools::browser_tools::qa::tests::timeout_is_clamped_to_the_qa_window ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::a_failed_check_blocks_passing_without_unverified ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::all_passing_checks_yield_a_clean_pass ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::an_empty_check_list_passes_trivially ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::apple_touch_icon_is_benign ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::arbitrary_image_failure_is_actionable ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::classification_is_case_insensitive ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::document_failure_is_actionable ... ok
+test builtin_tools::browser_tools::open::tests::test_browser_open_allowlist_mode ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::dot_map_substring_in_the_middle_is_actionable ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::doubleclick_is_benign ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::failure_and_unverified_are_both_reported ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::favicon_ico_is_benign ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::google_analytics_is_benign ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::googletagmanager_is_benign ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::script_failure_is_actionable ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::sentry_is_benign ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::sourcemap_suffix_is_benign ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::subtract_absorbs_exactly_n_occurrences_all_matched_nothing_new ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::subtract_counts_occurrences_the_n_plus_1th_occurrence_is_new ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::subtract_does_not_mutate_the_baseline ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::subtract_normalizes_whitespace_before_fingerprinting ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::subtract_preserves_final_read_order_within_each_bucket ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::subtract_treats_unseen_fingerprints_as_new ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::subtract_with_empty_baseline_reports_everything_new ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::telemetry_path_is_benign ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::unverified_checks_block_passing_and_are_reported_in_summary ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::warnings_do_not_affect_passed ... ok
+test builtin_tools::browser_tools::qa_verdict::tests::xhr_api_failure_is_actionable ... ok
+test builtin_tools::browser_tools::record::tests::action_is_required_there_is_no_default ... ok
+test builtin_tools::browser_tools::qa::tests::a_failing_run_with_screenshot_requested_attaches_the_evidence ... ok
+test builtin_tools::browser_tools::record::tests::description_stays_within_the_80_byte_discipline ... ok
+test builtin_tools::browser_tools::record::tests::start_rejects_a_path_without_an_extension ... ok
+test builtin_tools::browser_tools::record::tests::every_action_degrades_without_a_browser ... ok
+test builtin_tools::browser_tools::record::tests::start_rejects_quality_out_of_range ... ok
+test builtin_tools::browser_tools::record::tests::start_rejects_fps_out_of_range ... ok
+test builtin_tools::browser_tools::record::tests::start_validates_before_the_approval_gate ... ok
+test builtin_tools::browser_tools::record::tests::stop_without_a_recording_says_so_plainly ... ok
+test builtin_tools::browser_tools::record::tests::a_denied_start_never_reaches_the_backend ... ok
+test builtin_tools::browser_tools::record::tests::stop_and_status_skip_the_gate ... ok
+test builtin_tools::browser_tools::recovery::tests::attach_appends_a_parseable_trailer_without_hiding_the_error ... ok
+test builtin_tools::browser_tools::recovery::tests::every_browser_error_variant_has_a_category ... ok
+test builtin_tools::browser_tools::recovery::tests::human_has_control_suggests_no_tool ... ok
+test builtin_tools::browser_tools::recovery::tests::registry_hints_are_static_templates ... ok
+test builtin_tools::browser_tools::recovery::tests::unknown_is_not_a_dumping_ground ... ok
+test builtin_tools::browser_tools::recovery::tests::user_decision_and_unknown_categories_suggest_nothing ... ok
+test builtin_tools::browser_tools::resize::tests::zero_dimension_degrades_with_the_contract_instead_of_erroring ... ok
+test builtin_tools::browser_tools::resize::tests::test_resize_degrades_without_browser ... ok
+test builtin_tools::browser_tools::screenshot::tests::screenshot_output_is_hoisted_as_a_real_image_block ... ok
+test builtin_tools::browser_tools::screenshot::tests::test_screenshot_full_page ... ok
+test builtin_tools::browser_tools::screenshot::tests::test_screenshot_default_args ... ok
+test builtin_tools::browser_tools::operation_publish::tests::publication_failure_does_not_change_the_operation_result ... ok
+test builtin_tools::browser_tools::scroll::tests::test_scroll_down ... ok
+test builtin_tools::browser_tools::select::tests::test_select_blocks_secret_value ... ok
+test builtin_tools::browser_tools::select::tests::test_select_malformed_call_does_not_consume_approval ... ok
+test builtin_tools::browser_tools::select::tests::test_select_clean_value_not_blocked ... ok
+test builtin_tools::browser_tools::select::tests::test_select_no_target_is_graceful_failure ... ok
+test builtin_tools::browser_tools::session::tests::capabilities_needs_no_name_no_directory_and_no_approval ... ok
+test builtin_tools::browser_tools::select::tests::test_select_with_ref_id ... ok
+test builtin_tools::browser_tools::session::tests::save_without_a_name_refuses_instead_of_guessing ... ok
+test builtin_tools::browser_tools::session::tests::switch_engine_without_an_engine_does_not_consume_an_approval ... ok
+test builtin_tools::browser_tools::session::tests::switch_engine_is_gated_before_the_manager ... ok
+test builtin_tools::browser_tools::screenshot::tests::describe_layers_go_through_the_egress_chokepoint ... ok
+test builtin_tools::browser_tools::session::tests::test_session_bad_name_does_not_consume_approval ... ok
+test builtin_tools::browser_tools::session::tests::test_session_rejects_bad_name_before_backend ... ok
+test builtin_tools::browser_tools::session::tests::test_session_save_degrades_without_browser ... ok
+test builtin_tools::browser_tools::session::tests::test_resolve_session_path_rejects_traversal ... ok
+test builtin_tools::browser_tools::session::tests::the_catalog_serves_this_tools_own_description ... ok
+test builtin_tools::browser_tools::session::tests::test_session_load_is_gated_before_the_backend ... ok
+test builtin_tools::browser_tools::session::tests::the_description_points_at_the_action_and_does_not_carry_the_table ... ok
+test builtin_tools::browser_tools::snapshot::tests::a_hostile_page_title_is_contained_in_the_message_rather_than_forging_a_ref ... ok
+test builtin_tools::browser_tools::snapshot::tests::a_null_state_tree_is_refused_rather_than_shipped_as_a_json_body ... ok
+test builtin_tools::browser_tools::session::tests::test_session_save_is_gated_before_the_backend ... ok
+test builtin_tools::browser_tools::snapshot::tests::an_unknown_format_is_refused_rather_than_defaulted ... ok
+test builtin_tools::browser_tools::snapshot::tests::an_unknown_page_url_is_said_rather_than_left_blank ... ok
+test builtin_tools::browser_tools::snapshot::tests::json_on_a_text_driver_is_refused_and_names_the_cdp_driver ... ok
+test builtin_tools::browser_tools::snapshot::tests::max_chars_is_clamped_at_both_ends ... ok
+test builtin_tools::browser_tools::snapshot::tests::a_backend_on_the_default_presentation_keeps_the_old_pipeline_byte_for_byte ... ok
+test builtin_tools::browser_tools::principal_profile_census::no_browser_tool_addresses_live_state_with_the_raw_profile_argument ... ok
+test builtin_tools::browser_tools::snapshot::tests::test_snapshot_returns_snapshot ... ok
+test builtin_tools::browser_tools::snapshot::tests::the_description_states_the_obscura_ref_gap_together_with_its_door ... ok
+test builtin_tools::browser_tools::snapshot::tests::the_json_format_returns_the_page_state_tree_and_parses ... ok
+test builtin_tools::browser_tools::snapshot::tests::the_snapshot_output_names_the_page_and_counts_only_visible_refs ... ok
+test builtin_tools::browser_tools::snapshot::tests::the_tool_reads_through_snapshot_presented_not_snapshot ... ok
+test browser::live::tests::human_input_waits_on_the_mutation_gate_and_times_out_with_a_clear_error ... ok
+test builtin_tools::browser_tools::operation_publish::tests::publish_record_without_a_bus_is_denied ... ok
+test builtin_tools::browser_tools::operation_publish::tests::without_a_producer_the_plain_operation_runs_and_nothing_publishes ... ok
+test builtin_tools::browser_tools::tabs::tests::listing_is_parsed_before_the_egress_transforms_are_applied ... ok
+test builtin_tools::browser_tools::tabs::tests::every_declared_browser_tool_module_is_scanned ... ok
+test builtin_tools::browser_tools::tabs::tests::closing_a_tab_stops_tracking_it ... ok
+test builtin_tools::browser_tools::tabs::tests::test_tabs_close ... ok
+test builtin_tools::browser_tools::tabs::tests::an_over_budget_listing_reports_the_rows_it_dropped ... ok
+test builtin_tools::browser_tools::tabs::tests::test_tabs_list ... ok
+test builtin_tools::browser_tools::tabs::tests::the_scan_actually_recognises_every_shape_it_claims ... ok
+test builtin_tools::browser_tools::tabs::tests::test_tabs_switch ... ok
+test builtin_tools::browser_tools::tabs::tests::tab_urls_are_still_scrubbed_and_redacted ... ok
+test builtin_tools::browser_tools::tests::approval_display_target_keeps_navigation_origin_but_drops_the_query ... ok
+test builtin_tools::browser_tools::tests::approval_display_target_never_echoes_the_payload ... ok
+test builtin_tools::browser_tools::tests::bound_content_head_tail_is_char_safe_on_multibyte ... ok
+test builtin_tools::browser_tools::tests::bound_content_head_tail_keeps_short_text_intact ... ok
+test builtin_tools::browser_tools::tests::backend_error_text_carries_the_recovery_trailer ... ok
+test builtin_tools::browser_tools::tests::bound_content_head_tail_preserves_newest_entries ... ok
+test builtin_tools::browser_tools::tests::bound_content_is_char_safe_on_multibyte ... ok
+test builtin_tools::browser_tools::tests::bound_content_keeps_short_text_intact ... ok
+test builtin_tools::browser_tools::tests::bound_content_truncates_on_line_boundary_without_splitting_refs ... ok
+test builtin_tools::browser_tools::tests::backend_error_text_bounds_and_redacts_stderr ... ok
+test builtin_tools::browser_tools::exec::tests::a_truncated_exec_snapshot_offloads_the_whole_tree_under_its_own_tool_name ... ok
+test builtin_tools::browser_tools::tests::bound_screenshot_passes_through_non_image_bytes ... ok
+test builtin_tools::browser_tools::present::tests::expiry_sweep_and_expired_revision_revoke_and_emit_exact_closed ... ok
+test builtin_tools::browser_tools::tests::cross_profile_ref_is_unknown_not_a_panic ... ok
+test builtin_tools::browser_tools::tests::current_page_block_answers_about_the_row_the_caller_vetted ... ok
+test builtin_tools::browser_tools::tests::current_page_block_flags_internal_http_urls ... ok
+test builtin_tools::browser_tools::tests::precheck_refuses_a_retired_ref_as_navigated ... ok
+test builtin_tools::browser_tools::tests::precheck_skips_backends_without_a_ref_table ... ok
+test builtin_tools::browser_tools::tests::recovery_registry_entries_name_real_tools ... ok
+test builtin_tools::browser_tools::tests::redact_and_wrap_log_masks_secrets_and_emits_a_whole_fence ... ok
+test builtin_tools::browser_tools::tests::redact_wrap_masks_secrets_and_emits_a_whole_fence ... ok
+test builtin_tools::browser_tools::tests::ref_tools_precheck_before_they_dispatch ... ok
+test builtin_tools::browser_tools::tests::the_guarded_path_lists_tabs_exactly_once ... ok
+test builtin_tools::browser_tools::tabs::tests::no_browser_tool_formats_a_raw_backend_error ... ok
+test builtin_tools::browser_tools::tests::the_tool_layer_reads_the_selected_tab_not_the_last_line ... ok
+test builtin_tools::browser_tools::tests::url_drift_since_snapshot_is_named ... ok
+test builtin_tools::browser_tools::type_text::tests::test_type_malformed_call_does_not_consume_approval ... ok
+test builtin_tools::browser_tools::type_text::tests::test_type_with_ref_id ... ok
+test builtin_tools::browser_tools::tests::the_shape_gate_passes_non_minted_strings_before_any_table_lookup ... ok
+test builtin_tools::browser_tools::type_text::tests::test_type_without_ref_id_names_the_supported_targeting ... ok
+test builtin_tools::browser_tools::upload::tests::test_upload_degrades_without_browser ... ok
+test builtin_tools::browser_tools::upload::tests::test_upload_empty_paths_is_graceful_failure ... ok
+test builtin_tools::browser_tools::upload::tests::test_upload_refuses_a_protected_path_before_the_gate ... ok
+test builtin_tools::browser_tools::upload::tests::test_upload_refuses_a_relative_path ... ok
+test builtin_tools::browser_tools::wait_for::tests::an_interrupted_wait_does_not_report_a_verdict ... ok
+test builtin_tools::browser_tools::wait_for::tests::resolve_condition_maps_each_single_condition ... ok
+test builtin_tools::browser_tools::wait_for::tests::resolve_condition_maps_time_ms_to_a_clamped_delay ... ok
+test builtin_tools::browser_tools::wait_for::tests::resolve_condition_rejects_multiple_conditions ... ok
+test builtin_tools::browser_tools::wait_for::tests::resolve_condition_rejects_zero_conditions ... ok
+test builtin_tools::browser_tools::wait_for::tests::test_wait_for_two_conditions_is_graceful_failure ... ok
+test builtin_tools::browser_tools::wait_for::tests::test_wait_for ... ok
+test builtin_tools::browser_tools::wait_for::tests::test_wait_for_zero_conditions_is_graceful_failure ... ok
+test builtin_tools::browser_tools::wait_for::tests::the_interrupted_flag_is_absent_from_an_ordinary_report ... ok
+test builtin_tools::browser_tools::wait_for::tests::timeout_is_clamped_to_safe_window ... ok
+test builtin_tools::browser_tools::wait_for::tests::wait_for_resolves_its_tab_through_the_guarded_helper ... ok
+test gateway::handlers::browser_viewer::tests::credentialless_implicit_owner_denies_all_three_viewer_methods ... ok
+test browser::cdp_backend::navigate::tests::a_navigation_that_times_out_still_runs_the_landing_audit ... FAILED
+test gateway::handlers::browser_viewer::tests::decide_rpc_missing_state_and_anonymous_callers_deny_generically ... ok
+test builtin_tools::browser_tools::tests::redact_and_wrap_masks_secrets_and_emits_a_whole_fence_when_truncating ... ok
+test gateway::handlers::browser_viewer::tests::decide_rpc_rejects_authority_fields_and_noncanonical_values_without_echo ... ok
+test gateway::handlers::browser_viewer::tests::decide_rpc_without_lifecycle_denies_owner_and_leaves_resource_untouched ... ok
+test gateway::handlers::browser_viewer::tests::issuer_registration_missing_state_and_connection_only_deny ... ok
+test gateway::handlers::browser_viewer::tests::decide_rpc_with_lifecycle_applies_owner_decision_and_denies_non_owner ... ok
+test gateway::server::browser_viewer_route::tests::oversized_json_body_is_refused_before_parsing ... ok
+test gateway::server::browser_viewer_route::tests::viewer_credential_cannot_cross_scope ... ok
+test gateway::handlers::browser_viewer::tests::issuer_rpc_owned_issue_and_revoke_enforce_identity_without_oracle ... ok
+test gateway::server::browser_viewer_route::tests::ws_full_session_frames_input_and_revoke ... ok
+test gateway::handlers::browser_viewer::tests::issuer_rpc_rejects_authority_fields_and_noncanonical_permissions ... ok
+test builtin_tools::browser_tools::tests::bound_screenshot_leaves_within_budget_bytes_untouched ... ok
+test gateway::server::browser_viewer_route::tests::ws_origin_mismatch_is_unauthorized ... ok
+test gateway::server::browser_viewer_route::tests::ws_unknown_grant_is_unauthorized ... ok
+test gateway::handlers::browser_viewer::tests::verified_member_issues_own_resource_and_foreign_verified_is_denied ... ok
+test gateway::server::browser_viewer_route::tests::ws_rejects_malformed_binary_and_oversize_hello ... ok
+test builtin_tools::browser_tools::qa::tests::a_dimension_the_driver_cannot_serve_lands_in_unverified_not_pass ... ok
+test builtin_tools::browser_tools::qa::tests::evidence_tails_carry_only_the_new_lines ... ok
+test builtin_tools::browser_tools::snapshot::tests::a_presented_truncated_snapshot_is_emitted_verbatim_and_the_full_text_is_offloaded ... ok
+test browser::cdp_backend::dialog::tests::an_engine_timeout_leaves_the_door_open ... ok
+test browser::cdp_backend::migration::tests::import_sets_the_same_cookies_and_reopens_every_tab_on_the_target ... ok
+test builtin_tools::browser_tools::snapshot::tests::offload_names_only_the_retrieval_tools_the_dispatch_can_call ... ok
+test builtin_tools::browser_tools::snapshot::tests::offload_persists_the_whole_tree_redacted ... ok
+test gateway::server::browser_viewer_route::tests::ws_without_hello_times_out ... ok
+test builtin_tools::browser_tools::exec::tests::two_cut_snapshots_in_one_exec_keep_two_blobs ... ok
+test builtin_tools::browser_tools::session::tests::a_completed_switch_labels_its_warnings_once_and_truthfully ... ok
+test browser::live::tests::a_lagging_dispatcher_counts_what_it_missed ... ok
+test builtin_tools::browser_tools::tests::bound_screenshot_downscales_oversized_capture ... ok
+test browser::cdp_backend::tests::the_dead_code_permit_is_gone_once_production_constructs_this_backend ... ok
+test builtin_tools::browser_tools::tests::bound_screenshot_enforces_byte_cap_on_dense_capture ... ok
+
+failures:
+
+---- browser::cdp_backend::recording::tests::a_second_start_on_the_same_tab_is_refused_with_the_existing_id stdout ----
+
+thread 'browser::cdp_backend::recording::tests::a_second_start_on_the_same_tab_is_refused_with_the_existing_id' (12560) panicked at src\browser\cdp_backend\recording.rs:1333:14:
+first start: NoFfmpeg { searched: ["ALEPH_FFMPEG env", "ffmpeg on PATH", "playwright bundled ffmpeg (ms-playwright/ffmpeg-1011)"] }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- browser::cdp_backend::recording::tests::a_destroyed_event_for_another_tab_leaves_the_recording_running stdout ----
+
+thread 'browser::cdp_backend::recording::tests::a_destroyed_event_for_another_tab_leaves_the_recording_running' (8880) panicked at src\browser\cdp_backend\recording.rs:1999:14:
+start: NoFfmpeg { searched: ["ALEPH_FFMPEG env", "ffmpeg on PATH", "playwright bundled ffmpeg (ms-playwright/ffmpeg-1011)"] }
+
+---- browser::cdp_backend::recording::tests::resolve_ffmpeg_finds_the_one_on_this_machines_path stdout ----
+
+thread 'browser::cdp_backend::recording::tests::resolve_ffmpeg_finds_the_one_on_this_machines_path' (3220) panicked at src\browser\cdp_backend\recording.rs:1086:38:
+ffmpeg resolves on this machine (PATH or bundle)
+
+---- browser::cdp_backend::recording::tests::a_target_destroyed_event_finalizes_the_recording_while_the_engine_lives stdout ----
+
+thread 'browser::cdp_backend::recording::tests::a_target_destroyed_event_finalizes_the_recording_while_the_engine_lives' (11948) panicked at src\browser\cdp_backend\recording.rs:1934:14:
+start: NoFfmpeg { searched: ["ALEPH_FFMPEG env", "ffmpeg on PATH", "playwright bundled ffmpeg (ms-playwright/ffmpeg-1011)"] }
+
+---- browser::cdp_backend::recording::tests::start_on_an_unwritable_path_fails_fast_without_residue stdout ----
+
+thread 'browser::cdp_backend::recording::tests::start_on_an_unwritable_path_fails_fast_without_residue' (10452) panicked at src\browser\cdp_backend\recording.rs:1411:9:
+expected PathNotWritable, got NoFfmpeg { searched: ["ALEPH_FFMPEG env", "ffmpeg on PATH", "playwright bundled ffmpeg (ms-playwright/ffmpeg-1011)"] }
+
+---- browser::cdp_backend::recording::tests::a_nonzero_encoder_exit_is_never_reported_as_complete stdout ----
+
+thread 'browser::cdp_backend::recording::tests::a_nonzero_encoder_exit_is_never_reported_as_complete' (12936) panicked at src\browser\cdp_backend\recording.rs:1724:14:
+start: Io(Os { code: 193, kind: Uncategorized, message: "%1 不是有效的 Win32 应用程序。" })
+
+---- browser::cdp_backend::recording::tests::start_then_frames_then_stop_produces_a_playable_file_and_an_honest_receipt stdout ----
+
+thread 'browser::cdp_backend::recording::tests::start_then_frames_then_stop_produces_a_playable_file_and_an_honest_receipt' (11204) panicked at src\browser\cdp_backend\recording.rs:1443:14:
+start: NoFfmpeg { searched: ["ALEPH_FFMPEG env", "ffmpeg on PATH", "playwright bundled ffmpeg (ms-playwright/ffmpeg-1011)"] }
+
+---- browser::cdp_backend::recording::tests::start_without_extension_is_refused_before_any_engine_call stdout ----
+
+thread 'browser::cdp_backend::recording::tests::start_without_extension_is_refused_before_any_engine_call' (12736) panicked at src\browser\cdp_backend\recording.rs:1381:9:
+expected NoExtension, got NoFfmpeg { searched: ["ALEPH_FFMPEG env", "ffmpeg on PATH", "playwright bundled ffmpeg (ms-playwright/ffmpeg-1011)"] }
+
+---- browser::cdp_backend::recording::tests::a_preexisting_stale_file_is_never_reported_complete stdout ----
+
+thread 'browser::cdp_backend::recording::tests::a_preexisting_stale_file_is_never_reported_complete' (8836) panicked at src\browser\cdp_backend\recording.rs:1876:14:
+start: Io(Os { code: 193, kind: Uncategorized, message: "%1 不是有效的 Win32 应用程序。" })
+
+---- browser::cdp_backend::recording::tests::tab_death_mid_recording_auto_finalizes_a_truncated_receipt stdout ----
+
+thread 'browser::cdp_backend::recording::tests::tab_death_mid_recording_auto_finalizes_a_truncated_receipt' (5640) panicked at src\browser\cdp_backend\recording.rs:1642:14:
+start: NoFfmpeg { searched: ["ALEPH_FFMPEG env", "ffmpeg on PATH", "playwright bundled ffmpeg (ms-playwright/ffmpeg-1011)"] }
+
+---- browser::cdp_backend::recording::tests::a_slow_encoder_drops_frames_instead_of_buffering_them stdout ----
+
+thread 'browser::cdp_backend::recording::tests::a_slow_encoder_drops_frames_instead_of_buffering_them' (2844) panicked at src\browser\cdp_backend\recording.rs:1573:14:
+start: Io(Os { code: 193, kind: Uncategorized, message: "%1 不是有效的 Win32 应用程序。" })
+
+---- browser::cdp_backend::recording::tests::ack_is_sent_only_after_the_frame_is_written stdout ----
+
+thread 'browser::cdp_backend::recording::tests::ack_is_sent_only_after_the_frame_is_written' (10048) panicked at src\browser\cdp_backend\recording.rs:1517:14:
+start: Io(Os { code: 193, kind: Uncategorized, message: "%1 不是有效的 Win32 应用程序。" })
+
+---- browser::cdp_backend::recording::tests::ffmpeg_death_mid_recording_is_detected_on_the_next_frame_write stdout ----
+
+thread 'browser::cdp_backend::recording::tests::ffmpeg_death_mid_recording_is_detected_on_the_next_frame_write' (464) panicked at src\browser\cdp_backend\recording.rs:1814:14:
+start: Io(Os { code: 193, kind: Uncategorized, message: "%1 不是有效的 Win32 应用程序。" })
+
+---- browser::cdp_backend::recording::tests::stop_kills_a_wedged_ffmpeg_and_says_so stdout ----
+
+thread 'browser::cdp_backend::recording::tests::stop_kills_a_wedged_ffmpeg_and_says_so' (3028) panicked at src\browser\cdp_backend\recording.rs:1777:14:
+start: Io(Os { code: 193, kind: Uncategorized, message: "%1 不是有效的 Win32 应用程序。" })
+
+---- browser::cdp_backend::tests::no_verb_is_left_unwired stdout ----
+
+thread 'browser::cdp_backend::tests::no_verb_is_left_unwired' (12136) panicked at src\browser\cdp_backend\mod.rs:1184:9:
+assertion `left == right` failed: the scanned list and this directory disagree; a file missing from the list is one this census never looks at
+  left: ["actions.rs", "cookies.rs", "dialog.rs", "evaluate.rs", "events.rs", "migration.rs", "mod.rs", "navigate.rs", "recording.rs", "routes.rs", "screenshot.rs", "snapshot.rs", "tabs.rs"]
+ right: ["actions.rs", "cookies.rs", "dialog.rs", "evaluate.rs", "events.rs", "migration.rs", "mod.rs", "navigate.rs", "operation.rs", "recording.rs", "routes.rs", "screenshot.rs", "snapshot.rs", "tabs.rs"]
+
+---- browser::cdp_backend::navigate::tests::a_navigation_that_times_out_still_runs_the_landing_audit stdout ----
+
+thread 'browser::cdp_backend::navigate::tests::a_navigation_that_times_out_still_runs_the_landing_audit' (6400) panicked at src\browser\cdp_backend\navigate.rs:530:9:
+the blocked tab must be quarantined, not merely reported: ["Target.attachToTarget", "Target.setDiscoverTargets", "Page.enable", "Runtime.enable", "Network.enable", "Page.navigate"]
+
+
+failures:
+    browser::cdp_backend::navigate::tests::a_navigation_that_times_out_still_runs_the_landing_audit
+    browser::cdp_backend::recording::tests::a_destroyed_event_for_another_tab_leaves_the_recording_running
+    browser::cdp_backend::recording::tests::a_nonzero_encoder_exit_is_never_reported_as_complete
+    browser::cdp_backend::recording::tests::a_preexisting_stale_file_is_never_reported_complete
+    browser::cdp_backend::recording::tests::a_second_start_on_the_same_tab_is_refused_with_the_existing_id
+    browser::cdp_backend::recording::tests::a_slow_encoder_drops_frames_instead_of_buffering_them
+    browser::cdp_backend::recording::tests::a_target_destroyed_event_finalizes_the_recording_while_the_engine_lives
+    browser::cdp_backend::recording::tests::ack_is_sent_only_after_the_frame_is_written
+    browser::cdp_backend::recording::tests::ffmpeg_death_mid_recording_is_detected_on_the_next_frame_write
+    browser::cdp_backend::recording::tests::resolve_ffmpeg_finds_the_one_on_this_machines_path
+    browser::cdp_backend::recording::tests::start_on_an_unwritable_path_fails_fast_without_residue
+    browser::cdp_backend::recording::tests::start_then_frames_then_stop_produces_a_playable_file_and_an_honest_receipt
+    browser::cdp_backend::recording::tests::start_without_extension_is_refused_before_any_engine_call
+    browser::cdp_backend::recording::tests::stop_kills_a_wedged_ffmpeg_and_says_so
+    browser::cdp_backend::recording::tests::tab_death_mid_recording_auto_finalizes_a_truncated_receipt
+    browser::cdp_backend::tests::no_verb_is_left_unwired
+
+test result: FAILED. 601 passed; 16 failed; 0 ignored; 0 measured; 20059 filtered out; finished in 8.09s
+
+error: test failed, to rerun pass `-p alephcore --lib`

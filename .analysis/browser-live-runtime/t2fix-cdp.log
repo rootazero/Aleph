@@ -1,0 +1,77 @@
+   Compiling syn v2.0.117
+   Compiling typenum v1.20.1
+   Compiling generic-array v0.14.7
+   Compiling zerocopy v0.8.50
+   Compiling getrandom v0.3.4
+   Compiling windows-sys v0.61.2
+   Compiling rand_core v0.9.5
+   Compiling ppv-lite86 v0.2.21
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling serde_core v1.0.228
+   Compiling bytes v1.11.1
+   Compiling digest v0.10.7
+   Compiling rand_chacha v0.9.0
+   Compiling thiserror-impl v2.0.18
+   Compiling sha1 v0.10.6
+   Compiling thiserror v2.0.18
+   Compiling rand v0.9.4
+   Compiling http v1.4.1
+   Compiling mio v1.2.1
+   Compiling socket2 v0.6.4
+   Compiling futures-macro v0.3.32
+   Compiling tokio-macros v2.7.0
+   Compiling log v0.4.32
+   Compiling futures-sink v0.3.32
+   Compiling futures-core v0.3.32
+   Compiling serde v1.0.228
+   Compiling slab v0.4.12
+   Compiling tungstenite v0.26.2
+   Compiling futures-util v0.3.32
+   Compiling tracing-core v0.1.36
+   Compiling tokio v1.52.3
+   Compiling tracing-attributes v0.1.31
+   Compiling serde_derive v1.0.228
+   Compiling memchr v2.8.1
+   Compiling serde_json v1.0.150
+   Compiling tracing v0.1.44
+   Compiling tokio-tungstenite v0.26.2
+   Compiling aleph-cdp v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\crates\aleph-cdp)
+    Finished `test` profile [unoptimized] target(s) in 1m 03s
+     Running unittests src\lib.rs (target\debug\deps\aleph_cdp-955f659c2de2743e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests\connection.rs (target\debug\deps\connection-40c2f57033962d4d.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+     Running tests\events.rs (target\debug\deps\events-76a9edf9aaa8bd9e.exe)
+
+running 1 test
+test a_subscriber_that_falls_behind_is_told_exactly_how_many_events_it_missed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.01s
+
+     Running tests\methods.rs (target\debug\deps\methods-c782798231090de4.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 50 filtered out; finished in 0.00s
+
+     Running tests\session.rs (target\debug\deps\session-2306de23e86539cc.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests\smoke.rs (target\debug\deps\smoke-279a5dddf55843a9.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+

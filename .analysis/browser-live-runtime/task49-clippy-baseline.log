@@ -1,0 +1,128 @@
+    Checking windows-sys v0.61.2
+    Checking windows-sys v0.60.2
+    Checking aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
+    Checking socket2 v0.6.4
+    Checking mio v1.2.1
+    Checking schannel v0.1.29
+    Checking winapi-util v0.1.11
+    Checking errno v0.3.14
+    Checking rustix v1.1.4
+    Checking termcolor v1.4.1
+    Checking same-file v1.0.6
+    Checking native-tls v0.2.18
+    Checking dirs-sys v0.5.0
+    Checking wasmprinter v0.243.0
+    Checking dirs v6.0.0
+    Checking tokio v1.52.3
+    Checking walkdir v2.5.0
+    Checking tempfile v3.27.0
+    Checking polling v3.11.0
+    Checking wasmtime-internal-jit-icache-coherence v41.0.4
+    Checking nu-ansi-term v0.50.3
+    Checking tungstenite v0.26.2
+    Checking async-io v2.6.0
+    Checking tracing-subscriber v0.3.23
+    Checking anstyle-query v1.1.5
+    Checking wasmtime-environ v41.0.4
+    Checking anstyle-wincon v3.0.11
+    Checking anstream v1.0.0
+    Checking async-process v2.5.0
+    Checking colored v3.1.1
+    Checking stacker v0.1.24
+    Checking clap_builder v4.6.0
+    Checking dptree v0.5.1
+    Checking tracing-appender v0.2.5
+    Checking async-std v1.13.2
+    Checking notify v6.1.1
+    Checking rust-embed-utils v8.11.0
+    Checking socket-pktinfo v0.4.1
+    Checking if-addrs v0.15.0
+    Checking home v0.5.12
+    Checking fancy-regex v0.14.0
+    Checking keyring v3.6.3
+    Checking file-id v0.2.3
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+    Checking notify-debouncer-full v0.3.2
+    Checking which v6.0.3
+    Checking clap v4.6.1
+    Checking rpassword v7.5.4
+    Checking mdns-sd v0.20.3
+    Checking rust-embed v8.11.0
+    Checking aleph-logging v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\logging)
+    Checking tokio-util v0.7.18
+    Checking tokio-native-tls v0.3.1
+    Checking tokio-rustls v0.26.4
+    Checking tower v0.5.3
+    Checking async-compression v0.4.42
+    Checking wasmtime-internal-unwinder v41.0.4
+    Checking wasmtime-internal-fiber v41.0.4
+    Checking wasmtime-internal-cache v41.0.4
+    Checking wasmtime-internal-cranelift v41.0.4
+    Checking deadpool-runtime v0.1.4
+    Checking h2 v0.4.14
+    Checking h2 v0.3.27
+    Checking readlock-tokio v0.1.6
+    Checking tower-http v0.6.11
+    Checking eyeball-im v0.8.0
+    Checking matrix-sdk-common v0.16.0 (https://github.com/rootazero/matrix-rust-sdk?branch=aleph-0.16.0-recursion-fix#3b511d3e)
+    Checking eyeball v0.8.8
+    Checking deadpool v0.12.3
+    Checking wasmtime v41.0.4
+    Checking matrix-sdk-base v0.16.0 (https://github.com/rootazero/matrix-rust-sdk?branch=aleph-0.16.0-recursion-fix#3b511d3e)
+    Checking deadpool-sync v0.1.4
+    Checking tokio-stream v0.1.18
+    Checking hyper v0.14.32
+    Checking hyper v1.10.1
+    Checking tokio-websockets v0.13.2
+    Checking tokio-tungstenite v0.26.2
+    Checking tokio-rustls v0.25.0
+    Checking tokio-tungstenite v0.21.0
+    Checking hyper-util v0.1.20
+    Checking whatsapp-rust-tokio-transport v0.5.0
+    Checking fs-err v3.3.1
+    Checking hyper-tls v0.5.0
+    Checking reqwest v0.11.27
+    Checking tokio-tungstenite v0.29.0
+    Checking whatsapp-rust-sqlite-storage v0.5.0
+    Checking hyper-rustls v0.27.9
+    Checking hyper-tls v0.6.0
+    Checking reqwest v0.12.28
+    Checking aleph-desktop v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\shared)
+    Checking backon v1.6.0
+    Checking readability v0.3.0
+    Checking aleph-client v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\client)
+    Checking matrix-sdk-sqlite v0.16.0 (https://github.com/rootazero/matrix-rust-sdk?branch=aleph-0.16.0-recursion-fix#3b511d3e)
+    Checking teloxide-core v0.13.0
+    Checking oauth2 v5.0.0
+    Checking whatsapp-rust v0.5.0
+    Checking reqwest-eventsource v0.6.0
+    Checking serenity v0.12.5
+    Checking aleph-desktop-windows v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\windows)
+    Checking matrix-sdk v0.16.0 (https://github.com/rootazero/matrix-rust-sdk?branch=aleph-0.16.0-recursion-fix#3b511d3e)
+    Checking jsonschema v0.29.1
+    Checking wiggle v41.0.4
+    Checking wasi-common v41.0.4
+    Checking axum v0.8.9
+    Checking axum-server v0.7.3
+    Checking aleph-cdp v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\crates\aleph-cdp)
+    Checking lettre v0.11.22
+    Checking async-imap v0.10.4
+    Checking ignore v0.4.25
+    Checking agent-detect v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\crates\agent-detect)
+    Checking shellexpand v3.1.2
+    Checking async-native-tls v0.5.0
+    Checking extism v1.21.0
+    Checking teloxide v0.17.0
+error: method `attach` is never used
+   --> src\gateway\pty\runtime.rs:111:19
+    |
+ 76 | impl<'a> TerminalRuntime<'a> {
+    | ---------------------------- method in this implementation
+...
+111 |     pub(crate) fn attach(
+    |                   ^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: could not compile `alephcore` (lib) due to 1 previous error

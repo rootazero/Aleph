@@ -1,0 +1,14 @@
+    Blocking waiting for file lock on build directory
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+    Finished `test` profile [unoptimized] target(s) in 22m 06s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 5 tests
+test sandbox::platforms::windows::driver::tests::managed_spawn_is_refused_because_the_wrapper_pid_is_not_the_service_pid ... ok
+test sandbox::workspace::tests::managed_spawn_is_unsupported_for_a_driver_without_service_pid ... ok
+test sandbox::workspace::tests::managed_spawn_refuses_a_forking_policy_and_spawns_nothing ... ok
+test sandbox::workspace::tests::managed_spawn_goes_through_the_same_approval_and_denial_spawns_nothing ... ok
+test sandbox::workspace::tests::managed_spawn_after_approval_returns_the_driver_vouched_pid ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 20723 filtered out; finished in 0.11s
+

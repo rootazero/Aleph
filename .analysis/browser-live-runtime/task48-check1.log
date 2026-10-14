@@ -1,0 +1,37 @@
+    Checking aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
+    Checking aleph-desktop v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\shared)
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+    Checking aleph-client v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\client)
+    Checking aleph-desktop-windows v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\windows)
+    Checking shared-ui-logic v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\ui_logic)
+error[E0597]: `reaped` does not live long enough
+   --> src\builtin_tools\process_registry.rs:373:44
+    |
+358 |         let (cancel, mut reaped) = {
+    |                      ---------- binding `reaped` declared here
+...
+373 |         match tokio::time::timeout(budget, reaped.wait_for(|reaped| *reaped)).await {
+    |               -----------------------------^^^^^^----------------------------------
+    |               |                            |
+    |               |                            borrowed value does not live long enough
+    |               a temporary with access to the borrow is created here ...
+...
+378 |     }
+    |     -
+    |     |
+    |     `reaped` dropped here while still borrowed
+    |     ... and the borrow might be used here, when that temporary is dropped and runs the destructor for type `std::result::Result<std::result::Result<tokio::sync::watch::Ref<'_, bool>, tokio::sync::watch::error::RecvError>, tokio::time::error::Elapsed>`
+    |
+    = note: the temporary is part of an expression at the end of a block;
+            consider forcing this temporary to be dropped sooner, before the block's local variables are dropped
+help: for example, you could save the expression's value in a new local variable `x` and then make `x` be the expression at the end of the block
+    |
+373 ~         let x = match tokio::time::timeout(budget, reaped.wait_for(|reaped| *reaped)).await {
+374 |             Ok(Ok(_)) => ManagedCancelOutcome::Reaped,
+375 |             // Sender dropped without ack: the supervisor died unobserved.
+376 |             Ok(Err(_)) | Err(_) => ManagedCancelOutcome::TimedOut,
+377 ~         }; x
+    |
+
+For more information about this error, try `rustc --explain E0597`.
+error: could not compile `alephcore` (lib) due to 1 previous error

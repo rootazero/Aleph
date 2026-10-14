@@ -1,0 +1,17 @@
+{
+  "id": 0,
+  "owner": "u-owner",
+  "command": "pwsh (cwd D:\\Workspace\\Aleph-worktrees\\panel-browser-workspace-20261007-202532-13256\\.analysis\\browser-live-runtime\\home\\workspaces)",
+  "started_ms": 1791798298681,
+  "phase": "interrupted",
+  "ended_ms": 1791812371677,
+  "output_file": "output.txt",
+  "announce_attempts": 0,
+  "kind": "pty",
+  "pty_session_id": "4b5ab097-4f0f-47da-86c0-dfeaa53aead3",
+  "pid": 12028,
+  "process_created_at_ms": 1791798298000,
+  "tombstone": {
+    "kind": "exited_during_restart"
+  }
+}

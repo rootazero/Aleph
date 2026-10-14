@@ -47,6 +47,7 @@ pub mod artifacts;
 pub mod auth;
 pub mod behavior_config;
 pub mod browser_config;
+pub mod browser_viewer;
 pub mod bundled_sync;
 pub mod canvas;
 pub mod canvas_error;
@@ -787,6 +788,8 @@ impl HandlerRegistry {
                     crate::gateway::pairing_store::SqlitePairingStore::in_memory()
                         .expect("in-memory PairingStore for default registrations"),
                 ),
+                // Inert: no browser live runtime in the default registry.
+                browser_viewer_grants: Default::default(),
             };
             let s = default_store.clone();
             registry.register("users.me", move |req| {

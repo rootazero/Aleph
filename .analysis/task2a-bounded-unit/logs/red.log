@@ -1,0 +1,51 @@
+     Locking 7 packages to latest compatible versions
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling syn v3.0.5
+   Compiling tokio-macros v2.7.2
+   Compiling pin-project-lite v0.2.17
+   Compiling tokio v1.53.1
+   Compiling task2a-bounded-unit v0.0.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\.analysis\task2a-bounded-unit)
+    Finished `test` profile [unoptimized] target(s) in 10.21s
+     Running unittests lib.rs (target\debug\deps\task2a_bounded_unit-13864d54d07a5fbf.exe)
+
+running 4 tests
+test stream_hub::tests::publish_without_subscribers_never_blocks_and_resubscribe_gets_latest ... FAILED
+test stream_hub::tests::late_subscriber_gets_current_frame_immediately ... FAILED
+test stream_hub::tests::dropping_hub_terminates_receiver ... FAILED
+test stream_hub::tests::slow_subscriber_sees_only_latest_and_counts_skipped ... FAILED
+
+failures:
+
+---- stream_hub::tests::publish_without_subscribers_never_blocks_and_resubscribe_gets_latest stdout ----
+
+thread 'stream_hub::tests::publish_without_subscribers_never_blocks_and_resubscribe_gets_latest' (5332) panicked at ..\..\src\browser\live\stream_hub.rs:18:9:
+not implemented
+
+---- stream_hub::tests::late_subscriber_gets_current_frame_immediately stdout ----
+
+thread 'stream_hub::tests::late_subscriber_gets_current_frame_immediately' (10204) panicked at ..\..\src\browser\live\stream_hub.rs:18:9:
+not implemented
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- stream_hub::tests::dropping_hub_terminates_receiver stdout ----
+
+thread 'stream_hub::tests::dropping_hub_terminates_receiver' (11336) panicked at ..\..\src\browser\live\stream_hub.rs:18:9:
+not implemented
+
+---- stream_hub::tests::slow_subscriber_sees_only_latest_and_counts_skipped stdout ----
+
+thread 'stream_hub::tests::slow_subscriber_sees_only_latest_and_counts_skipped' (10604) panicked at ..\..\src\browser\live\stream_hub.rs:18:9:
+not implemented
+
+
+failures:
+    stream_hub::tests::dropping_hub_terminates_receiver
+    stream_hub::tests::late_subscriber_gets_current_frame_immediately
+    stream_hub::tests::publish_without_subscribers_never_blocks_and_resubscribe_gets_latest
+    stream_hub::tests::slow_subscriber_sees_only_latest_and_counts_skipped
+
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

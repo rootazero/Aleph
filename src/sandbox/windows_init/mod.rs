@@ -37,6 +37,10 @@ mod tests;
 
 pub use policy::{capability_names_for_network, WindowsInitPolicy};
 
+/// Shared with the parent-side managed launcher (`platforms::windows`).
+#[cfg(target_os = "windows")]
+pub(crate) use imp::{build_command_line, AppContainerProfile, ProcAttributeList};
+
 #[cfg(target_os = "windows")]
 use self::args::parse_init_args;
 

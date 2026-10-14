@@ -82,6 +82,11 @@ pub enum BrowserFailureCategory {
     SelectorMiss,
     /// An unanswered JS dialog is blocking the page.
     DialogPending,
+    /// A human has taken control of the browser target. Per
+    /// `error.rs::spec_7_1_signal` this maps to `RecoverySignal::Neither`
+    /// — names no verb and no engine, so `recovery_for` must suggest no
+    /// tool. The agent must wait for the human to cede or revoke.
+    HumanHasControl,
     /// The CDP/MCP/CLI channel itself failed, or never came up.
     Transport,
     /// The approval gate denied or parked the call.
@@ -261,6 +266,7 @@ pub fn classify(err: &BrowserError) -> BrowserFailureCategory {
         // page first.
         BrowserError::NavigationFailed(_) => C::NavigateBlocked,
         BrowserError::ActionFailed(_) => C::Unknown,
+        BrowserError::HumanHasControl { .. } => C::HumanHasControl,
         BrowserError::Timeout(_) => C::WaitTimeout,
         BrowserError::ChromiumNotFound => C::Unknown,
         BrowserError::EngineUnavailable { .. } => C::Unknown,
@@ -337,6 +343,23 @@ mod tests {
         Engine::Chromium
     }
 
+    fn binding() -> aleph_protocol::browser_live::ViewerBinding {
+        aleph_protocol::browser_live::ViewerBinding {
+            principal: aleph_protocol::browser_live::IssuerIdentity::User {
+                user_id: "u".into(),
+            },
+            task: aleph_protocol::browser_live::ConversationBinding {
+                session_key: "c".into(),
+                run_id: "r".into(),
+            },
+            target: aleph_protocol::browser_live::BrowserTargetBinding {
+                profile: "p".into(),
+                browser_session_id: "b".into(),
+                target_id: "T1".into(),
+            },
+        }
+    }
+
     /// One instance per `BrowserError` variant, classified. The pins that
     /// matter are named explicitly; the rest assert only that classify
     /// answered at all (the exhaustive match is what guarantees a decision
@@ -403,6 +426,9 @@ mod tests {
                 verb: "browser_click",
                 detail: "x".into(),
             },
+            BrowserError::HumanHasControl {
+                binding: Box::new(binding()),
+            },
             BrowserError::Cdp {
                 engine: engine(),
                 method: "m".into(),
@@ -454,6 +480,30 @@ mod tests {
                 supported_by: None
             }),
             BrowserFailureCategory::UnsupportedByEngine
+        );
+        assert_eq!(
+            classify(&BrowserError::HumanHasControl {
+                binding: Box::new(binding()),
+            }),
+            BrowserFailureCategory::HumanHasControl
+        );
+    }
+
+    /// `HumanHasControl` is a deterministic, known state — not a
+    /// near-enough bucket. Per `error.rs::spec_7_1_signal` it is
+    /// `RecoverySignal::Neither` (names no verb, no engine), so
+    /// `recovery_for` MUST suggest no tool. The agent must wait for the
+    /// human to cede or revoke; the recovery trailer must not invent
+    /// a side-effectful suggestion (判据 §8).
+    #[test]
+    fn human_has_control_suggests_no_tool() {
+        let r = recovery_for(&BrowserError::HumanHasControl {
+            binding: Box::new(binding()),
+        });
+        assert_eq!(r.category, BrowserFailureCategory::HumanHasControl);
+        assert!(
+            r.next_actions.is_empty(),
+            "HumanHasControl is spec_7_1 Neither; recovery next_actions must be empty"
         );
     }
 

@@ -1,0 +1,18 @@
+   Compiling task2a-bounded-unit v0.0.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\.analysis\task2a-bounded-unit)
+    Finished `test` profile [unoptimized] target(s) in 0.53s
+     Running unittests lib.rs (target\debug\deps\task2a_bounded_unit-13864d54d07a5fbf.exe)
+
+running 4 tests
+test stream_hub::tests::slow_subscriber_sees_only_latest_and_counts_skipped ... ok
+test stream_hub::tests::dropping_hub_terminates_receiver ... ok
+test stream_hub::tests::late_subscriber_gets_current_frame_immediately ... ok
+test stream_hub::tests::publish_without_subscribers_never_blocks_and_resubscribe_gets_latest ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests task2a_bounded_unit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

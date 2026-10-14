@@ -1,0 +1,80 @@
+free_bytes=13973733376
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+    Finished `test` profile [unoptimized] target(s) in 6m 10s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 71 tests
+test browser::cdp_backend::recording::tests::the_default_path_lands_under_the_managed_dir_with_profile_and_tab ... ok
+test browser::live::resource::tests::managed_provenance_must_pair_with_managed_source ... ok
+test browser::manager::tests::a_tracked_tab_no_longer_fakes_a_live_managed_session ... ok
+test browser::manager::tests::test_get_backend_routes_managed_to_playwright_cli ... ok
+test browser::profile::tests::legacy_managed_profile_resolves_to_chromium_under_obscura_default ... ok
+test builtin_tools::browser_tools::companion::manager::tests::start_publishes_a_managed_design_companion_with_the_driver_pid ... ok
+test builtin_tools::browser_tools::companion::process::tests::launcher_without_managed_spawn_is_unsupported ... ok
+test builtin_tools::browser_tools::driver_claim_census::no_browser_tool_claims_a_cdp_served_verb_is_managed_only ... ok
+test builtin_tools::process_registry::tests::cancel_managed_is_owner_scoped_and_unknown_ids_are_not_found ... ok
+test builtin_tools::process_registry::tests::cancel_managed_is_reaped_only_after_the_supervisor_acks ... ok
+test builtin_tools::process_registry::tests::cancel_managed_times_out_when_no_exit_is_confirmed ... ok
+test builtin_tools::process_registry::tests::kill_never_aborts_a_managed_entry ... ok
+test builtin_tools::process_registry::tests::shutdown_skips_managed_entries ... ok
+test diagnostics::checks::browser_runtime::tests::always_reports_chromium_node_and_managed_findings ... ok
+test diagnostics::checks::browser_runtime::tests::the_managed_finding_agrees_with_the_tool_gate ... ok
+test gateway::handlers::browser_config::tests::managed_profiles_that_shadow_the_headless_toggle_are_named ... ok
+test gateway::handlers::teams::tests::tests::create_task_respects_caller_supplied_managed_by_override ... ok
+test gateway::handlers::teams::tests::tests::create_task_with_owner_auto_injects_managed_by_dispatcher ... ok
+test gateway::handlers::teams::tests::tests::create_task_without_owner_skips_managed_by_marker ... ok
+test sandbox::platforms::windows::driver::tests::managed_spawn_is_refused_because_the_wrapper_pid_is_not_the_service_pid ... ok
+test sandbox::platforms::windows::driver::tests::windows_driver_is_supported_on_windows ... ok
+test sandbox::platforms::windows::driver::tests::windows_driver_platform ... ok
+test sandbox::platforms::windows::managed_launch::tests::allow_hosts_is_always_unsupported_even_with_full_capabilities ... ok
+test sandbox::platforms::windows::managed_launch::tests::current_build_refusal_is_typed_and_names_the_wrapper_pid ... ok
+test sandbox::platforms::windows::managed_launch::tests::current_build_refuses_before_any_os_object_is_created ... ok
+test sandbox::platforms::windows::managed_launch::tests::current_build_reports_every_blocker_in_stable_order ... ok
+test sandbox::platforms::windows::managed_launch::tests::current_capabilities_stay_all_false_until_a_verified_impl_exists ... ok
+test sandbox::platforms::windows::managed_launch::tests::each_missing_capability_and_bad_ports_are_refused ... ok
+test sandbox::platforms::windows::managed_launch::tests::failure_before_resume_never_resumes_and_terminates ... ok
+test sandbox::platforms::windows::managed_launch::tests::happy_path_resumes_last_after_admission_and_readback ... ok
+test sandbox::platforms::windows::managed_launch::tests::identity_rejects_pid_only_and_zero ... ok
+test sandbox::platforms::windows::managed_launch::tests::not_a_member_or_bad_readback_or_zero_identity_never_resumes ... ok
+test sandbox::platforms::windows::managed_launch::tests::preflight_only_passes_when_every_blocker_is_cleared ... ok
+test sandbox::platforms::windows::managed_launch::tests::teardown_removes_confinement_only_after_empty_confirmation ... ok
+test sandbox::platforms::windows::managed_launch::tests::unconfirmed_empty_job_leaves_confinement_installed ... ok
+test sandbox::workspace::tests::a_driver_that_never_overrides_the_dialect_declares_none ... ok
+test sandbox::workspace::tests::a_refused_capability_card_leaves_park_then_denied_and_never_spawns ... ok
+test sandbox::workspace::tests::an_approved_capability_card_is_released_in_the_log_before_the_spawn ... ok
+test sandbox::workspace::tests::an_elevation_refusal_is_visible_to_the_tool_confirm_gate ... ok
+test sandbox::workspace::tests::approval_approved_caches_grant_for_session ... ok
+test sandbox::workspace::tests::approval_denied_returns_capability_denied_error ... ok
+test sandbox::workspace::tests::blind_retry_is_auto_blocked_with_ledger_hint ... ok
+test sandbox::workspace::tests::caller_env_wins_over_sandbox_annotation ... ok
+test sandbox::workspace::tests::cwd_outside_workspace_root_is_denied ... ok
+test sandbox::workspace::tests::cwd_real_subdir_inside_workspace_is_accepted ... ok
+test sandbox::workspace::tests::env_tag_strips_os_prefix ... ok
+test sandbox::workspace::tests::injects_aleph_sandbox_env_var_with_mechanism_tag ... ok
+test sandbox::workspace::tests::managed_spawn_after_approval_returns_the_driver_vouched_pid ... ok
+test sandbox::workspace::tests::managed_spawn_goes_through_the_same_approval_and_denial_spawns_nothing ... ok
+test sandbox::workspace::tests::managed_spawn_is_unsupported_for_a_driver_without_service_pid ... ok
+test sandbox::workspace::tests::managed_spawn_on_unsupported_driver_never_raises_an_approval ... ok
+test sandbox::workspace::tests::managed_spawn_refuses_a_forking_policy_and_spawns_nothing ... ok
+test sandbox::workspace::tests::omits_network_disabled_env_var_when_network_allowed ... ok
+test sandbox::workspace::tests::proxy_injects_env_vars_for_allow_hosts_on_macos ... ok
+test sandbox::workspace::tests::proxy_respects_caller_supplied_http_proxy_env ... ok
+test sandbox::workspace::tests::proxy_skipped_when_network_policy_is_none ... ok
+test sandbox::workspace::tests::revalidate_accepts_an_unchanged_real_subdir ... ok
+test sandbox::workspace::tests::revalidate_accepts_the_workspace_root_itself ... ok
+test sandbox::workspace::tests::revalidate_rejects_a_cwd_that_vanished ... ok
+test sandbox::workspace::tests::session_key_filename_is_deterministic_and_hex ... ok
+test sandbox::workspace::tests::sid_is_unique_per_call ... ok
+test sandbox::workspace::tests::the_capability_card_is_in_the_log_before_the_requester_is_reached ... ok
+test sandbox::workspace::tests::three_distinct_elevation_denials_trip_the_session_breaker ... ok
+test sandbox::workspace::tests::unchanged_cwd_survives_the_post_approval_recheck ... ok
+test sandbox::workspace::tests::windows_driver_managed_spawn_is_refused_before_approval ... ok
+test sandbox::workspace::tests::workspace_is_created_on_first_execute ... ok
+test teams::background::tests::the_preview_counts_only_dispatcher_managed_team_tasks ... ok
+test teams::dispatcher::schedule::select::tests::selects_only_pending_managed_owned_unlocked ... ok
+test teams::dispatcher::schedule::select::tests::stale_review_ignores_unmanaged_task ... ok
+test teams::dispatcher::schedule::select::tests::zombie_detection_ignores_unmanaged_task ... ok
+test tools::probes::browser::tests::npx_alone_is_not_a_managed_runtime ... ok
+
+test result: ok. 71 passed; 0 failed; 0 ignored; 0 measured; 20674 filtered out; finished in 0.78s
+

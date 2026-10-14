@@ -1,0 +1,27 @@
+{
+  "key": "agent:main:main",
+  "agent_id": "main",
+  "session_type": "main",
+  "created_at": 1791705256,
+  "last_active_at": 1791705375,
+  "message_count": 54,
+  "total_tokens": 36,
+  "auto_reset_at": null,
+  "state": "idle",
+  "identity_meta": {
+    "role": "owner",
+    "identity_id": "owner",
+    "source_channel": "unknown",
+    "topic": "mock reply (0)"
+  },
+  "input_tokens": 18,
+  "output_tokens": 18,
+  "model": "mock-model",
+  "model_provider": "mock",
+  "owner_user_id": "u-owner",
+  "scope_id": "personal:u-owner",
+  "compaction_count": 0,
+  "derived_title": "OPEN_FIXTURE",
+  "last_message_preview": "call not executed — tool-loop halt",
+  "estimated_cost_usd": 0.0
+}

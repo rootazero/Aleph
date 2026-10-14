@@ -44,17 +44,56 @@ static INIT_CELL: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new()
 /// `extension::projection` publishes (`SkillSystem::scan_roots`). The
 /// `INIT_CELL` latch makes the rescan here run once; subsequent calls
 /// short-circuit.
+///
+/// The synchronous steps of THIS cold path run on the blocking pool via
+/// `super::run_blocking_fs`, so the first `skills.status` /
+/// `extensions.installed` / `extensions.catalog` does not pin a runtime worker
+/// on them: first construction of the singleton (`SkillSystem::new` reads
+/// `skills.toml`), `default_skill_dirs`' `exists()` probes, the root-set
+/// canonicalisation dedup in `scan_roots`, the recursive scan in
+/// `rescan_dirs`, and config load / usage sidecars in the snapshot rebuild.
+/// This does NOT cover extension loading (`ExtensionManager::ensure_loaded`),
+/// which is a separate, still-pending boundary, nor the public synchronous
+/// [`shared_skill_system`] accessor, which constructs inline when it is the
+/// first caller.
+///
+/// **Cancellation.** If either blocking hop (singleton/dirs, or the recursive
+/// scan inside `rescan_dirs`) is cancelled (runtime shutdown) the latch is
+/// NOT set: the error is logged and this call returns without
+/// having initialised anything, so a later call retries the whole first-init
+/// instead of the process keeping a silently half-initialised system.
+/// A panic inside the blocking work is re-raised on the caller
+/// (`run_blocking_fs`).
 pub async fn ensure_shared_skill_system_initialized() {
-    let system = shared_skill_system();
-    let dirs = super::default_skill_dirs();
-    INIT_CELL
-        .get_or_init(|| async move {
-            for dir in &dirs {
-                system.ensure_dir_registered(dir.clone()).await;
+    let outcome: Result<&(), ()> = INIT_CELL
+        .get_or_try_init(|| async {
+            // Obtain the singleton INSIDE the blocking closure: its first
+            // construction (`SkillSystem::new` -> `SkillsConfig::load`) is
+            // synchronous file I/O. `SkillSystem` is `Clone` over an `Arc`,
+            // so the owned clone shares the registry with every other holder.
+            let (system, dirs) =
+                super::run_blocking_fs("ensure_shared_skill_system_initialized", || {
+                    let system = shared_skill_system().clone();
+                    (system, super::default_skill_dirs())
+                })
+                .await
+                .ok_or(())?;
+            for dir in dirs {
+                system.ensure_dir_registered(dir).await;
             }
-            system.rescan_dirs().await;
+            // A cancelled rescan (runtime shutdown) must not latch the cell:
+            // the registry was left untouched, so report it as a failed init.
+            if !system.rescan_dirs().await {
+                return Err(());
+            }
+            Ok(())
         })
         .await;
+    if outcome.is_err() {
+        tracing::warn!(
+            "shared skill system first-init cancelled; not latched, next call will retry"
+        );
+    }
 }
 
 #[cfg(test)]

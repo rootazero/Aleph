@@ -220,8 +220,6 @@ pub(crate) fn collect_project_skill_block(workspace: &std::path::Path) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// P4.16 review I-2 residual: the SessionStart seam guard above drives
     /// `fire_session_start`, so a fire site that bypassed it — re-inlining
     /// its own dispatch — would stay green. Census: outside `src/extension/`
@@ -261,6 +259,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn superpowers_session_start_hook_fires_at_a_fresh_session() {
+        use super::*;
         use crate::gateway::agent_instance::AgentInstanceConfig;
         use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
 

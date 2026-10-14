@@ -1,0 +1,61 @@
+available_bytes=14341136384 required_bytes=4294967296 ALLOW
+         );
+     }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\macos\seatbelt.rs:1015:
+         let child = cmd.spawn().map_err(|e| {
+             SandboxError::ExecutionFailed(format!("failed to spawn sandbox-exec: {e}"))
+         })?;
+[31m-        let service_pid = child.id().ok_or_else(|| {
+[0m[31m-            SandboxError::ExecutionFailed("spawned child reported no pid".into())
+[0m[31m-        })?;
+[0m[32m+        let service_pid = child
+[0m[32m+            .id()
+[0m[32m+            .ok_or_else(|| SandboxError::ExecutionFailed("spawned child reported no pid".into()))?;
+[0m         Ok(crate::sandbox::managed::ManagedChild {
+             child,
+             service_pid,
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\platforms\windows\driver.rs:479:
+     async fn managed_spawn_is_refused_because_the_wrapper_pid_is_not_the_service_pid() {
+         let driver = WindowsSandboxDriver::new();
+         match driver.managed_spawn_preflight() {
+[31m-            Err(SandboxError::UnsupportedPolicy { feature, reason, .. }) => {
+[0m[32m+            Err(SandboxError::UnsupportedPolicy {
+[0m[32m+                feature, reason, ..
+[0m[32m+            }) => {
+[0m                 assert_eq!(feature, "managed_spawn");
+                 assert!(reason.contains("wrapper PID"), "{reason}");
+             }
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:730:
+     ) -> Result<crate::sandbox::managed::ManagedSpawn, SandboxError> {
+         if cmd.stdin.is_some() {
+             return Err(SandboxError::Other(
+[31m-                "managed spawn takes no pre-baked stdin: the owner writes the launch secret"
+[0m[31m-                    .into(),
+[0m[32m+                "managed spawn takes no pre-baked stdin: the owner writes the launch secret".into(),
+[0m             ));
+         }
+         let PreparedCommand {
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2085:
+             .await
+             .map(|_| ())
+             .expect_err("denied approval must refuse");
+[31m-        assert!(matches!(err, SandboxError::CapabilityDenied { .. }), "{err:?}");
+[0m[32m+        assert!(
+[0m[32m+            matches!(err, SandboxError::CapabilityDenied { .. }),
+[0m[32m+            "{err:?}"
+[0m[32m+        );
+[0m         assert_eq!(spawned.load(std::sync::atomic::Ordering::SeqCst), 0);
+     }
+ 
+Diff in \\?\D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\src\sandbox\workspace\mod.rs:2142:
+             .await
+             .map(|_| ())
+             .expect_err("unsupported");
+[31m-        assert!(matches!(err, SandboxError::UnsupportedPolicy { .. }), "{err:?}");
+[0m[32m+        assert!(
+[0m[32m+            matches!(err, SandboxError::UnsupportedPolicy { .. }),
+[0m[32m+            "{err:?}"
+[0m[32m+        );
+[0m     }
+ 
+     /// Denial ledger circuit breaker: after the first denial is recorded, an

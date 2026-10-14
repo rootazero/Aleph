@@ -1,0 +1,28 @@
+   Compiling aleph-desktop-shell v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\shell)
+   Compiling tauri-plugin-global-shortcut v2.3.2
+   Compiling aleph-client v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\client)
+   Compiling x509-parser v0.17.0
+   Compiling tauri-plugin-notification v2.3.3
+   Compiling tauri-plugin-autostart v2.5.1
+   Compiling tauri-plugin-single-instance v2.4.2
+   Compiling tauri-plugin-window-state v2.4.1
+error[E0308]: mismatched types
+   --> desktop\shell\src\keyring_bridge.rs:216:21
+    |
+216 |             allows: scope.allows().to_vec(),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^ expected `Vec<GatewayCredentialScope>`, found `Vec<Arc<GatewayCredentialScope>>`
+    |
+    = note: expected struct `Vec<keyring_bridge::GatewayCredentialScope>`
+               found struct `Vec<std::sync::Arc<keyring_bridge::GatewayCredentialScope>>`
+
+error[E0308]: mismatched types
+   --> desktop\shell\src\keyring_bridge.rs:217:21
+    |
+217 |             denies: scope.denies().to_vec(),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^ expected `Vec<GatewayCredentialScope>`, found `Vec<Arc<GatewayCredentialScope>>`
+    |
+    = note: expected struct `Vec<keyring_bridge::GatewayCredentialScope>`
+               found struct `Vec<std::sync::Arc<keyring_bridge::GatewayCredentialScope>>`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `aleph-desktop-shell` (bin "aleph-desktop-shell" test) due to 2 previous errors

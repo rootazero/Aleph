@@ -581,6 +581,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "browser_companion",
+        description: <crate::builtin_tools::browser_tools::companion::BrowserCompanionTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "browser_click",
         description: <crate::builtin_tools::browser_tools::click::BrowserClickTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
@@ -1293,13 +1298,14 @@ pub fn create_tool_boxed(
         // constructor. This session-less path would produce tools without the
         // approval gate — a security-relevant half-assembly — so they fall
         // through to `None`.
-        "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
-        | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
-        | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
-        | "browser_exec" | "browser_console" | "browser_hover" | "browser_scroll"
-        | "browser_pdf" | "browser_record" | "browser_qa" | "browser_network"
-        | "browser_dialog" | "browser_drag" | "browser_upload" | "browser_resize"
-        | "browser_emulate" | "browser_cookies" | "browser_session" | "browser_profile" => None,
+        "browser_open" | "browser_companion" | "browser_click" | "browser_type"
+        | "browser_screenshot" | "browser_snapshot" | "browser_navigate" | "browser_tabs"
+        | "browser_select" | "browser_evaluate" | "browser_fill_form" | "browser_press_key"
+        | "browser_wait_for" | "browser_exec" | "browser_console" | "browser_hover"
+        | "browser_scroll" | "browser_pdf" | "browser_record" | "browser_qa"
+        | "browser_network" | "browser_dialog" | "browser_drag" | "browser_upload"
+        | "browser_resize" | "browser_emulate" | "browser_cookies" | "browser_session"
+        | "browser_profile" => None,
         // Skill management tools — always available
         // Phase 2: share the process-wide initialized SkillSystem so
         // skill_status/install/manage see the same registry as the gateway.
@@ -3087,7 +3093,15 @@ mod tests {
     /// more; (3) no other tool names the restore surface — `list_folds` is a
     /// runtime answer (session_decompress{action:"list"}), not catalog
     /// bytes.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 117_174;
+    /// 2026-10-07 (#48 browser_companion tool): 117_174 -> 117368 B, measured by
+    /// this test's own failure line on Windows; the delta (+194 B) is
+    /// `browser_companion`'s whole DESCRIPTION. Three questions: (1) the verb
+    /// (a managed, sandbox-approved long-lived service whose page the viewer
+    /// shows) is not inferable from bash/browser_open, and no refusal names
+    /// it; (2) every per-field detail (argv/cwd/timeout bounds, the handshake,
+    /// owner-only status/stop) lives in the JsonSchema doc comments; (3) no
+    /// other tool names the managed-companion surface.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 117368;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3844,6 +3858,13 @@ mod tests {
     /// is pinned by the dispatch census in `dispatchable.rs` plus the
     /// catalog/group/dispatch registrations the C2 Task 3 ledger lists.
     ///
+    /// 2026-10-07: 134 -> 135 for `browser_companion` (#48) — class (b), same
+    /// shape as the other browser tools: it is built by the registry
+    /// constructor from the live `ProfileManager`, sandbox and producer, so
+    /// its schema is not in the session-less map; production wiring is pinned
+    /// by the `browser_companion` entries in `definitions.rs`, `groups.rs`,
+    /// `tool_registry_impl.rs` and the approval-wiring census.
+    ///
     /// 2026-10-01: 133 -> 134 for `browser_qa` (C3) — class (b), same shape
     /// as `browser_record`: the schema registers through the same browser
     /// tool loop, and the production wiring is pinned by the same
@@ -3865,8 +3886,8 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 134,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 134 \
+            missing.len() <= 135,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 135 \
              recorded here, so `registry_schema_bytes_ratchet` does not bound them. Three ways in, \
              and they are not equally fine. (a) The tool ships with no parameters at all — free, \
              and fine. (b) It registers only once a dependency is live, so its schema is unmeasured \
@@ -4145,6 +4166,7 @@ mod tests {
 
         // Verify browser tools
         assert!(names.contains(&"browser_open".to_string()));
+        assert!(names.contains(&"browser_companion".to_string()));
         assert!(names.contains(&"browser_click".to_string()));
         assert!(names.contains(&"browser_type".to_string()));
         assert!(names.contains(&"browser_screenshot".to_string()));
@@ -4272,6 +4294,7 @@ mod tests {
         // Test browser tools (require the live wiring from the registry
         // constructor — see the browser_* arm above — so None here)
         assert!(create_tool_boxed("browser_open", None).is_none());
+        assert!(create_tool_boxed("browser_companion", None).is_none());
         assert!(create_tool_boxed("browser_click", None).is_none());
         assert!(create_tool_boxed("browser_type", None).is_none());
         assert!(create_tool_boxed("browser_screenshot", None).is_none());

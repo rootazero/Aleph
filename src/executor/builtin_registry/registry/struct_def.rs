@@ -203,6 +203,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) canvas_tool: Option<crate::builtin_tools::canvas::CanvasTool>,
     /// Browser tools (always available, share a single `ProfileManager`)
     pub(crate) browser_open_tool: crate::builtin_tools::browser_tools::BrowserOpenTool,
+    pub(crate) browser_companion_tool: crate::builtin_tools::browser_tools::BrowserCompanionTool,
     pub(crate) browser_click_tool: crate::builtin_tools::browser_tools::BrowserClickTool,
     pub(crate) browser_type_tool: crate::builtin_tools::browser_tools::BrowserTypeTool,
     pub(crate) browser_screenshot_tool: crate::builtin_tools::browser_tools::BrowserScreenshotTool,

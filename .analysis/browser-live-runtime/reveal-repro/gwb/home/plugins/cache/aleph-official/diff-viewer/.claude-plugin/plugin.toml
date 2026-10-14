@@ -1,0 +1,10 @@
+name = "diff-viewer"
+version = "0.1.0"
+description = "Code diff comparison and change analysis"
+
+[aleph]
+runtime = "wasm"
+entry = "target/wasm32-wasip1/release/diff_viewer.wasm"
+
+[aleph.capabilities]
+workspace = { allowed_prefixes = [""] }

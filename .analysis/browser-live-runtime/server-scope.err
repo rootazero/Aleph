@@ -1,0 +1,2 @@
+Warning: Session migration failed: Configuration/Database error: Prepare failed: no such table: sessions
+  memory_reflect tool: MemoryReflector NOT wired (no embedder or default provider). Calls will return an error; configure an embedder + provider to enable it.

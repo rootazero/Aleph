@@ -512,6 +512,30 @@ pub enum GatewayEventFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project_id: Option<String>,
     },
+    /// A browser-live preview resource was published or revised
+    /// (`aleph_protocol::browser_live::PreviewResource`).
+    ///
+    /// The payload is carried NESTED under `resource` and verbatim, so the
+    /// frame's own `type` tag cannot collide with anything inside it and the
+    /// Panel decodes `data.resource` as the protocol type. It holds no URL,
+    /// grant or secret by construction (`PreviewResource` has no such field).
+    ///
+    /// `event_visibility` classifies it `ByBrowserLiveScope`: only the
+    /// authenticated user named by the Browser `ViewerBinding` principal, and
+    /// only while the binding's `run_id` resolves to the binding's
+    /// `session_key`, receives it. An Artifact binding or a Connection
+    /// principal is WITHHELD from every caller (fail closed). TopicEvent-form
+    /// only — no `stream_method()` arm.
+    BrowserLiveResource {
+        resource: aleph_protocol::browser_live::PreviewResource,
+    },
+    /// A browser-live resource ended
+    /// (`aleph_protocol::browser_live::BrowserLiveClosed`). Nested under
+    /// `closed` for the same reason as [`Self::BrowserLiveResource`], and
+    /// scoped by the same binding.
+    BrowserLiveClosed {
+        closed: aleph_protocol::browser_live::BrowserLiveClosed,
+    },
 }
 
 /// How a clarification ended, carried on [`GatewayEventFrame::ClarificationEnded`].
@@ -781,6 +805,8 @@ impl GatewayEventFrame {
             // The protocol const, not a second literal: the Panel subscribes
             // by this exact string and a drifted copy here would be silent.
             Self::CanvasUpdated { .. } => aleph_protocol::canvas::TOPIC,
+            Self::BrowserLiveResource { .. } => aleph_protocol::browser_live::RESOURCE_TOPIC,
+            Self::BrowserLiveClosed { .. } => aleph_protocol::browser_live::CLOSED_TOPIC,
         }
         .to_string()
     }
@@ -1074,5 +1100,87 @@ mod surface_notify_tests {
         assert_eq!(payload.revision, 3);
         assert_eq!(payload.ops.len(), 1);
         assert_eq!(payload.actor.as_deref(), Some("u-alice"));
+    }
+
+    /// Browser-live frames: topic names are the protocol constants (pinned to
+    /// their literals here), the frame is topic/data only, and the payload is
+    /// nested verbatim under `resource` / `closed` so it round-trips exactly
+    /// and no `type` tag collides.
+    #[test]
+    fn browser_live_frames_map_topics_and_round_trip_the_exact_payload() {
+        use aleph_protocol::browser_live as bl;
+        let binding = bl::ResourceBinding::Browser {
+            viewer: bl::ViewerBinding {
+                principal: bl::IssuerIdentity::User {
+                    user_id: "user-42".to_string(),
+                },
+                task: bl::ConversationBinding {
+                    session_key: "agent:operator:browser".to_string(),
+                    run_id: "run-7".to_string(),
+                },
+                target: bl::BrowserTargetBinding {
+                    profile: "default".to_string(),
+                    browser_session_id: "browser-session-3".to_string(),
+                    target_id: "target-9".to_string(),
+                },
+            },
+        };
+        let resource = bl::PreviewResource {
+            resource_id: "resource-5".to_string(),
+            revision: 2,
+            binding: binding.clone(),
+            kind: bl::PreviewKind::Page,
+            display: bl::DisplayPolicy::AutoRevealCurrentRun,
+            source: bl::PreviewSource::BrowserTool,
+            provenance: bl::PreviewProvenance::NotManaged,
+            expires_at_ms: 1_799_000_060_000,
+            redaction: bl::RedactionStatus::Safe,
+            companion_candidates: vec![],
+        };
+        let closed = bl::BrowserLiveClosed {
+            resource_id: "resource-5".to_string(),
+            binding,
+            reason: bl::ClosedReason::TargetClosed,
+            at_ms: 1_799_000_000_000,
+        };
+
+        let rf = GatewayEventFrame::BrowserLiveResource {
+            resource: resource.clone(),
+        };
+        let cf = GatewayEventFrame::BrowserLiveClosed {
+            closed: closed.clone(),
+        };
+        assert_eq!(rf.topic_name(), "browser.live.resource");
+        assert_eq!(cf.topic_name(), "browser.live.closed");
+        assert_eq!(rf.topic_name(), bl::RESOURCE_TOPIC);
+        assert_eq!(cf.topic_name(), bl::CLOSED_TOPIC);
+        assert!(rf.stream_method().is_none());
+        assert!(cf.stream_method().is_none());
+
+        let rv = serde_json::to_value(&rf).unwrap();
+        assert_eq!(rv["type"], "browser_live_resource");
+        assert_eq!(rv["resource"], serde_json::to_value(&resource).unwrap());
+        assert_eq!(
+            serde_json::from_value::<bl::PreviewResource>(rv["resource"].clone()).unwrap(),
+            resource
+        );
+        let cv = serde_json::to_value(&cf).unwrap();
+        assert_eq!(cv["type"], "browser_live_closed");
+        assert_eq!(cv["closed"], serde_json::to_value(&closed).unwrap());
+        assert_eq!(
+            serde_json::from_value::<bl::BrowserLiveClosed>(cv["closed"].clone()).unwrap(),
+            closed
+        );
+        // Frame-level round trip (the frame itself is Serialize + Deserialize).
+        let back: GatewayEventFrame = serde_json::from_value(rv.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&back).unwrap(), rv);
+
+        // No URL / secret-looking material rides the frame.
+        for v in [&rv, &cv] {
+            let s = v.to_string();
+            for forbidden in ["http://", "https://", "ws://", "token", "secret", "grant"] {
+                assert!(!s.contains(forbidden), "frame leaked {forbidden}: {s}");
+            }
+        }
     }
 }

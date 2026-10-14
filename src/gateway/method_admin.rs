@@ -92,6 +92,12 @@
 //!   [`crate::gateway::method_visibility`] (Task 7 entries — see that
 //!   module's doc for the exact `Treatment` and coverage boundary).
 //!
+//! `browser.viewer.grant.issue` / `.revoke` and `browser.viewer.resource.decide`
+//! / `.list` are member-open own-resource surfaces, not server configuration. Their
+//! handlers require an authenticated
+//! User and enforce exact resource ownership / original grant issuer; operators
+//! do not bypass ownership. Future browser control methods need their own ruling.
+//!
 //! This file is the authoritative source for the classification — both the
 //! enforcement and the audit trail. Nothing here defers to a report artifact.
 

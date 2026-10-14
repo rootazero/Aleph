@@ -1,0 +1,42 @@
+
+
+ProcessId      : 11076
+ExecutablePath : D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\target\debug\aleph-server.e
+                 xe
+CommandLine    : "D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\target\debug\aleph-server.
+                 exe" --config D:/Workspace/Aleph-worktrees/panel-browser-workspace-20261007-202532-13256/.analysis/bro
+                 wser-live-runtime/config.toml start 
+CreationDate   : 2026/10/11 19:37:41
+
+
+
+
+LocalPort OwningProcess
+--------- -------------
+    18791          2664
+    18790         11076
+
+
+
+
+ProcessId   : 6916
+CommandLine : "C:\Users\zou\AppData\Local\fnm_multishells\9440_1791423593460\node.exe" C:\Users\zou\.pi\agent\bin\pi-la
+              uncher.js
+
+ProcessId   : 4356
+CommandLine : C:\Users\zou\AppData\Local\fnm_multishells\9440_1791423593460\node.exe C:\Users\zou\.pi\agent\install\rel
+              eases\1.1.0\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js
+
+ProcessId   : 10692
+CommandLine : C:\Users\zou\AppData\Local\fnm_multishells\9440_1791423593460\node.exe C:\Users\zou\.pi\agent\npm\node_mo
+              dules\billion-context\dist\index.js start --host 127.0.0.1 --port 18796
+
+ProcessId   : 11376
+CommandLine : C:\Users\zou\AppData\Local\fnm_multishells\9440_1791423593460\node.exe C:\Users\zou\.pi\agent\npm\node_mo
+              dules\context-mode\server.bundle.mjs
+
+ProcessId   : 2664
+CommandLine : C:\Users\zou\AppData\Local\fnm_multishells\9440_1791423593460\node.exe mock-llm.js
+
+
+

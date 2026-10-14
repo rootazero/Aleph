@@ -1,0 +1,10 @@
+    Checking windows-sys v0.59.0
+    Checking aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
+    Checking rtoolbox v0.0.5
+    Checking getrandom v0.4.2
+    Checking shared-ui-logic v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\ui_logic)
+    Checking aleph-client v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\client)
+    Checking uuid v1.23.2
+    Checking rpassword v7.5.4
+    Checking aleph-tui v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\interfaces\tui)
+    Finished `dev` profile [unoptimized] target(s) in 21.15s

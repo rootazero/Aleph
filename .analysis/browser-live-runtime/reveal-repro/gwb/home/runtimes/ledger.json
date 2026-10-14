@@ -1,0 +1,44 @@
+{
+  "entries": {
+    "uv": {
+      "name": "uv",
+      "bin_path": "C:\\Users\\zou\\scoop\\shims\\uv.exe",
+      "version": "0.12.7",
+      "status": "ready",
+      "source": "system",
+      "last_probed": 1791866313
+    },
+    "git": {
+      "name": "git",
+      "bin_path": "C:\\Program Files\\Git\\mingw64\\bin\\git.exe",
+      "version": "2.54.0",
+      "status": "ready",
+      "source": "system",
+      "last_probed": 1791866313
+    },
+    "cargo": {
+      "name": "cargo",
+      "bin_path": "C:\\Users\\zou\\scoop\\persist\\rustup\\.cargo\\bin\\cargo.exe",
+      "version": "1.96.0",
+      "status": "ready",
+      "source": "system",
+      "last_probed": 1791866313
+    },
+    "node": {
+      "name": "node",
+      "bin_path": "C:\\Users\\zou\\scoop\\apps\\fnm\\current\\aliases\\default\\node.exe",
+      "version": "24.21.0",
+      "status": "ready",
+      "source": "system",
+      "last_probed": 1791866313
+    },
+    "fnm": {
+      "name": "fnm",
+      "bin_path": "C:\\Users\\zou\\scoop\\apps\\fnm\\current\\fnm.exe",
+      "version": "1.39.0",
+      "status": "ready",
+      "source": "system",
+      "last_probed": 1791866313
+    }
+  }
+}
