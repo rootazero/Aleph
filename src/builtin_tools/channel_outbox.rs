@@ -349,12 +349,11 @@ impl AlephTool for ChannelOutboxTool {
         "action=dead_letters: the given-up messages themselves — recipient, text ",
         "preview, attempts, last error, and why retrying stopped.\n",
         "action=redrive: put them back in the queue for another delivery pass.\n\n",
-        "Redrive moves only redrivable=true entries. replay_safe=false may ",
-        "already have been sent — skipped_not_replay_safe; ask the user. ",
-        "'payload_too_large' never left the process but a replay re-hits the ",
-        "cap — skipped_over_cap; raise max_payload_bytes. ",
-        "'explicit_only_retired' was never sent and its body was removed — ",
-        "skipped_policy_retired; ask the user to send again explicitly."
+        "Redrive redrivable=true. replay_safe=false may be sent: ",
+        "skipped_not_replay_safe; ask user. 'payload_too_large' unsent: ",
+        "skipped_over_cap; raise max_payload_bytes. ",
+        "'explicit_only_retired' unsent/body removed: ",
+        "skipped_policy_retired; resend explicitly."
     );
 
     type Args = ChannelOutboxArgs;

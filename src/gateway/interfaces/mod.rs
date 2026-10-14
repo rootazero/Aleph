@@ -26,6 +26,7 @@
 
 pub mod cli;
 pub mod plugin;
+pub mod voice_call;
 pub mod wechat;
 
 // iMessage module compiles on all platforms: the BlueBubbles transport is pure
@@ -71,6 +72,10 @@ pub use signal::{SignalChannel, SignalChannelFactory, SignalConfig};
 pub use slack::{SlackChannel, SlackChannelFactory, SlackConfig};
 pub use sms::{SmsChannel, SmsChannelFactory, SmsConfig, SmsTransport};
 pub use telegram::{TelegramChannel, TelegramChannelFactory, TelegramConfig};
+pub use voice_call::{
+    ApplyOutcome, CallAvailability, CallCommand, CallSession, CallState, CallStateError,
+    CallTransport, CallTransportError, IgnoredEvent, OfflineCallTransport, PlayedRange, TurnState,
+};
 pub use webhook::{WebhookChannel, WebhookChannelConfig, WebhookChannelFactory};
 pub use wechat::{WeChatChannel, WeChatChannelFactory, WeChatConfig};
 pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};
