@@ -188,6 +188,13 @@ pub trait LoopTool: Send + Sync {
         None
     }
 
+    /// Frozen contract of a canonical projection, used to reject source drift.
+    /// Projection-only test fixtures may judge this contract without a live store;
+    /// production always retains the live canonical link on LoopToolRegistry.
+    fn capability_descriptor(&self) -> Option<&crate::tools::descriptor::ToolCapabilityDescriptor> {
+        None
+    }
+
     /// Which uninstallable thing this tool belongs to, for usage accounting.
     ///
     /// `None` (the default) means "nothing to account" — that is the honest
@@ -216,6 +223,10 @@ pub trait LoopTool: Send + Sync {
 /// Flat registry mapping tool names to trait objects.
 pub struct LoopToolRegistry {
     tools: HashMap<String, Box<dyn LoopTool>>,
+    canonical_registry:
+        Option<crate::sync_primitives::Arc<crate::tools::registry::ToolHandlerRegistry>>,
+    visible_mcp_servers: Option<crate::tools::handlers::McpServerFilter>,
+    request_local: std::collections::HashSet<String>,
 }
 
 impl LoopToolRegistry {
@@ -224,12 +235,47 @@ impl LoopToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
+            canonical_registry: None,
+            visible_mcp_servers: None,
+            request_local: Default::default(),
         }
     }
 
     /// Register a tool. Overwrites any existing tool with the same name.
     pub fn register(&mut self, tool: Box<dyn LoopTool>) {
+        self.request_local.remove(tool.name());
         self.tools.insert(tool.name().to_string(), tool);
+    }
+
+    /// Link both primary and child views to the same store and visibility rule.
+    pub(crate) fn bind_canonical_registry(
+        &mut self,
+        registry: crate::sync_primitives::Arc<crate::tools::registry::ToolHandlerRegistry>,
+        visible: crate::tools::handlers::McpServerFilter,
+    ) {
+        self.canonical_registry = Some(registry);
+        self.visible_mcp_servers = Some(visible);
+    }
+
+    pub(crate) fn canonical_registry(
+        &self,
+    ) -> Option<crate::sync_primitives::Arc<crate::tools::registry::ToolHandlerRegistry>> {
+        self.canonical_registry.clone()
+    }
+
+    pub(crate) fn visible_mcp_servers(&self) -> Option<crate::tools::handlers::McpServerFilter> {
+        self.visible_mcp_servers.clone()
+    }
+
+    /// Request-generated schema/search helpers are not stale canonical fallbacks.
+    pub(crate) fn register_request_local(&mut self, tool: Box<dyn LoopTool>) {
+        let name = tool.name().to_string();
+        self.register(tool);
+        self.request_local.insert(name);
+    }
+
+    pub(crate) fn is_request_local(&self, name: &str) -> bool {
+        self.request_local.contains(name)
     }
 
     /// Look up a tool by name.
@@ -307,6 +353,8 @@ impl LoopToolRegistry {
     /// Remove tools whose names do not satisfy the predicate.
     pub fn retain(&mut self, f: impl Fn(&str) -> bool) {
         self.tools.retain(|name, _| f(name));
+        self.request_local
+            .retain(|name| self.tools.contains_key(name));
     }
 
     /// Collect definitions for all registered tools (sorted by name for determinism).

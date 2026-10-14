@@ -32,6 +32,7 @@ pub(super) async fn init_tool_catalog(
     memory_ext_registry: &std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>,
     daemon: bool,
     tool_catalog: Arc<alephcore::tool_metadata::ToolCatalog>,
+    canonical_tools: Arc<alephcore::tools::ToolHandlerRegistry>,
 ) -> Arc<alephcore::tool_metadata::ToolCatalog> {
     use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
 
@@ -41,6 +42,7 @@ pub(super) async fn init_tool_catalog(
 
     // Also register executor builtin tools as commands (search, screenshot, ocr, etc.)
     register_builtin_definitions(&tool_catalog).await;
+    register_canonical_builtin_definitions(&tool_catalog, &canonical_tools).await;
 
     // Runtime-only shorthand targets: provider-gated generation tools
     // (video/audio/speech_generate) that are NOT in BUILTIN_TOOL_DEFINITIONS,
@@ -298,9 +300,12 @@ pub(super) async fn init_tool_catalog(
         server.handlers_mut().register("tools.invoke", move |req| {
             let registry = reg.clone();
             let agents = Some(agents_for_invoke.clone());
+            let canonical = Some(canonical_tools.clone());
             async move {
-                alephcore::gateway::handlers::tools_invoke::handle_invoke(req, registry, agents)
-                    .await
+                alephcore::gateway::handlers::tools_invoke::handle_invoke_with_canonical(
+                    req, registry, agents, canonical,
+                )
+                .await
             }
         });
         if !daemon {
@@ -431,6 +436,31 @@ pub(super) async fn init_tool_catalog(
     }
 
     tool_catalog
+}
+
+/// Project registered builtin capabilities; the registry owns names and schemas.
+async fn register_canonical_builtin_definitions(
+    catalog: &alephcore::tool_metadata::ToolCatalog,
+    registry: &alephcore::tools::ToolHandlerRegistry,
+) {
+    use alephcore::tool_metadata::{ToolSource, UnifiedTool};
+    for descriptor in registry.descriptor_snapshot().values() {
+        if !matches!(
+            descriptor.source,
+            alephcore::tools::service::ToolSource::Builtin
+        ) || catalog.check_conflict(&descriptor.name).await.is_some()
+        {
+            continue;
+        }
+        let tool = UnifiedTool::new(
+            format!("builtin:{}", descriptor.name),
+            &descriptor.name,
+            &descriptor.description,
+            ToolSource::Builtin,
+        )
+        .with_parameters_schema(descriptor.input_schema.clone());
+        catalog.register_with_conflict_resolution(tool).await;
+    }
 }
 
 /// Register every entry in `BUILTIN_TOOL_DEFINITIONS` as a `ToolCatalog` row,

@@ -1,6 +1,10 @@
 //! MCP Type Definitions
 //!
 //! Common types used across MCP services.
+//!
+//! **Projection-only boundary:** these wire/catalog/result types project MCP
+//! state for transport and discovery. Their presence or absence never grants
+//! authorization and they are not a capability registry or recovery source.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

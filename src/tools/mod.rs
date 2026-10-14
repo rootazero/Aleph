@@ -37,6 +37,7 @@ pub mod budget;
 pub mod concurrency;
 pub mod context;
 pub mod descriptor;
+pub mod dispatch_verdict;
 pub mod error_kind;
 pub mod fallback_registry;
 pub mod fs_scope;
@@ -112,6 +113,8 @@ pub use descriptor::{
     DescriptorError, ImplementationContract, ReplayContractFingerprint, ReplayPolicy,
     ReplayPolicyLookup, ToolCallIdentity, ToolCapabilityDescriptor, ToolDescriptorLookup, ToolKind,
 };
+#[cfg(test)]
+pub(crate) use dispatch_verdict::current_dispatch_verdict;
 pub use null::NullToolService;
 pub use registration_scope::{ToolDisposeReport, ToolRegistrationScope};
 pub use registry::{RegistrySnapshot, ToolHandlerRegistry};

@@ -818,60 +818,80 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             let mcp_tool_names = match super::super::tool_service_builder::mcp_tool_registry() {
                 Some(mcp_registry) => {
-                    let joined = join_canonical_tools(
-                        &mcp_registry.entries_snapshot(),
-                        &mut loop_registry_inner,
-                        |name| {
-                            agent.is_tool_allowed(name)
-                                && super::super::slash_skill_scope::admits(
-                                    slash_skill_scope.as_ref(),
-                                    name,
-                                )
-                        },
-                        &visible_mcp_servers(visibility.clone(), extension_manager.clone()),
-                        &mut allowed_names,
-                        |name| {
-                            self.tool_registry.get_tool(name).and_then(|tool| {
-                                matches!(
-                                    &tool.source,
-                                    crate::tool_metadata::ToolSource::Native
-                                        | crate::tool_metadata::ToolSource::Builtin
-                                )
-                                .then_some(tool.max_result_tokens)
-                                .flatten()
-                            })
-                        },
-                    );
-                    if !joined.is_empty() {
-                        info!(
-                            run_id = run_id,
-                            count = joined.len(),
-                            "canonical capability snapshot projected"
-                        );
+                    let visible =
+                        visible_mcp_servers(visibility.clone(), extension_manager.clone());
+                    // Both services below receive this same Arc through the
+                    // shared projection; Scoped::new retains it, not a global
+                    // re-lookup or a second callable map.
+                    loop_registry_inner
+                        .bind_canonical_registry(mcp_registry.clone(), visible.clone());
+                    match select_canonical_mcp_projection(
+                        true,
+                        canonical_mcp_host_state(
+                            crate::capability::projection_host::projection_host()
+                                .map(|host| host.as_ref()),
+                        ),
+                    ) {
+                        CanonicalMcpProjection::Applied(entries) => {
+                            let joined = join_canonical_tools(
+                                &entries,
+                                &mut loop_registry_inner,
+                                |name| {
+                                    agent.is_tool_allowed(name)
+                                        && super::super::slash_skill_scope::admits(
+                                            slash_skill_scope.as_ref(),
+                                            name,
+                                        )
+                                },
+                                &visible,
+                                &mut allowed_names,
+                                |name| {
+                                    self.tool_registry.get_tool(name).and_then(|tool| {
+                                        matches!(
+                                            &tool.source,
+                                            crate::tool_metadata::ToolSource::Native
+                                                | crate::tool_metadata::ToolSource::Builtin
+                                        )
+                                        .then_some(tool.max_result_tokens)
+                                        .flatten()
+                                    })
+                                },
+                            );
+                            if !joined.is_empty() {
+                                info!(
+                                    run_id = run_id,
+                                    count = joined.len(),
+                                    "canonical capability snapshot projected"
+                                );
+                            }
+                            joined
+                        }
+                        CanonicalMcpProjection::MissingHost => {
+                            // Production boot installs the host before admitting
+                            // consumers. A missing host is a wiring failure, not
+                            // permission to rebuild a second authority.
+                            warn!(run_id = run_id, "capability projection host missing");
+                            std::collections::BTreeSet::new()
+                        }
+                        CanonicalMcpProjection::UnavailableHost => {
+                            // Before readiness, or after close/invalidation, the
+                            // installed host is fail-closed and exposes no tools.
+                            warn!(run_id = run_id, "capability projection host unavailable");
+                            std::collections::BTreeSet::new()
+                        }
+                        CanonicalMcpProjection::HostlessCompatibility => unreachable!(
+                            "a present canonical registry cannot select hostless compatibility"
+                        ),
                     }
-                    joined
                 }
                 None => {
-                    // The canonical slot is installed during production boot. If
-                    // an alternate entry point omits it, retain the old executor
-                    // projection explicitly instead of silently exposing no tools.
-                    loop_registry_inner = crate::tools::adapters::build_registry_from_tools(
-                        self.tool_registry.clone(),
-                        &allowed_tools,
-                    );
-                    let _ = super::super::markdown_skill_tools::join_markdown_skills(
-                        &mut loop_registry_inner,
-                        |name| {
-                            agent.is_tool_allowed(name)
-                                && super::super::slash_skill_scope::admits(
-                                    slash_skill_scope.as_ref(),
-                                    name,
-                                )
-                        },
-                        &mut allowed_names,
-                    )
-                    .await;
-                    std::collections::BTreeSet::new()
+                    // Never resurrect old Builtin/markdown/MCP projections when
+                    // the canonical authority is missing, even on alternate
+                    // production entry points. Fixtures construct Scoped directly.
+                    return Err(ExecutionError::Failed(
+                        "canonical capability registry is not installed; tool dispatch refused"
+                            .into(),
+                    ));
                 }
             };
 
@@ -906,7 +926,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         .into_iter()
                         .map(|d| (d.name, d.parameters))
                         .collect();
-                loop_registry_inner.register(Box::new(
+                loop_registry_inner.register_request_local(Box::new(
                     crate::tools::schema_lookup::SchemaLookupTool::new(std::sync::Arc::new(
                         schema_snapshot,
                     )),
@@ -961,7 +981,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         schema: d.parameters,
                     })
                     .collect();
-                loop_registry_inner.register(Box::new(
+                loop_registry_inner.register_request_local(Box::new(
                     crate::tools::tool_search::ToolSearchTool::new(docs, deferred.clone()),
                 ));
                 if !allowed_names.is_empty() {
@@ -1781,6 +1801,57 @@ fn publish_artifact_invalidation(
 ) {
     let Some(bus) = event_bus else { return };
     crate::gateway::event_emitter::artifact_ping::publish_artifact_ping_on(bus, session_key);
+}
+
+/// State observed from the installed projection host before canonical joining.
+/// The production selector keeps missing installation distinct from an installed
+/// host that is not ready or has failed closed; neither state may fall through to
+/// hostless/plugin compatibility.
+pub(super) enum CanonicalMcpHostState {
+    Missing,
+    Unavailable,
+    Applied(
+        std::sync::Arc<std::collections::HashMap<String, crate::tools::registry::RegistryEntry>>,
+    ),
+}
+
+/// The selected canonical input for one run-loop request.
+pub(super) enum CanonicalMcpProjection {
+    HostlessCompatibility,
+    MissingHost,
+    UnavailableHost,
+    Applied(
+        std::sync::Arc<std::collections::HashMap<String, crate::tools::registry::RegistryEntry>>,
+    ),
+}
+
+/// Read the actual applied state from the installed projection host.
+pub(super) fn canonical_mcp_host_state(
+    host: Option<&crate::capability::projection_host::ProjectionHost>,
+) -> CanonicalMcpHostState {
+    let Some(host) = host else {
+        return CanonicalMcpHostState::Missing;
+    };
+    host.current_snapshot()
+        .map(|snapshot| CanonicalMcpHostState::Applied(snapshot.entries))
+        .unwrap_or(CanonicalMcpHostState::Unavailable)
+}
+
+/// Select the canonical input without changing the canonical join itself.
+/// This pure seam lets tests exercise applied, missing, and unavailable states
+/// without resetting the install-once process slots.
+pub(super) fn select_canonical_mcp_projection(
+    canonical_registry_present: bool,
+    host_state: CanonicalMcpHostState,
+) -> CanonicalMcpProjection {
+    if !canonical_registry_present {
+        return CanonicalMcpProjection::HostlessCompatibility;
+    }
+    match host_state {
+        CanonicalMcpHostState::Missing => CanonicalMcpProjection::MissingHost,
+        CanonicalMcpHostState::Unavailable => CanonicalMcpProjection::UnavailableHost,
+        CanonicalMcpHostState::Applied(entries) => CanonicalMcpProjection::Applied(entries),
+    }
 }
 
 /// Project the one canonical capability snapshot into the request's loop

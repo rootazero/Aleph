@@ -108,10 +108,6 @@ impl<'a> TerminalRuntime<'a> {
         }
     }
 
-    /// Test-only: the production attach admission (owner gate plus snapshot)
-    /// lives in `gateway::handlers::pty`; this wrapper keeps the runtime-level
-    /// ownership matrix under test without a second production entry point.
-    #[cfg(test)]
     pub(crate) fn attach(
         &self,
         caller: &ObservationCaller,
@@ -353,23 +349,24 @@ mod tests {
     use std::task::{Context, Poll, Wake, Waker};
     use tokio_util::sync::CancellationToken;
 
-    struct Session(String);
-    impl Session {
-        fn new(owner: Option<&str>) -> Self {
+    struct Session<'a>(String, &'a PtyManager);
+    impl<'a> Session<'a> {
+        fn new(manager: &'a PtyManager, owner: Option<&str>) -> Self {
             Self(
-                manager()
+                manager
                     .spawn(&SpawnOptions {
                         created_by: owner.map(str::to_owned),
                         ..Default::default()
                     })
                     .expect("spawn")
                     .session_id,
+                manager,
             )
         }
     }
-    impl Drop for Session {
+    impl Drop for Session<'_> {
         fn drop(&mut self) {
-            let _ = manager().close(&self.0);
+            let _ = self.1.close(&self.0);
         }
     }
 
@@ -444,10 +441,11 @@ mod tests {
     #[test]
     #[serial_test::serial(pty_global_manager)]
     fn gateway_actorless_preserves_unknown_owner_admission() {
+        let manager = manager();
         let table = RuntimeAgents::default();
         let orphan = "orphan-without-pty";
         sample(&table, orphan, false);
-        let runtime = TerminalRuntime::new(manager(), &table);
+        let runtime = TerminalRuntime::new(manager, &table);
 
         let gateway = runtime.status(&ObservationCaller::Gateway { actor: None });
         assert!(gateway
@@ -476,13 +474,14 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(pty_global_manager)]
     async fn tool_without_actor_does_not_inherit_gateway_admission() {
-        let owned = Session::new(Some("alice"));
-        let unowned = Session::new(None);
+        let manager = manager();
+        let owned = Session::new(manager, Some("alice"));
+        let unowned = Session::new(manager, None);
         let table = RuntimeAgents::default();
         for id in [&owned.0, &unowned.0] {
             sample(&table, id, false);
         }
-        let runtime = TerminalRuntime::new(manager(), &table);
+        let runtime = TerminalRuntime::new(manager, &table);
         let tool = ObservationCaller::Tool { actor: None };
         let gateway = ObservationCaller::Gateway { actor: None };
         for caller in [&tool, &gateway] {
@@ -541,12 +540,13 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(pty_global_manager)]
     async fn alice_and_bob_ownership_reaches_every_observation_face() {
-        let alice = Session::new(Some("alice"));
-        let bob = Session::new(Some("bob"));
+        let manager = manager();
+        let alice = Session::new(manager, Some("alice"));
+        let bob = Session::new(manager, Some("bob"));
         let table = RuntimeAgents::default();
         sample(&table, &alice.0, false);
         sample(&table, &bob.0, false);
-        let runtime = TerminalRuntime::new(manager(), &table);
+        let runtime = TerminalRuntime::new(manager, &table);
         for (actor, own, other) in [("alice", &alice.0, &bob.0), ("bob", &bob.0, &alice.0)] {
             for caller in [
                 ObservationCaller::Tool {
@@ -598,8 +598,9 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(pty_global_manager)]
     async fn omitted_until_reaches_blocked_and_idle_through_the_borrowed_runtime() {
-        let blocked = Session::new(Some("alice"));
-        let idle = Session::new(Some("alice"));
+        let manager = manager();
+        let blocked = Session::new(manager, Some("alice"));
+        let idle = Session::new(manager, Some("alice"));
         let table = RuntimeAgents::default();
         let mut blocked_screen = Screen::new(4, 40);
         blocked_screen.feed(b"\x1b]0;Action Required\x07");
@@ -618,7 +619,7 @@ mod tests {
                 now: 0,
             });
         }
-        let runtime = TerminalRuntime::new(manager(), &table);
+        let runtime = TerminalRuntime::new(manager, &table);
         let caller = ObservationCaller::Tool {
             actor: Some("alice".into()),
         };
@@ -649,11 +650,12 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(pty_global_manager)]
     async fn quiet_does_not_become_idle() {
-        let session = Session::new(Some("alice"));
+        let manager = manager();
+        let session = Session::new(manager, Some("alice"));
         let table = RuntimeAgents::default();
         sample(&table, &session.0, true);
         table.mark_quiet(crate::gateway::runtime::QUIET_AFTER_MS);
-        let runtime = TerminalRuntime::new(manager(), &table);
+        let runtime = TerminalRuntime::new(manager, &table);
         let caller = ObservationCaller::Tool {
             actor: Some("alice".into()),
         };
@@ -682,9 +684,10 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(pty_global_manager)]
     async fn cancellation_ends_wait_without_busy_polling_or_a_held_store_lock() {
-        let session = Session::new(Some("alice"));
+        let manager = manager();
+        let session = Session::new(manager, Some("alice"));
         let table = RuntimeAgents::default();
-        let runtime = TerminalRuntime::new(manager(), &table);
+        let runtime = TerminalRuntime::new(manager, &table);
         let caller = ObservationCaller::Tool {
             actor: Some("alice".into()),
         };
@@ -729,14 +732,15 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(pty_global_manager)]
     async fn closed_pty_wins_over_a_stale_matching_agent_row() {
-        let session = Session::new(Some("alice"));
+        let manager = manager();
+        let session = Session::new(manager, Some("alice"));
         let table = RuntimeAgents::default();
         sample(&table, &session.0, true);
-        manager().close(&session.0).expect("close the live PTY");
+        manager.close(&session.0).expect("close the live PTY");
 
         for state in [RuntimeAgentState::Working, RuntimeAgentState::Blocked] {
             let outcome = wait_for_state(
-                manager(),
+                manager,
                 &table,
                 &session.0,
                 &[state],
@@ -753,9 +757,10 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(pty_global_manager)]
     async fn actual_core_producers_preserve_the_legacy_wire() {
-        let session = Session::new(Some("alice"));
+        let manager = manager();
+        let session = Session::new(manager, Some("alice"));
         let table = RuntimeAgents::default();
-        let runtime = TerminalRuntime::new(manager(), &table);
+        let runtime = TerminalRuntime::new(manager, &table);
         let caller = ObservationCaller::Tool {
             actor: Some("alice".into()),
         };
@@ -807,7 +812,7 @@ mod tests {
             serde_json::to_value(&reached).unwrap(),
             serde_json::json!({"session_id":session.0,"outcome":"reached","agent":table.entry(&session.0)})
         );
-        manager().close(&session.0).unwrap();
+        manager.close(&session.0).unwrap();
         table.remove(&session.0);
         let gone = runtime
             .wait(&caller, &params(&session.0, 0), CancellationToken::new())

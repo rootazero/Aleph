@@ -40,6 +40,7 @@ pub mod bash_exec;
 // registry. Re-declaring it here would just be a duplicate declaration.
 pub mod browser_tools;
 pub mod canvas;
+pub mod capability_projection_diagnostics;
 pub mod channel_directory;
 pub mod channel_manage;
 pub mod channel_message;
@@ -289,7 +290,7 @@ pub use strategy_manage::{StrategyAction, StrategyArgs, StrategyOutput, Strategy
 pub use system_tool::{SystemArgs, SystemOutput, SystemTool};
 pub use task_manage::*;
 pub use team::*;
-pub use terminal::{TerminalAction, TerminalArgs, TerminalOutput, TerminalTool};
+pub use terminal::TerminalOutput;
 pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreTool};
 pub use voice_tools::{
     LocalVoiceArgs, LocalVoiceOutput, LocalVoiceTool, VoiceModeSetArgs, VoiceModeSetOutput,

@@ -882,7 +882,6 @@ impl BuiltinToolRegistry {
             );
             let select_model_meta = crate::builtin_tools::SelectModelTool;
             let doctor_meta = crate::builtin_tools::DoctorTool::default();
-            let terminal_meta = crate::builtin_tools::TerminalTool;
             let extra_defs = [
                 apply_patch_tool.definition(),
                 desktop_ax_query_focused_tool.definition(),
@@ -896,7 +895,6 @@ impl BuiltinToolRegistry {
                 google_meet_meta.definition(),
                 select_model_meta.definition(),
                 doctor_meta.definition(),
-                terminal_meta.definition(),
             ];
             for td in &extra_defs {
                 let mut ut = UnifiedTool::new(
@@ -943,6 +941,36 @@ impl BuiltinToolRegistry {
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered schemas for media_understand, audio_transcribe, document_extract");
+        }
+
+        // Capability-runtime diagnostic control surface. Listed in
+        // BUILTIN_TOOL_DEFINITIONS for *catalog* purposes (so the
+        // BUILTIN_TOOL_DEFINITIONS tripwire sees the name) and
+        // dispatched in registry.rs, but the runtime advertisement is
+        // GATED on `diagnostics_control: Some(_)` — when the env
+        // `ALEPH_CAPABILITY_DIAGNOSTICS=1` is not set at startup,
+        // the tool is not in the runtime tool map, not in the LLM-
+        // facing tool list, and not in the dispatch census. The
+        // wire-level three-part check (operator + loopback + conn_id)
+        // lives in the tool module itself; this is the *enablement*
+        // half of the two-part guard, mirroring the media_pipeline
+        // block above. Keeping the registration block here (not
+        // unconditional) is the only reason a normal-mode build
+        // cannot accidentally dispatch the tool.
+        if let Some(ref dc) = config.diagnostics_control {
+            let td = crate::builtin_tools::capability_projection_diagnostics::DiagnosticTool::new(
+                crate::sync_primitives::Arc::clone(dc),
+            )
+            .definition();
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                ToolSource::Builtin,
+            );
+            ut = ut.with_parameters_schema(td.parameters.clone());
+            tools.insert(td.name.clone(), ut);
+            info!("Registered schema for capability_projection_diagnostics");
         }
 
         // config_audit shares the same gap: listed in BUILTIN_TOOL_DEFINITIONS
@@ -1459,6 +1487,7 @@ impl BuiltinToolRegistry {
             // held as constructed instances (config_audit / media_* / recall_context).
             config: config.config.clone(),
             media_pipeline: config.media_pipeline.clone(),
+            diagnostics_control: config.diagnostics_control.clone(),
             memory_project_scoped: config.memory_project_scoped,
             recall_context_db: config.memory_db.clone(),
             memory_trace_db: config.memory_db.clone(),

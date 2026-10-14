@@ -98,25 +98,30 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "config_audit",
     "get_tool_schema",
     "list_models",
-    // Read-only PTY session view (herdr runtime port, phase 1). Unlike
-    // `file_ops`/`doctor`/`note_schema` above, it has NO write arm at all to
-    // resolve per-argument — two exhaustive `match`es on `TerminalAction`
-    // make a mutating variant a compile error (deliberately not "a fourth
-    // variant": the count grew to five in round 2 and an ordinal in a comment
-    // is a fact that rots) — so listing it here outright, rather than in a
-    // `*_claim` function, is safe. One of the five, `wait`, BLOCKS for up to
-    // 150 s; it is still a read (it observes the agent table's change watch
-    // and returns a row, touching nothing), and none of the three consumers
-    // below changes answer for a read that takes time. Verified
-    // against this list's three actual consumers: `Shared` concurrency
-    // (each action only reads through `PtyManager`'s own lock and returns
-    // owned data, holding no state across the call), the one-shot
-    // auto-retry gate (nothing to retry into that a write could corrupt),
-    // and the `Ask`-tier read exemption (only an operator-tier caller can
-    // ever reach this tool at all — see `OPERATOR_TOOLS` — so exempting it
+    // Read-only PTY session view (herdr runtime port). Six canonical
+    // `terminal_sessions_*` capabilities, one verb each, replace the former
+    // single `terminal` tool and its `action` selector. Unlike
+    // `file_ops`/`doctor`/`note_schema` above there is NO write arm to resolve
+    // per-argument: every handler routes through `invoke_observation`, which
+    // only reads through the borrowed `TerminalRuntime`, so listing the names
+    // outright (rather than in a `*_claim` function) is safe. `wait` BLOCKS
+    // for up to 150 s; it is still a read (it observes the agent table's
+    // change watch and returns a row, touching nothing), and none of the
+    // three consumers below changes answer for a read that takes time.
+    // Verified against this list's three actual consumers: `Shared`
+    // concurrency (each verb only reads through `PtyManager`'s own lock and
+    // returns owned data, holding no state across the call), the one-shot
+    // auto-retry gate (nothing to retry into that a write could corrupt), and
+    // the `Ask`-tier read exemption (only an operator-tier caller can ever
+    // reach these tools at all — see `OPERATOR_TOOLS` — so exempting them
     // from `Ask` removes a redundant confirmation on top of that gate, it
-    // does not widen who may call it).
-    "terminal",
+    // does not widen who may call them).
+    "terminal_sessions_list",
+    "terminal_sessions_read",
+    "terminal_sessions_status",
+    "terminal_sessions_wait",
+    "terminal_sessions_explain",
+    "terminal_sessions_attach",
     // Progressive-disclosure meta-tool (reads the catalog, promotes a deferred
     // tool). NB: `list_tools` / `search_tools` were ghost names matching no
     // registered tool; the live one is `tool_search`.
@@ -800,6 +805,14 @@ mod tests {
             crate::tools::tool_search::ToolSearchTool::NAME,
         ];
         dynamic.extend_from_slice(crate::mcp::CAPABILITY_READ_BUILTIN_NAMES);
+        let canonical = crate::tools::ToolHandlerRegistry::new();
+        let mut scope = crate::tools::ToolRegistrationScope::new("test:read-only-census");
+        crate::builtin_tools::terminal::capabilities::register_observation_capabilities(
+            &canonical, &mut scope,
+        )
+        .unwrap();
+        let descriptors = canonical.descriptor_snapshot();
+        dynamic.extend(descriptors.keys().map(String::as_str));
 
         for name in READ_ONLY_TOOLS {
             let registered = BUILTIN_TOOL_DEFINITIONS.iter().any(|d| d.name == *name);

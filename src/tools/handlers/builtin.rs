@@ -118,6 +118,13 @@ impl ToolHandler for BuiltinHandler {
         }
     }
 
+    fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        // Classify the bound leaf, never a caller-supplied registry alias.
+        // Multiplexers such as file_ops legitimately have read arms even when
+        // their coarse idempotent/concurrent_safe metadata is false.
+        crate::tools::adapters::builtin_concurrency_claim(self.inner.name(), input)
+    }
+
     fn fences_output(&self) -> bool {
         self.fences_output
     }
@@ -258,6 +265,19 @@ impl ToolHandler for BuiltinRegistryRouter {
                     concurrent_safe: false,
                 },
             },
+        }
+    }
+
+    fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        // This router can also bind MCP/Plugin/custom catalog entries. Only
+        // an actual builtin binding may use the builtin per-input classifier.
+        let trustworthy_builtin = self.inner.get_tool(&self.name).is_some_and(|tool| {
+            tool.name == self.name && matches!(&tool.source, crate::ToolSource::Builtin)
+        });
+        if trustworthy_builtin {
+            crate::tools::adapters::builtin_concurrency_claim(&self.name, input)
+        } else {
+            crate::tools::concurrency::ConcurrencyClaim::global()
         }
     }
 }
@@ -574,10 +594,12 @@ mod builtin_handler_tests {
         .await
         .expect("registration should succeed");
 
-        let handler = registry
-            .resolve("ordinary_builtin")
-            .expect("ordinary name is registered");
-        let output = handler
+        // Exercise the router itself directly. The registry-facing wrapper
+        // intentionally requires a gate-issued proof; that boundary is tested
+        // by scoped dispatch, while this test remains about delegation.
+        let routed =
+            BuiltinRegistryRouter::new("ordinary_builtin".to_string(), Arc::clone(&tool_registry));
+        let output = routed
             .invoke(serde_json::json!({}))
             .await
             .expect("invoke should succeed");

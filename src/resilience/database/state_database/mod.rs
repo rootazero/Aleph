@@ -3,6 +3,10 @@ use super::migration;
 ///
 /// Contains the database connection, schema setup, and migration logic.
 /// Schema DDL is in `schema.rs`, tests are in `tests.rs`.
+///
+/// **Projection-only boundary:** this operational SQLite database is a query
+/// and metrics projection. It is not the capability registry, authorization
+/// source, or session recovery source of truth.
 use crate::error::AlephError;
 use crate::sync_primitives::{Arc, Mutex};
 use rusqlite::{params, Connection, OptionalExtension};

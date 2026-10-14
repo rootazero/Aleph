@@ -21,7 +21,7 @@ pub(crate) mod artifact_harvest;
 mod builder;
 mod cat_guard;
 mod deferred;
-mod dispatch;
+pub(in crate::tools) mod dispatch;
 mod gate_chain;
 mod ledger;
 mod progressive_disclosure;
@@ -43,6 +43,8 @@ mod refusal_tests;
 #[cfg(all(test, unix))]
 mod skill_inline_tests;
 
+#[cfg(test)]
+pub(crate) use crate::tools::dispatch_verdict::current_dispatch_verdict;
 pub use deferred::DeferredTools;
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;
 pub use traits::ToolDefinitionRewriter;
@@ -51,6 +53,7 @@ use std::collections::BTreeSet;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -62,6 +65,19 @@ use crate::sync_primitives::Arc;
 use crate::tool_metadata::ToolHealthCache;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
 use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
+
+/// Selects the representation produced after a tool has already crossed the
+/// normal admission and execution pipeline.
+///
+/// Model-facing calls keep the existing budgeted text representation. RPC
+/// callers need the structured value so a valid protocol envelope is not
+/// destroyed by a prompt-size budget before it reaches the transport.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ResultTransport {
+    #[default]
+    ModelContext,
+    StructuredRpc,
+}
 
 // =============================================================================
 // ScopedToolService
@@ -78,6 +94,11 @@ use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
 /// `allowed` is a set of permitted tool names. Empty = allow-all.
 pub struct ScopedToolService {
     pub(super) inner: Arc<LoopToolRegistry>,
+    /// Optional link to the unique canonical capability store, not a second map.
+    /// `None` is projection-only fixture construction; production must bind the
+    /// store before building either primary or subagent parent views.
+    canonical_registry: Option<Arc<crate::tools::registry::ToolHandlerRegistry>>,
+    visible_mcp_servers: Option<crate::tools::handlers::McpServerFilter>,
     pub(super) allowed: BTreeSet<String>,
     pub(super) subagent_tool: Option<Arc<SubagentTool>>,
     /// Extension-shipped hook executor. Fires `BeforeToolCall` interceptors
@@ -104,6 +125,8 @@ pub struct ScopedToolService {
     /// disk and replaces them with a compact marker before they enter
     /// the conversation history.
     pub(super) result_store: Option<Arc<crate::tools::result_store::ToolResultStore>>,
+    /// Layer 2 representation for the transport consuming this service.
+    pub(super) result_transport: ResultTransport,
     pub(super) schema_cache: ArcSwap<Option<(u64, Arc<[crate::tool_metadata::ToolDefinition]>)>>,
     pub(super) cache_generation: std::sync::atomic::AtomicU64,
     /// Optional runtime health cache. When set, `list()` and
@@ -465,6 +488,9 @@ impl ToolService for ScopedToolService {
         // of the policy layers.
         let inline_shell_refusal = self.inline_shell_refusal();
         let fut = crate::tools::turn_context::TURN_INLINE_SHELL.scope(inline_shell_refusal, fut);
+        // Nested service calls must judge their own gates with no outer proof.
+        let fut: BoxFuture<'_, (Result<ToolOutput, ToolError>, Option<Value>)> = Box::pin(fut);
+        let fut = crate::tools::dispatch_verdict::without_admission(fut);
 
         // Contain a panic raised anywhere below this seam — gate chain, hook
         // stages, tool body — to the call that raised it. The Act phase polls
@@ -528,7 +554,8 @@ impl ToolService for ScopedToolService {
         // allow-filter misses on the literal name and the inner claim lookup
         // falls to the conservative `Global` instead of the tool's real
         // bounded scope.
-        let canonical = self.inner.resolve(name).map(|t| t.name().to_string());
+        let resolved = self.inner.resolve(name);
+        let canonical = resolved.map(|t| t.name().to_string());
         let name: &str = canonical.as_deref().unwrap_or(name);
         // Subagent dispatch and disallowed tools are whole-world exclusive so
         // they can never join a parallel batch. Everything else — INCLUDING
@@ -539,6 +566,22 @@ impl ToolService for ScopedToolService {
             }
         }
         if !self.is_allowed(name) {
+            return ConcurrencyClaim::global();
+        }
+        if self.canonical_registry.is_some()
+            && !self.inner.is_request_local(name)
+            && !resolved.is_some_and(|tool| {
+                matches!(
+                    tool.usage_origin(),
+                    Some(crate::tools::usage::UsageOrigin::Plugin(_))
+                )
+            })
+        {
+            // Scheduling precedes dispatch's live generation capture. Neither a
+            // stale request projection nor a fresh lookup can pin that future
+            // invocation atomically here. Intentionally sacrifice canonical
+            // batch throughput (even reads) for hot-replacement safety; only
+            // dispatch's captured handler may supply per-input admission.
             return ConcurrencyClaim::global();
         }
         // Approval gates (confirm / permission-Ask / tier-argument / operator /

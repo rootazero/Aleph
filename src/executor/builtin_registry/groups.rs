@@ -114,18 +114,19 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             // `method_authz::OPERATOR_TOOLS`, not here.
             "runtime_manage",
             // Read-only agent panel over PTY sessions the caller owns on
-            // this server — no PTY-ish group exists yet (herdr runtime port
-            // is phase 1), so it is filed under this heading for lack of a
-            // group of its own. This category list is display-only and
-            // carries no authorization meaning (see this file's module
-            // doc): `doctor` and `config_audit` are NOT in
-            // `method_authz::OPERATOR_TOOLS` (`config_audit` is named there
-            // as deliberately absent — "read-only self-management tools …
-            // deliberately absent, chat tier keeps them"), and
-            // `agent_identity` IS operator-gated but lives in the
-            // `agent_mgmt` group below, not here. `terminal` does not "sit
-            // with" any of the three; it is simply grouped here.
-            "terminal",
+            // this server, one canonical capability per verb (registered by
+            // `builtin_tools::terminal::capabilities`, not by
+            // `BUILTIN_TOOL_DEFINITIONS`). No PTY-ish group exists, so they
+            // are filed under this heading for lack of a group of their own.
+            // This category list is display-only and carries no
+            // authorization meaning (see this file's module doc): their
+            // operator gate lives in `method_authz::OPERATOR_TOOLS`.
+            "terminal_sessions_list",
+            "terminal_sessions_read",
+            "terminal_sessions_status",
+            "terminal_sessions_wait",
+            "terminal_sessions_explain",
+            "terminal_sessions_attach",
             "select_model",
             "list_models",
             "moa",

@@ -244,7 +244,13 @@ pub(crate) fn is_prompt_bearing(event: &SessionEvent) -> bool {
         | SessionEvent::CompactionPerformed { .. }
         | SessionEvent::FoldRecorded { .. }
         | SessionEvent::SessionForked { .. }
-        | SessionEvent::Error { .. } => false,
+        | SessionEvent::Error { .. }
+        | SessionEvent::EffectClaimPrepared { .. }
+        | SessionEvent::EffectClaimClaimed { .. }
+        | SessionEvent::EffectClaimInvoking { .. }
+        | SessionEvent::EffectClaimTerminal { .. }
+        | SessionEvent::ApprovalMemo { .. }
+        | SessionEvent::HookMemo { .. } => false,
     }
 }
 
