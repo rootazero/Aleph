@@ -264,10 +264,7 @@ fn width_from_pointer(pane: NodeRef<leptos::html::Aside>, client_x: i32) -> Opti
         .and_then(|v| v.as_f64())
         .unwrap_or(right);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    Some(clamp_width(
-        raw.max(0.0) as u32,
-        viewport.max(0.0) as u32,
-    ))
+    Some(clamp_width(raw.max(0.0) as u32, viewport.max(0.0) as u32))
 }
 
 /// Deliverables tab — artifacts produced by the team, via teams.chat.thread.

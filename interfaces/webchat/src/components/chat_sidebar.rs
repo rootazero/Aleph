@@ -1186,20 +1186,19 @@ pub fn ChatSidebar() -> impl IntoView {
     view! {
         <div class="flex flex-col h-full">
             // Top action area
-            <div class="p-3 space-y-2">
-                // ── Advanced features zone ──────────────────────────────
-                // Team chat + Project management (placeholder). Each entry is
-                // a full-width row, stacked vertically; future advanced entries
-                // (e.g. workflows) keep getting appended into this block.
-                <div class="flex flex-col gap-1.5">
+            <div class="px-2.5 py-2 space-y-1.5">
+                // ── Quick navigation ────────────────────────────────────
+                // Keep routes and compose behavior; only the presentation changes.
+                <div class="flex flex-col gap-0.5">
                     <button
-                        class="w-full inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
-                               bg-surface-sunken border border-border text-sm
-                               hover:border-primary transition-colors"
+                        class="nav-tile w-full inline-flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-nav"
                         title=move || t_string!(i18n, chat.team_chat).to_string()
                         on:click=move |_| show_compose.set(true)
                     >
-                        {move || format!("👥 {}", t_string!(i18n, chat.team_chat))}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 20v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+                        </svg>
+                        {t!(i18n, chat.team_chat)}
                     </button>
                     // Was `disabled=true` with a "coming soon" badge from
                     // 2026-06-22 (fbbe7be0b) — true when written, and a lie from
@@ -1215,28 +1214,30 @@ pub fn ChatSidebar() -> impl IntoView {
                     // button was the sole in-app route to the Kanban / workspace
                     // / memory tabs, and it was bolted shut.
                     <button
-                        class="w-full inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
-                               bg-surface-sunken border border-border text-sm
-                               hover:border-primary transition-colors"
+                        class="nav-tile w-full inline-flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-nav"
                         title=move || t_string!(i18n, chat.project_management).to_string()
                         on:click={
                             let navigate = navigate.clone();
                             move |_| navigate("/projects", Default::default())
                         }
                     >
-                        {move || format!("📁 {}", t_string!(i18n, chat.project_management))}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                        </svg>
+                        {t!(i18n, chat.project_management)}
                     </button>
                     <button
-                        class="w-full inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
-                               bg-surface-sunken border border-border text-sm
-                               hover:border-primary transition-colors"
+                        class="nav-tile w-full inline-flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-nav"
                         title=move || t_string!(i18n, nav.extensions).to_string()
                         on:click={
                             let navigate = navigate.clone();
                             move |_| navigate("/extensions", Default::default())
                         }
                     >
-                        {move || format!("🧩 {}", t_string!(i18n, nav.extensions))}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M7 3h3a2 2 0 0 0 4 0h3a2 2 0 0 1 2 2v4a2 2 0 0 0 0 4v6a2 2 0 0 1-2 2h-3a2 2 0 0 0-4 0H7a2 2 0 0 1-2-2v-6a2 2 0 0 0 0-4V5a2 2 0 0 1 2-2z"/>
+                        </svg>
+                        {t!(i18n, nav.extensions)}
                     </button>
                 </div>
 
@@ -1259,8 +1260,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     />
                 </Show>
 
-                // Faint divider: advanced features zone ↔ normal chat
-                <div class="border-t border-border/50"></div>
+                // Whitespace separates quick navigation from the agent controls.
 
                 // ── Normal chat: agent picker + new chat ────────────────
                 <div class="flex items-center gap-2">
@@ -1272,9 +1272,9 @@ pub fn ChatSidebar() -> impl IntoView {
                     <div class="relative flex-1 min-w-0">
                         <button
                             type="button"
-                            class="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-sunken \
-                                   border border-border text-sm text-text-primary hover:border-primary/60 \
-                                   focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
+                            class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-surface-sunken \
+                                   text-nav text-text-primary hover:bg-surface-raised \
+                                   focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 transition-colors"
                             on:click=move |_| agent_picker_open.update(|v| *v = !*v)
                         >
                             <span class="flex-1 min-w-0 truncate text-left">
@@ -1394,7 +1394,7 @@ pub fn ChatSidebar() -> impl IntoView {
                 </div>
 
                 // Search — client-side filter over the session list.
-                <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-sunken border border-border text-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30">
+                <div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-surface-sunken text-nav focus-within:ring-2 focus-within:ring-primary/40">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                          stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-text-tertiary flex-shrink-0">
                         <circle cx="11" cy="11" r="8" />
@@ -1434,7 +1434,7 @@ pub fn ChatSidebar() -> impl IntoView {
             <div class="flex-1 flex flex-col min-h-0">
             <AgentPanel />
             // Session list + group section (single scroll container)
-            <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1 min-h-0">
+            <div class="flex-1 overflow-y-auto px-2.5 py-1.5 space-y-0.5 min-h-0">
 
                 // ── Group Chat collapsible section ────────────────────
                 {move || {
@@ -1900,7 +1900,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                             <div class="relative group">
                                                 <button
                                                     class=move || format!(
-                                                        "w-full text-left px-3 py-1.5 rounded-lg text-sm flex items-center justify-between {}",
+                                                        "w-full text-left px-2.5 py-1 rounded-lg text-nav flex items-center justify-between {}",
                                                         if is_active() {
                                                             "nav-tile-active"
                                                         } else {

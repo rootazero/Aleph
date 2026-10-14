@@ -44,14 +44,14 @@ pub fn AppearanceView() -> impl IntoView {
 
     view! {
         <div class="px-8 pb-8 aleph-content-top max-w-4xl mx-auto">
-            <div class="mb-8">
+            <div class="mb-6">
                 <h1 class="text-3xl font-bold mb-2 text-text-primary">{t!(i18n, appearance.title)}</h1>
                 <p class="text-text-secondary">
                     {t!(i18n, appearance.subtitle)}
                 </p>
             </div>
 
-            <div class="space-y-6">
+            <div class="space-y-4">
                 // --- Theme mode -------------------------------------------------
                 <SettingCard title=Signal::derive(move || t_string!(i18n, appearance.section.mode).to_string())
                     desc=Signal::derive(move || t_string!(i18n, appearance.desc.mode).to_string())>
@@ -163,7 +163,7 @@ pub fn AppearanceView() -> impl IntoView {
                 </SettingCard>
 
                 // --- Live preview ----------------------------------------------
-                <div class="bg-surface-raised border border-border rounded-xl p-6">
+                <div class="bg-surface-sunken/40 rounded-xl p-4">
                     <h2 class="text-sm font-semibold text-text-tertiary uppercase tracking-wider mb-3">{t!(i18n, appearance.preview.heading)}</h2>
                     <div class="flex items-center gap-3 flex-wrap">
                         <button class="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium">{t!(i18n, appearance.preview.primary)}</button>
@@ -191,7 +191,18 @@ pub fn AppearanceView() -> impl IntoView {
     }
 }
 
-/// A titled settings card matching the styling used across the settings pages.
+/// A settings row matching the styling used across the settings pages.
+///
+/// At >=1100px the row is a 2-column grid: label + description on the
+/// left, controls on the right, both vertically centred. Below 1100px
+/// the row stacks so the controls stay reachable on narrower windows.
+/// The label is `text-base font-medium` (16px / 500) — a row tier BELOW
+/// the section heading tier (`text-xl` = 18px, used by
+/// `SettingsSection` and the form grouping titles). Description drops
+/// to `text-xs` so the meta text under the label doesn't compete with
+/// the label. Both children of the grid are wrapped in `min-w-0` so a
+/// long label or a long choice string can truncate instead of pushing
+/// the row past the page's `max-w-4xl` width.
 #[component]
 fn SettingCard(
     #[prop(into)] title: Signal<String>,
@@ -199,10 +210,12 @@ fn SettingCard(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <div class="bg-surface-raised border border-border rounded-xl p-6">
-            <h2 class="text-xl font-semibold text-text-primary mb-1">{title}</h2>
-            <p class="text-sm text-text-secondary mb-4">{desc}</p>
-            {children()}
+        <div class="aleph-setting-row">
+            <div class="min-w-0">
+                <h2 class="block text-base font-medium text-text-primary">{title}</h2>
+                <p class="text-xs text-text-secondary">{desc}</p>
+            </div>
+            <div class="min-w-0">{children()}</div>
         </div>
     }
 }

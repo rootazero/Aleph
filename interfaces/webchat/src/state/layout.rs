@@ -205,7 +205,6 @@ impl LayoutMode {
             _ => Self::ChatOnly,
         }
     }
-
 }
 
 /// Reactive workspace state. Provided once via context, cloned via `Copy`.
@@ -308,8 +307,7 @@ impl WorkspaceState {
     /// instead, so they re-run when either changes.
     #[must_use]
     pub fn showing_now(&self, body: WorkspaceBody) -> bool {
-        self.mode.get_untracked() == LayoutMode::Split
-            && self.body.get_untracked() == body
+        self.mode.get_untracked() == LayoutMode::Split && self.body.get_untracked() == body
     }
 
     /// Set the layout mode explicitly. Persists to `localStorage`. Entering

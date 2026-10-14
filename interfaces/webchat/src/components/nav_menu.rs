@@ -94,12 +94,12 @@ pub fn NavMenu() -> impl IntoView {
     let current = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
 
     view! {
-        <div class="relative border-t border-border p-2 flex-shrink-0">
+        <div class="relative border-t border-border-subtle px-2.5 py-1.5 flex-shrink-0">
             // Trigger
             <button
                 on:click=move |_| open.update(|v| *v = !*v)
                 class=move || {
-                    let base = "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm";
+                    let base = "w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-nav";
                     if open.get() {
                         format!("{base} nav-tile-active")
                     } else {
@@ -133,7 +133,7 @@ pub fn NavMenu() -> impl IntoView {
             // picker / project menu affordances (see model_picker.rs).
             <Show when=move || open.get()>
                 <div class="glass animate-pop-in absolute bottom-full left-2 right-2 mb-2 z-50
-                            rounded-xl border border-border bg-surface-overlay/85 shadow-xl p-1.5 space-y-0.5"
+                            rounded-xl border border-border bg-surface-overlay/95 shadow-lg p-1.5 space-y-0.5"
                     on:mouseleave=move |_| open.set(false)>
                     {ALL_MODES.into_iter().map(|m| {
                         let route = m.path();
@@ -146,7 +146,7 @@ pub fn NavMenu() -> impl IntoView {
                                     nav(route, Default::default());
                                 }
                                 class=move || {
-                                    let base = "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm";
+                                    let base = "w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-nav";
                                     if is_active() {
                                         format!("{base} nav-tile-active")
                                     } else {

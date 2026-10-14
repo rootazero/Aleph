@@ -88,12 +88,8 @@ pub(crate) fn reveal_canvas(
     // any drag in progress once per tool call, and a model drawing a diagram
     // makes a lot of tool calls. The open document is kept current by the
     // `canvas.updated` reconciler instead; that is what those wires are for.
-    let already_open = canvas
-        .open_canvas
-        .try_get_untracked()
-        .flatten()
-        .as_deref()
-        == Some(canvas_id.as_str());
+    let already_open =
+        canvas.open_canvas.try_get_untracked().flatten().as_deref() == Some(canvas_id.as_str());
     if !already_open {
         crate::views::canvas::open_canvas(dashboard, canvas, i18n, canvas_id);
     }
@@ -144,10 +140,7 @@ fn canvas_auto_reveal(
     let canvas_id = crate::views::canvas::canvas_id_from_tool_result(result);
     let decision = auto_reveal_decision(
         workspace.mode.get_untracked(),
-        workspace
-            .auto_reveal_muted_run
-            .get_untracked()
-            .as_deref(),
+        workspace.auto_reveal_muted_run.get_untracked().as_deref(),
         run_id,
         canvas_id.as_deref(),
     );
@@ -652,17 +645,13 @@ fn apply_reasoning_block(chat: ChatState, data: &serde_json::Value) {
 /// when `uncertainty` is whitespace, so a structured event with an empty
 /// prose string cannot render an unexplained chip.
 fn apply_uncertainty_signal(chat: ChatState, run_id: &str, data: &serde_json::Value) {
-    let uncertainty = match data
-        .get("uncertainty")
-        .and_then(serde_json::Value::as_str)
-    {
+    let uncertainty = match data.get("uncertainty").and_then(serde_json::Value::as_str) {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => return,
     };
-    let action = match data
-        .get("suggested_action")
-        .and_then(|v| serde_json::from_value::<aleph_protocol::events::UncertaintyAction>(v.clone()).ok())
-    {
+    let action = match data.get("suggested_action").and_then(|v| {
+        serde_json::from_value::<aleph_protocol::events::UncertaintyAction>(v.clone()).ok()
+    }) {
         Some(a) => a,
         None => return,
     };
@@ -2528,7 +2517,10 @@ mod projection_tests {
             &json!({ "run_id": "run-2", "seq": 3 }), // missing both fields
         );
         assert!(
-            !chat.uncertainty_signals.get_untracked().contains_key("run-2"),
+            !chat
+                .uncertainty_signals
+                .get_untracked()
+                .contains_key("run-2"),
             "a signal with neither uncertainty nor suggested_action is no signal"
         );
     }

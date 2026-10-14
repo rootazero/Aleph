@@ -79,7 +79,7 @@ pub fn GeneralView() -> impl IntoView {
 
     view! {
         <div class="px-8 pb-8 aleph-content-top max-w-4xl mx-auto">
-            <div class="mb-8">
+            <div class="mb-6">
                 <h1 class="text-3xl font-bold mb-2 text-text-primary">
                     {t!(i18n, settings.general.title)}
                 </h1>
@@ -130,7 +130,7 @@ pub fn GeneralView() -> impl IntoView {
                     }.into_any()
                 } else if let Some(cfg) = config.get() {
                     view! {
-                        <div class="space-y-6">
+                        <div class="space-y-4">
                             <LanguageSection
                                 language=cfg.language
                                 on_change=move |lang| {
@@ -178,8 +178,8 @@ fn LanguageSection(
     let (selected, set_selected) = signal(language.unwrap_or_else(|| "system".to_string()));
 
     view! {
-        <div class="bg-surface-raised border border-border rounded-xl p-6">
-            <h2 class="text-xl font-semibold text-text-primary mb-4">{t!(i18n, settings.general.language.title)}</h2>
+        <div class="bg-surface-sunken/40 rounded-xl p-4">
+            <h2 class="text-xl font-semibold text-text-primary mb-3">{t!(i18n, settings.general.language.title)}</h2>
 
             <div>
                 <label class="block text-sm font-medium text-text-secondary mb-2">
@@ -269,7 +269,7 @@ fn ConfigReloadSection() -> impl IntoView {
     };
 
     view! {
-        <div class="bg-surface-raised border border-border rounded-xl p-6">
+        <div class="bg-surface-sunken/40 rounded-xl p-4">
             <h2 class="text-xl font-semibold text-text-primary mb-2">{t!(i18n, settings.general.config_reload.title)}</h2>
             <p class="text-sm text-text-secondary mb-4">
                 {t!(i18n, settings.general.config_reload.description)}

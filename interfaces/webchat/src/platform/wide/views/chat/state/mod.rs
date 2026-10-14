@@ -1759,20 +1759,22 @@ impl ChatState {
         if note.uncertainty.trim().is_empty() {
             return;
         }
-        self.uncertainty_signals
-            .update(|m: &mut std::collections::HashMap<String, UncertaintyNote>| {
+        self.uncertainty_signals.update(
+            |m: &mut std::collections::HashMap<String, UncertaintyNote>| {
                 m.insert(run_id.to_string(), note);
-            });
+            },
+        );
     }
 
     /// Drop a run's uncertainty note. Called by `complete_run` / `fail_run`
     /// for the run that just settled, so the chip never outlives its run.
     /// (`run_id`s are not reused; clearing an unrelated id is harmless.)
     pub fn clear_uncertainty(&self, run_id: &str) {
-        self.uncertainty_signals
-            .update(|m: &mut std::collections::HashMap<String, UncertaintyNote>| {
+        self.uncertainty_signals.update(
+            |m: &mut std::collections::HashMap<String, UncertaintyNote>| {
                 m.remove(run_id);
-            });
+            },
+        );
     }
 
     /// Prefix reuse across every priced run of *this* conversation.
