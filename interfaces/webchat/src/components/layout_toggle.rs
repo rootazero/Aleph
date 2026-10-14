@@ -47,6 +47,7 @@ pub fn LayoutToggle() -> impl IntoView {
     view! {
         <button
             type="button"
+            data-testid="layout-toggle"
             class="aleph-layout-toggle aleph-no-drag relative flex items-center justify-center
                    h-7 w-7 rounded-full
                    text-text-secondary hover:text-text-primary

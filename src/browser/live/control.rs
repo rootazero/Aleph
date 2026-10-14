@@ -160,6 +160,7 @@ impl TargetControl {
         self.lock().alive
     }
 
+    #[cfg(test)] // only tests read this; production has no caller
     pub(crate) fn pending_count(&self) -> usize {
         self.lock().pending.len()
     }
@@ -642,6 +643,7 @@ impl TargetControl {
         Ok(())
     }
 
+    #[cfg(test)] // only tests read this; production has no caller
     pub(crate) fn revoke_human_permission(&self, lease: &ViewerLease) -> Result<(), BrowserError> {
         let mut st = self.lock();
         Self::validate_lease(&st, lease).map_err(|reason| {

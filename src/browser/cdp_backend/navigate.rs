@@ -199,6 +199,13 @@ pub(super) async fn navigate(be: &CdpBackend, tab_id: &str, url: &str) -> Result
     // is a no-op — no enable, no task (spec §2's zero-overhead clause).
     be.ensure_intercept_loop(tab_id, &session).await?;
 
+    // Document boundary, declared BEFORE the engine is told: every approval of
+    // the old page of this exact (browser session, target) is demoted and its
+    // viewers fenced synchronously, so no frame of the new document can reach
+    // them while the navigation is in flight. `handle.live_owner()` is the
+    // owner this very mutation runs under; nothing is inferred from the URL.
+    handle.live_owner().agent_navigation(tab_id, &session).await;
+
     let mut events = handle.conn.events();
     let result = page::navigate(&handle.conn, Some(&session), url)
         .await
@@ -217,6 +224,10 @@ pub(super) async fn navigate(be: &CdpBackend, tab_id: &str, url: &str) -> Result
 
     let budget = be.command_timeout();
     let outcome = wait_for_load(&mut events, &session, &result.frame_id, budget).await;
+    // Second boundary once the load settled: an approval granted while the
+    // document was still loading must not survive into the loaded page, and an
+    // engine that never reported the commit event cannot leave one standing.
+    handle.live_owner().agent_navigation(tab_id, &session).await;
     // `Page.navigate`'s own response names the new document when it started
     // one; the event is the fallback for engines that omit it.
     let loader = result.loader_id.or(outcome.loader_id);
@@ -268,6 +279,10 @@ pub(super) async fn history(
 ) -> Result<(), BrowserError> {
     let handle = be.handle().await?;
     let session = handle.ensure_tab(tab_id).await?;
+    // Reload and history traversal change the document (or its history state)
+    // without a URL the caller chose; the boundary is declared before the
+    // engine is told, exactly as for `navigate`.
+    handle.live_owner().agent_navigation(tab_id, &session).await;
     let mut events = handle.conn.events();
 
     match nav {
@@ -317,6 +332,7 @@ pub(super) async fn history(
         .map(|t| t.frame.id)
         .unwrap_or_default();
     let outcome = wait_for_load(&mut events, &session, &main_frame_id, be.command_timeout()).await;
+    handle.live_owner().agent_navigation(tab_id, &session).await;
     apply_document_boundary(
         &handle,
         tab_id,

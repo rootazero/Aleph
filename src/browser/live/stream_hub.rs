@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use tokio::sync::watch;
 
+use super::navigation_gate::ContentGate;
+
 /// One decoded screencast frame as the owner publishes it.
 #[derive(Debug)]
 pub struct LiveFrame {
@@ -23,18 +25,39 @@ pub struct LiveFrame {
     /// The engine's own frame counter, which the one ACK must quote back.
     /// Viewers must never use it.
     pub(crate) engine_ack_id: u64,
+    /// The target's content generation when this frame was published. Owner
+    /// internal: the r4 wire frame never carries it.
+    pub(crate) content_gen: u64,
 }
 
 /// Publisher half; lives inside the owner's per-target stream.
 pub(crate) struct LatestFrameHub {
     tx: watch::Sender<Option<Arc<LiveFrame>>>,
     next_seq: u64,
+    gate: ContentGate,
 }
 
 impl LatestFrameHub {
     pub(crate) fn new() -> Self {
+        Self::with_gate(ContentGate::default())
+    }
+
+    /// A hub whose frames are stamped from `gate` (the owner's per-target
+    /// generation, shared across stream re-creation).
+    pub(crate) fn with_gate(gate: ContentGate) -> Self {
         let (tx, _rx) = watch::channel(None);
-        Self { tx, next_seq: 1 }
+        Self {
+            tx,
+            next_seq: 1,
+            gate,
+        }
+    }
+
+    /// Drop the stored frame. Called at a document boundary, under the same
+    /// owner lock that advances the gate, so a late subscriber can never be
+    /// handed the previous document's last frame.
+    pub(crate) fn clear(&self) {
+        self.tx.send_replace(None);
     }
 
     /// Store `data` as the latest frame. `send_replace` (not `send`) so the
@@ -52,6 +75,7 @@ impl LatestFrameHub {
             data: Arc::from(data),
             timestamp,
             engine_ack_id,
+            content_gen: self.gate.current(),
         });
         self.next_seq += 1;
         self.tx.send_replace(Some(frame.clone()));
@@ -68,6 +92,9 @@ impl LatestFrameHub {
             rx,
             last_seq: 0,
             skipped: 0,
+            approved: self.gate.current(),
+            gate: self.gate.clone(),
+            fenced: false,
         }
     }
 }
@@ -77,6 +104,13 @@ pub struct LatestFrameReceiver {
     rx: watch::Receiver<Option<Arc<LiveFrame>>>,
     last_seq: u64,
     skipped: u64,
+    /// The content generation this receiver was approved under. Captured while
+    /// the owner holds its state lock, so it is exact.
+    approved: u64,
+    gate: ContentGate,
+    /// Sticky: once the document changed under this receiver it never yields
+    /// another frame.
+    fenced: bool,
 }
 
 impl LatestFrameReceiver {
@@ -84,9 +118,23 @@ impl LatestFrameReceiver {
     /// stream has ended (target closed or destroyed, engine gone).
     pub async fn next(&mut self) -> Option<Arc<LiveFrame>> {
         loop {
+            if self.fence_if_stale() {
+                return None;
+            }
             self.rx.changed().await.ok()?;
+            if self.fence_if_stale() {
+                return None;
+            }
             let latest = self.rx.borrow_and_update().clone();
             if let Some(frame) = latest {
+                if frame.content_gen < self.approved {
+                    // A frame of an older document than this approval.
+                    continue;
+                }
+                if frame.content_gen != self.approved {
+                    self.fenced = true;
+                    return None;
+                }
                 if self.last_seq != 0 {
                     self.skipped += frame.seq.saturating_sub(self.last_seq + 1);
                 }
@@ -96,7 +144,29 @@ impl LatestFrameReceiver {
         }
     }
 
+    fn fence_if_stale(&mut self) -> bool {
+        if self.gate.current() != self.approved {
+            self.fenced = true;
+        }
+        self.fenced
+    }
+
+    /// Whether a document boundary ended this receiver (as opposed to the
+    /// stream or the target ending). A fenced receiver yields no more frames.
+    #[must_use]
+    pub fn is_fenced(&mut self) -> bool {
+        self.fence_if_stale()
+    }
+
+    /// Last-moment check for the transport: `frame` may only be sent if it is
+    /// of the approved document and no boundary has passed since it was taken.
+    #[must_use]
+    pub fn admits(&mut self, frame: &LiveFrame) -> bool {
+        !self.fence_if_stale() && frame.content_gen == self.approved
+    }
+
     /// How many frames this subscriber skipped because it read too slowly.
+    #[cfg(test)] // only tests read this; production has no caller
     #[must_use]
     pub fn skipped(&self) -> u64 {
         self.skipped

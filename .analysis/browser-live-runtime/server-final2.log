@@ -1,0 +1,341 @@
+ALEPH-BOOT ts=2026-10-11T10:47:34.613895600+00:00 pid=8876 version=26.9.1
+Loaded config from: D:/Workspace/Aleph-worktrees/panel-browser-workspace-20261007-202532-13256/.analysis/browser-live-runtime/config.toml
+PII filtering engine initialized (enabled: true)
+╔═══════════════════════════════════════════════╗
+║         Aleph Gateway v26.9.1           ║
+╠═══════════════════════════════════════════════╣
+║  WebSocket: ws://127.0.0.1:18790          ║
+║  Protocol:  JSON-RPC 2.0                      ║
+╚═══════════════════════════════════════════════╝
+
+Available methods:
+  - health    : Check server health status
+  - echo      : Echo back parameters (testing)
+  - version   : Get server version info
+  - agent.run : Execute agent request with streaming
+
+Agents: ["main"]
+
+Extension manager initialized
+Sandbox: WorkspaceSandbox rooted at D:/Workspace/Aleph-worktrees/panel-browser-workspace-20261007-202532-13256/.analysis/browser-live-runtime/home\workspaces
+Desktop capabilities: in-process (native)
+Memory backend initialized (SQLite + sqlite-vec)
+Migrating legacy SQLite sessions to file backend ...
+Session store initialized (file backend)
+MCP Manager spawned
+  Agent 'main': workspace=D:/Workspace/Aleph-worktrees/panel-browser-workspace-20261007-202532-13256/.analysis/browser-live-runtime/home\workspaces\main
+  Agent 'main__u-owner': workspace=D:/Workspace/Aleph-worktrees/panel-browser-workspace-20261007-202532-13256/.analysis/browser-live-runtime/home\workspaces\main__u-owner
+Workspace manager initialized (SQLite persistence)
+ACP harness manager initialized
+Cron service: enabled (RPC handlers registered)
+
+Heartbeat service: enabled (RPC handlers registered)
+
+Canvas methods:
+  - canvas.create        : Create a whiteboard canvas (owner-stamped)
+  - canvas.list          : List the caller's visible canvases
+  - canvas.get           : Fetch a canvas document + live selection
+  - canvas.apply         : Apply ops (optimistic revision check)
+  - canvas.delete        : Delete a canvas (owner-only)
+  - canvas.asset.put     : Store a content-addressed asset (base64)
+  - canvas.asset.get     : Read an asset back (base64)
+  - canvas.selection.set : Push the Panel's live selection
+
+  Coord task store initialized (SQLite)
+  Team store initialized (SQLite)
+  Artifact store initialized (SQLite)
+  Event log store initialized (SQLite)
+  Message store initialized (SQLite)
+  Session store initialized (SQLite)
+  Providers: 1 registered (default: mock)
+  query_filer: DefaultQueryFiler wired into memory_reflect
+  Session compactor enabled (hierarchical summarization)
+  MediaProcessor initialized
+  Registered agent: main (lazy)
+  Registered agent: main__u-owner (lazy)
+  Mode: Real AgentLoop (config provider)
+
+  Team dispatcher started
+  Capability probes: browser + generation wired to health cache
+  Dispatch registry: 51 skills registered
+  Dispatch registry initialized
+  commands.list: wired to unified dispatch registry
+  tools.catalog: wired to unified dispatch registry
+  tools.invoke: wired with agent allowlist gating
+  tools.effective: wired to unified dispatch registry + agent defs
+  tools.cancel_call + tools.in_flight: wired to in-flight registry
+  CommandParser: injected into chat.send / agent.run
+  MemoryProducerScheduler: spawned
+Agent control methods:
+  - agent.run            : Execute agent request with streaming
+  - agent.status         : Query run status by run_id
+  - agent.cancel         : Cancel an active run
+  - agent.list           : List available agents
+  - chat.send            : Send chat message (wraps agent.run)
+  - chat.abort           : Abort message generation
+  - chat.history         : Get chat history
+  - chat.clear           : Clear chat history
+
+  gateway.identity.get: wired
+  gateway.metrics.lanes: wired
+  gateway.credentials: wired
+  gateway.metrics.run_concurrency: wired
+  gateway.metrics.subagent_concurrency: wired
+  Gateway readiness: signaled (ready=true)
+MCP tool bridge wired
+Orchestrator: assembled (Phase 5)
+  MCP server face: /mcp (36 tools exposed, 4 unknown at boot — see log)
+Session methods:
+  - sessions.list      : List all sessions
+  - sessions.history   : Get session message history
+  - sessions.reset     : Clear session messages
+  - sessions.delete    : Delete a session
+  - sessions.new       : Close current session and start new one
+  - sessions.set_topic : Set session topic/title
+  - sessions.patch     : Patch session metadata
+  - sessions.preview   : Preview session with recent messages
+  - session.create     : Create a new session
+  - session.usage      : Get session token/message stats
+  - context.breakdown  : Measured layout of the last prompt sent
+  - session.compact    : Compact session history
+  - session.truncate   : Truncate session history to first N messages
+  - sessions.compaction.list    : List compaction checkpoints
+  - sessions.compaction.restore : Restore session to checkpoint
+  - sessions.compaction.branch  : Branch new session from checkpoint
+
+Artifact methods:
+  - artifacts.list      : List a session's stored artifacts
+  - artifacts.read_text : Read a text artifact for in-pane preview
+  - session.export_html : Export a session as a self-contained HTML document
+
+Memory methods:
+  - memory.search     : Search memories
+  - memory.stats      : Get memory statistics
+  - memory.delete     : Delete a memory
+  - memory.compress   : Trigger compression
+  - memory.reembed    : Re-embed all memories
+  - insights.tools    : Per-tool usage breakdown
+
+Daemon methods:
+  - daemon.status   : Server runtime status
+  - daemon.shutdown : Graceful shutdown
+  - daemon.logs     : View recent logs
+
+OAuth methods:
+  - providers.oauthLogin  : Start browser OAuth login
+  - providers.oauthLogout : Clear OAuth token
+  - providers.oauthStatus : Check OAuth status
+
+Workspace methods:
+  - workspace.create    : Create a new workspace
+  - workspace.list      : List all workspaces
+  - workspace.get       : Get workspace by ID
+  - workspace.update    : Update workspace metadata
+  - workspace.archive   : Archive (soft-delete) a workspace
+  - workspace.unarchive : Restore an archived workspace
+  - channels.set_agent  : Bind or unbind an agent to a channel
+  - agents.bindings     : Get all agent->channel bindings
+
+Project methods:
+  - projects.list          : List my projects (sorted by last_used_at)
+  - projects.add           : Register an existing folder as a project
+  - projects.create_blank  : Create + register a new empty folder
+  - projects.create        : Create an unbound project room
+  - projects.get           : Fetch a single project by ID
+  - projects.rename        : Rename a project (owner/admin)
+  - projects.archive       : Archive a project, keeping its roster (owner/admin)
+  - projects.remove        : Drop a project entry (does not delete the folder)
+  - projects.touch         : Bump last_used_at for a project
+  - projects.bind_workspace: Point a room at a folder, or unbind it (owner/admin)
+  - projects.member.add    : Add a user to a project roster (owner/admin)
+  - projects.member.remove : Remove a user from a project roster (owner/admin)
+  - projects.member.list   : List a project's roster
+  - projects.room_session  : Get-or-create the room's shared chat session key
+  - projects.channel.bind  : Bind a channel group conversation to a room (operator)
+  - projects.channel.unbind: Release a bound conversation (operator)
+  - projects.channel.list  : List a room's bound conversations
+
+Filesystem-browse methods (scoped by [projects].allowed_roots):
+  - fs.allowed_roots : List configured browseable roots
+  - fs.home_dir      : Server's $HOME (for default start path)
+  - fs.list_dir      : List subdirectories + files at a path
+  - fs.create_dir    : Create a subdirectory inside an allowed root
+  - fs.read_file     : Read a file's text content (size-capped)
+
+  MCP management handlers registered (mcp.*)
+  Extensions hub handlers registered (extensions.*)
+A2A protocol: disabled (set [a2a] enabled = true in config)
+
+Skill watcher: hot-reload active (D:/Workspace/Aleph-worktrees/panel-browser-workspace-20261007-202532-13256/.analysis/browser-live-runtime/home\skills)
+Extension watcher: hot-reload active (commands/agents/plugins/hooks.json)
+Cron timer loop: started
+Heartbeat timer loop: started
+Task reaper: started
+Projection reconciler + resume: boot scan spawned
+Group Chat: Disabled (requires ANTHROPIC_API_KEY or OPENAI_API_KEY)
+
+Channel pairing methods:
+  - channel.pairing.list     : List pending channel pairing requests
+  - channel.pairing.approve  : Approve a channel sender
+  - channel.pairing.reject   : Reject a pending pairing request
+  - channel.pairing.approved : List approved channel senders
+  - channel.pairing.revoke   : Revoke a channel sender
+
+Auto-started 0/0 channels
+Channel methods:
+  - channels.list   : List all channels
+  - channels.status : Get channel status
+  - channel.start   : Start a channel
+  - channel.stop    : Stop a channel
+  - channel.send    : Send message via channel
+  - channel.create  : Create a new channel
+  - channel.delete  : Delete a channel
+
+LinkManager started (external bridge plugins)
+
+exec-approval: ApprovalGate + ScopedToolService.with_confirmation requester wired (Telegram channel approvals enabled)
+tool-result-budget: ToolResultStore + TurnResultBudget wired (<config_dir>/data/tool_results/global/, session-scoped handles, result_ceiling=none, max_turn_tokens=32000)
+  Inbound router: execution support enabled
+  Inbound router: exec-approval callback dispatch enabled
+  Inbound router: message coalescing enabled
+  Inbound router: slash command resolution enabled (unified registry)
+  Inbound router: session management enabled (/new command)
+  Inbound router: voice TTS output enabled
+Inbound message router started
+
+Config methods:
+  - config.reload   : Force reload configuration
+  - config.get      : Get current configuration
+  - config.validate : Validate config file
+  - config.path     : Get config file path
+
+Hot config reload enabled: D:/Workspace/Aleph-worktrees/panel-browser-workspace-20261007-202532-13256/.analysis/browser-live-runtime/config.toml
+
+WebChat UI directory found: interfaces/webchat/dist
+  Note: WebChat requires a separate HTTP port (use --webchat-port)
+
+
+Aleph Server:
+  - URL:       http://127.0.0.1:18790
+  - WebSocket: ws://127.0.0.1:18790/ws
+  - Panel UI:  http://127.0.0.1:18790/
+
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents

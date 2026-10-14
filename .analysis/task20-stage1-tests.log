@@ -1,0 +1,54 @@
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+warning: unused import: `super::*`
+   --> src\gateway\execution_engine\run_loop\project_context.rs:223:9
+    |
+223 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::Duration`
+ --> src\gateway\execution_engine\slash_command_body\tests.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FileSessionStoreConfig` and `FileSessionStore`
+  --> src\gateway\session_store\hook_transcripts.rs:42:55
+   |
+42 |     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+   |                                                       ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `with_consent` is never used
+   --> src\builtin_tools\skill_reader\read.rs:157:19
+    |
+101 | impl ReadSkillTool {
+    | ------------------ method in this implementation
+...
+157 |     pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `parked_len` is never used
+   --> src\gateway\server\browser_viewer_route.rs:197:8
+    |
+121 | impl BrowserViewerRouteState {
+    | ---------------------------- method in this implementation
+...
+197 |     fn parked_len(&self) -> usize {
+    |        ^^^^^^^^^^
+
+warning: `alephcore` (lib test) generated 5 warnings (run `cargo fix --lib -p alephcore --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 9m 15s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-8fa026bb9f4d089e.exe)
+
+running 5 tests
+test browser::live::owner_registry::tests::ended_owner_rejects_registration_lookup_and_prepared_lease ... ok
+test browser::live::owner_registry::tests::old_registration_and_late_callbacks_fail_closed_after_replacement ... ok
+test browser::live::owner_registry::tests::same_profile_and_target_different_sessions_do_not_cross_route ... ok
+test browser::live::owner_registry::tests::strong_owner_and_engine_lifetime_survives_per_call_record_drop ... ok
+test browser::live::owner_registry::tests::tombstones_are_bounded_and_old_tokens_stay_dead_after_eviction ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 20571 filtered out; finished in 0.02s
+

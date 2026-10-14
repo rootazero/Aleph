@@ -85,7 +85,16 @@ pub fn approve_cert(
     persist_pending_if_match(state.inner(), &host, &fingerprint, &path)?;
     set_trust_pending(false);
     // Reload the remote target now that the cert is pinned.
-    crate::reroute_for_target(&app, crate::connection::load_target());
+    // `reroute_for_target` is async now (awaited under the target-switch gate);
+    // this command is sync, so hand it to the runtime instead of blocking here.
+    // It MUST go through `reroute_current_target`, never `reroute_for_target`
+    // directly: that helper takes the shared target-switch gate and reads the
+    // persisted target only once inside it. A switch that failed to persist
+    // (credential or marker write error) has already rolled back / never moved
+    // the marker, so this re-routes to the previous consistent target and can
+    // never navigate on a half-applied switch. A switch still in flight
+    // finishes first. (Pinned by `approve_cert_reroutes_through_the_switch_gate`.)
+    tauri::async_runtime::spawn(crate::connection::reroute_current_target(app));
     Ok(())
 }
 
@@ -230,47 +239,17 @@ mod tests {
 
     // W-13 regression tests for the persist-then-clear ordering.
 
-    /// Use a fresh tmpdir as HOME so the trust store path lands on disk
-    /// under it. Each test scopes to its own dir via the `tag` so parallel
-    /// test runs (or repeated runs after a flaky failure) don't trample
-    /// each other. `drop` test scope is enforced by `serial_test::serial`.
-    /// Returns a guard path + the resolved store file path. The dir is
-    /// rm'd on `Guard::drop`.
-    struct ScopedHome {
-        path: std::path::PathBuf,
-        prev: Option<std::ffi::OsString>,
-    }
-    impl Drop for ScopedHome {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-    fn scoped_tempdir(tag: &str) -> (ScopedHome, std::path::PathBuf) {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "aleph-cert-trust-{}-{}-{}",
-            tag,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&p).expect("mkdir HOME temp");
-        let prev = std::env::var_os("HOME");
-        std::env::set_var("HOME", &p);
-        let store = store_path_in(&p);
-        (ScopedHome { path: p, prev }, store)
-    }
-    fn store_path_in(home: &std::path::Path) -> std::path::PathBuf {
-        let mut p = home.to_path_buf();
-        p.push(".aleph");
-        p.push("desktop-shell-trusted-certs");
-        p
+    /// Owned temp root routed into `connection::marker_path` for this thread
+    /// (no `HOME`/`USERPROFILE` mutation). Returns the guard (deletes the root
+    /// on drop) and the store path derived through production `store_path()`.
+    fn scoped_tempdir(tag: &str) -> (crate::connection::test_home::TestHome, std::path::PathBuf) {
+        let home = crate::connection::test_home::TestHome::new(tag);
+        let store = store_path().expect("fixture home installed");
+        assert!(
+            home.contains(&store),
+            "store must live under the owned root"
+        );
+        (home, store)
     }
 
     /// W-13 happy path: pending matches, persist succeeds, state cleared.
@@ -324,7 +303,7 @@ mod tests {
             "pending record preserved across persist failure"
         );
 
-        // Restore so the tempdir can be cleaned up by ScopedHome::drop.
+        // Restore so the tempdir can be cleaned up by TestHome::drop.
         let _ = std::fs::set_permissions(
             path.parent().unwrap(),
             std::fs::Permissions::from_mode(0o700),
@@ -390,5 +369,26 @@ mod tests {
         // re-render the cert and the user can re-review.
         let r = take_matching_record(&state, "gw.example", "BBB").expect("B survived");
         assert_eq!(r.fp, "BBB");
+    }
+
+    /// Source pin: approval re-routes only via the gated, reload-inside-the-gate
+    /// helper (see the comment in `approve_cert`).
+    #[test]
+    fn approve_cert_reroutes_through_the_switch_gate() {
+        let src = include_str!("pending.rs").replace('\r', "");
+        let start = src.find("pub fn approve_cert(").unwrap();
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        assert!(
+            body.contains("crate::connection::reroute_current_target(app)"),
+            "approve_cert must reroute via the gated helper"
+        );
+        assert!(
+            !body.contains("reroute_for_target("),
+            "approve_cert must not navigate outside the target-switch gate"
+        );
+        let persist = body.find("persist_pending_if_match(").unwrap();
+        let reroute = body.find("reroute_current_target(").unwrap();
+        assert!(persist < reroute, "pin the cert before re-routing");
     }
 }

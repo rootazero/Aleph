@@ -1,0 +1,158 @@
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+warning: unused import: `super::*`
+   --> src\gateway\execution_engine\run_loop\project_context.rs:223:9
+    |
+223 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::Duration`
+ --> src\gateway\execution_engine\slash_command_body\tests.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FileSessionStoreConfig` and `FileSessionStore`
+  --> src\gateway\session_store\hook_transcripts.rs:42:55
+   |
+42 |     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+   |                                                       ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `with_consent` is never used
+   --> src\builtin_tools\skill_reader\read.rs:157:19
+    |
+101 | impl ReadSkillTool {
+    | ------------------ method in this implementation
+...
+157 |     pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `alephcore` (lib test) generated 4 warnings (run `cargo fix --lib -p alephcore --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 2m 22s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 118 tests
+test browser::live::control::tests::all_agent_mutations_hold_bound_permit ... ok
+test browser::live::control::tests::cede_keeps_frames_but_whole_revoke_closes_lease_and_purges ... ok
+test browser::live::control::tests::out_of_order_dispatch_cannot_apply_an_older_sequence_after_a_newer_one ... ok
+test browser::live::control::tests::dispatch_rechecks_every_axis_and_does_not_start_after_revoke ... ok
+test browser::live::control::tests::dispatch_permit_spans_entire_backend_future_and_summary_is_factual ... ok
+test browser::live::control::tests::permission_loss_retains_frames_and_failed_summary_closes_control ... ok
+test browser::live::control::tests::stale_input_is_never_replayed ... ok
+test browser::live::control::tests::queue_is_64_and_cancel_releases_slot_without_replaying_seq ... ok
+test browser::live::control::tests::stale_agent_waiter_cannot_write_after_handoff_and_destroy_ends_control_once ... ok
+test browser::live::grant::tests::nonce_and_ticket_are_single_use_and_expire ... ok
+test browser::live::grant::tests::inflight_cap_rejects_the_ninth_attempt ... ok
+test browser::live::grant::tests::dropped_attempt_aborts_without_burning_the_secret ... ok
+test browser::live::grant::tests::revocation_closes_frame_and_input ... ok
+test browser::live::grant::tests::revoke_resource_revokes_only_that_resources_grants ... ok
+test browser::live::grant::tests::viewer_credential_cannot_cross_scope ... ok
+test browser::live::grant::tests::rotation_commits_once_and_consumed_secret_replay_revokes ... ok
+test browser::live::issuer::tests::absolute_store_expiry_never_extends_and_invalid_ttls_deny ... ok
+test browser::live::issuer::tests::pending_redaction_resource_cannot_be_issued ... ok
+test browser::live::issuer::tests::issue_recheck_revokes_minted_grant_on_close_or_revision_change ... ok
+test browser::live::issuer::tests::owned_issue_uses_exact_registry_binding_and_fragment_only ... ok
+test browser::live::issuer::tests::revoke_only_original_issuer_and_never_reports_unknown_or_expired ... ok
+test browser::live::issuer::tests::permissions_narrow_without_implicitly_adding_frames_and_ttl_clamps ... ok
+test browser::live::issuer::tests::trusted_origin_is_explicit_and_rejects_authority_or_url_extras ... ok
+test browser::live::lifecycle::tests::close_twice_revokes_and_emits_once ... ok
+test browser::live::lifecycle::tests::close_binding_revokes_and_emits_target_closed_once ... ok
+test browser::live::attachment_tests::foreign_session_or_profile_is_rejected_without_side_effects ... ok
+test browser::live::lifecycle::tests::close_target_closes_only_that_exact_target_revokes_and_emits_once ... ok
+test browser::live::lifecycle::tests::close_session_closes_whole_batch_revokes_and_isolates_sessions ... ok
+test browser::live::issuer::tests::foreign_unknown_closed_expired_connection_artifact_and_refused_deny ... ok
+test browser::live::attachment_tests::lease_release_does_not_tear_down_a_legacy_attachment ... ok
+test browser::live::lifecycle::tests::missing_bus_publish_creates_nothing ... ok
+test browser::live::lifecycle::tests::missing_bus_close_still_closes_and_revokes ... ok
+test browser::live::attachment_tests::stale_lease_after_close_and_reacquire_releases_nothing ... ok
+test browser::live::lifecycle::tests::missing_bus_close_binding_still_closes_and_revokes ... ok
+test browser::live::lifecycle::tests::missing_bus_republish_refusal_expiry_and_success_fail_closed ... ok
+test browser::live::lifecycle::tests::missing_bus_close_target_and_session_still_close_and_revoke ... ok
+test browser::live::attachment_tests::cancelled_acquire_leaks_no_reference_or_stream ... ok
+test browser::live::attachment_tests::dropping_the_last_prepared_viewer_releases_attachment_and_control ... ok
+test browser::live::attachment_tests::n_prepared_viewers_share_one_attachment_and_the_last_out_closes_it ... ok
+test browser::live::attachment_tests::last_lease_release_leaves_the_recording_running ... ok
+test browser::live::lifecycle::tests::expiry_sweep_revokes_and_emits_once_and_expired_revision_sweeps ... ok
+test browser::live::lifecycle::tests::missing_bus_sweep_still_expires_and_revokes_whole_batch ... ok
+test browser::live::attachment_tests::release_recheck_under_lifecycle_lock_spares_a_concurrent_reacquire ... ok
+test browser::live::navigation_gate_tests::hub_receiver_is_pinned_to_the_generation_it_was_approved_under ... ok
+test browser::live::attachment_tests::cancelled_first_prepare_does_not_close_the_shared_attachment ... ok
+test browser::live::attachment_tests::legacy_attach_adopts_an_attachment_whose_release_is_pending ... ok
+test browser::live::lifecycle::tests::safe_revision_keeps_existing_grant ... ok
+test browser::live::lifecycle::tests::safe_republish_shortening_expiry_revokes_but_extending_keeps ... ok
+test browser::live::lifecycle::tests::terminal_sink_maps_target_destroyed_and_owner_ended_to_closes ... ok
+test browser::live::lifecycle::tests::publish_and_republish_to_pending_revoke_existing_grant ... ok
+test browser::live::lifecycle::tests::refusal_closes_revokes_and_emits_exactly_once ... ok
+test browser::live::navigation_gate_tests::registry_demotion_is_exact_about_session_and_target ... ok
+test browser::live::control::tests::backend_mutation_entry_table_refuses_human_before_any_cdp_write ... ok
+test browser::live::navigation_gate_tests::agent_navigation_declares_the_boundary_before_returning ... ok
+test browser::live::navigation_gate_tests::event_gap_fails_closed ... ok
+test browser::live::navigation_gate_tests::registering_an_operation_installs_the_registry_sink_on_its_owner ... ok
+test browser::live::owner_registry::tests::ended_owner_rejects_registration_lookup_and_prepared_lease ... ok
+test browser::live::navigation_gate_tests::human_navigate_input_declares_the_boundary_first ... ok
+test browser::live::owner_registry::tests::destroyed_target_rejects_record_and_lease_without_affecting_other_targets ... ok
+test browser::live::resource::tests::binding_source_and_provenance_cannot_change_across_revisions ... ok
+test browser::live::owner_registry::tests::old_registration_and_late_callbacks_fail_closed_after_replacement ... ok
+test browser::live::resource::tests::close_emits_exact_event_once_and_leaves_a_tombstone ... ok
+test browser::live::navigation_gate_tests::sub_frame_navigation_is_not_a_page_boundary ... ok
+test browser::live::resource::tests::close_target_and_session_are_exact_about_profile_session_and_target ... ok
+test browser::live::resource::tests::expired_resources_are_never_active_and_sweep_emits_expired_once ... ok
+test browser::live::resource::tests::invalid_refused_artifact_and_empty_drafts_fail_closed ... ok
+test browser::live::resource::tests::companion_candidates_are_design_companion_only_and_bounded ... ok
+test browser::live::resource::tests::managed_provenance_must_pair_with_managed_source ... ok
+test browser::live::resource::tests::owner_scoped_lookup_is_generic_for_other_principals ... ok
+test browser::live::resource::tests::refusal_event_drives_grant_revocation ... ok
+test browser::live::resource::tests::refused_draft_closes_the_live_resource_in_the_same_step ... ok
+test browser::live::resource::tests::revisions_are_monotonic_per_resource_and_stale_cas_loses ... ok
+test browser::live::stream_hub::tests::dropping_hub_terminates_receiver ... ok
+test browser::live::owner_registry::tests::strong_owner_and_engine_lifetime_survives_per_call_record_drop ... ok
+test browser::live::stream_hub::tests::late_subscriber_gets_current_frame_immediately ... ok
+test browser::live::owner_registry::tests::same_profile_and_target_different_sessions_do_not_cross_route ... ok
+test browser::live::stream_hub::tests::slow_subscriber_sees_only_latest_and_counts_skipped ... ok
+test browser::live::owner_registry::tests::tombstones_are_bounded_and_old_tokens_stay_dead_after_eviction ... ok
+test browser::live::stream_hub::tests::publish_without_subscribers_never_blocks_and_resubscribe_gets_latest ... ok
+test browser::live::resource::tests::resource_ids_are_opaque_and_serialization_has_no_url_or_secret ... ok
+test browser::live::tests::concurrent_attaches_elect_exactly_one_owner ... ok
+test browser::live::tests::cede_keeps_shared_consumers_but_owner_retirement_closes_them ... ok
+test browser::live::tests::an_old_fetch_feed_going_away_does_not_unhook_its_replacement ... ok
+test browser::live::navigation_gate_tests::top_level_frame_navigated_demotes_safe_revokes_grants_and_fences_viewer ... ok
+test browser::live::navigation_gate_tests::malformed_navigation_event_fails_closed ... ok
+test browser::live::navigation_gate_tests::unattributable_navigation_events_fail_closed_for_every_target_of_the_session ... ok
+test browser::live::navigation_gate_tests::same_document_navigation_of_a_known_other_frame_is_ignored ... ok
+test browser::live::navigation_gate_tests::navigation_of_one_target_leaves_the_other_target_approved ... ok
+test browser::live::tests::retired_owner_refuses_attach_and_never_claims_ownership ... ok
+test browser::live::tests::lag_close_target_is_suppressed_when_a_fresh_fetch_slot_is_registered ... ok
+test browser::live::tests::target_aware_stop_helper_skips_a_re_armed_screencast_for_the_same_target ... ok
+test browser::live::tests::target_destroyed_closes_control_recording_fetch_and_viewer_together ... ok
+test browser::live::tests::terminal_sink_registered_after_owner_end_gets_the_end_replayed ... ok
+test browser::live::tests::terminal_sink_registered_before_owner_end_is_told_exactly_once ... ok
+test browser::live::viewer_backend::tests::control_for_rebinds_after_a_dead_map_entry_but_reuses_a_live_one ... ok
+test browser::live::viewer_backend::tests::control_key_is_the_exact_session_and_target_pair ... ok
+test browser::live::viewer_backend::tests::foreign_session_same_target_id_never_reuses_or_evicts_the_owners_control ... ok
+test browser::live::navigation_gate_tests::obscura_stale_loader_navigation_still_fences ... ok
+test browser::live::tests::a_dropped_recording_tap_stops_a_screencast_nobody_else_holds ... ok
+test browser::live::tests::lag_terminates_streams_and_closes_fetch_targets_without_continuing_requests ... ok
+test browser::live::navigation_gate_tests::same_document_navigation_demotes_and_fences ... ok
+test browser::live::tests::full_fetch_feed_closes_its_target_instead_of_leaving_paused_requests ... ok
+test browser::live::viewer_backend::tests::prepare_uses_the_registry_resource_and_rejects_bad_resources_before_attach ... ok
+test browser::live::viewer_backend::tests::no_exact_registration_or_token_means_no_attach_or_dispatch ... ok
+test browser::live::viewer_backend::tests::prepare_failure_after_attach_closes_only_the_screencast_it_started ... ok
+test browser::live::resource::tests::caps_fail_closed_and_tombstones_make_room ... ok
+test browser::live::viewer_backend::tests::prepared_exact_routes_dispatch_only_to_their_owner_and_retire_fail_closed ... ok
+test browser::live::control::tests::expiry_closes_without_waiting_for_another_input_and_errors_never_report_success ... ok
+test browser::live::tests::claimed_but_unacked_frames_are_acked_when_the_recording_tap_goes_away ... ok
+test browser::live::tests::target_destroyed_after_start_completes_stops_the_orphan_screencast ... ok
+test browser::live::tests::slow_or_hidden_viewer_does_not_stop_recording ... ok
+test browser::live::tests::one_profile_has_one_connection_and_per_target_streams ... ok
+test browser::live::tests::a_cancelled_attach_leaves_no_stream_and_no_screencast ... ok
+test browser::live::navigation_gate_tests::receiver_taken_after_a_boundary_never_sees_the_previous_documents_frame ... ok
+test browser::live::control::tests::dispatch_busy_at_250ms_and_cancelled_dispatch_has_no_effect ... ok
+test browser::live::tests::destroying_a_target_during_start_does_not_report_a_successful_attach ... ok
+test browser::live::tests::human_input_waits_on_the_mutation_gate_and_times_out_with_a_clear_error ... ok
+test browser::live::tests::a_lagging_dispatcher_counts_what_it_missed ... ok
+
+test result: ok. 118 passed; 0 failed; 0 ignored; 0 measured; 20558 filtered out; finished in 0.79s
+

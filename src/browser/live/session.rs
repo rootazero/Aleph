@@ -51,10 +51,33 @@ impl FrameAcker {
     }
 
     pub(crate) async fn ack(&self, engine_ack_id: u64) -> Result<(), CdpError> {
-        if let Some(pending) = &self.pending {
-            lock_pending(pending).ids.remove(&engine_ack_id);
+        let Some(pending) = &self.pending else {
+            return screencast::screencast_frame_ack(
+                &self.conn,
+                Some(&self.session),
+                engine_ack_id,
+            )
+            .await;
+        };
+        // Exactly once: whoever removes the id from `pending` owns its ack.
+        // If it is already gone, the owner (feed closed) or the tap guard
+        // acked it.
+        if !lock_pending(pending).ids.remove(&engine_ack_id) {
+            return Ok(());
         }
-        screencast::screencast_frame_ack(&self.conn, Some(&self.session), engine_ack_id).await
+        // The id has left `pending`, so the guard will no longer cover it:
+        // the send must survive cancellation of this future (a writer that is
+        // aborted mid-ack). Detach it onto the runtime; awaiting the handle
+        // keeps the after-write pacing for the normal path.
+        let (conn, session) = (self.conn.clone(), self.session.clone());
+        let send = tokio::spawn(async move {
+            screencast::screencast_frame_ack(&conn, Some(&session), engine_ack_id).await
+        });
+        match send.await {
+            Ok(res) => res,
+            // The runtime is shutting down; the engine goes with it.
+            Err(_) => Ok(()),
+        }
     }
 }
 
@@ -173,6 +196,12 @@ impl TargetStream {
             tap: None,
             attached: false,
         }
+    }
+
+    /// Stamp this stream's frames from the owner's per-target content gate.
+    pub(crate) fn with_gate(mut self, gate: super::navigation_gate::ContentGate) -> Self {
+        self.hub = LatestFrameHub::with_gate(gate);
+        self
     }
 
     /// Signal the recording observer (if any) that the stream is over. The

@@ -73,7 +73,7 @@ const fn os_rng() -> UnwrapErr<SysRng> {
     UnwrapErr(SysRng)
 }
 
-fn mint_secret() -> String {
+pub(super) fn mint_secret() -> String {
     let mut bytes = [0u8; SECRET_BYTES];
     os_rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
@@ -213,8 +213,14 @@ impl GrantEntry {
     }
 }
 
+type PrincipalValidator = Arc<dyn Fn(&IssuerIdentity) -> bool + Send + Sync>;
+
 #[derive(Default)]
 struct Inner {
+    // Installed by gateway composition before exposing the issuer. The callback
+    // must not re-enter this store; its status read and insertion share the
+    // same lock as revoke_for_principal's sweep.
+    principal_validator: Option<PrincipalValidator>,
     entries: HashMap<String, GrantEntry>,
     next_attempt: u64,
 }
@@ -239,6 +245,13 @@ impl ViewerGrantStore {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Install the live authority used at the insertion linearization point.
+    /// Low-level stores without gateway composition retain their caller-owned
+    /// policy; the gateway always installs a fail-closed validator.
+    pub(crate) fn set_principal_validator(&self, validator: PrincipalValidator) {
+        self.lock().principal_validator = Some(validator);
+    }
+
     /// Mint a grant over an exact binding. `permissions` are canonicalized
     /// (sorted, deduped); an empty effective set is denied. The wire type
     /// [`ViewerBinding`] is browser-only, so artifact-bound grants are
@@ -253,9 +266,37 @@ impl ViewerGrantStore {
         origin: ViewerOrigin,
         ttl: Duration,
     ) -> Result<IssuedGrant, GrantDenied> {
-        if resource_id.is_empty() || ttl.is_zero() {
+        let ttl_ms = i64::try_from(ttl.as_millis()).map_err(|_| GrantDenied)?;
+        let expires_at_ms = now_ms().checked_add(ttl_ms).ok_or(GrantDenied)?;
+        self.issue_until(
+            issuer,
+            binding,
+            resource_id,
+            permissions,
+            origin,
+            expires_at_ms,
+        )
+    }
+
+    /// Mint with an absolute resource/policy deadline. The monotonic anchor is
+    /// captured before reading wall time so store work cannot extend that bound.
+    pub(crate) fn issue_until(
+        &self,
+        issuer: IssuerIdentity,
+        binding: ViewerBinding,
+        resource_id: &str,
+        permissions: &[ViewerPermission],
+        origin: ViewerOrigin,
+        expires_at_ms: i64,
+    ) -> Result<IssuedGrant, GrantDenied> {
+        let anchor = Instant::now();
+        let remaining_ms = expires_at_ms.checked_sub(now_ms()).ok_or(GrantDenied)?;
+        if resource_id.is_empty() || remaining_ms <= 0 {
             return Err(GrantDenied);
         }
+        let deadline = anchor
+            .checked_add(Duration::from_millis(remaining_ms as u64))
+            .ok_or(GrantDenied)?;
         let mut permissions = permissions.to_vec();
         permissions.sort_unstable();
         permissions.dedup();
@@ -264,7 +305,6 @@ impl ViewerGrantStore {
         }
         let grant_id = mint_secret();
         let nonce = mint_secret();
-        let expires_at_ms = now_ms() + ttl.as_millis() as i64;
         let entry = GrantEntry {
             issuer,
             binding,
@@ -272,7 +312,7 @@ impl ViewerGrantStore {
             permissions,
             origin,
             expires_at_ms,
-            deadline: Instant::now() + ttl,
+            deadline,
             stage: Stage::Nonce {
                 hash: hash_secret(&nonce),
                 consumed: false,
@@ -280,6 +320,11 @@ impl ViewerGrantStore {
             live: None,
         };
         let mut inner = self.lock();
+        if let Some(validate) = &inner.principal_validator {
+            if !validate(&entry.issuer) || !validate(&entry.binding.principal) {
+                return Err(GrantDenied);
+            }
+        }
         inner.prune_expired();
         if inner.entries.len() >= MAX_LIVE_GRANTS {
             let Some(victim) = inner
@@ -518,6 +563,60 @@ impl ViewerGrantStore {
     pub(crate) fn revoke(&self, grant_id: &str) -> bool {
         let mut inner = self.lock();
         Self::revoke_locked(&mut inner, grant_id)
+    }
+
+    /// Recheck issuer and expiry under the mutation lock: an issuer RPC's
+    /// earlier grant_info lookup must not race into success on an expired grant.
+    pub(crate) fn revoke_for_issuer(&self, grant_id: &str, issuer: &IssuerIdentity) -> bool {
+        let mut inner = self.lock();
+        if !inner
+            .entries
+            .get(grant_id)
+            .is_some_and(|e| e.alive() && &e.issuer == issuer)
+        {
+            return false;
+        }
+        Self::revoke_locked(&mut inner, grant_id)
+    }
+
+    /// Revoke every outstanding grant of `resource_id` (resource closed or
+    /// expired): each live WS is closed through its lease and each grant id
+    /// becomes unknown. Returns how many grants were revoked. A bounded scan
+    /// (<= `MAX_LIVE_GRANTS`) rather than a second index that could drift
+    /// from `entries`.
+    #[allow(dead_code)] // consumed by the Task 6 resource close/expiry wiring
+    pub(crate) fn revoke_resource(&self, resource_id: &str) -> usize {
+        let mut inner = self.lock();
+        let doomed: Vec<String> = inner
+            .entries
+            .iter()
+            .filter(|(_, e)| e.resource_id == resource_id)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for grant_id in &doomed {
+            Self::revoke_locked(&mut inner, grant_id);
+        }
+        doomed.len()
+    }
+
+    /// Issuer death: revoke every grant `principal` issued or is bound to as
+    /// the viewing principal (a deactivated user loses both). Same whole-grant
+    /// path as [`Self::revoke`]: each live WS is closed through its lease,
+    /// which bumps the target's control epoch and ws generation and hands any
+    /// human control back to the Agent with one `Revoked` summary. Returns
+    /// how many grants were revoked. Bounded scan, like `revoke_resource`.
+    pub(crate) fn revoke_for_principal(&self, principal: &IssuerIdentity) -> usize {
+        let mut inner = self.lock();
+        let doomed: Vec<String> = inner
+            .entries
+            .iter()
+            .filter(|(_, e)| &e.issuer == principal || &e.binding.principal == principal)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for grant_id in &doomed {
+            Self::revoke_locked(&mut inner, grant_id);
+        }
+        doomed.len()
     }
 
     fn revoke_locked(inner: &mut Inner, grant_id: &str) -> bool {
@@ -927,5 +1026,94 @@ mod tests {
         // Second revoke is idempotent; unknown grant ids are too.
         assert!(!store.revoke(&grant_id));
         assert!(!store.revoke("never-existed"));
+    }
+
+    #[tokio::test]
+    async fn revoke_resource_revokes_only_that_resources_grants() {
+        let store = ViewerGrantStore::default();
+        let a1 = issue(&store, "res-1", "target-1");
+        let a2 = issue(&store, "res-1", "target-1");
+        let b = issue(&store, "res-2", "target-2");
+        // a1 reaches a live WS; a2 stays at the nonce stage.
+        let consumed = store
+            .consume_nonce(&a1.grant_id, &a1.nonce, Some(&origin()))
+            .expect("consume");
+        let exchanged = store
+            .exchange(&consumed.ticket, Some(&origin()))
+            .expect("exchange");
+        let attempt = store
+            .begin_auth(&hello(&a1.grant_id, 0, &exchanged.current_secret.0))
+            .expect("begin");
+        store.commit_auth(attempt).expect("commit");
+        let (control, lease, close) = live_control("res-1", &binding("target-1"));
+        assert!(store.publish_live(&a1.grant_id, control, lease.clone()));
+
+        assert_eq!(store.revoke_resource("res-1"), 2);
+        assert!(store.grant_info(&a1.grant_id).is_none());
+        assert!(store.grant_info(&a2.grant_id).is_none());
+        assert!(close.has_changed().unwrap_or(true), "live WS close fired");
+        assert!(lease.closed());
+        // Revoked grants are denied generically, like never-existed ones.
+        assert!(store
+            .consume_nonce(&a2.grant_id, &a2.nonce, Some(&origin()))
+            .is_err());
+        // The other resource's grant is untouched; repeat is a no-op.
+        assert!(store.grant_info(&b.grant_id).is_some());
+        assert_eq!(store.revoke_resource("res-1"), 0);
+        assert_eq!(store.revoke_resource("never-existed"), 0);
+    }
+
+    /// Issuer death (user deactivation) is a whole-grant revoke: the live WS
+    /// closes, human control returns to the Agent with a bumped control
+    /// epoch, and only that principal's grants are touched.
+    #[tokio::test]
+    async fn revoke_for_principal_is_whole_grant_revoke_for_that_principal_only() {
+        let store = ViewerGrantStore::default();
+        let (grant_id, s0) = reach_session(&store, "target-1");
+        let attempt = store.begin_auth(&hello(&grant_id, 0, &s0)).expect("begin");
+        store.commit_auth(attempt).expect("commit");
+        let (control, lease, close) = live_control("res-1", &binding("target-1"));
+        assert!(store.publish_live(&grant_id, control.clone(), lease.clone()));
+        let taken = control
+            .take(
+                &lease,
+                aleph_protocol::browser_live::ControlRequest {
+                    expected_control_epoch: 0,
+                    action_seq: 1,
+                    expires_at_ms: chrono::Utc::now().timestamp_millis() + 60_000,
+                },
+            )
+            .await;
+        assert!(taken.accepted);
+        let epoch_before = control.snapshot().control_epoch;
+
+        // A grant whose issuer AND viewing principal is another user.
+        let other = IssuerIdentity::User {
+            user_id: "user-2".into(),
+        };
+        let mut other_binding = binding("target-2");
+        other_binding.principal = other.clone();
+        let foreign = store
+            .issue(
+                other.clone(),
+                other_binding,
+                "res-2",
+                &[ViewerPermission::Frames],
+                origin(),
+                Duration::from_secs(600),
+            )
+            .expect("issue other");
+
+        assert_eq!(store.revoke_for_principal(&issuer()), 1);
+        assert!(store.grant_info(&grant_id).is_none());
+        assert!(close.has_changed().unwrap_or(true), "live WS close fired");
+        assert!(lease.closed());
+        let after = control.snapshot();
+        assert_eq!(after.controller, Controller::Agent);
+        assert!(after.control_epoch > epoch_before, "control epoch bumped");
+        // The other principal's grant survives; repeat is a no-op.
+        assert!(store.grant_info(&foreign.grant_id).is_some());
+        assert_eq!(store.revoke_for_principal(&issuer()), 0);
+        assert_eq!(store.revoke_for_principal(&other), 1);
     }
 }

@@ -9,6 +9,20 @@
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
+// The QA build deliberately compiles out the host-global side-effect surfaces
+// (tray, hotkey, deep-link, updater/notification bridges, window-state). Their
+// modules stay compiled for the shared command table, so silence the resulting
+// dead-code noise for that build only.
+#![cfg_attr(feature = "qa-owned-root", allow(dead_code, unused_imports))]
+
+// `qa-owned-root` is a QA-only confinement build: debug builds of the panel-only
+// (lite) shell, nothing else. Both misuses fail the build rather than degrade.
+#[cfg(all(feature = "qa-owned-root", not(debug_assertions)))]
+compile_error!("feature `qa-owned-root` is QA-only and requires a debug build (debug_assertions)");
+#[cfg(all(feature = "qa-owned-root", feature = "embedded-core"))]
+compile_error!(
+    "feature `qa-owned-root` must not be combined with `embedded-core`; build the lite shell with --no-default-features --features qa-owned-root"
+);
 
 mod cert_trust;
 mod connection;
@@ -31,11 +45,18 @@ mod external_link;
 // lite-only `connect_setup` the full app had to answer it a second, weaker way.
 mod gateway_probe;
 mod hotkey;
+mod keyring_bridge;
 #[cfg(target_os = "macos")]
 mod menu;
 mod notify;
 #[cfg(feature = "embedded-core")]
 mod perm_monitor;
+// QA-only owned-root resolver; absent from every non-QA build.
+#[cfg(feature = "qa-owned-root")]
+mod qa_root;
+// QA-only native credential execution trace (stdout pipe to the harness).
+#[cfg(feature = "qa-owned-root")]
+mod qa_trace;
 mod tray;
 mod update;
 mod webview_perms;
@@ -43,6 +64,7 @@ mod webview_perms;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+#[cfg(not(feature = "qa-owned-root"))]
 use tauri_plugin_window_state::{StateFlags, WindowExt};
 
 /// The loopback Gateway origin. In the full app the bundled daemon serves it;
@@ -136,8 +158,309 @@ const SHELL_MARKER_JS: &str = "var e=document.documentElement;\
 /// stays out of it — the shell drives that itself (created hidden so geometry is
 /// restored off-screen, shown with the splash as soon as setup finishes, hidden
 /// again when the user closes to the tray).
+#[cfg(not(feature = "qa-owned-root"))]
 fn window_state_flags() -> StateFlags {
     StateFlags::SIZE | StateFlags::POSITION
+}
+
+/// Placeholder in [`QA_MONITOR_JS`] replaced by the validated decimal port.
+#[cfg(feature = "qa-owned-root")]
+const QA_MONITOR_PORT_PLACEHOLDER: &str = "__QA_MONITOR_PORT__";
+
+/// Placeholder in [`QA_MONITOR_JS`] replaced by the JSON string literal of the
+/// validated QA root nonce (the first-message authentication value).
+#[cfg(feature = "qa-owned-root")]
+const QA_MONITOR_NONCE_PLACEHOLDER: &str = "__QA_MONITOR_NONCE__";
+
+/// QA-only bounded DOM driver (`qa-owned-root` + `--qa-monitor-port`).
+///
+/// This script does NOT observe or wrap Tauri IPC. `window.__TAURI_INTERNALS__`
+/// (and its `invoke`) is immutable in the real webview, and anything a page
+/// script reports about native execution would be page-forgeable anyway. The
+/// evidence that the `panel_credential_*` commands ran is emitted by Rust in the
+/// command handlers themselves and travels on the child's stdout pipe (see
+/// `qa_trace.rs`); this script is only the DOM driver + self-report channel.
+/// It only READS `window.__TAURI_INTERNALS__` for presence (never writes it): if
+/// the page has no `__TAURI_INTERNALS__` / no `invoke` function it is not the real
+/// Panel in a Tauri webview, and the script reports an UNTRUSTED `install_failed`
+/// event (`no_internals` / `no_invoke`) as the first and only event (never
+/// `hello`, never any command handling). The only endpoint is
+/// `ws://127.0.0.1:<port>/qa` with a compile-time-fixed host and path; the port is
+/// substituted from a `u16` (digits only).
+///
+/// Authentication: `hello` carries `auth`, the validated root nonce (the QA
+/// OWNERSHIP nonce the harness wrote to `.qa-owned`; not a secret credential and
+/// not proof of IPC or identity). The harness compares it exactly against the nonce
+/// it created, plus the upgrade `Origin`. The page cannot authenticate the harness
+/// (a process that took the fixed port would see the nonce); that residual risk is
+/// accepted for a loopback-only QA channel and is why commands are fixed and bounded.
+///
+/// DOM side: after `hello` the page accepts ONLY fixed snake_case commands
+/// `ask_pair | submit_ticket | reload | inspect | reveal_browser` (envelope
+/// `{v:1,type:'command',run,id,command[,ticket]}`: exact key set, `run` == this
+/// document's run token, `id` strictly sequential from 0, one command in flight). It
+/// never evaluates harness text, never takes a selector, and never calls
+/// `invoke` or touches app state directly: it only clicks the real Pair-desktop
+/// button, sets the real password input through the native value setter plus an
+/// `input` event and clicks the real submit button, reloads, reports booleans, or
+/// (`reveal_browser`) opens the workspace pane and selects the Browser tab.
+/// `reveal_browser` is the ONLY multi-step command and stays fixed and bounded: it
+/// clicks the `layout-toggle` button ONLY when the workspace pane is not already open
+/// (the toggle would otherwise close it), then polls at most 20 x 25 ms (500 ms) for
+/// the enabled `workspace-tab-browser` button and clicks only that. No selector or
+/// text from the harness is used; absent/disabled => `command_ack` ok:false.
+/// Selectors are the compile-time table `SEL` (stable `data-testid`). The ticket
+/// lives only in the handler's local variable: it is never stored in a module
+/// variable, emitted, logged or put in a URL. `command_ack` carries only a fixed
+/// action enum and a boolean (false when the element is absent/disabled or the
+/// envelope is refused); `dom_state` carries only fixed boolean keys.
+/// Wire shape follows `qa/native_ipc/monitor_contract.mjs`
+/// (`v`, `type`, `run`, `seq`; one run token and stream per document).
+#[cfg(feature = "qa-owned-root")]
+const QA_MONITOR_JS: &str = r#"(function () {
+  'use strict';
+  var PORT = __QA_MONITOR_PORT__;
+  var AUTH = __QA_MONITOR_NONCE__;
+  var V = 1;
+  var CONTRACT = 'aleph-qa-monitor-v1';
+  var MAX_SEQ = 512;
+  var ACTIONS = ['ask_pair', 'submit_ticket', 'reload', 'inspect', 'reveal_browser'];
+  var MAX_COMMAND_CHARS = 4096;
+  var MAX_TICKET_CHARS = 2048;
+  var SEL = {
+    tokenWall: '[data-testid=token-wall]',
+    tokenInput: '[data-testid=token-wall-input]',
+    tokenSubmit: '[data-testid=token-wall-submit]',
+    tokenRejected: '[data-testid=token-wall-instruction-rejected]',
+    pairingNotice: '[data-testid=pairing-notice]',
+    pairDesktop: '[data-testid=pairing-notice-pair-desktop]',
+    decision: '[data-testid=browser-live-decision]',
+    launch: '[data-testid=browser-live-launch]',
+    liveFrame: '[data-testid=browser-live-frame]',
+    liveStatus: '[data-testid=browser-live-status]',
+    workspace: '[data-testid=workspace-panel]',
+    layoutToggle: '[data-testid=layout-toggle]',
+    browserTab: '[data-testid=workspace-tab-browser]'
+  };
+  var REVEAL_POLL_MS = 25;
+  var REVEAL_MAX_TRIES = 20;
+  var run = null;
+  try {
+    var rb = new Uint8Array(16);
+    window.crypto.getRandomValues(rb);
+    run = '';
+    for (var i = 0; i < rb.length; i++) { run += (rb[i] < 16 ? '0' : '') + rb[i].toString(16); }
+  } catch (_) { return; }
+  var seq = 0;
+  var ended = false;
+  var open = false;
+  var closeAfterFlush = false;
+  var helloSent = false;
+  var busy = false;
+  var lastId = -1;
+  var queue = [];
+  var ws = null;
+  function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+  function emit(type, fields) {
+    if (ended) { return -1; }
+    if (seq >= MAX_SEQ && type !== 'monitor_end') { emit('monitor_end', { reason: 'monitor_error' }); return -1; }
+    var e = { v: V, type: type, run: run, seq: seq };
+    for (var k in fields) { if (has(fields, k)) { e[k] = fields[k]; } }
+    var at = seq;
+    seq += 1;
+    if (type === 'monitor_end' || type === 'install_failed') { ended = true; }
+    try {
+      var s = JSON.stringify(e);
+      if (open) { ws.send(s); } else { queue.push(s); }
+    } catch (_) { ended = true; return -1; }
+    return at;
+  }
+  // ---- bounded DOM driver (fixed commands; booleans only on the wire) ----
+  function q(sel) { try { return document.querySelector(sel); } catch (_) { return null; } }
+  function enabledButton(el) {
+    return el !== null && el.tagName === 'BUTTON' && el.disabled === false && el.getAttribute('aria-disabled') !== 'true';
+  }
+  function ack(action, ok) { emit('command_ack', { action: action, ok: ok === true }); }
+  function done(action, ok) { busy = false; ack(action, ok); }
+  function parseCommand(m) {
+    if (m === null || typeof m !== 'object' || Array.isArray(m)) { return null; }
+    if (m.v !== V || m.type !== 'command' || m.run !== run) { return null; }
+    if (typeof m.command !== 'string' || ACTIONS.indexOf(m.command) < 0) { return null; }
+    if (typeof m.id !== 'number' || Math.floor(m.id) !== m.id || m.id !== lastId + 1 || m.id > MAX_SEQ) { return null; }
+    var withTicket = m.command === 'submit_ticket';
+    var keys = Object.keys(m);
+    if (keys.length !== (withTicket ? 6 : 5)) { return null; }
+    var need = ['v', 'type', 'run', 'id', 'command'];
+    if (withTicket) { need.push('ticket'); }
+    for (var i = 0; i < need.length; i++) { if (!has(m, need[i])) { return null; } }
+    var ticket = null;
+    if (withTicket) {
+      if (typeof m.ticket !== 'string' || m.ticket.length < 1 || m.ticket.length > MAX_TICKET_CHARS) { return null; }
+      ticket = m.ticket;
+    }
+    return { action: m.command, id: m.id, ticket: ticket };
+  }
+  // The pane is always mounted and CSS-collapsed outside Split mode (marker class
+  // `workspace-collapsed`); "open" = present and not carrying that class.
+  function workspaceOpen() {
+    var w = q(SEL.workspace);
+    if (w === null) { return false; }
+    var cl = w.classList;
+    return !(cl && typeof cl.contains === 'function' && cl.contains('workspace-collapsed'));
+  }
+  function inspect() {
+    var wall = q(SEL.tokenWall) !== null;
+    var input = q(SEL.tokenInput) !== null;
+    var notice = q(SEL.pairingNotice) !== null;
+    var decision = q(SEL.decision) !== null;
+    var launch = q(SEL.launch) !== null;
+    var pair = q(SEL.pairDesktop);
+    var toggle = q(SEL.layoutToggle);
+    var tab = q(SEL.browserTab);
+    var st = {
+      tokenWall: wall,
+      tokenInput: input,
+      tokenSubmitEnabled: enabledButton(q(SEL.tokenSubmit)),
+      tokenRejected: q(SEL.tokenRejected) !== null,
+      pairingNotice: notice,
+      pairDesktop: pair !== null,
+      pairDesktopEnabled: enabledButton(pair),
+      paired: (decision || launch) && !notice,
+      resource: decision,
+      live: q(SEL.liveFrame) !== null,
+      liveStatus: q(SEL.liveStatus) !== null,
+      workspace: workspaceOpen(),
+      layoutToggle: toggle !== null,
+      layoutToggleEnabled: enabledButton(toggle),
+      browserTab: tab !== null,
+      browserTabEnabled: enabledButton(tab)
+    };
+    emit('dom_state', st);
+    done('inspect', true);
+  }
+  function askPair() {
+    var btn = q(SEL.pairDesktop);
+    if (!enabledButton(btn)) { done('ask_pair', false); return; }
+    btn.click();
+    done('ask_pair', true);
+  }
+  function setNativeValue(input, text) {
+    var d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+    if (!d || typeof d.set !== 'function') { return false; }
+    d.set.call(input, text);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }
+  function submitTicket(act) {
+    var input = q(SEL.tokenInput);
+    if (input === null || input.tagName !== 'INPUT' || input.type !== 'password' || q(SEL.tokenSubmit) === null) {
+      act.ticket = null;
+      done('submit_ticket', false);
+      return;
+    }
+    var set = false;
+    try { set = setNativeValue(input, act.ticket); } catch (_) { set = false; }
+    act.ticket = null;
+    if (!set) { done('submit_ticket', false); return; }
+    var tries = 0;
+    var poll = function () {
+      var btn = q(SEL.tokenSubmit);
+      if (enabledButton(btn)) { btn.click(); done('submit_ticket', true); return; }
+      tries += 1;
+      if (tries >= 20 || btn === null) {
+        try { setNativeValue(input, ''); } catch (_) {}
+        done('submit_ticket', false);
+        return;
+      }
+      setTimeout(poll, 25);
+    };
+    setTimeout(poll, 25);
+  }
+  function revealBrowser() {
+    if (!workspaceOpen()) {
+      var tg = q(SEL.layoutToggle);
+      if (!enabledButton(tg)) { done('reveal_browser', false); return; }
+      tg.click();
+    }
+    var tries = 0;
+    var poll = function () {
+      try {
+        var tab = q(SEL.browserTab);
+        if (enabledButton(tab)) { tab.click(); done('reveal_browser', true); return; }
+        tries += 1;
+        if (tries >= REVEAL_MAX_TRIES) { done('reveal_browser', false); return; }
+        setTimeout(poll, REVEAL_POLL_MS);
+      } catch (_) { done('reveal_browser', false); }
+    };
+    setTimeout(poll, REVEAL_POLL_MS);
+  }
+  function reload() {
+    done('reload', true);
+    setTimeout(function () { try { window.location.reload(); } catch (_) {} }, 100);
+  }
+  function onCommand(raw) {
+    if (ended || !helloSent) { return; }
+    if (busy) { ack('refused', false); return; }
+    var m = null;
+    if (typeof raw !== 'string' || raw.length > MAX_COMMAND_CHARS) { ack('refused', false); return; }
+    try { m = JSON.parse(raw); } catch (_) { ack('refused', false); return; }
+    var act = parseCommand(m);
+    m = null;
+    if (act === null) { ack('refused', false); return; }
+    lastId = act.id;
+    busy = true;
+    try {
+      if (act.action === 'inspect') { inspect(); }
+      else if (act.action === 'ask_pair') { askPair(); }
+      else if (act.action === 'submit_ticket') { submitTicket(act); }
+      else if (act.action === 'reveal_browser') { revealBrowser(); }
+      else { reload(); }
+    } catch (_) { done(act.action, false); }
+  }
+  try {
+    ws = new WebSocket('ws://127.0.0.1:' + PORT + '/qa');
+    ws.onopen = function () {
+      open = true;
+      try { while (queue.length) { ws.send(queue.shift()); } } catch (_) { ended = true; }
+      if (closeAfterFlush) { try { ws.close(); } catch (_) {} }
+    };
+    ws.onmessage = function (ev) { try { onCommand(ev.data); } catch (_) {} };
+    ws.onclose = function () { open = false; ended = true; };
+    ws.onerror = function () { open = false; ended = true; };
+  } catch (_) { return; }
+  // Read-only presence check; nothing is wrapped or written.
+  var reason = null;
+  var ti = window.__TAURI_INTERNALS__;
+  if (ti === null || typeof ti !== 'object') {
+    reason = 'no_internals';
+  } else if (typeof ti.invoke !== 'function') {
+    reason = 'no_invoke';
+  }
+  if (reason !== null) {
+    closeAfterFlush = true;
+    emit('install_failed', { trusted: false, reason: reason });
+    return;
+  }
+  emit('hello', { contract: CONTRACT, auth: AUTH });
+  helloSent = true;
+  window.addEventListener('pagehide', function () { emit('monitor_end', { reason: 'page_unload' }); }, false);
+})();"#;
+
+/// Build the monitor init script for a validated `--qa-monitor-port` and the
+/// validated root nonce. The port is a `u16` (1..=5 ASCII digits); the nonce is
+/// re-checked to be 16..=128 ASCII hex characters (as `qa_root` already proved) and
+/// substituted as a JSON string literal. `None` (no monitor) on any doubt.
+#[cfg(feature = "qa-owned-root")]
+fn qa_monitor_script(port: u16, nonce: &str) -> Option<String> {
+    if !(16..=128).contains(&nonce.len()) || !nonce.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let json = serde_json::to_string(nonce).ok()?;
+    Some(
+        QA_MONITOR_JS
+            .replacen(QA_MONITOR_PORT_PLACEHOLDER, &port.to_string(), 1)
+            .replacen(QA_MONITOR_NONCE_PLACEHOLDER, &json, 1),
+    )
 }
 
 /// Repair the PATH for a GUI (Finder/Dock) launch.
@@ -218,6 +541,21 @@ fn main() {
     linux_webkit_compat();
     init_tracing();
 
+    // QA build: resolve and prove the owned root BEFORE anything can touch disk
+    // (markers, WebView2 profile). Any rejection aborts with a non-zero exit;
+    // there is no fallback to the real home directory.
+    #[cfg(feature = "qa-owned-root")]
+    if let Err(e) = qa_root::init_from_args(std::env::args_os()) {
+        eprintln!("{}: refusing to start: {e}", qa_root::QA_BUILD_MARKER);
+        std::process::exit(2);
+    }
+
+    // QA build registers NO host-global side-effect plugin (single-instance
+    // mutex/IPC, autostart registry/launch-agent, window-state file, updater,
+    // deep-link scheme registration, global shortcut, notifications).
+    #[cfg(feature = "qa-owned-root")]
+    let builder = tauri::Builder::default();
+    #[cfg(not(feature = "qa-owned-root"))]
     let builder = tauri::Builder::default()
         // Single-instance must be registered first: a second launch focuses
         // the running shell instead of spawning a duplicate window. Its
@@ -277,6 +615,9 @@ fn main() {
         cert_trust::pending::get_pending_cert,
         cert_trust::pending::approve_cert,
         cert_trust::pending::reject_cert,
+        keyring_bridge::panel_credential_load,
+        keyring_bridge::panel_credential_save,
+        keyring_bridge::panel_credential_delete,
     ]);
     #[cfg(not(feature = "embedded-core"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -289,6 +630,9 @@ fn main() {
         cert_trust::pending::get_pending_cert,
         cert_trust::pending::approve_cert,
         cert_trust::pending::reject_cert,
+        keyring_bridge::panel_credential_load,
+        keyring_bridge::panel_credential_save,
+        keyring_bridge::panel_credential_delete,
     ]);
 
     // Shared update state: the background checker, the tray, and the macOS
@@ -317,6 +661,9 @@ fn main() {
         .setup(|app| {
             let handle = app.handle().clone();
 
+            if keyring_bridge::install(&handle).is_err() {
+                tracing::warn!("Protected credential bridge unavailable");
+            }
             build_main_window(&handle)?;
 
             // Show the window immediately, displaying the bundled splash. Rust
@@ -330,11 +677,19 @@ fn main() {
             focus_window(&handle);
 
             // System tray — the resident, always-available face of the app.
+            // QA build: skipped (tray menu drives the autostart plugin, which
+            // the QA build does not register).
+            #[cfg(not(feature = "qa-owned-root"))]
             tray::build(&handle)?;
 
             // Global summon hotkey and the `aleph://` deep-link scheme.
-            hotkey::setup(&handle);
-            deeplink::setup(&handle);
+            // QA build: skipped (global shortcut registration and, on Windows,
+            // `register_all()` writing the `aleph://` handler into the registry).
+            #[cfg(not(feature = "qa-owned-root"))]
+            {
+                hotkey::setup(&handle);
+                deeplink::setup(&handle);
+            }
 
             #[cfg(target_os = "macos")]
             apply_macos_vibrancy(&handle);
@@ -404,7 +759,10 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     }
     // `mut` is only needed on macOS, where the title-bar overlay is applied
     // via reassignment below; other platforms never rebind `builder`.
-    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    #[cfg_attr(
+        not(any(target_os = "macos", feature = "qa-owned-root")),
+        allow(unused_mut)
+    )]
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Aleph")
         .inner_size(1180.0, 800.0)
@@ -413,6 +771,7 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .resizable(true)
         .visible(false)
         .initialization_script(SHELL_MARKER_JS)
+        .initialization_script("try { Object.defineProperty(window, '__ALEPH_PANEL_KEYRING__', { value: true, writable: false, configurable: false }); } catch (_) {}")
         // Turn `target="_blank"` clicks into a top-level navigation so the
         // guard below can externalise them; pin the lone webview to the
         // Panel origin and hand outside URLs to the OS browser (R5).
@@ -473,6 +832,23 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true);
     }
+    // QA build: pin the WebView2 user-data folder inside the owned QA root
+    // (otherwise it lands in %LOCALAPPDATA%<identifier>EBWebView). The
+    // containment check is re-asserted here, at the point of use.
+    #[cfg(feature = "qa-owned-root")]
+    {
+        builder = builder.data_directory(qa_root::webview_data_dir()?);
+        // Optional redacted IPC monitor: only when `--qa-monitor-port` was given
+        // and the owned root was proven (`monitor_port()` is None otherwise).
+        // The root nonce (first-message auth value) is only available after the
+        // same root proof; a nonce that fails re-validation means no monitor.
+        if let (Some(port), Some(nonce)) = (qa_root::monitor_port(), qa_root::monitor_auth_nonce()) {
+            match qa_monitor_script(port, nonce) {
+                Some(script) => builder = builder.initialization_script(&script),
+                None => eprintln!("{}: monitor script refused (invalid nonce)", qa_root::QA_BUILD_MARKER),
+            }
+        }
+    }
     let window = builder.build()?;
 
     // Grant the Panel webview microphone access (voice-input button). No-op on
@@ -485,7 +861,9 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     cert_trust::install::install_cert_trust(&window);
 
     // Restore the window's last size and position. On first run there is
-    // nothing saved, so it keeps the centered default set above.
+    // nothing saved, so it keeps the centered default set above. QA build: the
+    // window-state plugin is not registered and no state file is read/written.
+    #[cfg(not(feature = "qa-owned-root"))]
     if let Err(e) = window.restore_state(window_state_flags()) {
         tracing::warn!("could not restore window geometry: {e}");
     }
@@ -524,7 +902,14 @@ fn spawn_background(handle: tauri::AppHandle) {
                     supervise_daemon(handle.clone(), boot),
                     update::run_update_checker(handle),
                 );
-                #[cfg(not(feature = "embedded-core"))]
+                // QA build: bring the target online once, then run nothing
+                // resident (no notification websocket, no update checker, no
+                // remote-health relocation) — the QA page owns the run.
+                #[cfg(feature = "qa-owned-root")]
+                {
+                    let _ = boot;
+                }
+                #[cfg(all(not(feature = "embedded-core"), not(feature = "qa-owned-root")))]
                 {
                     let _ = boot;
                     // Spawn the resident remote-health supervisor as a separate
@@ -799,7 +1184,17 @@ fn focus_window_inner(handle: &tauri::AppHandle) {
 /// paths that reach `set_connection_target` directly (the full-app-shaped
 /// `connect.html` fallback, "Back to Local", tray/menu) cannot strand the
 /// user on a dead origin either (spec §8 — no white screen).
-pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::ConnectionTarget) {
+///
+/// `async` and **not** self-spawning, on purpose: callers
+/// ([`connection::serialize_target_switch`]) hold the target-switch gate across
+/// this future, so the probe and navigation of switch A are committed before
+/// switch B starts. Spawned completions could land out of order and leave the
+/// webview on the older target. The price is that a slow probe delays the next
+/// switch (bounded by the probe's own timeout).
+pub(crate) async fn reroute_for_target(
+    app: &tauri::AppHandle,
+    target: connection::ConnectionTarget,
+) {
     match &target {
         connection::ConnectionTarget::Remote(url) => {
             external_link::set_remote_host(Some(url.clone()));
@@ -813,20 +1208,15 @@ pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::Con
             // as healthy forever, so the next tick never came.
             #[cfg(feature = "embedded-core")]
             {
-                let handle = app.clone();
-                let url = url.clone();
-                let target = target.clone();
-                tauri::async_runtime::spawn(async move {
-                    if gateway_probe::target_reachable(&target).await {
-                        if let Some(window) = handle.get_webview_window("main") {
-                            let _ = window.navigate(url);
-                        }
-                    } else {
-                        let why = gateway_probe::target_unreachable_message(&target);
-                        tracing::warn!("remote target unreachable — opening connect page: {why}");
-                        show_connection_page(&handle, &why);
+                if gateway_probe::target_reachable(&target).await {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.navigate(url.clone());
                     }
-                });
+                } else {
+                    let why = gateway_probe::target_unreachable_message(&target);
+                    tracing::warn!("remote target unreachable — opening connect page: {why}");
+                    show_connection_page(app, &why);
+                }
             }
         }
         connection::ConnectionTarget::Local => {
@@ -834,32 +1224,25 @@ pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::Con
             // Full app: bring the local daemon up, then reveal the Panel.
             #[cfg(feature = "embedded-core")]
             {
-                let handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let version = handle.package_info().version.to_string();
-                    daemon::reconcile_for_version(&version).await;
-                    let _ = daemon::ensure_ready().await;
-                    reveal_panel(&handle);
-                });
+                let version = app.package_info().version.to_string();
+                daemon::reconcile_for_version(&version).await;
+                let _ = daemon::ensure_ready().await;
+                reveal_panel_now(app).await;
             }
         }
     }
     // Panel-only shell: no daemon to manage in either arm — probe the target
-    // and navigate only when it answers. The probe is async, so hop onto the
-    // async runtime (the sync connection commands stay non-blocking).
+    // and navigate only when it answers.
     #[cfg(not(feature = "embedded-core"))]
     {
-        let handle = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if gateway_probe::target_reachable(&target).await {
-                navigate_to_target(&handle, &target);
-                focus_window(&handle);
-            } else {
-                let why = gateway_probe::target_unreachable_message(&target);
-                tracing::warn!("re-route target unreachable — opening connect page: {why}");
-                connect_setup::show_lite_connect_page(&handle, &why);
-            }
-        });
+        if gateway_probe::target_reachable(&target).await {
+            navigate_to_target(app, &target);
+            focus_window(app);
+        } else {
+            let why = gateway_probe::target_unreachable_message(&target);
+            tracing::warn!("re-route target unreachable — opening connect page: {why}");
+            connect_setup::show_lite_connect_page(app, &why);
+        }
     }
 }
 
@@ -871,10 +1254,15 @@ pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::Con
 #[cfg(feature = "embedded-core")]
 fn reveal_panel(handle: &tauri::AppHandle) {
     let handle = handle.clone();
-    tauri::async_runtime::spawn(async move {
-        navigate_to_target(&handle, &connection::load_target());
-        focus_window(&handle);
-    });
+    tauri::async_runtime::spawn(async move { reveal_panel_now(&handle).await });
+}
+
+/// The awaited body of [`reveal_panel`]. `reroute_for_target` calls this
+/// directly (no second spawn) so the switch gate covers the navigation.
+#[cfg(feature = "embedded-core")]
+async fn reveal_panel_now(handle: &tauri::AppHandle) {
+    navigate_to_target(handle, &connection::load_target());
+    focus_window(handle);
 }
 
 /// Surface a daemon-startup failure on the splash screen. Full-app-only — the

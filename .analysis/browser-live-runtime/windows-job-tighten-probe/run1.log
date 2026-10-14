@@ -1,0 +1,35 @@
+probe start_utc=2026-10-12T02:42:18Z exe=D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\.analysis\browser-live-runtime\windows-job-tighten-probe\job_tighten_probe.exe pid=2660 base=C:\Users\zou\AppData\Local\Temp\aleph-jobtighten-2660-1791772938938157200
+SCOPE: anonymous Job Object dynamic ActiveProcessLimit 2->1 with std surrogate wrapper+service (NORMAL, non-AppContainer); NOT sandbox-init, NOT AppContainer, NOT production spawn-suspended barrier; controlled stdin barrier != malicious child admission.
+  [PASS] initial SetInformationJobObject(limit=2, KILL_ON_JOB_CLOSE) :: Ok(())
+  [PASS] initial limit read-back :: ActiveProcessLimit=2 flags=0x2008
+  [PASS] wrapper blocked pre-assignment (ready, no GO yet) :: wrapper pid=Some("11852")
+  [PASS] wrapper NOT in job before assign :: IsProcessInJob=false
+  [PASS] wrapper not yet spawned anything :: no wrapper-result before GO
+  [PASS] AssignProcessToJobObject(wrapper) :: ok
+  [PASS] wrapper in job after assign :: Active=1
+  [PASS] parent (probe) NOT in job :: IsProcessInJob(self)=false
+  [PASS] wrapper spawned service (slot 2) :: service-spawn: OK pid=10112
+  [PASS] OpenProcess(service pid, QUERY_LIMITED|SYNCHRONIZE|TERMINATE) :: pid=10112 handle ok
+  [PASS] exact service handle IsProcessInJob :: member of parent-owned job
+  pre-tighten: members=["11852:job_tighten_probe.exe", "10112:job_tighten_probe.exe", "9044:conhost.exe"] controlled(non-conhost)=2 Active=3 Total=3
+  [PASS] pre-tighten: wrapper alive :: alive
+  [PASS] pre-tighten: service alive :: alive
+  [PASS] pre-tighten: exactly 2 controlled members (wrapper+service) :: ["11852:job_tighten_probe.exe", "10112:job_tighten_probe.exe", "9044:conhost.exe"]
+  [PASS] service blocked in WAIT (no svc-attempt1 yet) :: svc-attempt1 absent
+  QueryInformationJobObject(ext) before tighten: OK ActiveProcessLimit=2 flags=0x2008
+  SetInformationJobObject(ActiveProcessLimit=1, flags=0x2008) -> returned nonzero (success) (0 ms)
+  read-back after tighten attempt: ActiveProcessLimit=1 flags=0x2008 (KILL_ON_CLOSE preserved=true)
+  post-tighten: wrapper=alive service=alive Active=3 Total=3 TotalTerminated=0 members=["11852:job_tighten_probe.exe", "10112:job_tighten_probe.exe", "9044:conhost.exe"] controlled=2
+  [OBSERVED] tighten Set 2->1 while 2 members live accepted :: Ok(())  (hypothesis: success or refusal both possible; literal recorded)
+  [OBSERVED] attempt1 (wrapper+service live, limit=1) :: REFUSED os_error=1816 (配额不足，无法处理此命令。 (os error 1816))  (hypothesis: quota refusal)
+  after attempt1: Active=3 TotalProcesses=3 members=["11852:job_tighten_probe.exe", "10112:job_tighten_probe.exe", "9044:conhost.exe"]
+  [PASS] wrapper exited (parent still owns job) :: wait=0x0
+  after wrapper exit: members=["10112:job_tighten_probe.exe", "9044:conhost.exe"] controlled=1 Active=2 Total=3 service=alive
+  [PASS] service still alive after wrapper exit :: alive
+  [PASS] exactly 1 controlled member (service) after wrapper exit :: ["10112:job_tighten_probe.exe", "9044:conhost.exe"]
+  [OBSERVED] attempt2 (wrapper gone, service only, limit=1) :: REFUSED os_error=1816 (配额不足，无法处理此命令。 (os error 1816))  (hypothesis: quota refusal)
+  final accounting: Total=3 Active=2 TotalTerminated=0 members=["10112:job_tighten_probe.exe", "9044:conhost.exe"]
+  post-TerminateJobObject: Active=0 Total=3 TotalTerminated=0
+cleanup: contained=true fixture root removed=true exists_now=false
+end_utc=2026-10-12T02:42:19Z
+RESULT: MECHANICS OK (mechanical_fails=0, hypothesis_mismatches=0)

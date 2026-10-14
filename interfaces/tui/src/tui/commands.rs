@@ -465,6 +465,266 @@ pub(super) async fn execute_local_command(
             };
             state.add_system_message(notice);
         }
+        LocalCommand::Browser { resource_id } => {
+            execute_browser(state, client, &resource_id).await;
+        }
+    }
+}
+
+/// Usage text for a blank `/browser` argument.
+const BROWSER_USAGE: &str = "Usage: /browser <resource_id> - open a Gateway-published browser resource in your configured viewer.";
+
+/// Shown when the viewer launcher is not enabled. Names the two environment
+/// variables to set, never their values.
+const BROWSER_DISABLED_NOTICE: &str = "Browser viewer is disabled by default. Set ALEPH_VIEWER_ENABLED=1 and ALEPH_VIEWER_TRUSTED_ORIGINS (comma-separated origins) and restart to open browser resources.";
+
+/// One fixed text for every failed grant request. The RPC error is never
+/// echoed: it can carry server-supplied text, including secrets.
+const BROWSER_REQUEST_FAILED: &str = "Browser viewer request failed or was denied.";
+
+/// Longest resource id the list will print.
+const BROWSER_LIST_ID_MAX_LEN: usize = 128;
+
+/// Why a `/browser <id>` request may or may not go to the Gateway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserResourceStatus {
+    /// Blank argument: print usage.
+    Empty,
+    /// Not in the live catalog (never published, closed, or cleared on reconnect).
+    Missing,
+    /// In the catalog but past `expires_at_ms`.
+    Expired,
+    Available,
+}
+
+/// Classify `resource_id` against the live catalog. Exact-id lookup only: the
+/// id is never derived from a URL, tab or profile, and the Gateway is not
+/// consulted for anything the catalog does not already hold.
+fn browser_resource_status(
+    catalog: &app::BrowserResourceCatalog,
+    resource_id: &str,
+    now_ms: i64,
+) -> BrowserResourceStatus {
+    if resource_id.trim().is_empty() {
+        BrowserResourceStatus::Empty
+    } else if catalog.get_unexpired(resource_id, now_ms).is_some() {
+        BrowserResourceStatus::Available
+    } else if catalog.get(resource_id).is_some() {
+        BrowserResourceStatus::Expired
+    } else {
+        BrowserResourceStatus::Missing
+    }
+}
+
+/// Generic refusal text for a non-available status; never echoes the id.
+fn browser_status_notice(status: BrowserResourceStatus) -> Option<&'static str> {
+    match status {
+        BrowserResourceStatus::Empty => Some(BROWSER_USAGE),
+        BrowserResourceStatus::Missing => {
+            Some("Browser resource not found. It may have closed or not been published yet.")
+        }
+        BrowserResourceStatus::Expired => Some("Browser resource has expired."),
+        BrowserResourceStatus::Available => None,
+    }
+}
+
+/// An id is printed only if every char is ASCII alphanumeric, `_` or `-`
+/// (real ids are `res_...`). Ids come from the Gateway and are untrusted: one
+/// with control characters could inject terminal escape sequences, and an
+/// unsafe id cannot be offered as a copyable argument anyway.
+fn is_displayable_browser_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= BROWSER_LIST_ID_MAX_LEN
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Usage plus the exact ids of the catalog's unexpired resources. Only ids are
+/// shown (no title, URL or secret). Unexpired resources whose id is not safe to
+/// print are counted, not shown and not rewritten.
+fn format_browser_listing(catalog: &app::BrowserResourceCatalog, now_ms: i64) -> String {
+    let mut ids = Vec::new();
+    let mut omitted = 0usize;
+    for resource in catalog.resources() {
+        if now_ms >= resource.expires_at_ms {
+            continue;
+        }
+        if is_displayable_browser_id(&resource.resource_id) {
+            ids.push(resource.resource_id.as_str());
+        } else {
+            omitted += 1;
+        }
+    }
+    let mut out = String::from(BROWSER_USAGE);
+    if ids.is_empty() {
+        out.push_str("\nNo browser resources are currently available.");
+    } else {
+        out.push_str("\nAvailable browser resources:");
+        for id in ids {
+            out.push_str("\n  ");
+            out.push_str(id);
+        }
+    }
+    if omitted > 0 {
+        out.push_str(&format!(
+            "\n({omitted} resource(s) with a non-displayable id omitted.)"
+        ));
+    }
+    out
+}
+
+/// What `/browser <arg>` does before any Gateway call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BrowserPreflight {
+    /// Show this text; do not contact the Gateway (no grant is minted).
+    Show(String),
+    /// The id is live and the viewer is enabled: go on to request a grant.
+    Proceed,
+}
+
+/// Pure pre-issue decision. Order: blank argument lists resources; then the
+/// exact catalog status/expiry guard; then the viewer-enabled gate, so a
+/// disabled viewer never mints a grant nobody can use.
+fn browser_preflight(
+    catalog: &app::BrowserResourceCatalog,
+    viewer_enabled: bool,
+    resource_id: &str,
+    now_ms: i64,
+) -> BrowserPreflight {
+    match browser_resource_status(catalog, resource_id, now_ms) {
+        BrowserResourceStatus::Empty => {
+            BrowserPreflight::Show(format_browser_listing(catalog, now_ms))
+        }
+        BrowserResourceStatus::Available if !viewer_enabled => {
+            BrowserPreflight::Show(BROWSER_DISABLED_NOTICE.to_string())
+        }
+        BrowserResourceStatus::Available => BrowserPreflight::Proceed,
+        refused => BrowserPreflight::Show(
+            browser_status_notice(refused)
+                .unwrap_or(BROWSER_USAGE)
+                .to_string(),
+        ),
+    }
+}
+
+/// Text for a failed viewer launch. `LaunchError`'s Display never carries the
+/// URL or nonce; `Disabled` additionally says how to opt in.
+fn format_browser_launch_error(err: &crate::viewer_launcher::LaunchError) -> String {
+    match err {
+        crate::viewer_launcher::LaunchError::Disabled => {
+            "Browser viewer launch is disabled by default. Enable and configure the viewer launcher to open browser resources."
+                .to_string()
+        }
+        other => format!("Browser viewer launch failed: {other}"),
+    }
+}
+
+/// `/browser`: with no argument, list the live resource ids. With an id:
+/// request a read-only frames grant for that exact catalog resource (only
+/// when the viewer launcher is enabled), then hand the one-time launch request to the (default
+/// disabled) system launcher off the UI thread. Nothing secret is displayed.
+async fn execute_browser(state: &mut AppState, client: &AlephClient, resource_id: &str) {
+    execute_browser_with_launcher(state, client, resource_id, |config, request| {
+        crate::viewer_launcher::ViewerLauncher::system(config).launch(&request)
+    })
+    .await;
+}
+
+/// [`execute_browser`] with the launch step injected, so tests can observe the
+/// issue -> launch -> cleanup sequence without starting a real browser. The
+/// only production caller passes the real system launcher; `launch` runs on
+/// the blocking pool exactly like the closure it replaced.
+async fn execute_browser_with_launcher<L>(
+    state: &mut AppState,
+    client: &AlephClient,
+    resource_id: &str,
+    launch: L,
+) where
+    L: FnOnce(
+            crate::viewer_launcher::ViewerLauncherConfig,
+            crate::viewer_launcher::ViewerLaunchRequest,
+        ) -> Result<(), crate::viewer_launcher::LaunchError>
+        + Send
+        + 'static,
+{
+    let now_ms = i64::try_from(state.now_ms()).unwrap_or(i64::MAX);
+    let preflight = browser_preflight(
+        &state.browser_resources,
+        state.viewer_launcher_config.enabled,
+        resource_id,
+        now_ms,
+    );
+    if let BrowserPreflight::Show(text) = preflight {
+        state.add_system_message(text);
+        return;
+    }
+    let issued = match crate::issue_browser_viewer_grant(client, resource_id).await {
+        Ok(issued) => issued,
+        Err(_) => {
+            state.add_system_message(BROWSER_REQUEST_FAILED.to_string());
+            return;
+        }
+    };
+    let crate::IssuedBrowserViewerLaunch { request, grant_id } = issued;
+    let config = state.viewer_launcher_config.clone();
+    let outcome =
+        browser_launch_outcome(tokio::task::spawn_blocking(move || launch(config, request)).await);
+    let message = finish_browser_launch(&grant_id, outcome, |id| async move {
+        crate::revoke_browser_viewer_grant(client, &id)
+            .await
+            .is_ok()
+    })
+    .await;
+    state.add_system_message(message);
+}
+
+/// Result of handing an issued launch to the launcher thread.
+#[derive(Debug)]
+enum BrowserLaunchOutcome {
+    Launched,
+    Failed(crate::viewer_launcher::LaunchError),
+    /// The blocking task itself panicked or was cancelled.
+    TaskFailed,
+}
+
+fn browser_launch_outcome(
+    joined: Result<Result<(), crate::viewer_launcher::LaunchError>, tokio::task::JoinError>,
+) -> BrowserLaunchOutcome {
+    match joined {
+        Ok(Ok(())) => BrowserLaunchOutcome::Launched,
+        Ok(Err(e)) => BrowserLaunchOutcome::Failed(e),
+        Err(_) => BrowserLaunchOutcome::TaskFailed,
+    }
+}
+
+/// Appended when a failed launch could not be cleaned up. Fixed text: the
+/// revoke RPC error is never echoed (it may carry server-supplied text).
+const BROWSER_GRANT_CLEANUP_FAILED: &str =
+    " The unused viewer grant could not be revoked; it will expire on its own (TTL).";
+
+/// Turn a launch outcome into the user-facing message. On any failure, calls
+/// `revoke` once with the exact issued `grant_id`; on success never. The
+/// original launch-failure text is always kept; a failed cleanup only appends
+/// [`BROWSER_GRANT_CLEANUP_FAILED`].
+async fn finish_browser_launch<R, Fut>(
+    grant_id: &str,
+    outcome: BrowserLaunchOutcome,
+    revoke: R,
+) -> String
+where
+    R: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let base = match &outcome {
+        BrowserLaunchOutcome::Launched => return "Browser viewer launched.".to_string(),
+        BrowserLaunchOutcome::Failed(e) => format_browser_launch_error(e),
+        BrowserLaunchOutcome::TaskFailed => "Browser viewer launch task failed.".to_string(),
+    };
+    if revoke(grant_id.to_string()).await {
+        base
+    } else {
+        format!("{base}{BROWSER_GRANT_CLEANUP_FAILED}")
     }
 }
 
@@ -1776,6 +2036,274 @@ pub(super) async fn fetch_my_user_id(client: &AlephClient) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn browser_resource_status_classifies_blank_and_missing() {
+        let catalog = app::BrowserResourceCatalog::new();
+        assert_eq!(
+            browser_resource_status(&catalog, "", 0),
+            BrowserResourceStatus::Empty
+        );
+        assert_eq!(
+            browser_resource_status(&catalog, "  \t", 0),
+            BrowserResourceStatus::Empty
+        );
+        assert_eq!(
+            browser_resource_status(&catalog, "res_a", 0),
+            BrowserResourceStatus::Missing
+        );
+    }
+
+    #[test]
+    fn browser_status_notices_are_generic_and_only_available_proceeds() {
+        assert_eq!(
+            browser_status_notice(BrowserResourceStatus::Empty),
+            Some(BROWSER_USAGE)
+        );
+        let missing = browser_status_notice(BrowserResourceStatus::Missing).unwrap();
+        let expired = browser_status_notice(BrowserResourceStatus::Expired).unwrap();
+        assert!(missing.contains("not found"));
+        assert!(expired.contains("expired"));
+        assert_eq!(
+            browser_status_notice(BrowserResourceStatus::Available),
+            None
+        );
+    }
+
+    /// Same shape as the `browser_catalog` tests' `resource()` fixture.
+    fn browser_fixture(
+        id: &str,
+        expires_at_ms: i64,
+    ) -> aleph_protocol::browser_live::PreviewResource {
+        use aleph_protocol::browser_live::{
+            BrowserTargetBinding, ConversationBinding, DisplayPolicy, IssuerIdentity, PreviewKind,
+            PreviewProvenance, PreviewResource, PreviewSource, RedactionStatus, ResourceBinding,
+            ViewerBinding,
+        };
+        PreviewResource {
+            resource_id: id.into(),
+            revision: 1,
+            binding: ResourceBinding::Browser {
+                viewer: ViewerBinding {
+                    principal: IssuerIdentity::User {
+                        user_id: "u1".into(),
+                    },
+                    task: ConversationBinding {
+                        session_key: "agent:main:main".into(),
+                        run_id: "run-1".into(),
+                    },
+                    target: BrowserTargetBinding {
+                        profile: "default".into(),
+                        browser_session_id: "bs-1".into(),
+                        target_id: "t1".into(),
+                    },
+                },
+            },
+            kind: PreviewKind::Page,
+            display: DisplayPolicy::ExplicitOnly,
+            source: PreviewSource::BrowserTool,
+            provenance: PreviewProvenance::NotManaged,
+            expires_at_ms,
+            redaction: RedactionStatus::Pending,
+            companion_candidates: Vec::new(),
+        }
+    }
+
+    fn catalog_with(entries: &[(&str, i64)]) -> app::BrowserResourceCatalog {
+        let mut catalog = app::BrowserResourceCatalog::new();
+        for (id, expires_at_ms) in entries {
+            let data = json!({
+                "type": "browser_live_resource",
+                "resource": browser_fixture(id, *expires_at_ms),
+            });
+            catalog.apply_topic(aleph_protocol::browser_live::RESOURCE_TOPIC, &data);
+            assert!(catalog.get(id).is_some(), "fixture not stored: {id:?}");
+        }
+        catalog
+    }
+
+    #[test]
+    fn blank_browser_arg_lists_only_unexpired_exact_ids_and_never_proceeds() {
+        let catalog = catalog_with(&[
+            ("res_live_b", 2_000),
+            ("res_live_a", 2_000),
+            ("res_old", 500),
+        ]);
+        for arg in ["", "  \t"] {
+            for enabled in [false, true] {
+                let BrowserPreflight::Show(text) = browser_preflight(&catalog, enabled, arg, 1_000)
+                else {
+                    panic!("blank argument must not proceed");
+                };
+                assert!(text.contains(BROWSER_USAGE));
+                assert!(text.contains("\n  res_live_a\n  res_live_b"), "{text}");
+                assert!(!text.contains("res_old"), "expired id listed: {text}");
+            }
+        }
+        // Expiry boundary: now == expires_at_ms is expired.
+        let BrowserPreflight::Show(text) = browser_preflight(&catalog, true, "", 2_000) else {
+            panic!("blank argument must not proceed");
+        };
+        assert!(!text.contains("res_live_a"));
+        assert!(text.contains("No browser resources are currently available."));
+    }
+
+    #[test]
+    fn browser_listing_with_empty_catalog_says_so_without_inventing_ids() {
+        let text = format_browser_listing(&app::BrowserResourceCatalog::new(), 0);
+        assert!(text.contains(BROWSER_USAGE));
+        assert!(text.contains("No browser resources are currently available."));
+        assert!(!text.contains("res_"));
+    }
+
+    #[test]
+    fn browser_listing_skips_unsafe_ids_and_does_not_forge_a_copyable_one() {
+        let long = format!("res_{}", "a".repeat(BROWSER_LIST_ID_MAX_LEN));
+        let entries: Vec<(&str, i64)> = vec![
+            ("res_\u{1b}[31mred", 2_000),
+            ("res_a b", 2_000),
+            ("res_\nline", 2_000),
+            ("res_\u{e9}", 2_000),
+            (long.as_str(), 2_000),
+            ("res_ok-1", 2_000),
+        ];
+        let text = format_browser_listing(&catalog_with(&entries), 1_000);
+        assert!(text.contains("\n  res_ok-1"));
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        assert!(!text.contains("res_a b") && !text.contains("res_\u{e9}") && !text.contains(&long));
+        // Only the safe id is a list line; no sanitized variant of the others.
+        assert_eq!(text.lines().filter(|l| l.starts_with("  ")).count(), 1);
+        assert!(
+            text.contains("(5 resource(s) with a non-displayable id omitted.)"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn browser_preflight_guards_status_before_the_disabled_gate() {
+        let catalog = catalog_with(&[("res_live", 2_000), ("res_old", 500)]);
+        let missing = browser_status_notice(BrowserResourceStatus::Missing).unwrap();
+        let expired = browser_status_notice(BrowserResourceStatus::Expired).unwrap();
+        for enabled in [false, true] {
+            assert_eq!(
+                browser_preflight(&catalog, enabled, "res_nope", 1_000),
+                BrowserPreflight::Show(missing.to_string())
+            );
+            assert_eq!(
+                browser_preflight(&catalog, enabled, "res_old", 1_000),
+                BrowserPreflight::Show(expired.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn browser_preflight_returns_before_issue_when_viewer_is_disabled() {
+        let catalog = catalog_with(&[("res_live", 2_000)]);
+        // Disabled: a live id stops here. The handler returns on `Show`, so
+        // `issue_browser_viewer_launch` is never reached and no grant is minted.
+        let BrowserPreflight::Show(text) = browser_preflight(&catalog, false, "res_live", 1_000)
+        else {
+            panic!("disabled viewer must not proceed to the issuer");
+        };
+        assert_eq!(text, BROWSER_DISABLED_NOTICE);
+        assert!(text.contains("ALEPH_VIEWER_ENABLED=1"));
+        assert!(text.contains("ALEPH_VIEWER_TRUSTED_ORIGINS"));
+        assert!(!text.contains("res_live"));
+        // Enabled: only now does it go on to the issuer.
+        assert_eq!(
+            browser_preflight(&catalog, true, "res_live", 1_000),
+            BrowserPreflight::Proceed
+        );
+    }
+
+    #[test]
+    fn browser_request_failure_text_is_fixed_and_carries_no_rpc_text() {
+        assert_eq!(
+            BROWSER_REQUEST_FAILED,
+            "Browser viewer request failed or was denied."
+        );
+    }
+
+    /// Drive `finish_browser_launch` with a recording revoke; returns the
+    /// message and the grant ids revoked.
+    async fn run_finish(outcome: BrowserLaunchOutcome, revoke_ok: bool) -> (String, Vec<String>) {
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = calls.clone();
+        let message = finish_browser_launch("grant_issued_1", outcome, |id| async move {
+            sink.lock().unwrap().push(id);
+            revoke_ok
+        })
+        .await;
+        let ids = calls.lock().unwrap().clone();
+        (message, ids)
+    }
+
+    #[tokio::test]
+    async fn browser_launch_success_never_revokes() {
+        let (message, calls) = run_finish(BrowserLaunchOutcome::Launched, true).await;
+        assert_eq!(message, "Browser viewer launched.");
+        assert!(calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn browser_launch_failures_revoke_the_exact_grant_once() {
+        use crate::viewer_launcher::LaunchError;
+        let errors = [
+            LaunchError::Disabled,
+            LaunchError::InvalidUrl(crate::viewer_launcher::UrlRejection::UntrustedOrigin),
+            LaunchError::InvalidExecutable,
+            LaunchError::Spawn(std::io::ErrorKind::NotFound),
+            LaunchError::NonZeroExit(Some(1)),
+            LaunchError::NonZeroExit(None),
+            LaunchError::ForbiddenArgument,
+        ];
+        for e in errors {
+            let expected = format_browser_launch_error(&e);
+            let (message, calls) = run_finish(BrowserLaunchOutcome::Failed(e), true).await;
+            assert_eq!(message, expected);
+            assert_eq!(calls, vec!["grant_issued_1".to_string()]);
+        }
+        let (message, calls) = run_finish(BrowserLaunchOutcome::TaskFailed, true).await;
+        assert_eq!(message, "Browser viewer launch task failed.");
+        assert_eq!(calls, vec!["grant_issued_1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn browser_launch_join_error_revokes() {
+        let joined =
+            tokio::task::spawn_blocking(|| -> Result<(), crate::viewer_launcher::LaunchError> {
+                panic!("simulated launcher panic")
+            })
+            .await;
+        let outcome = browser_launch_outcome(joined);
+        assert!(matches!(outcome, BrowserLaunchOutcome::TaskFailed));
+        let (_, calls) = run_finish(outcome, true).await;
+        assert_eq!(calls, vec!["grant_issued_1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn browser_launch_cleanup_failure_keeps_launch_error_and_notes_ttl() {
+        use crate::viewer_launcher::LaunchError;
+        let e = LaunchError::NonZeroExit(Some(3));
+        let original = format_browser_launch_error(&e);
+        let (message, calls) = run_finish(BrowserLaunchOutcome::Failed(e), false).await;
+        assert_eq!(message, format!("{original}{BROWSER_GRANT_CLEANUP_FAILED}"));
+        assert!(message.contains("expire on its own (TTL)"));
+        assert!(!message.contains("grant_issued_1"));
+        assert_eq!(calls.len(), 1);
+    }
+
+    #[test]
+    fn browser_launch_disabled_points_at_configuration_and_leaks_nothing() {
+        use crate::viewer_launcher::LaunchError;
+        let disabled = format_browser_launch_error(&LaunchError::Disabled);
+        assert!(disabled.contains("disabled by default"));
+        assert!(disabled.contains("Enable"));
+        assert_eq!(
+            format_browser_launch_error(&LaunchError::ForbiddenArgument),
+            "Browser viewer launch failed: forbidden browser argument"
+        );
+    }
+
     /// `/undo`'s boundary must be an ordinal over the STORED rows.
     ///
     /// The rendered list drops every `tool` row, so a count taken from it names
@@ -2026,6 +2554,1237 @@ mod tests {
             "the one resolver call belongs at the send chokepoint, found: {}",
             hits[0]
         );
+    }
+
+    /// Hermetic flow tests for [`execute_browser_with_launcher`].
+    ///
+    /// Nothing here touches the real world: the Gateway is a loopback-only,
+    /// in-process fake (hand-rolled RFC 6455, `tokio::net` only) that answers
+    /// the three RPCs the flow uses; `AppState::new` is pure in-memory; the
+    /// launcher is the real `ViewerLauncher` over a recording `CommandRunner`
+    /// (Windows argv, never executed), so no `StdCommandRunner`, `rundll32` or
+    /// browser is ever started. The launch URL lives only in memory; assertions
+    /// on secret-bearing values use `assert!` on booleans so a failure cannot
+    /// print the nonce. The fake is NOT the production Gateway.
+    mod launch_flow {
+        use super::*;
+        use crate::viewer_launcher::{
+            CommandExit, CommandRunner, LaunchCommand, LaunchError, Platform, ViewerLauncher,
+            ViewerLauncherConfig,
+        };
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+
+        const FAR_FUTURE_MS: i64 = 4_102_444_800_000; // 2100-01-01
+        const ISSUE: &str = "browser.viewer.grant.issue";
+        const REVOKE: &str = "browser.viewer.grant.revoke";
+
+        // ---- minimal crypto for the WebSocket accept key (test-only) ----
+
+        fn sha1(data: &[u8]) -> [u8; 20] {
+            let mut h: [u32; 5] = [
+                0x6745_2301,
+                0xEFCD_AB89,
+                0x98BA_DCFE,
+                0x1032_5476,
+                0xC3D2_E1F0,
+            ];
+            let mut msg = data.to_vec();
+            let bit_len = (data.len() as u64) * 8;
+            msg.push(0x80);
+            while msg.len() % 64 != 56 {
+                msg.push(0);
+            }
+            msg.extend_from_slice(&bit_len.to_be_bytes());
+            for chunk in msg.chunks(64) {
+                let mut w = [0u32; 80];
+                for (i, word) in w.iter_mut().enumerate().take(16) {
+                    *word = u32::from_be_bytes([
+                        chunk[4 * i],
+                        chunk[4 * i + 1],
+                        chunk[4 * i + 2],
+                        chunk[4 * i + 3],
+                    ]);
+                }
+                for i in 16..80 {
+                    w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+                }
+                let [mut a, mut b, mut c, mut d, mut e] = h;
+                for (i, wi) in w.iter().enumerate() {
+                    let (f, k) = match i {
+                        0..=19 => ((b & c) | (!b & d), 0x5A82_7999u32),
+                        20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                        40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                        _ => (b ^ c ^ d, 0xCA62_C1D6),
+                    };
+                    let t = a
+                        .rotate_left(5)
+                        .wrapping_add(f)
+                        .wrapping_add(e)
+                        .wrapping_add(k)
+                        .wrapping_add(*wi);
+                    e = d;
+                    d = c;
+                    c = b.rotate_left(30);
+                    b = a;
+                    a = t;
+                }
+                for (slot, v) in h.iter_mut().zip([a, b, c, d, e]) {
+                    *slot = slot.wrapping_add(v);
+                }
+            }
+            let mut out = [0u8; 20];
+            for (i, word) in h.iter().enumerate() {
+                out[4 * i..4 * i + 4].copy_from_slice(&word.to_be_bytes());
+            }
+            out
+        }
+
+        fn base64_std(data: &[u8]) -> String {
+            const T: &[u8; 64] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut out = String::new();
+            for chunk in data.chunks(3) {
+                let n = (u32::from(chunk[0]) << 16)
+                    | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+                    | u32::from(*chunk.get(2).unwrap_or(&0));
+                out.push(T[((n >> 18) & 63) as usize] as char);
+                out.push(T[((n >> 12) & 63) as usize] as char);
+                out.push(if chunk.len() > 1 {
+                    T[((n >> 6) & 63) as usize] as char
+                } else {
+                    '='
+                });
+                out.push(if chunk.len() > 2 {
+                    T[(n & 63) as usize] as char
+                } else {
+                    '='
+                });
+            }
+            out
+        }
+
+        fn ws_accept(key: &str) -> String {
+            base64_std(&sha1(
+                format!("{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11").as_bytes(),
+            ))
+        }
+
+        #[test]
+        fn fake_gateway_accept_key_matches_rfc6455_sample() {
+            assert_eq!(
+                ws_accept("dGhlIHNhbXBsZSBub25jZQ=="),
+                "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+            );
+        }
+
+        // ---- fake gateway ----
+
+        #[derive(Clone, Debug, PartialEq)]
+        enum Event {
+            Rpc { method: String, params: Value },
+            Launch,
+        }
+        type Log = Arc<Mutex<Vec<Event>>>;
+
+        fn push(log: &Log, event: Event) {
+            log.lock().unwrap().push(event);
+        }
+
+        fn rpcs(log: &Log, method: &str) -> Vec<Value> {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Rpc { method: m, params } if m == method => Some(params.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn launches(log: &Log) -> usize {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|e| matches!(e, Event::Launch))
+                .count()
+        }
+
+        fn rpc_methods(log: &Log) -> Vec<String> {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Rpc { method, .. } => Some(method.clone()),
+                    Event::Launch => None,
+                })
+                .collect()
+        }
+
+        #[derive(Clone)]
+        struct Script {
+            /// `Some((grant_id, launch_url))` = issue succeeds; `None` = denied.
+            issue: Option<(String, String)>,
+            revoke_ok: bool,
+        }
+
+        impl Script {
+            fn reply(&self, method: &str) -> Result<Value, &'static str> {
+                match method {
+                    "connect" => Ok(json!({ "role": "operator" })),
+                    ISSUE => match &self.issue {
+                        Some((grant_id, url)) => Ok(json!({
+                            "launch_url": url,
+                            "grant_id": grant_id,
+                            "expires_at_ms": FAR_FUTURE_MS,
+                        })),
+                        None => Err("denied"),
+                    },
+                    REVOKE if self.revoke_ok => Ok(json!({ "revoked": true })),
+                    REVOKE => Err("revoke unavailable"),
+                    _ => Err("unexpected method"),
+                }
+            }
+        }
+
+        async fn read_frame(s: &mut TcpStream) -> Option<(u8, Vec<u8>)> {
+            let mut h = [0u8; 2];
+            s.read_exact(&mut h).await.ok()?;
+            let opcode = h[0] & 0x0f;
+            let masked = h[1] & 0x80 != 0;
+            let mut len = u64::from(h[1] & 0x7f);
+            if len == 126 {
+                let mut b = [0u8; 2];
+                s.read_exact(&mut b).await.ok()?;
+                len = u64::from(u16::from_be_bytes(b));
+            } else if len == 127 {
+                let mut b = [0u8; 8];
+                s.read_exact(&mut b).await.ok()?;
+                len = u64::from_be_bytes(b);
+            }
+            let mut mask = [0u8; 4];
+            if masked {
+                s.read_exact(&mut mask).await.ok()?;
+            }
+            let mut payload = vec![0u8; usize::try_from(len).ok()?];
+            s.read_exact(&mut payload).await.ok()?;
+            if masked {
+                for (i, byte) in payload.iter_mut().enumerate() {
+                    *byte ^= mask[i % 4];
+                }
+            }
+            Some((opcode, payload))
+        }
+
+        async fn write_frame(s: &mut TcpStream, opcode: u8, payload: &[u8]) -> bool {
+            let mut frame = vec![0x80 | opcode];
+            if payload.len() < 126 {
+                frame.push(payload.len() as u8);
+            } else {
+                frame.push(126);
+                frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+            }
+            frame.extend_from_slice(payload);
+            s.write_all(&frame).await.is_ok()
+        }
+
+        async fn run_gateway(listener: TcpListener, script: Script, log: Log) {
+            let Ok((mut s, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buf = Vec::new();
+            let mut byte = [0u8; 1];
+            while !buf.ends_with(b"\r\n\r\n") {
+                if buf.len() > 16 * 1024 || s.read_exact(&mut byte).await.is_err() {
+                    return;
+                }
+                buf.push(byte[0]);
+            }
+            let request = String::from_utf8_lossy(&buf).into_owned();
+            let key = request.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.trim()
+                    .eq_ignore_ascii_case("sec-websocket-key")
+                    .then(|| value.trim().to_string())
+            });
+            let Some(key) = key else { return };
+            let response = format!(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\
+                 Connection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+                ws_accept(&key)
+            );
+            if s.write_all(response.as_bytes()).await.is_err() {
+                return;
+            }
+            while let Some((opcode, payload)) = read_frame(&mut s).await {
+                match opcode {
+                    8 => {
+                        write_frame(&mut s, 8, &[]).await;
+                        return;
+                    }
+                    9 => {
+                        write_frame(&mut s, 0xA, &payload).await;
+                    }
+                    1 => {
+                        let Ok(request) = serde_json::from_slice::<Value>(&payload) else {
+                            continue;
+                        };
+                        let method = request
+                            .get("method")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let params = request.get("params").cloned().unwrap_or(Value::Null);
+                        let id = request.get("id").cloned().unwrap_or(Value::Null);
+                        push(
+                            &log,
+                            Event::Rpc {
+                                method: method.clone(),
+                                params,
+                            },
+                        );
+                        let reply = match script.reply(&method) {
+                            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+                            Err(message) => json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "error": { "code": -32000, "message": message },
+                            }),
+                        };
+                        if !write_frame(&mut s, 1, reply.to_string().as_bytes()).await {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        /// Keeps the client's event receiver and the gateway task alive.
+        struct Harness {
+            client: AlephClient,
+            log: Log,
+            _events: tokio::sync::mpsc::Receiver<aleph_protocol::StreamEvent>,
+            server: tokio::task::JoinHandle<()>,
+        }
+
+        impl Drop for Harness {
+            fn drop(&mut self) {
+                self.server.abort();
+            }
+        }
+
+        async fn harness(script: Script) -> Harness {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("ws://{}", listener.local_addr().unwrap());
+            let log: Log = Arc::default();
+            let server = tokio::spawn(run_gateway(listener, script, log.clone()));
+            let config = aleph_client::CliConfig {
+                device_name: "launch-flow-test".to_string(),
+                ..aleph_client::CliConfig::default()
+            };
+            let (client, events) = AlephClient::connect(&url, &config).await.unwrap();
+            Harness {
+                client,
+                log,
+                _events: events,
+                server,
+            }
+        }
+
+        // ---- fixtures ----
+
+        const GRANT_ID: &str = "grant_flow_1";
+
+        fn nonce() -> String {
+            let nonce = format!("SECRETNONCE{}", "x".repeat(32));
+            assert_eq!(nonce.len(), 43);
+            nonce
+        }
+
+        fn launch_url() -> String {
+            format!(
+                "https://viewer.example.test/v#grant_id={GRANT_ID}&nonce={}",
+                nonce()
+            )
+        }
+
+        fn granting() -> Script {
+            Script {
+                issue: Some((GRANT_ID.to_string(), launch_url())),
+                revoke_ok: true,
+            }
+        }
+
+        fn state(enabled: bool, ids: &[(&str, i64)]) -> AppState {
+            let mut state = AppState::new("agent:main:main".to_string(), "test-model".to_string());
+            state.browser_resources = catalog_with(ids);
+            state.viewer_launcher_config = ViewerLauncherConfig {
+                enabled,
+                ..ViewerLauncherConfig::default()
+            };
+            state
+        }
+
+        fn live_state() -> AppState {
+            state(
+                true,
+                &[("res_live_1", FAR_FUTURE_MS), ("res_live_2", FAR_FUTURE_MS)],
+            )
+        }
+
+        /// Records every command instead of running it.
+        #[derive(Clone, Default)]
+        struct RecordingRunner {
+            commands: Arc<Mutex<Vec<LaunchCommand>>>,
+            exit: Option<CommandExit>,
+        }
+
+        impl CommandRunner for RecordingRunner {
+            fn run(&self, command: &LaunchCommand) -> std::io::Result<CommandExit> {
+                self.commands.lock().unwrap().push(command.clone());
+                Ok(self.exit.unwrap_or(CommandExit::Exited(Some(0))))
+            }
+        }
+
+        fn notices(state: &AppState) -> Vec<String> {
+            state
+                .messages
+                .iter()
+                .filter_map(|m| match m {
+                    app::TranscriptEntry::SystemNotice { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn assert_no_secret(state: &AppState) {
+            let everything = format!("{:?}{:?}", state.messages, notices(state));
+            assert!(
+                !everything.contains("SECRETNONCE"),
+                "nonce leaked into UI state"
+            );
+        }
+
+        async fn bounded<F: std::future::Future>(fut: F) -> F::Output {
+            tokio::time::timeout(std::time::Duration::from_secs(20), fut)
+                .await
+                .expect("flow test timed out")
+        }
+
+        // ---- tests ----
+
+        #[tokio::test]
+        async fn launches_only_after_real_issue_for_exact_id_and_never_revokes_on_success() {
+            let gw = harness(granting()).await;
+            let mut state = live_state();
+            let runner = RecordingRunner::default();
+            let commands = runner.commands.clone();
+            let log = gw.log.clone();
+            let config_seen = Arc::new(Mutex::new(None));
+            let config_seen_in = config_seen.clone();
+
+            bounded(execute_browser_with_launcher(
+                &mut state,
+                &gw.client,
+                "res_live_1",
+                move |config, request| {
+                    push(&log, Event::Launch);
+                    *config_seen_in.lock().unwrap() = Some(config.clone());
+                    ViewerLauncher::new(config, runner, Platform::Windows).launch(&request)
+                },
+            ))
+            .await;
+
+            // Ordered log: handshake, exactly one issue, then the launch, nothing else.
+            let log = gw.log.lock().unwrap().clone();
+            assert_eq!(
+                log.len(),
+                3,
+                "unexpected events: {:?}",
+                rpc_methods(&gw.log)
+            );
+            assert!(matches!(&log[0], Event::Rpc { method, .. } if method == "connect"));
+            assert_eq!(
+                log[1],
+                Event::Rpc {
+                    method: ISSUE.to_string(),
+                    params: json!({ "resource_id": "res_live_1", "permissions": ["frames"] }),
+                }
+            );
+            assert_eq!(log[2], Event::Launch);
+            assert!(rpcs(&gw.log, REVOKE).is_empty(), "success must not revoke");
+
+            // The launcher got the state's config and the URL the Gateway issued.
+            assert!(config_seen.lock().unwrap().as_ref().unwrap().enabled);
+            let commands = commands.lock().unwrap();
+            assert_eq!(commands.len(), 1);
+            assert_eq!(commands[0].program, "rundll32.exe");
+            assert!(
+                commands[0].args[1] == launch_url(),
+                "URL not passed through intact"
+            );
+
+            assert_eq!(
+                notices(&state),
+                vec!["Browser viewer launched.".to_string()]
+            );
+            assert_no_secret(&state);
+        }
+
+        #[tokio::test]
+        async fn launcher_error_revokes_the_exact_grant_once_and_keeps_failure_text() {
+            let gw = harness(granting()).await;
+            let mut state = live_state();
+            let log = gw.log.clone();
+
+            bounded(execute_browser_with_launcher(
+                &mut state,
+                &gw.client,
+                "res_live_2",
+                move |_config, _request| {
+                    push(&log, Event::Launch);
+                    Err(LaunchError::Spawn(std::io::ErrorKind::NotFound))
+                },
+            ))
+            .await;
+
+            assert_eq!(
+                rpc_methods(&gw.log),
+                vec!["connect", ISSUE, REVOKE],
+                "issue -> revoke, once each"
+            );
+            assert_eq!(launches(&gw.log), 1);
+            assert_eq!(
+                rpcs(&gw.log, ISSUE),
+                vec![json!({ "resource_id": "res_live_2", "permissions": ["frames"] })]
+            );
+            assert_eq!(rpcs(&gw.log, REVOKE), vec![json!({ "grant_id": GRANT_ID })]);
+            assert_eq!(
+                notices(&state),
+                vec![format_browser_launch_error(&LaunchError::Spawn(
+                    std::io::ErrorKind::NotFound
+                ))]
+            );
+            assert_no_secret(&state);
+        }
+
+        #[tokio::test]
+        async fn real_launcher_rejecting_the_issued_url_is_cleaned_up_without_leaking() {
+            // Issuer returns a URL the real launcher refuses (http, not https).
+            let script = Script {
+                issue: Some((
+                    GRANT_ID.to_string(),
+                    format!(
+                        "http://viewer.example.test/v#grant_id={GRANT_ID}&nonce={}",
+                        nonce()
+                    ),
+                )),
+                revoke_ok: true,
+            };
+            let gw = harness(script).await;
+            let mut state = live_state();
+            let runner = RecordingRunner::default();
+            let commands = runner.commands.clone();
+
+            bounded(execute_browser_with_launcher(
+                &mut state,
+                &gw.client,
+                "res_live_1",
+                move |config, request| {
+                    ViewerLauncher::new(config, runner, Platform::Windows).launch(&request)
+                },
+            ))
+            .await;
+
+            assert!(commands.lock().unwrap().is_empty(), "no process may start");
+            assert_eq!(rpcs(&gw.log, REVOKE), vec![json!({ "grant_id": GRANT_ID })]);
+            assert!(notices(&state)[0].starts_with("Browser viewer launch failed:"));
+            assert_no_secret(&state);
+        }
+
+        #[tokio::test]
+        async fn launcher_panic_is_reported_as_task_failure_and_revoked_once() {
+            let gw = harness(granting()).await;
+            let mut state = live_state();
+
+            bounded(execute_browser_with_launcher(
+                &mut state,
+                &gw.client,
+                "res_live_1",
+                |_config, _request| -> Result<(), LaunchError> {
+                    panic!("injected launcher panic")
+                },
+            ))
+            .await;
+
+            assert_eq!(rpcs(&gw.log, REVOKE), vec![json!({ "grant_id": GRANT_ID })]);
+            assert_eq!(
+                notices(&state),
+                vec!["Browser viewer launch task failed.".to_string()]
+            );
+            assert_no_secret(&state);
+        }
+
+        #[tokio::test]
+        async fn failed_cleanup_appends_ttl_notice_after_one_revoke_attempt() {
+            let mut script = granting();
+            script.revoke_ok = false;
+            let gw = harness(script).await;
+            let mut state = live_state();
+
+            bounded(execute_browser_with_launcher(
+                &mut state,
+                &gw.client,
+                "res_live_1",
+                |_config, _request| Err(LaunchError::NonZeroExit(Some(1))),
+            ))
+            .await;
+
+            assert_eq!(rpcs(&gw.log, REVOKE).len(), 1, "no retry loop");
+            let message = notices(&state).remove(0);
+            assert!(message.starts_with("Browser viewer launch failed:"));
+            assert!(message.ends_with(BROWSER_GRANT_CLEANUP_FAILED));
+            assert_no_secret(&state);
+        }
+
+        #[tokio::test]
+        async fn denied_issue_never_reaches_the_launcher_or_revoke() {
+            let gw = harness(Script {
+                issue: None,
+                revoke_ok: true,
+            })
+            .await;
+            let mut state = live_state();
+            let log = gw.log.clone();
+
+            bounded(execute_browser_with_launcher(
+                &mut state,
+                &gw.client,
+                "res_live_1",
+                move |_config, _request| {
+                    push(&log, Event::Launch);
+                    Ok(())
+                },
+            ))
+            .await;
+
+            assert_eq!(rpc_methods(&gw.log), vec!["connect", ISSUE]);
+            assert_eq!(launches(&gw.log), 0);
+            assert_eq!(notices(&state), vec![BROWSER_REQUEST_FAILED.to_string()]);
+        }
+
+        #[tokio::test]
+        async fn preflight_refusals_issue_nothing_and_never_launch() {
+            // (viewer enabled, catalog, argument)
+            let cases = vec![
+                (false, vec![("res_live_1", FAR_FUTURE_MS)], "res_live_1"), // disabled
+                (true, vec![("res_live_1", FAR_FUTURE_MS)], "res_unknown"), // not in catalog
+                (true, vec![("res_live_1", FAR_FUTURE_MS)], "res_live"),    // prefix of an id
+                (true, vec![("res_old", 1)], "res_old"),                    // expired
+                (true, vec![("res_live_1", FAR_FUTURE_MS)], ""),            // blank
+                (true, vec![("res_live_1", FAR_FUTURE_MS)], "  \t"),        // whitespace
+            ];
+            for (enabled, ids, arg) in cases {
+                let gw = harness(granting()).await;
+                let mut state = state(enabled, &ids);
+                let log = gw.log.clone();
+                bounded(execute_browser_with_launcher(
+                    &mut state,
+                    &gw.client,
+                    arg,
+                    move |_config, _request| {
+                        push(&log, Event::Launch);
+                        Ok(())
+                    },
+                ))
+                .await;
+                assert_eq!(
+                    rpc_methods(&gw.log),
+                    vec!["connect"],
+                    "case enabled={enabled} arg={arg:?} reached the Gateway"
+                );
+                assert_eq!(
+                    launches(&gw.log),
+                    0,
+                    "case arg={arg:?} reached the launcher"
+                );
+                assert_eq!(notices(&state).len(), 1, "case arg={arg:?}");
+            }
+        }
+    }
+    /// Real-Gateway acceptance of the `/browser` command path
+    /// (`execute_browser_with_launcher`). Opt-in only: the test is
+    /// `#[ignore]`d and additionally refuses to run unless the caller (see
+    /// `qa/browser_live/tui-real-run.mjs`) has confirmed that the exact
+    /// loopback Gateway is an owned process.
+    ///
+    /// What is REAL: the WebSocket, the device-token handshake
+    /// (`AlephClient::connect_with_credential`), `events.subscribe`,
+    /// `agent.run`, the Gateway-published `browser.live.resource` event
+    /// (via `take_topic_events`), `browser.viewer.resource.decide`, grant
+    /// issue / revoke, and the `browser_tabs` tool.
+    /// What is INSTRUMENTED: the OS launcher. The callback builds a real
+    /// `ViewerLauncher` (URL validation, trusted-origin check, Windows argv)
+    /// but its `CommandRunner` only records the command; nothing is spawned.
+    /// What is NOT the production TUI: the credential comes from an owned file
+    /// (never the keyring / `--pair` / `--paired` store) and `AppState` is an
+    /// in-memory test instance.
+    mod real_gateway {
+        use super::*;
+        use crate::viewer_launcher::{
+            CommandExit, CommandRunner, LaunchCommand, LaunchError, Platform, ViewerLauncher,
+            ViewerLauncherConfig,
+        };
+        use aleph_client::DeviceCredential;
+        use aleph_protocol::browser_live::{
+            BrowserTargetBinding, RedactionStatus, ResourceBinding, RESOURCE_TOPIC,
+        };
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        const GATEWAY_WS: &str = "ws://127.0.0.1:18790/ws";
+        const TRUSTED_ORIGIN: &str = "http://127.0.0.1:18790";
+        const ENV_AUTH_FILE: &str = "ALEPH_TUI_REAL_AUTH_FILE"; // PATH only, never the secret
+        const ENV_GATEWAY: &str = "ALEPH_TUI_REAL_GATEWAY_WS";
+        const ENV_FIXTURE: &str = "ALEPH_TUI_REAL_FIXTURE_URL";
+        const ENV_OWNED: &str = "ALEPH_TUI_REAL_GATEWAY_OWNED"; // must be "1"
+        const DEFAULT_FIXTURE: &str = "http://127.0.0.1:18791/page";
+        const RESOURCE_WAIT: Duration = Duration::from_secs(90);
+        const RPC_WAIT: Duration = Duration::from_secs(30);
+        const SCENARIO_BUDGET: Duration = Duration::from_secs(120);
+        const CLEANUP_BUDGET: Duration = Duration::from_secs(30);
+
+        /// Records every command instead of running it; optionally refuses.
+        #[derive(Clone, Default)]
+        struct OwnedRecordingRunner {
+            commands: Arc<Mutex<Vec<LaunchCommand>>>,
+            refuse: bool,
+        }
+
+        impl CommandRunner for OwnedRecordingRunner {
+            fn run(&self, command: &LaunchCommand) -> std::io::Result<CommandExit> {
+                self.commands.lock().unwrap().push(command.clone());
+                if self.refuse {
+                    Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+                } else {
+                    Ok(CommandExit::Exited(Some(0)))
+                }
+            }
+        }
+
+        fn system_notices(state: &AppState) -> Vec<String> {
+            state
+                .messages
+                .iter()
+                .filter_map(|m| match m {
+                    app::TranscriptEntry::SystemNotice { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// `grant_id` out of the launch URL's fragment. The URL itself is
+        /// secret-bearing and is never returned, logged or compared in an
+        /// assertion that would print it.
+        fn grant_id_of(url: &str) -> Option<String> {
+            let fragment = url.split_once('#')?.1;
+            fragment
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("grant_id="))
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        }
+
+        fn has_nonce(url: &str) -> bool {
+            url.split_once('#')
+                .map(|(_, f)| {
+                    f.split('&')
+                        .any(|kv| kv.strip_prefix("nonce=").is_some_and(|v| !v.is_empty()))
+                })
+                .unwrap_or(false)
+        }
+
+        fn find_tabs(v: &Value, depth: u8) -> Option<Vec<Value>> {
+            if depth > 6 {
+                return None;
+            }
+            match v {
+                Value::String(s) => serde_json::from_str::<Value>(s)
+                    .ok()
+                    .and_then(|inner| find_tabs(&inner, depth + 1)),
+                Value::Object(map) => {
+                    if let Some(Value::Array(tabs)) = map.get("tabs") {
+                        return Some(tabs.clone());
+                    }
+                    map.values().find_map(|c| find_tabs(c, depth + 1))
+                }
+                _ => None,
+            }
+        }
+
+        fn find_success(v: &Value, depth: u8) -> Option<bool> {
+            if depth > 6 {
+                return None;
+            }
+            match v {
+                Value::String(s) => serde_json::from_str::<Value>(s)
+                    .ok()
+                    .and_then(|inner| find_success(&inner, depth + 1)),
+                Value::Object(map) => {
+                    if let Some(Value::Bool(b)) = map.get("success") {
+                        return Some(*b);
+                    }
+                    map.values().find_map(|c| find_success(c, depth + 1))
+                }
+                _ => None,
+            }
+        }
+
+        fn check(cond: bool, what: &str) -> Result<(), String> {
+            if cond {
+                Ok(())
+            } else {
+                Err(format!("check failed: {what}"))
+            }
+        }
+
+        fn clip(s: &str) -> String {
+            s.chars().take(160).collect()
+        }
+
+        async fn rpc(client: &AlephClient, method: &str, params: Value) -> Result<Value, String> {
+            tokio::time::timeout(RPC_WAIT, client.call::<_, Value>(method, Some(params)))
+                .await
+                .map_err(|_| format!("{method}: timed out"))?
+                .map_err(|e| format!("{method}: {}", clip(&e.to_string())))
+        }
+
+        /// Everything the report may say: booleans, counts and fixed text only.
+        #[derive(Default)]
+        struct Report(serde_json::Map<String, Value>);
+        impl Report {
+            fn set(&mut self, key: &str, v: impl Into<Value>) {
+                self.0.insert(key.to_string(), v.into());
+            }
+        }
+
+        type TargetSlot = Arc<Mutex<Option<BrowserTargetBinding>>>;
+
+        async fn scenario(
+            client: &AlephClient,
+            topics: &mut tokio::sync::mpsc::Receiver<aleph_client::TopicEvent>,
+            state: &mut AppState,
+            fixture: &str,
+            target_slot: &TargetSlot,
+            report: &mut Report,
+        ) -> Result<(), String> {
+            // ---- subscribe exactly like the TUI does, then publish a fresh run ----
+            crate::tui::subscribe_browser_live_topics(client)
+                .await
+                .map_err(|e| format!("events.subscribe: {}", clip(&e.to_string())))?;
+
+            let session_key = format!(
+                "agent:main:tui-real-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0)
+            );
+            let run = rpc(
+                client,
+                "agent.run",
+                json!({
+                    "input": format!("OPEN_FIXTURE:{fixture}"),
+                    "session_key": session_key,
+                    "stream": true,
+                }),
+            )
+            .await?;
+            let run_id = run
+                .get("run_id")
+                .and_then(Value::as_str)
+                .ok_or("agent.run: no run_id")?
+                .to_string();
+
+            // ---- the real Gateway-published resource event for THIS run ----
+            let deadline = tokio::time::Instant::now() + RESOURCE_WAIT;
+            let mut foreign_events = 0usize;
+            let published = loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let ev = tokio::time::timeout(remaining, topics.recv())
+                    .await
+                    .map_err(|_| "no browser.live.resource for this run in time".to_string())?
+                    .ok_or("topic plane closed")?;
+                if ev.topic != RESOURCE_TOPIC {
+                    continue;
+                }
+                let mine = ev
+                    .data
+                    .pointer("/resource/binding/viewer/task/run_id")
+                    .and_then(Value::as_str)
+                    == Some(run_id.as_str());
+                if mine {
+                    break ev;
+                }
+                foreign_events += 1;
+            };
+            report.set("foreign_resource_events_ignored", foreign_events);
+
+            // ---- through the TUI's own topic path into the catalog ----
+            let resource_id = published
+                .data
+                .pointer("/resource/resource_id")
+                .and_then(Value::as_str)
+                .ok_or("event has no resource_id")?
+                .to_string();
+            let first_revision = published
+                .data
+                .pointer("/resource/revision")
+                .and_then(Value::as_u64)
+                .ok_or("event has no revision")?;
+            state.handle_topic_event(&published.topic, published.data.clone());
+            let stored = state
+                .browser_resources
+                .get(&resource_id)
+                .ok_or("catalog did not store the real resource event")?;
+            check(stored.revision == first_revision, "stored revision matches event")?;
+            let (target, bound_run, bound_session) = match &stored.binding {
+                ResourceBinding::Browser { viewer } => (
+                    viewer.target.clone(),
+                    viewer.task.run_id.clone(),
+                    viewer.task.session_key.clone(),
+                ),
+                _ => return Err("resource binding is not a browser binding".into()),
+            };
+            report.set(
+                "initial_redaction_pending",
+                stored.redaction == RedactionStatus::Pending,
+            );
+            // From here the bound tab must be closed no matter what happens.
+            *target_slot.lock().unwrap() = Some(target);
+            check(bound_run == run_id, "binding.run_id is this run")?;
+            check(bound_session == session_key, "binding.session_key is this run")?;
+            report.set("initial_revision", first_revision);
+
+            // ---- decide(safe) with the REAL revision; feed the REAL response back ----
+            let decided = rpc(
+                client,
+                "browser.viewer.resource.decide",
+                json!({
+                    "resource_id": resource_id,
+                    "expected_revision": first_revision,
+                    "decision": "safe",
+                }),
+            )
+            .await?;
+            state.handle_topic_event(RESOURCE_TOPIC, decided);
+            let after = state
+                .browser_resources
+                .get(&resource_id)
+                .ok_or("resource vanished after decide")?;
+            check(after.revision > first_revision, "decide produced a newer revision")?;
+            check(
+                after.redaction == RedactionStatus::Safe,
+                "catalog holds the safe revision",
+            )?;
+            report.set("decided_revision_advanced", true);
+            report.set("decided_redaction_safe", true);
+            let now_ms = i64::try_from(state.now_ms()).unwrap_or(i64::MAX);
+            check(
+                state
+                    .browser_resources
+                    .get_unexpired(&resource_id, now_ms)
+                    .is_some(),
+                "resource unexpired at launch time",
+            )?;
+
+            // ---- launcher config set directly on the state (no env mutation) ----
+            state.viewer_launcher_config = ViewerLauncherConfig {
+                enabled: true,
+                trusted_origins: vec![TRUSTED_ORIGIN.to_string()],
+                ..ViewerLauncherConfig::default()
+            };
+
+            // ================= success scenario =================
+            let ok_runner = OwnedRecordingRunner::default();
+            let ok_commands = ok_runner.commands.clone();
+            let notices_before = system_notices(state).len();
+            execute_browser_with_launcher(state, client, &resource_id, move |config, request| {
+                ViewerLauncher::new(config, ok_runner, Platform::Windows).launch(&request)
+            })
+            .await;
+            let notices_now = system_notices(state);
+            check(
+                notices_now.len() == notices_before + 1,
+                "success: exactly one notice",
+            )?;
+            check(
+                notices_now.last().map(String::as_str) == Some("Browser viewer launched."),
+                "success notice is the launched text",
+            )?;
+            let ok_cmds = ok_commands.lock().unwrap().clone();
+            check(ok_cmds.len() == 1, "success: exactly one instrumented launch")?;
+            check(
+                ok_cmds[0].program == "rundll32.exe",
+                "success: Windows default argv program",
+            )?;
+            check(ok_cmds[0].args.len() == 2, "success: argv shape")?;
+            let ok_url = ok_cmds[0].args[1].clone();
+            check(
+                ok_url.starts_with(&format!("{TRUSTED_ORIGIN}/")),
+                "success: URL on the trusted loopback origin",
+            )?;
+            check(has_nonce(&ok_url), "success: URL carries a nonce")?;
+            let ok_grant = grant_id_of(&ok_url).ok_or("success: no grant_id in URL")?;
+            let flat = format!("{:?}{:?}", state.messages, system_notices(state));
+            check(
+                !flat.contains(&ok_grant),
+                "success: grant id not shown in UI state",
+            )?;
+            report.set("success_launch_count", 1);
+            report.set("success_notice_launched", true);
+            report.set("success_url_on_trusted_origin", true);
+
+            // Dispose the unused success grant through the real revoke RPC.
+            let disposed = rpc(
+                client,
+                "browser.viewer.grant.revoke",
+                json!({ "grant_id": ok_grant }),
+            )
+            .await?;
+            check(
+                disposed.get("revoked").and_then(Value::as_bool) == Some(true),
+                "success grant was still live (revoked:true on dispose, i.e. helper did not revoke it)",
+            )?;
+            report.set("success_grant_live_until_dispose", true);
+
+            // ================= failure scenario =================
+            let bad_runner = OwnedRecordingRunner {
+                refuse: true,
+                ..OwnedRecordingRunner::default()
+            };
+            let bad_commands = bad_runner.commands.clone();
+            let before = system_notices(state).len();
+            execute_browser_with_launcher(state, client, &resource_id, move |config, request| {
+                // Real launcher; its runner refuses -> LaunchError::Spawn.
+                let result =
+                    ViewerLauncher::new(config, bad_runner, Platform::Windows).launch(&request);
+                match &result {
+                    Err(LaunchError::Spawn(_)) => result,
+                    _ => Err(LaunchError::Spawn(std::io::ErrorKind::Other)),
+                }
+            })
+            .await;
+            let after_notices = system_notices(state);
+            check(after_notices.len() == before + 1, "failure: exactly one notice")?;
+            let failure_text = after_notices.last().cloned().unwrap_or_default();
+            check(
+                failure_text.starts_with("Browser viewer launch failed:"),
+                "failure: launch-failed notice",
+            )?;
+            check(
+                !failure_text.contains(BROWSER_GRANT_CLEANUP_FAILED.trim()),
+                "failure: helper's revoke succeeded (no cleanup-failed suffix)",
+            )?;
+            let bad_cmds = bad_commands.lock().unwrap().clone();
+            check(bad_cmds.len() == 1, "failure: exactly one instrumented launch")?;
+            let bad_url = bad_cmds[0].args.get(1).cloned().unwrap_or_default();
+            let bad_grant = grant_id_of(&bad_url).ok_or("failure: no grant_id in URL")?;
+            check(bad_grant != ok_grant, "failure: a FRESH grant was issued")?;
+            let flat = format!("{:?}{:?}", state.messages, system_notices(state));
+            check(
+                !flat.contains(&bad_grant),
+                "failure: grant id not shown in UI state",
+            )?;
+            report.set("failure_launch_count", 1);
+            report.set("failure_notice_launch_failed", true);
+            report.set("failure_notice_cleanup_suffix_absent", true);
+
+            // The helper already revoked this exact grant. The Gateway's revoke is
+            // owner-scoped and non-oracular: a second revoke of a consumed grant is
+            // the generic PERMISSION_DENIED / "denied" (see handlers/browser_viewer.rs
+            // `issuer_rpc_owned_issue_and_revoke_enforce_identity_without_oracle`),
+            // never `revoked:false`. Accept ONLY that exact code + message.
+            let probe = tokio::time::timeout(
+                RPC_WAIT,
+                client.call::<_, Value>(
+                    "browser.viewer.grant.revoke",
+                    Some(json!({ "grant_id": bad_grant })),
+                ),
+            )
+            .await
+            .map_err(|_| "failure probe revoke: timed out".to_string())?;
+            let already_revoked_denied = matches!(
+                &probe,
+                Err(CliError::Rpc { code, message })
+                    if *code == aleph_protocol::jsonrpc::PERMISSION_DENIED
+                        && message == "denied"
+            );
+            check(
+                already_revoked_denied,
+                "failure grant already revoked by the helper (second revoke is exactly PERMISSION_DENIED/denied)",
+            )?;
+            report.set("failure_probe_second_revoke_permission_denied", true);
+
+            // Fixed, client-side RPC accounting (not server-observed).
+            report.set(
+                "rpc_direct_calls",
+                json!({
+                    "events.subscribe": 1, "agent.run": 1, "decide": 1,
+                    "grant.revoke(dispose success)": 1, "grant.revoke(probe failure, denied)": 1,
+                }),
+            );
+            report.set(
+                "rpc_via_helper",
+                json!({ "grant.issue": 2, "grant.revoke(failure cleanup)": 1 }),
+            );
+            Ok(())
+        }
+
+        /// Close ONLY the tab bound to this run's resource.
+        async fn close_own_tab(
+            client: &AlephClient,
+            target: &BrowserTargetBinding,
+            report: &mut Report,
+        ) -> Result<(), String> {
+            let listed = rpc(
+                client,
+                "tools.invoke",
+                json!({
+                    "tool_name": "browser_tabs",
+                    "arguments": { "profile": target.profile, "action": "list" },
+                }),
+            )
+            .await?;
+            let tabs = find_tabs(&listed, 0).ok_or("browser_tabs list: no tabs array")?;
+            let exact = tabs
+                .iter()
+                .filter(|t| t.get("id").and_then(Value::as_str) == Some(target.target_id.as_str()))
+                .count();
+            report.set("tab_list_exact_matches", exact);
+            if exact != 1 {
+                return Err("bound tab not uniquely identified; nothing closed".into());
+            }
+            let closed = rpc(
+                client,
+                "tools.invoke",
+                json!({
+                    "tool_name": "browser_tabs",
+                    "arguments": {
+                        "profile": target.profile,
+                        "action": { "close": { "tab_id": target.target_id } },
+                    },
+                }),
+            )
+            .await?;
+            let ok = find_success(&closed, 0);
+            report.set("tab_close_success", ok.map(Value::from).unwrap_or(Value::Null));
+            check(ok != Some(false), "browser_tabs close reported failure")
+        }
+
+        #[tokio::test]
+        #[ignore = "requires an owned real Gateway on 127.0.0.1:18790 + device-token file; run via qa/browser_live/tui-real-run.mjs"]
+        async fn real_gateway_browser_command_path() {
+            // ---- opt-in gates: nothing below runs against anything unconfirmed ----
+            assert!(
+                std::env::var(ENV_OWNED).as_deref() == Ok("1"),
+                "owned-Gateway confirmation missing"
+            );
+            let gateway = std::env::var(ENV_GATEWAY).unwrap_or_else(|_| GATEWAY_WS.to_string());
+            assert!(
+                gateway == GATEWAY_WS,
+                "Gateway URL is not the exact loopback URL"
+            );
+            let fixture =
+                std::env::var(ENV_FIXTURE).unwrap_or_else(|_| DEFAULT_FIXTURE.to_string());
+            assert!(
+                fixture.starts_with("http://127.0.0.1:"),
+                "fixture URL is not loopback"
+            );
+            let auth_path = std::env::var(ENV_AUTH_FILE).expect("auth file path env missing");
+
+            // ---- credential: read in-process from the owned file, never printed ----
+            let credential = {
+                let raw = std::fs::read_to_string(&auth_path).expect("auth file unreadable");
+                let doc: Value = serde_json::from_str(&raw).expect("auth file is not JSON");
+                let id = doc
+                    .get("device_id")
+                    .and_then(Value::as_str)
+                    .expect("device_id");
+                let token = doc
+                    .get("device_token")
+                    .and_then(Value::as_str)
+                    .expect("device_token");
+                DeviceCredential::device_token(id, token).expect("credential rejected")
+            };
+            let config = aleph_client::CliConfig {
+                device_name: "tui-real-gateway-acceptance".to_string(),
+                ..aleph_client::CliConfig::default()
+            };
+
+            let mut report = Report::default();
+            report.set(
+                "label",
+                "real Gateway and TUI command path, instrumented OS runner",
+            );
+            report.set("os_launch_proved", false);
+
+            let (client, mut stream_events) = tokio::time::timeout(
+                Duration::from_secs(20),
+                AlephClient::connect_with_credential(&gateway, &config, credential),
+            )
+            .await
+            .expect("connect timed out")
+            .unwrap_or_else(|e| panic!("connect_with_credential failed: {}", clip(&e.to_string())));
+            report.set("connected_with_device_token", true);
+            let drain = tokio::spawn(async move { while stream_events.recv().await.is_some() {} });
+            let mut topics = client
+                .take_topic_events()
+                .expect("topic plane already claimed");
+            let mut state = AppState::new("agent:main:main".to_string(), "test-model".to_string());
+            let target_slot: TargetSlot = Arc::default();
+
+            let outcome = tokio::time::timeout(
+                SCENARIO_BUDGET,
+                scenario(
+                    &client,
+                    &mut topics,
+                    &mut state,
+                    &fixture,
+                    &target_slot,
+                    &mut report,
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| Err("scenario exceeded its time budget".to_string()));
+
+            // ---- cleanup: close only our own tab, whatever the outcome ----
+            let target = target_slot.lock().unwrap().clone();
+            let cleanup = match &target {
+                Some(t) => {
+                    tokio::time::timeout(CLEANUP_BUDGET, close_own_tab(&client, t, &mut report))
+                        .await
+                        .unwrap_or_else(|_| Err("tab cleanup timed out".to_string()))
+                }
+                None => Ok(()),
+            };
+            report.set("own_tab_closed", target.is_some() && cleanup.is_ok());
+            drain.abort();
+
+            report.set("scenario_ok", outcome.is_ok());
+            report.set("cleanup_ok", cleanup.is_ok());
+            if let Err(e) = &outcome {
+                report.set("scenario_error", clip(e));
+            }
+            if let Err(e) = &cleanup {
+                report.set("cleanup_error", clip(e));
+            }
+            println!("REAL_GATEWAY_REPORT {}", Value::Object(report.0));
+            assert!(outcome.is_ok(), "scenario failed (see REAL_GATEWAY_REPORT)");
+            assert!(cleanup.is_ok(), "cleanup failed (see REAL_GATEWAY_REPORT)");
+        }
     }
 }
 

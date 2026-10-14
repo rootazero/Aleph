@@ -4,12 +4,13 @@ use std::time::Duration;
 
 use aleph_cdp::testkit::{FakeCdpServer, Responder};
 use aleph_cdp::{CdpConnection, ConnectOptions, SessionId};
-use aleph_protocol::browser_live::BrowserTargetBinding;
+use aleph_protocol::browser_live::{BrowserTargetBinding, ClosedReason};
 use base64::Engine as _;
 use serde_json::{json, Value};
 
 use std::sync::Arc;
 
+use super::navigation_gate::OwnerTerminalSink;
 use super::LiveProfileOwner;
 use crate::browser::engine::{Engine, EngineHandle, TabEntry};
 use crate::browser::error::BrowserError;
@@ -26,12 +27,19 @@ pub(super) fn binding(target: &str) -> BrowserTargetBinding {
 /// in its tab table; the owner is the one the production path hands out
 /// (`EngineHandle::live_owner`), so "one connection per profile" is asserted
 /// against the real construction, not a hand-built owner.
-pub(super) async fn fixture() -> (FakeCdpServer, Arc<LiveProfileOwner>, Arc<EngineHandle>) {
+pub(crate) async fn fixture() -> (FakeCdpServer, Arc<LiveProfileOwner>, Arc<EngineHandle>) {
     fixture_with(Responder::Reply(json!({}))).await
 }
 
-async fn fixture_with(
+pub(super) async fn fixture_with(
     start: Responder,
+) -> (FakeCdpServer, Arc<LiveProfileOwner>, Arc<EngineHandle>) {
+    fixture_with_timeout(start, Duration::from_secs(5)).await
+}
+
+async fn fixture_with_timeout(
+    start: Responder,
+    command_timeout: Duration,
 ) -> (FakeCdpServer, Arc<LiveProfileOwner>, Arc<EngineHandle>) {
     let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![
         ("Page.startScreencast", start),
@@ -39,14 +47,9 @@ async fn fixture_with(
         ("Page.screencastFrameAck", Responder::Reply(json!({}))),
     ]))
     .await;
-    let conn = CdpConnection::connect(
-        &server.ws_url(),
-        ConnectOptions {
-            command_timeout: Duration::from_secs(5),
-        },
-    )
-    .await
-    .expect("the fake server accepts a websocket");
+    let conn = CdpConnection::connect(&server.ws_url(), ConnectOptions { command_timeout })
+        .await
+        .expect("the fake server accepts a websocket");
     let handle = Arc::new(EngineHandle::for_test(Engine::Chromium, "p", conn));
     {
         let mut tabs = handle.tabs.lock().await;
@@ -247,7 +250,7 @@ async fn cede_keeps_shared_consumers_but_owner_retirement_closes_them() {
     assert!(owner.mutate(None, async { Ok(()) }).await.is_err());
 }
 
-fn frame_event(session: &str, ack_id: u64, payload: &str) -> Value {
+pub(super) fn frame_event(session: &str, ack_id: u64, payload: &str) -> Value {
     json!({
         "method": "Page.screencastFrame",
         "sessionId": session,
@@ -282,7 +285,7 @@ async fn wait_until(mut cond: impl FnMut() -> bool, what: &str) {
     }
 }
 
-async fn within<T>(fut: impl std::future::Future<Output = T>, what: &str) -> T {
+pub(super) async fn within<T>(fut: impl std::future::Future<Output = T>, what: &str) -> T {
     tokio::time::timeout(Duration::from_secs(5), fut)
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
@@ -295,13 +298,21 @@ async fn one_profile_has_one_connection_and_per_target_streams() {
         Arc::ptr_eq(&handle.live_owner(), &owner),
         "the handle hands out one owner per profile"
     );
-    owner.attach_target(binding("T1")).await.expect("attach T1");
+    assert!(
+        owner.attach_target(binding("T1")).await.expect("attach T1"),
+        "first attach establishes the viewer attachment"
+    );
     owner.attach_target(binding("T2")).await.expect("attach T2");
-    // Attaching the same target twice must not start a second engine stream.
-    owner
-        .attach_target(binding("T1"))
-        .await
-        .expect("re-attach T1");
+    // Attaching the same target twice must not start a second engine stream,
+    // and the second caller does not own the attachment (must not unwind it).
+    assert!(
+        !owner
+            .attach_target(binding("T1"))
+            .await
+            .expect("re-attach T1"),
+        "an already attached target is not owned by the second caller"
+    );
+    assert!(owner.subscribe_latest("T1").is_ok());
 
     assert_eq!(
         server.connection_count(),
@@ -475,6 +486,176 @@ async fn claimed_but_unacked_frames_are_acked_when_the_recording_tap_goes_away()
         "the owner to ack the in-flight and queued frames of a dead tap",
     )
     .await;
+}
+
+/// Poll once without yielding the executor: cancellation happens before the
+/// detached cleanup can run, not at a scheduler-dependent sleep boundary.
+async fn poll_pending<F: std::future::Future>(mut future: std::pin::Pin<&mut F>) {
+    std::future::poll_fn(|cx| {
+        assert!(future.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+}
+
+fn screencast_commands(server: &FakeCdpServer) -> Vec<String> {
+    server
+        .received()
+        .iter()
+        .filter_map(|frame| frame["method"].as_str())
+        .filter(|method| matches!(*method, "Page.startScreencast" | "Page.stopScreencast"))
+        .map(str::to_owned)
+        .collect()
+}
+
+async fn cancelled_stop_cannot_overtake_rearm(recording: bool) {
+    let (server, owner, _handle) = fixture().await;
+    let tap = if recording {
+        Some(
+            owner
+                .observe_recording("T1", &SessionId("S1".into()), super::VIEWER_FORMAT)
+                .await
+                .unwrap(),
+        )
+    } else {
+        owner.attach_target(binding("T1")).await.unwrap();
+        None
+    };
+    server.on(
+        "Page.stopScreencast",
+        Responder::Delay(
+            Duration::from_millis(100),
+            Box::new(Responder::Reply(json!({}))),
+        ),
+    );
+    let mut releasing = Box::pin(async {
+        if let Some(tap) = &tap {
+            owner.release_recording("T1", &tap.captured).await;
+        } else {
+            owner.close_target("T1").await.unwrap();
+        }
+    });
+    poll_pending(releasing.as_mut()).await;
+    drop(releasing);
+    assert!(owner.state().streams.is_empty());
+    assert!(
+        owner.lifecycle.try_lock().is_err(),
+        "cancelled cleanup must still own the lifecycle lock before its first poll"
+    );
+    let mut rearm = Box::pin(owner.attach_target(binding("T1")));
+    poll_pending(rearm.as_mut()).await;
+    assert!(owner.state().streams.is_empty(), "rearm must wait for stop");
+    within(rearm, "rearm after cancelled stop").await.unwrap();
+    assert_eq!(
+        screencast_commands(&server),
+        [
+            "Page.startScreencast",
+            "Page.stopScreencast",
+            "Page.startScreencast"
+        ]
+    );
+    assert!(owner.state().streams["T1"].attached);
+    // A stale tap dropping after replacement must not remove the new stream.
+    drop(tap);
+    let mut viewer = owner.subscribe_latest("T1").unwrap();
+    server.push_event(frame_event("S1", 41, "new"));
+    assert!(within(viewer.next(), "replacement frame").await.is_some());
+    wait_until(|| acks(&server, "S1") == [41], "replacement ack").await;
+}
+
+#[tokio::test]
+async fn cancelled_recording_release_orders_stop_before_rearm() {
+    cancelled_stop_cannot_overtake_rearm(true).await;
+}
+
+#[tokio::test]
+async fn cancelled_viewer_detach_orders_stop_before_rearm() {
+    cancelled_stop_cannot_overtake_rearm(false).await;
+}
+
+#[tokio::test]
+async fn cancelled_start_orders_rollback_before_rearm() {
+    let (server, owner, _handle) = fixture_with(Responder::Delay(
+        Duration::from_millis(100),
+        Box::new(Responder::Reply(json!({}))),
+    ))
+    .await;
+    let mut starting = Box::pin(owner.attach_target(binding("T1")));
+    poll_pending(starting.as_mut()).await;
+    drop(starting);
+    assert!(owner.state().streams.is_empty());
+    assert!(owner.lifecycle.try_lock().is_err());
+    within(owner.attach_target(binding("T1")), "rearm cancelled start")
+        .await
+        .unwrap();
+    assert_eq!(
+        screencast_commands(&server),
+        [
+            "Page.startScreencast",
+            "Page.stopScreencast",
+            "Page.startScreencast"
+        ]
+    );
+    assert!(owner.state().streams["T1"].attached);
+}
+
+#[tokio::test]
+async fn timed_out_start_preserves_busy_error_rolls_back_and_recovers() {
+    let (server, owner, _handle) = fixture_with_timeout(
+        Responder::Delay(
+            Duration::from_millis(300),
+            Box::new(Responder::Reply(json!({}))),
+        ),
+        Duration::from_millis(100),
+    )
+    .await;
+    let err = within(owner.attach_target(binding("T1")), "start timeout")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, BrowserError::EngineBusy { method, .. } if method == "Page.startScreencast")
+    );
+    assert!(owner.state().streams.is_empty(), "no half-started stream");
+    assert!(owner.state().attachments.is_empty(), "no orphan attachment");
+    server.on("Page.startScreencast", Responder::Reply(json!({})));
+    within(owner.attach_target(binding("T1")), "recovery after timeout")
+        .await
+        .unwrap();
+    assert_eq!(
+        screencast_commands(&server),
+        [
+            "Page.startScreencast",
+            "Page.stopScreencast",
+            "Page.startScreencast"
+        ]
+    );
+    let mut viewer = owner.subscribe_latest("T1").unwrap();
+    // Even after the original reply arrives, it cannot affect the new stream.
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    server.push_event(frame_event("S1", 42, "recovered"));
+    assert!(within(viewer.next(), "recovered frame").await.is_some());
+    wait_until(|| acks(&server, "S1") == [42], "recovered ack").await;
+    assert_eq!(owner.state().streams.len(), 1);
+    assert_eq!(server.received_for("Page.stopScreencast").len(), 1);
+}
+
+#[tokio::test]
+async fn explicit_start_refusal_preserves_cdp_error_without_uncertain_cleanup() {
+    let (server, owner, _handle) = fixture_with(Responder::Error {
+        code: -32000,
+        message: "screencast refused".into(),
+    })
+    .await;
+    let err = within(owner.attach_target(binding("T1")), "explicit refusal")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, BrowserError::Cdp { code: -32000, .. }));
+    assert!(owner.state().streams.is_empty());
+    assert!(server.received_for("Page.stopScreencast").is_empty());
+    server.on("Page.startScreencast", Responder::Reply(json!({})));
+    within(owner.attach_target(binding("T1")), "recovery after refusal")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -741,37 +922,157 @@ async fn target_aware_stop_helper_skips_a_re_armed_screencast_for_the_same_targe
 }
 
 #[tokio::test]
-async fn lag_close_target_is_suppressed_when_a_fresh_fetch_slot_is_registered() {
-    // Task 3: the lifecycle lock around `spawn_close_target` and
-    // `register_fetch` must order re-arm over stale close.
-    //
-    // We do NOT re-enter `lifecycle`: holding the lock across the close
-    // call self-deadlocks on the same `tokio::sync::Mutex`. Instead we
-    // install the fresh slot first (under the lock, briefly), then drive
-    // the close path. The helper mirrors the production `spawn_close_target`
-    // slot check, so a close that runs after a `register_fetch` for the
-    // same target must see the new slot and skip.
+async fn lag_close_target_is_sent_even_when_a_fresh_fetch_slot_is_registered() {
+    // I4: a close exists because a `Fetch.requestPaused` was LOST. A feed
+    // re-armed afterwards never saw that request, so it cannot answer it;
+    // skipping the close for the fresh slot would leave the lost request
+    // paused forever. The close must go out regardless — and never as a
+    // blind continue/disable.
     let (server, owner, _handle) = fixture().await;
     server.on(
         "Target.closeTarget",
         Responder::Reply(json!({"success": true})),
     );
     let target = "T1".to_string();
-    // Install a fresh fetch slot for the target.
     let _rearmed = owner.register_fetch(&target, &SessionId("S1".into())).await;
-    // Drive the close path with a finite wait: a future regression that
-    // makes the close hang (instead of skip) must surface as a test
-    // failure, not a permanent process hang.
-    tokio::time::timeout(
-        Duration::from_secs(2),
-        owner.spawn_close_target_for_test(target.clone()),
+    owner.spawn_close_target(target.clone());
+    wait_until(
+        || server.received_for("Target.closeTarget").len() == 1,
+        "the fail-closed close to be sent despite the re-armed slot",
     )
-    .await
-    .expect("close path did not return within 2s");
-    assert!(
-        server.received_for("Target.closeTarget").is_empty(),
-        "a close that lost the lifecycle race against a register_fetch must NOT be sent"
+    .await;
+    assert_eq!(
+        server.received_for("Target.closeTarget")[0]["params"]["targetId"],
+        "T1"
     );
+    assert!(server.received_for("Fetch.continueRequest").is_empty());
+    assert!(server.received_for("Fetch.disable").is_empty());
+}
+
+#[tokio::test]
+async fn a_frame_acked_by_the_tap_guard_is_never_acked_again_by_the_recorder() {
+    // I1 exactly-once: once the guard (or the owner) owns a frame's ack, a
+    // late recorder ack for the same frame is a no-op, not a second ack.
+    let (server, owner, _handle) = fixture().await;
+    owner.attach_target(binding("T1")).await.expect("attach T1");
+    let mut tap = owner
+        .observe_recording(
+            "T1",
+            &SessionId("S1".to_string()),
+            aleph_cdp::methods::screencast::ScreencastFormat::Jpeg { quality: 80 },
+        )
+        .await
+        .expect("observe");
+    server.push_event(frame_event("S1", 1, "x"));
+    let frame = within(tap.frames.recv(), "frame 1").await.expect("frame");
+    let late_acker = tap.acker.clone();
+    drop(tap);
+    wait_until(|| acks(&server, "S1") == [1], "the guard to ack frame 1").await;
+    within(late_acker.ack(frame.engine_ack_id), "late recorder ack")
+        .await
+        .expect("late ack is a no-op, not an error");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(acks(&server, "S1"), [1], "frame 1 is acked exactly once");
+}
+
+#[tokio::test]
+async fn a_recorder_ack_cancelled_mid_send_is_still_delivered_exactly_once() {
+    // I1: a writer aborted inside `ack` (after the id left `pending`, so the
+    // guard no longer covers it) must not lose that ack.
+    let (server, owner, _handle) = fixture().await;
+    server.on(
+        "Page.screencastFrameAck",
+        Responder::Delay(
+            Duration::from_millis(300),
+            Box::new(Responder::Reply(json!({}))),
+        ),
+    );
+    owner.attach_target(binding("T1")).await.expect("attach T1");
+    let mut tap = owner
+        .observe_recording(
+            "T1",
+            &SessionId("S1".to_string()),
+            aleph_cdp::methods::screencast::ScreencastFormat::Jpeg { quality: 80 },
+        )
+        .await
+        .expect("observe");
+    server.push_event(frame_event("S1", 5, "x"));
+    let frame = within(tap.frames.recv(), "frame 5").await.expect("frame");
+    // Poll the ack exactly once, then drop it: the cancellation point.
+    let cancelled = tokio::time::timeout(Duration::ZERO, tap.acker.ack(frame.engine_ack_id)).await;
+    assert!(
+        cancelled.is_err(),
+        "the ack must still be pending when dropped"
+    );
+    drop(tap);
+    wait_until(
+        || acks(&server, "S1") == [5],
+        "the cancelled ack to be delivered by its detached send",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(acks(&server, "S1"), [5], "neither lost nor doubled");
+}
+
+#[tokio::test]
+async fn a_cancelled_release_recording_still_stops_the_screencast() {
+    // I3: `release_recording` removes the stream entry and then stops the
+    // engine screencast. Cancelling the caller after the removal must not
+    // lose the stop — nothing else would ever stop that screencast.
+    let (server, owner, _handle) = fixture().await;
+    server.on(
+        "Page.stopScreencast",
+        Responder::Delay(
+            Duration::from_millis(300),
+            Box::new(Responder::Reply(json!({}))),
+        ),
+    );
+    let tap = owner
+        .observe_recording(
+            "T1",
+            &SessionId("S1".to_string()),
+            aleph_cdp::methods::screencast::ScreencastFormat::Jpeg { quality: 80 },
+        )
+        .await
+        .expect("observe");
+    let cancelled =
+        tokio::time::timeout(Duration::ZERO, owner.release_recording("T1", &tap.captured)).await;
+    assert!(cancelled.is_err(), "the release must still be pending");
+    wait_until(
+        || server.received_for("Page.stopScreencast").len() == 1,
+        "the stop to survive the cancelled release",
+    )
+    .await;
+    assert!(owner.state().streams.is_empty(), "no orphan stream entry");
+    drop(tap);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(
+        server.received_for("Page.stopScreencast").len(),
+        1,
+        "stopped exactly once"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_detach_still_stops_the_screencast() {
+    // I3: same for the viewer side (`close_target` -> `detach_locked`).
+    let (server, owner, _handle) = fixture().await;
+    server.on(
+        "Page.stopScreencast",
+        Responder::Delay(
+            Duration::from_millis(300),
+            Box::new(Responder::Reply(json!({}))),
+        ),
+    );
+    owner.attach_target(binding("T1")).await.expect("attach T1");
+    let cancelled = tokio::time::timeout(Duration::ZERO, owner.close_target("T1")).await;
+    assert!(cancelled.is_err(), "the detach must still be pending");
+    wait_until(
+        || server.received_for("Page.stopScreencast").len() == 1,
+        "the stop to survive the cancelled detach",
+    )
+    .await;
+    assert!(owner.state().streams.is_empty(), "no orphan stream entry");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
@@ -813,4 +1114,101 @@ async fn human_input_waits_on_the_mutation_gate_and_times_out_with_a_clear_error
         "unexpected error: {err}"
     );
     drop(held);
+}
+
+#[tokio::test]
+async fn retired_owner_refuses_attach_and_never_claims_ownership() {
+    let (_server, owner, _handle) = fixture().await;
+    owner.retire_routing();
+    assert!(
+        owner.attach_target(binding("T1")).await.is_err(),
+        "a routing-retired owner accepts no new attachment"
+    );
+    assert!(owner.subscribe_latest("T1").is_err());
+}
+
+#[tokio::test]
+async fn concurrent_attaches_elect_exactly_one_owner() {
+    let (_server, owner, _handle) = fixture().await;
+    let (a, b) = tokio::join!(
+        owner.attach_target(binding("T1")),
+        owner.attach_target(binding("T1"))
+    );
+    let owned = [a.unwrap(), b.unwrap()];
+    assert_eq!(
+        owned.iter().filter(|o| **o).count(),
+        1,
+        "exactly one concurrent attach owns the attachment: {owned:?}"
+    );
+}
+
+/// Records what a terminal sink was told; never calls back into the owner.
+#[derive(Default)]
+struct RecordingTerminalSink {
+    ended: std::sync::Mutex<Vec<(String, String, ClosedReason)>>,
+}
+
+impl OwnerTerminalSink for RecordingTerminalSink {
+    fn target_destroyed(&self, _: &str, _: &str, _: &str) {}
+
+    fn owner_ended(&self, profile: &str, session: &str, reason: ClosedReason) {
+        self.ended
+            .lock()
+            .unwrap()
+            .push((profile.into(), session.into(), reason));
+    }
+}
+
+impl RecordingTerminalSink {
+    fn ended(&self) -> Vec<(String, String, ClosedReason)> {
+        self.ended.lock().unwrap().clone()
+    }
+}
+
+#[tokio::test]
+async fn terminal_sink_registered_before_owner_end_is_told_exactly_once() {
+    let (_server, owner, _handle) = fixture().await;
+    let sink = Arc::new(RecordingTerminalSink::default());
+    owner.add_terminal_sink(sink.clone());
+    owner.add_terminal_sink(sink.clone()); // idempotent per sink
+    assert_eq!(owner.terminal_sink_count(), 1);
+    owner.retire();
+    owner.retire(); // a duplicate end must not notify again
+    assert_eq!(
+        sink.ended(),
+        vec![(
+            owner.profile().to_string(),
+            owner.browser_session_id().to_string(),
+            ClosedReason::EngineExited
+        )]
+    );
+}
+
+#[tokio::test]
+async fn terminal_sink_registered_after_owner_end_gets_the_end_replayed() {
+    let (_server, owner, _handle) = fixture().await;
+    let early = Arc::new(RecordingTerminalSink::default());
+    owner.add_terminal_sink(early.clone());
+    owner.retire();
+    assert_eq!(early.ended().len(), 1);
+
+    // Registered after the owner ended: joins the list (so dedupe holds) and
+    // is told the owner ended exactly once, however often it re-registers.
+    let late = Arc::new(RecordingTerminalSink::default());
+    owner.add_terminal_sink(late.clone());
+    owner.add_terminal_sink(late.clone()); // idempotent per sink: no second replay
+    assert_eq!(
+        owner.terminal_sink_count(),
+        2,
+        "a late sink is retained once"
+    );
+    assert_eq!(
+        late.ended(),
+        vec![(
+            owner.profile().to_string(),
+            owner.browser_session_id().to_string(),
+            ClosedReason::EngineExited
+        )]
+    );
+    assert_eq!(early.ended().len(), 1, "the early sink is not re-notified");
 }

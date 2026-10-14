@@ -65,11 +65,14 @@ mod evaluate;
 mod events;
 pub(crate) mod migration;
 mod navigate;
+mod operation;
 pub(crate) mod recording;
 pub(crate) mod routes;
 mod screenshot;
 mod snapshot;
 mod tabs;
+
+pub(crate) use operation::{BrowserOperationKind, BrowserOperationRecord};
 
 pub struct CdpBackend {
     registry: Arc<EngineRegistry>,
@@ -179,8 +182,8 @@ impl CdpBackend {
     /// may open one — the same split, for the same reason, as
     /// `PlaywrightCliBackend::run` / `run_launching`.
     pub(crate) async fn handle(&self) -> Result<Arc<EngineHandle>, BrowserError> {
-        if let Ok(handle) = MUTATION_HANDLE.try_with(Arc::clone) {
-            return self.bound_handle(handle);
+        if let Some(pinned) = self.pinned_handle() {
+            return pinned;
         }
         let handle = self
             .registry
@@ -193,8 +196,8 @@ impl CdpBackend {
     /// The profile's engine, launching one if there is none — i.e. the caller is
     /// saying "give me a browser".
     pub(crate) async fn handle_launching(&self) -> Result<Arc<EngineHandle>, BrowserError> {
-        if let Ok(handle) = MUTATION_HANDLE.try_with(Arc::clone) {
-            return self.bound_handle(handle);
+        if let Some(pinned) = self.pinned_handle() {
+            return pinned;
         }
         let handle = self
             .registry
@@ -212,6 +215,20 @@ impl CdpBackend {
         launching: bool,
         future: impl std::future::Future<Output = Result<T, BrowserError>>,
     ) -> Result<T, BrowserError> {
+        // Re-entrant on the SAME task, but only INSIDE the enclosing scope: a
+        // mutation already running here holds the owner's `mutations` gate and
+        // the permits for its own target(s). A nested write it performs (the
+        // post-navigation audit's quarantine `close_tab`) runs under that
+        // scope — re-acquiring the non-reentrant gate would wait 250ms, fail,
+        // and silently leave a policy-blocked tab open. Re-entry is NOT a
+        // bypass: `nested_scope` verifies the pinned backend identity and that
+        // the nested target is covered by what the outer call locked, and
+        // refuses BEFORE `future` is polled. Task-locals do not cross `spawn`,
+        // so no other task can enter this branch.
+        if let Some(scope) = self.nested_scope(target_id) {
+            scope?;
+            return future.await;
+        }
         let handle = if launching {
             self.handle_launching().await?
         } else {
@@ -220,9 +237,157 @@ impl CdpBackend {
         let owner = handle.live_owner();
         // Pin the exact checked handle: a registry lookup inside this lazy
         // future must not land on a replacement engine after ownership checks.
-        MUTATION_HANDLE
-            .scope(handle, owner.mutate(target_id, future))
+        let scope = MutationScope {
+            handle,
+            target: target_id.map(str::to_owned),
+        };
+        MUTATION_SCOPE
+            .scope(scope, owner.mutate(target_id, future))
             .await
+    }
+
+    /// [`Self::mutate`] plus a receipt for the successful operation.
+    ///
+    /// The receipt is captured after the operation succeeds but still inside
+    /// the owner's permit scope, from the same handle/owner pair that ran it —
+    /// never from a later registry/manager/active-tab lookup. `target` maps the
+    /// operation's own result to the exact CDP target id it acted on.
+    async fn mutate_recorded<T>(
+        &self,
+        target_id: Option<&str>,
+        launching: bool,
+        kind: BrowserOperationKind,
+        target: impl FnOnce(&T) -> String,
+        future: impl std::future::Future<Output = Result<T, BrowserError>>,
+    ) -> Result<(T, BrowserOperationRecord), BrowserError> {
+        // Nested under an enclosing mutation: same admission as `mutate`
+        // (refused before the future is polled), and the receipt is minted from
+        // the enclosing scope's pinned handle/owner — never a fresh lookup.
+        let (handle, enclosing) = match self.nested_scope(target_id) {
+            Some(scope) => (scope?, Some(MUTATION_SCOPE.with(|s| s.target.clone()))),
+            None if launching => (self.handle_launching().await?, None),
+            None => (self.handle().await?, None),
+        };
+        let owner = handle.live_owner();
+        let pinned = Arc::clone(&handle);
+        let recorded_owner = Arc::clone(&owner);
+        let requested = target_id.map(str::to_owned);
+        let nested = enclosing.is_some();
+        let enclosing_target = enclosing.flatten();
+        let run = async move {
+            let value = future.await?;
+            let acted = target(&value);
+            // The receipt names the target the operation actually acted on; it
+            // must be the one that was asked for AND the one the enclosing
+            // scope covers, else no receipt exists for it.
+            let covered = requested.as_deref().is_none_or(|r| r == acted)
+                && enclosing_target.as_deref().is_none_or(|p| p == acted);
+            if !covered {
+                return Err(BrowserError::ActionFailed(format!(
+                    "browser operation acted on target '{acted}' outside its mutation scope; \
+                     no receipt issued"
+                )));
+            }
+            let record = BrowserOperationRecord::capture(&recorded_owner, &pinned, acted, kind);
+            Ok((value, record))
+        };
+        if nested {
+            return run.await;
+        }
+        let scope = MutationScope {
+            handle,
+            target: target_id.map(str::to_owned),
+        };
+        MUTATION_SCOPE
+            .scope(scope, owner.mutate(target_id, run))
+            .await
+    }
+
+    /// `open_tab` that also returns the receipt of the tab it created.
+    pub(crate) async fn open_tab_with_record(
+        &self,
+        url: &str,
+    ) -> Result<(TabId, BrowserOperationRecord), BrowserError> {
+        self.mutate_recorded(
+            None,
+            true,
+            BrowserOperationKind::Open,
+            Clone::clone,
+            tabs::open_tab(self, url),
+        )
+        .await
+    }
+
+    /// `navigate` that also returns the receipt of the navigated tab.
+    pub(crate) async fn navigate_with_record(
+        &self,
+        tab_id: &str,
+        url: &str,
+    ) -> Result<BrowserOperationRecord, BrowserError> {
+        self.mutate_recorded(
+            Some(tab_id),
+            false,
+            BrowserOperationKind::Navigate,
+            |()| tab_id.to_owned(),
+            navigate::navigate(self, tab_id, url),
+        )
+        .await
+        .map(|((), record)| record)
+    }
+
+    /// `history` (back/forward/refresh) that also returns the tab's receipt.
+    pub(crate) async fn history_with_record(
+        &self,
+        tab_id: &str,
+        nav: HistoryNav,
+    ) -> Result<BrowserOperationRecord, BrowserError> {
+        self.mutate_recorded(
+            Some(tab_id),
+            false,
+            BrowserOperationKind::History(nav),
+            |()| tab_id.to_owned(),
+            navigate::history(self, tab_id, nav),
+        )
+        .await
+        .map(|((), record)| record)
+    }
+
+    /// The handle pinned by an enclosing mutation on this task, re-validated
+    /// against this backend's engine/profile. `None` outside any mutation.
+    fn pinned_handle(&self) -> Option<Result<Arc<EngineHandle>, BrowserError>> {
+        MUTATION_SCOPE
+            .try_with(|scope| self.bound_handle(Arc::clone(&scope.handle)))
+            .ok()
+    }
+
+    /// Admission for a mutation issued while another one is running on this
+    /// task. `None` outside any mutation (caller takes the normal path).
+    /// Otherwise the pinned handle, iff it is this backend's engine/profile AND
+    /// the enclosing scope covers `requested`: an enclosing global scope
+    /// (`None`) holds every permit so any nested target is covered; an
+    /// enclosing `Some(A)` holds only A's permit, so only `Some(A)` is.
+    fn nested_scope(
+        &self,
+        requested: Option<&str>,
+    ) -> Option<Result<Arc<EngineHandle>, BrowserError>> {
+        MUTATION_SCOPE
+            .try_with(|scope| {
+                let handle = self.bound_handle(Arc::clone(&scope.handle))?;
+                match scope.target.as_deref() {
+                    Some(held) if requested != Some(held) => {
+                        Err(BrowserError::ActionFailed(format!(
+                            "nested browser mutation on {} is outside its enclosing mutation \
+                             scope (target '{held}')",
+                            requested.map_or_else(
+                                || "the whole profile".to_owned(),
+                                |t| format!("target '{t}'")
+                            )
+                        )))
+                    }
+                    _ => Ok(handle),
+                }
+            })
+            .ok()
     }
 
     fn bound_handle(&self, handle: Arc<EngineHandle>) -> Result<Arc<EngineHandle>, BrowserError> {
@@ -281,8 +446,16 @@ impl CdpBackend {
     }
 }
 
+/// What a running mutation pins for nested calls on the same task: the exact
+/// checked handle, and the target its owner permit covers (`None` = the global
+/// scope that holds every live target's permit).
+struct MutationScope {
+    handle: Arc<EngineHandle>,
+    target: Option<String>,
+}
+
 tokio::task_local! {
-    static MUTATION_HANDLE: Arc<EngineHandle>;
+    static MUTATION_SCOPE: MutationScope;
 }
 
 /// Three CDP failures, three different operator problems.
@@ -416,7 +589,7 @@ impl BrowserBackend for CdpBackend {
     }
 
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {
-        self.mutate(None, true, tabs::open_tab(self, url)).await
+        self.open_tab_with_record(url).await.map(|(tab, _)| tab)
     }
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
         self.mutate(Some(tab_id), false, tabs::close_tab(self, tab_id))
@@ -430,12 +603,10 @@ impl BrowserBackend for CdpBackend {
             .await
     }
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {
-        self.mutate(Some(tab_id), false, navigate::navigate(self, tab_id, url))
-            .await
+        self.navigate_with_record(tab_id, url).await.map(|_| ())
     }
     async fn history(&self, tab_id: &str, nav: HistoryNav) -> Result<(), BrowserError> {
-        self.mutate(Some(tab_id), false, navigate::history(self, tab_id, nav))
-            .await
+        self.history_with_record(tab_id, nav).await.map(|_| ())
     }
     async fn snapshot(&self, tab_id: &str) -> Result<SnapshotOutput, BrowserError> {
         snapshot::snapshot(self, tab_id).await
@@ -648,7 +819,13 @@ impl BrowserBackend for CdpBackend {
         self.mutate(None, false, cookies::cookies(self, op)).await
     }
     async fn save_state(&self, path: &std::path::Path) -> Result<(), BrowserError> {
-        cookies::save_state(self, path).await
+        // Not a page write, but it runs `Runtime.evaluate` in the page main
+        // world (href + localStorage dump) and may `ensure_tab` attach: script
+        // the page can observe, interleaved with a human's input. Same
+        // profile-wide gate as the `cookies` read form, so a human holding
+        // any target of this profile refuses it before any CDP write.
+        self.mutate(None, false, cookies::save_state(self, path))
+            .await
     }
     async fn load_state(&self, path: &std::path::Path) -> Result<(), BrowserError> {
         self.mutate(None, false, cookies::load_state(self, path))
@@ -1060,7 +1237,7 @@ mod tests {
     fn no_verb_is_left_unwired() {
         let marker = concat!("CDP_VERB", "_NOT_WIRED");
         let helper = concat!("not_yet", "_wired");
-        let scanned: [(&str, &str); 13] = [
+        let scanned: [(&str, &str); 14] = [
             ("mod.rs", include_str!("mod.rs")),
             ("actions.rs", include_str!("actions.rs")),
             ("cookies.rs", include_str!("cookies.rs")),
@@ -1069,6 +1246,7 @@ mod tests {
             ("events.rs", include_str!("events.rs")),
             ("migration.rs", include_str!("migration.rs")),
             ("navigate.rs", include_str!("navigate.rs")),
+            ("operation.rs", include_str!("operation.rs")),
             ("recording.rs", include_str!("recording.rs")),
             ("routes.rs", include_str!("routes.rs")),
             ("screenshot.rs", include_str!("screenshot.rs")),
@@ -1335,6 +1513,353 @@ mod tests {
             methods(&server).is_empty(),
             "nothing may reach the wire: {:?}",
             methods(&server)
+        );
+    }
+
+    // ---- nested-mutation scope ---------------------------------------------
+    //
+    // `navigate` runs a post-navigation audit INSIDE its own mutation, and that
+    // audit's quarantine `close_tab` is itself a mutation. Re-entry on the same
+    // task is allowed, but only inside the enclosing scope; these tests pin
+    // that the allowance is exactly that wide and that a refusal happens
+    // before the refused future is polled.
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    use aleph_cdp::{CdpConnection, ConnectOptions, SessionId};
+    use aleph_protocol::browser_live::{
+        BrowserTargetBinding, ControlRequest, Controller, ConversationBinding, IssuerIdentity,
+        ViewerBinding, ViewerPermission, ViewportCssPx,
+    };
+
+    use super::{BrowserOperationKind, CdpBackend, MutationScope, MUTATION_SCOPE};
+    use crate::browser::engine::{EngineHandle, TabEntry};
+    use crate::browser::live::control::TargetControl;
+
+    /// A backend over a fake engine with live-owner-bound `Agent` controls on
+    /// each of `targets`.
+    async fn scoped(
+        targets: &[&str],
+    ) -> (
+        FakeCdpServer,
+        CdpBackend,
+        Arc<EngineHandle>,
+        Vec<Arc<TargetControl>>,
+    ) {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![
+            ("Page.startScreencast", Responder::Reply(json!({}))),
+            ("Page.stopScreencast", Responder::Reply(json!({}))),
+            ("Page.screencastFrameAck", Responder::Reply(json!({}))),
+        ]))
+        .await;
+        let (_registry, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("seeded handle");
+        {
+            let mut tabs = handle.tabs.lock().await;
+            for (i, t) in targets.iter().enumerate() {
+                tabs.entries
+                    .insert((*t).to_string(), TabEntry::new(SessionId(format!("S{i}"))));
+            }
+        }
+        let owner = handle.live_owner();
+        let mut controls = Vec::new();
+        for t in targets {
+            let target = BrowserTargetBinding {
+                profile: "default".into(),
+                browser_session_id: owner.browser_session_id().into(),
+                target_id: (*t).into(),
+            };
+            owner.attach_target(target.clone()).await.unwrap();
+            controls.push(
+                owner
+                    .bind_control(
+                        &format!("resource-{t}"),
+                        ViewerBinding {
+                            principal: IssuerIdentity::User {
+                                user_id: "user".into(),
+                            },
+                            task: ConversationBinding {
+                                session_key: "session".into(),
+                                run_id: "run".into(),
+                            },
+                            target,
+                        },
+                        ViewportCssPx {
+                            width: 800,
+                            height: 600,
+                        },
+                        Arc::new(|_| Ok(())),
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
+        (server, backend, handle, controls)
+    }
+
+    /// Hand `control` to a human viewer.
+    async fn human_takes(control: &Arc<TargetControl>) {
+        let lease = control
+            .register_viewer(
+                "viewer",
+                1,
+                i64::MAX,
+                vec![ViewerPermission::Frames, ViewerPermission::HumanInput],
+            )
+            .unwrap();
+        assert!(
+            control
+                .take(
+                    &lease,
+                    ControlRequest {
+                        expected_control_epoch: 0,
+                        action_seq: 1,
+                        expires_at_ms: i64::MAX,
+                    },
+                )
+                .await
+                .accepted
+        );
+        assert!(matches!(
+            control.snapshot().controller,
+            Controller::Human { .. }
+        ));
+    }
+
+    /// A future that records that it was polled.
+    async fn mark(flag: &AtomicBool) -> Result<(), BrowserError> {
+        flag.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn is_scope_refusal(err: &BrowserError) -> bool {
+        matches!(err, BrowserError::ActionFailed(m) if m.contains("outside its enclosing mutation scope"))
+    }
+
+    /// The navigate -> audit -> quarantine `close_tab` shape: same target,
+    /// nested. Must run under the outer permit, not wait out the 250ms gate.
+    #[tokio::test]
+    async fn a_nested_mutation_on_the_same_target_runs_under_the_outer_scope() {
+        let (_server, backend, _handle, _controls) = scoped(&["A"]).await;
+        let started = std::time::Instant::now();
+        let out = backend
+            .mutate(Some("A"), false, async {
+                backend.mutate(Some("A"), false, async { Ok(7) }).await
+            })
+            .await;
+        assert_eq!(out.expect("nested same-target write must succeed"), 7);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "no re-lock of the owner gate: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// An outer `Some(A)` holds only A's permit. A nested write on B (here a
+    /// human-controlled tab) must be refused WITHOUT polling its future and
+    /// without touching B's control state.
+    #[tokio::test]
+    async fn a_nested_mutation_on_another_target_is_refused_unpolled() {
+        let (_server, backend, _handle, controls) = scoped(&["A", "B"]).await;
+        human_takes(&controls[1]).await;
+        let before = controls[1].snapshot();
+        let polled = AtomicBool::new(false);
+        let out = backend
+            .mutate(Some("A"), false, async {
+                backend.mutate(Some("B"), false, mark(&polled)).await
+            })
+            .await;
+        let err = out.expect_err("Some(A) -> Some(B) must be refused");
+        assert!(is_scope_refusal(&err), "{err:?}");
+        assert!(!polled.load(Ordering::SeqCst), "refused future was polled");
+        let after = controls[1].snapshot();
+        assert_eq!(after.controller, before.controller);
+        assert_eq!(after.control_epoch, before.control_epoch);
+    }
+
+    /// An outer `Some(A)` must not widen to the whole profile.
+    #[tokio::test]
+    async fn a_nested_global_mutation_under_a_single_target_is_refused_unpolled() {
+        let (_server, backend, _handle, _controls) = scoped(&["A", "B"]).await;
+        let polled = AtomicBool::new(false);
+        let out = backend
+            .mutate(Some("A"), false, async {
+                backend.mutate(None, false, mark(&polled)).await
+            })
+            .await;
+        let err = out.expect_err("Some(A) -> None must be refused");
+        assert!(is_scope_refusal(&err), "{err:?}");
+        assert!(!polled.load(Ordering::SeqCst), "refused future was polled");
+    }
+
+    /// An outer global scope holds every live permit, so any nested target on
+    /// the same owner is covered.
+    #[tokio::test]
+    async fn a_global_scope_covers_nested_mutations_on_the_same_owner() {
+        let (_server, backend, _handle, _controls) = scoped(&["A", "B"]).await;
+        let out = backend
+            .mutate(None, false, async {
+                let a = backend.mutate(Some("A"), false, async { Ok(1) }).await?;
+                let b = backend.mutate(Some("B"), false, async { Ok(2) }).await?;
+                let all = backend.mutate(None, false, async { Ok(3) }).await?;
+                Ok(a + b + all)
+            })
+            .await;
+        assert_eq!(out.expect("global scope covers nested writes"), 6);
+    }
+
+    /// A pinned handle from another profile is refused before the future is
+    /// polled.
+    #[tokio::test]
+    async fn a_pinned_handle_for_another_profile_is_refused_unpolled() {
+        let (server, backend, _handle, _controls) = scoped(&["A"]).await;
+        let conn = CdpConnection::connect(
+            &server.ws_url(),
+            ConnectOptions {
+                command_timeout: TEST_TIMEOUT,
+            },
+        )
+        .await
+        .unwrap();
+        let other = Arc::new(EngineHandle::for_test(Engine::Chromium, "other", conn));
+        let polled = AtomicBool::new(false);
+        let out = MUTATION_SCOPE
+            .scope(
+                MutationScope {
+                    handle: other,
+                    target: None,
+                },
+                backend.mutate(Some("A"), false, mark(&polled)),
+            )
+            .await;
+        assert!(
+            matches!(&out, Err(BrowserError::ActionFailed(m)) if m.contains("bound engine/profile")),
+            "{out:?}"
+        );
+        assert!(!polled.load(Ordering::SeqCst), "refused future was polled");
+    }
+
+    /// Same for a pinned handle from another engine.
+    #[tokio::test]
+    async fn a_pinned_handle_for_another_engine_is_refused_unpolled() {
+        let (server, backend, _handle, _controls) = scoped(&["A"]).await;
+        let conn = CdpConnection::connect(
+            &server.ws_url(),
+            ConnectOptions {
+                command_timeout: TEST_TIMEOUT,
+            },
+        )
+        .await
+        .unwrap();
+        let other = Arc::new(EngineHandle::for_test(Engine::Obscura, "default", conn));
+        let polled = AtomicBool::new(false);
+        let out = MUTATION_SCOPE
+            .scope(
+                MutationScope {
+                    handle: other,
+                    target: Some("A".into()),
+                },
+                backend.mutate(Some("A"), false, mark(&polled)),
+            )
+            .await;
+        assert!(
+            matches!(&out, Err(BrowserError::ActionFailed(m)) if m.contains("bound engine/profile")),
+            "{out:?}"
+        );
+        assert!(!polled.load(Ordering::SeqCst), "refused future was polled");
+    }
+
+    /// A nested recorded write on the enclosing target succeeds, without the
+    /// 250ms re-lock, and its receipt names the exact pinned owner + target.
+    #[tokio::test]
+    async fn a_nested_recorded_mutation_on_the_same_target_yields_an_exact_receipt() {
+        let (_server, backend, handle, _controls) = scoped(&["A"]).await;
+        let started = std::time::Instant::now();
+        let out = backend
+            .mutate(Some("A"), false, async {
+                backend
+                    .mutate_recorded(
+                        Some("A"),
+                        false,
+                        BrowserOperationKind::Navigate,
+                        |t: &String| t.clone(),
+                        async { Ok("A".to_string()) },
+                    )
+                    .await
+            })
+            .await;
+        let (value, record) = out.expect("nested recorded write on the same target");
+        assert_eq!(value, "A");
+        assert_eq!(record.target_id(), "A");
+        assert_eq!(record.kind(), BrowserOperationKind::Navigate);
+        assert_eq!(record.engine(), Engine::Chromium);
+        assert!(Arc::ptr_eq(record.owner(), &handle.live_owner()));
+        let binding = record.target_binding();
+        assert_eq!(binding.profile, "default");
+        assert_eq!(
+            binding.browser_session_id,
+            handle.live_owner().browser_session_id()
+        );
+        assert_eq!(binding.target_id, "A");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "no re-lock of the owner gate: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A nested recorded write on another target is refused unpolled and mints
+    /// no receipt.
+    #[tokio::test]
+    async fn a_nested_recorded_mutation_on_another_target_is_refused_unpolled() {
+        let (_server, backend, _handle, _controls) = scoped(&["A", "B"]).await;
+        let polled = AtomicBool::new(false);
+        let out = backend
+            .mutate(Some("A"), false, async {
+                backend
+                    .mutate_recorded(
+                        Some("B"),
+                        false,
+                        BrowserOperationKind::Navigate,
+                        |_: &()| "B".to_string(),
+                        mark(&polled),
+                    )
+                    .await
+            })
+            .await;
+        let Err(err) = out else {
+            panic!("cross-target recorded write must be refused");
+        };
+        assert!(is_scope_refusal(&err), "{err:?}");
+        assert!(!polled.load(Ordering::SeqCst), "refused future was polled");
+    }
+
+    /// A receipt is only minted for a target the scope covers: a nested
+    /// recorded write that ACTED on a different target than it was scoped to
+    /// returns an error, not a receipt for the wrong tab.
+    #[tokio::test]
+    async fn a_recorded_mutation_that_acted_outside_its_scope_mints_no_receipt() {
+        let (_server, backend, _handle, _controls) = scoped(&["A", "B"]).await;
+        let out = backend
+            .mutate(Some("A"), false, async {
+                backend
+                    .mutate_recorded(
+                        Some("A"),
+                        false,
+                        BrowserOperationKind::Navigate,
+                        |t: &String| t.clone(),
+                        async { Ok("B".to_string()) },
+                    )
+                    .await
+            })
+            .await;
+        let Err(err) = out else {
+            panic!("receipt for an uncovered target must be refused");
+        };
+        assert!(
+            matches!(&err, BrowserError::ActionFailed(m) if m.contains("no receipt issued")),
+            "{err:?}"
         );
     }
 }

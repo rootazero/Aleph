@@ -1,0 +1,39 @@
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+    Finished `test` profile [unoptimized] target(s) in 13m 29s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-1792a2b7cdaace99.exe)
+
+running 31 tests
+test extension::claude_cache_tests::a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home ... ok
+test extension::lifecycle::tests::load_all_mounts_enabled_plugins_and_records_their_scope ... ok
+test extension::lifecycle::tests::load_all_stamps_project_scope_key_from_the_discovery_root ... ok
+test extension::lifecycle::tests::load_all_stamps_the_key_on_parse_error_rows_too ... ok
+test extension::lifecycle::tests::mount_after_unmount_keeps_the_rows_scope_key ... ok
+test extension::lifecycle::tests::mount_of_a_static_plugin_is_loaded ... ok
+test extension::lifecycle::tests::mount_of_an_unknown_id_is_not_found_and_twice_is_already_mounted ... ok
+test extension::lifecycle::tests::mount_refuses_a_plugin_the_operator_disabled_and_a_blocked_origin ... ok
+test extension::lifecycle::tests::mount_with_a_running_manager_ends_terminal_when_the_actor_answers ... ok
+test extension::lifecycle::tests::mount_with_a_silent_manager_is_pending_on_the_server_and_a_dropped_answer_stays_a_wait ... ok
+test extension::lifecycle::tests::mount_without_an_mcp_handle_is_pending_on_the_manager ... ok
+test extension::lifecycle::tests::reload_plugin_is_unmount_then_mount_and_reload_rebuilds_everything ... ok
+test hub::cache::tests::async_api_round_trips_through_the_blocking_boundary ... ok
+test hub::cache::tests::blocked_sqlite_work_neither_pins_the_runtime_nor_admits_a_second_writer ... ok
+test hub::cache::tests::clear_source_removes_only_that_source ... ok
+test hub::cache::tests::count_source_counts_only_that_source ... ok
+test hub::cache::tests::query_by_id_returns_exact_entry ... ok
+test hub::cache::tests::query_does_not_match_stored_json_keys ... ok
+test hub::cache::tests::query_reaches_description_tags_and_author ... ok
+test hub::cache::tests::query_substring_matches_name ... ok
+test hub::cache::tests::upsert_is_idempotent_by_id ... ok
+test hub::cache::tests::upsert_then_query_by_category ... ok
+test hub::cache::tests::with_conn_reraises_a_panic_and_releases_the_guard ... ok
+test hub::cache::tests::with_conn_runs_sqlite_off_the_runtime_thread ... ok
+test skill::tests::merge_published_roots_literal_fallback_keeps_plugin_roots ... ok
+test skill::tests::merge_published_roots_reraises_an_equiv_panic - should panic ... ok
+test skill::tests::merge_published_roots_runs_equiv_off_the_runtime_thread ... ok
+test skill::tests::merge_published_roots_skips_the_hop_without_published_dirs ... ok
+test skill::tests::run_blocking_fs_reraises_a_panic_on_the_caller - should panic ... ok
+test skill::tests::run_blocking_fs_runs_off_the_runtime_thread ... ok
+test skill::tests::the_cold_skill_path_routes_sync_fs_through_the_blocking_pool ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 20767 filtered out; finished in 21.87s
+

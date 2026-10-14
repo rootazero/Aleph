@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-is-lite-shell"
+description = "Enables the is_lite_shell command without any pre-configured scope."
+commands.allow = ["is_lite_shell"]
+
+[[permission]]
+identifier = "deny-is-lite-shell"
+description = "Denies the is_lite_shell command without any pre-configured scope."
+commands.deny = ["is_lite_shell"]

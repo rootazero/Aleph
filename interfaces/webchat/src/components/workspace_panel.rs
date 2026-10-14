@@ -53,6 +53,18 @@ fn body_label(body: WorkspaceBody, i18n: crate::i18n::I18nCtx) -> String {
     }
 }
 
+/// Stable QA selector for a body's tab button (`data-testid`). Attribute only —
+/// no behavior. The QA monitor's `reveal_browser` clicks `workspace-tab-browser`.
+fn body_testid(body: WorkspaceBody) -> &'static str {
+    match body {
+        WorkspaceBody::Artifacts => "workspace-tab-artifacts",
+        WorkspaceBody::Deliverables => "workspace-tab-deliverables",
+        WorkspaceBody::Tasks => "workspace-tab-tasks",
+        WorkspaceBody::Canvas => "workspace-tab-canvas",
+        WorkspaceBody::Browser => "workspace-tab-browser",
+    }
+}
+
 /// Workspace pane root — always mounted, CSS-collapsed outside
 /// [`LayoutMode::Split`].
 #[component]
@@ -171,6 +183,7 @@ pub fn WorkspacePanel() -> impl IntoView {
         // (label + LayoutToggle in app.rs) stays glued to its leading edge.
         <aside
             node_ref=pane_ref
+            data-testid="workspace-panel"
             class="aleph-workspace-pane absolute inset-y-0 right-0 z-20 flex flex-col
                    glass border-l border-border bg-surface-overlay/95 shadow-xl
                    min-w-[280px] w-[var(--aleph-workspace-w)] overflow-hidden"
@@ -206,6 +219,7 @@ pub fn WorkspacePanel() -> impl IntoView {
                         .copied()
                         .map(|body| view! {
                             <button
+                                data-testid=body_testid(body)
                                 class=move || {
                                     if active.get() == body {
                                         "px-2 py-1 rounded bg-primary text-white"

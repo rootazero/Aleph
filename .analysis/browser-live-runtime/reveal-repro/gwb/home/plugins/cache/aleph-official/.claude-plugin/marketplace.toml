@@ -1,0 +1,52 @@
+name = "aleph-official"
+
+[owner]
+name = "Rootazero"
+url = "https://github.com/rootazero"
+
+[metadata]
+description = "Aleph official plugin marketplace"
+version = "1.0.0"
+plugin-root = "."
+
+[[plugins]]
+name = "diagnostics"
+source = "./diagnostics"
+description = "System health monitoring, performance diagnostics, and OpenTelemetry trace collection"
+version = "0.1.0"
+
+[[plugins]]
+name = "llm-task"
+source = "./llm-task"
+description = "Batch LLM operations: parallel prompts, map/reduce over data, prompt chaining"
+version = "0.1.0"
+
+[[plugins]]
+name = "memory-analytics"
+source = "./memory-analytics"
+description = "Memory usage analytics: fact distribution, decay stats, compression metrics"
+version = "0.1.0"
+
+[[plugins]]
+name = "diff-viewer"
+source = "./diff-viewer"
+description = "Code diff viewing: unified diffs, side-by-side comparison"
+version = "0.1.0"
+
+[[plugins]]
+name = "voice-call"
+source = "./voice-call"
+description = "Voice calling with WebRTC/SIP: initiate calls, manage sessions, real-time transcription"
+version = "0.1.0"
+
+[[plugins]]
+name = "phone-control"
+source = "./phone-control"
+description = "Android phone control via ADB: screen interaction, app management, file transfer"
+version = "0.1.0"
+
+[[plugins]]
+name = "media-office"
+source = "./media-office"
+description = "Office document processing: DOCX/XLSX/PPTX text extraction, table parsing, metadata"
+version = "0.1.0"

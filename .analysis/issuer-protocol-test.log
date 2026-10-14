@@ -1,0 +1,22 @@
+
+running 8 tests
+test browser_live::tests::secrets_are_absent_from_resources_and_debug_output ... ok
+test browser_live::tests::permissions_and_resource_binding_fail_closed ... ok
+test browser_live::tests::companion_and_bus_shapes_cannot_cross_transport_boundaries ... ok
+test browser_live::tests::auth_wire_is_bounded_strict_and_redacted ... ok
+test browser_live::tests::viewer_binding_round_trip_preserves_every_axis ... ok
+test browser_live::tests::schema_has_epoch_and_expiry ... ok
+test browser_live::tests::frame_codec_round_trip_and_bounds_are_exact ... ok
+test browser_live::tests::every_contract_family_has_schema_and_round_trip_evidence ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 376 filtered out; finished in 0.01s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+    Finished `test` profile [unoptimized] target(s) in 0.61s
+     Running unittests src\lib.rs (target\debug\deps\aleph_protocol-d8e52b62ea3451c0.exe)
+     Running unittests src\bin\export_desktop_bridge_schema.rs (target\debug\deps\export_desktop_bridge_schema-00e56a8bf5691bcd.exe)

@@ -1,0 +1,49 @@
+
+    Checking aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
+    Checking aleph-desktop v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\shared)
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+    Checking aleph-desktop-windows v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\windows)
+    Checking aleph-client v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\client)
+warning: method `close_target` is never used
+   --> src\browser\live\mod.rs:453:25
+    |
+123 | impl LiveProfileOwner {
+    | --------------------- method in this implementation
+...
+453 |     pub(crate) async fn close_target(&self, target_id: &str) -> Result<(), BrowserError> {
+    |                         ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `pending_count` and `revoke_human_permission` are never used
+   --> src\browser\live\control.rs:163:19
+    |
+131 | impl TargetControl {
+    | ------------------ methods in this implementation
+...
+163 |     pub(crate) fn pending_count(&self) -> usize {
+    |                   ^^^^^^^^^^^^^
+...
+645 |     pub(crate) fn revoke_human_permission(&self, lease: &ViewerLease) -> Result<(), BrowserError> {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `skipped` is never used
+   --> src\browser\live\stream_hub.rs:101:12
+    |
+ 82 | impl LatestFrameReceiver {
+    | ------------------------ method in this implementation
+...
+101 |     pub fn skipped(&self) -> u64 {
+    |            ^^^^^^^
+
+warning: method `attach` is never used
+   --> src\gateway\pty\runtime.rs:111:19
+    |
+ 76 | impl<'a> TerminalRuntime<'a> {
+    | ---------------------------- method in this implementation
+...
+111 |     pub(crate) fn attach(
+    |                   ^^^^^^
+
+warning: `alephcore` (lib) generated 4 warnings
+    Finished `dev` profile [unoptimized] target(s) in 3m 48s

@@ -79,6 +79,10 @@ pub fn capability_names_for_network(
         // AllowHosts is rejected at WindowsSandboxDriver::profile_for time
         // (cycle 1 / SP-3b). If we ever get here we're conservative.
         NetworkPolicy::AllowHosts { .. } => Vec::new(),
+        // Exact loopback ports are granted by per-run WFP permit filters
+        // keyed on the AppContainer SID, never by a broad capability: no
+        // `internetClient` / `privateNetworkClientServer` here.
+        NetworkPolicy::LoopbackPorts { .. } => Vec::new(),
     }
 }
 

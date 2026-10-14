@@ -1,0 +1,14 @@
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+    Finished `test` profile [unoptimized] target(s) in 8m 16s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 6 tests
+test gateway::server::connection::off_loop::tests::only_read_only_non_handshake_methods_leave_the_loop ... ok
+test gateway::server::connection::off_loop::tests::the_connection_loop_uses_the_off_loop_set ... ok
+test gateway::server::connection::off_loop::tests::dropping_the_set_aborts_in_flight_dispatches ... ok
+test gateway::server::connection::off_loop::tests::the_cap_hands_the_future_back_for_inline_dispatch ... ok
+test gateway::server::connection::off_loop::tests::a_slow_dispatch_does_not_hold_back_a_fast_one ... ok
+test gateway::server::connection::off_loop::tests::a_panicking_dispatch_answers_internal_error_for_its_id ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 20760 filtered out; finished in 0.01s
+

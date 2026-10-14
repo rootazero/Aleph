@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:46:5 › standalone-same-target: viewer transport is same-origin and frame-backed (1.1s)
+
+  1 passed (1.9s)

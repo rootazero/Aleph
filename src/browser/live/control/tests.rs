@@ -323,6 +323,8 @@ async fn backend_mutation_entry_table_refuses_human_before_any_cdp_write() {
         .unwrap();
     take(&control, &lease, 1).await;
     let baseline = server.received().len();
+    let state_dir = tempfile::tempdir().unwrap();
+    let state_path = state_dir.path().join("state.json");
     for name in [
         "open",
         "navigate",
@@ -333,6 +335,8 @@ async fn backend_mutation_entry_table_refuses_human_before_any_cdp_write() {
         "evaluate",
         "engine-switch",
         "batch-sub-operations",
+        "save-state",
+        "load-state",
     ] {
         let target = ActionTarget::Coordinates { x: 10.0, y: 10.0 };
         let result = match name {
@@ -355,6 +359,10 @@ async fn backend_mutation_entry_table_refuses_human_before_any_cdp_write() {
                 assert!(matches!(first, Err(BrowserError::HumanHasControl { .. })));
                 backend.press_key("T1", "Enter").await
             }
+            // Runs page-main-world script (href + localStorage dump): gated
+            // profile-wide like the cookies read form. Refusal writes no file.
+            "save-state" => backend.save_state(&state_path).await,
+            "load-state" => backend.load_state(&state_path).await,
             _ => unreachable!(),
         };
         assert!(
@@ -367,6 +375,7 @@ async fn backend_mutation_entry_table_refuses_human_before_any_cdp_write() {
         baseline,
         "HumanHasControl must be returned before CDP mutation, not after"
     );
+    assert!(!state_path.exists(), "a refused save_state wrote no file");
     assert_eq!(server.connection_count(), 1);
 }
 
@@ -531,4 +540,239 @@ async fn stale_agent_waiter_cannot_write_after_handoff_and_destroy_ends_control_
         summaries.lock().unwrap()[0].ended_by,
         InterventionEnd::TargetClosed
     );
+}
+
+type LiveOwner = Arc<crate::browser::live::LiveProfileOwner>;
+
+/// One CDP backend with a live owner, T1 attached and bound to `binding("T1")`.
+/// The fake answers `Runtime.evaluate`, so an admitted `evaluate` is a
+/// visible CDP write and a refused one is visibly absent.
+async fn live_backend() -> (
+    aleph_cdp::testkit::FakeCdpServer,
+    crate::browser::cdp_backend::CdpBackend,
+    LiveOwner,
+    Arc<TargetControl>,
+    ViewerBinding,
+) {
+    use crate::browser::cdp_backend::test_support::{backend_with, open_guard, wire_session};
+    use crate::browser::engine::Engine;
+    use aleph_cdp::testkit::{FakeCdpServer, Responder};
+    use serde_json::json;
+
+    let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+    wire_session(&server, "S1");
+    server.on("Page.startScreencast", Responder::Reply(json!({})));
+    server.on(
+        "Runtime.evaluate",
+        Responder::Reply(json!({ "result": { "type": "number", "value": 1 } })),
+    );
+    let (_registry, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+    let handle = backend.handle().await.unwrap();
+    for (target, session) in [("T1", "S1"), ("T2", "S2")] {
+        handle.tabs.lock().await.entries.insert(
+            target.into(),
+            crate::browser::engine::TabEntry::new(aleph_cdp::SessionId(session.into())),
+        );
+    }
+    let owner = handle.live_owner();
+    let binding = owner_binding(&owner, "user", "run", "T1");
+    owner.attach_target(binding.target.clone()).await.unwrap();
+    let control = owner
+        .bind_control(
+            "resource",
+            binding.clone(),
+            ViewportCssPx {
+                width: 800,
+                height: 600,
+            },
+            Arc::new(|_| Ok(())),
+        )
+        .await
+        .unwrap();
+    (server, backend, owner, control, binding)
+}
+
+fn owner_binding(owner: &LiveOwner, user: &str, run: &str, target: &str) -> ViewerBinding {
+    ViewerBinding {
+        principal: IssuerIdentity::User {
+            user_id: user.into(),
+        },
+        task: ConversationBinding {
+            session_key: format!("conversation-{run}"),
+            run_id: run.into(),
+        },
+        target: BrowserTargetBinding {
+            profile: "default".into(),
+            browser_session_id: owner.browser_session_id().into(),
+            target_id: target.into(),
+        },
+    }
+}
+
+/// Negative binding: a human holding T1 (issuer `user`, run `run`, resource
+/// `resource`) never blocks a different target bound to a different issuer,
+/// run and resource; and that other binding's lease cannot take, cede or
+/// revoke T1's control. Effects are asserted on the wire and on the state.
+#[tokio::test]
+async fn other_issuer_run_resource_target_neither_blocks_nor_satisfies_the_guard() {
+    use crate::browser::backend::BrowserBackend;
+
+    let (server, backend, owner, control, binding) = live_backend().await;
+    let lease = control
+        .register_viewer("viewer", 1, i64::MAX, vec![ViewerPermission::HumanInput])
+        .unwrap();
+    take(&control, &lease, 1).await;
+
+    let other_binding = owner_binding(&owner, "other-user", "other-run", "T2");
+    owner
+        .attach_target(other_binding.target.clone())
+        .await
+        .unwrap();
+    let other = owner
+        .bind_control(
+            "other-resource",
+            other_binding,
+            ViewportCssPx {
+                width: 800,
+                height: 600,
+            },
+            Arc::new(|_| Ok(())),
+        )
+        .await
+        .unwrap();
+    let other_lease = other
+        .register_viewer(
+            "other-viewer",
+            1,
+            i64::MAX,
+            vec![ViewerPermission::HumanInput],
+        )
+        .unwrap();
+
+    // The other target's agent mutation is admitted and reaches the wire.
+    let before = server.received_for("Runtime.evaluate").len();
+    assert!(backend.evaluate("T2", "1").await.is_ok());
+    let admitted = server.received_for("Runtime.evaluate").len();
+    assert!(
+        admitted > before,
+        "the unblocked target's write reached CDP"
+    );
+    // T1 stays refused with ITS binding, and nothing more reaches the wire.
+    assert!(matches!(
+        backend.evaluate("T1", "1").await,
+        Err(BrowserError::HumanHasControl { binding: b }) if *b == binding
+    ));
+    assert_eq!(server.received_for("Runtime.evaluate").len(), admitted);
+
+    // The foreign lease cannot act on T1's control: no state change at all.
+    let epoch = control.snapshot().control_epoch;
+    let foreign = ControlRequest {
+        expected_control_epoch: epoch,
+        action_seq: 9,
+        expires_at_ms: i64::MAX,
+    };
+    assert_eq!(
+        control.cede(&other_lease, foreign.clone()).await.reason,
+        Some(InputRejectReason::Invalid)
+    );
+    assert_eq!(
+        control.take(&other_lease, foreign).await.reason,
+        Some(InputRejectReason::Invalid)
+    );
+    assert!(control
+        .revoke(&other_lease, InterventionEnd::Revoked)
+        .is_err());
+    let after = control.snapshot();
+    assert_eq!(after.control_epoch, epoch);
+    assert!(matches!(after.controller, Controller::Human { .. }));
+    assert!(!lease.closed());
+    assert!(!other_lease.closed());
+}
+
+/// Take wins the serial queue after the agent read its epoch: the agent's
+/// permit is refused and its backend future never writes to CDP.
+#[tokio::test]
+async fn take_queued_ahead_of_agent_permit_leaves_no_cdp_write() {
+    use crate::browser::backend::BrowserBackend;
+
+    let (server, backend, _owner, control, binding) = live_backend().await;
+    let lease = control
+        .register_viewer("viewer", 1, i64::MAX, vec![ViewerPermission::HumanInput])
+        .unwrap();
+    let before = server.received_for("Runtime.evaluate").len();
+    let epoch = control.snapshot().control_epoch;
+    // Hold the serial so both contenders queue (tokio Mutex is FIFO).
+    let held = control.serial.clone().lock_owned().await;
+    let taking = tokio::spawn({
+        let c = control.clone();
+        let l = lease.clone();
+        let req = request(&control, 1);
+        async move { c.take(&l, req).await }
+    });
+    tokio::task::yield_now().await;
+    let agent = tokio::spawn(async move { backend.evaluate("T1", "1").await });
+    tokio::task::yield_now().await;
+    assert!(!taking.is_finished() && !agent.is_finished());
+    drop(held);
+    assert!(taking.await.unwrap().accepted);
+    assert!(matches!(
+        agent.await.unwrap(),
+        Err(BrowserError::HumanHasControl { binding: b }) if *b == binding
+    ));
+    assert!(control.snapshot().control_epoch > epoch);
+    assert_eq!(
+        server.received_for("Runtime.evaluate").len(),
+        before,
+        "no CDP write after the control epoch bump"
+    );
+}
+
+/// Dispatcher vs lifecycle: a queued input never starts after a whole-grant
+/// revoke or a target close, and each intervention yields exactly one
+/// InterventionSummary whatever ends it, even when ends race.
+#[tokio::test]
+async fn queued_input_vs_revoke_or_target_close_never_starts_and_summarizes_once() {
+    for end in ["revoke", "target-close", "cede-then-revoke"] {
+        let (control, lease, summaries) = fixture();
+        take(&control, &lease, 1).await;
+        let queued = control.queue_input(&lease, input(&control, 1)).unwrap();
+        let epoch = control.snapshot().control_epoch;
+        let ws = control.lock().viewers["viewer"].ws_generation;
+        let expected = match end {
+            "revoke" => {
+                control.revoke(&lease, InterventionEnd::Revoked).unwrap();
+                // A second end of the same intervention adds nothing.
+                control.invalidate(InterventionEnd::TargetClosed).unwrap();
+                InterventionEnd::Revoked
+            }
+            "target-close" => {
+                control.invalidate(InterventionEnd::TargetClosed).unwrap();
+                control.revoke(&lease, InterventionEnd::Revoked).unwrap();
+                InterventionEnd::TargetClosed
+            }
+            "cede-then-revoke" => {
+                assert!(control.cede(&lease, request(&control, 2)).await.accepted);
+                control.revoke(&lease, InterventionEnd::Revoked).unwrap();
+                InterventionEnd::Cede
+            }
+            _ => unreachable!(),
+        };
+        let result = control
+            .dispatch(queued, |_| async {
+                panic!("queued input dispatched after its intervention ended");
+                #[allow(unreachable_code)]
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(!result.accepted, "{end}");
+        assert!(lease.closed(), "{end}: whole-grant end closes the viewer");
+        assert!(control.snapshot().control_epoch > epoch, "{end}");
+        assert!(control.lock().viewers["viewer"].ws_generation > ws, "{end}");
+        let saved = summaries.lock().unwrap();
+        assert_eq!(saved.len(), 1, "{end}: exactly one summary");
+        assert_eq!(saved[0].ended_by, expected, "{end}");
+        assert_eq!(saved[0].destination.run_id, "run");
+        assert_eq!(saved[0].destination.session_key, "conversation");
+    }
 }

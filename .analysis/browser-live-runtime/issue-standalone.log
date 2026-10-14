@@ -1,0 +1,12 @@
+minted ticket aleph-bt...
+connected device_id= device-9a048a6c-0f68-40e6-81a8-b2f146109133 user_id= u-owner
+subscribed [
+  'browser.live.resource',
+  'browser.live.closed',
+  'browser.live.state'
+]
+agent.run accepted run_id 7e651d99-9349-4a80-b26b-97187b52fbad
+captured pending resource res_Zunr7uij1J6VUrvvI2bov781OayZuoaaX2MFbbZw8cQ rev 1
+decide ok new revision 2
+issued grant kzmpsZgmSpbuujXibOJbXS026yjOGECx6SbO3eHD-ps expires_at_ms 1791906649543 launch_url http://127.0.0.1:18790/viewer/browser#grant_id=kzmpsZgmSpbuujXibOJbXS026yjOGECx6SbO3eHD-ps&nonce=xoD-hKpVdjzulQ4I4O4uvrDMWdNjLu1ykbR7TT7lCfw
+wrote resource.json

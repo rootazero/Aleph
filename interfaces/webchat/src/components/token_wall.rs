@@ -30,12 +30,20 @@ pub fn TokenWall() -> impl IntoView {
 
     view! {
         <Show when=move || state.needs_token.get()>
-            <div class="fixed inset-0 z-[100] flex items-center justify-center bg-surface/95 backdrop-blur-sm p-6">
+            <div data-testid="token-wall" class="fixed inset-0 z-[100] flex items-center justify-center bg-surface/95 backdrop-blur-sm p-6">
                 <div class="max-w-md w-full bg-surface-raised border border-border rounded-2xl p-8 shadow-xl">
                     <h2 class="text-2xl font-bold text-text-primary mb-2">
                         {t!(i18n, common.token_wall_title)}
                     </h2>
-                    <p class="text-sm text-text-secondary mb-6">
+                    <p
+                        data-testid=move || {
+                            if state.token_was_rejected.get() {
+                                "token-wall-instruction-rejected"
+                            } else {
+                                "token-wall-instruction"
+                            }
+                        }
+                        class="text-sm text-text-secondary mb-6">
                         {move || {
                             if state.token_was_rejected.get() {
                                 t_string!(i18n, common.token_wall_instruction_rejected).to_string()
@@ -45,6 +53,7 @@ pub fn TokenWall() -> impl IntoView {
                         }}
                     </p>
                     <input
+                        data-testid="token-wall-input"
                         type="password"
                         class="w-full px-4 py-3 rounded-xl bg-surface-sunken border border-border text-text-primary font-mono text-sm mb-4 focus:outline-none focus:border-primary"
                         placeholder=move || t_string!(i18n, common.token_wall_placeholder).to_string()
@@ -57,6 +66,7 @@ pub fn TokenWall() -> impl IntoView {
                         }
                     />
                     <button
+                        data-testid="token-wall-submit"
                         type="button"
                         class="w-full py-3 bg-primary hover:bg-primary/90 text-white rounded-xl transition-colors font-semibold disabled:opacity-50"
                         disabled=move || token.get().trim().is_empty()

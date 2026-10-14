@@ -2549,6 +2549,26 @@
     "screens": "屏幕数：{{ n }}",
     "animation": "动画 {{ name }} · {{ ms }} ms",
     "animation_looped": "循环",
-    "reduced_motion": "偏好减少动态效果"
+    "reduced_motion": "偏好减少动态效果",
+    "decision_title": "需要审查",
+    "decision_hint": "请选择该预览是否可以显示。除非标记为安全，否则不会显示任何内容。",
+    "decision_safe": "标记为安全",
+    "decision_refuse": "拒绝",
+    "decision_busy": "正在等待网关确认你的决定…",
+    "pair_desktop": "配对桌面",
+    "pair_required_hint": "请先配对此桌面连接，才能使用浏览器查看器。",
+    "decision_failed": "决定未能发送，请重试。",
+    "launch_title": "打开浏览器查看器",
+    "launch_hint": "将为这个确切的安全资源申请仅包含画面的查看授权。",
+    "launch_open": "打开查看器",
+    "launch_dismiss": "取消",
+    "launch_busy": "正在申请查看权限…",
+    "launch_opened": "查看器已在新标签页中打开。",
+    "launch_failed": "无法打开查看器，请重试。",
+    "standalone_invalid": "此浏览器查看链接无效或已过期。",
+    "standalone_unavailable": "此版本尚未提供浏览器查看器。",
+    "standalone_closed": "浏览器查看器连接已关闭。",
+    "standalone_connecting": "正在连接浏览器查看器…",
+    "standalone_failed": "无法连接浏览器查看器。"
   }
 }

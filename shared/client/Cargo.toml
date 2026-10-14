@@ -7,6 +7,13 @@ description = "Aleph Gateway client library — WebSocket JSON-RPC 2.0"
 # IMPORTANT: This crate MUST NOT depend on alephcore.
 # It is a pure protocol client used by CLI, TUI, and any future client.
 
+[features]
+# QA-only: exposes `DeviceCredentialStore::for_gateway_in_service`, which files
+# the credential under a harness-supplied `aleph-qa.device-credential.<hex>`
+# service instead of the production one (see `credential_store`). Never enabled
+# by default or by any production build.
+qa-service = []
+
 [dependencies]
 aleph-protocol = { path = "../protocol" }
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros"] }
@@ -22,6 +29,22 @@ toml = "0.8"
 thiserror = "2.0"
 tracing = "0.1"
 dirs = "6.0"
+
+# OS-protected storage for the paired-device credential (see
+# `credential_store`). Only the platform-native providers are enabled, and only
+# on the platforms that have one: on any other target the crate is not linked
+# at all (keyring's featureless fallback is an in-memory mock) and the store
+# fails closed. There is deliberately NO plaintext-file fallback. Linux uses the
+# Secret Service (persistent; the kernel keyutils provider is not enabled
+# because it does not survive a reboot).
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 # `net` for the loopback WebSocket server the handshake test spins up.

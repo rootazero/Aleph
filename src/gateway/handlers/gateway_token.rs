@@ -13,8 +13,13 @@
 
 use serde_json::json;
 
+use std::collections::HashMap;
+use tokio::sync::RwLock;
+
+use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::gateway::security::{DeviceTokenManager, SharedTokenManager};
+use crate::gateway::server::ConnectionState;
 use crate::sync_primitives::Arc;
 
 /// `gateway.token.current` — the shared Gateway token plaintext (or `null` if
@@ -33,6 +38,8 @@ pub async fn handle_token_current(request: JsonRpcRequest) -> JsonRpcResponse {
 pub async fn handle_token_rotate(
     request: JsonRpcRequest,
     device_token_mgr: Option<Arc<DeviceTokenManager>>,
+    connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let Some(mgr) = SharedTokenManager::global() else {
         return JsonRpcResponse::error(
@@ -58,7 +65,15 @@ pub async fn handle_token_rotate(
     // device-revocation failure is logged, not surfaced as an error.
     let mut revoked_devices = 0usize;
     if let Some(dt) = device_token_mgr {
-        match dt.revoke_all_panel_devices() {
+        // Through the kick pipeline, not the raw store revoke: live sessions
+        // (loopback-paired included) must drop their verified identity too.
+        match crate::gateway::handlers::gateway_devices::revoke_all_panel_devices_and_kick(
+            &dt,
+            &connections,
+            &event_bus,
+        )
+        .await
+        {
             Ok(n) => revoked_devices = n,
             Err(e) => tracing::warn!("token rotate: revoking paired devices failed: {e}"),
         }

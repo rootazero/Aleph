@@ -566,6 +566,10 @@ impl BrowserViewerModel {
 #[derive(Clone, Copy)]
 pub struct BrowserWorkspace {
     pub model: RwSignal<BrowserViewerModel>,
+    /// Count of decoded `browser.live.*` bus frames seen by the bridge. Not
+    /// reactive: it only fences a Gateway list snapshot against frames that
+    /// landed while the list request was in flight (see `bridge::seed_workspace`).
+    frames: StoredValue<u64>,
 }
 
 impl BrowserWorkspace {
@@ -573,7 +577,19 @@ impl BrowserWorkspace {
     pub fn new() -> Self {
         Self {
             model: RwSignal::new(BrowserViewerModel::default()),
+            frames: StoredValue::new(0),
         }
+    }
+
+    /// Record one decoded browser-live bus frame (disposed handle: no-op).
+    pub fn note_frame(&self) {
+        let _ = self.frames.try_update_value(|n| *n = n.wrapping_add(1));
+    }
+
+    /// Decoded browser-live frames seen so far (`0` once disposed).
+    #[must_use]
+    pub fn frame_seq(&self) -> u64 {
+        self.frames.try_get_value().unwrap_or(0)
     }
 
     /// Tracked: does the tab have something to show?

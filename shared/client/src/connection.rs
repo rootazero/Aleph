@@ -19,6 +19,7 @@ use tokio_tungstenite::{
 use tracing::{debug, error, info, warn};
 
 use crate::config::CliConfig;
+use crate::credential::{ensure_credential_transport, DeviceCredential, VerifiedIdentity};
 use crate::error::{CliError, CliResult};
 use crate::tls;
 
@@ -276,6 +277,16 @@ pub struct AlephClient {
     /// Behind a lock because there can be more than one handshake — see
     /// [`AlephClient::role`].
     role: Arc<std::sync::Mutex<String>>,
+    /// Opt-in device credential presented on every handshake (initial and
+    /// reconnect). `None` for every pre-existing caller. In memory only — see
+    /// [`crate::credential`]. After a bootstrap-ticket exchange the one-shot
+    /// ticket is replaced here by the device token the Gateway issued, so a
+    /// reconnect never replays a consumed ticket.
+    credential: Arc<std::sync::Mutex<Option<DeviceCredential>>>,
+    /// The identity the Gateway reported for the credential on the most recent
+    /// handshake. Cleared on every handshake first, set only when the response
+    /// proves the credential path (see [`AlephClient::verified_identity`]).
+    identity: Arc<std::sync::Mutex<Option<VerifiedIdentity>>>,
     /// Serialises the entire [`AlephClient::reconnect`] critical section.
     ///
     /// The earlier `is_connected()` early-return and the actual socket swap
@@ -306,6 +317,72 @@ impl AlephClient {
         let (client, events) = Self::open(url, config).await?;
         client.set_role(client.handshake(config).await?);
         Ok((client, events))
+    }
+
+    /// [`Self::connect`], presenting `credential` in the handshake.
+    ///
+    /// The credential is refused before any socket is opened unless the
+    /// transport protects it (`wss://`, or `ws://` to a loopback host). The
+    /// handshake then fails closed unless the Gateway's response proves the
+    /// credential path: `authorized: true` plus a server-reported `device_id`
+    /// (a bootstrap exchange must also return the issued `device_token`). A
+    /// client-asserted device id is never accepted as proof. The credential is
+    /// retained in memory and re-presented by [`Self::reconnect`].
+    pub async fn connect_with_credential(
+        url: &str,
+        config: &CliConfig,
+        credential: DeviceCredential,
+    ) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
+        ensure_credential_transport(url)?;
+        let (client, events) = Self::open(url, config).await?;
+        *client.credential.lock().unwrap_or_else(|e| e.into_inner()) = Some(credential);
+        match client.handshake(config).await {
+            Ok(role) => {
+                client.set_role(role);
+                Ok((client, events))
+            }
+            Err(e) => {
+                // Do not leave a socket (or a retained secret) behind on refusal.
+                let _ = client.close().await;
+                client
+                    .credential
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take();
+                Err(e)
+            }
+        }
+    }
+
+    /// The identity the Gateway reported for this connection's credential, as
+    /// of the most recent handshake. `None` when no credential was presented,
+    /// or the handshake did not prove one. Server-derived, never client-asserted.
+    #[must_use]
+    pub fn verified_identity(&self) -> Option<VerifiedIdentity> {
+        self.identity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// The credential this client may persist, as an in-memory clone.
+    ///
+    /// `Some` only when the credential is a long-lived device token the
+    /// Gateway has verified on the most recent handshake (`verified_identity`
+    /// names the same device). After a bootstrap-ticket exchange this is the
+    /// issued device token, never the consumed ticket; while a ticket is still
+    /// held (no successful exchange) it is `None`. Hand the result to
+    /// [`crate::DeviceCredentialStore::save`] — never to config or logs.
+    #[must_use]
+    pub fn credential_for_persistence(&self) -> Option<DeviceCredential> {
+        let credential = self
+            .credential
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()?;
+        credential.persistable_parts()?;
+        let identity = self.verified_identity()?;
+        (identity.device_id == credential.device_id()).then_some(credential)
     }
 
     /// Rebuild the socket under this client, keeping every handle its callers
@@ -461,6 +538,8 @@ impl AlephClient {
             url: url.to_string(),
             generation: generation.clone(),
             role: Arc::new(std::sync::Mutex::new(String::new())),
+            credential: Arc::new(std::sync::Mutex::new(None)),
+            identity: Arc::new(std::sync::Mutex::new(None)),
             reconnect_lock: Arc::new(Mutex::new(())),
         };
 
@@ -563,12 +642,10 @@ impl AlephClient {
         topic_tx: &mpsc::Sender<TopicEvent>,
         write: &WsWriter,
     ) {
-        // Log all incoming messages for debugging.
-        // Truncate on a UTF-8 char boundary — a byte slice (`&text[..n]`) panics
-        // when byte `n` lands inside a multi-byte char (common with CJK/emoji),
-        // which would kill the read loop and silently hang every pending request.
-        let preview_end = text.char_indices().nth(500).map_or(text.len(), |(i, _)| i);
-        debug!("Received raw message: {}", &text[..preview_end]);
+        // Never log the raw frame: the response to `connect` carries the
+        // issued `device_token`, and other frames may carry secrets. Size
+        // only; the classified arms below log method names.
+        debug!(bytes = text.len(), "Received message");
 
         match classify_frame(text) {
             Inbound::Response { id, result } => {
@@ -584,7 +661,7 @@ impl AlephClient {
                 Self::handle_server_request(&method, id, write).await;
             }
             Inbound::Event(event) => {
-                debug!("Parsed event: {:?}", event);
+                debug!("Parsed stream event");
                 // Lossy on backpressure, mirroring the topic channel below:
                 // the read loop is the ONLY router of RPC responses on this
                 // socket, so it must never `.await` on a downstream consumer
@@ -643,7 +720,7 @@ impl AlephClient {
             }
         };
 
-        debug!("Sending response to Server: {}", json);
+        debug!(method = %method, "Sending method-not-found response to Server");
         let mut write_guard = write.lock().await;
         if let Err(e) = write_guard.send(Message::Text(json.into())).await {
             error!("Failed to send response: {}", e);
@@ -737,7 +814,9 @@ impl AlephClient {
         // lifetime of the client because the `?` returned while the entry
         // was still in the map.
         let json = serde_json::to_string(&request)?;
-        debug!("Sending: {}", json);
+        // Never log the serialised request: `connect` params carry
+        // `device_token` / `bootstrap_ticket`. Method + id + size suffice.
+        debug!(method = %method, id = %id, bytes = json.len(), "Sending request");
 
         let (tx, rx) = oneshot::channel();
 
@@ -790,34 +869,49 @@ impl AlephClient {
 
     /// Perform the `connect` handshake with the server.
     ///
-    /// `connect` carries no credential — it only declares a surface identity
-    /// (`device_name`) and receives the session baseline back: `{ role,
+    /// By default `connect` carries no credential — it only declares a surface
+    /// identity (`device_name`) and receives the session baseline back: `{ role,
     /// state_version, keepalive }`. No token is minted, stored, or replayed.
+    /// Only a client built through [`Self::connect_with_credential`] adds a
+    /// [`DeviceCredential`]; the response must then prove the credential path
+    /// or the handshake fails closed.
     ///
-    /// That is sufficient on loopback, which the gateway resolves to `operator`
-    /// before consulting any credential, and it is the reason this client
-    /// cannot reach a REMOTE gateway: a non-loopback connection is walled until
-    /// it presents a device token, a bootstrap ticket, or the shared gateway
-    /// token, and this crate has a surface for none of the three. The role the
+    /// Credential-less is sufficient on loopback, which the gateway resolves to
+    /// `operator` when no credential is presented, and it is the reason a
+    /// credential-less client cannot reach a REMOTE gateway: a non-loopback
+    /// connection is walled until it presents a device token, a bootstrap
+    /// ticket, or the shared gateway token. The role the
     /// server returns is latched into [`Self::role`] either way, so a walled
     /// connection reports what it actually got rather than assuming operator.
     ///
     /// Private on purpose — see [`Self::connect`].
     async fn handshake(&self, config: &CliConfig) -> CliResult<String> {
-        #[derive(Serialize)]
-        struct ConnectParams<'a> {
-            device_name: &'a str,
-        }
-
         #[derive(serde::Deserialize)]
         struct ConnectResult {
             #[serde(default)]
             role: String,
+            #[serde(default)]
+            authorized: Option<bool>,
+            #[serde(default)]
+            device_id: Option<String>,
+            #[serde(default)]
+            user_id: Option<String>,
+            #[serde(default)]
+            device_token: Option<String>,
         }
 
-        let params = ConnectParams {
-            device_name: &config.device_name,
-        };
+        // Whatever an earlier handshake proved says nothing about this socket.
+        self.identity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let credential = self
+            .credential
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+
+        let params = build_connect_params(&config.device_name, credential.as_ref());
 
         // `request`, not `call`: the guard `call` applies is "is this client
         // usable", and during a reconnect handshake it deliberately is not —
@@ -827,8 +921,34 @@ impl AlephClient {
         // exchange that must go out anyway, and the socket under it is live by
         // construction: it was opened three lines ago.
         let result: ConnectResult = self
-            .request("connect", Some(params), Duration::from_secs(30))
+            .request("connect", Some(Value::Object(params)), Duration::from_secs(30))
             .await?;
+
+        if let Some(credential) = credential {
+            // Fail closed: a credential was presented, so the response must
+            // prove the Gateway took the credential path. A loopback gateway
+            // that ignored it would still answer `authorized: true` with the
+            // operator role; the server-reported `device_id` is what tells the
+            // two apart, and it must be the device this credential was minted
+            // for (a client-asserted id is not proof).
+            let verified = verify_credential_response(
+                &credential,
+                result.authorized,
+                result.device_id,
+                result.user_id,
+                result.device_token.as_deref(),
+            )?;
+            if credential.is_bootstrap_ticket() {
+                // `verify_credential_response` guaranteed a token. The ticket is
+                // one-shot and now spent; swap in the issued token (memory only)
+                // so reconnects authenticate without replaying it.
+                if let Some(token) = result.device_token {
+                    *self.credential.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(DeviceCredential::device_token(&verified.device_id, token)?);
+                }
+            }
+            *self.identity.lock().unwrap_or_else(|e| e.into_inner()) = Some(verified);
+        }
         Ok(result.role)
     }
 
@@ -872,6 +992,55 @@ impl AlephClient {
             .store(false, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
+}
+
+/// Build the `connect` params: the surface name, plus the credential fields
+/// when one is presented.
+fn build_connect_params(
+    device_name: &str,
+    credential: Option<&DeviceCredential>,
+) -> serde_json::Map<String, Value> {
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "device_name".to_string(),
+        Value::String(device_name.to_string()),
+    );
+    if let Some(credential) = credential {
+        credential.write_connect_params(&mut params);
+    }
+    params
+}
+
+/// Decide whether a connect response proves the presented `credential` was
+/// validated by the Gateway. Pure so the fail-closed rules are unit-testable.
+fn verify_credential_response(
+    credential: &DeviceCredential,
+    authorized: Option<bool>,
+    device_id: Option<String>,
+    user_id: Option<String>,
+    issued_device_token: Option<&str>,
+) -> CliResult<VerifiedIdentity> {
+    if authorized != Some(true) {
+        return Err(CliError::Connection(
+            "gateway did not authorize the device credential".into(),
+        ));
+    }
+    let Some(device_id) = device_id.filter(|d| !d.is_empty()) else {
+        return Err(CliError::Connection(
+            "gateway did not confirm a device identity for the credential".into(),
+        ));
+    };
+    if device_id != credential.device_id() {
+        return Err(CliError::Connection(
+            "gateway resolved the credential to a different device than expected".into(),
+        ));
+    }
+    if credential.is_bootstrap_ticket() && issued_device_token.is_none_or(str::is_empty) {
+        return Err(CliError::Connection(
+            "gateway accepted the bootstrap ticket but returned no device token".into(),
+        ));
+    }
+    Ok(VerifiedIdentity { device_id, user_id })
 }
 
 #[cfg(test)]

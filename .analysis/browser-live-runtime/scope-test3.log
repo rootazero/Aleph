@@ -1,0 +1,46 @@
+warning: unused import: `super::*`
+   --> src\gateway\execution_engine\run_loop\project_context.rs:223:9
+    |
+223 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::Duration`
+ --> src\gateway\execution_engine\slash_command_body\tests.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FileSessionStoreConfig` and `FileSessionStore`
+  --> src\gateway\session_store\hook_transcripts.rs:42:55
+   |
+42 |     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+   |                                                       ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `with_consent` is never used
+   --> src\builtin_tools\skill_reader\read.rs:157:19
+    |
+101 | impl ReadSkillTool {
+    | ------------------ method in this implementation
+...
+157 |     pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `alephcore` (lib test) generated 4 warnings (run `cargo fix --lib -p alephcore --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 1.46s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 7 tests
+test gateway::server::browser_viewer_route::tests::oversized_json_body_is_refused_before_parsing ... ok
+test gateway::server::browser_viewer_route::tests::viewer_credential_cannot_cross_scope ... ok
+test gateway::server::browser_viewer_route::tests::ws_unknown_grant_is_unauthorized ... ok
+test gateway::server::browser_viewer_route::tests::ws_origin_mismatch_is_unauthorized ... ok
+test gateway::server::browser_viewer_route::tests::ws_rejects_malformed_binary_and_oversize_hello ... ok
+test gateway::server::browser_viewer_route::tests::ws_full_session_frames_input_and_revoke ... ok
+test gateway::server::browser_viewer_route::tests::ws_without_hello_times_out ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 20678 filtered out; finished in 0.17s
+

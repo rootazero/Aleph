@@ -320,8 +320,28 @@ impl RouteRegistry {
         self.refresh_active();
     }
 
-    /// Remove and return the loop's kill switch. Called by the loop itself on
-    /// exit AND by `stop_intercept_loop_if_idle`; both removing is fine.
+    /// Remove the entry only if it still belongs to the task `id` — the loop's
+    /// own exit path. A stopped (or crashed) loop finishing late must never
+    /// remove the entry of the loop that re-armed the tab after it.
+    pub(crate) fn take_own_loop(&self, profile: &str, tab_id: &str, id: tokio::task::Id) -> bool {
+        let key = (profile.to_string(), tab_id.to_string());
+        let removed = {
+            let mut loops = lock(&self.loops);
+            if loops.get(&key).is_some_and(|h| h.id() == id) {
+                loops.remove(&key);
+                true
+            } else {
+                false
+            }
+        };
+        self.refresh_active();
+        removed
+    }
+
+    /// Remove and return the loop's kill switch, whoever owns it. Only the
+    /// disarm path (`stop_intercept_loop_if_idle`) and the dead-loop reaper
+    /// call this, both under `start_lock`; the loop's own exit uses
+    /// [`Self::take_own_loop`].
     pub(crate) fn take_loop(
         &self,
         profile: &str,
@@ -398,7 +418,7 @@ async fn run_loop(
     // per call, so the only thing keeping the dispatcher (and this feed's
     // sender) alive across the navigation is this parameter. Drop it and
     // `feed.rx` returns `None` on the next `recv`, the loop exits, and
-    // `routes.take_loop` clears the registry entry — so a later `ensure`
+    // `routes.take_own_loop` clears this loop's entry — so a later `ensure`
     // re-arms instead of finding a corpse.
     let _owner = owner;
     let mut last_lagged = 0u64;
@@ -539,7 +559,12 @@ async fn run_loop(
             break;
         }
     }
-    registry.take_loop(&profile, &tab_id);
+    // Identity-safe: only this task's own entry. `try_id` is `None` only when
+    // `run_loop` is driven outside a spawned task (never in production); then
+    // there is no entry of ours to remove.
+    if let Some(id) = tokio::task::try_id() {
+        registry.take_own_loop(&profile, &tab_id, id);
+    }
 }
 
 impl CdpBackend {
@@ -1401,6 +1426,62 @@ mod tests {
     /// Review Focus #2: the tab dies mid-decision; every answer errors. The
     /// loop must recognise the dead session and EXIT — an error-spinning task
     /// would burn the runtime for the rest of the profile's life.
+    /// I2: a loop that was stopped and replaced (re-arm) and only THEN finishes
+    /// must not remove the replacement's registry entry — the exit path is
+    /// identity-safe (task id), not keyed by `(profile, tab)` alone.
+    #[tokio::test]
+    async fn a_late_exiting_old_loop_never_removes_the_replacement_entry() {
+        let dead = Responder::Error {
+            code: -32001,
+            message: "Session with given id not found".to_string(),
+        };
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![
+            ("Fetch.fulfillRequest", dead.clone()),
+            ("Fetch.continueRequest", dead),
+        ]))
+        .await;
+        let conn = connect(&server).await;
+        let registry = Arc::new(RouteRegistry::new());
+        registry
+            .add(
+                "p",
+                "t1",
+                "/api/",
+                None,
+                mock_json(200, "x"),
+                RouteScope::Tab,
+                None,
+            )
+            .expect("add");
+        let old = spawn_loop(&conn, &registry, open_guard()).await;
+        // The re-arm: a fresh loop takes the same `(profile, tab)` slot while
+        // the old one is still winding down.
+        let replacement = tokio::spawn(std::future::pending::<()>());
+        registry.register_loop("p", "t1", replacement.abort_handle());
+
+        for i in 1..=3 {
+            server.push_event(paused(
+                &format!("r{i}"),
+                "http://93.184.216.34/api/x",
+                "GET",
+                "S1",
+            ));
+        }
+        tokio::time::timeout(Duration::from_secs(2), old)
+            .await
+            .expect("the old loop exits within the strike budget")
+            .expect("old loop task");
+        assert!(
+            registry.loop_running("p", "t1"),
+            "the old loop's exit must leave the replacement's entry in place"
+        );
+        assert!(
+            registry.list("p")[0].active,
+            "the replacement still serves the rule"
+        );
+        replacement.abort();
+    }
+
     #[tokio::test]
     async fn the_loop_exits_when_its_session_dies_mid_decision() {
         let dead = Responder::Error {

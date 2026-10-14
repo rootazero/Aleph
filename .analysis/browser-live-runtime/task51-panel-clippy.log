@@ -1,0 +1,5 @@
+free_bytes=14000271360
+   Compiling aleph-panel v0.2.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\interfaces\webchat)
+    Checking aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
+    Checking shared-ui-logic v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\ui_logic)
+    Finished `dev` profile [unoptimized] target(s) in 5m 43s

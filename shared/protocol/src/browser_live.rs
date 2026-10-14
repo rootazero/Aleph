@@ -453,6 +453,66 @@ pub struct RevokeViewerGrantResponse {
     pub revoked: bool,
 }
 
+fn deserialize_nonzero_revision<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let revision = u64::deserialize(deserializer)?;
+    if revision == 0 {
+        // Revisions start at 1: 0 can never name a published revision.
+        return Err(serde::de::Error::custom("expected_revision must be >= 1"));
+    }
+    Ok(revision)
+}
+
+/// The user's explicit verdict on one exact resource revision.
+///
+/// `Safe` is a declaration by the authenticated user that the revision may be
+/// displayed. It is NOT an automatic content inspection, NOT automatic
+/// redaction, and never an LLM judgement. `Refused` closes the resource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceDecision {
+    Safe,
+    Refused,
+}
+
+/// `browser.viewer.resource.decide` params. The caller identity comes from the
+/// authenticated RPC; binding, user, target and expiry are deliberately absent
+/// and rejected (`deny_unknown_fields`). `expected_revision` must be the exact
+/// current revision (>= 1); a mismatch is denied like any other refusal.
+///
+/// The success response reuses the existing bus shapes: [`BusEvent::Resource`]
+/// (decision `safe`, new revision, unchanged absolute expiry) or
+/// [`BusEvent::Closed`] (decision `refused`). No separate wire shape exists.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DecideResourceRequest {
+    pub resource_id: String,
+    #[serde(deserialize_with = "deserialize_nonzero_revision")]
+    pub expected_revision: u64,
+    pub decision: ResourceDecision,
+}
+
+/// `browser.viewer.resource.list` params: deliberately EMPTY. The caller
+/// identity comes from the handshake-verified RPC user; a filter (user,
+/// session, target, URL, ...) supplied by the client is rejected
+/// (`deny_unknown_fields`) so the server never lists by a client-chosen key.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListResourcesRequest {}
+
+/// `browser.viewer.resource.list` result: the server registry's exact current
+/// view of the caller's own live, unexpired resources (Safe and Pending; a
+/// Refused resource is never live). Same [`PreviewResource`] shape as the
+/// `browser.live.resource` bus event, so a client applies both through one
+/// acceptance path. Ordered by `resource_id` (opaque, deterministic).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListResourcesResponse {
+    pub resources: Vec<PreviewResource>,
+}
+
 macro_rules! secret_wrapper {
     ($name:ident) => {
         #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -926,6 +986,11 @@ pub struct InterventionSummary {
     pub facts: InterventionFacts,
 }
 
+/// Gateway event topic carrying a [`PreviewResource`] (`BusEvent::Resource`).
+pub const RESOURCE_TOPIC: &str = "browser.live.resource";
+/// Gateway event topic carrying a [`BrowserLiveClosed`] (`BusEvent::Closed`).
+pub const CLOSED_TOPIC: &str = "browser.live.closed";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum BusEvent {
@@ -1350,6 +1415,9 @@ mod tests {
                 "browser.live.intervention"
             ]
         );
+        // The topic constants are the same literals, pinned independently.
+        assert_eq!(RESOURCE_TOPIC, "browser.live.resource");
+        assert_eq!(CLOSED_TOPIC, "browser.live.closed");
         for forbidden in ["browser.live.frame", "browser.live.state"] {
             assert!(serde_json::from_value::<BusEvent>(json!({"type": forbidden})).is_err());
         }
@@ -1786,5 +1854,45 @@ mod tests {
         };
         assert!(!format!("{response:?}").contains(secret));
         assert!(!response.ws_path.contains(secret));
+    }
+
+    #[test]
+    fn list_request_is_empty_and_rejects_any_client_filter() {
+        let decoded: ListResourcesRequest = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(decoded, ListResourcesRequest {});
+        assert_eq!(serde_json::to_value(decoded).unwrap(), json!({}));
+        for filter in [
+            json!({"user_id": "someone"}),
+            json!({"session_key": "s"}),
+            json!({"target_id": "t"}),
+            json!({"url": "https://example.test"}),
+        ] {
+            assert!(serde_json::from_value::<ListResourcesRequest>(filter).is_err());
+        }
+    }
+
+    #[test]
+    fn list_response_carries_exactly_the_bus_resource_shape() {
+        let response = ListResourcesResponse {
+            resources: vec![resource()],
+        };
+        let value = serde_json::to_value(&response).unwrap();
+        let keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, vec!["resources"]);
+        assert_eq!(
+            value["resources"][0],
+            serde_json::to_value(resource()).unwrap()
+        );
+        let back: ListResourcesResponse = serde_json::from_value(value).unwrap();
+        assert_eq!(back, response);
+        assert!(serde_json::from_value::<ListResourcesResponse>(
+            json!({"resources": [], "cursor": 1})
+        )
+        .is_err());
     }
 }

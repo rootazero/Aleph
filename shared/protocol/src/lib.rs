@@ -35,6 +35,7 @@ mod ids;
 pub mod json_canvas;
 pub mod jsonrpc;
 pub mod metrics;
+pub mod native_credentials;
 pub mod paths;
 pub mod plan;
 pub mod plugins;

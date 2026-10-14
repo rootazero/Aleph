@@ -1921,7 +1921,12 @@ mod sent_history_tests {
         let mut ta = TextArea::default();
         let action = press_up(&mut state, &mut ta);
         assert!(matches!(action, Action::None), "got {action:?}");
-        assert_eq!(text(&ta), "third", "expected most recent, got {:?}", text(&ta));
+        assert_eq!(
+            text(&ta),
+            "third",
+            "expected most recent, got {:?}",
+            text(&ta)
+        );
         assert_eq!(state.history_index, Some(2));
     }
 
@@ -1950,7 +1955,12 @@ mod sent_history_tests {
         // the composer — the user is reading the oldest message.
         let action = press_up(&mut state, &mut ta);
         assert!(matches!(action, Action::None), "got {action:?}");
-        assert_eq!(text(&ta), "first", "oldest must stay put, got {:?}", text(&ta));
+        assert_eq!(
+            text(&ta),
+            "first",
+            "oldest must stay put, got {:?}",
+            text(&ta)
+        );
         assert_eq!(state.history_index, Some(0));
     }
 
@@ -1975,7 +1985,11 @@ mod sent_history_tests {
         // boundary in the other direction.
         let action = press_down(&mut state, &mut ta);
         assert!(matches!(action, Action::None), "got {action:?}");
-        assert!(text(&ta).is_empty(), "past-newest must clear, got {:?}", text(&ta));
+        assert!(
+            text(&ta).is_empty(),
+            "past-newest must clear, got {:?}",
+            text(&ta)
+        );
         assert_eq!(state.history_index, None);
     }
 }

@@ -1,0 +1,162 @@
+    Checking windows-sys v0.61.2
+    Checking socket2 v0.6.4
+    Checking mio v1.2.1
+    Checking tokio v1.52.3
+    Checking tokio-util v0.7.18
+    Checking schannel v0.1.29
+    Checking native-tls v0.2.18
+    Checking winapi-util v0.1.11
+    Checking tokio-native-tls v0.3.1
+    Checking h2 v0.4.14
+    Checking hyper v1.10.1
+    Checking tokio-rustls v0.26.4
+    Checking hyper-util v0.1.20
+    Checking tower v0.5.3
+    Checking termcolor v1.4.1
+    Checking wasmprinter v0.243.0
+    Checking async-compression v0.4.42
+    Checking tower-http v0.6.11
+    Checking wasmtime-environ v41.0.4
+    Checking hyper-tls v0.6.0
+    Checking hyper-rustls v0.27.9
+    Checking reqwest v0.12.28
+    Checking errno v0.3.14
+    Checking dirs-sys v0.5.0
+    Checking rustix v1.1.4
+    Checking same-file v1.0.6
+    Checking walkdir v2.5.0
+    Checking wasmtime-internal-unwinder v41.0.4
+    Checking dirs v6.0.0
+    Checking tempfile v3.27.0
+    Checking wasmtime-internal-cranelift v41.0.4
+    Checking wasmtime-internal-fiber v41.0.4
+    Checking wasmtime-internal-cache v41.0.4
+    Checking eyeball-im v0.8.0
+    Checking h2 v0.3.27
+    Checking polling v3.11.0
+    Checking wasmtime-internal-jit-icache-coherence v41.0.4
+    Checking readlock-tokio v0.1.6
+    Checking deadpool-runtime v0.1.4
+    Checking nu-ansi-term v0.50.3
+    Checking anstyle-wincon v3.0.11
+    Checking wasmtime v41.0.4
+    Checking eyeball v0.8.8
+    Checking tracing-subscriber v0.3.23
+    Checking async-io v2.6.0
+    Checking hyper v0.14.32
+    Checking matrix-sdk-common v0.16.0 (https://github.com/rootazero/matrix-rust-sdk?branch=aleph-0.16.0-recursion-fix#3b511d3e)
+    Checking aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
+    Checking tungstenite v0.26.2
+    Checking anstyle-query v1.1.5
+    Checking anstream v1.0.0
+    Checking deadpool v0.12.3
+    Checking tokio-websockets v0.13.2
+    Checking tokio-tungstenite v0.26.2
+    Checking matrix-sdk-base v0.16.0 (https://github.com/rootazero/matrix-rust-sdk?branch=aleph-0.16.0-recursion-fix#3b511d3e)
+    Checking wiggle v41.0.4
+    Checking stacker v0.1.24
+    Checking hyper-tls v0.5.0
+    Checking async-process v2.5.0
+    Checking deadpool-sync v0.1.4
+    Checking tokio-rustls v0.25.0
+    Checking tokio-stream v0.1.18
+    Checking colored v3.1.1
+    Checking teloxide-core v0.13.0
+    Checking reqwest v0.11.27
+    Checking clap_builder v4.6.0
+    Checking tracing-appender v0.2.5
+    Checking dptree v0.5.1
+    Checking tokio-tungstenite v0.21.0
+    Checking tokio-tungstenite v0.29.0
+    Checking wasi-common v41.0.4
+    Checking matrix-sdk-sqlite v0.16.0 (https://github.com/rootazero/matrix-rust-sdk?branch=aleph-0.16.0-recursion-fix#3b511d3e)
+    Checking async-std v1.13.2
+    Checking aleph-desktop v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\shared)
+    Checking whatsapp-rust-sqlite-storage v0.5.0
+    Checking fs-err v3.3.1
+    Checking whatsapp-rust-tokio-transport v0.5.0
+    Checking notify v6.1.1
+    Checking oauth2 v5.0.0
+    Checking rust-embed-utils v8.11.0
+    Checking backon v1.6.0
+    Checking socket-pktinfo v0.4.1
+    Checking if-addrs v0.15.0
+    Checking home v0.5.12
+   Compiling alephcore v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256)
+    Checking reqwest-eventsource v0.6.0
+    Checking async-imap v0.10.4
+    Checking axum v0.8.9
+    Checking lettre v0.11.22
+    Checking jsonschema v0.29.1
+    Checking which v6.0.3
+    Checking extism v1.21.0
+    Checking matrix-sdk v0.16.0 (https://github.com/rootazero/matrix-rust-sdk?branch=aleph-0.16.0-recursion-fix#3b511d3e)
+    Checking serenity v0.12.5
+    Checking mdns-sd v0.20.3
+    Checking teloxide v0.17.0
+    Checking clap v4.6.1
+    Checking axum-server v0.7.3
+    Checking rpassword v7.5.4
+    Checking rust-embed v8.11.0
+    Checking notify-debouncer-full v0.3.2
+    Checking aleph-client v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\client)
+    Checking whatsapp-rust v0.5.0
+    Checking aleph-desktop-windows v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\desktop\windows)
+    Checking readability v0.3.0
+    Checking ignore v0.4.25
+    Checking aleph-logging v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\logging)
+    Checking aleph-cdp v26.9.1 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\crates\aleph-cdp)
+    Checking shellexpand v3.1.2
+    Checking async-native-tls v0.5.0
+error: unknown character escape: `w`
+   --> src\sandbox\platforms\windows\driver.rs:810:47
+    |
+810 |             .profile_for(&caps, Path::new("C:\ws"))
+    |                                               ^ unknown character escape
+    |
+    = help: for more information, visit <https://doc.rust-lang.org/reference/tokens.html#literals>
+help: if you meant to write a literal backslash (perhaps escaping in a regular expression), consider a raw string literal
+    |
+810 |             .profile_for(&caps, Path::new(r"C:\ws"))
+    |                                           +
+
+error: unknown character escape: `w`
+   --> src\sandbox\platforms\windows\driver.rs:824:27
+    |
+824 |             Path::new("C:\ws"),
+    |                           ^ unknown character escape
+    |
+    = help: for more information, visit <https://doc.rust-lang.org/reference/tokens.html#literals>
+help: if you meant to write a literal backslash (perhaps escaping in a regular expression), consider a raw string literal
+    |
+824 |             Path::new(r"C:\ws"),
+    |                       +
+
+error: unknown character escape: `w`
+   --> src\sandbox\platforms\windows\driver.rs:831:56
+    |
+831 |         assert_eq!(spec.workspace.as_deref(), Some("C:\ws"));
+    |                                                        ^ unknown character escape
+    |
+    = help: for more information, visit <https://doc.rust-lang.org/reference/tokens.html#literals>
+help: if you meant to write a literal backslash (perhaps escaping in a regular expression), consider a raw string literal
+    |
+831 |         assert_eq!(spec.workspace.as_deref(), Some(r"C:\ws"));
+    |                                                    +
+
+error[E0282]: type annotations needed for `std::result::Result<(), _>`
+   --> src\sandbox\platforms\windows\wfp.rs:351:13
+    |
+351 |         let result = (|| {
+    |             ^^^^^^
+...
+374 |                     return Ok(());
+    |                            ------ type must be known at this point
+    |
+help: consider giving `result` an explicit type, where the type for type parameter `E` is specified
+    |
+351 |         let result: std::result::Result<_, E> = (|| {
+    |                   +++++++++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0282`.
+error: could not compile `alephcore` (lib) due to 4 previous errors

@@ -192,11 +192,6 @@ impl BrowserViewerRouteState {
         }
         Some(entry.prepared)
     }
-
-    #[cfg(test)]
-    fn parked_len(&self) -> usize {
-        self.lock_parked().len()
-    }
 }
 
 /// The viewer routes, ready to `merge` into the gateway router BEFORE the
@@ -544,15 +539,22 @@ async fn run_live_loop(
         control,
         mut frames,
         binding,
+        input_route,
         resource_id,
         permissions,
         expires_at_ms,
+        // Held (named, not `_`) until the loop returns: the viewer's
+        // reference on the shared attachment lives for the whole socket.
+        attachment: _attachment,
     } = prepared;
-    let target_id = binding.target.target_id.clone();
     let can_frames = permissions.contains(&ViewerPermission::Frames);
     let mut close_rx = lease.close_signal();
     loop {
         tokio::select! {
+            // Biased: a revoke that has already landed always wins over a
+            // frame that is ready in the same poll. Randomised branch choice
+            // would let one more frame through after the close signal.
+            biased;
             // `wait_for`, not `changed`: a revoke that landed before this
             // receiver was cloned must still close the socket.
             _ = async { let _ = close_rx.wait_for(|closed| *closed).await; } => {
@@ -578,20 +580,43 @@ async fn run_live_loop(
             }
             frame = frames.next(), if can_frames => {
                 let Some(frame) = frame else {
-                    // The screencast ended under us: the target is gone.
+                    // The screencast ended under us: the target is gone, or
+                    // the document changed under this approval (the receiver
+                    // is fenced by the owner's content generation).
+                    let reason = if frames.is_fenced() {
+                        ClosedReason::Revoked
+                    } else {
+                        ClosedReason::TargetClosed
+                    };
                     let closed = ViewerServerMessage::Closed {
                         closed: BrowserLiveClosed {
                             resource_id: resource_id.clone(),
                             binding: ResourceBinding::Browser {
                                 viewer: binding.clone(),
                             },
-                            reason: ClosedReason::TargetClosed,
+                            reason,
                             at_ms: now_ms(),
                         },
                     };
                     let _ = send_server(socket, &closed).await;
                     return;
                 };
+                // Last check before the frame leaves: it must still belong to
+                // the document this viewer was approved for.
+                if !frames.admits(&frame) {
+                    let closed = ViewerServerMessage::Closed {
+                        closed: BrowserLiveClosed {
+                            resource_id: resource_id.clone(),
+                            binding: ResourceBinding::Browser {
+                                viewer: binding.clone(),
+                            },
+                            reason: ClosedReason::Revoked,
+                            at_ms: now_ms(),
+                        },
+                    };
+                    let _ = send_server(socket, &closed).await;
+                    return;
+                }
                 // LiveFrame.engine_ack_id is read by NOBODY here — it is an
                 // engine-side detail that never reaches the wire.
                 let ws_frame = ViewerWsFrame {
@@ -623,7 +648,7 @@ async fn run_live_loop(
                     Some(Ok(Message::Text(text))) => {
                         if !handle_client_message(
                             socket, state, &control, lease, &snapshot,
-                            &target_id, &text,
+                            &input_route, &text,
                         ).await {
                             return;
                         }
@@ -646,7 +671,7 @@ async fn handle_client_message(
     control: &Arc<crate::browser::live::control::TargetControl>,
     lease: &crate::browser::live::control::ViewerLease,
     snapshot: &aleph_protocol::browser_live::BrowserLiveSnapshot,
-    target_id: &str,
+    input_route: &crate::browser::live::viewer_backend::ViewerInputRoute,
     text: &str,
 ) -> bool {
     let Ok(message) = serde_json::from_str::<ViewerClientMessage>(text) else {
@@ -709,10 +734,10 @@ async fn handle_client_message(
             match control.queue_input(lease, request) {
                 Ok(queued) => {
                     let backend = state.backend.clone();
-                    let target = target_id.to_string();
+                    let route = input_route.clone();
                     match control
                         .dispatch(queued, move |event| async move {
-                            backend.dispatch_input(&target, event).await
+                            backend.dispatch_input(&route, event).await
                         })
                         .await
                     {
@@ -896,22 +921,26 @@ mod tests {
                     control: self.control.clone(),
                     frames,
                     binding: self.binding.clone(),
+                    input_route: crate::browser::live::viewer_backend::ViewerInputRoute::for_test(
+                        &self.binding.target.target_id,
+                    ),
                     resource_id: self.resource_id.clone(),
                     permissions: PERMS.to_vec(),
                     expires_at_ms: self.expires_at_ms,
+                    attachment: None,
                 })
             })
         }
 
         fn dispatch_input<'a>(
             &'a self,
-            target_id: &'a str,
+            route: &'a crate::browser::live::viewer_backend::ViewerInputRoute,
             event: HumanInputEvent,
         ) -> BoxFuture<'a, Result<(), BrowserError>> {
             self.dispatched
                 .lock()
                 .unwrap()
-                .push((target_id.to_string(), event));
+                .push((route.target_id().to_string(), event));
             Box::pin(async { Ok(()) })
         }
     }

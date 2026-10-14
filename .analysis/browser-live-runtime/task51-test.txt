@@ -1,0 +1,60 @@
+// The launch fragment is a one-shot handoff credential. Once the page has read
+// it, it must be gone from the address bar (current history entry) and from the
+// document. Every assertion below is a boolean with a fixed message so a
+// failure never prints the credential (no `toContain(secret)` / `toBe(secret)`).
+test('grant-boundary: fragment credential is scrubbed from the address bar and never enters the document', async ({ page }) => {
+  // Read the original fragment from the Gateway-issued URL inside the driver;
+  // it is never logged, traced or passed through a matcher that echoes it.
+  const original = new URL(viewerUrl('grant-boundary'));
+  const fragment = original.hash;
+  expect(fragment.length > 1, 'the Gateway-issued viewer URL must carry a non-empty fragment').toBe(true);
+  const secrets = [...new URLSearchParams(fragment.slice(1)).values()].filter((v) => v.length >= 8);
+  expect(secrets.length > 0, 'the fragment must carry at least one credential value').toBe(true);
+
+  await openViewer(page, 'grant-boundary');
+  await expectLiveFrame(page);
+
+  // 1. Address bar: no fragment, no query, same-origin fixed path.
+  const current = new URL(page.url());
+  expect(current.hash === '', 'address bar fragment must be empty after exchange').toBe(true);
+  expect(current.search === '', 'address bar query must be empty after exchange').toBe(true);
+  expect(current.origin === original.origin, 'address bar origin must be unchanged').toBe(true);
+  expect(current.pathname === '/viewer/browser', 'address bar path must be the fixed viewer path').toBe(true);
+  expect(
+    await page.evaluate(() => location.hash === '' && location.search === ''),
+    'location.hash / location.search must be empty in the page',
+  ).toBe(true);
+
+  // 2. Document: neither the raw fragment nor any credential value is rendered
+  //    or embedded in a script / attribute.
+  const html = await page.content();
+  const text = await page.locator('body').innerText();
+  const scripts = (await page.locator('script').allTextContents()).join('\n');
+  const haystack = `${html}\n${text}\n${scripts}`;
+  expect(haystack.includes(fragment), 'raw fragment must not appear in the document').toBe(false);
+  expect(
+    secrets.some((value) => haystack.includes(value)),
+    'no fragment credential value may appear in the document',
+  ).toBe(false);
+
+  // 3. Reloading the cleaned URL must not replay the credential: fixed
+  //    invalid-link status, no frame.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('browser-live-viewer')).toBeVisible();
+  await expect(page.getByTestId('browser-live-status')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('browser-live-frame')).toHaveCount(0);
+  expect(new URL(page.url()).hash === '', 'reloaded address bar fragment must stay empty').toBe(true);
+
+  // 4. A malformed fragment is scrubbed too and renders the fixed notice.
+  const malformed = await page.context().newPage();
+  try {
+    await malformed.goto(`${original.origin}/viewer/browser#not-a-valid-handoff`, { waitUntil: 'domcontentloaded' });
+    await expect(malformed.getByTestId('browser-live-status')).toBeVisible({ timeout: 30_000 });
+    await expect(malformed.getByTestId('browser-live-frame')).toHaveCount(0);
+    expect(new URL(malformed.url()).hash === '', 'malformed fragment must also be scrubbed from the address bar').toBe(true);
+    expect(new URL(malformed.url()).pathname === '/viewer/browser', 'malformed link keeps the fixed path').toBe(true);
+  } finally {
+    await malformed.close();
+  }
+});
+

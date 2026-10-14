@@ -1,0 +1,28 @@
+
+Running 1 test using 1 worker
+
+  ✘  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:78:5 › grant-boundary: fragment credential is scrubbed from the address bar and never enters the document (1.1s)
+
+
+  1) [chromium] › qa\browser_live\tests\viewer.spec.ts:78:5 › grant-boundary: fragment credential is scrubbed from the address bar and never enters the document 
+
+    Error: address bar fragment must be empty after exchange
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+      90 |   // 1. Address bar: no fragment, no query, same-origin fixed path.
+      91 |   const current = new URL(page.url());
+    > 92 |   expect(current.hash === '', 'address bar fragment must be empty after exchange').toBe(true);
+         |                                                                                    ^
+      93 |   expect(current.search === '', 'address bar query must be empty after exchange').toBe(true);
+      94 |   expect(current.origin === original.origin, 'address bar origin must be unchanged').toBe(true);
+      95 |   expect(current.pathname === '/viewer/browser', 'address bar path must be the fixed viewer path').toBe(true);
+        at D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\qa\browser_live\tests\viewer.spec.ts:92:84
+
+    Error Context: test-results\viewer-grant-boundary-frag-a7df9-d-never-enters-the-document-chromium\error-context.md
+
+  1 failed
+    [chromium] › qa\browser_live\tests\viewer.spec.ts:78:5 › grant-boundary: fragment credential is scrubbed from the address bar and never enters the document 

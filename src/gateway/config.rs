@@ -155,6 +155,12 @@ pub struct GatewayServerConfig {
     /// page the user's browser visits — keep false unless you know why.
     #[serde(default)]
     pub allow_any_origin: bool,
+    /// Explicit trusted public origin (`https://host[:port]`, no path) for the
+    /// browser live viewer. `None` (default) keeps the viewer deny-only: no
+    /// backend is installed and the route stays unmounted. Never inferred from
+    /// `host`/`port`, a request Origin, or `allow_any_origin`.
+    #[serde(default)]
+    pub browser_viewer_origin: Option<String>,
     /// Native in-process TLS. See [`GatewayTlsConfig`].
     #[serde(default)]
     pub tls: GatewayTlsConfig,
@@ -255,6 +261,7 @@ impl Default for GatewayServerConfig {
             protocol_version: 1,
             allowed_origins: Vec::new(),
             allow_any_origin: false,
+            browser_viewer_origin: None,
             tls: GatewayTlsConfig::default(),
             trusted_proxy: TrustedProxyConfig::default(),
             allow_insecure_remote: false,

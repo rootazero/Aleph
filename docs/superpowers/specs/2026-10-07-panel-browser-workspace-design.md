@@ -270,3 +270,23 @@ Spike 不读取日常浏览器 profile、不访问真实内网、不修改 main�
 ## 12. 实现后明确不做的事情 / Explicitly not done by this specification
 
 本规格没有实现产品代码、没有安装依赖、没有启动浏览器或测试服务、没有执行安全 Spike、没有声称外部 GPT／Claude CLI 可被拦截，也没有承诺 obscura 或 Chromium 已经满足完整的任务级网络隔离。上述事项属于后续批准后的计划和验证范围。
+
+## 附录 A / Appendix A: 用户确认 Safe（Task20，用户已批准）
+
+**中文**
+- `browser.viewer.resource.decide` 请求仅含 `resource_id`、`expected_revision`、`decision`（`safe`/`refused`）；调用者取自已认证 RPC，不接受 target/binding/user/expiry。
+- Viewer 的 issue/revoke/decide 必须使用服务端验证的 paired-device → 有效 User 绑定；普通 RPC 为兼容而解析出的隐式 owner（无凭据 loopback、legacy shared token、未绑定设备）不满足该判据。认证来源只在服务端传递，缺失、失效或与当前 caller 不符时泛化拒绝；缓存 replay 与等待队列不能绕过判据。普通 loopback/legacy RPC 兼容规则保持不变。
+- 「Safe」是用户对**当前精确 revision** 的显式展示声明，不是自动内容检查，也不是自动脱敏；不由 LLM 判定。
+- 精确 revision CAS：revision 不符、已过期、已关闭、非 owner User（含 Connection/他人）一律泛化拒绝。确认后 revision+1，绝对 `expires_at_ms`/kind/source/provenance/binding 不变，TTL 不重建。
+- Refused：原子关闭并留 tombstone，经 BrowserLiveLifecycle 统一撤销 grant 并发 closed 事件。
+- 导航/内容变化后的下一次 operation publish 回到 Pending 并撤销旧 grant；旧 revision 不能再确认。真实顶层/同文档导航/reload 都必须失效；runtime 已接入内部同步 generation gate，在异步 revoke 前阻断旧 Safe approval 的新帧（wire r4 不变；Obscura event-less click 与 subframe 仍是已记录限制）。
+- 仅 Frames：确认后签发的 grant 仍只含 Frames；network grant 不变。生产 producer/`browser_present` 不得以输入 redaction=Safe 绕过用户决策。
+
+**English**
+- `browser.viewer.resource.decide` takes only `resource_id`, `expected_revision`, `decision` (`safe`/`refused`); the caller comes from the authenticated RPC; no target/binding/user/expiry input.
+- Viewer issue/revoke/decide require a server-verified paired-device binding to an active User. The compatibility owner resolved for credentialless loopback, legacy shared tokens, or unbound devices does not satisfy this requirement. Credential provenance stays server-side; missing, invalidated, or mismatched provenance receives a generic denial, including cached replay and queued dispatch. Ordinary loopback/legacy RPC compatibility remains unchanged.
+- "Safe" is the user's explicit display declaration for the exact current revision. It is not an automatic content inspection, not automatic redaction, and never an LLM judgement.
+- Exact-revision CAS: stale revision, expired, closed, or non-owner (Connection/foreign) callers get one generic denial. Confirming advances revision by 1 and keeps absolute `expires_at_ms`/kind/source/provenance/binding; TTL is not rebuilt.
+- Refused atomically closes with a tombstone, revoking grants and emitting closed through BrowserLiveLifecycle.
+- The next operation publish after navigation/content change returns to Pending and revokes old grants; the old revision cannot be confirmed. Top-level navigation, same-document navigation and reload invalidate the approval; the runtime now has an internal synchronous generation gate that blocks new frames for the old Safe approval before asynchronous revoke completes (wire r4 unchanged; Obscura event-less clicks and subframes remain documented limitations).
+- Frames only: grants issued after confirmation stay Frames-only; network grant semantics are unchanged. The producer/`browser_present` must not bypass the user decision via input redaction=Safe.

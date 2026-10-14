@@ -7,7 +7,7 @@
 ## Overview
 
 Aleph's security system provides:
-- **Permission Model**: single-tier Gateway-token auth — loopback is operator zero-config; a remote presents the shared token (or is walled). Authorized == full local-equivalent authority (see below)
+- **Permission Model**: Gateway-token auth — credentialless loopback keeps the zero-config operator; explicit paired credentials authenticate through their device→User binding on local and remote connections. Remote connections without a valid credential are walled. User roles and viewer credential provenance are separate requirements (see below).
 - **Tool Permission Enforcement**: Per-channel tool permissions via `ScopedToolService` — governs *what an agent may do*, orthogonal to *who may connect*
 - **Exec Tier**: the one user-facing dial over tool permissions — `Ask` / `Auto` / `Full`, metadata-driven, fail-closed for unknown tools (see below)
 - **Exec Approval**: Human-in-the-loop, keyed on the *action* (the actual command / arguments), not the tool name
@@ -1186,6 +1186,14 @@ gap rather than a consequence of the boundary above. Mechanism, the measured
 evidence, the proposed `instance_tag` fix and its two-server falsifier are in
 [FEATURE_LOCATOR.md](FEATURE_LOCATOR.md) §3.12 第七轮 ⑤.
 
+### Browser live viewer grants (2026-10-07 checkpoint)
+<!-- browser-live-docs:begin -->
+The viewer is a second browser surface beside the managed debug port above, with a different shape: the Gateway owns CDP and hands a human a **one-shot, Frames-only grant** (`src/browser/live/grant.rs`); the nonce lives only in the URL `fragment` and is never logged; `consume` -> `exchange` -> `ws` run with strict Origin / binding / resource / target checks and a rotating secret. Resources are `Pending`/`Refused` by default and `Safe` only through `browser.viewer.resource.decide` (revision CAS; producers cannot set it; `Refused -> Revoked`). The real issuer/backend is installed only for an explicit valid `[gateway] browser_viewer_origin`; otherwise deny-only. `NetworkContextGrant` / `BrowserContext` / proxy are untouched (gated by Task 0), and The real Windows Credential Manager standalone synthetic probe passed (1/1); TUI remains default-disabled pending actual pairing-to-browser E2E. Viewer RPCs require `current_caller_verified_user()` from validated paired credentials and an active User binding; ordinary credentialless loopback/legacy compatibility does not authorize viewer RPCs. Native Panel scoped-keyring integration is under compile/static validation; pure-browser localStorage is not protected authentication. Full invariants: [BROWSER_LIVE_VIEWER.md](BROWSER_LIVE_VIEWER.md) §3.
+
+- **共同边界 / Shared boundary**：Gateway 独占 CDP（Gateway owns CDP）；Panel/TUI 仅 I/O only 呈现；仅显式合法 `[gateway] browser_viewer_origin` 才 opt-in，默认（None / 非法）deny-only；producer 的 `Safe` 被钳为 `Pending`，`Safe` 只来自用户经 `browser.viewer.resource.decide` 的 revision CAS；绑定走精确 binding / owner / generation；#27 TUI paired/browser 已接线，Windows Credential Manager standalone probe 1/1 已通过；macOS/Linux provider 与真实 pairing/browser E2E 仍 blocked；`NetworkContextGrant` / proxy 未触碰；**not production ready**。
+Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[gateway] browser_viewer_origin`, default deny-only; producer `Safe` is clamped to `Pending` and `Safe` comes only from the user's decision CAS; exact binding/owner/generation; #27 TUI paired/browser wiring is implemented; the Windows Credential Manager standalone probe passed 1/1; macOS/Linux providers and real pairing/browser E2E remain blocked; network grants untouched; not production ready.
+<!-- browser-live-docs:end -->
+
 ---
 
 ## Command allowlist
@@ -2046,13 +2054,16 @@ The trust boundary is the network boundary, gated by a **Gateway-token login
 wall**. Loopback is the implicit operator (zero-config, no credential). A
 remote connection must present a valid credential at the `connect` handshake,
 resolved by `src/gateway/handlers/connect.rs::resolve_connect_auth` in
-priority order: (1) loopback ⇒ operator; (2) **device token** (`aleph-dt-*`,
-long-lived, bound to a paired device, SHA-256-hashed at rest); (3) **bootstrap
+priority order: explicitly presented **device token** (`aleph-dt-*`,
+long-lived, bound to a paired device, SHA-256-hashed at rest) or **bootstrap
 ticket** (`aleph-bt-*`, 5-min single-use, exchanged during onboarding for a
-fresh device token); (4) the legacy shared **Gateway token** (`aleph-<uuid>`,
-`SharedTokenManager`, HMAC-hashed, constant-time verified). A valid credential
-= full operator authority (single tier, identical to local); a missing /
-invalid one is walled (the WS dispatch refuses every method but `connect`, and
+fresh device token) is validated before the loopback shortcut. An invalid
+explicit device credential never falls back to loopback or the shared token.
+With no device credential, loopback keeps its implicit operator; remote
+connections may use the legacy shared **Gateway token** (`aleph-<uuid>`,
+`SharedTokenManager`, HMAC-hashed, constant-time verified). Paired credentials
+resolve their bound User and role through the P0 layer below; a missing /
+invalid remote credential is walled (the WS dispatch refuses every method but `connect`, and
 a flood guard closes a connection that keeps probing). Revocation is token
 rotation (`gateway.token.rotate` — regenerates the shared token, revokes all
 paired Panel devices, and force-closes live remote sockets) or per-device

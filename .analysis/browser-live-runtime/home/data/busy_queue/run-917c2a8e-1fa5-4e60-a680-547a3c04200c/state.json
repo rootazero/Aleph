@@ -1,0 +1,28 @@
+{
+  "phase": "settled",
+  "reason": "admitted",
+  "payload": {
+    "run_id": "917c2a8e-1fa5-4e60-a680-547a3c04200c",
+    "lane_key": "agent:main:e2e-1791709056649",
+    "addressed_session_key": "agent:main:e2e-1791709056649",
+    "input": "OPEN_FIXTURE",
+    "metadata": {
+      "sender_id": "websocket",
+      "platform": "webchat",
+      "channel_id": "",
+      "scope_id": "personal:u-owner",
+      "conversation_id": "agent:main:e2e-1791709056649",
+      "scope_owner_user_id": "u-owner",
+      "author_user_id": "u-owner",
+      "locale": "zh",
+      "caller_role": "operator"
+    },
+    "timeout_secs": null,
+    "workspace_override": null,
+    "max_iterations_override": null,
+    "model_override": null,
+    "attachments": [],
+    "locale": "zh",
+    "enqueued_at_ms": 1791709056651
+  }
+}

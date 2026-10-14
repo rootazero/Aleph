@@ -152,7 +152,7 @@ impl ReadSkillTool {
 
     /// Check a skill's inline commands against `consent` instead of the
     /// process-wide registry (a test's own file).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     #[must_use]
     pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
         self.consent = Some(consent);

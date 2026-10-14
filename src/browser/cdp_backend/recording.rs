@@ -109,12 +109,98 @@ pub(crate) fn resolve_ffmpeg_labeled() -> Option<(PathBuf, String)> {
 
 /// `which(1)` by hand: the first executable named `name` on PATH. (The `which`
 /// crate is not a dependency and pulling one in for a PATH scan would be R3.)
+///
+/// Reads PATH / PATHEXT but never mutates them; the decision itself lives in
+/// [`find_executable_in`], which takes both as explicit inputs so tests can
+/// exercise it without touching process-global env.
 fn which_on_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|dir| dir.join(name))
-            .find(|p| is_executable(p))
-    })
+    let path = std::env::var_os("PATH")?;
+    let pathext = if cfg!(windows) {
+        Some(std::env::var_os("PATHEXT"))
+    } else {
+        None
+    };
+    find_executable_in(&path, pathext.as_ref().map(|e| e.as_deref()), name)
+}
+
+/// The Windows default when PATHEXT is unset or yields nothing usable.
+const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+
+/// Parse a PATHEXT value into normalized suffixes: `;`-separated, trimmed,
+/// empty entries dropped, a missing leading `.` added, case-insensitive
+/// duplicates removed (first occurrence keeps its position). An unset or
+/// effectively empty value falls back to [`DEFAULT_PATHEXT`].
+fn parse_pathext(pathext: Option<&std::ffi::OsStr>) -> Vec<String> {
+    fn parse(raw: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for entry in raw.split(';') {
+            let entry = entry.trim();
+            if entry.is_empty() || entry == "." {
+                continue;
+            }
+            let ext = if entry.starts_with('.') {
+                entry.to_string()
+            } else {
+                format!(".{entry}")
+            };
+            if !out.iter().any(|e| e.eq_ignore_ascii_case(&ext)) {
+                out.push(ext);
+            }
+        }
+        out
+    }
+    let parsed = pathext
+        .map(|v| parse(&v.to_string_lossy()))
+        .unwrap_or_default();
+    if parsed.is_empty() {
+        parse(DEFAULT_PATHEXT)
+    } else {
+        parsed
+    }
+}
+
+/// The file names to probe in each PATH directory for `name`.
+///
+/// - `suffixes == None` (non-Windows): exactly `name`.
+/// - Windows, `name` already carries an extension (`ffmpeg.exe`): probe it
+///   as-is first, then with each suffix appended (cmd.exe's order).
+/// - Windows, bare `name` (`ffmpeg`): only `name + suffix` for each suffix —
+///   an extensionless file is not something Windows can launch.
+fn executable_names(name: &str, suffixes: Option<&[String]>) -> Vec<String> {
+    let Some(suffixes) = suffixes else {
+        return vec![name.to_string()];
+    };
+    let mut out = Vec::with_capacity(suffixes.len() + 1);
+    if Path::new(name).extension().is_some() {
+        out.push(name.to_string());
+    }
+    out.extend(suffixes.iter().map(|ext| format!("{name}{ext}")));
+    out
+}
+
+/// Directory-major candidate order: every name in the first PATH directory
+/// before any name in the second, matching how a shell resolves. Empty PATH
+/// entries are skipped — they would silently mean "the current directory".
+fn path_probe_candidates(path: &std::ffi::OsStr, names: &[String]) -> Vec<PathBuf> {
+    std::env::split_paths(path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
+        .collect()
+}
+
+/// The pure resolver behind [`which_on_path`]: `pathext` is `None` on
+/// non-Windows (no suffix probing) and `Some(PATHEXT value)` on Windows.
+/// Only an existing regular file (plus the exec bit on unix) is accepted.
+fn find_executable_in(
+    path: &std::ffi::OsStr,
+    pathext: Option<Option<&std::ffi::OsStr>>,
+    name: &str,
+) -> Option<PathBuf> {
+    let suffixes = pathext.map(parse_pathext);
+    let names = executable_names(name, suffixes.as_deref());
+    path_probe_candidates(path, &names)
+        .into_iter()
+        .find(|p| is_executable(p))
 }
 
 #[cfg(unix)]
@@ -762,6 +848,10 @@ async fn run_recording(p: RunParams) {
             }
             Err(_) => {
                 writer.abort();
+                // Settle the aborted task before the tap guard runs: any frame
+                // it held is then either acked (detached send) or still in
+                // `pending` for the guard — never in limbo.
+                let _ = writer.await;
                 writer_result = Some(Err(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
                     "encoder stopped reading; writer aborted",
@@ -1077,6 +1167,89 @@ mod tests {
     }
 
     #[test]
+    fn pathext_parsing_normalizes_and_falls_back_to_the_default() {
+        use std::ffi::OsStr;
+        let default: Vec<String> = [".COM", ".EXE", ".BAT", ".CMD"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(parse_pathext(None), default, "unset -> default");
+        assert_eq!(parse_pathext(Some(OsStr::new(""))), default);
+        assert_eq!(parse_pathext(Some(OsStr::new(" ; ;."))), default);
+        assert_eq!(
+            parse_pathext(Some(OsStr::new(" .exe ; CMD;;.EXE;.Ps1 "))),
+            vec![".exe".to_string(), ".CMD".to_string(), ".Ps1".to_string()],
+            "trimmed, dot-prefixed, case-insensitively deduped, order kept"
+        );
+    }
+
+    #[test]
+    fn executable_names_follow_platform_suffix_rules() {
+        let sfx = vec![".COM".to_string(), ".EXE".to_string()];
+        // Non-Windows: the bare name only.
+        assert_eq!(executable_names("ffmpeg", None), vec!["ffmpeg"]);
+        // Windows bare name: suffixes only, never the extensionless file.
+        assert_eq!(
+            executable_names("ffmpeg", Some(&sfx)),
+            vec!["ffmpeg.COM", "ffmpeg.EXE"]
+        );
+        // Windows explicit extension: as-is first, then appended suffixes.
+        assert_eq!(
+            executable_names("ffmpeg.exe", Some(&sfx)),
+            vec!["ffmpeg.exe", "ffmpeg.exe.COM", "ffmpeg.exe.EXE"]
+        );
+    }
+
+    #[test]
+    fn path_probe_candidates_are_directory_major_and_skip_empty_entries() {
+        let a = PathBuf::from("dir_a");
+        let b = PathBuf::from("dir_b");
+        let joined = std::env::join_paths([a.clone(), PathBuf::new(), b.clone()]).unwrap();
+        let names = vec!["x.COM".to_string(), "x.EXE".to_string()];
+        assert_eq!(
+            path_probe_candidates(&joined, &names),
+            vec![
+                a.join("x.COM"),
+                a.join("x.EXE"),
+                b.join("x.COM"),
+                b.join("x.EXE"),
+            ]
+        );
+    }
+
+    /// The real resolver against a temp dir, with PATH/PATHEXT passed in
+    /// explicitly (process env is never touched). Reproduces the scoop shim
+    /// shape: PATH holds `ffmpeg.exe`, the lookup asks for `ffmpeg`.
+    #[cfg(windows)]
+    #[test]
+    fn windows_resolver_finds_suffixed_file_and_requires_a_real_file() {
+        use std::ffi::OsStr;
+        let decoy = tempfile::tempdir().unwrap();
+        let real = tempfile::tempdir().unwrap();
+        // A DIRECTORY named like the target must not satisfy the probe.
+        std::fs::create_dir(decoy.path().join("ffmpeg.exe")).unwrap();
+        // An extensionless file must not satisfy a Windows bare-name lookup.
+        std::fs::write(decoy.path().join("ffmpeg"), b"").unwrap();
+        std::fs::write(real.path().join("ffmpeg.exe"), b"").unwrap();
+        let path =
+            std::env::join_paths([decoy.path().to_path_buf(), real.path().to_path_buf()]).unwrap();
+
+        let hit = find_executable_in(&path, Some(Some(OsStr::new(".COM;.EXE"))), "ffmpeg");
+        assert_eq!(hit, Some(real.path().join("ffmpeg.EXE")));
+        assert!(hit.unwrap().is_file());
+
+        // Explicit extension in the requested name also resolves.
+        let hit = find_executable_in(&path, Some(None), "ffmpeg.exe");
+        assert_eq!(hit, Some(real.path().join("ffmpeg.exe")));
+
+        // PATHEXT without .EXE -> not found (PATHEXT is honored, not ignored).
+        assert_eq!(
+            find_executable_in(&path, Some(Some(OsStr::new(".CMD"))), "ffmpeg"),
+            None
+        );
+    }
+
+    #[test]
     fn resolve_ffmpeg_finds_the_one_on_this_machines_path() {
         // A machine fact the plan relies on: /usr/bin/ffmpeg n9.0.1 is on PATH
         // here, so the resolution chain must come back non-empty with an
@@ -1252,9 +1425,51 @@ mod tests {
         })
     }
 
-    fn shell_stub(dir: &tempfile::TempDir, name: &str, body: &str) -> PathBuf {
-        let path = dir.path().join(name);
-        std::fs::write(&path, body).expect("write stub");
+    /// The native fake encoder, compiled ONCE per test process. The source is
+    /// `recording_test_encoder.rs` (std-only, include_str!-ed, not a module);
+    /// `rustc` builds it shell-free into an owned temp dir and only the bytes
+    /// are kept, so no `sh`/`cmd` and no pre-built artifact are involved.
+    fn encoder_image() -> &'static [u8] {
+        static IMAGE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        IMAGE.get_or_init(|| {
+            let work = tempfile::tempdir().expect("encoder build dir");
+            let src = work.path().join("recording_test_encoder.rs");
+            let exe = work
+                .path()
+                .join(format!("encoder{}", std::env::consts::EXE_SUFFIX));
+            assert!(src.starts_with(work.path()) && exe.starts_with(work.path()));
+            std::fs::write(&src, include_str!("recording_test_encoder.rs")).expect("write src");
+            let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+            let out = std::process::Command::new(rustc)
+                // The manifest dir is only the toolchain anchor (rustup
+                // proxies resolve overrides from the cwd); nothing is
+                // written there — source and output are absolute temp paths.
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .args(["--edition", "2021", "-C", "debuginfo=0", "-o"])
+                .arg(&exe)
+                .arg(&src)
+                .output()
+                .expect("spawn rustc for the test encoder");
+            assert!(
+                out.status.success(),
+                "compiling the test encoder failed:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            std::fs::read(&exe).expect("read compiled encoder")
+        })
+    }
+
+    /// Materialise the fake encoder for `mode` as `<dir>/<mode>[.exe]`; the
+    /// encoder picks its behaviour from its own file stem (see
+    /// `recording_test_encoder.rs`). Everything stays inside the owned dir.
+    fn encoder_stub(dir: &tempfile::TempDir, mode: &str) -> PathBuf {
+        const MODES: [&str; 5] = ["wedged", "slow", "failing", "short-lived", "no-touch"];
+        assert!(MODES.contains(&mode), "unknown test encoder mode `{mode}`");
+        let path = dir
+            .path()
+            .join(format!("{mode}{}", std::env::consts::EXE_SUFFIX));
+        assert!(path.starts_with(dir.path()), "stub escapes its owned dir");
+        std::fs::write(&path, encoder_image()).expect("write stub");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1494,15 +1709,17 @@ mod tests {
 
     /// Review Focus #1, direction pin: an ack is sent only AFTER the frame's
     /// bytes reached the encoder's stdin. The stub never reads, so the writer
-    /// blocks inside `write_all` once the OS pipe is full — frame 1 is 2MB,
+    /// blocks inside `write_all` once the OS pipe is full — frame 1 is 4MB,
     /// larger than any default pipe capacity (/proc/sys/fs/pipe-max-size is
     /// 1MB here). If the ack for frame 1 ever arrives, the ack went out before
-    /// the write.
+    /// the write. 4MB rather than "just over the pipe": on Windows tokio's
+    /// child stdin is a blocking-io wrapper whose 2MiB internal buffer absorbs
+    /// a smaller write instantly, so a 2MB frame was acked with no encoder read.
     #[tokio::test]
     async fn ack_is_sent_only_after_the_frame_is_written() {
         let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
-        let stub = shell_stub(&dir, "wedged-encoder", "#!/bin/sh\nexec sleep 3600\n");
+        let stub = encoder_stub(&dir, "wedged");
         let registry = registry(Duration::from_secs(1));
 
         registry
@@ -1515,7 +1732,7 @@ mod tests {
             )
             .await
             .expect("start");
-        let big = base64::engine::general_purpose::STANDARD.encode(vec![0x41u8; 2_000_000]);
+        let big = base64::engine::general_purpose::STANDARD.encode(vec![0x41u8; 4_000_000]);
         server.push_event(frame_event(1, &big));
         // Let the writer pick frame 1 up and block on the full pipe.
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1554,11 +1771,7 @@ mod tests {
     async fn a_slow_encoder_drops_frames_instead_of_buffering_them() {
         let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
-        let stub = shell_stub(
-            &dir,
-            "slow-encoder",
-            "#!/bin/sh\nwhile true; do dd bs=1024 count=1 of=/dev/null 2>/dev/null || break; sleep 0.05; done\n",
-        );
+        let stub = encoder_stub(&dir, "slow");
         let registry = registry(Duration::from_secs(1));
 
         registry
@@ -1705,11 +1918,7 @@ mod tests {
     async fn a_nonzero_encoder_exit_is_never_reported_as_complete() {
         let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
-        let stub = shell_stub(
-            &dir,
-            "failing-encoder",
-            "#!/bin/sh\nfor last; do :; done\ncat > \"$last\"\nexit 1\n",
-        );
+        let stub = encoder_stub(&dir, "failing");
         let registry = registry(Duration::from_secs(10));
 
         let status = registry
@@ -1762,7 +1971,7 @@ mod tests {
     async fn stop_kills_a_wedged_ffmpeg_and_says_so() {
         let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
-        let stub = shell_stub(&dir, "wedged-encoder", "#!/bin/sh\nexec sleep 3600\n");
+        let stub = encoder_stub(&dir, "wedged");
         let registry = registry(Duration::from_secs(1));
 
         registry
@@ -1795,11 +2004,7 @@ mod tests {
     async fn ffmpeg_death_mid_recording_is_detected_on_the_next_frame_write() {
         let (server, owner) = recording_server().await;
         let dir = tempfile::tempdir().expect("tmp");
-        let stub = shell_stub(
-            &dir,
-            "short-lived-encoder",
-            "#!/bin/sh\nhead -c 256 >/dev/null\nexit 0\n",
-        );
+        let stub = encoder_stub(&dir, "short-lived");
         let registry = registry(Duration::from_secs(10));
 
         registry
@@ -1857,11 +2062,7 @@ mod tests {
             .expect("open")
             .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
             .expect("backdate mtime");
-        let stub = shell_stub(
-            &dir,
-            "no-touch-encoder",
-            "#!/bin/sh\ncat >/dev/null\nexit 0\n",
-        );
+        let stub = encoder_stub(&dir, "no-touch");
         let registry = registry(Duration::from_secs(10));
 
         registry

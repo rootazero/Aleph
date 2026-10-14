@@ -1,0 +1,28 @@
+# Native OS-keyring Bridge (Task 41). One permission per fixed command; each
+# allows exactly one method. These are only *definitions*: nothing is granted
+# here. The grant is a runtime capability added by `keyring_bridge::install`
+# (remote-only, window "main", scoped to the native-configured Gateway origin),
+# so a permission set never widens the existing IPC surface or capabilities.
+#
+# Naming: `build.rs` registers every custom command in the AppManifest, which
+# auto-generates `allow-<command>` / `deny-<command>` for each of them
+# (e.g. `allow-panel-credential-load`). The hand-written ids below therefore
+# carry a `protected-` infix: re-using the auto-generated id would be a
+# duplicate-identifier build error. `keyring_bridge::PERMISSIONS` must list
+# exactly these ids (a unit test pins it). The auto-generated `allow-panel-*`
+# ids are granted to no capability.
+
+[[permission]]
+identifier = "allow-protected-panel-credential-load"
+description = "Allows the Panel to start a credential lease and read the stored device credential."
+commands.allow = ["panel_credential_load"]
+
+[[permission]]
+identifier = "allow-protected-panel-credential-save"
+description = "Allows the Panel to store a device credential under the active lease."
+commands.allow = ["panel_credential_save"]
+
+[[permission]]
+identifier = "allow-protected-panel-credential-delete"
+description = "Allows the Panel to delete the stored device credential under the active lease."
+commands.allow = ["panel_credential_delete"]

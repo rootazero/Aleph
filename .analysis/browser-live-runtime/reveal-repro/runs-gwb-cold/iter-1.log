@@ -1,0 +1,42 @@
+1039ms [log] Message loop started
+1044ms [log] Connected to Gateway
+1066ms [log] Loading initial alert states...
+1066ms [log] Alert event received: presence.joined - Object {"conn_id": String("127.0.0.1:52708")}
+1066ms [log] events.subscribe config.**: ok
+1066ms [log] events.subscribe browser.live.resource: ok
+1066ms [log] events.subscribe browser.live.closed: ok
+1067ms [log] events.subscribe alerts.**: ok
+1067ms [log] events.subscribe approval.**: ok
+1069ms [log] events.subscribe runtime.agents.changed: ok
+1069ms [log] events.subscribe canvas.updated: ok
+1070ms [log] events.subscribe session.artifact: ok
+1139ms [log] events.subscribe runtime.agents.changed: ok
+31051ms [warning] Failed to fetch system health: Request timed out
+31062ms [error] Failed to list sessions: Request timed out
+31067ms [warning] user directory: users.me failed: Request timed out
+31142ms [warning] events.subscribe stream.run_accepted: error (local)
+31142ms [error] Failed to subscribe to stream.run_accepted: Request timed out
+31142ms [error] Failed to fetch commands: Request timed out
+31142ms [warning] events.subscribe team.changed: error (local)
+31142ms [error] Failed to subscribe to team.changed: Request timed out
+31143ms [warning] events.subscribe stream.*: error (local)
+31143ms [error] Failed to subscribe stream events: Request timed out
+31143ms [warning] events.subscribe team.*: error (local)
+31143ms [error] Failed to subscribe team events: Request timed out
+42329ms [log] Alert event received: run.session_updated - Object {"session_key": String("agent:main:reveal-repro-9b458e8a5189"), "type": String("session_updated")}
+42329ms [log] Initial alert states loaded
+42329ms [log] Alert event received: run.run_accepted - Object {"accepted_at": String("2026-10-13T04:35:46.611857600+00:00"), "run_id": String("cfb04c78-f45b-4a71-8aa1-cbd75dd34909"), "session_key": String("agent:main:reveal-repro-9b458e8a5189"), "type": String("run_accepted")}
+42339ms [log] events.subscribe stream.run_complete: ok
+42340ms [log] Alert event received: run.running_set_changed - Object {"running": Array [String("agent:main:reveal-repro-9b458e8a5189")], "seq": Number(2), "type": String("running_set_changed")}
+42340ms [log] Alert event received: run.session_updated - Object {"origin_run_id": String("cfb04c78-f45b-4a71-8aa1-cbd75dd34909"), "session_key": String("agent:main:reveal-repro-9b458e8a5189"), "type": String("session_updated")}
+42341ms [log] Alert event received: run.model_resolved - Object {"model_info": Object {"is_fallback": Bool(false), "model": String(""), "original_model": Null, "provider": String("mock")}, "run_id": String("cfb04c78-f45b-4a71-8aa1-cbd75dd34909"), "type": String("model_resolved")}
+42342ms [log] Alert event received: run.session_updated - Object {"session_key": String("agent:main:reveal-repro-9b458e8a5189"), "type": String("session_updated")}
+42343ms [log] Alert event received: run.agent_trace - Object {"event": Object {"iteration": Number(0), "kind": String("turn_started")}, "run_id": String("cfb04c78-f45b-4a71-8aa1-cbd75dd34909"), "seq": Number(0), "type": String("agent_trace")}
+42345ms [log] Alert event received: run.run_complete - Object {"run_id": String("cfb04c78-f45b-4a71-8aa1-cbd75dd34909"), "seq": Number(1), "summary": Object {"context_tokens": Number(0), "context_window": Number(128000), "duration_ms": Number(22), "loops": Number(0), "terminate_reason": String("failed"), "tool_calls": Number(0), "total_tokens": Number(0)}, "total_duration_ms": Number(22), "type": String("run_complete")}
+42346ms [log] Alert event received: run.running_set_changed - Object {"running": Array [], "seq": Number(3), "type": String("running_set_changed")}
+42347ms [log] Alert event received: run.run_error - Object {"error": String("任务执行失败，请重试。"), "error_code": String("FAILED"), "run_id": String("cfb04c78-f45b-4a71-8aa1-cbd75dd34909"), "seq": Number(0), "type": String("run_error")}
+42347ms [log] Alert event received: run.session_updated - Object {"origin_run_id": String("cfb04c78-f45b-4a71-8aa1-cbd75dd34909"), "session_key": String("agent:main:reveal-repro-9b458e8a5189"), "type": String("session_updated")}
+42347ms [log] Alert event received: run.session_updated - Object {"session_key": String("agent:main:reveal-repro-9b458e8a5189"), "topic": String("OPEN_FIXTURE")}
+42350ms [log] events.subscribe stream.run_error: ok
+42366ms [log] events.subscribe stream.running_set_changed: ok
+42369ms [log] events.subscribe team.changed: ok

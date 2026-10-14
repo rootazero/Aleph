@@ -4,6 +4,7 @@
 //! to registered handlers.
 
 mod artifact_route;
+mod browser_live_runtime;
 mod browser_viewer_route;
 mod byte_range;
 mod canvas_asset_route;
@@ -91,6 +92,14 @@ pub struct ConnectionState {
     /// Authenticated user behind this connection (`users.user_id`), resolved at
     /// `connect` together with `caller_role`. `None` for walled connections.
     pub caller_user: Option<String>,
+    /// Server-verified user behind this connection: `Some(uid)` only when the
+    /// `connect` handshake authenticated a paired device whose `devices.user_id`
+    /// binding resolves to an Active user equal to `caller_user` (see
+    /// `connection::auth::derive_verified_user`). `None` for loopback, legacy
+    /// shared token, unbound devices, walled connections and before handshake.
+    /// Unlike `caller_user` it never carries the implicit-owner compat identity.
+    /// Cleared together with `caller_user` by [`invalidate_device_sessions`].
+    pub verified_user: Option<String>,
 }
 
 impl ConnectionState {
@@ -130,6 +139,7 @@ impl ConnectionState {
             },
             device_id: None,
             caller_user: None,
+            verified_user: None,
         }
     }
 }
@@ -153,6 +163,16 @@ pub async fn invalidate_device_sessions(
     device_id: &str,
 ) -> usize {
     let mut conns = connections.write().await;
+    invalidate_device_sessions_locked(&mut conns, device_id)
+}
+
+/// Synchronous core of [`invalidate_device_sessions`] for callers that already
+/// hold the connection-map write guard (so a revoke's store write and the
+/// downgrade are one critical section against the `connect` handshake).
+pub(crate) fn invalidate_device_sessions_locked(
+    conns: &mut HashMap<String, ConnectionState>,
+    device_id: &str,
+) -> usize {
     let mut hit = 0;
     for state in conns.values_mut() {
         if state.device_id.as_deref() == Some(device_id) {
@@ -161,6 +181,9 @@ pub async fn invalidate_device_sessions(
             // comment) — a downgrade to guest must clear it too, or a walled
             // connection would keep reading a stale authenticated user.
             state.caller_user = None;
+            // The verified identity dies with the role: a revoked/deactivated
+            // device must not keep proving a user to per-user capabilities.
+            state.verified_user = None;
             state.permissions.clear();
             hit += 1;
         }
@@ -467,12 +490,16 @@ pub struct GatewayServer {
     /// SPA fallback. The same `Arc` is process-global via
     /// `mcp_face::install_mcp_face` so lifecycle can broadcast through it.
     mcp_face: Option<Arc<crate::gateway::mcp_face::McpFace>>,
-    /// The browser viewer backend + its grant store. When absent the
-    /// `/viewer/browser/...` routes are not mounted rather than mounted open.
+    /// One issuer state owns the store for both RPCs and viewer routes. When
+    /// absent the routes are not mounted and issuer RPCs deny generically.
     browser_viewer: Option<(
-        crate::browser::live::grant::ViewerGrantStore,
+        Arc<super::handlers::browser_viewer::BrowserViewerIssuerState>,
         Arc<dyn crate::browser::live::viewer_backend::ViewerBackend>,
     )>,
+    /// Late-bound slot for the browser live grant store, shared with the
+    /// `users.update` deactivation kick so issuer death runs the canonical
+    /// whole-grant revoke. Bound by `install_browser_live_runtime`.
+    browser_viewer_grants: super::handlers::users::BrowserViewerGrantRevocation,
     /// See [`GatewaySharedState::node_registry`]. `build_router` clones this Arc
     /// into the shared state so both point at the same registry.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
@@ -543,6 +570,7 @@ impl GatewayServer {
             canvas_store: None,
             mcp_face: None,
             browser_viewer: None,
+            browser_viewer_grants: Default::default(),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
@@ -606,6 +634,7 @@ impl GatewayServer {
             canvas_store: None,
             mcp_face: None,
             browser_viewer: None,
+            browser_viewer_grants: Default::default(),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
@@ -734,34 +763,41 @@ impl GatewayServer {
 
     /// Install the MCP server face (mounts `/mcp` in `build_router`). Pass the
     /// same `Arc` that `mcp_face::install_mcp_face` holds.
+    /// Handle the deactivation kick holds so user deactivation revokes that
+    /// user's browser live viewer grants. Inert until the runtime installs.
+    pub fn browser_viewer_grant_revocation(
+        &self,
+    ) -> super::handlers::users::BrowserViewerGrantRevocation {
+        self.browser_viewer_grants.clone()
+    }
+
     pub fn set_mcp_face(&mut self, face: Arc<crate::gateway::mcp_face::McpFace>) {
         self.mcp_face = Some(face);
     }
 
-    /// Install the browser viewer backend (mounts `/viewer/browser/...` in
-    /// `build_router`). Creates the grant store the route will use; pass the
-    /// backend that owns the browser's `LiveProfileOwner` handle. Without
-    /// this the routes are simply absent — a viewer capability flow cannot
-    /// half-exist.
-    #[allow(dead_code)] // consumed by the Task 6 boot wiring
+    /// Install the backend together with its server-owned issuer state. Only
+    /// [`GatewayServer::install_browser_live_runtime`] calls this, passing the
+    /// runtime's lifecycle-backed issuer and an explicit configured origin. There is
+    /// no default store, guessed localhost origin, or caller-derived authority.
     pub(crate) fn set_browser_viewer_backend(
         &mut self,
         backend: Arc<dyn crate::browser::live::viewer_backend::ViewerBackend>,
+        issuer: Arc<super::handlers::browser_viewer::BrowserViewerIssuerState>,
     ) {
-        self.browser_viewer = Some((
-            crate::browser::live::grant::ViewerGrantStore::default(),
-            backend,
-        ));
+        self.browser_viewer = Some((issuer, backend));
+        // Register only after installation; also replaces an earlier denying
+        // registration if the builder ran before backend initialization.
+        self.register_browser_viewer_handlers();
     }
 
-    /// The grant store behind `/viewer/browser/...`, when the backend is
-    /// installed. The issuer-side RPC surface (grant mint/revoke) will take
-    /// this handle; the route's exchange/auth paths already use it.
-    #[allow(dead_code)] // consumed by the Task 6 issuer RPC surface
-    pub(crate) fn browser_viewer_grants(
-        &self,
-    ) -> Option<crate::browser::live::grant::ViewerGrantStore> {
-        self.browser_viewer.as_ref().map(|(store, _)| store.clone())
+    /// Builder seam: missing browser backend/registry/origin is a generic
+    /// denial, not an alternate default store or a half-open route.
+    pub fn register_browser_viewer_handlers(&mut self) {
+        let state = self
+            .browser_viewer
+            .as_ref()
+            .map(|(issuer, _)| issuer.clone());
+        super::handlers::browser_viewer::register(self.handlers_mut(), state);
     }
 
     /// "Is an operator surface connected?" for the MCP face's attendance
@@ -998,10 +1034,10 @@ impl GatewayServer {
         // own transport / origin guards, like the artifact and canvas routes;
         // mounted only when boot installed the backend (fail-closed: absent,
         // never open).
-        if let Some((store, backend)) = &self.browser_viewer {
+        if let Some((issuer, backend)) = &self.browser_viewer {
             router = router.merge(browser_viewer_route::browser_viewer_routes(Arc::new(
                 browser_viewer_route::BrowserViewerRouteState::new(
-                    store.clone(),
+                    issuer.grants.clone(),
                     backend.clone(),
                     shared.origin_policy.clone(),
                     shared.trusted_proxy_enabled,
@@ -2023,6 +2059,9 @@ mod tests {
 }
 
 #[cfg(test)]
+mod browser_viewer_issuer_tests;
+
+#[cfg(test)]
 mod channel_kind_tests {
     use super::*;
     use crate::gateway::surface::SurfaceKind;
@@ -2083,6 +2122,7 @@ mod device_invalidation_tests {
         let mut cs = ConnectionState::new("10.0.0.9".parse().unwrap(), false);
         cs.caller_role = "operator".to_string();
         cs.caller_user = Some(format!("u-{conn}"));
+        cs.verified_user = device_id.map(|_| format!("u-{conn}"));
         cs.permissions = vec!["*".to_string()];
         cs.device_id = device_id.map(String::from);
         (conn.to_string(), cs)
@@ -2114,6 +2154,10 @@ mod device_invalidation_tests {
                  caller_user is resolved together with caller_role"
             );
             assert!(s.permissions.is_empty(), "{hit} must lose event scope");
+            assert_eq!(
+                s.verified_user, None,
+                "{hit} must lose its verified user alongside the role"
+            );
         }
         for spared in ["c", "d"] {
             assert_eq!(
@@ -2124,6 +2168,11 @@ mod device_invalidation_tests {
                 map[spared].caller_user,
                 Some(format!("u-{spared}")),
                 "{spared} must keep its authenticated user"
+            );
+            assert_eq!(
+                map[spared].verified_user,
+                (spared == "c").then(|| format!("u-{spared}")),
+                "{spared} must keep its verified user untouched"
             );
         }
     }
