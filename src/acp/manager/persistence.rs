@@ -3,6 +3,10 @@
 //! Format: a JSON array of [`crate::acp::session::PersistedAcpSession`] entries
 //! at `~/.aleph/data/acp_sessions.json`. Best-effort — parse failures fall back
 //! to "no persisted sessions" and write failures only warn.
+//!
+//! **Projection-only boundary:** this JSON is a re-creatable protocol/session
+//! projection. It is not an authorization source, capability registry, or
+//! recovery source of truth.
 
 use tracing::{info, warn};
 

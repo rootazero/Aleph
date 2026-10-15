@@ -1,5 +1,6 @@
 use crate::i18n::{use_i18n, I18nContextProvider};
 use crate::state::memory::MemoryState;
+use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::Router;
@@ -7,6 +8,9 @@ use leptos_router::hooks::{use_location, use_navigate};
 
 // Views
 use crate::views::agent_trace::AgentTrace;
+use crate::views::browser::{
+    apply_browser_event, seed_from_gateway, BrowserWorkspace, SeedOutcome,
+};
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
 use crate::views::extensions::{ExtensionsView, StoreState};
@@ -65,6 +69,16 @@ use crate::views::voice::{ImmersiveVoiceView, VoiceMode};
 #[component]
 #[must_use]
 pub fn App() -> impl IntoView {
+    #[cfg(target_arch = "wasm32")]
+    if crate::views::browser::is_standalone_viewer_route() {
+        return view! {
+            <I18nContextProvider>
+                <crate::views::browser::StandaloneBrowserViewerRoute />
+            </I18nContextProvider>
+        }
+        .into_any();
+    }
+
     view! {
         <I18nContextProvider>
             <DashboardContext>
@@ -72,6 +86,7 @@ pub fn App() -> impl IntoView {
             </DashboardContext>
         </I18nContextProvider>
     }
+    .into_any()
 }
 
 #[component]
@@ -127,6 +142,44 @@ fn AppContent() -> impl IntoView {
     // `context_ownership` guard.
     let canvas_state = crate::state::canvas::CanvasState::new();
     provide_context(canvas_state);
+
+    // Browser live-view workspace. Provided at the root (not by WorkspacePanel)
+    // so the bus bridge below outlives every tab: a resource published while
+    // the Browser tab is closed must still be there when it opens, and a close
+    // notice must still land. The handler captures the (Copy) handle — a
+    // callback cannot look a context up later. It only mirrors the exact
+    // `browser.live.*` topics into the model; the model owns every acceptance
+    // rule. Grant / auth / viewer socket are NOT wired here.
+    let browser_workspace = BrowserWorkspace::new();
+    provide_context(browser_workspace);
+    {
+        let _browser_sub = state.subscribe_events(move |event| {
+            let _ = apply_browser_event(&event, &browser_workspace);
+        });
+        // Root-level subscription is app-lifetime; no on_cleanup needed.
+    }
+    // Seed after every (re)connect: frames published before this socket
+    // existed are never replayed, so ask the Gateway registry for the verified
+    // caller's exact live resources. Tracks the paired caller (user + epoch +
+    // gateway), so it re-runs per handshake and never runs unpaired. Only a
+    // fixed outcome kind is logged, never a payload.
+    Effect::new(move || {
+        let Some(caller) = crate::api::browser_viewer::ViewerCaller::tracked(&state) else {
+            return;
+        };
+        spawn_local(async move {
+            let outcome = seed_from_gateway(state, browser_workspace, caller).await;
+            let kind = match &outcome {
+                Ok(SeedOutcome::Applied) => "applied",
+                Ok(SeedOutcome::Unchanged) => "unchanged",
+                Ok(SeedOutcome::Ambiguous(_)) => "ambiguous",
+                Ok(SeedOutcome::Stale) => "stale",
+                Ok(SeedOutcome::Rejected(_)) => "rejected",
+                Err(_) => "error",
+            };
+            web_sys::console::log_1(&format!("browser-live seed: {kind}").into());
+        });
+    });
 
     // Global run.* dispatcher: subscribed once here (not per-mount) so a
     // run_id routes to the active singleton or a backgrounded live[conv]
@@ -307,16 +360,36 @@ fn AppContent() -> impl IntoView {
             match state.connect().await {
                 Ok(()) => {
                     web_sys::console::log_1(&"Connected to Gateway".into());
-                    if let Err(e) = state.setup_alert_subscriptions().await {
-                        web_sys::console::error_1(
-                            &format!("Failed to setup alert subscriptions: {e}").into(),
-                        );
+                    // Every subscription below is its own task: no topic waits
+                    // on another topic's setup chain (alert/approval setup also
+                    // registers handlers and seeds state), so a slow or failing
+                    // subscribe can only ever affect itself. Each outcome is
+                    // reported by `subscribe_topic` as a sanitized diagnostic
+                    // (topic + kind); a failure never marks any viewer as
+                    // connected or live and leaves no ledger entry.
+                    for topic in ["config.**", RESOURCE_TOPIC, CLOSED_TOPIC] {
+                        spawn_local(async move {
+                            if let Err(e) = state.subscribe_topic(topic).await {
+                                web_sys::console::warn_1(
+                                    &format!("Failed to subscribe to {topic}: {e}").into(),
+                                );
+                            }
+                        });
                     }
-                    if let Err(e) = state.setup_approval_subscriptions().await {
-                        web_sys::console::error_1(
-                            &format!("Failed to setup approval subscriptions: {e}").into(),
-                        );
-                    }
+                    spawn_local(async move {
+                        if let Err(e) = state.setup_alert_subscriptions().await {
+                            web_sys::console::error_1(
+                                &format!("Failed to setup alert subscriptions: {e}").into(),
+                            );
+                        }
+                    });
+                    spawn_local(async move {
+                        if let Err(e) = state.setup_approval_subscriptions().await {
+                            web_sys::console::error_1(
+                                &format!("Failed to setup approval subscriptions: {e}").into(),
+                            );
+                        }
+                    });
                 }
                 Err(e) => {
                     web_sys::console::error_1(&format!("Failed to connect to Gateway: {e}").into());

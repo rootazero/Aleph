@@ -1,0 +1,51 @@
+   Compiling aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
+   Compiling aleph-client v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\client)
+    Finished `test` profile [unoptimized] target(s) in 12.86s
+     Running unittests src\lib.rs (target\debug\deps\aleph_client-501cac65d787e59f.exe)
+
+running 43 tests
+test connection::wire_contract::a_non_json_frame_is_ignored_rather_than_panicking ... ok
+test connection::wire_contract::a_malformed_topic_event_notification_is_quiet ... ok
+test connection::wire_contract::a_response_with_neither_result_nor_error_still_resolves_its_caller ... ok
+test connection::wire_contract::a_topic_event_notification_decodes_into_topic ... ok
+test connection::wire_contract::a_server_request_is_not_read_as_a_response ... ok
+test connection::wire_contract::a_result_response_routes_by_id ... ok
+test credential::tests::credential_transport_policy ... ok
+test connection::wire_contract::an_undecodable_stream_frame_is_loud ... ok
+test credential::tests::debug_never_prints_the_secret ... ok
+test credential::tests::connect_params_carry_exactly_the_matching_secret_field ... ok
+test credential::tests::empty_parts_are_rejected ... ok
+test connection::wire_contract::envelope_without_the_version_tag_still_yields_the_event ... ok
+test connection::wire_contract::the_shared_notification_constructor_yields_an_event ... ok
+test connection::wire_contract::a_numeric_id_matches_the_string_key_the_client_registered ... ok
+test credential_store::tests::backend_failures_fail_closed_without_leaking_secrets ... ok
+test credential_store::tests::bootstrap_ticket_is_never_persisted ... ok
+test credential_store::tests::connect_adapters_accept_loopback_plain_ws ... ok
+test credential_store::tests::connect_adapters_refuse_blank_credentials_before_any_io ... ok
+test credential_store::tests::connect_adapters_reject_remote_plain_transport_before_any_io ... ok
+test credential_store::tests::connect_dto_debug_redacts_the_token ... ok
+test credential_store::tests::connect_adapters_roundtrip_through_the_fake_backend ... ok
+test credential_store::tests::debug_never_prints_the_secret ... ok
+test credential_store::tests::connect_load_refuses_corrupt_payload_and_failures_are_secret_free ... ok
+test credential_store::tests::os_keyring_roundtrip_on_windows_credential_manager ... ignored, writes a synthetic credential to the real OS keyring
+test credential_store::tests::keyring_error_text_is_dropped ... ok
+test credential_store::tests::payload_roundtrips_through_the_store ... ok
+test gateway_client::tests::test_client_builder ... ok
+test credential_store::tests::service_and_account_are_deterministic_and_secret_free ... ok
+test credential_store::tests::unknown_fields_and_bad_payloads_are_refused ... ok
+test gateway_client::tests::test_default_values ... ok
+test session_resolve::tests::an_empty_list_yields_nothing ... ok
+test session_resolve::tests::keyless_rows_are_skipped_not_selected ... ok
+test session_resolve::tests::a_full_session_row_parses ... ok
+test session_resolve::tests::newest_timestamp_wins ... ok
+test session_resolve::tests::ties_keep_the_earlier_candidate ... ok
+test tls::tests::loopback_is_recognised_in_every_spelling_the_gateway_binds ... ok
+test tls::tests::plaintext_urls_never_get_a_connector ... ok
+test tls::tests::an_unreadable_ca_cert_is_an_error_not_a_silent_fallback ... ok
+test gateway_client::tests::a_handshake_error_is_surfaced_immediately_not_at_the_method_timeout ... ok
+test connection::tests::a_reconnect_feeds_the_receiver_the_caller_already_holds ... ok
+test connection::tests::a_dying_socket_fails_the_request_waiting_on_it ... ok
+test connection::tests::connect_handshakes_before_handing_back_the_client ... ok
+test connection::tests::a_superseded_read_loop_does_not_kill_the_live_connection ... ok
+
+test result: ok. 42 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.22s

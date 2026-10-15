@@ -4,7 +4,9 @@
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::extension::hooks::{budget_hook_contexts, HookContext, PermissionDecision};
+use crate::extension::hooks::{
+    budget_hook_contexts, HookContext, HookExecutor, PermissionDecision,
+};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant, GrantScope};
@@ -237,7 +239,8 @@ impl ScopedToolService {
             .hook_executor
             .as_ref()
             .filter(|e| e.has_hooks_for(HookEvent::PermissionDenied))
-            .map(|e| (e.clone(), input.clone()));
+            .and_then(|_| self.hook_executor_for_memo("permission_denied"))
+            .map(|executor| (executor, input.clone()));
         let mut capture: Option<Value> = None;
         let result = self.execute_gated(name, input, cancel, &mut capture).await;
         if let (
@@ -1507,27 +1510,42 @@ impl ScopedToolService {
         })
         .await;
 
-        // The identity-ledger record above still lands whatever happens here
-        // — this is the *session* copy of the same decision, and the one
-        // writer says why when it cannot land it (missing service, missing
-        // ambient identity, refused append).
-        crate::session::call_log::emit_for_ambient_call(
+        // Persist the decision and its memo atomically under one ambient
+        // identity resolution. A failed batch is logged by the one writer and
+        // is never retried through a non-atomic fallback.
+        let approval_source = decision.approval_source();
+        let denial_reason = decision.denial_reason().map(str::to_owned);
+        let memo = match rule {
+            Some(rule) => format!(
+                "{} [gate: {rule}] (fingerprint: {fingerprint})",
+                decision.detail()
+            ),
+            None => format!("{} (fingerprint: {fingerprint})", decision.detail()),
+        };
+        crate::session::call_log::emit_approval_decision_batch(
             &turn.session_key,
             name,
-            "approval decision",
-            |turn_id, call_id| match decision.denial_reason() {
-                Some(reason) => SessionEvent::ToolCallDenied {
-                    turn_id,
-                    call_id,
-                    reason: reason.to_string(),
+            move |turn_id, call_id| {
+                let event = match denial_reason {
+                    Some(reason) => SessionEvent::ToolCallDenied {
+                        turn_id,
+                        call_id: call_id.clone(),
+                        reason,
+                        at: now_ms(),
+                    },
+                    None => SessionEvent::ToolCallApproved {
+                        turn_id,
+                        call_id: call_id.clone(),
+                        by: approval_source,
+                        at: now_ms(),
+                    },
+                };
+                let memo = SessionEvent::ApprovalMemo {
+                    request_id: call_id,
+                    memo,
                     at: now_ms(),
-                },
-                None => SessionEvent::ToolCallApproved {
-                    turn_id,
-                    call_id,
-                    by: decision.approval_source(),
-                    at: now_ms(),
-                },
+                };
+                (event, memo)
             },
         )
         .await;
@@ -1574,9 +1592,9 @@ impl ScopedToolService {
         input: Value,
         already_authorized: bool,
     ) -> Result<(Value, Vec<String>, bool), ToolError> {
-        let executor = match self.hook_executor.as_ref() {
-            Some(e) if e.hook_count() > 0 => e.clone(),
-            _ => return Ok((input, Vec::new(), false)),
+        let executor = match self.hook_executor_for_memo("before_tool_call") {
+            Some(executor) => executor,
+            None => return Ok((input, Vec::new(), false)),
         };
 
         let ctx = self.build_hook_context(name, &input, None, None);
@@ -1726,9 +1744,9 @@ impl ScopedToolService {
         result: &mut Result<ToolOutput, ToolError>,
         pre_contexts: Vec<String>,
     ) {
-        let executor = match self.hook_executor.as_ref() {
-            Some(e) if e.hook_count() > 0 => e.clone(),
-            _ => {
+        let executor = match self.hook_executor_for_memo("after_tool_call") {
+            Some(executor) => executor,
+            None => {
                 if !pre_contexts.is_empty() {
                     if let Ok(output) = result {
                         let bounded =
@@ -1791,6 +1809,24 @@ impl ScopedToolService {
                     .await;
             }
         }
+    }
+
+    /// A per-call `HookExecutor` clone with a production memo sink attached,
+    /// recording this call's hook outcomes into the ambient session log under
+    /// `phase`. Clones the shared executor so the sink never leaks back into
+    /// the service's long-lived executor.
+    fn hook_executor_for_memo(&self, phase: &'static str) -> Option<Arc<HookExecutor>> {
+        let base = self.hook_executor.as_ref().filter(|e| e.hook_count() > 0)?;
+        let session = self
+            .turn_context
+            .as_ref()
+            .map(|c| c.session_key.clone())
+            .unwrap_or_else(|| {
+                crate::routing::session_key::SessionKey::main(self.hook_session_id.clone())
+            });
+        Some(Arc::new(
+            (**base).clone().with_session_memo_sink(session, phase),
+        ))
     }
 
     fn build_hook_context(

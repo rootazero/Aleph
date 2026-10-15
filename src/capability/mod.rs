@@ -44,6 +44,15 @@
 use crate::sync_primitives::Arc;
 use std::sync::OnceLock;
 
+pub mod backend;
+pub mod descriptor;
+pub mod diagnostic_control;
+pub mod effect_claim;
+pub mod facade;
+pub mod ownership;
+pub mod projection_host;
+pub mod zahir_facade;
+
 /// The membership rule that decides what belongs in this module's roster.
 #[cfg(test)]
 pub(crate) mod census;
@@ -367,6 +376,7 @@ pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
     crate::gateway::security::store::slot::users_store_slot(),
     crate::gateway::telecom::public_history::installed_slot(),
     crate::gateway::telecom::public_approval::installed_slot(),
+    crate::capability::projection_host::projection_host_slot(),
 ];
 
 #[cfg(test)]

@@ -106,6 +106,13 @@ pub enum LocalCommand {
     /// carried through as `Some` rather than silently becoming the default:
     /// the handler has to be able to say "there is no theme called that".
     Theme { name: Option<String> },
+    /// Open a Gateway-published browser resource in the viewer.
+    ///
+    /// `resource_id` is the exact (parser-trimmed, otherwise untouched) id the
+    /// user typed; empty means "no argument" and the handler prints usage. The
+    /// handler only honours ids present in the live `BrowserResourceCatalog` -
+    /// this command never derives an id from a URL, tab, or profile.
+    Browser { resource_id: String },
 }
 
 /// A per-conversation knob reachable from a slash command.
@@ -235,6 +242,10 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
         "Break down what is filling the context window right now",
     ),
     ("/theme", "Switch the colour preset: dark|light|terminal"),
+    (
+        "/browser",
+        "List browser resource IDs (/browser), or open one in the viewer (/browser <resource_id>)",
+    ),
     ("/replays", "List recent persisted trace replays"),
     ("/replay", "Load a persisted trace replay by task ID"),
     ("/help", "Show available commands"),
@@ -331,6 +342,14 @@ pub fn parse_input(input: &str) -> ParsedInput {
         "/context" => ParsedInput::Local(LocalCommand::Context),
         "/theme" => ParsedInput::Local(LocalCommand::Theme {
             name: (!args.is_empty()).then(|| args.to_lowercase()),
+        }),
+        // The id is carried verbatim (the parser already trimmed the line): it is
+        // an opaque handle the Gateway published, so no case-folding or other
+        // normalisation - the handler does an exact catalog lookup. A blank arg
+        // stays LOCAL (usage text) rather than falling through to the Gateway as
+        // chat.
+        "/browser" => ParsedInput::Local(LocalCommand::Browser {
+            resource_id: args.to_string(),
         }),
         "/agentpanel" => ParsedInput::Local(LocalCommand::AgentPanel),
         "/replays" => ParsedInput::Local(LocalCommand::ReplayList),
@@ -642,6 +661,38 @@ mod tests {
                 query: "Claude".to_string()
             })
         );
+    }
+
+    /// `/browser <resource_id>` carries the id verbatim; a bare `/browser` is
+    /// still a LOCAL command (usage), never a Gateway chat message.
+    #[test]
+    fn parse_browser_carries_the_resource_id_verbatim() {
+        assert_eq!(
+            parse_input("/browser"),
+            ParsedInput::Local(LocalCommand::Browser {
+                resource_id: String::new()
+            })
+        );
+        assert_eq!(
+            parse_input("/browser   "),
+            ParsedInput::Local(LocalCommand::Browser {
+                resource_id: String::new()
+            })
+        );
+        // Case is preserved: the id is an opaque Gateway-issued handle.
+        assert_eq!(
+            parse_input("/browser Res-ABC_1"),
+            ParsedInput::Local(LocalCommand::Browser {
+                resource_id: "Res-ABC_1".to_string()
+            })
+        );
+        assert_eq!(
+            parse_input("/BROWSER res-1"),
+            ParsedInput::Local(LocalCommand::Browser {
+                resource_id: "res-1".to_string()
+            })
+        );
+        assert!(local_commands().iter().any(|(name, _)| *name == "/browser"));
     }
 
     #[test]

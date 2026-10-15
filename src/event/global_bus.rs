@@ -5,6 +5,10 @@
 //! multiple Agent `EventBus` instances, enabling cross-agent event subscription
 //! and routing.
 //!
+//! **Notification-only boundary:** `GlobalBus` is a low-latency fan-out
+//! notification surface. Its callbacks are not authorization, persistence, or
+//! recovery state, and missed notifications do not change committed state.
+//!
 //! # Example
 //!
 //! ```rust,ignore

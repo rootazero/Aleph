@@ -5,6 +5,7 @@
 // The two projection paths live in sibling modules: `events` (StreamEvent ->
 // state) and `trace` (AgentTraceEvent -> state).
 
+mod browser_catalog;
 mod context_view;
 mod cost;
 mod events;
@@ -13,6 +14,7 @@ mod trace;
 #[cfg(test)]
 mod tests;
 
+pub use browser_catalog::BrowserResourceCatalog;
 pub use context_view::ContextView;
 pub use cost::{CostTally, CostView};
 
@@ -1049,6 +1051,16 @@ pub struct AppState {
     /// clears it itself, once per iteration, after the `select!` — see
     /// `mod.rs::main_loop`.
     pub runtime_agents_refetch_due: bool,
+    /// Browser-live resources the Gateway has published to this screen
+    /// (`browser.live.resource` / `browser.live.closed`). A mirror of wire
+    /// facts only - see [`BrowserResourceCatalog`]. Nothing here opens a
+    /// viewer; that needs an explicit `issue_browser_viewer_launch` call.
+    pub browser_resources: BrowserResourceCatalog,
+    /// How `/browser` may launch a viewer. Disabled by default; `tui::run`
+    /// fills it once from the explicit `ALEPH_VIEWER_*` environment opt-in.
+    /// Plain data (no URL, no secret) - the launch URL only ever lives inside
+    /// the one `/browser` handler call that received it from the Gateway.
+    pub viewer_launcher_config: crate::viewer_launcher::ViewerLauncherConfig,
 }
 
 impl AppState {
@@ -1128,6 +1140,8 @@ impl AppState {
             runtime_agents: AgentPanelData::Loading,
             agent_panel_visible: false,
             runtime_agents_refetch_due: false,
+            browser_resources: BrowserResourceCatalog::new(),
+            viewer_launcher_config: crate::viewer_launcher::ViewerLauncherConfig::default(),
         }
     }
 
@@ -1535,6 +1549,13 @@ impl AppState {
             // perspective. The re-fetch this triggers replaces it once the
             // answer is in hand.
             self.runtime_agents_refetch_due = true;
+        } else if topic == aleph_protocol::browser_live::RESOURCE_TOPIC
+            || topic == aleph_protocol::browser_live::CLOSED_TOPIC
+        {
+            // Fail-closed inside the catalog: a malformed, stale or
+            // post-close frame changes nothing. The outcome is not surfaced -
+            // nothing renders this yet.
+            let _ = self.browser_resources.apply_topic(topic, &data);
         }
     }
 

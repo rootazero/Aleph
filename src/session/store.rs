@@ -2107,7 +2107,13 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         // treat it as one of the turn's events).
         | SessionEvent::SeedProvenance { .. }
         | SessionEvent::CompactionPerformed { .. }
-        | SessionEvent::FoldRecorded { .. } => None,
+        | SessionEvent::FoldRecorded { .. }
+        | SessionEvent::EffectClaimPrepared { .. }
+        | SessionEvent::EffectClaimClaimed { .. }
+        | SessionEvent::EffectClaimInvoking { .. }
+        | SessionEvent::EffectClaimTerminal { .. }
+        | SessionEvent::ApprovalMemo { .. }
+        | SessionEvent::HookMemo { .. } => None,
     }
 }
 
@@ -2156,6 +2162,12 @@ pub(crate) const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::FoldRecorded { .. } => "fold_recorded",
         SessionEvent::SessionForked { .. } => "session_forked",
         SessionEvent::Error { .. } => "error",
+        SessionEvent::EffectClaimPrepared { .. } => "effect_claim_prepared",
+        SessionEvent::EffectClaimClaimed { .. } => "effect_claim_claimed",
+        SessionEvent::EffectClaimInvoking { .. } => "effect_claim_invoking",
+        SessionEvent::EffectClaimTerminal { .. } => "effect_claim_terminal",
+        SessionEvent::ApprovalMemo { .. } => "approval_memo",
+        SessionEvent::HookMemo { .. } => "hook_memo",
     }
 }
 

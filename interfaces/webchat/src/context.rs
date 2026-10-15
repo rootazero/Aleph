@@ -1,3 +1,7 @@
+use crate::api::native_credentials::{
+    attempt_current, native_expected, native_handshake, new_device_id, ticket_from_search,
+    AttemptReceipt, ConnectSendError, HandshakeRequest, NativeAuthState, NativeOutcome, TauriIpc,
+};
 use crate::api::ExecApprovalApi;
 use crate::api::TelecomApprovalApi;
 use crate::components::sidebar::SystemAlert;
@@ -434,7 +438,12 @@ fn scrub_credentials_and_reload() {}
 
 enum Handshake {
     Authorized,
-    NeedsToken { was_rejected: bool },
+    /// A newer attempt, a disconnect or an endpoint change owns the state;
+    /// this attempt must touch nothing.
+    Superseded,
+    NeedsToken {
+        was_rejected: bool,
+    },
     Failed(ConnectionFailure),
 }
 
@@ -483,13 +492,152 @@ where
     F: FnMut(Value) -> Fut,
     Fut: std::future::Future<Output = Result<Value, String>>,
 {
-    let mut failed = Vec::new();
-    for (pattern, except) in entries {
-        if let Err(e) = subscribe(topics_request(&pattern, &except)).await {
-            failed.push((pattern, e));
+    // Concurrent, not serial: one subscribe that never answers (30 s ceiling in
+    // `send_rpc`) must not hold every entry queued behind it. Each future is
+    // independent and a failure is collected per entry.
+    let pending: Vec<_> = entries
+        .into_iter()
+        .map(|(pattern, except)| {
+            let request = subscribe(topics_request(&pattern, &except));
+            async move { request.await.map_err(|e| (pattern, e)) }
+        })
+        .collect();
+    futures::future::join_all(pending)
+        .await
+        .into_iter()
+        .filter_map(Result::err)
+        .collect()
+}
+
+/// Why a `subscribe_topic` call did not end with the entry in the ledger.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SubscribeError {
+    /// The RPC itself failed (server verdict or local transport failure).
+    Rpc(RpcFailure),
+    /// The RPC succeeded, but on a socket that is no longer the current one
+    /// (reconnected, or dropped, while the reply was in flight). The reply
+    /// says nothing about the new socket's server-side filter.
+    Superseded,
+}
+
+impl SubscribeError {
+    /// The message handed back to `String`-error callers.
+    fn into_message(self) -> String {
+        match self {
+            Self::Rpc(failure) => failure.message,
+            Self::Superseded => "Connection changed during subscribe".to_string(),
         }
     }
-    failed
+}
+
+/// Send one `events.subscribe` (`call`) and file `entry` in `ledger` **only
+/// if it succeeded on the connection it was issued on**.
+///
+/// The ledger is what a reconnect replays, so it must mean "the server
+/// accepted this" - never "someone asked for this". Filing before the RPC
+/// (the previous shape) made a timed-out or rejected subscribe look
+/// subscribed forever: the replay re-offered it without anyone knowing it had
+/// never worked, and a `connected` socket silently lacked `approval.**`.
+///
+/// `epoch_then` is the `connection_epoch` captured after the socket was ready
+/// and before the request went out; `current_epoch` yields the epoch now, or
+/// `None` while disconnected. Anything but an exact match is `Superseded` and
+/// leaves the ledger alone. Pure over its inputs so the host tests drive it
+/// without a websocket.
+async fn subscribe_recorded<Fut>(
+    ledger: &Mutex<BTreeSet<LedgerEntry>>,
+    entry: LedgerEntry,
+    epoch_then: u64,
+    current_epoch: impl FnOnce() -> Option<u64>,
+    call: Fut,
+) -> Result<(), SubscribeError>
+where
+    Fut: std::future::Future<Output = Result<Value, RpcFailure>>,
+{
+    call.await.map_err(SubscribeError::Rpc)?;
+    if current_epoch() != Some(epoch_then) {
+        return Err(SubscribeError::Superseded);
+    }
+    ledger
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(entry);
+    Ok(())
+}
+
+/// One console line per subscribe attempt: the topic pattern and an outcome
+/// KIND (`ok`, `error (server|local|superseded)`). Deliberately never the
+/// error message, params, URL or any credential - a server message may echo
+/// them.
+fn subscribe_diagnostic(topic: &str, result: &Result<(), SubscribeError>) -> String {
+    let outcome = match result {
+        Ok(()) => "ok",
+        Err(SubscribeError::Rpc(f)) if f.code.is_some() => "error (server)",
+        Err(SubscribeError::Rpc(_)) => "error (local)",
+        Err(SubscribeError::Superseded) => "error (superseded)",
+    };
+    format!("events.subscribe {topic}: {outcome}")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn log_subscribe_diagnostic(topic: &str, result: &Result<(), SubscribeError>) {
+    let line = subscribe_diagnostic(topic, result);
+    if result.is_ok() {
+        web_sys::console::log_1(&line.into());
+    } else {
+        web_sys::console::warn_1(&line.into());
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn log_subscribe_diagnostic(topic: &str, result: &Result<(), SubscribeError>) {
+    // No console off the wasm target; build the line so the formatter stays
+    // exercised (and not dead code) on the host.
+    let _ = subscribe_diagnostic(topic, result);
+}
+
+/// Responses the message loop is still waiting for, keyed by JSON-RPC id.
+type PendingRpcs = HashMap<String, oneshot::Sender<Result<Value, RpcFailure>>>;
+
+/// File `response_tx` under `id` **before** the request goes on the wire, then
+/// send it; a failed send un-files it and answers the caller with `on_error`.
+///
+/// Registering first makes "a reply can never arrive for an id nobody is
+/// waiting for" true by construction instead of by the loop's current shape
+/// (the stream is only polled after this returns). A reply that did find no
+/// entry is dropped without a trace and the caller then waits out the 30 s
+/// ceiling in `send_rpc` — and every `events.subscribe` queued behind it with
+/// it. `send` receives the map so the order is assertable off the wasm target.
+async fn send_tracked<E, Fut>(
+    pending: &mut PendingRpcs,
+    id: String,
+    response_tx: oneshot::Sender<Result<Value, RpcFailure>>,
+    send: impl FnOnce(&PendingRpcs) -> Fut,
+    on_error: impl FnOnce(E) -> RpcFailure,
+) where
+    Fut: std::future::Future<Output = Result<(), E>>,
+{
+    pending.insert(id.clone(), response_tx);
+    let sending = send(pending);
+    if let Err(e) = sending.await {
+        if let Some(tx) = pending.remove(&id) {
+            let _ = tx.send(Err(on_error(e)));
+        }
+    }
+}
+
+/// Whether an approval-pending seed fetched at (`epoch_then`, `edits_then`) may
+/// still be applied at (`epoch_now`, `edits_now`). The seed runs off the
+/// subscription path now, so it can land after the socket was replaced (a list
+/// read from a dead connection) or after an `approval.*` event already
+/// refetched a newer list (the seed would overwrite it with an older one).
+const fn approval_seed_applies(
+    epoch_then: u64,
+    epoch_now: u64,
+    edits_then: u64,
+    edits_now: u64,
+) -> bool {
+    epoch_then == epoch_now && edits_then == edits_now
 }
 
 #[derive(Clone, Copy)]
@@ -548,7 +696,10 @@ pub struct DashboardState {
     ///
     /// The ledger is the single source for "what is this client subscribed to",
     /// so a new subscription site can never again forget to register itself for
-    /// replay.
+    /// replay. It records only subscriptions the server **accepted** on the
+    /// connection they were issued on (`subscribe_recorded`); there is
+    /// deliberately no separate "intent" set - a failed subscribe is reported
+    /// to its caller instead of being silently retried by the next replay.
     subscribed_topics: StoredValue<Arc<Mutex<BTreeSet<LedgerEntry>>>>,
 
     // Channel for stopping the message loop
@@ -630,6 +781,18 @@ pub struct DashboardState {
     /// `localStorage` nor sent to the server. A second device on the same
     /// gateway is looking at its own terminal.
     pub terminal_selection: RwSignal<Option<String>>,
+
+    /// Gateway-verified User of the current native connection. Set only by a
+    /// `NativeOutcome::Protected` of the *current* connect attempt (after the
+    /// Gateway accepted `connect` and the credential was stored). `None` in a
+    /// plain browser, for the credentialless loopback compat connect, on every
+    /// new attempt, on disconnect and on drop. Never derived from the URL or
+    /// `localStorage`.
+    pub protected_user: RwSignal<Option<String>>,
+
+    /// Private native handshake state (attempt fence, in-memory bootstrap
+    /// ticket). Not exposed: it can hold a one-shot ticket.
+    native_auth: StoredValue<Arc<NativeAuthState>>,
 }
 
 /// Build the gateway WS URL from a page protocol + host. `https:` ⇒ `wss://`.
@@ -772,6 +935,36 @@ fn panel_device_identity() -> (String, String) {
     (String::new(), "Panel".to_string())
 }
 
+/// `window.location.search`, or empty off-browser.
+#[cfg(target_arch = "wasm32")]
+fn location_search() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn location_search() -> String {
+    String::new()
+}
+
+/// Friendly device label for the native handshake. Unlike
+/// `panel_device_identity` it reads/writes no `localStorage` (the native device
+/// id comes from the keyring or is minted in memory).
+#[cfg(target_arch = "wasm32")]
+fn native_device_name() -> String {
+    web_sys::window()
+        .map(|w| w.navigator())
+        .and_then(|n| n.user_agent().ok())
+        .map(|ua| friendly_device_name(&ua))
+        .unwrap_or_else(|| "Panel".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_device_name() -> String {
+    "Panel".to_string()
+}
+
 /// This Panel's `device_id`, or `None` before it has ever paired.
 ///
 /// Exposed so the paired-device roster can mark which row is *this* browser.
@@ -849,7 +1042,19 @@ impl DashboardState {
             token_was_rejected: RwSignal::new(false),
             connection_failure: RwSignal::new(None),
             terminal_selection: RwSignal::new(None),
+            protected_user: RwSignal::new(None),
+            native_auth: StoredValue::new(Arc::new(NativeAuthState::default())),
         }
+        .with_native_cleanup()
+    }
+
+    /// Owner cleanup invalidates every outstanding native attempt so a late
+    /// reply can never write a credential or set `protected_user` after the
+    /// owner is gone.
+    fn with_native_cleanup(self) -> Self {
+        let auth = self.native_auth.get_value();
+        on_cleanup(move || auth.invalidate());
+        self
     }
 
     /// Capture the `needs_token` verdict from a `connect` response. A missing
@@ -880,20 +1085,46 @@ impl DashboardState {
         self.connection_error.set(Some(legacy));
     }
 
-    /// Submit a credential from the login wall: route it by kind, then reload
-    /// the page so the fresh `connect` handshake presents it. Reload (vs.
-    /// in-place reconnect) keeps the boot/subscription wiring on its single
-    /// happy path.
-    ///
-    /// Accepts all three credentials the server understands — a one-time pairing
-    /// ticket (`aleph-bt-…`, what `aleph-server pair` and the QR hand out), a
-    /// device token (`aleph-dt-…`), or the legacy shared token (`aleph-…`).
-    /// Tickets used to be silently misfiled as shared tokens and rejected by the
-    /// server, which made "read the code off the QR and type it in" — the only
-    /// option when a phone cannot scan — impossible.
+    /// Open the native pairing prompt without persisting or redirecting a ticket.
+    pub fn request_native_pairing(&self) {
+        if !native_expected() {
+            return;
+        }
+        let state = *self;
+        spawn_local(async move {
+            let _ = state.disconnect().await;
+            let _ = state.needs_token.try_set(true);
+            let _ = state.token_was_rejected.try_set(false);
+            let _ = state
+                .connection_failure
+                .try_set(Some(ConnectionFailure::AuthRequired));
+        });
+    }
+
+    /// Native mode accepts an in-memory pairing ticket; the browser compatibility
+    /// path retains its existing ticket/device/shared-token login behavior.
     pub fn submit_token(&self, token: String) {
         let token = token.trim().to_string();
         if token.is_empty() {
+            return;
+        }
+        if native_expected() {
+            if !matches!(
+                classify_credential(&token),
+                SubmittedCredential::BootstrapTicket
+            ) {
+                let _ = self.token_was_rejected.try_set(true);
+                return;
+            }
+            let state = *self;
+            spawn_local(async move {
+                let _ = state.disconnect().await;
+                let Some(auth) = state.native_auth.try_get_value() else {
+                    return;
+                };
+                auth.stash_ticket(token);
+                let _ = state.connect().await;
+            });
             return;
         }
         match classify_credential(&token) {
@@ -995,17 +1226,19 @@ impl DashboardState {
 
     /// Subscribe to a specific event topic on the Gateway.
     ///
-    /// The pattern is filed in `subscribed_topics` **before** the RPC goes
-    /// out: a failed subscribe (e.g. socket mid-reconnect) must not silently
-    /// drop the topic until the owning component happens to remount — the
-    /// next reconnect's replay re-offers it, and a duplicate server-side
-    /// subscribe is idempotent. See that field's doc for why a missing replay
-    /// is a silent kill rather than a missing restore.
+    /// The pattern is filed in `subscribed_topics` only **after** the RPC
+    /// succeeded on the connection it was issued on: the ledger is what a
+    /// reconnect replays, so it records what the server accepted, not what was
+    /// asked for (see [`subscribe_recorded`]). A failed subscribe therefore
+    /// returns `Err` and leaves no entry - the caller decides whether to retry.
+    /// A subscribe whose reply lands after a reconnect is re-issued once on the
+    /// new socket, because the replay (which only knows ledger entries) will
+    /// not cover it. A duplicate server-side subscribe is idempotent.
     pub async fn subscribe_topic(&self, pattern: &str) -> Result<(), String> {
         self.subscribe_topic_except(pattern, &[]).await
     }
 
-    /// [`Self::subscribe_topic`], minus the topics in `except` — for a surface
+    /// [`Self::subscribe_topic`], minus the topics in `except` - for a surface
     /// that never renders them. Unsubscribe with the same `except`
     /// ([`Self::unsubscribe_topic_except`]): the carve-out names the
     /// subscription, so another surface's plain subscription to the same
@@ -1015,15 +1248,43 @@ impl DashboardState {
         pattern: &str,
         except: &[&str],
     ) -> Result<(), String> {
+        /// One re-issue after a reconnect raced the reply; more would just
+        /// chase a flapping socket.
+        const ATTEMPTS: u32 = 2;
         let except: Vec<String> = except.iter().map(|e| (*e).to_string()).collect();
-        self.subscribed_topics.with_value(|set| {
-            set.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert((pattern.to_string(), except.clone()));
-        });
-        self.rpc_call("events.subscribe", topics_request(pattern, &except))
-            .await
-            .map(|_| ())
+        let ledger = self.subscribed_topics.with_value(std::clone::Clone::clone);
+        let mut last = SubscribeError::Superseded;
+        for _ in 0..ATTEMPTS {
+            if let Err(message) = self.await_gateway_ready().await {
+                last = SubscribeError::Rpc(RpcFailure::local(message));
+                break;
+            }
+            // Captured after readiness and before the request goes out: this
+            // is the connection the request will be sent on.
+            let Some(epoch_then) = self.connection_epoch.try_get_untracked() else {
+                break;
+            };
+            let result = subscribe_recorded(
+                &ledger,
+                (pattern.to_string(), except.clone()),
+                epoch_then,
+                || {
+                    let connected = self.is_connected.try_get_untracked().unwrap_or(false);
+                    connected
+                        .then(|| self.connection_epoch.try_get_untracked())
+                        .flatten()
+                },
+                self.send_rpc("events.subscribe", topics_request(pattern, &except)),
+            )
+            .await;
+            log_subscribe_diagnostic(pattern, &result);
+            match result {
+                Ok(()) => return Ok(()),
+                Err(SubscribeError::Superseded) => last = SubscribeError::Superseded,
+                Err(e) => return Err(e.into_message()),
+            }
+        }
+        Err(last.into_message())
     }
 
     /// Subscribe **without** filing the pattern in the reconnect ledger.
@@ -1245,7 +1506,13 @@ impl DashboardState {
 
     /// Handshake outcome — distinguishes "authorized", "needs a token"
     /// (login wall, NOT a transport failure), and a transport-level failure.
-    async fn handshake(&self) -> Handshake {
+    async fn handshake(&self, receipt: Option<AttemptReceipt>, dialed_url: &str) -> Handshake {
+        // Native shell: the OS keyring is the only credential store. Decide
+        // BEFORE `panel_device_identity` / `read_connect_credentials`, both of
+        // which touch localStorage.
+        if native_expected() {
+            return self.native_handshake_branch(receipt, dialed_url).await;
+        }
         let (device_id, device_name) = panel_device_identity();
         let creds = read_connect_credentials();
         let mut params = serde_json::json!({
@@ -1269,7 +1536,13 @@ impl DashboardState {
 
         // `send_rpc`, not `rpc_call`: this call is what makes the socket
         // authorized, so waiting for authorization here would deadlock.
-        let resp = match self.send_rpc("connect", params).await {
+        let response = self.send_rpc("connect", params).await;
+        if !attempt_current(&receipt)
+            || self.gateway_url.try_get_untracked().as_deref() != Some(dialed_url)
+        {
+            return Handshake::Superseded;
+        }
+        let resp = match response {
             Ok(r) => r,
             Err(e) => {
                 return Handshake::Failed(classify(
@@ -1306,8 +1579,124 @@ impl DashboardState {
         }
     }
 
+    /// Native handshake via the Bridge keyring. Reuses the existing
+    /// `connect` RPC on the already-open socket (`send_rpc`), so no second
+    /// socket exists. Every state write after an await is fenced by the
+    /// attempt receipt and uses `try_set`.
+    async fn native_handshake_branch(
+        &self,
+        receipt: Option<AttemptReceipt>,
+        dialed_url: &str,
+    ) -> Handshake {
+        let Some(receipt) = receipt else {
+            // Attempt counter exhausted: fail closed.
+            return Handshake::Failed(classify(
+                FailureStage::Handshake,
+                Some("Gateway connection failed"),
+                false,
+            ));
+        };
+        let state = *self;
+        let auth = self.native_auth.get_value();
+        // A pairing ticket from the URL goes to memory and leaves the URL; it
+        // is never written to localStorage.
+        if let Some(ticket) = ticket_from_search(&location_search()) {
+            auth.stash_ticket(ticket);
+            scrub_credentials_from_url();
+        }
+        let device_name = native_device_name();
+        let dialed = dialed_url.to_string();
+        let current = || {
+            receipt.is_current()
+                && state.gateway_url.try_get_untracked().as_deref() == Some(dialed.as_str())
+        };
+        let send_receipt = receipt.clone();
+        let outcome = native_handshake(
+            &TauriIpc,
+            HandshakeRequest {
+                dialed_url: &dialed,
+                device_name: &device_name,
+                auth: &auth,
+                new_device_id: &new_device_id,
+            },
+            &current,
+            move |params| async move {
+                match state.send_rpc("connect", params).await {
+                    Ok(resp) => {
+                        if send_receipt.is_current() {
+                            let walled = resp
+                                .get("needs_token")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false);
+                            let _ = state.needs_token.try_set(walled);
+                        }
+                        Ok(resp)
+                    }
+                    // The transport message can echo the dialed URL: drop it.
+                    Err(_) => Err(ConnectSendError),
+                }
+            },
+        )
+        .await;
+        if !current() {
+            return Handshake::Superseded;
+        }
+        match outcome {
+            NativeOutcome::Protected { user_id } => {
+                let _ = state.needs_token.try_set(false);
+                let _ = state.token_was_rejected.try_set(false);
+                let _ = state.protected_user.try_set(Some(user_id));
+                Handshake::Authorized
+            }
+            // Works, but is NOT protected.
+            NativeOutcome::Credentialless => {
+                let _ = state.needs_token.try_set(false);
+                let _ = state.token_was_rejected.try_set(false);
+                Handshake::Authorized
+            }
+            NativeOutcome::NeedsToken { was_rejected } => {
+                let _ = state.protected_user.try_set(None);
+                Handshake::NeedsToken { was_rejected }
+            }
+            NativeOutcome::Superseded => Handshake::Superseded,
+            NativeOutcome::Failed(f) => {
+                let _ = state.protected_user.try_set(None);
+                Handshake::Failed(classify(FailureStage::Handshake, Some(f.message()), false))
+            }
+        }
+    }
+
     /// Connect to the gateway
     pub async fn connect(&self) -> Result<(), String> {
+        let auth = self
+            .native_auth
+            .try_get_value()
+            .ok_or("Connection owner closed")?;
+        let receipt = auth.begin();
+        if receipt.is_none() {
+            let _ = self.disconnect().await;
+            return Err("Connection attempts exhausted".to_string());
+        }
+        self.connect_attempt(receipt).await
+    }
+
+    async fn connect_attempt(&self, receipt: Option<AttemptReceipt>) -> Result<(), String> {
+        // Every attempt starts a fresh fence and forgets the previous User; a
+        // plain browser simply never sets it again.
+        if !attempt_current(&receipt) {
+            return Ok(());
+        }
+        let native = native_expected();
+        let _ = self.protected_user.try_set(None);
+        let _ = self.is_connected.try_set(false);
+        let mut previous = None;
+        let _ = self
+            .disconnect_tx
+            .try_update_value(|slot| previous = slot.take());
+        if let Some(previous) = previous {
+            let _ = previous.send(());
+        }
+        let _ = self.rpc_tx.try_set_value(None);
         let url = self.gateway_url.get();
         if url.is_empty() {
             // `derive_gateway_url()` refused to build a plaintext socket URL
@@ -1338,6 +1727,12 @@ impl DashboardState {
                 }
             }
         };
+        if !attempt_current(&receipt)
+            || self.gateway_url.try_get_untracked().as_deref() != Some(url.as_str())
+        {
+            let _ = connector.disconnect().await;
+            return Ok(());
+        }
         match open_result {
             Ok(()) => {
                 // Get the message stream
@@ -1353,6 +1748,12 @@ impl DashboardState {
 
                 // Clone state for message loop
                 let state = *self;
+                let loop_receipt = receipt.clone();
+                let Some(loop_auth) = self.native_auth.try_get_value() else {
+                    let _ = connector.disconnect().await;
+                    return Ok(());
+                };
+                let loop_url = url.clone();
 
                 // Spawn message loop task that owns the connector
                 spawn_local(async move {
@@ -1361,10 +1762,7 @@ impl DashboardState {
                     let mut stream = stream.fuse();
                     let mut rpc_rx = rpc_rx.fuse();
                     let mut disconnect_rx = disconnect_rx.fuse();
-                    let mut pending_rpcs: HashMap<
-                        String,
-                        oneshot::Sender<Result<Value, RpcFailure>>,
-                    > = HashMap::new();
+                    let mut pending_rpcs: PendingRpcs = HashMap::new();
                     // Track whether the loop exited because of an explicit
                     // disconnect() call (no auto-reconnect) or an unintentional
                     // drop (auto-reconnect to drive ConnectionPhase::Reconnecting
@@ -1374,10 +1772,19 @@ impl DashboardState {
                     let mut drop_reason: Option<String> = None;
 
                     loop {
+                        if !attempt_current(&loop_receipt)
+                            || state.gateway_url.try_get_untracked().as_deref()
+                                != Some(loop_url.as_str())
+                        {
+                            let _ = connector.disconnect().await;
+                            break;
+                        }
                         // Use futures::select! to handle multiple async operations
                         futures::select! {
                             // Handle incoming RPC requests
                             rpc_req = rpc_rx.select_next_some() => {
+                                if !attempt_current(&loop_receipt) || state.gateway_url.try_get_untracked().as_deref() != Some(loop_url.as_str()) { break; }
+                                let credential_request = rpc_req.method == "connect";
                                 // Build JSON-RPC request
                                 let request = serde_json::json!({
                                     "jsonrpc": "2.0",
@@ -1386,21 +1793,26 @@ impl DashboardState {
                                     "params": rpc_req.params
                                 });
 
-                                // Send request
-                                match connector.send(request).await {
-                                    Ok(()) => {
-                                        // Store pending request
-                                        pending_rpcs.insert(rpc_req.id, rpc_req.response_tx);
-                                    }
-                                    Err(e) => {
-                                        web_sys::console::error_1(&format!("Failed to send RPC: {e:?}").into());
-                                        let _ = rpc_req.response_tx.send(Err(RpcFailure::local(e.to_string())));
-                                    }
-                                }
+                                // Register the pending response, then send
+                                // (see `send_tracked`).
+                                send_tracked(
+                                    &mut pending_rpcs,
+                                    rpc_req.id,
+                                    rpc_req.response_tx,
+                                    |_| connector.send(request),
+                                    |e| {
+                                        let detail = if native || credential_request {
+                                            "Gateway request could not be sent".to_string()
+                                        } else { e.to_string() };
+                                        web_sys::console::error_1(&detail.clone().into());
+                                        RpcFailure::local(detail)
+                                    },
+                                ).await;
                             }
 
                             // Handle incoming WebSocket messages
                             msg = stream.select_next_some() => {
+                                if !attempt_current(&loop_receipt) || state.gateway_url.try_get_untracked().as_deref() != Some(loop_url.as_str()) { break; }
                                 match msg {
                                     Ok(value) => {
                                         // Never log per-frame breadcrumbs here: a streaming run
@@ -1458,8 +1870,13 @@ impl DashboardState {
                                         }
                                     }
                                     Err(e) => {
-                                        web_sys::console::error_1(&format!("Message loop error: {e:?}").into());
-                                        drop_reason = Some(format!("WebSocket dropped: {e}"));
+                                        let detail = if native {
+                                            if matches!(classify(FailureStage::AfterOpen, Some(&e.to_string()), false), ConnectionFailure::AuthRequired) {
+                                                "auth required".to_string()
+                                            } else { "Protected connection closed".to_string() }
+                                        } else { format!("WebSocket dropped: {e}") };
+                                        web_sys::console::error_1(&detail.clone().into());
+                                        drop_reason = Some(detail);
                                         break;
                                     }
                                 }
@@ -1485,7 +1902,11 @@ impl DashboardState {
                         }
                     }
 
+                    let _ = connector.disconnect().await;
                     web_sys::console::log_1(&"Message loop stopped".into());
+                    if !attempt_current(&loop_receipt) {
+                        return;
+                    }
 
                     // Unintentional drop: flip is_connected so ConnectionPhase
                     // re-derives, then kick off reconnect() from a fresh task
@@ -1497,6 +1918,12 @@ impl DashboardState {
                     // any error as terminal). The drop_reason is logged for
                     // dev-console debugging.
                     if !intentional_close {
+                        // Only the newest attempt may forget the User; a stale
+                        // loop must not clear a newer attempt's state.
+                        if attempt_current(&loop_receipt) {
+                            loop_auth.invalidate();
+                            let _ = state.protected_user.try_set(None);
+                        }
                         if let Some(reason) = drop_reason.as_deref() {
                             web_sys::console::warn_1(
                                 &format!(
@@ -1526,21 +1953,44 @@ impl DashboardState {
                             // server has already killed it: say so in the wall copy, and
                             // drop it so the next page load doesn't re-present a corpse.
                             state.token_was_rejected.set(true);
-                            clear_credentials();
+                            if !native {
+                                clear_credentials();
+                            }
                         }
                         state.is_connected.set(false);
                         // Clear the dead rpc_tx so the next rpc_call() won't
                         // block on a sender whose receiver task just exited.
                         state.rpc_tx.set_value(None);
+                        let retry_receipt = loop_auth.begin();
                         spawn_local(async move {
-                            let _ = state.reconnect().await;
+                            let _ = state.reconnect_attempt(retry_receipt, loop_url).await;
                         });
                     }
                 });
 
                 // Complete the session handshake before marking as connected.
                 let handshake_state = *self;
-                match handshake_state.handshake().await {
+                let handshake = handshake_state.handshake(receipt.clone(), &url).await;
+                if !attempt_current(&receipt) {
+                    return Ok(());
+                }
+                if native
+                    && matches!(
+                        &handshake,
+                        Handshake::NeedsToken { .. } | Handshake::Failed(_) | Handshake::Superseded
+                    )
+                {
+                    let mut sender = None;
+                    let _ = self
+                        .disconnect_tx
+                        .try_update_value(|slot| sender = slot.take());
+                    if let Some(sender) = sender {
+                        let _ = sender.send(());
+                    }
+                    let _ = self.rpc_tx.try_set_value(None);
+                }
+                match handshake {
+                    Handshake::Superseded => Ok(()),
                     Handshake::Authorized => {
                         self.is_connected.set(true);
                         self.connection_error.set(None);
@@ -1575,9 +2025,11 @@ impl DashboardState {
                                 |params| state_for_subscribe.rpc_call("events.subscribe", params),
                             )
                             .await;
-                            for (topic, e) in failed {
+                            // Topic + kind only: the server's message may echo
+                            // params or credentials (see `subscribe_diagnostic`).
+                            for (topic, _message) in failed {
                                 web_sys::console::error_1(
-                                    &format!("Failed to subscribe to {topic} events: {e}").into(),
+                                    &format!("events.subscribe {topic}: error (replay)").into(),
                                 );
                             }
                         });
@@ -1629,8 +2081,15 @@ impl DashboardState {
                 } else {
                     OriginLiveness::Unknown
                 };
+                if !attempt_current(&receipt) {
+                    return Ok(());
+                }
                 let stage = stage_for_connect_error(&e, origin);
-                let detail = e.to_string();
+                let detail = if native {
+                    "Gateway connection failed".to_string()
+                } else {
+                    e.to_string()
+                };
                 self.set_failure(classify(stage, Some(&detail), false));
                 Err(detail)
             }
@@ -1639,8 +2098,16 @@ impl DashboardState {
 
     /// Disconnect from the gateway
     pub async fn disconnect(&self) -> Result<(), String> {
+        // A queued native action may first run after its reactive owner is gone.
+        let Some(auth) = self.native_auth.try_get_value() else {
+            return Ok(());
+        };
         // Cleanup alert subscriptions first
         self.cleanup_alert_subscriptions();
+
+        // Invalidate every outstanding native attempt and forget the User.
+        auth.invalidate();
+        let _ = self.protected_user.try_set(None);
 
         // Send disconnect signal to message loop (take ownership)
         let mut tx_opt = None;
@@ -1666,6 +2133,25 @@ impl DashboardState {
     /// token is wasted); every other class uses exponential backoff with
     /// downward jitter, reusing the shared `ReconnectStrategy`.
     pub async fn reconnect(&self) -> Result<(), String> {
+        let Some(auth) = self.native_auth.try_get_value() else {
+            return Ok(());
+        };
+        let Some(scope) = self.gateway_url.try_get_untracked() else {
+            return Ok(());
+        };
+        self.reconnect_attempt(auth.begin(), scope).await
+    }
+
+    async fn reconnect_attempt(
+        &self,
+        mut retry_receipt: Option<AttemptReceipt>,
+        scope: String,
+    ) -> Result<(), String> {
+        if !attempt_current(&retry_receipt)
+            || self.gateway_url.try_get_untracked().as_deref() != Some(scope.as_str())
+        {
+            return Ok(());
+        }
         use crate::state::connection::MAX_RECONNECT_ATTEMPTS;
         use shared_ui_logic::connection::{ConnectionFailure, ReconnectStrategy};
 
@@ -1678,6 +2164,9 @@ impl DashboardState {
             return Ok(());
         }
 
+        let Some(auth) = self.native_auth.try_get_value() else {
+            return Ok(());
+        };
         self.is_reconnecting.set(true);
         let mut strategy = ReconnectStrategy::new(MAX_RECONNECT_ATTEMPTS, 1000);
         let mut attempt: u32 = 0;
@@ -1691,7 +2180,17 @@ impl DashboardState {
         } {
             self.reconnect_count.set(attempt);
             TimeoutFuture::new(delay as u32).await;
-            match self.connect().await {
+            if !attempt_current(&retry_receipt)
+                || self.gateway_url.try_get_untracked().as_deref() != Some(scope.as_str())
+            {
+                return Ok(());
+            }
+            retry_receipt = auth.begin();
+            let result = self.connect_attempt(retry_receipt.clone()).await;
+            if !attempt_current(&retry_receipt) {
+                return Ok(());
+            }
+            match result {
                 Ok(()) => {
                     // connect() returns Ok for both Authorized and NeedsToken;
                     // if it walled, stop here (TokenWall covers it).
@@ -1717,11 +2216,6 @@ impl DashboardState {
     /// updates the DashboardState.alerts `HashMap` when events arrive.
     /// It also fetches initial alert states on mount.
     pub async fn setup_alert_subscriptions(&self) -> Result<(), String> {
-        // Subscribe to alert events on the Gateway
-        self.subscribe_topic("alerts.**").await?;
-
-        web_sys::console::log_1(&"Subscribed to alerts.** events".into());
-
         // Load initial alert states
         let state_for_init = *self;
         spawn_local(async move {
@@ -1791,7 +2285,10 @@ impl DashboardState {
         // Store subscription ID for cleanup
         self.alert_subscription_id.set_value(Some(subscription_id));
 
-        Ok(())
+        // Subscribe last: the handler above exists even when this fails (the
+        // reconnect replay seeds `alerts.**` regardless), and a slow or failing
+        // subscribe cannot keep it from being registered.
+        self.subscribe_topic("alerts.**").await
     }
 
     /// Refetch pending telecom approvals. `Some(Ok(()))` means the operator-only
@@ -1868,15 +2365,10 @@ impl DashboardState {
     /// (ids only), so `exec.approvals.pending` is the source of truth: any
     /// approval event simply triggers a refetch.
     pub async fn setup_approval_subscriptions(&self) -> Result<(), String> {
-        self.subscribe_topic("approval.**").await?;
-        web_sys::console::log_1(&"Subscribed to approval.** events".into());
-
-        // Seed with whatever is already pending at connect time.
-        if let Ok(list) = ExecApprovalApi::list_pending(self).await {
-            self.pending_approvals.set(list);
-        }
-        self.refresh_telecom_approvals().await;
-
+        // The refetch counter lets the seed below notice that an event already
+        // delivered a newer list.
+        let refetches = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let handler_refetches = Arc::clone(&refetches);
         let state = *self;
         let subscription_id =
             self.subscribe_events(move |event: GatewayEvent| match event.topic.as_str() {
@@ -1885,6 +2377,7 @@ impl DashboardState {
                 // be one round trip per reminder for a list that cannot have
                 // changed. Its audience is the desktop shell's OS banner.
                 "approval.requested" | "approval.resolved" | "approval.expired" => {
+                    handler_refetches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     spawn_local(async move {
                         if let Ok(list) = ExecApprovalApi::list_pending(&state).await {
                             state.pending_approvals.set(list);
@@ -1897,7 +2390,39 @@ impl DashboardState {
 
         self.approval_subscription_id
             .set_value(Some(subscription_id));
-        Ok(())
+
+        // Seed with whatever is already pending at connect time — AFTER the
+        // handler exists (an event during the fetch is no longer missed) and
+        // off this path: the mount effect awaits this method before it would
+        // otherwise move on, so a slow `exec.approvals.pending` (30 s ceiling)
+        // must not hold anything behind it. One task per call, one bounded RPC,
+        // applied only if still current.
+        let epoch = self
+            .connection_epoch
+            .try_get_untracked()
+            .unwrap_or(u64::MAX);
+        let edits = refetches.load(std::sync::atomic::Ordering::SeqCst);
+        let seed_state = *self;
+        spawn_local(async move {
+            if let Ok(list) = ExecApprovalApi::list_pending(&seed_state).await {
+                let applies = approval_seed_applies(
+                    epoch,
+                    seed_state
+                        .connection_epoch
+                        .try_get_untracked()
+                        .unwrap_or(u64::MAX),
+                    edits,
+                    refetches.load(std::sync::atomic::Ordering::SeqCst),
+                );
+                if applies {
+                    let _ = seed_state.pending_approvals.try_set(list);
+                }
+            }
+            seed_state.refresh_telecom_approvals().await;
+        });
+
+        // Subscribe last, same reason as `setup_alert_subscriptions`.
+        self.subscribe_topic("approval.**").await
     }
 
     /// Load initial alert states from Gateway
@@ -2047,6 +2572,55 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
 }
 
 #[cfg(test)]
+mod native_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn a_delayed_retry_does_not_supersede_a_new_connection() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let state = DashboardState::new();
+            let scope = state.gateway_url.get_untracked();
+            let auth = state.native_auth.get_value();
+            let retry = state.reconnect_attempt(auth.begin(), scope);
+            let new_attempt = auth.begin().unwrap();
+            state.protected_user.set(Some("new-user".into()));
+            state.is_connected.set(true);
+            futures::executor::block_on(retry).unwrap();
+            assert!(new_attempt.is_current());
+            assert!(state.is_connected.get_untracked());
+            assert_eq!(
+                state.protected_user.get_untracked().as_deref(),
+                Some("new-user")
+            );
+        });
+        owner.cleanup();
+    }
+
+    #[test]
+    fn queued_disconnect_is_harmless_after_dashboard_disposal() {
+        let owner = Owner::new();
+        let state = owner.with(DashboardState::new);
+        let pending = state.disconnect();
+        owner.cleanup();
+        futures::executor::block_on(pending).unwrap();
+    }
+
+    #[test]
+    fn destroying_the_dashboard_invalidates_the_native_attempt() {
+        let owner = Owner::new();
+        let receipt = owner.with(|| {
+            DashboardState::new()
+                .native_auth
+                .with_value(|auth| auth.begin().unwrap())
+        });
+        assert!(receipt.is_current());
+        owner.cleanup();
+        assert!(!receipt.is_current());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     // `role_is_operator` was imported here until 2026-08-08 — by NOTHING, the
     // import line was its only mention. It went out with the client-side role
@@ -2056,6 +2630,7 @@ mod tests {
     // a day: every test in this crate stopped compiling, so none of them ran
     // and none of them could fail.
     use super::{
+        approval_seed_applies,
         // `role_is_operator` was removed with the cached `role` field (see the
         // 2026-08-07 note above); nothing in this module used it and only the
         // test tree still named it, so `cargo check -p aleph-panel` stayed
@@ -2065,10 +2640,16 @@ mod tests {
         query_with_bootstrap_ticket,
         replay_set,
         replay_subscriptions,
+        send_tracked,
         strip_params,
+        subscribe_diagnostic,
+        subscribe_recorded,
         ws_url_for,
         GatewayReadiness,
+        PendingRpcs,
+        RpcFailure,
         SubmittedCredential,
+        SubscribeError,
         BASE_TOPICS,
         GATEWAY_NOT_READY,
     };
@@ -2198,6 +2779,238 @@ mod tests {
             "the phone's carve-out must be re-sent: {sent:?}"
         );
         assert!(sent.contains(&wire("team.*", vec![])), "{sent:?}");
+    }
+
+    // ---- Subscription ledger: records successes only, fenced by epoch ----
+
+    fn entry(topic: &str) -> super::LedgerEntry {
+        (topic.to_string(), Vec::new())
+    }
+
+    fn new_ledger() -> std::sync::Mutex<BTreeSet<super::LedgerEntry>> {
+        std::sync::Mutex::new(BTreeSet::new())
+    }
+
+    fn ledger_topics(l: &std::sync::Mutex<BTreeSet<super::LedgerEntry>>) -> Vec<String> {
+        l.lock().unwrap().iter().map(|(t, _)| t.clone()).collect()
+    }
+
+    fn ok_reply() -> std::future::Ready<Result<serde_json::Value, RpcFailure>> {
+        std::future::ready(Ok(serde_json::Value::Null))
+    }
+
+    /// The defect: the ledger was written BEFORE the RPC, so a subscribe the
+    /// server never accepted was replayed as if it had succeeded.
+    #[test]
+    fn a_successful_subscribe_is_filed_in_the_ledger() {
+        let l = new_ledger();
+        let r = futures::executor::block_on(subscribe_recorded(
+            &l,
+            entry("approval.**"),
+            3,
+            || Some(3),
+            ok_reply(),
+        ));
+        assert_eq!(r, Ok(()));
+        assert_eq!(ledger_topics(&l), vec!["approval.**".to_string()]);
+    }
+
+    #[test]
+    fn a_failed_subscribe_leaves_no_ledger_entry() {
+        let l = new_ledger();
+        let r = futures::executor::block_on(subscribe_recorded(
+            &l,
+            entry("approval.**"),
+            3,
+            || Some(3),
+            std::future::ready(Err(RpcFailure::local("Request timed out"))),
+        ));
+        assert!(matches!(r, Err(SubscribeError::Rpc(_))), "{r:?}");
+        assert!(
+            ledger_topics(&l).is_empty(),
+            "a failure must not be replayed"
+        );
+    }
+
+    /// A reply that lands after a reconnect was issued on the old socket; it
+    /// says nothing about the new socket's (empty) server-side filter.
+    #[test]
+    fn a_stale_epoch_success_does_not_touch_the_ledger() {
+        let l = new_ledger();
+        let r = futures::executor::block_on(subscribe_recorded(
+            &l,
+            entry("config.**"),
+            3,
+            || Some(4),
+            ok_reply(),
+        ));
+        assert_eq!(r, Err(SubscribeError::Superseded));
+        assert!(ledger_topics(&l).is_empty());
+    }
+
+    /// Disconnected at reply time is the same verdict as a newer epoch.
+    #[test]
+    fn a_success_after_the_socket_dropped_does_not_touch_the_ledger() {
+        let l = new_ledger();
+        let r = futures::executor::block_on(subscribe_recorded(
+            &l,
+            entry("config.**"),
+            3,
+            || None,
+            ok_reply(),
+        ));
+        assert_eq!(r, Err(SubscribeError::Superseded));
+        assert!(ledger_topics(&l).is_empty());
+    }
+
+    #[test]
+    fn a_duplicate_successful_subscribe_keeps_one_entry() {
+        let l = new_ledger();
+        for _ in 0..2 {
+            futures::executor::block_on(subscribe_recorded(
+                &l,
+                entry("alerts.**"),
+                1,
+                || Some(1),
+                ok_reply(),
+            ))
+            .unwrap();
+        }
+        assert_eq!(ledger_topics(&l).len(), 1);
+    }
+
+    /// The carve-out is part of the key: the phone's `stream.*` minus
+    /// reasoning and a plain `stream.*` are two successful subscriptions.
+    #[test]
+    fn the_carve_out_is_part_of_the_recorded_key() {
+        let l = new_ledger();
+        let phone = ("stream.*".to_string(), vec!["stream.reasoning".to_string()]);
+        for e in [entry("stream.*"), phone] {
+            futures::executor::block_on(subscribe_recorded(&l, e, 1, || Some(1), ok_reply()))
+                .unwrap();
+        }
+        assert_eq!(l.lock().unwrap().len(), 2);
+    }
+
+    /// Reconnect replay re-offers the successes (plus the always-seeded base
+    /// topics) and nothing that never succeeded.
+    #[test]
+    fn replay_only_replays_successful_entries() {
+        let l = new_ledger();
+        futures::executor::block_on(subscribe_recorded(
+            &l,
+            entry("browser.live.resource"),
+            1,
+            || Some(1),
+            ok_reply(),
+        ))
+        .unwrap();
+        let _ = futures::executor::block_on(subscribe_recorded(
+            &l,
+            entry("browser.live.closed"),
+            1,
+            || Some(1),
+            std::future::ready(Err(RpcFailure::local("boom"))),
+        ));
+        let _ = futures::executor::block_on(subscribe_recorded(
+            &l,
+            entry("session.artifact"),
+            1,
+            || Some(2),
+            ok_reply(),
+        ));
+        let snapshot = l.lock().unwrap().clone();
+        let replay = replay_set(&snapshot);
+        assert!(replayed(&replay, "browser.live.resource"));
+        assert!(!replayed(&replay, "browser.live.closed"), "{replay:?}");
+        assert!(!replayed(&replay, "session.artifact"), "{replay:?}");
+        for base in BASE_TOPICS {
+            assert!(replayed(&replay, base), "{base} is always seeded");
+        }
+    }
+
+    /// The console line carries the topic and an error KIND only: never the
+    /// server's message (which may echo params, URLs or credentials).
+    #[test]
+    fn the_diagnostic_names_topic_and_kind_but_not_the_message() {
+        let secret = "ticket=abc123 url=ws://h/?token=xyz";
+        let server = Err(SubscribeError::Rpc(RpcFailure {
+            code: Some(-32000),
+            message: secret.to_string(),
+        }));
+        let local = Err(SubscribeError::Rpc(RpcFailure::local(secret)));
+        let stale = Err(SubscribeError::Superseded);
+        let ok = Ok(());
+        let lines = [
+            subscribe_diagnostic("approval.**", &ok),
+            subscribe_diagnostic("approval.**", &server),
+            subscribe_diagnostic("approval.**", &local),
+            subscribe_diagnostic("approval.**", &stale),
+        ];
+        for line in &lines {
+            assert!(line.contains("approval.**"), "{line}");
+            for leak in ["abc123", "token", "ws://", "ticket", "-32000"] {
+                assert!(!line.contains(leak), "{line} leaks {leak}");
+            }
+        }
+        assert!(lines[0].contains("ok"));
+        assert!(lines[1].contains("server"));
+        assert!(lines[2].contains("local"));
+        assert!(lines[3].contains("superseded"));
+    }
+
+    /// A request is filed as pending BEFORE it is sent, so no reply can arrive
+    /// for an id nobody is waiting for; the send closure observes the map.
+    #[test]
+    fn a_request_is_registered_before_it_is_sent() {
+        let mut pending = PendingRpcs::new();
+        let (tx, mut rx) = futures::channel::oneshot::channel();
+        let mut registered_at_send = false;
+        futures::executor::block_on(send_tracked(
+            &mut pending,
+            "7".to_string(),
+            tx,
+            |p| {
+                registered_at_send = p.contains_key("7");
+                std::future::ready(Ok::<(), String>(()))
+            },
+            RpcFailure::local,
+        ));
+        assert!(
+            registered_at_send,
+            "must be registered when the send starts"
+        );
+        assert!(pending.contains_key("7"), "stays pending until the reply");
+        assert!(rx.try_recv().unwrap().is_none(), "nothing answered yet");
+    }
+
+    /// A failed send removes the entry and answers the caller once, with the
+    /// failure `on_error` minted (no code: it is local, not a server verdict).
+    #[test]
+    fn a_failed_send_unregisters_and_answers_the_caller() {
+        let mut pending = PendingRpcs::new();
+        let (tx, mut rx) = futures::channel::oneshot::channel();
+        futures::executor::block_on(send_tracked(
+            &mut pending,
+            "8".to_string(),
+            tx,
+            |_| std::future::ready(Err::<(), &str>("closed")),
+            |e| RpcFailure::local(format!("could not send: {e}")),
+        ));
+        assert!(pending.is_empty(), "a failed send must not leak an entry");
+        assert_eq!(
+            rx.try_recv().unwrap().unwrap().unwrap_err(),
+            RpcFailure::local("could not send: closed")
+        );
+    }
+
+    /// The approval seed is discarded when the socket was replaced or an event
+    /// already delivered a newer list; otherwise it applies.
+    #[test]
+    fn a_stale_approval_seed_is_discarded() {
+        assert!(approval_seed_applies(3, 3, 0, 0));
+        assert!(!approval_seed_applies(3, 4, 0, 0), "new connection");
+        assert!(!approval_seed_applies(3, 3, 0, 1), "newer event refetch");
     }
 
     /// The reconnect replay is also a *narrowing*: an empty gateway-side filter

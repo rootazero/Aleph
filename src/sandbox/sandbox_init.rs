@@ -258,6 +258,8 @@ fn seccomp_net_for(network: &crate::sandbox::capabilities::NetworkPolicy) -> Sec
             SeccompNetworkMode::ProxyRouted
         }
         NetworkPolicy::AllowHosts { .. } => SeccompNetworkMode::Unrestricted,
+        // Never reaches a Linux launch (bwrap rejects it); fail closed anyway.
+        NetworkPolicy::LoopbackPorts { .. } => SeccompNetworkMode::UnixOnly,
     }
 }
 

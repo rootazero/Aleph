@@ -152,7 +152,7 @@ pub async fn connect_to(app: tauri::AppHandle, raw: String) -> Result<(), String
     }
     // Reachable: persist + re-route through the shared connection path so the
     // external-link allow-list and webview navigation stay in one place.
-    connection::set_connection_target(app, raw)
+    connection::set_connection_target(app, raw).await
 }
 
 #[cfg(test)]

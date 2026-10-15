@@ -116,6 +116,14 @@ graphify-out/
 .pi/
 # Local third-party reference source cache
 .ref-cache/
+# Local agent/analysis scratch dir (test logs, cargo scratch, fingerprint caches,
+# run reports). Already-tracked files inside remain tracked; the rule prevents
+# future additions and matches the 2026-10-12 housekeeping decision.
+/.analysis/
+# Root-level analysis status snapshot emitted by tooling
+/.analysis-status.txt
+# Windows reserved-device-name stray file (accidental `> nul` redirection)
+/nul
 # rust-doctor per-crate diagnostic cache (regenerated on each scan)
 .rust-doctor-cache.json
 **/.rust-doctor-cache.json

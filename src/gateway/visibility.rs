@@ -232,6 +232,18 @@ pub fn run_principal() -> RunPrincipal {
     run_principal_in(crate::gateway::security::store::slot::multi_user())
 }
 
+/// [`run_principal`] for a caller that must attribute work to the RUN alone
+/// (browser-live publication): the gateway RPC identity (`CALLER_USER`) is
+/// masked for the duration of the derivation, so a foreign connection that
+/// is live on the same task can never re-attribute the run. Everything else
+/// -- the seeded room speaker, the scope owner, the speakerless-room
+/// fail-closed rule and the mode verdict -- is [`run_principal`] itself, not
+/// a second derivation.
+#[must_use]
+pub fn run_principal_sans_caller() -> RunPrincipal {
+    crate::gateway::caller_identity::CALLER_USER.sync_scope(None, run_principal)
+}
+
 /// [`run_principal`] with the server's mode explicit — lib tests never
 /// install the users store, so this is where both modes meet the ambient
 /// scope.
@@ -605,6 +617,21 @@ mod tests {
     use crate::gateway::caller_identity::CALLER_USER;
     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
     use tempfile::TempDir;
+
+    /// A foreign `CALLER_USER` never reaches `run_principal_sans_caller`: the run's
+    /// scope owner answers, and with no run scope nobody is attached.
+    #[test]
+    fn run_principal_sans_caller_ignores_the_gateway_caller() {
+        let foreign = || {
+            CALLER_USER.sync_scope(Some("foreign".to_string()), || {
+                (run_principal_in(false), run_principal_sans_caller())
+            })
+        };
+        let (plain, only) = foreign();
+        assert_eq!(plain, RunPrincipal::Person("foreign".to_string()));
+        assert_ne!(only, plain);
+        assert!(!matches!(only, RunPrincipal::Person(ref p) if p == "foreign"));
+    }
 
     /// `ambient_actor` falls back to the turn's AGENT id when no principal is
     /// in scope; `ambient_principal` must not — a caller that composes with
@@ -1235,6 +1262,10 @@ mod tests {
         (
             "src/builtin_tools/canvas.rs",
             "who-owns: stamps a new canvas row's owner (the projects.rs shape); every VISIBILITY question in that file goes through ambient_canvas_visible / ambient_actor",
+        ),
+        (
+            "src/gateway/caller_identity.rs",
+            "test-only: the task-local seeding test asserts `scope::ambient_owner()` follows CALLER_USER; no production call",
         ),
     ];
 

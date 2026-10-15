@@ -542,6 +542,16 @@ it is a pure I/O interface (redline R4): user input → JSON-RPC request, and
 `StreamEvent`s → rendered output. See
 [FEATURE_LOCATOR.md](FEATURE_LOCATOR.md) §5.13 for the file-level map.
 
+### Browser Live Viewer (Panel browser workspace)
+<!-- browser-live-docs:begin -->
+Browser execution stays in the Gateway/Core (`src/browser/`, `crates/aleph-cdp`); the Panel Browser tab and the TUI launcher never speak CDP. The Gateway issues one-shot viewer grants and carries the viewer WebSocket (`src/gateway/server/browser_live_runtime.rs`, `src/gateway/handlers/browser_viewer.rs`); Panel renders and collects local input only (R2/R4), and `interfaces/tui/src/viewer_launcher.rs` is a disabled-by-default local launch seam. Layers, call chain and status table: [BROWSER_LIVE_VIEWER.md](BROWSER_LIVE_VIEWER.md).
+
+浏览器执行留在 Gateway/Core；Panel / TUI 不碰 CDP。
+
+- **共同边界 / Shared boundary**：Gateway 独占 CDP（Gateway owns CDP）；Panel/TUI 仅 I/O only 呈现；仅显式合法 `[gateway] browser_viewer_origin` 才 opt-in，默认（None / 非法）deny-only；producer 的 `Safe` 被钳为 `Pending`，`Safe` 只来自用户经 `browser.viewer.resource.decide` 的 revision CAS；绑定走精确 binding / owner / generation；#27 TUI paired/browser 已接线，Windows Credential Manager standalone probe 1/1 已通过；macOS/Linux provider 与真实 pairing/browser E2E 仍 blocked；`NetworkContextGrant` / proxy 未触碰；**not production ready**。
+Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[gateway] browser_viewer_origin`, default deny-only; producer `Safe` is clamped to `Pending` and `Safe` comes only from the user's decision CAS; exact binding/owner/generation; #27 TUI paired/browser wiring is implemented; the Windows Credential Manager standalone probe passed 1/1; macOS/Linux providers and real pairing/browser E2E remain blocked; network grants untouched; not production ready.
+<!-- browser-live-docs:end -->
+
 ---
 
 ## Identity Context Flow

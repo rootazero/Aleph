@@ -192,7 +192,7 @@ fn handshake_error(msg: &Value) -> Option<String> {
 
 /// Build the `EventBus` WS URL for a target. Local → the loopback default;
 /// Remote → `ws(s)://host:port/ws` derived from the target origin (https→wss).
-fn ws_url(target: &crate::connection::ConnectionTarget) -> String {
+pub(crate) fn ws_url(target: &crate::connection::ConnectionTarget) -> String {
     match target {
         crate::connection::ConnectionTarget::Local => WS_URL.to_string(),
         crate::connection::ConnectionTarget::Remote(url) => {

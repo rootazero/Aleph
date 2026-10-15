@@ -170,7 +170,8 @@ disabled-tests = []
 # until the runtime lands.
 plugin-wasm = []
 [dependencies]
-tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }
+# 1.41: `tokio::task::Id`, `task::try_id`, `AbortHandle::id` are stable from 1.41.0 (used by browser routes, subagent loop_tool, resume_coordinator).
+tokio = { version = "1.41", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }
 tokio-util = { version = "0.7", features = ["rt", "compat"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -371,6 +372,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Pipes",
     "Win32_System_Memory",           # SP-3a (LocalFree) + SP-6 (HeapAlloc/HeapFree)
     "Win32_System_SystemServices",   # SP-6: PROC_THREAD_ATTRIBUTE_* constants
+    "Win32_NetworkManagement_WindowsFilteringPlatform", # #48/#53: per-run WFP confinement
+    "Win32_System_Rpc",              # #48/#53: Fwpm engine authn constants
 ] }
 
 [build-dependencies]
@@ -412,7 +415,7 @@ rand = "0.10"
 http-body-util = "0.1"
 wiremock = "0.6"
 insta = "1"
-tokio = { version = "1.35", features = ["test-util"] }
+tokio = { version = "1.41", features = ["test-util"] }
 
 [[bench]]
 name = "memory_benchmarks_simple"

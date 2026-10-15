@@ -1,6 +1,10 @@
 //! P3 Stage I — `McpScopedToolService` layers per-agent MCP scope tools UNDER
 //! the existing `AllowlistToolService` gate. Parent's tools take precedence;
 //! `extras` fill in tools the parent doesn't expose.
+//!
+//! **Projection-only boundary:** this service exposes a scoped projection under
+//! the parent's authorization gate. `extras` do not form a second registry or
+//! authorization source.
 
 use crate::sync_primitives::Arc;
 

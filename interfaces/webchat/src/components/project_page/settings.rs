@@ -687,7 +687,10 @@ mod tests {
             } else {
                 continue;
             };
-            assert!(block.contains(DISABLED), "the roster's {kind} control has no `{DISABLED}`");
+            assert!(
+                block.contains(DISABLED),
+                "the roster's {kind} control has no `{DISABLED}`"
+            );
             gated.insert(kind);
         }
         assert_eq!(

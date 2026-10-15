@@ -178,6 +178,17 @@ impl WindowsSandboxDriver {
                     ),
                 });
             }
+            NetworkPolicy::LoopbackPorts(ports) => {
+                // Only the managed launcher can enforce this (per-run WFP
+                // confinement keyed by the AppContainer SID); `run()` refuses
+                // it. The ports are carried verbatim so `spawn_managed` derives
+                // its `NetworkRequest` from the same profile the approval gate
+                // saw - never from a second copy.
+                lines.push(format!("network={NETWORK_LOOPBACK_PORTS}"));
+                for port in ports {
+                    lines.push(format!("loopback_port={port}"));
+                }
+            }
         }
 
         lines.push(format!("allow_fork={}", policy.process.allow_fork));
@@ -243,6 +254,45 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
         &["access is denied"]
     }
 
+    /// Managed spawn does NOT go through the `sandbox-init-windows` wrapper:
+    /// the service is created parent-side, suspended, in a per-run
+    /// AppContainer, so its PID/creation time come from its own handle. It is
+    /// still refused until per-run WFP confinement is verified and the process
+    /// is elevated (typed blockers, see `managed_launch::assess_managed_launch`).
+    fn managed_spawn_preflight(&self) -> Result<(), SandboxError> {
+        super::managed_launch::managed_spawn_preflight_with(
+            &super::managed_launch::HostFacts::observe(),
+        )
+    }
+
+    async fn spawn_managed(
+        &self,
+        program: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+        cwd: &Path,
+        profile: &OsSandboxProfile,
+    ) -> Result<crate::sandbox::managed::ManagedChild, SandboxError> {
+        // Typed refusal first: nothing is created while any blocker applies.
+        self.managed_spawn_preflight()?;
+        let (spec, req) = managed_launch_inputs(program, args, env, cwd, profile)?;
+        let process = tokio::task::spawn_blocking(move || {
+            super::launcher::launch(
+                spec,
+                super::wfp::WfpBackend,
+                &req,
+                &super::managed_launch::CURRENT_CAPABILITIES,
+                MANAGED_CONFIRM_TIMEOUT,
+            )
+        })
+        .await
+        .map_err(|e| SandboxError::ExecutionFailed(format!("managed launch task failed: {e}")))??;
+        Ok(crate::sandbox::managed::ManagedChild {
+            process: Box::new(process),
+            keepalive: None,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
@@ -256,6 +306,17 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
         max_output_bytes: usize,
     ) -> Result<SandboxOutput, SandboxError> {
         let parsed = parse_profile(&profile.contents)?;
+        if parsed.network_mode == NETWORK_LOOPBACK_PORTS {
+            // The one-shot path has no per-run WFP confinement; running the
+            // target here would either be unconfined or silently unreachable.
+            return Err(SandboxError::UnsupportedPolicy {
+                platform: "windows/token",
+                feature: "NetworkPolicy::LoopbackPorts".into(),
+                reason: "exact loopback-port confinement is only available through the \
+                         managed launcher (spawn_managed), not one-shot run()"
+                    .into(),
+            });
+        }
 
         debug!("running Windows sandbox for program: {}", program);
 
@@ -398,6 +459,80 @@ impl Default for WindowsSandboxDriver {
     }
 }
 
+/// `network=` value for [`NetworkPolicy::LoopbackPorts`] profiles.
+const NETWORK_LOOPBACK_PORTS: &str = "loopback_ports";
+
+/// How long teardown waits for the job to be confirmed empty.
+const MANAGED_CONFIRM_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn managed_refusal(reason: impl Into<String>) -> SandboxError {
+    SandboxError::UnsupportedPolicy {
+        platform: "windows/token",
+        feature: "managed_spawn".into(),
+        reason: reason.into(),
+    }
+}
+
+/// Profile -> launch spec + exact loopback request for the managed launcher.
+/// Pure (no OS objects). Refuses anything the strict launch cannot honour:
+/// no AppContainer, a non-loopback-port network mode, or a forking service.
+fn managed_launch_inputs(
+    program: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    cwd: &Path,
+    profile: &OsSandboxProfile,
+) -> Result<
+    (
+        super::launcher::ManagedLaunchSpec,
+        super::managed_launch::NetworkRequest,
+    ),
+    SandboxError,
+> {
+    let parsed = parse_profile(&profile.contents)?;
+    if parsed.network_mode != NETWORK_LOOPBACK_PORTS {
+        return Err(managed_refusal(format!(
+            "managed spawn needs an exact loopback-port network grant, got network={:?}",
+            parsed.network_mode
+        )));
+    }
+    if parsed.allow_fork {
+        return Err(managed_refusal(
+            "managed spawn is a single-process contract; allow_fork must be false",
+        ));
+    }
+    let init: WindowsInitPolicy = match &profile.windows_init_policy {
+        Some(json) => serde_json::from_str(json).map_err(|e| {
+            SandboxError::ProfileGeneration(format!("WindowsInitPolicy parse: {e}"))
+        })?,
+        None => {
+            return Err(managed_refusal(
+                "managed spawn requires the AppContainer policy; it never runs the service under the host token",
+            ))
+        }
+    };
+    if !init.use_app_container {
+        return Err(managed_refusal(
+            "managed spawn requires use_app_container; per-run confinement is keyed by the AppContainer SID",
+        ));
+    }
+    let spec = super::launcher::ManagedLaunchSpec {
+        program: program.to_string(),
+        args: args.to_vec(),
+        env: env.clone(),
+        cwd: cwd.to_path_buf(),
+        app_container_capabilities: init.app_container_capabilities,
+        workspace: init.workspace_path,
+        deny_read_globs: init.deny_read_globs,
+        max_memory_mb: profile.max_memory_mb,
+    };
+    let req = super::managed_launch::NetworkRequest {
+        loopback_ports: parsed.loopback_ports,
+        allow_hosts: parsed.allowed_hosts,
+    };
+    Ok((spec, req))
+}
+
 /// Parse a profile string back into policy components.
 // rust-doctor-disable-next-line high-cyclomatic-complexity
 fn parse_profile(contents: &str) -> Result<ParsedProfile, SandboxError> {
@@ -424,6 +559,16 @@ fn parse_profile(contents: &str) -> Result<ParsedProfile, SandboxError> {
                         profile.proxy_ports.push(port);
                     }
                 }
+                "loopback_port" => {
+                    // Fail closed: a port we cannot parse must not silently
+                    // shrink the request into something narrower/emptier.
+                    let port = value.parse().map_err(|_| {
+                        SandboxError::ProfileGeneration(format!(
+                            "invalid loopback_port in windows profile: {value:?}"
+                        ))
+                    })?;
+                    profile.loopback_ports.push(port);
+                }
                 "allow_fork" => profile.allow_fork = value == "true",
                 "max_memory_mb" => {
                     if let Ok(mb) = value.parse() {
@@ -449,6 +594,7 @@ struct ParsedProfile {
     network_mode: String,
     allowed_hosts: Vec<String>,
     proxy_ports: Vec<u16>,
+    loopback_ports: Vec<u16>,
     allow_fork: bool,
     max_memory_mb: Option<u64>,
 }
@@ -457,6 +603,42 @@ struct ParsedProfile {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// Launcher, handle-derived identity and WFP confinement are all still
+    /// unproven on this host, so preflight refuses (typed) before any spawn.
+    #[tokio::test]
+    async fn managed_spawn_is_refused_until_wfp_confinement_is_verified() {
+        let driver = WindowsSandboxDriver::new();
+        match driver.managed_spawn_preflight() {
+            Err(SandboxError::UnsupportedPolicy {
+                feature, reason, ..
+            }) => {
+                assert_eq!(feature, "managed_spawn");
+                assert!(!reason.contains("wrapper PID"), "{reason}");
+                assert!(reason.contains("arbitration"), "{reason}");
+            }
+            other => panic!("expected UnsupportedPolicy, got {other:?}"),
+        }
+        let profile = OsSandboxProfile {
+            contents: String::new(),
+            max_memory_mb: None,
+            linux_init_policy: None,
+            windows_init_policy: None,
+        };
+        let spawned = driver
+            .spawn_managed(
+                "x",
+                &[],
+                &HashMap::new(),
+                std::path::Path::new("."),
+                &profile,
+            )
+            .await;
+        assert!(matches!(
+            spawned,
+            Err(SandboxError::UnsupportedPolicy { .. })
+        ));
+    }
 
     #[test]
     fn windows_driver_platform() {
@@ -621,5 +803,64 @@ mod tests {
 
         assert!(profile.contents.contains("fs=read_paths"));
         assert!(profile.contents.contains("read=C:\\ProgramData"));
+    }
+
+    fn managed_profile(network: crate::sandbox::capabilities::NetworkPolicy) -> OsSandboxProfile {
+        let caps = SandboxCapabilities {
+            network,
+            ..SandboxCapabilities::strict()
+        };
+        WindowsSandboxDriver::new()
+            .profile_for(&caps, Path::new(r"C:\ws"))
+            .expect("profile")
+    }
+
+    /// The exact loopback port reaches the launcher request unchanged and the
+    /// spec keeps the AppContainer (no broad capability for loopback ports).
+    #[test]
+    fn managed_inputs_carry_the_exact_loopback_port_and_the_app_container() {
+        use crate::sandbox::capabilities::NetworkPolicy as Net;
+        let profile = managed_profile(Net::LoopbackPorts { ports: vec![5173] });
+        let (spec, req) = managed_launch_inputs(
+            "node.exe",
+            &["a".into()],
+            &HashMap::new(),
+            Path::new(r"C:\ws"),
+            &profile,
+        )
+        .expect("inputs");
+        assert_eq!(req.loopback_ports, vec![5173]);
+        assert!(req.allow_hosts.is_empty());
+        assert!(spec.app_container_capabilities.is_empty());
+        assert_eq!(spec.workspace.as_deref(), Some(r"C:\ws"));
+        assert_eq!(spec.program, "node.exe");
+    }
+
+    #[test]
+    fn managed_inputs_refuse_non_loopback_grants_and_missing_app_container() {
+        use crate::sandbox::capabilities::NetworkPolicy as Net;
+        for net in [Net::None, Net::AllowAll] {
+            let profile = managed_profile(net);
+            assert!(matches!(
+                managed_launch_inputs("x", &[], &HashMap::new(), Path::new("."), &profile),
+                Err(SandboxError::UnsupportedPolicy { .. })
+            ));
+        }
+        let mut profile = managed_profile(Net::LoopbackPorts { ports: vec![1] });
+        profile.windows_init_policy = None;
+        assert!(matches!(
+            managed_launch_inputs("x", &[], &HashMap::new(), Path::new("."), &profile),
+            Err(SandboxError::UnsupportedPolicy { .. })
+        ));
+        let mut forking = managed_profile(Net::LoopbackPorts { ports: vec![1] });
+        forking.contents.push_str(
+            "
+allow_fork=true
+",
+        );
+        assert!(matches!(
+            managed_launch_inputs("x", &[], &HashMap::new(), Path::new("."), &forking),
+            Err(SandboxError::UnsupportedPolicy { .. })
+        ));
     }
 }

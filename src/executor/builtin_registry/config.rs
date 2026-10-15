@@ -54,6 +54,15 @@ pub struct BuiltinToolConfig {
     pub agent_manager: Option<Arc<crate::config::agent_manager::AgentManager>>,
     /// Browser profile manager for browser_* tools
     pub browser_profile_manager: Option<Arc<crate::browser::manager::ProfileManager>>,
+    /// Browser-live producer from the single composed runtime (the SAME
+    /// stores/owner registry the viewer issuer and backend hold). Boot sets it
+    /// only when `[gateway] browser_viewer_origin` is explicit and valid
+    /// (`GatewayServer::install_browser_live_runtime`); otherwise it is `None`
+    /// and `browser_open` / `browser_navigate` publish nothing. When set, they
+    /// publish best-effort from the CDP backend's operation receipt and never
+    /// change their own output.
+    pub browser_live_producer:
+        Option<Arc<crate::builtin_tools::browser_tools::present::BrowserLiveProducer>>,
     /// Media pipeline for `media_understand` tool
     pub media_pipeline: Option<Arc<crate::media::MediaPipeline>>,
     /// Extension manager for plugin tool execution
@@ -167,4 +176,34 @@ pub struct BuiltinToolConfig {
     /// reconstructed. `None` → agent-driven MCP installs report "MCP manager
     /// unavailable"; plugin installs and secret storage still work.
     pub hub_mcp_handle: Option<crate::mcp::manager::McpManagerHandle>,
+
+    /// Capability-runtime diagnostic control surface for
+    /// `capability_projection_diagnostics`. Set by startup when the env
+    /// `ALEPH_CAPABILITY_DIAGNOSTICS=1`; `None` disables the tool
+    /// entirely — no advertisement, no dispatch arm, no hold/timer
+    /// state. The wire-level gate (operator + loopback + conn_id) lives
+    /// in the tool module itself; this field is the *enablement* half
+    /// of the two-part guard, mirroring the `media_pipeline` /
+    /// `catalog_cache` / `config` slots above.
+    pub diagnostics_control: Option<Arc<crate::capability::diagnostic_control::DiagnosticControl>>,
+}
+
+impl BuiltinToolConfig {
+    /// Bind the optional core producer to this config's existing event bus.
+    /// A caller must still supply a typed real-operation/launcher record; this
+    /// seam does not register a tool or resolve a profile's current tab.
+    pub(crate) fn browser_live_producer(
+        &self,
+    ) -> Result<
+        crate::builtin_tools::browser_tools::present::BrowserLiveProducer,
+        crate::builtin_tools::browser_tools::present::PresentError,
+    > {
+        use crate::builtin_tools::browser_tools::present::PresentError;
+        let producer = self
+            .browser_live_producer
+            .as_ref()
+            .ok_or(PresentError::NotConfigured)?;
+        let event_bus = self.event_bus.clone().ok_or(PresentError::NotConfigured)?;
+        Ok(producer.with_event_bus(event_bus))
+    }
 }

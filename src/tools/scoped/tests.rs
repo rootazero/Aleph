@@ -4563,7 +4563,7 @@ fn a_side_question_refusal_names_itself_not_the_plan_handoff() {
 /// A file that DEFINES `execute_with_cancel` or `execute_with_cancel_effective`
 /// forwards or implements it (the trait default, the scoped service, the
 /// allowlist / MCP-scope decorators); ORIGINATORS only call it. Today that set
-/// is the harness Act phase alone, each call inside a
+/// is the harness Act phase and the MCP server face, each call inside a
 /// `with_call_identity(..)` scope — which is what lets
 /// `session::call_log::emit_for_ambient_call` treat a missing identity as a
 /// counted, logged anomaly rather than an expected shape (spec §6.2). Equality
@@ -4793,7 +4793,14 @@ async fn an_answered_gate_leaves_park_then_decision_in_the_session_log() {
         .iter()
         .map(|r| crate::session::store::event_type_tag(&r.event))
         .collect();
-    assert_eq!(kinds, ["tool_call_parked", "tool_call_denied"]);
+    // park -> decision -> memo, in that order: the gate's entry fact, its
+    // exit fact, and the durable memo the decision leaves behind (§6.1 plus
+    // the atomic memo batch — the memo rides the decision's `emit_batch`, not
+    // a separate park).
+    assert_eq!(
+        kinds,
+        ["tool_call_parked", "tool_call_denied", "approval_memo"]
+    );
     assert!(
         matches!(
             &rows[0].event,
@@ -4802,6 +4809,22 @@ async fn an_answered_gate_leaves_park_then_decision_in_the_session_log() {
         ),
         "the confirm card parks as `Approval`, under the ambient call id: {:?}",
         rows[0].event
+    );
+    assert!(
+        matches!(
+            &rows[1].event,
+            SessionEvent::ToolCallDenied { call_id, .. } if call_id == "toolu_unit"
+        ),
+        "the decision releases the same call id the park named: {:?}",
+        rows[1].event
+    );
+    assert!(
+        matches!(
+            &rows[2].event,
+            SessionEvent::ApprovalMemo { request_id, .. } if request_id == "toolu_unit"
+        ),
+        "the memo lands after the decision, under the same call id: {:?}",
+        rows[2].event
     );
 }
 

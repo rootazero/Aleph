@@ -36,6 +36,12 @@ impl fmt::Display for StaleReason {
 
 #[derive(Debug, Error)]
 pub enum BrowserError {
+    /// The exact target is under a human lease; no agent mutation may start.
+    #[error("human has control of browser target '{binding:?}'; wait for explicit cede")]
+    HumanHasControl {
+        binding: Box<aleph_protocol::browser_live::ViewerBinding>,
+    },
+
     /// A launch that did not reach a usable browser, tagged with **which
     /// step** failed. The stage is not decoration: "the binary would not
     /// spawn", "the process died before it published a port" and "the port
@@ -588,6 +594,7 @@ mod tests {
 
     fn spec_7_1_signal(err: &BrowserError) -> RecoverySignal {
         match err {
+            BrowserError::HumanHasControl { .. } => RecoverySignal::Neither,
             BrowserError::LaunchFailed { .. }
             | BrowserError::TabNotFound(_)
             | BrowserError::NavigationFailed(_)

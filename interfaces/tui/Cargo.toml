@@ -59,3 +59,7 @@ aleph-logging = { path = "../../shared/logging" }
 
 # Utilities
 chrono = "0.4"
+# `--pair`: hidden TTY prompt for the one-time ticket + fresh device id.
+# Same specs the CLI already uses (rpassword 7, uuid 1.7/v4).
+rpassword = "7"
+uuid = { version = "1.7", features = ["v4"] }

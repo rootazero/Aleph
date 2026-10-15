@@ -195,7 +195,11 @@ pub fn on_event(app: &AppHandle, id: &str) {
             }
         }
         ID_CONNECT_LOCAL => {
-            let _ = crate::connection::clear_connection_target(app.clone());
+            // Async command: must be driven, not dropped (a bare call never runs).
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = crate::connection::clear_connection_target(app).await;
+            });
         }
         // Apply a staged update, or trigger a fresh check if none — mirrors
         // the tray so the notification's "or the Aleph menu" is truthful.

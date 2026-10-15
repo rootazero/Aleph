@@ -104,7 +104,7 @@ pub fn DesktopAutostartSection() -> impl IntoView {
     move || {
         available.get().then(|| {
             view! {
-                <div class="bg-surface-raised border border-border rounded-xl p-6">
+                <div class="bg-surface-sunken/40 rounded-xl p-4">
                     <div class="flex items-center justify-between gap-4">
                         <div>
                             <h2 class="text-xl font-semibold text-text-primary mb-2">

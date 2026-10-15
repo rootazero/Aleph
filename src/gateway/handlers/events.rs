@@ -586,7 +586,11 @@ mod tests {
             .collect();
         assert_eq!(
             by_constant,
-            ["canvas::TOPIC"],
+            [
+                "canvas::TOPIC",
+                "browser_live::RESOURCE_TOPIC",
+                "browser_live::CLOSED_TOPIC"
+            ],
             "frame.rs names a topic through a constant this test does not read"
         );
         let mut names: Vec<String> = frame_src
@@ -601,6 +605,8 @@ mod tests {
             .map(str::to_string)
             .collect();
         names.push(aleph_protocol::canvas::TOPIC.to_string());
+        names.push(aleph_protocol::browser_live::RESOURCE_TOPIC.to_string());
+        names.push(aleph_protocol::browser_live::CLOSED_TOPIC.to_string());
         names.sort();
         names.dedup();
         assert!(

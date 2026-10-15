@@ -44,6 +44,9 @@ pub enum NetworkPolicy {
     AllowHosts(Vec<String>),
     /// Allow all network access.
     AllowAll,
+    /// Exact loopback TCP ports only (see
+    /// [`crate::sandbox::capabilities::NetworkPolicy::LoopbackPorts`]).
+    LoopbackPorts(Vec<u16>),
 }
 
 /// Process execution policy.
@@ -94,6 +97,9 @@ impl From<&SandboxCapabilities> for SandboxPolicy {
             CapNetworkPolicy::AllowAll => NetworkPolicy::AllowAll,
             // rust-doctor-disable-next-line excessive-clone
             CapNetworkPolicy::AllowHosts { hosts } => NetworkPolicy::AllowHosts(hosts.clone()),
+            CapNetworkPolicy::LoopbackPorts { ports } => {
+                NetworkPolicy::LoopbackPorts(ports.clone())
+            }
         };
 
         let process = ProcessPolicy {

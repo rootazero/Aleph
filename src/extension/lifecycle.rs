@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use super::effects::{async_disposer, DisposeReport, Disposer, EffectScope};
 use super::error::ExtensionResult;
 use super::hooks::{HookExecutor, ShellHookConsent};
-use super::manifest::adapter::AdapterOutput;
+use super::manifest::adapter::{AdapterOutput, AdapterRegistry};
 use super::manifest::PluginManifest;
 use super::plugin_state::Activation;
 use super::projection::Views;
@@ -102,6 +102,30 @@ impl Identified {
             Self::Unparsed { id, .. } => id,
         }
     }
+}
+
+/// One discovered directory with every synchronous filesystem fact the load
+/// walk needs, gathered on the blocking pool by
+/// [`ExtensionManager::scan_plugins_blocking`]. All owned, so the async walk
+/// never touches the filesystem to decide shadowing / admission / record.
+struct ScannedDir {
+    found: super::DiscoveredExtensionDir,
+    identified: Identified,
+    /// `parse_manifest_from_dir_cached_global` of the root, only for a
+    /// `Parsed` dir and only when it parses — the one manifest both
+    /// `build_record` (kind) and `mount_parsed` (wasm / mcp steps) read.
+    manifest: Option<PluginManifest>,
+    /// A legacy `.disabled` marker exists (never checked under Claude
+    /// Code's cache, which is never written).
+    legacy_marker: bool,
+}
+
+/// One cold discovery pass, scanned off the runtime: dirs in discovery
+/// order (the walk iterates them reversed, as before) plus the sources the
+/// pass could not read.
+struct ScanPlan {
+    dirs: Vec<ScannedDir>,
+    unreadable: Vec<PathBuf>,
 }
 
 /// What a full reload did.
@@ -213,14 +237,32 @@ impl ExtensionManager {
         // config is a plugin the operator configured and cannot tell.
         self.publish_plugin_settings().await;
 
-        let collected = self.collect_plugin_dirs()?;
+        // Discovery walk, adapter parse and manifest parse are synchronous
+        // filesystem work: run them on the blocking pool over owned inputs.
+        // A join cancellation (runtime shutdown) takes the same early-return
+        // path a discovery error always took: before the registry is
+        // cleared, `loaded` stays false, no `after_transition`.
+        let plan = {
+            let discovery = Arc::clone(&self.discovery);
+            let adapters = Arc::clone(&self.adapter_registry);
+            let extra_parents = self.extra_plugin_scan_parents();
+            crate::skill::run_blocking_fs("ExtensionManager::scan_plugins_blocking", move || {
+                Self::scan_plugins_blocking(&discovery, &adapters, extra_parents)
+            })
+            .await
+            .ok_or_else(|| {
+                super::error::ExtensionError::Runtime(
+                    "extension discovery was cancelled (runtime shutting down)".to_string(),
+                )
+            })??
+        };
         {
             // The sources this pass could not read are stored WITH its rows:
             // a reader of the registry gets both from one guard, so "unknown
             // this load" cannot be read as "not installed".
             let mut registry = self.plugin_registry.write().await;
             registry.clear();
-            registry.set_unreadable_sources(collected.unreadable.clone());
+            registry.set_unreadable_sources(plan.unreadable.clone());
         }
 
         // Shadow resolution: dirs are walked highest-priority first, so a
@@ -230,9 +272,15 @@ impl ExtensionManager {
         let mut winners: HashMap<String, PathBuf> = HashMap::new();
         let mut failed_plugin_ids: HashSet<String> = HashSet::new();
 
-        for found in collected.dirs.iter().rev() {
+        for scanned in plan.dirs.into_iter().rev() {
+            let ScannedDir {
+                found,
+                identified,
+                manifest,
+                legacy_marker,
+            } = scanned;
             let dir_path = &found.path;
-            let output = match self.identify(found) {
+            let output = match identified {
                 Identified::Parsed(output) => output,
                 Identified::Unparsed {
                     id: fallback_id,
@@ -287,7 +335,7 @@ impl ExtensionManager {
             // A foreign tree (Claude Code's cache) is never written: no
             // marker migration there, whatever it contains.
             if found.origin != PluginOrigin::ClaudeCache {
-                self.migrate_legacy_disabled_marker(dir_path, &plugin_id)
+                self.migrate_legacy_disabled_marker(dir_path, &plugin_id, legacy_marker)
                     .await;
             }
 
@@ -296,6 +344,7 @@ impl ExtensionManager {
                 dir_path.clone(),
                 found.origin,
                 found.scope_key.clone(),
+                manifest.as_ref(),
             );
             match self.admit(&plugin_id, found.origin).await {
                 Err(e @ MountError::Blocked { .. }) => {
@@ -331,7 +380,7 @@ impl ExtensionManager {
                     // anything else is a bug in this file, not a plugin outcome.
                     unreachable!("admit returned {other:?}");
                 }
-                Ok(()) => match self.mount_parsed(output, record).await {
+                Ok(()) => match self.mount_parsed(output, record, manifest).await {
                     Ok(_) => mounted.push(plugin_id),
                     Err(e) => {
                         summary.errors.push(format!("{plugin_id}: {e}"));
@@ -358,11 +407,19 @@ impl ExtensionManager {
     /// `.disabled` markers written by older builds are migrated into
     /// `plugins.toml` on first sight and then removed, so the answer
     /// converges to one source instead of two.
-    async fn migrate_legacy_disabled_marker(&self, dir_path: &std::path::Path, plugin_id: &str) {
-        let legacy_marker = dir_path.join(".disabled");
-        if !legacy_marker.exists() {
+    ///
+    /// `present` is the scan's answer (`ScannedDir::legacy_marker`, checked
+    /// on the blocking pool) — no `exists()` stat on the runtime here.
+    async fn migrate_legacy_disabled_marker(
+        &self,
+        dir_path: &std::path::Path,
+        plugin_id: &str,
+        present: bool,
+    ) {
+        if !present {
             return;
         }
+        let legacy_marker = dir_path.join(".disabled");
         {
             let mut cfg = self.plugins_config.write().await;
             if cfg.set_enabled(plugin_id, false) {
@@ -391,11 +448,12 @@ impl ExtensionManager {
         root_dir: PathBuf,
         origin: PluginOrigin,
         scope_key: ScopeKey,
+        manifest: Option<&PluginManifest>,
     ) -> PluginRecord {
-        let mut record = PluginRecord::from_adapter_output(output, root_dir.clone());
+        let mut record = PluginRecord::from_adapter_output(output, root_dir);
         record.origin = origin;
         record.scope_key = scope_key;
-        if let Ok(m) = manifest::parse_manifest_from_dir_cached_global(&root_dir) {
+        if let Some(m) = manifest {
             record.kind = m.kind;
         }
         // The row counts only servers the mount will start — the same gate as
@@ -417,13 +475,63 @@ impl ExtensionManager {
     /// or — when the manifest does not parse — the id its error row gets.
     /// The one derivation `load_all` and `discovered_plugin_ids` share.
     fn identify(&self, found: &super::DiscoveredExtensionDir) -> Identified {
-        match self.adapter_registry.parse_dir(&found.path) {
+        Self::identify_with(&self.adapter_registry, found)
+    }
+
+    /// [`Self::identify`] without `&self`, for the blocking-pool scan.
+    fn identify_with(
+        adapters: &AdapterRegistry,
+        found: &super::DiscoveredExtensionDir,
+    ) -> Identified {
+        match adapters.parse_dir(&found.path) {
             Ok(output) => Identified::Parsed(output),
             Err(e) => Identified::Unparsed {
                 id: Self::unparsed_plugin_id(&found.path, found.origin),
                 error: e.to_string(),
             },
         }
+    }
+
+    /// The synchronous half of one discovery pass, over owned inputs and no
+    /// `&self`: walk (`collect_plugin_dirs_with`), identify every dir
+    /// (adapter parse — including shadowed dirs, as before), parse the
+    /// manifest of every parsed dir, and stat the legacy `.disabled` marker.
+    /// Blocking; runs on the blocking pool via `crate::skill::run_blocking_fs`
+    /// from [`Self::discover_and_mount`]. Writes nothing the async walk did
+    /// not already write (adapter `ensure_data_dir_if_referenced`, manifest
+    /// cache fill), so a scan whose awaiting future was dropped finishing
+    /// detached is harmless.
+    fn scan_plugins_blocking(
+        discovery: &crate::discovery::DiscoveryManager,
+        adapters: &AdapterRegistry,
+        extra_parents: Vec<crate::discovery::ProjectPluginParent>,
+    ) -> ExtensionResult<ScanPlan> {
+        let collected = Self::collect_plugin_dirs_with(discovery, extra_parents)?;
+        let dirs = collected
+            .dirs
+            .into_iter()
+            .map(|found| {
+                let identified = Self::identify_with(adapters, &found);
+                let manifest = match identified {
+                    Identified::Parsed(_) => {
+                        manifest::parse_manifest_from_dir_cached_global(&found.path).ok()
+                    }
+                    Identified::Unparsed { .. } => None,
+                };
+                let legacy_marker = found.origin != PluginOrigin::ClaudeCache
+                    && found.path.join(".disabled").exists();
+                ScannedDir {
+                    found,
+                    identified,
+                    manifest,
+                    legacy_marker,
+                }
+            })
+            .collect();
+        Ok(ScanPlan {
+            dirs,
+            unreadable: collected.unreadable,
+        })
     }
 
     /// Every plugin id one discovery pass finds, with its origin — the same
@@ -551,7 +659,27 @@ impl ExtensionManager {
             return Err(e);
         }
 
-        let output = match self.adapter_registry.parse_dir(&root_dir) {
+        // Adapter parse + manifest parse are synchronous filesystem work:
+        // blocking pool, owned inputs. Cancellation (runtime shutdown) is a
+        // `Parse` error that writes nothing onto the row.
+        let parsed = {
+            let adapters = Arc::clone(&self.adapter_registry);
+            let dir = root_dir.clone();
+            crate::skill::run_blocking_fs("ExtensionManager::mount_inner.parse", move || {
+                adapters.parse_dir(&dir).map(|output| {
+                    let manifest = manifest::parse_manifest_from_dir_cached_global(&dir).ok();
+                    (output, manifest)
+                })
+            })
+            .await
+        };
+        let Some(parsed) = parsed else {
+            return Err(MountError::Parse {
+                id: id.to_string(),
+                reason: "manifest parse was cancelled (runtime shutting down)".to_string(),
+            });
+        };
+        let (output, manifest) = match parsed {
             Ok(o) => o,
             Err(e) => {
                 let reason = e.to_string();
@@ -566,8 +694,8 @@ impl ExtensionManager {
                 });
             }
         };
-        let record = Self::build_record(&output, root_dir, origin, scope_key);
-        self.mount_parsed(output, record).await
+        let record = Self::build_record(&output, root_dir, origin, scope_key, manifest.as_ref());
+        self.mount_parsed(output, record, manifest).await
     }
 
     /// The six effects, in [`super::effects::STEP_LABELS`] order. `record`
@@ -577,11 +705,12 @@ impl ExtensionManager {
         &self,
         output: AdapterOutput,
         record: PluginRecord,
+        // Parsed once off the runtime by the caller (the same value
+        // `build_record` took `record.kind` from), not re-parsed here.
+        manifest: Option<PluginManifest>,
     ) -> Result<PluginStatus, MountError> {
         let id = record.id.clone();
         let root_dir = record.root_dir.clone();
-        let manifest: Option<PluginManifest> =
-            manifest::parse_manifest_from_dir_cached_global(&root_dir).ok();
         // The kind `build_record` derived — and counted the row's servers by —
         // not a second derivation that could disagree with it.
         let kind = record.kind;
@@ -2686,6 +2815,7 @@ priority = 60
     /// the assertion below meaningless, not merely fail it).
     #[tokio::test]
     async fn after_transition_broadcasts_tools_list_changed_to_the_installed_face() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         use crate::gateway::mcp_face::{install_mcp_face, test_support, try_mcp_face};
 
         let face = Arc::new(test_support::face(&["echo"], true));

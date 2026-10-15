@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use aleph_protocol::pty::{PtyAttachResponse, PtyListResponse};
+use aleph_protocol::pty::PtyListResponse;
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState, RuntimeAgentsListResponse};
 use aleph_protocol::terminal::{
     TerminalExplainInputs, TerminalExplainResponse, TerminalExplainRule, TerminalReadResponse,
@@ -112,7 +112,7 @@ impl<'a> TerminalRuntime<'a> {
         &self,
         caller: &ObservationCaller,
         session_id: &str,
-    ) -> Result<PtyAttachResponse, ToolError> {
+    ) -> Result<aleph_protocol::pty::PtyAttachResponse, ToolError> {
         self.owned(caller, session_id)?;
         self.pty.attach_snapshot(session_id).map_err(execution)
     }

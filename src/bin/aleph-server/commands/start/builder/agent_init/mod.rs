@@ -178,6 +178,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // observation capabilities through it; they are not executor-registry
     // tools, so the raw `BuiltinToolRegistry` cannot answer for them.
     canonical_tools: Arc<alephcore::tools::ToolHandlerRegistry>,
+    // Startup-scoped diagnostics over the already-mounted canonical host/tree.
+    diagnostics_control: Option<Arc<alephcore::capability::diagnostic_control::DiagnosticControl>>,
 ) -> alephcore::Result<AgentHandlersResult> {
     // Assigned in both the real-execution branch and the simulated branch
     // below; deferred init keeps the dead initial value out (and lets the
@@ -552,6 +554,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             None
         };
 
+        // Browser live runtime: composed (and the viewer backend mounted) only
+        // for an explicit, valid `[gateway] browser_viewer_origin`; otherwise
+        // `None`, the viewer stays deny-only and the browser tools publish
+        // nothing. The guard is built from the same `[general.browser].policy`
+        // the ProfileManager below uses.
+        let browser_live_producer = server.install_browser_live_runtime(
+            full_config.gateway.browser_viewer_origin.as_deref(),
+            alephcore::browser::network_policy::BrowserSsrfGuard::new(
+                app_config.general.browser.policy.clone(),
+            ),
+        );
+
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
@@ -589,6 +603,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     app_config.general.browser.clone(),
                 ),
             )),
+            browser_live_producer,
             // Spec 4 Task 11: thread capture-filter registry into session_complete tool.
             capture_registry: Some(memory_ext_registry.clone()),
             // Spec 5 Task 12: wiki orientation tools.
@@ -615,6 +630,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             hub_mcp_handle,
             // The gateway's own canvas store Arc — see the parameter doc.
             canvas_store: canvas_store.clone(),
+            diagnostics_control,
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await?;

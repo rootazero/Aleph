@@ -59,6 +59,17 @@ pub enum NetworkPolicy {
     AllowHosts {
         hosts: Vec<String>,
     },
+    /// Exact loopback TCP ports (127.0.0.1 / ::1 only), nothing else.
+    ///
+    /// Deliberately a separate variant rather than an `AllowHosts` entry of
+    /// `"127.0.0.1"`: a host list says nothing about ports, and the Windows
+    /// managed launcher confines by (loopback, port) — so `AllowHosts` must
+    /// never be read as loopback. Only drivers that can enforce per-port
+    /// loopback confinement accept it; every other driver rejects it with
+    /// `UnsupportedPolicy`.
+    LoopbackPorts {
+        ports: Vec<u16>,
+    },
 }
 
 impl SandboxCapabilities {
@@ -244,6 +255,9 @@ fn network_within(child: &NetworkPolicy, baseline: &NetworkPolicy) -> bool {
         (AllowAll, _) => false,
         (AllowHosts { hosts: c }, AllowHosts { hosts: b }) => c.iter().all(|h| b.contains(h)),
         (AllowHosts { .. }, None) => false,
+        (LoopbackPorts { ports: c }, LoopbackPorts { ports: b }) => c.iter().all(|p| b.contains(p)),
+        (LoopbackPorts { .. }, None | AllowHosts { .. }) => false,
+        (AllowHosts { .. }, LoopbackPorts { .. }) => false,
     }
 }
 

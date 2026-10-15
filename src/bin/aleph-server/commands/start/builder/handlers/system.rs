@@ -30,6 +30,14 @@ pub(in crate::commands::start) fn register_daemon_handlers(
     }
 }
 
+/// Register the authenticated browser grant surface. Until core boot installs
+/// the real backend, producer registry and explicit trusted public origin via
+/// set_browser_viewer_backend, these handlers return only generic denial.
+/// That setter re-registers after installation, so call order cannot fork state.
+pub(in crate::commands::start) fn register_browser_viewer_handlers(server: &mut GatewayServer) {
+    server.register_browser_viewer_handlers();
+}
+
 // ─── register_pty_handlers ────────────────────────────────────────────────
 
 /// Registers `pty.spawn` — the one `pty.*` method that needs the live

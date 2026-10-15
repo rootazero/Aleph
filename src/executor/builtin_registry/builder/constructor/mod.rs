@@ -17,12 +17,13 @@ use tracing::info;
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
-    BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool, BrowserDragTool,
-    BrowserEmulateTool, BrowserEvaluateTool, BrowserExecTool, BrowserFillFormTool,
-    BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool, BrowserOpenTool, BrowserPdfTool,
-    BrowserPressKeyTool, BrowserProfileTool, BrowserQaTool, BrowserRecordTool, BrowserResizeTool,
-    BrowserScreenshotTool, BrowserScrollTool, BrowserSelectTool, BrowserSessionTool,
-    BrowserSnapshotTool, BrowserTabsTool, BrowserTypeTool, BrowserUploadTool, BrowserWaitForTool,
+    BrowserClickTool, BrowserCompanionTool, BrowserConsoleTool, BrowserCookiesTool,
+    BrowserDialogTool, BrowserDragTool, BrowserEmulateTool, BrowserEvaluateTool, BrowserExecTool,
+    BrowserFillFormTool, BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool,
+    BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool, BrowserProfileTool, BrowserQaTool,
+    BrowserRecordTool, BrowserResizeTool, BrowserScreenshotTool, BrowserScrollTool,
+    BrowserSelectTool, BrowserSessionTool, BrowserSnapshotTool, BrowserTabsTool, BrowserTypeTool,
+    BrowserUploadTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::{
     ApplyPatchTool, AutomationTool, BashExecTool, CodeCheckTool, CodeExecTool, DesktopTool,
@@ -598,8 +599,21 @@ impl BuiltinToolRegistry {
         let pdf_generate_tool = pdf_generate_tool
             .with_playwright_config(browser_profile_manager.playwright_cli_config().clone())
             .with_browser_runtime(browser_profile_manager.runtime_config().clone());
+        // The registry's own producer (shared resource/grant stores + event bus),
+        // or None: boot leaves it unset, so tools publish nothing by default.
+        let browser_live_producer = config.browser_live_producer().ok();
         let browser_open_tool = BrowserOpenTool::new(Arc::clone(&browser_profile_manager))
-            .with_approval_policy(Arc::clone(&approval_policy));
+            .with_approval_policy(Arc::clone(&approval_policy))
+            .with_live_producer(browser_live_producer.clone());
+        // Managed companion: spawns ONLY through the registry's workspace
+        // sandbox (the same approval/profile path as bash) and publishes ONLY
+        // through the registry's producer; without either it fails closed.
+        let browser_companion_tool = BrowserCompanionTool::new(
+            Arc::clone(&browser_profile_manager),
+            config.sandbox.clone(),
+            browser_live_producer.clone(),
+        )
+        .with_approval_policy(Arc::clone(&approval_policy));
         let browser_click_tool = BrowserClickTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_type_tool = BrowserTypeTool::new(Arc::clone(&browser_profile_manager))
@@ -612,7 +626,8 @@ impl BuiltinToolRegistry {
                 .with_vision_bridge(Arc::clone(&vision_bridge));
         let browser_snapshot_tool = BrowserSnapshotTool::new(Arc::clone(&browser_profile_manager));
         let browser_navigate_tool = BrowserNavigateTool::new(Arc::clone(&browser_profile_manager))
-            .with_approval_policy(Arc::clone(&approval_policy));
+            .with_approval_policy(Arc::clone(&approval_policy))
+            .with_live_producer(browser_live_producer);
         let browser_tabs_tool = BrowserTabsTool::new(Arc::clone(&browser_profile_manager));
         let browser_select_tool = BrowserSelectTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
@@ -807,6 +822,7 @@ impl BuiltinToolRegistry {
             use crate::tools::AlephTool;
             let browser_tool_defs = [
                 browser_open_tool.definition(),
+                browser_companion_tool.definition(),
                 browser_click_tool.definition(),
                 browser_type_tool.definition(),
                 browser_screenshot_tool.definition(),
@@ -925,6 +941,36 @@ impl BuiltinToolRegistry {
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered schemas for media_understand, audio_transcribe, document_extract");
+        }
+
+        // Capability-runtime diagnostic control surface. Listed in
+        // BUILTIN_TOOL_DEFINITIONS for *catalog* purposes (so the
+        // BUILTIN_TOOL_DEFINITIONS tripwire sees the name) and
+        // dispatched in registry.rs, but the runtime advertisement is
+        // GATED on `diagnostics_control: Some(_)` — when the env
+        // `ALEPH_CAPABILITY_DIAGNOSTICS=1` is not set at startup,
+        // the tool is not in the runtime tool map, not in the LLM-
+        // facing tool list, and not in the dispatch census. The
+        // wire-level three-part check (operator + loopback + conn_id)
+        // lives in the tool module itself; this is the *enablement*
+        // half of the two-part guard, mirroring the media_pipeline
+        // block above. Keeping the registration block here (not
+        // unconditional) is the only reason a normal-mode build
+        // cannot accidentally dispatch the tool.
+        if let Some(ref dc) = config.diagnostics_control {
+            let td = crate::builtin_tools::capability_projection_diagnostics::DiagnosticTool::new(
+                crate::sync_primitives::Arc::clone(dc),
+            )
+            .definition();
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                ToolSource::Builtin,
+            );
+            ut = ut.with_parameters_schema(td.parameters.clone());
+            tools.insert(td.name.clone(), ut);
+            info!("Registered schema for capability_projection_diagnostics");
         }
 
         // config_audit shares the same gap: listed in BUILTIN_TOOL_DEFINITIONS
@@ -1309,6 +1355,7 @@ impl BuiltinToolRegistry {
             // executing the turn. See `build_flag_user_correction`.
             flag_user_correction_db: config.memory_db.clone(),
             browser_open_tool,
+            browser_companion_tool,
             browser_click_tool,
             browser_type_tool,
             browser_screenshot_tool,
@@ -1441,6 +1488,7 @@ impl BuiltinToolRegistry {
             // held as constructed instances (config_audit / media_* / recall_context).
             config: config.config.clone(),
             media_pipeline: config.media_pipeline.clone(),
+            diagnostics_control: config.diagnostics_control.clone(),
             memory_project_scoped: config.memory_project_scoped,
             recall_context_db: config.memory_db.clone(),
             memory_trace_db: config.memory_db.clone(),

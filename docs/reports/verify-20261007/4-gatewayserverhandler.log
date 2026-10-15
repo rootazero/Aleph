@@ -1,0 +1,103 @@
+warning: unused import: `super::*`
+   --> src\gateway\execution_engine\run_loop\project_context.rs:223:9
+    |
+223 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::Duration`
+ --> src\gateway\execution_engine\slash_command_body\tests.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FileSessionStoreConfig` and `FileSessionStore`
+  --> src\gateway\session_store\hook_transcripts.rs:42:55
+   |
+42 |     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+   |                                                       ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `with_consent` is never used
+   --> src\builtin_tools\skill_reader\read.rs:157:19
+    |
+101 | impl ReadSkillTool {
+    | ------------------ method in this implementation
+...
+157 |     pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `parked_len` is never used
+   --> src\gateway\server\browser_viewer_route.rs:197:8
+    |
+121 | impl BrowserViewerRouteState {
+    | ---------------------------- method in this implementation
+...
+197 |     fn parked_len(&self) -> usize {
+    |        ^^^^^^^^^^
+
+warning: `alephcore` (lib test) generated 5 warnings (run `cargo fix --lib -p alephcore --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 2.73s
+     Running unittests src\lib.rs (target\debug\deps\alephcore-56ec4c3a082c670d.exe)
+
+running 56 tests
+test gateway::server::handler::device_revocation_tests::topic_constant_matches_frame_topic_name ... ok
+test gateway::server::handler::device_revocation_tests::never_closes_an_unbound_session ... ok
+test gateway::server::handler::device_revocation_tests::closes_only_the_named_device ... ok
+test gateway::server::handler::device_revocation_tests::other_events_never_trigger_close ... ok
+test gateway::server::handler::device_revocation_tests::reads_device_id_from_the_real_publish_frame_wire_form ... ok
+test gateway::server::handler::tests::an_unprojected_frame_is_forwarded_as_its_original_bytes ... ok
+test gateway::server::handler::tests::cached_and_waiting_viewer_results_are_gated_on_live_state ... ok
+test gateway::server::handler::tests::extract_topic_and_data_handles_the_real_bare_topic_event_wire_form ... ok
+test gateway::server::handler::tests::extract_topic_and_data_handles_the_real_stream_wire_form ... ok
+test gateway::server::handler::tests::extract_topic_and_data_unwraps_the_real_double_nested_event_envelope ... ok
+test gateway::server::handler::tests::insecure_remote_gate_truth_table ... ok
+test gateway::server::handler::tests::forwarder_terminates_when_client_receiver_dropped ... ok
+test gateway::server::handler::tests::forwarder_forwards_all_events_without_lag ... ok
+test gateway::server::handler::tests::loopback_stamps_owner_operator_regardless_of_device ... ok
+test gateway::server::handler::tests::forwarder_survives_lag_and_forwards_post_lag_events ... ok
+test gateway::server::handler::tests::no_store_and_no_device_falls_back_to_owner_when_authorized ... ok
+test gateway::server::handler::tests::no_device_manager_fails_closed_on_explicit_device_credential ... ok
+test gateway::server::handler::tests::no_store_but_device_bound_fails_closed_to_guest ... ok
+test gateway::server::handler::tests::node_connect_claim_detects_commands_or_tags_shape ... ok
+test gateway::server::handler::tests::overflow_warning_frame_has_reconnect_advice ... ok
+test gateway::server::handler::tests::ordinary_connect_params_are_not_node_shaped ... ok
+test gateway::server::handler::tests::parses_trusted_ips_dropping_garbage ... ok
+test gateway::server::handler::tests::node_shape_connect_registers_and_disconnect_deregisters ... ok
+test gateway::server::handler::tests::the_delivery_loop_parses_each_event_once_and_projects_it ... ok
+test gateway::server::handler::tests::the_event_arm_wall_refuses_a_guest_and_still_serves_both_authorized_roles ... ok
+test gateway::server::handler::tests::the_insecure_transport_gate_reads_the_local_bit_not_the_resolved_ip ... ok
+test gateway::server::handler::tests::owner_scoping_round_trips_through_the_real_publish_path ... ok
+test gateway::server::handler::tests::the_running_set_frame_reaches_the_wire_narrowed_to_this_connection ... ok
+test gateway::server::handler::tests::viewer_idempotency_principal_is_verified_scoped_and_other_methods_unchanged ... ok
+test gateway::server::handler::tests::viewer_principal_requires_member_or_operator_and_equal_nonempty_verified ... ok
+test gateway::server::handler::tests::wall_admits_member_on_a_daily_method ... ok
+test gateway::server::handler::tests::wall_admits_operator_on_everything ... ok
+test gateway::server::handler::tests::wall_fails_closed_on_absent_or_unknown_roles ... ok
+test gateway::server::handler::tests::wall_refuses_guest_except_connect ... ok
+test gateway::server::handler::token_rotation_tests::detects_real_publish_frame_wire_form ... ok
+test gateway::server::handler::token_rotation_tests::loopback_session_ignores_token_rotated ... ok
+test gateway::server::handler::token_rotation_tests::other_events_never_trigger_close ... ok
+test gateway::server::handler::token_rotation_tests::remote_session_closes_on_token_rotated ... ok
+test gateway::server::handler::token_rotation_tests::topic_constant_matches_frame_topic_name ... ok
+test gateway::server::handler::tests::connect_stamps_operator_and_walled_scopes_unchanged ... ok
+test gateway::server::handler::tests::connect_response_is_unchanged_for_operator_and_walled_connections ... ok
+test gateway::server::handler::tests::member_user_device_stamps_member_and_user_id ... ok
+test gateway::server::handler::tests::admin_user_device_stamps_operator_and_user_id ... ok
+test gateway::server::handler::tests::deactivated_user_device_is_walled_at_connect_time ... ok
+test gateway::server::handler::tests::connect_stamps_a_member_out_of_the_admin_event_scope ... ok
+test gateway::server::handler::tests::connect_response_reports_member_authority_to_a_member ... ok
+test gateway::server::handler::tests::connect_response_walls_a_deactivated_users_valid_device ... ok
+test gateway::server::handler::tests::dispatch_with_caller_context_leaves_scope_unset_for_no_caller_user ... ok
+test gateway::server::handler::tests::both_dispatch_stations_seed_scope ... ok
+test gateway::server::handler::tests::unauthorized_stays_walled_even_with_a_store_present ... ok
+test gateway::server::handler::tests::queued_viewer_request_invalidated_before_permit_never_reaches_handler ... ok
+test gateway::server::handler::tests::dispatch_with_caller_context_seeds_conn_id ... ok
+test gateway::server::handler::tests::dispatch_for_connection_runs_viewer_handler_only_for_live_verified_principal ... ok
+test gateway::server::handler::tests::stale_snapshot_after_bulk_revoke_is_denied_and_handler_unreached ... ok
+test gateway::server::handler::tests::scope_keyed_on_role_matches_holds_authority_except_for_members ... ok
+test gateway::server::handler::tests::cron_create_through_dispatch_persists_the_caller_as_owner ... ok
+
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 20620 filtered out; finished in 0.21s

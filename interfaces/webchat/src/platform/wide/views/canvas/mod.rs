@@ -466,20 +466,14 @@ mod tests {
                 "output": json!({"canvas_id": "cv-9", "revision": 4}).to_string()
             }
         });
-        assert_eq!(
-            canvas_id_from_tool_result(&result).as_deref(),
-            Some("cv-9")
-        );
+        assert_eq!(canvas_id_from_tool_result(&result).as_deref(), Some("cv-9"));
     }
 
     /// …and the object form, which the in-process and replayed paths carry.
     #[test]
     fn the_object_form_of_the_same_output_reads_the_same() {
         let result = json!({"Success": {"output": {"canvas_id": "cv-9"}}});
-        assert_eq!(
-            canvas_id_from_tool_result(&result).as_deref(),
-            Some("cv-9")
-        );
+        assert_eq!(canvas_id_from_tool_result(&result).as_deref(), Some("cv-9"));
         // A bare payload (no envelope) is accepted too — the envelope is the
         // harness's, not the tool's.
         assert_eq!(

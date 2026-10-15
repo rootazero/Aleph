@@ -273,11 +273,7 @@ mod tests {
             tool_call_id: Some("tool-1".into()),
             reason: Some("destructive".into()),
             expires_at_ms: 60_000,
-            allowed_decisions: vec![
-                "allow-once".into(),
-                "allow-session".into(),
-                "deny".into(),
-            ],
+            allowed_decisions: vec!["allow-once".into(), "allow-session".into(), "deny".into()],
         }
     }
 

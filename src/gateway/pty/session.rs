@@ -197,6 +197,22 @@ impl PtySession {
             .openpty(size)
             .map_err(|e| format!("openpty failed: {e}"))?;
 
+        // Test builds only: hold the process-wide `$HOME` lock from the moment
+        // the builder snapshots the environment until the child has exec'd.
+        // portable-pty 0.8.1 copies `std::env::vars_os()` in
+        // `CommandBuilder::new*` and, when no `cwd` is given, chdirs the child
+        // into that snapshot's `$HOME`. Lib tests repoint `$HOME` at paths that
+        // are never created (`HomeEnvGuards::acquire_and_set(.., tmp/"home")`,
+        // `/tmp/fake-home`) under `HOME_LOCK`; a PTY spawned on another test
+        // thread inside that window failed with `spawn_command failed: No such
+        // file or directory (os error 2)` (I2). Taking the same lock here
+        // serializes every PTY spawn against every `$HOME` mover at one choke
+        // point instead of at each of the spawning tests. Production behaviour
+        // is unchanged: the guard does not exist outside `cfg(test)`.
+        // Non-reentrant: a test must not spawn a PTY while holding this guard.
+        #[cfg(test)]
+        let home_guard = crate::runtimes::post_install::HomeEnvGuard::acquire();
+
         // Build the command (explicit program or the platform default shell).
         // `SpawnOptions::shell_label` projects the same pair, so the journal's
         // intent row and this label cannot disagree.
@@ -224,6 +240,10 @@ impl PtySession {
         let child = slave
             .spawn_command(cmd)
             .map_err(|e| format!("spawn_command failed: {e}"))?;
+        // The child has exec'd (std's spawn waits for exec or its error), so the
+        // `$HOME` it was given has been consumed.
+        #[cfg(test)]
+        drop(home_guard);
         // Drop the slave so the kernel propagates EOF to the master read side
         // once the child closes its descriptors.
         drop(slave);
@@ -1027,5 +1047,60 @@ mod tests {
             "a no-op must not burn a seq"
         );
         session.kill();
+    }
+
+    /// A PTY spawn must not snapshot a `$HOME` another test thread has
+    /// repointed at a directory that does not exist (I2).
+    ///
+    /// portable-pty copies the environment when the builder is created and,
+    /// with no `cwd`, chdirs the child into that copy's `$HOME`, so a spawn
+    /// that lands inside a sibling test's `HomeEnvGuard` window fails with
+    /// `spawn_command failed: No such file or directory (os error 2)` — the
+    /// seven `builtin_tools::terminal::tests` failures of the full root run.
+    ///
+    /// The holder thread keeps a missing `$HOME` in place until the spawner
+    /// reports or `HOLD` expires. Without the lock in `PtySession::spawn` the
+    /// spawner snapshots the missing path at once and reports the ENOENT
+    /// inside the window (red); with it, the spawn waits for the guard to drop
+    /// and then runs against the restored `$HOME` (green). The bound is a
+    /// ceiling on the window, not a sleep the result depends on.
+    #[test]
+    #[cfg(unix)]
+    fn a_spawn_waits_out_a_concurrent_missing_home_window() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        const HOLD: Duration = Duration::from_millis(500);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("never-created-home");
+        assert!(!missing.exists());
+
+        let (held_tx, held_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel::<Result<(), String>>();
+
+        let holder = std::thread::spawn(move || {
+            let _home = crate::runtimes::post_install::HomeEnvGuard::acquire_and_set(&missing);
+            held_tx.send(()).unwrap();
+            // Inside the window: did the spawner finish (and how)?
+            done_rx.recv_timeout(HOLD).ok()
+        });
+
+        held_rx.recv().unwrap();
+        let spawner = std::thread::spawn(move || {
+            let result = PtySession::spawn("t-home-window".into(), &SpawnOptions::default(), None)
+                .map(|session| session.kill());
+            let _ = done_tx.send(result.clone());
+            result
+        });
+
+        let inside_window = holder.join().unwrap();
+        let outcome = spawner.join().unwrap();
+
+        assert!(
+            inside_window.is_none(),
+            "the spawn completed while a sibling held $HOME at a missing path: {inside_window:?}"
+        );
+        assert_eq!(outcome, Ok(()), "the spawn after the window must succeed");
     }
 }

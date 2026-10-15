@@ -1765,7 +1765,8 @@ mod tests {
         // Open at the team-attachment guard's `if` and find the matching
         // close. Walk braces because the call body contains a multi-line
         // `set_send_error(...)` invocation.
-        let open_idx = body.find("if chat.team_id.get_untracked().is_some() && !files.is_empty()")?;
+        let open_idx =
+            body.find("if chat.team_id.get_untracked().is_some() && !files.is_empty()")?;
         let after_if = &body[open_idx..];
         let after_open_brace = after_if.find('{')?;
         let bytes = after_if.as_bytes();
@@ -1885,8 +1886,7 @@ mod tests {
         // reference both `should_suppress_enter` and the conditional Enter
         // dispatch.
         let body = production_half_ime(src);
-        body.contains("should_suppress_enter(")
-            && body.contains("ev.key() == \"Enter\"")
+        body.contains("should_suppress_enter(") && body.contains("ev.key() == \"Enter\"")
     }
 
     #[test]

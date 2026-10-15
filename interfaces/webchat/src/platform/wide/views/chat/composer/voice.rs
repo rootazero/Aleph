@@ -528,9 +528,7 @@ fn browser_start(
                 stop_tracks(&stream);
             }
             match blob {
-                Some(blob) => {
-                    read_blob_then(dash, chat, sessions, blob, mime, core, state, error)
-                }
+                Some(blob) => read_blob_then(dash, chat, sessions, blob, mime, core, state, error),
                 None => apply_state(&core, &state, RecState::Idle),
             }
         }) as Box<dyn FnMut(web_sys::Event)>);
@@ -593,16 +591,7 @@ fn finish(
                         apply_state(&core, &state, RecState::Idle);
                         return;
                     }
-                    transcribe_and_send(
-                        dash,
-                        chat,
-                        sessions,
-                        base64,
-                        mime,
-                        core,
-                        state,
-                        error,
-                    );
+                    transcribe_and_send(dash, chat, sessions, base64, mime, core, state, error);
                 }
                 Err(e) => {
                     error.set(Some(
@@ -709,10 +698,9 @@ pub(super) fn VoiceInputButton(
         };
         state.set(core.get_value().borrow().rec_state());
         if should_arm_timer {
-            if let Ok(h) = set_timeout_with_handle(
-                start_dictation,
-                std::time::Duration::from_millis(450),
-            ) {
+            if let Ok(h) =
+                set_timeout_with_handle(start_dictation, std::time::Duration::from_millis(450))
+            {
                 press_timer.set_value(Some(h));
             }
         }
@@ -732,7 +720,15 @@ pub(super) fn VoiceInputButton(
         state.set(core.get_value().borrow().rec_state());
         match action {
             PointerUpAction::Finish => {
-                finish(handle.get_value(), dashboard, chat, sessions, core, state, error);
+                finish(
+                    handle.get_value(),
+                    dashboard,
+                    chat,
+                    sessions,
+                    core,
+                    state,
+                    error,
+                );
             }
             PointerUpAction::OpenVoiceMode => {
                 voice_mode.open.set(true);
@@ -756,7 +752,15 @@ pub(super) fn VoiceInputButton(
         state.set(core.get_value().borrow().rec_state());
         match action {
             PointerUpAction::Finish => {
-                finish(handle.get_value(), dashboard, chat, sessions, core, state, error);
+                finish(
+                    handle.get_value(),
+                    dashboard,
+                    chat,
+                    sessions,
+                    core,
+                    state,
+                    error,
+                );
             }
             PointerUpAction::OpenVoiceMode => {
                 voice_mode.open.set(true);
@@ -883,12 +887,21 @@ mod tests {
         s.on_pointer_down();
         // The press armed a timer; state still Idle (timer decides tap vs hold).
         assert_eq!(s.rec_state(), RecState::Idle);
-        assert!(s.press_timer_active(), "Idle pointer_down must arm the press-timer slot");
+        assert!(
+            s.press_timer_active(),
+            "Idle pointer_down must arm the press-timer slot"
+        );
 
         // Timer fired (450 ms later) — the gesture was a long press.
-        assert!(s.fire_long_press_timer(), "timer fired in Idle+armed must transition");
+        assert!(
+            s.fire_long_press_timer(),
+            "timer fired in Idle+armed must transition"
+        );
         assert_eq!(s.rec_state(), RecState::Starting);
-        assert!(s.long_press(), "long_press flag should be set after timer fires");
+        assert!(
+            s.long_press(),
+            "long_press flag should be set after timer fires"
+        );
         assert!(!s.press_timer_active(), "timer slot consumed after fire");
     }
 
@@ -925,7 +938,10 @@ mod tests {
         assert_eq!(action, PointerUpAction::Finish);
         assert_eq!(s.rec_state(), RecState::Transcribing);
         assert_eq!(s.finish_calls(), 1);
-        assert!(s.finish_emitted(), "finish_emitted should guard any second call");
+        assert!(
+            s.finish_emitted(),
+            "finish_emitted should guard any second call"
+        );
     }
 
     /// Bug 1 fix: pointer_up while still in Starting (mic permission
@@ -942,7 +958,11 @@ mod tests {
         assert_eq!(s.rec_state(), RecState::Starting);
 
         let action = s.on_pointer_up();
-        assert_ne!(action, PointerUpAction::Finish, "ghost finish on Starting state");
+        assert_ne!(
+            action,
+            PointerUpAction::Finish,
+            "ghost finish on Starting state"
+        );
         assert_eq!(s.finish_calls(), 0, "no finish should have been emitted");
     }
 
@@ -955,12 +975,18 @@ mod tests {
     fn pointer_up_always_clears_press_timer_slot() {
         let mut s = fresh();
         s.on_pointer_down();
-        assert!(s.press_timer_active(), "press-timer slot should be armed after Idle pointer_down");
+        assert!(
+            s.press_timer_active(),
+            "press-timer slot should be armed after Idle pointer_down"
+        );
 
         // Pre-timer release — gesture was a tap, timer still queued.
         let action = s.on_pointer_up();
         assert_eq!(action, PointerUpAction::OpenVoiceMode);
-        assert!(!s.press_timer_active(), "press-timer slot leaked after pointer_up");
+        assert!(
+            !s.press_timer_active(),
+            "press-timer slot leaked after pointer_up"
+        );
     }
 
     /// Bug 3 fix: a double release (a quick double-tap on the mic
@@ -987,7 +1013,11 @@ mod tests {
         // and finish_emitted is also set); must be ignored.
         let second = s.on_pointer_up();
         assert_ne!(second, PointerUpAction::Finish, "double finish emitted");
-        assert_eq!(s.finish_calls(), n_after_first, "finish_calls must not advance on second release");
+        assert_eq!(
+            s.finish_calls(),
+            n_after_first,
+            "finish_calls must not advance on second release"
+        );
 
         // And even if state were still Recording (simulate the browser
         // backend race where `MediaRecorder::stop()` has not yet hit
@@ -1001,6 +1031,10 @@ mod tests {
         // Force the core back to Recording to simulate the browser
         // race window between `rec.stop()` and `onstop`.
         s2.set_rec_state(RecState::Recording);
-        assert_eq!(s2.on_pointer_up(), PointerUpAction::Ignored, "finish_emitted guard must block re-entry");
+        assert_eq!(
+            s2.on_pointer_up(),
+            PointerUpAction::Ignored,
+            "finish_emitted guard must block re-entry"
+        );
     }
 }

@@ -10,8 +10,14 @@ use super::{
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
 use crate::extension::visibility::ScopeKey;
 use crate::extension::ExtensionError;
+use crate::session::{
+    call_log::emit_for_ambient_call,
+    events::{now_ms, SessionEvent},
+    service::SessionId,
+};
 use crate::sync_primitives::Arc;
 use crate::utils::no_window::NoWindow;
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
@@ -399,6 +405,49 @@ fn describe_action(action: &HookAction) -> String {
     )
 }
 
+/// Sink for recording hook execution outcomes in the memo boundary.
+#[async_trait]
+pub trait HookMemoSink: Send + Sync {
+    async fn record(&self, event: HookEvent, capability: Option<&str>, outcome: &str);
+}
+
+/// Production memo sink: records each hook execution outcome into the session
+/// call log as a durable [`SessionEvent::HookMemo`], attributed to the ambient
+/// capability call. Each dispatch clones the shared executor and attaches a
+/// phase-tagged sink so the memo records *which* phase (`permission_denied` /
+/// `before_tool_call` / `after_tool_call`) fired the hook, without mutating the
+/// service's long-lived executor.
+pub struct SessionHookMemoSink {
+    session: SessionId,
+    phase: String,
+}
+
+#[async_trait]
+impl HookMemoSink for SessionHookMemoSink {
+    async fn record(&self, event: HookEvent, capability: Option<&str>, outcome: &str) {
+        // Owned copies up front: the emit closure is `move` and outlives this
+        // call's borrows, so capture values, not references.
+        let phase = self.phase.clone();
+        let event_str = format!("{event:?}");
+        let capability = capability.map(str::to_string);
+        let outcome = outcome.to_string();
+        emit_for_ambient_call(&self.session, "hook", "hook memo", move |_, call_id| {
+            SessionEvent::HookMemo {
+                request_id: call_id,
+                memo: serde_json::json!({
+                    "phase": phase,
+                    "event": event_str,
+                    "capability": capability,
+                    "outcome": outcome,
+                })
+                .to_string(),
+                at: now_ms(),
+            }
+        })
+        .await;
+    }
+}
+
 /// Hook executor - runs hook actions based on events
 #[derive(Clone)]
 pub struct HookExecutor {
@@ -413,6 +462,7 @@ pub struct HookExecutor {
     /// commands are skipped (fail-safe) and recorded as `pending`. `None`
     /// disables the gate entirely (the default, so tests run commands freely).
     consent: Option<Arc<ShellHookConsent>>,
+    memo_sink: Option<Arc<dyn HookMemoSink>>,
 }
 
 impl HookExecutor {
@@ -425,7 +475,25 @@ impl HookExecutor {
             command_timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
             regex_cache,
             consent: None,
+            memo_sink: None,
         }
+    }
+
+    /// Attach a memo sink for hook execution outcomes.
+    #[must_use]
+    pub fn with_memo_sink(mut self, sink: Arc<dyn HookMemoSink>) -> Self {
+        self.memo_sink = Some(sink);
+        self
+    }
+
+    /// Attach a production memo sink that records hook outcomes into the
+    /// session call log under `phase`.
+    #[must_use]
+    pub fn with_session_memo_sink(self, session: SessionId, phase: impl Into<String>) -> Self {
+        self.with_memo_sink(Arc::new(SessionHookMemoSink {
+            session,
+            phase: phase.into(),
+        }))
     }
 
     /// Set the command timeout
@@ -1169,6 +1237,10 @@ impl HookExecutor {
                                     &mut accumulated,
                                 );
                                 if accumulated.blocked || accumulated.denied {
+                                    if let Some(sink) = &self.memo_sink {
+                                        sink.record(event, Some(&hook.plugin_name), "blocked")
+                                            .await;
+                                    }
                                     return Ok((current_context, accumulated));
                                 }
                             }
@@ -1186,6 +1258,10 @@ impl HookExecutor {
                                     &mut accumulated,
                                 );
                                 if accumulated.blocked || accumulated.denied {
+                                    if let Some(sink) = &self.memo_sink {
+                                        sink.record(event, Some(&hook.plugin_name), "blocked")
+                                            .await;
+                                    }
                                     return Ok((current_context, accumulated));
                                 }
                             }
@@ -1217,6 +1293,9 @@ impl HookExecutor {
                         accumulated.blocked = true;
                         accumulated.block_reason = Some(format!("Interceptor hook failed: {e}"));
                         accumulated.action_failed = true;
+                        if let Some(sink) = &self.memo_sink {
+                            sink.record(event, Some(&hook.plugin_name), "error").await;
+                        }
                         return Ok((current_context, accumulated));
                     }
                 }
@@ -1231,6 +1310,11 @@ impl HookExecutor {
             // (`jq -r '.tool_input…'`). Updating only `arguments` (the old
             // behaviour) silently handed downstream interceptors the ORIGINAL
             // input on stdin.
+            if let Some(sink) = &self.memo_sink {
+                sink.record(event, Some(&hook.plugin_name), "completed")
+                    .await;
+            }
+
             if let Some(ref updated) = accumulated.updated_input {
                 let rewritten = updated.to_string();
                 current_context.arguments = Some(rewritten.clone());
@@ -1384,6 +1468,10 @@ impl HookExecutor {
                             // observer kind: exit 2 is logged, never applied.
                             // `scratch` is dropped — observers cannot modify.
                             if let HookAction::Command { .. } = action {
+                                if let Some(sink) = &self.memo_sink {
+                                    sink.record(event, Some(&hook.plugin_name), "completed")
+                                        .await;
+                                }
                                 let mut scratch = super::HookResult::default();
                                 super::derive_decision(
                                     ar.exit_code,
@@ -1394,10 +1482,15 @@ impl HookExecutor {
                                 );
                             }
                         }
-                        Err(e) => warn!(
-                            "Observer hook action from plugin '{}' failed: {}",
-                            hook.plugin_name, e
-                        ),
+                        Err(e) => {
+                            if let Some(sink) = &self.memo_sink {
+                                sink.record(event, Some(&hook.plugin_name), "error").await;
+                            }
+                            warn!(
+                                "Observer hook action from plugin '{}' failed: {}",
+                                hook.plugin_name, e
+                            )
+                        }
                     }
                 }
             })

@@ -41,6 +41,7 @@ pub mod bash_exec;
 pub mod browser_tools;
 pub mod call_lifecycle;
 pub mod canvas;
+pub mod capability_projection_diagnostics;
 pub mod channel_directory;
 pub mod channel_manage;
 pub mod channel_message;
@@ -154,26 +155,27 @@ pub use agent_manage::{
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
 pub use browser_tools::{
-    BrowserClickArgs, BrowserClickOutput, BrowserClickTool, BrowserConsoleArgs,
-    BrowserConsoleOutput, BrowserConsoleTool, BrowserCookiesArgs, BrowserCookiesOutput,
-    BrowserCookiesTool, BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool, BrowserDragArgs,
-    BrowserDragOutput, BrowserDragTool, BrowserEmulateArgs, BrowserEmulateOutput,
-    BrowserEmulateTool, BrowserEvaluateArgs, BrowserEvaluateOutput, BrowserEvaluateTool,
-    BrowserExecArgs, BrowserExecOutput, BrowserExecTool, BrowserFillFormArgs,
-    BrowserFillFormOutput, BrowserFillFormTool, BrowserHoverArgs, BrowserHoverOutput,
-    BrowserHoverTool, BrowserNavigateArgs, BrowserNavigateOutput, BrowserNavigateTool,
-    BrowserNetworkArgs, BrowserNetworkOutput, BrowserNetworkTool, BrowserOpenArgs,
-    BrowserOpenOutput, BrowserOpenTool, BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool,
-    BrowserPressKeyArgs, BrowserPressKeyOutput, BrowserPressKeyTool, BrowserProfileArgs,
-    BrowserProfileOutput, BrowserProfileTool, BrowserQaArgs, BrowserQaOutput, BrowserQaTool,
-    BrowserRecordArgs, BrowserRecordOutput, BrowserRecordTool, BrowserResizeArgs,
-    BrowserResizeOutput, BrowserResizeTool, BrowserScreenshotArgs, BrowserScreenshotOutput,
-    BrowserScreenshotTool, BrowserScrollArgs, BrowserScrollOutput, BrowserScrollTool,
-    BrowserSelectArgs, BrowserSelectOutput, BrowserSelectTool, BrowserSessionArgs,
-    BrowserSessionOutput, BrowserSessionTool, BrowserSnapshotArgs, BrowserSnapshotOutput,
-    BrowserSnapshotTool, BrowserTabsArgs, BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs,
-    BrowserTypeOutput, BrowserTypeTool, BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool,
-    BrowserWaitForArgs, BrowserWaitForOutput, BrowserWaitForTool,
+    BrowserClickArgs, BrowserClickOutput, BrowserClickTool, BrowserCompanionArgs,
+    BrowserCompanionOutput, BrowserCompanionTool, BrowserConsoleArgs, BrowserConsoleOutput,
+    BrowserConsoleTool, BrowserCookiesArgs, BrowserCookiesOutput, BrowserCookiesTool,
+    BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool, BrowserDragArgs, BrowserDragOutput,
+    BrowserDragTool, BrowserEmulateArgs, BrowserEmulateOutput, BrowserEmulateTool,
+    BrowserEvaluateArgs, BrowserEvaluateOutput, BrowserEvaluateTool, BrowserExecArgs,
+    BrowserExecOutput, BrowserExecTool, BrowserFillFormArgs, BrowserFillFormOutput,
+    BrowserFillFormTool, BrowserHoverArgs, BrowserHoverOutput, BrowserHoverTool,
+    BrowserNavigateArgs, BrowserNavigateOutput, BrowserNavigateTool, BrowserNetworkArgs,
+    BrowserNetworkOutput, BrowserNetworkTool, BrowserOpenArgs, BrowserOpenOutput, BrowserOpenTool,
+    BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool, BrowserPressKeyArgs, BrowserPressKeyOutput,
+    BrowserPressKeyTool, BrowserProfileArgs, BrowserProfileOutput, BrowserProfileTool,
+    BrowserQaArgs, BrowserQaOutput, BrowserQaTool, BrowserRecordArgs, BrowserRecordOutput,
+    BrowserRecordTool, BrowserResizeArgs, BrowserResizeOutput, BrowserResizeTool,
+    BrowserScreenshotArgs, BrowserScreenshotOutput, BrowserScreenshotTool, BrowserScrollArgs,
+    BrowserScrollOutput, BrowserScrollTool, BrowserSelectArgs, BrowserSelectOutput,
+    BrowserSelectTool, BrowserSessionArgs, BrowserSessionOutput, BrowserSessionTool,
+    BrowserSnapshotArgs, BrowserSnapshotOutput, BrowserSnapshotTool, BrowserTabsArgs,
+    BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs, BrowserTypeOutput, BrowserTypeTool,
+    BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool, BrowserWaitForArgs,
+    BrowserWaitForOutput, BrowserWaitForTool,
 };
 pub use canvas::{CanvasTool, CanvasToolAction, CanvasToolArgs};
 pub use channel_directory::{

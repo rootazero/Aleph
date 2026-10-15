@@ -3,6 +3,10 @@
 //! Free functions operating on `ToolMap`. Only the live production paths
 //! are kept: `replace_tool_arc_impl` (markdown-skill hot reload) and
 //! `list_tools_arc_impl` (agent-loop factory).
+//!
+//! **Projection-only boundary:** `list_tools_arc_impl` exposes a view of the
+//! live tool map. The returned list is not a second registry or authorization
+//! source.
 
 use super::ToolMap;
 use crate::sync_primitives::Arc;

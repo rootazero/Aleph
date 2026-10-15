@@ -254,6 +254,11 @@ fn compress_screenshot(output: &str) -> String {
     {
         return "[Screenshot captured successfully]".to_owned();
     }
+    // A single-line non-base64 payload has no metadata structure to preserve;
+    // return it intact so a long alphanumeric log is not silently rewritten.
+    if !output.contains('\n') && !output.contains('\r') {
+        return output.to_owned();
+    }
     // May contain metadata lines before or instead of base64 — keep first 5 lines.
     // Apply [`cap_line`] per kept line so a single overlong metadata line
     // (mirroring compress_snapshot's structural-summary arm) cannot blow up

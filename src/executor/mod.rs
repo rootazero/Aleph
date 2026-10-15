@@ -3,7 +3,14 @@
 //! Provides the builtin tool registry + the [`ToolRegistry`] trait used by
 //! the gateway execution engine to dispatch tool calls.
 
-mod builtin_registry;
+// `pub(crate)` so cross-crate test consumers (notably
+// `security::dangerous_tools::tests::every_entry_names_a_real_tool`, which
+// pins every denylist entry against a real tool) can reach the test-only
+// `dispatchable` census through `crate::executor::builtin_registry
+// ::dispatchable::advertised_tools` without rebuilding the registry. The
+// runtime surface still flows through the `pub use` below; nothing
+// here is a runtime API.
+pub(crate) mod builtin_registry;
 mod tool_registry;
 
 pub use builtin_registry::{

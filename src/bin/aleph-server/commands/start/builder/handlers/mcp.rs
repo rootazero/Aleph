@@ -116,7 +116,7 @@ mod tests {
     fn only_mcp_list_is_registered_here() {
         let src = include_str!("mcp.rs");
         // Production half only: this test's own text names the macro.
-        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let production = alephcore::utils::source_scan::production_prefix(src);
         let registered: Vec<&str> = production
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))

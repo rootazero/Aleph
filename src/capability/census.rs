@@ -821,17 +821,19 @@ mod tests {
         // guard edited green is worse than one that is honestly red).
         assert_eq!(
             raw + slots,
-            55,
+            56,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             55. Never assert either side alone: raw shrinks and slots grows as \
+             56. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \
              investigate before editing this number. \
-             Last moved 2026-10-13: 54 -> 55 when `gateway/telecom/public_approval` \
-             was rostered (Task #14, A-step), so the operator control plane's \
-             shared ledger and the public run driver's trusted scope lifecycle \
-             share one observable install-or-decline. Before that, 2026-10-03: \
+             Last moved 2026-10-15: 55 -> 56 when `capability/projection_host` \
+             was rostered alongside the existing telecom public-history and \
+             public-approval slots. Before that, 2026-10-13: 54 -> 55 when \
+             `gateway/telecom/public_approval` was rostered (Task #14, A-step), \
+             so the operator control plane's shared ledger and the public run \
+             driver's trusted scope lifecycle share one observable install-or-decline. Before that, 2026-10-03: \
              52 -> 53 when the `gateway/mcp-face` slot was rostered (P6.4), so \
              the MCP server face's install-or-decline is observable to \
              `core/capability-wiring` like every other subsystem. Before that, \

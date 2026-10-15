@@ -25,6 +25,15 @@
 
 `[sandbox.command_policy]` 的硬底线**任何档位都压不下去**。
 
+## 非旋钮：浏览器 viewer 绑定 (not a session knob)
+<!-- browser-live-docs:begin -->
+浏览器 live viewer 的绑定**不是**会话旋钮（not a session knob），不写 `identity_meta.custom`，也不要为它加第七根旋钮。绑定来自 grant 与资源，并按精确 `(browser_session_id, target_id)` owner（`src/browser/live/owner_registry.rs`）与内容 generation 校验；真机 selector `binding-switch`（`qa/browser_live/run.sh --case binding-switch`，Windows 真实运行 exit 0）只证明两个全新资源的 grant 各自独立出帧；它**不**证明会话切换 / 刷新 / 重连隔离，这些仍未验证（见 [BROWSER_LIVE_VIEWER.md](BROWSER_LIVE_VIEWER.md) §4）。
+The viewer binding is not a session knob: it derives from the grant and resource, is validated against the exact `(browser_session_id, target_id)` owner and the content generation, and the `binding-switch` selector (Windows real run, exit 0) proves only that two fresh resources' grants are independently frame-backed; conversation-switch/refresh/reconnect isolation is not proven.
+
+- **共同边界 / Shared boundary**：Gateway 独占 CDP（Gateway owns CDP）；Panel/TUI 仅 I/O only 呈现；仅显式合法 `[gateway] browser_viewer_origin` 才 opt-in，默认（None / 非法）deny-only；producer 的 `Safe` 被钳为 `Pending`，`Safe` 只来自用户经 `browser.viewer.resource.decide` 的 revision CAS；绑定走精确 binding / owner / generation；#27 TUI paired/browser 已接线，Windows Credential Manager standalone probe 1/1 已通过；macOS/Linux provider 与真实 pairing/browser E2E 仍 blocked；`NetworkContextGrant` / proxy 未触碰；**not production ready**。
+Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[gateway] browser_viewer_origin`, default deny-only; producer `Safe` is clamped to `Pending` and `Safe` comes only from the user's decision CAS; exact binding/owner/generation; #27 TUI paired/browser wiring is implemented; the Windows Credential Manager standalone probe passed 1/1; macOS/Linux providers and real pairing/browser E2E remain blocked; network grants untouched; not production ready.
+<!-- browser-live-docs:end -->
+
 ## 崩溃恢复：run 开始时的旋钮快照
 
 一个被守护进程崩溃打断的 run，恢复时**不再重新问今天的旋钮**。`RunStarted` marker 上冻结着它开跑时的 envelope（`session::events::RunEnvelopeSnapshot`：六根旋钮 `exec_tier` / `session_mode` / `think_level` / `memory_mode` / `model` / `model_provider`，字段名与本表同一套词表，`session_snapshot::RUN_ENVELOPE_KNOB_KEYS`；**加两条事实** `allowed_tools` / `btw`，见下），`resume_coordinator` 从**同一个** `open_run` 锚点读出来，一次性算成 `ResumePlan`。envelope 的键集 == KNOB ∪ FACT，由 `session::events::tests::the_envelope_carries_exactly_the_published_knob_keys` 的等式 census 钉住（T12，`4f300b435`）。

@@ -120,6 +120,7 @@ pub enum NetworkState {
     Denied,
     AllowAll,
     AllowHosts { hosts: Vec<String> },
+    LoopbackPorts { ports: Vec<u16> },
 }
 
 impl NetworkState {
@@ -131,6 +132,9 @@ impl NetworkState {
             NetworkPolicy::AllowHosts { hosts } => Self::AllowHosts {
                 hosts: hosts.clone(),
             },
+            NetworkPolicy::LoopbackPorts { ports } => Self::LoopbackPorts {
+                ports: ports.clone(),
+            },
         }
     }
 
@@ -140,6 +144,14 @@ impl NetworkState {
     pub const fn is_denied(&self) -> bool {
         matches!(self, Self::Denied)
     }
+}
+
+fn join_ports(ports: &[u16]) -> String {
+    ports
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl SandboxSummary {
@@ -290,6 +302,9 @@ impl SandboxSummary {
                     format!("Network: allowed (hosts: {})", hosts.join(", "))
                 }
             }
+            NetworkState::LoopbackPorts { ports } => {
+                format!("Network: loopback only (ports: {})", join_ports(ports))
+            }
         };
         Some(line)
     }
@@ -331,6 +346,7 @@ impl SandboxSummary {
                 NetworkState::Denied => "denied".to_string(),
                 NetworkState::AllowAll => "allowed (all hosts)".to_string(),
                 NetworkState::AllowHosts { hosts } => hosts.join(", "),
+                NetworkState::LoopbackPorts { ports } => join_ports(ports),
             },
         ));
         if let Some(mb) = max_memory_mb {

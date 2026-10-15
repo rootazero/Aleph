@@ -1151,7 +1151,8 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
         let clipboard = win.navigator().clipboard();
         let copied = copied;
         wasm_bindgen_futures::spawn_local(async move {
-            let result = wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&copy_text)).await;
+            let result =
+                wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&copy_text)).await;
             match result {
                 Ok(_) => {
                     copied.set(true);
