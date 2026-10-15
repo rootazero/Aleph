@@ -540,6 +540,14 @@ pub enum Treatment {
 /// attributes as enforced — see that doc for the sweep methodology and the
 /// (recorded, not silently dropped) gaps this table does not yet cover.
 pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
+    // Browser issuer RPCs resolve opaque keys against server-owned state.
+    // Ownership is exact even for operators; no cross-user admin override.
+    ("browser.viewer.grant.issue", Treatment::KeyChecked),
+    ("browser.viewer.grant.revoke", Treatment::KeyChecked),
+    ("browser.viewer.resource.decide", Treatment::KeyChecked),
+    // Exact-owner list (verified user's own live resources); operators do not
+    // see other users' resources, stricter than `visible_owner_filter()`.
+    ("browser.viewer.resource.list", Treatment::ListFiltered),
     ("sessions.list", Treatment::ListFiltered),
     ("sessions.history", Treatment::KeyChecked),
     ("sessions.preview", Treatment::KeyChecked),

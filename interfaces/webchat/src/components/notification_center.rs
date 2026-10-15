@@ -2,8 +2,9 @@
 //!
 //! A bell button anchored to the top-right of the window, with a popover
 //! listing every active alert from [`crate::context::DashboardState::alerts`].
-//! Reads the existing `alerts.**` data stream — no new RPC, no new gateway
-//! event variant. UI-private state lives in
+//! Reads the existing `alerts.**` data stream; telecom approvals use a
+//! bounded operator-only list RPC while mounted, without a new event variant.
+//! UI-private state lives in
 //! [`crate::state::notifications::NotificationsState`].
 //!
 //! Anchoring: fixed-positioned so it survives any view's reflow. z-index
@@ -12,6 +13,7 @@
 
 use crate::components::approval_card::ApprovalCard;
 use crate::components::sidebar::AlertLevel;
+use crate::components::telecom_approval_card::TelecomApprovalCard;
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
 use crate::state::notifications::{
@@ -32,8 +34,12 @@ pub fn NotificationCenter() -> impl IntoView {
 
     let alerts = dashboard.alerts;
     let pending_approvals = dashboard.pending_approvals;
+    let pending_telecom = dashboard.pending_telecom_approvals;
     let is_open = notif.is_open;
     let dismissed = notif.dismissed;
+
+    // A/B approvals have no event; poll only while this desktop view is mounted.
+    dashboard.poll_telecom_approvals_while_mounted();
 
     // Hide the bell entirely until we've ever connected — otherwise the
     // first-boot user sees a stray icon over the BootCheckGate spinner.
@@ -45,7 +51,17 @@ pub fn NotificationCenter() -> impl IntoView {
     let badge_count = Memo::new(move |_| {
         let a = alerts.get();
         let d = dismissed.get();
-        unread_count(&a, &d) + pending_approvals.get().len()
+        unread_count(&a, &d) + pending_approvals.get().len() + pending_telecom.get().len()
+    });
+
+    // No gateway event announces telecom approvals, so refetch whenever the
+    // popover opens. Failures collapse to an empty list (non-operators).
+    Effect::new(move |_| {
+        if is_open.get() {
+            leptos::task::spawn_local(async move {
+                dashboard.refresh_telecom_approvals().await;
+            });
+        }
     });
 
     // Visible alerts list (sorted). Re-evaluates on either signal change.
@@ -166,9 +182,25 @@ pub fn NotificationCenter() -> impl IntoView {
                             }.into_any()
                         }
                     }}
+                    // Telecom A/B approvals: keyed by id so a card keeps its
+                    // loaded review across unrelated list refetches.
+                    <ul class="divide-y divide-border">
+                        <For
+                            each=move || pending_telecom.get()
+                            key=|a| a.id.clone()
+                            children=move |a| view! {
+                                <li class="px-4 py-3">
+                                    <TelecomApprovalCard approval=a />
+                                </li>
+                            }
+                        />
+                    </ul>
                     {move || {
                         let items = list.get();
-                        if items.is_empty() && pending_approvals.get().is_empty() {
+                        if items.is_empty()
+                            && pending_approvals.get().is_empty()
+                            && pending_telecom.get().is_empty()
+                        {
                             view! {
                                 <div class="px-4 py-6 text-center text-sm text-text-tertiary">
                                     {move || t_string!(use_i18n(), notifications.empty).to_string()}

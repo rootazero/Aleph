@@ -120,9 +120,7 @@ pub async fn reattach_after_connect(
             // socket — the latch survives until the next time the socket comes
             // up, at which point the bump re-runs us and we try again.
             chat.pending_reattach.set(true);
-            leptos::logging::warn!(
-                "reattach: run_concurrency probe failed after retries: {e}"
-            );
+            leptos::logging::warn!("reattach: run_concurrency probe failed after retries: {e}");
             return;
         }
     };
@@ -156,9 +154,7 @@ pub async fn reattach_after_connect(
 /// (the WASM-side delay primitive — `tokio::time::sleep` is not available
 /// under `leptos::csr`); the total wait budget is the sum of
 /// [`REATTACH_BACKOFF`], so a cold caller can plan the upper bound.
-pub(crate) async fn probe_with_backoff(
-    dash: &DashboardState,
-) -> Result<HashSet<String>, String> {
+pub(crate) async fn probe_with_backoff(dash: &DashboardState) -> Result<HashSet<String>, String> {
     probe_with_backoff_with_sleep(
         || async {
             SystemApi::run_concurrency(dash)
@@ -200,9 +196,7 @@ where
         match probe().await {
             Ok(set) => {
                 if attempt > 0 {
-                    leptos::logging::log!(
-                        "reattach: probe succeeded on retry {attempt}"
-                    );
+                    leptos::logging::log!("reattach: probe succeeded on retry {attempt}");
                 }
                 return Ok(set);
             }
@@ -350,9 +344,7 @@ mod tests {
                 let attempts = Arc::clone(&attempts_for_closure);
                 async move {
                     let n = attempts.fetch_add(1, Ordering::SeqCst);
-                    Err::<std::collections::HashSet<String>, _>(format!(
-                        "simulated failure #{n}"
-                    ))
+                    Err::<std::collections::HashSet<String>, _>(format!("simulated failure #{n}"))
                 }
             },
             |_d| async move {},
@@ -360,8 +352,7 @@ mod tests {
 
         let calls = attempts.load(Ordering::SeqCst);
         assert_eq!(
-            calls,
-            3,
+            calls, 3,
             "exhaustion must have tried every attempt (1 + REATTACH_BACKOFF.len())"
         );
         let err = result.expect_err("probe should exhaust after 3 failed attempts");

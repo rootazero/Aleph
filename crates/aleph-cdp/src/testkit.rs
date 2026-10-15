@@ -301,6 +301,13 @@ impl FakeCdpServer {
 
     // ---- driving ----
 
+    /// How many websocket connections have completed their handshake with this server. A test of
+    /// "one profile owns one connection" needs this: counting `Target.attachToTarget` frames
+    /// measures sessions, not sockets.
+    pub fn connection_count(&self) -> usize {
+        lock(&self.conns).len()
+    }
+
     /// Push an unsolicited event frame to every connected client, in line behind everything
     /// already queued for that connection.
     ///

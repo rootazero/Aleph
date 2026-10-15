@@ -169,6 +169,7 @@ mod tests {
         SpendPolicy {
             per_user_usd: Some(10.0),
             total_usd: None,
+            telecom_public_usd: None,
             period,
         }
     }

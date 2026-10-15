@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "legacy-local-ipc",
+  "description": "Keeps the shell's pre-existing custom commands working for LOCAL origins (the bundled tauri://localhost / http://tauri.localhost pages such as connect.html and cert-trust.html) once build.rs registers an AppManifest. Before the manifest, Tauri implicitly allowed every custom command from a local origin; with one, each needs an explicit allow-*. This capability is deliberately local-only (no `remote.urls`, so the loopback/remote Panel gains nothing), covers every window as before, and lists exactly the nine legacy commands - no wildcard, and none of the panel_credential_* commands (those are granted only by the runtime capability that keyring_bridge::install adds).",
+  "local": true,
+  "windows": ["*"],
+  "permissions": [
+    "allow-get-connection-target",
+    "allow-set-connection-target",
+    "allow-clear-connection-target",
+    "allow-is-lite-shell",
+    "allow-discover-servers",
+    "allow-connect-to",
+    "allow-get-pending-cert",
+    "allow-approve-cert",
+    "allow-reject-cert"
+  ]
+}

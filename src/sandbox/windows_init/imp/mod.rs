@@ -31,6 +31,7 @@ use windows_sys::Win32::System::Threading::{
 
 mod app_container;
 pub(super) use app_container::launch_with_app_container;
+pub(crate) use app_container::{AppContainerProfile, ProcAttributeList};
 
 /// SP-6 v2: RAII guard that calls `LocalFree` on `Drop`. Used for
 /// `PSECURITY_DESCRIPTOR` (returned by `GetNamedSecurityInfoW`'s
@@ -494,7 +495,7 @@ fn spawn_and_wait(parsed: &ParsedInitArgs, token: Option<HANDLE>) -> Result<i32,
 /// Build a Windows-conforming command line from program + args. The
 /// program goes first (quoted if it contains a space); each arg is
 /// quoted using the CommandLineToArgvW-compatible escape rules.
-fn build_command_line(program: &str, args: &[String]) -> String {
+pub(crate) fn build_command_line(program: &str, args: &[String]) -> String {
     let mut line = String::new();
     line.push_str(&quote_arg(program));
     for a in args {

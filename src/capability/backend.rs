@@ -98,7 +98,6 @@ impl CapabilityBackend for ToolBackendAdapter {
             .filter(|d| Self::in_scope(&d.id, scope))
             .collect()
     }
-
 }
 
 /// Fold a tool descriptor into the kind-agnostic [`CapabilityDescriptor`].

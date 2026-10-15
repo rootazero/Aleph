@@ -384,6 +384,23 @@ pub struct RunRequest {
     /// requested model with auto-resolved provider (Raw). `None` keeps the
     /// agent's configured default + fallback chain.
     pub model_override: Option<crate::gateway::model_override::ModelOverride>,
+    /// Public-telecom provenance of this run (SMS today, PSTN voice later).
+    ///
+    /// `Some` marks the run as admitted from a public telecom line; readers
+    /// that gain a telecom-aware path may only *narrow* from it. `None` is the
+    /// legacy / non-telecom value and says nothing (it is neither a deny nor a
+    /// grant). Typed, never read from `metadata`: `TelecomPublicContext` has
+    /// only `pub(crate)` constructors and the SMS adapter (typed
+    /// `MessageMeta::Sms`, stamped in `inbound_router::executor`) is its only
+    /// production producer. That is an in-crate convention, not a
+    /// cryptographic or unforgeable guarantee. Derived runs inherit it
+    /// (continuations, rescue); rebuilt-from-storage producers (busy-queue
+    /// reinjection, crash resume, goal-wait wake) carry `None` — see the Task 4
+    /// contract-fix report for that residual gap.
+    pub telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
+    /// Non-serialized authority minted only by an authenticated server builder.
+    /// New/derived/resumed requests initialize this to None.
+    pub telecom_authority: Option<crate::gateway::telecom::lifecycle_tools::TelecomToolAuthority>,
 }
 
 /// `metadata` key: an execution-tier **ceiling** for this run.
@@ -477,6 +494,7 @@ impl std::fmt::Debug for RunRequest {
                 &self.sandbox_override.as_ref().map(|_| "<dyn Sandbox>"),
             )
             .field("workspace_override", &self.workspace_override)
+            .field("telecom_public", &self.telecom_public)
             .finish()
     }
 }

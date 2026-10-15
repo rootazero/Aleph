@@ -4,6 +4,9 @@
 
 use crate::sync_primitives::{Arc, RwLock};
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -233,14 +236,100 @@ pub struct ResolvedDecision {
     pub deny_reason: Option<String>,
 }
 
+/// Receiver bound to the exact registration that created it. Private fields
+/// prevent a caller from attaching a different generation to a raw receiver.
+/// A refused duplicate has no token and can never clean up a pending entry.
+pub struct RegisteredApprovalReceiver {
+    receiver: oneshot::Receiver<Option<ApprovalDecisionType>>,
+    generation: Option<Arc<()>>,
+}
+
+impl RegisteredApprovalReceiver {
+    pub fn try_recv(
+        &mut self,
+    ) -> Result<Option<ApprovalDecisionType>, oneshot::error::TryRecvError> {
+        self.receiver.try_recv()
+    }
+}
+
+impl Future for RegisteredApprovalReceiver {
+    type Output = Result<Option<ApprovalDecisionType>, oneshot::error::RecvError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.get_mut().receiver).poll(cx)
+    }
+}
+
 /// Internal pending entry with channel
 struct PendingEntry {
     record: ExecApprovalRecord,
     sender: Option<oneshot::Sender<Option<ApprovalDecisionType>>>,
     created_at: Instant,
+    /// Independent operator approvals reject unoffered decisions instead of
+    /// downgrading them. Ordinary approvals retain their scope-clamping rule.
+    operator_once: bool,
+    /// Allocation identity captured under the registration lock. An old guard
+    /// cannot own a later registration just because it reused the same id.
+    generation: Arc<()>,
+}
+
+/// Exact-registration cleanup for the independent operator approval only.
+/// Kept alive through notification and waiting, including future drop.
+/// Removal never stamps a denial or cascades to any sibling card.
+pub(crate) struct OperatorApprovalRegistration<'a> {
+    manager: &'a ExecApprovalManager,
+    id: String,
+    generation: Arc<()>,
+}
+
+impl OperatorApprovalRegistration<'_> {
+    /// Wait only when the receiver belongs to this guard's registration.
+    /// Cleanup then uses the receiver's captured token, as for ordinary cards.
+    pub(crate) async fn wait(
+        &self,
+        rx: RegisteredApprovalReceiver,
+        timeout: Option<Duration>,
+    ) -> ResolvedDecision {
+        if !rx
+            .generation
+            .as_ref()
+            .is_some_and(|generation| Arc::ptr_eq(generation, &self.generation))
+        {
+            return ResolvedDecision::default();
+        }
+        self.manager
+            .await_registered(self.id.clone(), rx, timeout)
+            .await
+    }
+}
+
+impl Drop for OperatorApprovalRegistration<'_> {
+    fn drop(&mut self) {
+        let mut pending = self
+            .manager
+            .pending
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        if pending
+            .get(&self.id)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.generation, &self.generation))
+        {
+            pending.remove(&self.id);
+        }
+    }
 }
 
 impl PendingEntry {
+    /// Shared boundary for owner text replies, originator metadata and channel
+    /// callbacks. The internal independent flag and legacy wire flag both count.
+    fn is_operator_only(&self) -> bool {
+        self.operator_once || self.record.operator_only
+    }
+
+    fn accepts_decision(&self, decision: ApprovalDecisionType) -> bool {
+        !self.operator_once || self.record.allowed_decisions.contains(&decision)
+    }
+
     /// Whether a waiter is still parked on this entry.
     ///
     /// A CLOSED oneshot receiver proves nobody is waiting: the only holder is
@@ -371,14 +460,53 @@ impl ExecApprovalManager {
     /// notification about the pending approval should call this FIRST, then
     /// publish, then [`Self::await_registered`] — so a fast resolver cannot
     /// race ahead of registration (resolve-before-register → spurious timeout).
+    /// A duplicate id is rejected with a closed receiver (a non-decision),
+    /// leaving the original entry intact instead of overwriting or panicking.
     #[must_use]
     pub fn register_pending(
         &self,
         record: ExecApprovalRecord,
+    ) -> (String, RegisteredApprovalReceiver, Option<Duration>) {
+        let (id, rx, timeout, _) = self.register_pending_inner(record, false);
+        (id, rx, timeout)
+    }
+
+    /// Register an independent, strictly single-use operator approval. The
+    /// returned guard unregisters this exact generation on every exit, even
+    /// if the caller is dropped before waiting. A duplicate id returns `None`
+    /// without replacing its entry. Wait via the guard to verify its receiver.
+    /// Clear the grant key to isolate BOTH incoming and outgoing cascades.
+    #[must_use]
+    pub(crate) fn register_operator_once(
+        &self,
+        mut record: ExecApprovalRecord,
+    ) -> Option<(
+        String,
+        RegisteredApprovalReceiver,
+        Option<Duration>,
+        OperatorApprovalRegistration<'_>,
+    )> {
+        record.operator_only = true;
+        record.allowed_decisions = crate::exec::allowed_decisions::once_only();
+        record.grant_key = None;
+        let (id, rx, timeout, generation) = self.register_pending_inner(record, true);
+        let guard = OperatorApprovalRegistration {
+            manager: self,
+            id: id.clone(),
+            generation: generation?,
+        };
+        Some((id, rx, timeout, guard))
+    }
+
+    fn register_pending_inner(
+        &self,
+        record: ExecApprovalRecord,
+        operator_once: bool,
     ) -> (
         String,
-        oneshot::Receiver<Option<ApprovalDecisionType>>,
+        RegisteredApprovalReceiver,
         Option<Duration>,
+        Option<Arc<()>>,
     ) {
         // Use remaining time from now, not the full original timeout window.
         // This prevents granting a full timeout if the wait begins long after
@@ -403,31 +531,51 @@ impl ExecApprovalManager {
         // task needed.
         self.cleanup_expired();
 
-        {
+        let generation = {
             let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
             if pending.contains_key(&id) {
-                // `ExecApprovalRequest.id` is caller-supplied: a duplicate
-                // silently drops the live entry's sender, and its waiter then
-                // reports a spurious timeout. Keep the overwrite (callers use
-                // uuid v4 today) but make it observable.
-                warn!(id = %id, "Duplicate approval id overwrites a live pending entry");
-                debug_assert!(false, "duplicate approval id registered: {id}");
+                // Preserve the original waiter. A closed receiver is the
+                // existing API's non-decision failure signal, not a panic or
+                // a new approval capability. The operator API returns None.
+                warn!(id = %id, "Duplicate approval id rejected; existing entry retained");
+                return (
+                    id,
+                    RegisteredApprovalReceiver {
+                        receiver: rx,
+                        generation: None,
+                    },
+                    timeout,
+                    None,
+                );
             }
+            let generation = Arc::new(());
             pending.insert(
                 id.clone(),
                 PendingEntry {
                     record,
                     sender: Some(tx),
                     created_at: Instant::now(),
+                    operator_once,
+                    generation: generation.clone(),
                 },
             );
-        }
+            generation
+        };
 
-        (id, rx, timeout)
+        (
+            id,
+            RegisteredApprovalReceiver {
+                receiver: rx,
+                generation: Some(generation.clone()),
+            },
+            timeout,
+            Some(generation),
+        )
     }
 
     /// Await a previously [`register_pending`](Self::register_pending)ed
-    /// approval, removing it from `pending` on resolution or timeout.
+    /// approval, removing only its matching registration on resolution or timeout.
+    /// Rejected receivers never remove or harvest another registration's reason.
     ///
     /// The denial reason (if the resolver attached one) is harvested from the
     /// removed entry here — the resolver stamps it on the record BEFORE waking
@@ -435,9 +583,10 @@ impl ExecApprovalManager {
     pub async fn await_registered(
         &self,
         id: String,
-        rx: oneshot::Receiver<Option<ApprovalDecisionType>>,
+        rx: RegisteredApprovalReceiver,
         timeout: Option<Duration>,
     ) -> ResolvedDecision {
+        let generation = rx.generation.clone();
         // `None` = the no-expiry sentinel: wait indefinitely (notify + wait).
         let result = match timeout {
             Some(t) => tokio::time::timeout(t, rx).await,
@@ -447,7 +596,16 @@ impl ExecApprovalManager {
         // Remove from pending, harvesting the record the resolver annotated.
         let deny_reason = {
             let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
-            pending.remove(&id).and_then(|e| e.record.deny_reason)
+            let owned = generation.as_ref().is_some_and(|generation| {
+                pending
+                    .get(&id)
+                    .is_some_and(|entry| Arc::ptr_eq(&entry.generation, generation))
+            });
+            if owned {
+                pending.remove(&id).and_then(|e| e.record.deny_reason)
+            } else {
+                None
+            }
         };
 
         let decision = match result {
@@ -507,12 +665,49 @@ impl ExecApprovalManager {
         resolved_by: Option<String>,
         deny_reason: Option<String>,
     ) -> bool {
+        self.resolve_by_id(id, decision, resolved_by, deny_reason, false)
+    }
+
+    /// Channel callbacks cannot resolve an operator entry even if the id is
+    /// replaced between the callback's early check and this lock acquisition.
+    pub(crate) fn resolve_for_channel(
+        &self,
+        id: &str,
+        decision: ApprovalDecisionType,
+        resolved_by: Option<String>,
+    ) -> bool {
+        self.resolve_for_channel_with_reason(id, decision, resolved_by, None)
+    }
+
+    /// Owner-addressed RPC decisions use the same final operator exclusion,
+    /// while retaining the ordinary free-text denial reason.
+    pub(crate) fn resolve_for_channel_with_reason(
+        &self,
+        id: &str,
+        decision: ApprovalDecisionType,
+        resolved_by: Option<String>,
+        deny_reason: Option<String>,
+    ) -> bool {
+        self.resolve_by_id(id, decision, resolved_by, deny_reason, true)
+    }
+
+    fn resolve_by_id(
+        &self,
+        id: &str,
+        decision: ApprovalDecisionType,
+        resolved_by: Option<String>,
+        deny_reason: Option<String>,
+        owner_only: bool,
+    ) -> bool {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
         let Some(entry) = pending.get_mut(id) else {
             warn!(id = %id, "Approval not found or already resolved");
             return false;
         };
+        if owner_only && entry.is_operator_only() {
+            return false;
+        }
         // Liveness is the honest signal, exactly as the clarification twin
         // enforces it ([`crate::clarification::session::ClarificationManager::resolve`]):
         // a dead entry is one already resolved (`sender` taken), past its
@@ -524,6 +719,12 @@ impl ExecApprovalManager {
         // by-id path must too, or the two disagree on the same registry.
         if !entry.is_live() {
             warn!(id = %id, "Approval already resolved, expired, or abandoned");
+            return false;
+        }
+
+        // An independent operator decision must be the actual offered value,
+        // not a wider wire decision that ordinary cards narrow to AllowOnce.
+        if !entry.accepts_decision(decision) {
             return false;
         }
 
@@ -544,9 +745,17 @@ impl ExecApprovalManager {
         // stdout-grep. We capture the command-shape and session id from
         // the resolved entry before any cascade clobbers the lock; the
         // block is best-effort (no audit log installed is not an error).
-        let audit_snapshot = pending
-            .get(id)
-            .map(|e| (e.record.command.clone(), e.record.session_key.clone()));
+        let audit_snapshot = pending.get(id).map(|e| {
+            // Only the new independent operator-once path is redacted here.
+            // Its command is private resolving-UI context, not audit content;
+            // a prefix/bounded summary would still leak target and body.
+            let command = if e.operator_once {
+                format!("action operator once approval id={id}")
+            } else {
+                e.record.command.clone()
+            };
+            (command, e.record.session_key.clone())
+        });
         // R2 D2 wiring: clone the attribution BEFORE the cascade consumes
         // it so the helper call below can carry `resolved_by` as the
         // audit row's `actor_user`. The cascade path takes ownership to
@@ -712,9 +921,22 @@ impl ExecApprovalManager {
         }
     }
 
+    /// Recognize both operator kinds before channel action parsing. This also
+    /// recognizes dead entries; liveness is checked at resolution under lock.
+    #[must_use]
+    pub(crate) fn is_operator_approval(&self, id: &str) -> bool {
+        self.pending
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .is_some_and(PendingEntry::is_operator_only)
+    }
+
     /// The originator (raw channel user id) recorded on a **live** pending
-    /// approval, or `None` when the id is unknown / already resolved / expired,
-    /// OR when the record carries no originator (non-channel or legacy record).
+    /// owner approval, or `None` when the id is operator-only, unknown, already
+    /// resolved, expired, or carries no originator (non-channel/legacy record).
+    /// `None` is NOT operator authorization: channel callers must check
+    /// [`Self::is_operator_approval`] and use [`Self::resolve_for_channel`].
     ///
     /// The channel button-callback gate
     /// ([`ManagerCallbackSink::handle_callback`](crate::approval::callback_sink))
@@ -727,7 +949,7 @@ impl ExecApprovalManager {
         let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
         pending
             .get(id)
-            .filter(|entry| entry.is_live())
+            .filter(|entry| entry.is_live() && !entry.is_operator_only())
             .and_then(|entry| entry.record.originator_user_id.clone())
     }
 
@@ -764,11 +986,14 @@ impl ExecApprovalManager {
     ) -> SessionResolveOutcome {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
-        // Oldest-first live entries for this session — the stable order every
-        // `Ambiguous` listing renders (and snapshots).
+        // Intentional filter correction: exclude BOTH operator kinds BEFORE
+        // building owner lists, positional snapshots, candidates or summaries.
+        // Oldest-first owner entries keep the ordinary listing order.
         let mut live: Vec<(Instant, String)> = pending
             .iter()
-            .filter(|(_, e)| e.is_live() && e.record.session_key == session_key)
+            .filter(|(_, e)| {
+                e.is_live() && !e.is_operator_only() && e.record.session_key == session_key
+            })
             .map(|(id, e)| (e.created_at, id.clone()))
             .collect();
         live.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
@@ -818,7 +1043,9 @@ impl ExecApprovalManager {
                 match addressed {
                     Some(id)
                         if pending.get(&id).is_some_and(|e| {
-                            e.is_live() && e.record.session_key == session_key
+                            e.is_live()
+                                && !e.is_operator_only()
+                                && e.record.session_key == session_key
                         }) =>
                     {
                         id
@@ -859,6 +1086,9 @@ impl ExecApprovalManager {
         }
 
         if let Some(entry) = pending.get_mut(&id) {
+            if !entry.accepts_decision(decision) {
+                return SessionResolveOutcome::NothingPending;
+            }
             let decision = Self::clamp_decision(decision, &entry.record.allowed_decisions);
             let summary = Self::display_line(&entry.record);
             Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason.clone());
@@ -1062,6 +1292,630 @@ mod tests {
             allowed_decisions: crate::exec::allowed_decisions::with_persistent(),
             ..mock_request()
         }
+    }
+
+    // Intentional filter correction: operator escalation cards never belong to
+    // the originator's /approve list, even when the session/originator matches.
+    #[tokio::test]
+    async fn session_replies_hide_both_operator_kinds_before_listing_and_indexing() {
+        for independent in [false, true] {
+            let manager = ExecApprovalManager::new();
+            let mut request = keyed_request("private", "s1", None);
+            request.command = "PRIVATE target=+15550001111 body=private-canary".to_string();
+            request.originator_user_id = Some("alice".to_string());
+            let mut record = manager.create(&request, 60_000);
+            record.operator_only = true;
+            let (_id, mut rx, _timeout, guard) = if independent {
+                let (id, rx, timeout, guard) = manager.register_operator_once(record).unwrap();
+                // Prove the internal flag independently of the legacy flag.
+                manager
+                    .pending
+                    .write()
+                    .unwrap()
+                    .get_mut(&id)
+                    .unwrap()
+                    .record
+                    .operator_only = false;
+                (id, rx, timeout, Some(guard))
+            } else {
+                let (id, rx, timeout) = manager.register_pending(record);
+                (id, rx, timeout, None)
+            };
+            assert!(manager.is_operator_approval("private"));
+            assert!(!manager.resolve_for_channel(
+                "private",
+                ApprovalDecisionType::AllowOnce,
+                Some("alice".to_string())
+            ));
+            for actor in [Some("alice".to_string()), None] {
+                for index in [None, Some(1)] {
+                    assert_eq!(
+                        manager.resolve_for_session(
+                            "s1",
+                            index,
+                            ApprovalDecisionType::AllowOnce,
+                            actor.clone(),
+                            None,
+                        ),
+                        SessionResolveOutcome::NothingPending,
+                    );
+                }
+            }
+            assert!(matches!(
+                rx.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            assert!(manager.record_originator("private").is_none());
+
+            let (_a, rx_a, _) = manager
+                .register_pending(manager.create(&keyed_request("owner-a", "s1", None), 60_000));
+            let (_b, rx_b, _) = manager
+                .register_pending(manager.create(&keyed_request("owner-b", "s1", None), 60_000));
+            assert_eq!(
+                manager.resolve_for_session(
+                    "s1",
+                    None,
+                    ApprovalDecisionType::AllowOnce,
+                    Some("alice".to_string()),
+                    None,
+                ),
+                SessionResolveOutcome::Ambiguous(vec![
+                    (1, "npm install".to_string()),
+                    (2, "npm install".to_string()),
+                ]),
+            );
+            assert_eq!(
+                manager.session_listings.read().unwrap()["s1"],
+                vec!["owner-a", "owner-b"]
+            );
+            // Simulate a listing shown before the filter correction: even a
+            // stale indexed candidate must not address an operator-only card.
+            manager
+                .session_listings
+                .write()
+                .unwrap()
+                .insert("s1".to_string(), vec!["private".to_string()]);
+            assert!(matches!(
+                manager.resolve_for_session("s1", Some(1), ApprovalDecisionType::AllowOnce, Some("alice".to_string()), None),
+                SessionResolveOutcome::Ambiguous(cards) if cards.len() == 2 && cards.iter().all(|(_, line)| !line.contains("PRIVATE"))
+            ));
+            assert!(matches!(
+                manager.resolve_for_session("s1", Some(1), ApprovalDecisionType::AllowOnce, Some("alice".to_string()), None),
+                SessionResolveOutcome::Resolved { summary, .. } if summary == "npm install"
+            ));
+            assert_eq!(rx_a.await.unwrap(), Some(ApprovalDecisionType::AllowOnce));
+            assert!(manager.get_pending("owner-b").is_some());
+            assert!(manager.get_pending("private").is_some());
+            // Trusted by-id resolution remains available to the operator RPC.
+            assert!(manager.resolve(
+                "private",
+                ApprovalDecisionType::AllowOnce,
+                Some("operator".to_string())
+            ));
+            assert_eq!(rx.await.unwrap(), Some(ApprovalDecisionType::AllowOnce));
+            drop((rx_b, guard));
+        }
+    }
+
+    // A guard must own its generation, not merely an id. Both sweep and explicit
+    // retirement can free an id while its old guard/waiter still exists.
+    #[tokio::test]
+    async fn operator_once_stale_guard_and_wait_cleanup_preserve_reused_id() {
+        for retirement in ["retire", "sweep"] {
+            for (finish_wait, b_resolved) in [(false, false), (true, false), (true, true)] {
+                let manager = ExecApprovalManager::new();
+                let (id, rx_a, timeout_a, guard_a) = manager
+                    .register_operator_once(
+                        manager.create(&keyed_request("reused", "s1", None), 60_000),
+                    )
+                    .unwrap();
+                if retirement == "retire" {
+                    assert!(manager.retire_pending(&id));
+                } else {
+                    manager
+                        .pending
+                        .write()
+                        .unwrap()
+                        .get_mut(&id)
+                        .unwrap()
+                        .created_at = Instant::now() - Duration::from_secs(61);
+                    manager.cleanup_expired();
+                }
+                assert!(!manager.pending.read().unwrap().contains_key(&id));
+                let (id_b, rx_b, timeout_b, guard_b) = manager
+                    .register_operator_once(
+                        manager.create(&keyed_request("reused", "s1", None), 60_000),
+                    )
+                    .unwrap();
+                // Exercise cleanup with a resolved B as well as a live B:
+                // the old waiter must not harvest B's denial reason either.
+                if b_resolved {
+                    assert!(manager.resolve_with_reason(
+                        &id_b,
+                        ApprovalDecisionType::Deny,
+                        None,
+                        Some("B reason".to_string())
+                    ));
+                }
+                if finish_wait {
+                    assert_eq!(
+                        guard_a.wait(rx_a, timeout_a).await,
+                        ResolvedDecision::default()
+                    );
+                } else {
+                    drop(rx_a);
+                }
+                drop(guard_a);
+                assert!(
+                    manager.pending.read().unwrap().contains_key(&id_b),
+                    "{retirement}/{finish_wait}/{b_resolved} deleted B"
+                );
+                if !b_resolved {
+                    assert!(manager.get_pending(&id_b).is_some());
+                    assert!(manager.resolve_with_reason(
+                        &id_b,
+                        ApprovalDecisionType::Deny,
+                        None,
+                        Some("B reason".to_string())
+                    ));
+                }
+                let resolved = guard_b.wait(rx_b, timeout_b).await;
+                assert_eq!(resolved.decision, Some(ApprovalDecisionType::Deny));
+                assert_eq!(resolved.deny_reason.as_deref(), Some("B reason"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_registration_refuses_without_overwriting_or_panicking() {
+        for first_operator in [false, true] {
+            let manager = ExecApprovalManager::new();
+            let record =
+                manager.create(&keyed_request("collision", "s1", None), NO_APPROVAL_TIMEOUT);
+            let (id, rx, timeout, guard) = if first_operator {
+                let (id, rx, timeout, guard) = manager.register_operator_once(record).unwrap();
+                (id, rx, timeout, Some(guard))
+            } else {
+                let (id, rx, timeout) = manager.register_pending(record);
+                (id, rx, timeout, None)
+            };
+            assert!(manager
+                .register_operator_once(
+                    manager.create(&keyed_request("collision", "s1", None), 60_000),
+                )
+                .is_none());
+            let (refused_id, refused_rx, refused_timeout) = manager
+                .register_pending(manager.create(&keyed_request("collision", "s1", None), 60_000));
+            assert_eq!(
+                manager
+                    .await_registered(refused_id, refused_rx, refused_timeout)
+                    .await,
+                ResolvedDecision::default()
+            );
+            assert!(manager.get_pending(&id).is_some());
+            assert!(manager.resolve(&id, ApprovalDecisionType::AllowOnce, None));
+            let resolved = if let Some(ref guard) = guard {
+                guard.wait(rx, timeout).await
+            } else {
+                manager.await_registered(id, rx, timeout).await
+            };
+            assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+        }
+    }
+
+    #[tokio::test]
+    async fn refused_ordinary_receiver_cannot_remove_resolved_original_or_steal_reason() {
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&keyed_request("duplicate", "s1", None), NO_APPROVAL_TIMEOUT);
+        let (id, rx_a, timeout_a) = manager.register_pending(record.clone());
+        let (duplicate_id, rx_d, timeout_d) = manager.register_pending(record);
+        // Resolve BEFORE the refused receiver waits: sender=None is not ownership.
+        assert!(manager.resolve_with_reason(
+            &id,
+            ApprovalDecisionType::Deny,
+            None,
+            Some("A exact reason".to_string())
+        ));
+        assert!(
+            rx_d.generation.is_none(),
+            "a refused duplicate owns no entry"
+        );
+        assert_eq!(
+            manager
+                .await_registered(duplicate_id, rx_d, timeout_d)
+                .await,
+            ResolvedDecision::default()
+        );
+        assert!(manager.pending.read().unwrap().contains_key(&id));
+        assert_eq!(
+            manager.await_registered(id, rx_a, timeout_a).await,
+            ResolvedDecision {
+                decision: Some(ApprovalDecisionType::Deny),
+                deny_reason: Some("A exact reason".to_string()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn retired_ordinary_receiver_cleanup_preserves_reused_resolved_entry_reason() {
+        for resolve_a in [false, true] {
+            let manager = ExecApprovalManager::new();
+            let record = manager.create(
+                &keyed_request("reused-ordinary", "s1", None),
+                NO_APPROVAL_TIMEOUT,
+            );
+            let (id, rx_a, timeout_a) = manager.register_pending(record.clone());
+            if resolve_a {
+                assert!(manager.resolve_with_reason(
+                    &id,
+                    ApprovalDecisionType::Deny,
+                    None,
+                    Some("A exact reason".to_string())
+                ));
+                // retire_pending deliberately retires live cards only. A
+                // resolved no-expiry tombstone is removed by the real sweep.
+                manager.cleanup_expired();
+                assert!(!manager.pending.read().unwrap().contains_key(&id));
+            } else {
+                assert!(manager.retire_pending(&id));
+            }
+            let (id_b, rx_b, timeout_b) = manager.register_pending(record);
+            assert!(manager.resolve_with_reason(
+                &id_b,
+                ApprovalDecisionType::Deny,
+                None,
+                Some("B exact reason".to_string())
+            ));
+            let resolved_a = manager.await_registered(id, rx_a, timeout_a).await;
+            assert_eq!(
+                resolved_a.decision,
+                resolve_a.then_some(ApprovalDecisionType::Deny)
+            );
+            // A's record was retired; its receiver cannot harvest B's reason.
+            assert_eq!(resolved_a.deny_reason, None);
+            assert!(manager.pending.read().unwrap().contains_key(&id_b));
+            assert_eq!(
+                manager.await_registered(id_b, rx_b, timeout_b).await,
+                ResolvedDecision {
+                    decision: Some(ApprovalDecisionType::Deny),
+                    deny_reason: Some("B exact reason".to_string()),
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn operator_guard_refuses_a_different_registration_receiver() {
+        let manager = ExecApprovalManager::new();
+        let (id_a, rx_a, timeout_a, guard_a) = manager
+            .register_operator_once(
+                manager.create(&keyed_request("guard-a", "s1", None), NO_APPROVAL_TIMEOUT),
+            )
+            .unwrap();
+        let (id_b, rx_b, timeout_b, guard_b) = manager
+            .register_operator_once(
+                manager.create(&keyed_request("guard-b", "s1", None), NO_APPROVAL_TIMEOUT),
+            )
+            .unwrap();
+        assert!(manager.resolve_with_reason(
+            &id_b,
+            ApprovalDecisionType::Deny,
+            None,
+            Some("B exact reason".to_string())
+        ));
+        assert_eq!(
+            guard_a.wait(rx_b, timeout_b).await,
+            ResolvedDecision::default()
+        );
+        assert!(manager.pending.read().unwrap().contains_key(&id_b));
+        assert!(manager.get_pending(&id_a).is_some());
+        assert!(manager.resolve_with_reason(
+            &id_a,
+            ApprovalDecisionType::Deny,
+            None,
+            Some("A exact reason".to_string())
+        ));
+        assert_eq!(
+            guard_a.wait(rx_a, timeout_a).await.deny_reason.as_deref(),
+            Some("A exact reason")
+        );
+        drop(guard_b);
+    }
+
+    // The installed audit receiver captures the real resolve -> discord hook ->
+    // SecurityAuditLog::log chain, not a mocked snapshot or a bounded preview.
+    #[tokio::test]
+    #[serial_test::serial(global_audit_log)]
+    async fn operator_once_audit_never_emits_private_target_body_or_prefix_on_allow_or_deny() {
+        use crate::approval::callback_sink::ManagerCallbackSink;
+        use crate::gateway::inbound_router::approval_callback::ApprovalCallbackSink;
+        use crate::security::audit::{self, SecurityAuditLog};
+        let _serial = audit::AUDIT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        struct ResetAudit;
+        impl Drop for ResetAudit {
+            fn drop(&mut self) {
+                audit::clear_global_for_test();
+            }
+        }
+        let (log, mut audit_rx) = SecurityAuditLog::new(audit::TEST_LOG_CAPACITY);
+        audit::replace_global_for_test(&log);
+        let _reset = ResetAudit;
+        for (decision, label) in [
+            (ApprovalDecisionType::AllowOnce, "allow_once"),
+            (ApprovalDecisionType::Deny, "deny"),
+        ] {
+            let manager = Arc::new(ExecApprovalManager::new());
+            let mut request = keyed_request(&format!("once-audit-{label}"), "s1", None);
+            request.command = format!(
+                "PRIVATE-CANARY target=+15559998888 body=secret-canary{}",
+                "x".repeat(5000)
+            );
+            request.originator_user_id = Some("once-audit-actor".to_string());
+            let (id, rx, timeout, guard) = manager
+                .register_operator_once(ExecApprovalRecord::from_request(&request, 60_000))
+                .unwrap();
+            let sink = ManagerCallbackSink::new(manager.clone());
+            let callback = sink
+                .handle_callback(&format!("approve:{id}:once"), "once-audit-actor")
+                .await
+                .unwrap();
+            assert!(!callback.resolved);
+            tokio::task::yield_now().await;
+            while let Ok(row) = audit_rx.try_recv() {
+                assert_ne!(
+                    row.actor_user.as_deref(),
+                    Some("once-audit-actor"),
+                    "a blocked callback emitted an audit row"
+                );
+            }
+            assert!(manager.resolve(&id, decision, Some("once-audit-actor".to_string())));
+            assert_eq!(guard.wait(rx, timeout).await.decision, Some(decision));
+            let row = tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let row = audit_rx.recv().await.expect("audit receiver closed");
+                    if row.actor_user.as_deref() == Some("once-audit-actor") {
+                        break row;
+                    }
+                }
+            })
+            .await
+            .expect("resolution must reach the installed audit hook");
+            assert_eq!(row.detail, format!("discord.command.approval.resolved: {label} action operator once approval id={id}"));
+            for canary in [
+                "PRIVATE-CANARY",
+                "+15559998888",
+                "secret-canary",
+                "target=",
+                "body=",
+            ] {
+                assert!(
+                    !format!("{row:?}").contains(canary),
+                    "audit leaked {canary}"
+                );
+            }
+        }
+        // Existing config-tier audit policy is deliberately NOT broadened.
+        let manager = ExecApprovalManager::new();
+        let mut record = manager.create(&keyed_request("config-audit", "s1", None), 60_000);
+        record.command = "ordinary-config-command".to_string();
+        record.operator_only = true;
+        let (id, rx, timeout) = manager.register_pending(record);
+        assert!(manager.resolve(
+            &id,
+            ApprovalDecisionType::AllowOnce,
+            Some("config-audit-actor".to_string())
+        ));
+        manager.await_registered(id, rx, timeout).await;
+        let row = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let row = audit_rx.recv().await.unwrap();
+                if row.actor_user.as_deref() == Some("config-audit-actor") {
+                    break row;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            row.detail,
+            "discord.command.approval.resolved: allow_once ordinary-config-command"
+        );
+    }
+
+    // Unlike get_pending/list_pending (which hide dead entries), inspect the
+    // backing map here to prove RAII physically unregisters every state.
+    #[tokio::test]
+    async fn operator_once_guard_unregisters_live_resolved_expired_and_abandoned_entries() {
+        for state in ["live", "resolved", "expired", "abandoned", "waiting"] {
+            let manager = ExecApprovalManager::new();
+            let record = manager.create(&mock_request(), 60_000);
+            let (id, rx, timeout, guard) = manager.register_operator_once(record).unwrap();
+            let mut rx = Some(rx);
+            match state {
+                "resolved" => {
+                    assert!(manager.resolve(&id, ApprovalDecisionType::AllowOnce, None));
+                }
+                "expired" => {
+                    manager
+                        .pending
+                        .write()
+                        .unwrap()
+                        .get_mut(&id)
+                        .unwrap()
+                        .record
+                        .expires_at_ms = 1;
+                }
+                _ => {}
+            }
+            if state == "waiting" {
+                let mut wait = Box::pin(guard.wait(rx.take().unwrap(), timeout));
+                assert!(std::future::Future::poll(
+                    wait.as_mut(),
+                    &mut std::task::Context::from_waker(std::task::Waker::noop())
+                )
+                .is_pending());
+                drop(wait);
+            } else if state == "abandoned" {
+                drop(rx.take());
+            }
+            assert!(manager.pending.read().unwrap().contains_key(&id));
+            drop(guard);
+            assert!(
+                !manager.pending.read().unwrap().contains_key(&id),
+                "{state} must be physically removed even without a sweep"
+            );
+            if let Some(rx) = rx {
+                if state == "resolved" {
+                    assert_eq!(rx.await.unwrap(), Some(ApprovalDecisionType::AllowOnce));
+                } else {
+                    assert!(rx.await.is_err(), "unregister closes without stamping Deny");
+                }
+            }
+        }
+    }
+
+    // Verify the real requester owns the guard, not merely that a standalone
+    // guard works: dropped receivers are hidden by list_pending/get_pending.
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_requester_physically_removes_entries_on_every_nondecision_exit() {
+        use crate::approval::OperatorApprovalRequester;
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::sandbox::exec_approval::{gate::ApprovalOutcome, ApprovalAction};
+        use tokio_util::sync::CancellationToken;
+        for exit in ["drop", "cancel", "deadline", "bus-zero"] {
+            let manager = Arc::new(ExecApprovalManager::new());
+            let bus = Arc::new(GatewayEventBus::new());
+            let subscriber = if exit == "bus-zero" {
+                None
+            } else {
+                Some(bus.subscribe_typed())
+            };
+            let requester = OperatorApprovalRequester::for_config_tier(manager.clone(), bus);
+            let action = ApprovalAction::bare("telephone", "single use");
+            let cancel = CancellationToken::new();
+            let mut future = Box::pin(requester.request_operator_once(
+                &action,
+                &cancel,
+                tokio::time::Instant::now() + Duration::from_secs(10),
+            ));
+            let poll = |f: std::pin::Pin<&mut _>| {
+                std::future::Future::poll(
+                    f,
+                    &mut std::task::Context::from_waker(std::task::Waker::noop()),
+                )
+            };
+            if exit == "bus-zero" {
+                let std::task::Poll::Ready(response) = poll(future.as_mut()) else {
+                    panic!("delivery failure must not wait");
+                };
+                assert_eq!(response.outcome, ApprovalOutcome::Denied);
+            } else {
+                assert!(poll(future.as_mut()).is_pending());
+                assert_eq!(manager.pending.read().unwrap().len(), 1);
+                match exit {
+                    "drop" => drop(future),
+                    _ => {
+                        if exit == "cancel" {
+                            cancel.cancel();
+                        } else {
+                            tokio::time::advance(Duration::from_secs(10)).await;
+                        }
+                        let std::task::Poll::Ready(response) = poll(future.as_mut()) else {
+                            panic!("exit ignored");
+                        };
+                        assert_eq!(response.outcome, ApprovalOutcome::Denied);
+                    }
+                }
+            }
+            assert!(
+                manager.pending.read().unwrap().is_empty(),
+                "{exit} must not leave even a hidden zombie"
+            );
+            drop(subscriber);
+        }
+    }
+
+    #[tokio::test]
+    async fn operator_once_registration_isolated_from_grant_and_denial_cascades() {
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&keyed_request("isolated", "s1", Some("k1")), 60_000);
+        let (id, rx, timeout, guard) = manager.register_operator_once(record).unwrap();
+        let record = manager.get_pending(&id).unwrap().record;
+        assert!(record.operator_only);
+        assert!(record.grant_key.is_none());
+        assert_eq!(record.session_key, "s1");
+        assert_eq!(
+            record.allowed_decisions,
+            vec![ApprovalDecisionType::AllowOnce, ApprovalDecisionType::Deny]
+        );
+        let (sibling, mut sibling_rx, _) = manager
+            .register_pending(manager.create(&keyed_request("sibling", "s1", Some("k1")), 60_000));
+        let (source, source_rx, source_timeout) = manager
+            .register_pending(manager.create(&keyed_request("source", "s1", Some("k1")), 60_000));
+        // An ordinary standing grant must not reach this isolated waiter.
+        assert!(manager.resolve(&source, ApprovalDecisionType::AllowSession, None));
+        assert_eq!(
+            sibling_rx.try_recv().unwrap(),
+            Some(ApprovalDecisionType::AllowSession)
+        );
+        assert!(manager.get_pending(&id).is_some());
+        manager
+            .await_registered(source, source_rx, source_timeout)
+            .await;
+        // Register another identical sibling, then deny the isolated card.
+        let (sibling2, mut sibling2_rx, _) = manager
+            .register_pending(manager.create(&keyed_request("sibling2", "s1", Some("k1")), 60_000));
+        assert!(manager.resolve(&id, ApprovalDecisionType::Deny, None));
+        assert_eq!(
+            guard.wait(rx, timeout).await.decision,
+            Some(ApprovalDecisionType::Deny)
+        );
+        assert!(manager.get_pending(&sibling2).is_some());
+        assert!(matches!(
+            sibling2_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        drop(guard);
+        assert!(manager.pending.read().unwrap().contains_key(&sibling));
+    }
+
+    #[tokio::test]
+    async fn operator_once_rejects_wider_decisions_but_ordinary_once_cards_still_clamp() {
+        let manager = ExecApprovalManager::new();
+        let (id, rx, timeout, guard) = manager
+            .register_operator_once(manager.create(&mock_request(), 60_000))
+            .unwrap();
+        for decision in [
+            ApprovalDecisionType::AllowSession,
+            ApprovalDecisionType::AllowAlways,
+        ] {
+            assert!(!manager.resolve(&id, decision, None));
+            assert!(manager.get_pending(&id).is_some());
+            assert_eq!(
+                manager.resolve_for_session("agent:main:main", None, decision, None, None),
+                SessionResolveOutcome::NothingPending
+            );
+            assert!(manager.get_pending(&id).is_some());
+        }
+        assert!(manager.resolve(&id, ApprovalDecisionType::AllowOnce, None));
+        assert_eq!(
+            guard.wait(rx, timeout).await.decision,
+            Some(ApprovalDecisionType::AllowOnce)
+        );
+        drop(guard);
+        let mut request = mock_request();
+        request.allowed_decisions = crate::exec::allowed_decisions::once_only();
+        let (id, rx, timeout) =
+            manager.register_pending(manager.create(&request, NO_APPROVAL_TIMEOUT));
+        assert!(timeout.is_none());
+        assert!(manager.resolve(&id, ApprovalDecisionType::AllowAlways, None));
+        assert_eq!(
+            manager.await_registered(id, rx, timeout).await.decision,
+            Some(ApprovalDecisionType::AllowOnce),
+            "ordinary cards retain scope narrowing"
+        );
     }
 
     #[test]

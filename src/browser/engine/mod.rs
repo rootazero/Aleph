@@ -292,6 +292,11 @@ pub struct EngineHandle {
     /// complete. [`TabEntry::lag_at_attach`] is the subtrahend that turns this
     /// into a per-tab delta, so a tab attached after the drop reads clean.
     pub pump_lagged: std::sync::atomic::AtomicU64,
+    /// The profile's one live owner (viewer streams, recording tap, mock Fetch
+    /// feed), built on first use. It takes the connection's event subscription
+    /// at construction, so it is lazy: nothing but a verb that needs it pays
+    /// for a second dispatcher task.
+    live: std::sync::OnceLock<Arc<crate::browser::live::LiveProfileOwner>>,
     process: Arc<dyn EngineProcess>,
 }
 
@@ -402,6 +407,7 @@ impl EngineHandle {
             }),
             pump_started: std::sync::atomic::AtomicBool::new(false),
             pump_lagged: std::sync::atomic::AtomicU64::new(0),
+            live: std::sync::OnceLock::new(),
             process,
         }
     }
@@ -441,6 +447,7 @@ impl EngineHandle {
             tabs: tokio::sync::Mutex::new(TabTable::default()),
             pump_started: std::sync::atomic::AtomicBool::new(false),
             pump_lagged: std::sync::atomic::AtomicU64::new(0),
+            live: std::sync::OnceLock::new(),
             // `detached`, not `new`: `FakeEngineProcess::new(engine,
             // &FakeCdpServer, &Path)` exists to hand a launcher a server to
             // point a `Launched` at and a directory to write a sidecar into.
@@ -449,6 +456,33 @@ impl EngineHandle {
             // never uses.
             process: Arc::new(crate::browser::testkit::FakeEngineProcess::detached(engine)),
         }
+    }
+
+    /// The profile's single live owner, built on first call. Its session
+    /// resolver holds only a `Weak` to this handle, so the owner cannot keep a
+    /// dead engine's handle alive.
+    #[must_use]
+    pub(crate) fn live_owner(self: &Arc<Self>) -> Arc<crate::browser::live::LiveProfileOwner> {
+        self.live
+            .get_or_init(|| {
+                let weak = Arc::downgrade(self);
+                let resolver: crate::browser::live::SessionResolver = Arc::new(move |tab_id| {
+                    let weak = weak.clone();
+                    Box::pin(async move {
+                        match weak.upgrade() {
+                            Some(handle) => handle.ensure_tab(&tab_id).await,
+                            None => Err(BrowserError::TabNotFound(tab_id)),
+                        }
+                    })
+                });
+                crate::browser::live::LiveProfileOwner::new(
+                    &self.profile,
+                    self.engine,
+                    self.conn.clone(),
+                    resolver,
+                )
+            })
+            .clone()
     }
 
     /// Whether the engine is still reachable.

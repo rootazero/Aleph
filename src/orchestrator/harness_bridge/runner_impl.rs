@@ -101,6 +101,24 @@ impl HarnessRunner for AgentHarnessRunner {
         self.verifier_chain.clone()
     }
 
+    async fn run_public_text(
+        &self,
+        request: crate::orchestrator::dispatch::PublicRunRequest,
+        cancel: CancellationToken,
+        events: broadcast::Sender<FlowStreamEvent>,
+    ) -> Result<FlowOutcome, FlowError> {
+        self.run_public_text_impl(request, cancel, events).await
+    }
+
+    async fn run_private_draft(
+        &self,
+        request: crate::orchestrator::dispatch::PrivateDraftRequest,
+        cancel: CancellationToken,
+        events: broadcast::Sender<FlowStreamEvent>,
+    ) -> Result<FlowOutcome, FlowError> {
+        self.run_private_draft_impl(request, cancel, events).await
+    }
+
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn run(
         &self,
@@ -120,6 +138,7 @@ impl HarnessRunner for AgentHarnessRunner {
         mut envelope: crate::thinker::TurnEnvelope,
         turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
         run_id: String,
+        _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -340,7 +359,20 @@ impl HarnessRunner for AgentHarnessRunner {
         // summaries, so the system prompt can surface `SessionContextGuideLayer`.
         let user_query = last_user_query(&input);
         let has_session_summaries = input.carries_session_summaries();
-        session_seed::seed_session(self.session_service.as_ref(), &session_id, input).await?;
+        // The run's typed origin goes down with the seed so an unanswered tail
+        // (crash before `RunStarted`) can resume with it. Same capture the
+        // `RunStarted` below carries; `None` => `Ordinary`.
+        let telecom_provenance =
+            crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::capture(
+                _telecom_public.as_ref(),
+            );
+        session_seed::seed_session(
+            self.session_service.as_ref(),
+            &session_id,
+            input,
+            telecom_provenance.clone(),
+        )
+        .await?;
 
         // Phase 4 (F2): resolve the per-run Think→Act iteration cap once
         // here so the same value flows into both the system prompt
@@ -1004,6 +1036,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     at: crate::session::events::now_ms(),
                     project_root: project_root_str,
                     envelope: Some(run_envelope_snapshot),
+                    telecom_provenance,
                 },
             )
             .await
@@ -1288,6 +1321,8 @@ impl HarnessRunner for AgentHarnessRunner {
             serving_model: Some(gauge_model.clone()),
             // rust-doctor-disable-next-line excessive-clone
             serving_provider: Some(cost_provider.clone()),
+            // Owner runs never offer `request_private_lookup`.
+            private_lookup: None,
         };
 
         // P4: single-source the terminal `Complete(outcome)` emit. The

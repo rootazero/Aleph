@@ -182,14 +182,12 @@ impl CapabilityChangeStream {
                 continue;
             }
             if let Some((id, rev)) = id_rev_of(&change) {
-                let already = self
-                    .changes
-                    .iter()
-                    .chain(accepted.iter())
-                    .any(|existing| match id_rev_of(existing) {
+                let already = self.changes.iter().chain(accepted.iter()).any(|existing| {
+                    match id_rev_of(existing) {
                         Some((eid, erev)) => eid == id && erev == rev,
                         None => false,
-                    });
+                    }
+                });
                 if already {
                     continue;
                 }
@@ -340,10 +338,19 @@ mod tests {
         // Pre-existing history is preserved; Invalidated is appended once;
         // both delta entries follow in input order.
         assert_eq!(stream.changes.len(), 4);
-        assert!(matches!(stream.changes[0], CapabilityChange::Registered { .. }));
+        assert!(matches!(
+            stream.changes[0],
+            CapabilityChange::Registered { .. }
+        ));
         assert!(matches!(stream.changes[1], CapabilityChange::Invalidated));
-        assert!(matches!(stream.changes[2], CapabilityChange::Replaced { .. }));
-        assert!(matches!(stream.changes[3], CapabilityChange::Unregistered { .. }));
+        assert!(matches!(
+            stream.changes[2],
+            CapabilityChange::Replaced { .. }
+        ));
+        assert!(matches!(
+            stream.changes[3],
+            CapabilityChange::Unregistered { .. }
+        ));
     }
 
     #[test]
@@ -364,7 +371,10 @@ mod tests {
         // 1 pre-existing + 1 Invalidated + 1 surviving delta entry.
         assert_eq!(stream.changes.len(), 3);
         assert_eq!(stream.committed_cursor, Cursor(4));
-        assert!(matches!(stream.changes[0], CapabilityChange::Registered { .. }));
+        assert!(matches!(
+            stream.changes[0],
+            CapabilityChange::Registered { .. }
+        ));
         assert!(matches!(stream.changes[1], CapabilityChange::Invalidated));
         assert!(matches!(
             stream.changes[2],

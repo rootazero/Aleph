@@ -81,6 +81,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::gateway::channel::Attachment;
 use crate::gateway::model_override::ModelOverride;
+use crate::gateway::telecom::{MarkerRestore, PersistedTelecomMarker};
 use crate::sync_primitives::Mutex;
 
 /// Cap on summed inline attachment bytes (`Attachment.data`) a record may
@@ -131,6 +132,14 @@ pub struct QueuedRunPayload {
     /// Wall-clock enqueue time, for boot ordering only. Never fed back into
     /// the monotonic `Ticket.enqueued_at` — see the module doc.
     pub enqueued_at_ms: i64,
+    /// Server-authored, versioned telecom-provenance marker. Written ONLY by
+    /// [`QueuedRunPayload::from_request`] from `RunRequest.telecom_public`;
+    /// absent in records written before it existed (reads back as
+    /// `Legacy`, which reports its own limitation and is never re-serialised
+    /// as `Ordinary`). Not authorization: reinjection restores it onto the
+    /// `RunRequest` and nothing else consumes it yet.
+    #[serde(default, skip_serializing_if = "PersistedTelecomMarker::is_legacy")]
+    pub telecom_marker: PersistedTelecomMarker,
 }
 
 /// The lifecycle of one journaled message.
@@ -176,6 +185,9 @@ impl QueuedRunPayload {
                 .to_string(),
             ),
             enqueued_at_ms: crate::session::events::now_ms(),
+            // The single write entry for the telecom marker (census test in
+            // `persisted_marker`): both spawn seams reach it only through here.
+            telecom_marker: PersistedTelecomMarker::capture(request.telecom_public.as_ref()),
         }
     }
 }
@@ -410,6 +422,19 @@ pub(crate) fn admit_reinjection<R>(
 where
     R: FnOnce(crate::scope::authority::FireSubject<'_>) -> crate::scope::authority::FireAuthority,
 {
+    // Provenance first: an unrecognised / corrupt marker must never run as an
+    // ordinary message, whatever the fire-time grant would say. Refused is
+    // tombstoned by the caller (same arm as an authority refusal; the detail
+    // keeps the sentence). Legacy records restore as `None` (reported by the
+    // caller via `limitation()`); no `known_telecom` guess is made from
+    // metadata / session key / source channel.
+    let telecom_public = match payload.telecom_marker.restore() {
+        MarkerRestore::Ordinary | MarkerRestore::LegacyUnproven => None,
+        MarkerRestore::Public(ctx) => Some(ctx),
+        MarkerRestore::Refuse(reason) => {
+            return Err(crate::gateway::fire_gate::FireStop::Refused(reason));
+        }
+    };
     let metadata = crate::gateway::fire_gate::admit_session_metadata(
         resolve,
         multi_user,
@@ -428,6 +453,8 @@ where
         workspace_override: payload.workspace_override.clone(),
         max_iterations_override: payload.max_iterations_override,
         model_override: payload.model_override.clone(),
+        telecom_public,
+        telecom_authority: None,
     })
 }
 
@@ -529,7 +556,13 @@ pub async fn reinject_survivors(
             ),
         };
         let request = match admitted {
-            Ok(request) => request,
+            Ok(request) => {
+                if let Some(limit) = payload.telecom_marker.limitation() {
+                    tracing::info!(run_id = %run_id, limitation = limit,
+                        "busy-queue reinject: provenance limitation");
+                }
+                request
+            }
             Err(crate::gateway::fire_gate::FireStop::Refused(reason)) => {
                 tracing::warn!(run_id = %run_id, reason = %reason,
                     "busy-queue reinject: authority refused; tombstoning the record");
@@ -671,6 +704,7 @@ mod tests {
             attachments: Vec::new(),
             locale: None,
             enqueued_at_ms: 1,
+            telecom_marker: PersistedTelecomMarker::Ordinary,
         }
     }
 
@@ -828,6 +862,188 @@ mod tests {
             FireVerdict::Refused("principal deactivated — author `u-bob`".into()),
             "a deactivated member's queued message is refused although the creator is active"
         );
+    }
+
+    // ---- telecom provenance marker (task-4 queue-provenance slice) --------
+
+    fn sms_context() -> crate::gateway::telecom::TelecomPublicContext {
+        use aleph_protocol::telecom_relay::SmsEncoding;
+        crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(
+            &crate::gateway::telecom::SmsInboundMeta {
+                region: "r-secret".into(),
+                binding_ref: "b-secret".into(),
+                provider_account_id: "acct".into(),
+                provider_message_id: "pm".into(),
+                envelope_event_id: "ev".into(),
+                connection_generation: 4,
+                service_address: "+15550001111".into(),
+                peer_address: "+15552223333".into(),
+                encoding: SmsEncoding::Gsm7,
+                segment_count: 1,
+                created_at: chrono::Utc::now(),
+                expires_at: chrono::Utc::now(),
+            },
+        )
+    }
+
+    fn live_request(
+        telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
+    ) -> crate::gateway::execution_engine::RunRequest {
+        crate::gateway::execution_engine::RunRequest {
+            run_id: "r-tel".into(),
+            input: "hi".into(),
+            session_key: crate::routing::session_key::SessionKey::main("main"),
+            timeout_secs: None,
+            metadata: HashMap::new(),
+            attachments: Vec::new(),
+            pending_media: Default::default(),
+            sandbox_override: None,
+            workspace_override: None,
+            max_iterations_override: None,
+            model_override: None,
+            telecom_public,
+            telecom_authority: None,
+        }
+    }
+
+    /// Reinject `payload` through the real admission function under an active
+    /// member row (so the fire-gate itself never refuses).
+    fn admit(
+        payload: &QueuedRunPayload,
+    ) -> Result<crate::gateway::execution_engine::RunRequest, crate::gateway::fire_gate::FireStop>
+    {
+        use crate::gateway::security::store::{SecurityStore, UserRole};
+        let users = SecurityStore::in_memory().unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        let row = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-bob".into()),
+            scope_id: Some("personal:u-bob".into()),
+            ..Default::default()
+        };
+        let key = crate::routing::session_key::SessionKey::main("main");
+        admit_reinjection(
+            |s| crate::scope::authority::resolve_with(Some(&users), &s),
+            || true,
+            Some(&row),
+            payload,
+            &key,
+        )
+    }
+
+    #[test]
+    fn a_public_context_survives_from_request_serde_and_reinjection() {
+        let ctx = sms_context();
+        let queued = QueuedRunPayload::from_request(
+            &live_request(Some(ctx.clone())),
+            crate::gateway::i18n::Locale::En,
+        );
+        assert!(matches!(
+            queued.telecom_marker,
+            PersistedTelecomMarker::Public(_)
+        ));
+        let wire = serde_json::to_vec(&queued).unwrap();
+        let text = String::from_utf8(wire.clone()).unwrap();
+        assert!(text.contains("\"telecom_marker\""), "{text}");
+        let back: QueuedRunPayload = serde_json::from_slice(&wire).unwrap();
+        let request = admit(&back).expect("known marker is admitted");
+        assert_eq!(request.telecom_public, Some(ctx));
+    }
+
+    #[test]
+    fn an_ordinary_request_stays_none_and_is_written_explicitly() {
+        let queued =
+            QueuedRunPayload::from_request(&live_request(None), crate::gateway::i18n::Locale::En);
+        assert_eq!(queued.telecom_marker, PersistedTelecomMarker::Ordinary);
+        let back: QueuedRunPayload =
+            serde_json::from_slice(&serde_json::to_vec(&queued).unwrap()).unwrap();
+        assert_eq!(admit(&back).unwrap().telecom_public, None);
+    }
+
+    #[test]
+    fn a_journal_written_before_the_marker_parses_reports_its_limit_and_stays_legacy() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _g = arm(tmp.path());
+        // A record exactly as the previous version wrote it: no marker field.
+        let mut value = serde_json::to_value(JournalEntry {
+            phase: QueuedPhase::Queued,
+            reason: None,
+            detail: None,
+            payload: payload("old"),
+        })
+        .unwrap();
+        value["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("telecom_marker");
+        let dir = entry_dir(tmp.path(), "old");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("state.json"), serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let survivor = survivors().pop().expect("legacy record still parses");
+        assert_eq!(survivor.telecom_marker, PersistedTelecomMarker::Legacy);
+        assert!(survivor.telecom_marker.limitation().is_some());
+        assert_eq!(admit(&survivor).unwrap().telecom_public, None);
+
+        // A tombstone rewrite must not launder it into `Ordinary`.
+        record_settled("old", SettleReason::Purged);
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("state.json")).unwrap()).unwrap();
+        assert!(
+            rewritten["payload"].get("telecom_marker").is_none(),
+            "{rewritten}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_or_corrupt_marker_is_refused_never_run_as_ordinary() {
+        use crate::gateway::fire_gate::FireStop;
+        for raw in [
+            serde_json::json!({"version": 99, "state": "public"}),
+            serde_json::json!("garbage"),
+            serde_json::json!({"version": 1, "state": "public"}),
+        ] {
+            let mut v = serde_json::to_value(payload("bad")).unwrap();
+            v["telecom_marker"] = raw.clone();
+            let parsed: QueuedRunPayload = serde_json::from_value(v)
+                .expect("a bad marker must not make the record unreadable");
+            assert!(
+                matches!(admit(&parsed), Err(FireStop::Refused(_))),
+                "{raw} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn the_marker_round_trips_through_the_real_journal_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _g = arm(tmp.path());
+        let ctx = sms_context();
+        assert!(record_enqueued(QueuedRunPayload::from_request(
+            &live_request(Some(ctx.clone())),
+            crate::gateway::i18n::Locale::En
+        )));
+        let survivor = survivors().pop().unwrap();
+        assert_eq!(admit(&survivor).unwrap().telecom_public, Some(ctx));
+    }
+
+    /// The marker is written only by `from_request`: no seam may hand-build a
+    /// payload (which would default the marker and skip `capture`).
+    #[test]
+    fn no_seam_builds_a_queued_payload_by_hand() {
+        for (name, src) in [
+            ("spawn.rs", include_str!("spawn.rs")),
+            ("executor.rs", include_str!("../inbound_router/executor.rs")),
+        ] {
+            let prod = crate::utils::source_scan::production_prefix(src);
+            assert!(
+                prod.contains("QueuedRunPayload::from_request"),
+                "{name} must journal via from_request"
+            );
+            assert!(
+                !prod.contains("QueuedRunPayload {"),
+                "{name} must not struct-literal a payload"
+            );
+        }
     }
 
     #[test]

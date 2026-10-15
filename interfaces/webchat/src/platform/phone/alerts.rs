@@ -10,9 +10,8 @@
 //! Reads the same two signals the bell reads (`DashboardState::alerts` and
 //! `::pending_approvals`) through the same two pure helpers
 //! (`visible_alerts` / `unread_count`) and renders approvals with the same
-//! `ApprovalCard`. No new RPC, no new event variant, no second notion of what
-//! counts as unread — a second derivation is how the badge and the list start
-//! disagreeing about how many things are waiting.
+//! `ApprovalCard`. Telecom approvals also use a bounded operator-only list
+//! RPC while mounted, without a new event variant or second notion of unread.
 //!
 //! Route: `/more/alerts`, so `PanelMode::from_path`'s existing
 //! `starts_with("/more")` arm keeps the ••• tab highlighted with no new mode.
@@ -25,6 +24,7 @@ use leptos::prelude::*;
 
 use crate::components::approval_card::ApprovalCard;
 use crate::components::sidebar::AlertLevel;
+use crate::components::telecom_approval_card::TelecomApprovalCard;
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
 use crate::platform::phone::shell::PhoneShell;
@@ -56,9 +56,14 @@ pub fn PhoneAlerts() -> impl IntoView {
 
     let alerts = dashboard.alerts;
     let pending_approvals = dashboard.pending_approvals;
+    let pending_telecom = dashboard.pending_telecom_approvals;
     let dismissed = notif.dismissed;
 
     let list = Memo::new(move |_| visible_alerts(&alerts.get(), &dismissed.get()));
+
+    // A/B approvals emit no event; poll only while this phone route is mounted.
+    // The initial request is connect-gated, and a non-operator refusal stops it.
+    dashboard.poll_telecom_approvals_while_mounted();
 
     view! {
         <PhoneShell title="Alerts" back="/more" back_label="More">
@@ -81,12 +86,28 @@ pub fn PhoneAlerts() -> impl IntoView {
                 }.into_any()
             }}
 
+            // Telecom A/B approvals, keyed by id so a loaded review survives
+            // unrelated refetches.
+            <Show when=move || !pending_telecom.with(Vec::is_empty) fallback=|| ()>
+                <div class="list">
+                    <For
+                        each=move || pending_telecom.get()
+                        key=|a| a.id.clone()
+                        children=move |a| view! {
+                            <div class="cell" style="display:block;">
+                                <TelecomApprovalCard approval=a />
+                            </div>
+                        }
+                    />
+                </div>
+            </Show>
+
             {move || {
                 let items = list.get();
                 if items.is_empty() {
                     // Empty state has to distinguish itself from the approvals
                     // block above, which may well be non-empty.
-                    if pending_approvals.get().is_empty() {
+                    if pending_approvals.get().is_empty() && pending_telecom.get().is_empty() {
                         return view! {
                             <div class="px-4 py-10 text-center text-sm text-text-tertiary">
                                 {t_string!(i18n, notifications.empty).to_string()}

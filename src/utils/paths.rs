@@ -535,10 +535,12 @@ pub(crate) fn private_temp_root() -> std::io::Result<PathBuf> {
 
 /// Create `dir` owner-only if absent, then verify we exclusively own it.
 ///
-/// Split out from [`private_temp_root`] so the refusal arms are testable: a
-/// test cannot chmod the real root without breaking every sibling test that
-/// writes under it.
-fn ensure_private_dir(dir: PathBuf) -> std::io::Result<PathBuf> {
+/// Shared with Core-local startup stores and [`private_temp_root`]. The parent
+/// directory must already exist on Unix. Refuses symlinks, foreign ownership,
+/// and group/other access rather than repairing or adopting an unsafe directory.
+/// On non-Unix targets this helper does not verify ACLs; callers requiring an
+/// owner-only security boundary must reject those targets before calling it.
+pub fn ensure_private_dir(dir: PathBuf) -> std::io::Result<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;

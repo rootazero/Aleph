@@ -19,11 +19,20 @@ default = ["embedded-core"]
 # Bundles + supervises the local aleph-server daemon (full app variant).
 # Build the panel-only shell with --no-default-features.
 embedded-core = []
+# QA-only (debug builds, lite shell only): confines every shell file write and the
+# WebView2 profile to an owned temp root passed via --qa-root/--qa-nonce, swaps
+# the OS keyring for a process-local in-memory backend and disables host-global
+# side-effect plugins. Never enabled by default; incompatible with embedded-core.
+# `--qa-credential-backend os` additionally files the credential in the real OS
+# keyring under a random QA-only service namespace (aleph-client/qa-service).
+qa-owned-root = ["aleph-client/qa-service"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+aleph-client = { path = "../../shared/client" }
+aleph-protocol = { path = "../../shared/protocol" }
 sha2 = { workspace = true }
 hex = { workspace = true }
 x509-parser = { workspace = true }

@@ -86,6 +86,8 @@ pub struct TurnContext {
     /// carries, and a string match is exactly the kind of predicate that
     /// keeps working right up until someone renames the prefix.
     pub side_question: bool,
+    /// Server-minted capability for this exact run, never ambient role/JSON.
+    pub telecom_authority: Option<crate::gateway::telecom::lifecycle_tools::TelecomToolAuthority>,
 }
 
 /// Canonical operator-role predicate for a raw `caller_role` string. `None`
@@ -97,6 +99,12 @@ pub fn role_is_operator(role: Option<&str>) -> bool {
 }
 
 impl TurnContext {
+    /// A parent tool view may restrict a child but cannot grant call authority.
+    pub fn without_telecom_authority(mut self) -> Self {
+        self.telecom_authority = None;
+        self
+    }
+
     /// True when the turn has a reachable channel to deliver a prompt to.
     /// HITL tools must deny / fail gracefully when this is false.
     #[must_use]
@@ -265,6 +273,7 @@ mod caller_tier_tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         }
     }
 

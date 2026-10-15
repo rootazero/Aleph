@@ -442,6 +442,7 @@ mod tests {
     /// forgetting one a red test rather than a silent gap in coverage.
     const BROWSER_TOOL_SOURCES: &[(&str, &str)] = &[
         ("click", include_str!("click.rs")),
+        ("companion", include_str!("companion/tool.rs")),
         ("console", include_str!("console.rs")),
         ("cookies", include_str!("cookies.rs")),
         ("dialog", include_str!("dialog.rs")),
@@ -455,6 +456,7 @@ mod tests {
         ("network", include_str!("network.rs")),
         ("open", include_str!("open.rs")),
         ("pdf", include_str!("pdf.rs")),
+        ("present", include_str!("present.rs")),
         ("press_key", include_str!("press_key.rs")),
         ("profile_tool", include_str!("profile_tool.rs")),
         ("qa", include_str!("qa.rs")),

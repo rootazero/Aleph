@@ -552,6 +552,8 @@ mod tests {
             at: now_ms(),
             project_root: None,
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         }
     }
 
@@ -635,7 +637,12 @@ mod tests {
         } else {
             panic!("decision destructure failed");
         }
-        if let SessionEvent::ApprovalMemo { request_id: r, memo: m, .. } = &events[1].event {
+        if let SessionEvent::ApprovalMemo {
+            request_id: r,
+            memo: m,
+            ..
+        } = &events[1].event
+        {
             assert_eq!(r, &request_id);
             assert_eq!(m, "user typed: yes");
         } else {

@@ -67,6 +67,10 @@ pub enum WorkspaceBody {
     Tasks,
     /// The whiteboard canvas (`views::canvas`).
     Canvas,
+    /// The browser live view (`views::browser`). Offered only while a
+    /// `BrowserWorkspace` holds an authorized resource — see
+    /// [`WorkspaceBody::available_with`].
+    Browser,
 }
 
 impl WorkspaceBody {
@@ -76,10 +80,21 @@ impl WorkspaceBody {
     /// body each mode opens with.
     #[must_use]
     pub const fn available(is_team: bool) -> &'static [Self] {
-        if is_team {
-            &[Self::Deliverables, Self::Tasks, Self::Canvas]
-        } else {
-            &[Self::Artifacts, Self::Canvas]
+        Self::available_with(is_team, false)
+    }
+
+    /// [`Self::available`] plus the `Browser` body when `has_browser`.
+    ///
+    /// `Browser` is last so it never displaces the fallback entry, and it is
+    /// absent unless an authorized browser resource exists — an empty Browser
+    /// tab would invite the user to look at a target nothing granted.
+    #[must_use]
+    pub const fn available_with(is_team: bool, has_browser: bool) -> &'static [Self] {
+        match (is_team, has_browser) {
+            (true, false) => &[Self::Deliverables, Self::Tasks, Self::Canvas],
+            (true, true) => &[Self::Deliverables, Self::Tasks, Self::Canvas, Self::Browser],
+            (false, false) => &[Self::Artifacts, Self::Canvas],
+            (false, true) => &[Self::Artifacts, Self::Canvas, Self::Browser],
         }
     }
 }
@@ -94,7 +109,13 @@ impl WorkspaceBody {
 /// strip for exactly the sessions where it matters.
 #[must_use]
 pub fn coerce_body(body: WorkspaceBody, is_team: bool) -> WorkspaceBody {
-    let available = WorkspaceBody::available(is_team);
+    coerce_body_with(body, is_team, false)
+}
+
+/// [`coerce_body`] that also knows whether the Browser body is offered.
+#[must_use]
+pub fn coerce_body_with(body: WorkspaceBody, is_team: bool, has_browser: bool) -> WorkspaceBody {
+    let available = WorkspaceBody::available_with(is_team, has_browser);
     if available.contains(&body) {
         body
     } else {
@@ -205,7 +226,6 @@ impl LayoutMode {
             _ => Self::ChatOnly,
         }
     }
-
 }
 
 /// Reactive workspace state. Provided once via context, cloned via `Copy`.
@@ -308,8 +328,7 @@ impl WorkspaceState {
     /// instead, so they re-run when either changes.
     #[must_use]
     pub fn showing_now(&self, body: WorkspaceBody) -> bool {
-        self.mode.get_untracked() == LayoutMode::Split
-            && self.body.get_untracked() == body
+        self.mode.get_untracked() == LayoutMode::Split && self.body.get_untracked() == body
     }
 
     /// Set the layout mode explicitly. Persists to `localStorage`. Entering
@@ -557,6 +576,60 @@ mod tests {
         assert_eq!(
             coerce_body(WorkspaceBody::Tasks, true),
             WorkspaceBody::Tasks
+        );
+    }
+
+    /// Browser is opt-in: absent by default, last when present, and a stored
+    /// Browser body falls back to the mode's first body once the browser
+    /// resource goes away.
+    #[test]
+    fn browser_body_is_offered_only_with_a_browser_and_coerces_away_without() {
+        assert_eq!(
+            WorkspaceBody::available_with(false, false),
+            WorkspaceBody::available(false)
+        );
+        assert_eq!(
+            WorkspaceBody::available_with(true, false),
+            WorkspaceBody::available(true)
+        );
+        assert_eq!(
+            WorkspaceBody::available_with(false, true),
+            &[
+                WorkspaceBody::Artifacts,
+                WorkspaceBody::Canvas,
+                WorkspaceBody::Browser
+            ]
+        );
+        assert_eq!(
+            WorkspaceBody::available_with(true, true),
+            &[
+                WorkspaceBody::Deliverables,
+                WorkspaceBody::Tasks,
+                WorkspaceBody::Canvas,
+                WorkspaceBody::Browser
+            ]
+        );
+        assert_eq!(WorkspaceBody::default(), WorkspaceBody::Artifacts);
+        assert_eq!(
+            coerce_body_with(WorkspaceBody::Browser, false, true),
+            WorkspaceBody::Browser
+        );
+        assert_eq!(
+            coerce_body_with(WorkspaceBody::Browser, true, true),
+            WorkspaceBody::Browser
+        );
+        assert_eq!(
+            coerce_body_with(WorkspaceBody::Browser, false, false),
+            WorkspaceBody::Artifacts
+        );
+        assert_eq!(
+            coerce_body_with(WorkspaceBody::Browser, true, false),
+            WorkspaceBody::Deliverables
+        );
+        // The legacy entry point never offers Browser.
+        assert_eq!(
+            coerce_body(WorkspaceBody::Browser, false),
+            WorkspaceBody::Artifacts
         );
     }
 

@@ -155,6 +155,7 @@ pub struct BuiltinToolRegistry {
     /// Uses `OnceCell` for deferred injection: `BuiltinToolRegistry` is created before
     /// `ExecutionAdapter` exists, but `GatewayContext` needs `ExecutionAdapter`.
     pub(crate) gateway_context: Arc<tokio::sync::OnceCell<Arc<GatewayContext>>>,
+    pub(crate) call_lifecycle: crate::builtin_tools::call_lifecycle::CallLifecycleTools,
     /// Session new tool (optional - requires `SessionManager`)
     pub(crate) session_new_tool: Option<crate::builtin_tools::sessions::SessionNewTool>,
     /// Session compact tool (optional - requires `SessionManager`)
@@ -203,6 +204,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) canvas_tool: Option<crate::builtin_tools::canvas::CanvasTool>,
     /// Browser tools (always available, share a single `ProfileManager`)
     pub(crate) browser_open_tool: crate::builtin_tools::browser_tools::BrowserOpenTool,
+    pub(crate) browser_companion_tool: crate::builtin_tools::browser_tools::BrowserCompanionTool,
     pub(crate) browser_click_tool: crate::builtin_tools::browser_tools::BrowserClickTool,
     pub(crate) browser_type_tool: crate::builtin_tools::browser_tools::BrowserTypeTool,
     pub(crate) browser_screenshot_tool: crate::builtin_tools::browser_tools::BrowserScreenshotTool,

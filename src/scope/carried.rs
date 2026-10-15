@@ -76,6 +76,9 @@ pub struct CarriedAttribution {
     caller_role: Option<String>,
     room_author: Option<String>,
     exec_workspace: Option<std::path::PathBuf>,
+    /// The run's telecom origin (seeded only by `run_loop::with_request_scope`).
+    /// Unseeded stays unseeded across the carrier; see `telecom::run_origin`.
+    run_origin: crate::gateway::telecom::run_origin::CarriedRunOrigin,
 }
 
 impl CarriedAttribution {
@@ -102,6 +105,7 @@ impl CarriedAttribution {
             caller_role,
             room_author,
             exec_workspace: None,
+            run_origin: Default::default(),
         }
     }
 
@@ -127,6 +131,7 @@ impl CarriedAttribution {
             caller_role: crate::gateway::caller_identity::current_caller_role(),
             room_author: super::current_room_author(),
             exec_workspace: crate::sandbox::context::current_exec_workspace(),
+            run_origin: crate::gateway::telecom::run_origin::capture_carry(),
         }
     }
 
@@ -191,7 +196,10 @@ impl CarriedAttribution {
                                 self.room_author,
                                 crate::sandbox::context::with_exec_workspace(
                                     self.exec_workspace,
-                                    Box::pin(fut),
+                                    crate::gateway::telecom::run_origin::reestablish_carry(
+                                        self.run_origin,
+                                        Box::pin(fut),
+                                    ),
                                 ),
                             ),
                         ),

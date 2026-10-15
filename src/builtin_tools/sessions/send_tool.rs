@@ -444,6 +444,15 @@ impl SessionsSendTool {
         // resolves every member's delegated child to the room's CREATOR
         // instead (`scope::room_author`'s fallback).
         let inherited_room_author = crate::scope::current_room_author();
+        // Same capture-before-spawn rule once more: WHERE a public telecom run
+        // came from. Read from the run-origin task-local (seeded only from the
+        // parent request's own admitted `telecom_public`, never from a model
+        // argument) and stored as the typed `RunRequest.telecom_public` field,
+        // so the fire-and-forget `tokio::spawn` below — which drops task-locals
+        // — and the auto-continuation request both carry the same value. An
+        // ordinary / unseeded parent reads `None`: this path never upgrades a
+        // run's origin, it only refuses to launder a public one into "ordinary".
+        let inherited_telecom_public = crate::gateway::telecom::run_origin::current_run_origin();
         // `TURN_CONTEXT` is reliably in scope here (ScopedToolService scopes it
         // around every tool dispatch and reading it does not cross a
         // `tokio::spawn` boundary), so the dispatching turn's `caller_role` AND
@@ -501,6 +510,8 @@ impl SessionsSendTool {
             workspace_override: inherited_workspace.clone(),
             max_iterations_override: None,
             model_override: None,
+            telecom_public: inherited_telecom_public.clone(),
+            telecom_authority: None,
         };
 
         // Get execution adapter
@@ -582,6 +593,8 @@ impl SessionsSendTool {
                                 workspace_override: inherited_workspace.clone(),
                                 max_iterations_override: None,
                                 model_override: None,
+                                telecom_public: inherited_telecom_public.clone(),
+                                telecom_authority: None,
                             };
                             let continue_emitter: Arc<
                                 dyn crate::gateway::event_emitter::EventEmitter + Send + Sync,
@@ -1016,6 +1029,331 @@ mod tests {
             .error
             .unwrap()
             .contains("GatewayContext not configured"));
+    }
+
+    // ============================================================================
+    // Telecom provenance (Task 4): a delegated child of a public telecom run
+    // ============================================================================
+
+    /// Records `(run_id, request.telecom_public)` for every `execute`, as the
+    /// typed field — NOT the task-local — and answers the first (non-`-continue`)
+    /// run with a truncated assistant reply so wait mode auto-continues.
+    struct ProvenanceAdapter {
+        seen: tokio::sync::mpsc::UnboundedSender<(
+            String,
+            Option<crate::gateway::telecom::TelecomPublicContext>,
+        )>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::gateway::execution_adapter::ExecutionAdapter for ProvenanceAdapter {
+        async fn execute(
+            &self,
+            request: RunRequest,
+            agent: Arc<crate::gateway::agent_instance::AgentInstance>,
+            _emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
+        ) -> std::result::Result<(), crate::gateway::execution_engine::ExecutionError> {
+            let reply = if request.run_id.ends_with("-continue") {
+                "tail"
+            } else {
+                "head [output truncated"
+            };
+            let store = agent.session_store();
+            store.get_or_create(&request.session_key).await.unwrap();
+            store
+                .append_message(
+                    &request.session_key,
+                    crate::gateway::session_store::types::MessageRecord {
+                        id: request.run_id.clone(),
+                        role: "assistant".to_string(),
+                        content: reply.to_string(),
+                        timestamp: chrono::Utc::now().timestamp(),
+                        metadata: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        tool_call_id: None,
+                        tool_name: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let _ = self
+                .seen
+                .send((request.run_id.clone(), request.telecom_public.clone()));
+            Ok(())
+        }
+        async fn cancel(
+            &self,
+            _run_id: &str,
+        ) -> std::result::Result<(), crate::gateway::execution_engine::ExecutionError> {
+            Ok(())
+        }
+        async fn get_status(
+            &self,
+            _run_id: &str,
+        ) -> Option<crate::gateway::execution_engine::RunStatus> {
+            None
+        }
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+
+    type Seen = tokio::sync::mpsc::UnboundedReceiver<(
+        String,
+        Option<crate::gateway::telecom::TelecomPublicContext>,
+    )>;
+
+    async fn provenance_tool() -> (SessionsSendTool, Seen, tempfile::TempDir) {
+        use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
+        use crate::gateway::session_store::SessionStore;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: tmp.path().join("agent-sessions"),
+                ..FileSessionStoreConfig::default()
+            })
+            .unwrap(),
+        );
+        let registry = Arc::new(AgentRegistry::new());
+        registry
+            .register(
+                AgentInstance::new(
+                    AgentInstanceConfig {
+                        agent_id: "main".into(),
+                        workspace: tmp.path().join("workspace"),
+                        agent_dir: tmp.path().join("agent"),
+                        ..AgentInstanceConfig::default()
+                    },
+                    store,
+                )
+                .unwrap(),
+            )
+            .await;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let manager = Arc::new(
+            crate::gateway::SessionManager::new(
+                crate::gateway::session_manager::SessionManagerConfig {
+                    db_path: tmp.path().join("sessions.db"),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+        let context = GatewayContext::new(
+            manager,
+            registry,
+            Arc::new(ProvenanceAdapter { seen: tx }),
+            Arc::new(crate::gateway::inter_agent_policy::AgentToAgentPolicy::permissive()),
+        );
+        (SessionsSendTool::with_context(context, "main"), rx, tmp)
+    }
+
+    async fn drain(
+        rx: &mut Seen,
+        n: usize,
+    ) -> Vec<(
+        String,
+        Option<crate::gateway::telecom::TelecomPublicContext>,
+    )> {
+        let mut out = Vec::new();
+        for _ in 0..n {
+            out.push(
+                tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                    .await
+                    .expect("adapter must observe the run")
+                    .expect("channel open"),
+            );
+        }
+        out
+    }
+
+    fn send_args(timeout_seconds: u32) -> SessionsSendArgs {
+        SessionsSendArgs {
+            session_key: None,
+            message: "delegate".to_string(),
+            timeout_seconds,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_public_parents_wait_send_and_auto_continuation_carry_its_origin() {
+        let (tool, mut rx, _tmp) = provenance_tool().await;
+        let ctx = crate::gateway::telecom::run_origin::sample_public_context("b-send-wait");
+        let out = crate::gateway::telecom::run_origin::seed_run_origin(
+            Some(ctx.clone()),
+            AlephTool::call(&tool, send_args(30)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.status, SessionsSendStatus::Ok, "{:?}", out.error);
+        assert_eq!(out.reply.as_deref(), Some("head [output truncatedtail"));
+        let seen = drain(&mut rx, 2).await;
+        assert!(!seen[0].0.ends_with("-continue"));
+        assert!(seen[1].0.ends_with("-continue"), "{seen:?}");
+        assert_eq!(seen[0].1, Some(ctx.clone()), "initial child request");
+        assert_eq!(seen[1].1, Some(ctx), "automatic continuation request");
+    }
+
+    #[tokio::test]
+    async fn a_public_parents_fire_and_forget_send_carries_its_origin_across_the_spawn() {
+        let (tool, mut rx, _tmp) = provenance_tool().await;
+        let ctx = crate::gateway::telecom::run_origin::sample_public_context("b-send-ff");
+        let out = crate::gateway::telecom::run_origin::seed_run_origin(
+            Some(ctx.clone()),
+            AlephTool::call(&tool, send_args(0)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.status, SessionsSendStatus::Accepted);
+        let seen = drain(&mut rx, 1).await;
+        assert_eq!(seen[0].1, Some(ctx), "bare-spawned child request");
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_or_unseeded_parent_send_stays_none() {
+        for timeout in [0u32, 30] {
+            let (tool, mut rx, _tmp) = provenance_tool().await;
+            let out = crate::gateway::telecom::run_origin::seed_run_origin(
+                None,
+                AlephTool::call(&tool, send_args(timeout)),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                out.status,
+                SessionsSendStatus::Ok | SessionsSendStatus::Accepted
+            ));
+            let want = if timeout == 30 { 2 } else { 1 };
+            for (id, origin) in drain(&mut rx, want).await {
+                assert_eq!(origin, None, "ordinary parent, run {id}");
+            }
+            // Unseeded (no run scope at all) is also ordinary.
+            let (tool, mut rx, _tmp) = provenance_tool().await;
+            AlephTool::call(&tool, send_args(timeout)).await.unwrap();
+            for (id, origin) in drain(&mut rx, want).await {
+                assert_eq!(origin, None, "unseeded parent, run {id}");
+            }
+        }
+    }
+
+    /// A real `HarnessRunner` whose `run` executes the real `SessionsSendTool`
+    /// -- i.e. the tool runs inside the task `Orchestrator::dispatch` spawns,
+    /// where the gateway's run-origin task-local no longer exists unless the
+    /// spawn re-seeds it.
+    struct SendingHarness {
+        tool: Arc<SessionsSendTool>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::orchestrator::dispatch::HarnessRunner for SendingHarness {
+        async fn run(
+            &self,
+            _session_key: String,
+            _spec: Arc<crate::orchestrator::flow_spec::FlowSpec>,
+            _input: crate::orchestrator::flow_spec::FlowInput,
+            _sandbox: Arc<dyn crate::sandbox::Sandbox>,
+            _events: tokio::sync::broadcast::Sender<crate::orchestrator::dispatch::FlowStreamEvent>,
+            _cancel: tokio_util::sync::CancellationToken,
+            _tool_service_override: Option<Arc<dyn crate::tools::service::ToolService>>,
+            _trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+            _interaction_manifest: Option<crate::thinker::InteractionManifest>,
+            _workspace_override: Option<std::path::PathBuf>,
+            _max_iterations_override: Option<u32>,
+            _transient_context: Option<String>,
+            _think_level: Option<crate::agents::thinking::ThinkLevel>,
+            _envelope: crate::thinker::TurnEnvelope,
+            _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+            _run_id: String,
+            _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
+        ) -> std::result::Result<
+            crate::orchestrator::dispatch::FlowOutcome,
+            crate::orchestrator::errors::FlowError,
+        > {
+            let out = AlephTool::call(&*self.tool, send_args(30)).await.unwrap();
+            assert_eq!(out.status, SessionsSendStatus::Ok, "{:?}", out.error);
+            Ok(crate::orchestrator::dispatch::FlowOutcome::default())
+        }
+    }
+
+    /// End to end through the real harness spawn: the delegated child's typed
+    /// `RunRequest.telecom_public` is `Some` for a public parent request and
+    /// `None` for an ordinary one (no origin is invented).
+    #[tokio::test]
+    async fn sessions_send_inside_the_harness_spawn_carries_the_requests_origin() {
+        use crate::orchestrator::dispatch::{FlowRequest, Orchestrator};
+        use crate::orchestrator::flow_registry::{FlowRegistry, FlowSet};
+        use crate::orchestrator::flow_spec::{
+            BrainRef, FlowInput, FlowOverrides, FlowSpec, SessionStrategy,
+        };
+
+        let ctx = crate::gateway::telecom::run_origin::sample_public_context("b-harness");
+        for parent in [Some(ctx.clone()), None] {
+            let (tool, mut rx, _tmp) = provenance_tool().await;
+            let mut specs = FlowSet::new();
+            specs.insert(
+                "default-agent".into(),
+                Arc::new(FlowSpec {
+                    id: "default-agent".into(),
+                    description: "t".into(),
+                    agent: "main".into(),
+                    brain: BrainRef::Default,
+                    session_strategy: SessionStrategy::Fresh,
+                    overrides: FlowOverrides::default(),
+                }),
+            );
+            let mut defaults = std::collections::HashMap::new();
+            defaults.insert("main".to_string(), "default-agent".to_string());
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            crate::session::store::migrate_add_session_events(&conn).unwrap();
+            let store: Arc<dyn crate::session::store::SessionEventStore> =
+                Arc::new(crate::session::store::SqliteEventStore::new(conn));
+            let orch = Orchestrator::new(
+                Arc::new(FlowRegistry::new(specs)),
+                Arc::new(defaults),
+                Arc::new(crate::session::in_process::InProcessActorSessionService::new(store)),
+                crate::orchestrator::sandbox_factory::build_sandbox_factory(Arc::new(|_| {
+                    Ok(Arc::new(crate::sandbox::NoopSandbox) as Arc<dyn crate::sandbox::Sandbox>)
+                })),
+                Arc::new(SendingHarness {
+                    tool: Arc::new(tool),
+                }),
+            );
+            let handle = orch
+                .dispatch(FlowRequest {
+                    flow_id: None,
+                    agent_id: "main".into(),
+                    run_id: "parent-run".into(),
+                    input: FlowInput::Prompt("go".into()),
+                    channel: None,
+                    session_hint: None,
+                    scope: crate::scope::FlowScope::unscoped(),
+                    parent_session: None,
+                    depth: 0,
+                    tool_service: None,
+                    trace_sink: None,
+                    event_tx: None,
+                    interaction_manifest: None,
+                    sandbox_override: None,
+                    workspace_override: None,
+                    max_iterations_override: None,
+                    transient_context: None,
+                    think_level: None,
+                    envelope: crate::thinker::TurnEnvelope::none(),
+                    model_directive: None,
+                    telecom_public: parent.clone(),
+                })
+                .await
+                .expect("dispatch ok");
+            handle.completion.await.unwrap().expect("harness ok");
+            for (id, origin) in drain(&mut rx, 2).await {
+                assert_eq!(origin, parent, "child run {id}");
+            }
+        }
     }
 
     // ============================================================================

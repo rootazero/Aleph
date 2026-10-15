@@ -33,14 +33,14 @@ pub fn SettingsSection(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <div class="bg-surface-raised border border-border rounded-xl p-6">
-            <div class="mb-4">
+        <div class="bg-surface-raised rounded-xl p-4">
+            <div class="mb-3">
                 <h2 class="text-xl font-semibold text-text-primary">{title}</h2>
                 {description.map(|desc| view! {
                     <p class="text-sm text-text-secondary mt-1">{desc}</p>
                 })}
             </div>
-            <div class="space-y-4">
+            <div class="space-y-3">
                 {children()}
             </div>
         </div>
@@ -72,7 +72,7 @@ pub fn FormField(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <div class="space-y-2">
+        <div class="space-y-1.5">
             <label class="block text-sm font-medium text-text-secondary">
                 {label}
             </label>

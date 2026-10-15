@@ -50,15 +50,23 @@ pub mod auth;
 pub mod cleanup;
 pub mod dispatch;
 pub mod forward;
+pub mod off_loop;
 pub mod upgrade;
 
 // Bring every helper used by the orchestrator into this module's scope.
 // (The test module in `handler.rs` reaches them via the re-exports
 // declared at the bottom of this file.)
 pub use auth::{
-    connect_verdict, node_connect_claim, resolve_stamped_identity, wall_admits, NodeConnectClaim,
+    connect_auth_without_device_manager, connect_verdict, credential_provenance_device_id,
+    derive_verified_user, finalize_handshake_identity, has_presented_device_credential,
+    node_connect_claim, resolve_stamped_identity, revalidate_connect_credential_source,
+    wall_admits, NodeConnectClaim,
 };
-pub use dispatch::{dispatch_with_caller_context, process_request};
+pub use dispatch::{
+    dispatch_for_connection, dispatch_with_caller_context, idempotency_principal,
+    is_browser_viewer_method, process_request, revalidate_for_dispatch, viewer_denied_response,
+    viewer_principal, CallerSnapshot,
+};
 pub use forward::{
     device_revoked_id, device_revoked_should_close, event_wire_form, extract_topic_and_data,
     forward_bus_to_client, is_token_rotated_frame, overflow_warning_frame,
@@ -226,6 +234,11 @@ pub async fn handle_connection(
     // `ConnectionState` because exactly one reader exists (R10 "zero consumers ⇒
     // no abstraction").
     let mut session_device_id: Option<String> = None;
+    // In-flight read-only RPCs dispatched outside the select loop (see
+    // `off_loop`). After the loop exits, `OffLoopRpcs::shutdown` drops queued
+    // work, aborts active tasks and waits at most `OFF_LOOP_SHUTDOWN_GRACE` for
+    // them before the connection cleanup runs (see the end of this function).
+    let mut off_loop_rpcs = off_loop::OffLoopRpcs::new();
 
     loop {
         tokio::select! {
@@ -448,35 +461,22 @@ pub async fn handle_connection(
                                     // state (pre-handshake / probe) defaults by
                                     // network position — loopback operator,
                                     // remote guest (fail closed).
-                                    let caller_role: Option<String> = {
-                                        let conns = ctx.connections.read().await;
-                                        conns.get(&conn_id).map(|s| s.caller_role.clone())
-                                    }
-                                    .or_else(|| {
-                                        Some(
-                                            if ctx.client_is_local {
-                                                "operator"
-                                            } else {
-                                                "guest"
-                                            }
-                                            .to_string(),
-                                        )
-                                    });
+                                    // Role, user and handshake-verified user are read in
+                                    // ONE snapshot (single `connections` read) so they
+                                    // can never disagree about the same request.
+                                    let caller_snapshot = dispatch::CallerSnapshot::read(
+                                        &ctx.connections,
+                                        &conn_id,
+                                        ctx.client_is_local,
+                                    )
+                                    .await;
+                                    let caller_role: Option<String> = caller_snapshot.role.clone();
 
-                                    // Originating connection's authenticated user
-                                    // (`users.user_id`), latched at `connect`
-                                    // alongside `caller_role`. Pre-handshake /
-                                    // probe paths default by network position —
-                                    // loopback is the implicit owner, remote has
-                                    // no user until authorized.
-                                    let caller_user: Option<String> = {
-                                        let conns = ctx.connections.read().await;
-                                        conns.get(&conn_id).and_then(|s| s.caller_user.clone())
-                                    }
-                                    .or_else(|| {
-                                        ctx.client_is_local
-                                            .then(|| crate::gateway::security::store::OWNER_USER_ID.to_string())
-                                    });
+                                    // The originating user (`caller_snapshot.user`) and its
+                                    // handshake-verified counterpart travel inside
+                                    // `caller_snapshot`; pre-handshake / probe paths
+                                    // default by network position (loopback = implicit
+                                    // owner, never verified).
 
                                     // Login wall (Gateway-token model): an
                                     // unauthorized connection — a remote Panel
@@ -495,9 +495,7 @@ pub async fn handle_connection(
                                         let resp = JsonRpcResponse::error(
                                             req.id.clone(),
                                             AUTH_REQUIRED,
-                                            "Not authorized: present a valid Gateway token via \
-                                             `connect` to access this core."
-                                                .to_string(),
+                                            auth::LOGIN_WALL_MESSAGE.to_string(),
                                         );
                                         let resp_str =
                                             serde_json::to_string(&resp).unwrap_or_default();
@@ -534,8 +532,15 @@ pub async fn handle_connection(
                                         continue;
                                     }
 
-                                    // Handle events.* methods specially (they need conn_id)
-                                    if req.method == "events.subscribe" {
+                                    // Browser-viewer methods need a handshake-VERIFIED
+                                    // user (member/operator, stamped user == verified).
+                                    // Gate BEFORE the idempotency cache so a cached
+                                    // payload can never reach an unverified caller.
+                                    if dispatch::is_browser_viewer_method(&req.method)
+                                        && dispatch::viewer_principal(&caller_snapshot).is_none()
+                                    {
+                                        dispatch::viewer_denied_response(req.id.clone())
+                                    } else if req.method == "events.subscribe" {
                                         let resp = handle_subscribe(req.clone(), &conn_id, ctx.subscription_manager.clone()).await;
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else if req.method == "events.unsubscribe" {
@@ -593,7 +598,7 @@ pub async fn handle_connection(
                                         let idempotency_key = raw_idem_key.map(|k| {
                                             let composed = format!(
                                                 "{}{}{}{}{}",
-                                                caller_user.as_deref().unwrap_or("<anon>"),
+                                                dispatch::idempotency_principal(&req.method, &caller_snapshot),
                                                 IDEM_NS_SEP,
                                                 req.method,
                                                 IDEM_NS_SEP,
@@ -639,10 +644,12 @@ pub async fn handle_connection(
                                         }
 
                                         // Helper closure: standard lane dispatch (no idempotency)
-                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>, caller_user: Option<String>, caller_is_loopback: bool, caller_conn_id: Option<String>| async move {
+                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, connections: Arc<RwLock<HashMap<String, ConnectionState>>>, conn_id: String, client_is_local: bool, start: dispatch::CallerSnapshot| async move {
                                             let lane_result = lm.acquire(&method, class).await;
                                             match lane_result {
-                                                Ok(_permit) => dispatch_with_caller_context(&text, &mc, caller_role, caller_user, caller_is_loopback, caller_conn_id).await,
+                                                // Identity is re-read AFTER the permit is granted
+                                                // (viewer methods revalidate against live state).
+                                                Ok(_permit) => dispatch::dispatch_for_connection(&text, &mc, &connections, &conn_id, client_is_local, &method, req_id, &start).await,
                                                 Err(_) => serde_json::to_string(&JsonRpcResponse::error(
                                                     req_id,
                                                     INTERNAL_ERROR,
@@ -651,15 +658,42 @@ pub async fn handle_connection(
                                             }
                                         };
 
+                                        // Read-only RPCs leave the select loop so a slow one
+                                        // (e.g. a cold `extensions.catalog`) cannot freeze event
+                                        // forwarding or later requests on this connection; the
+                                        // `off_loop_rpcs` arm below writes the response. Only an
+                                        // audited allowlist leaves the loop, and the per-connection
+                                        // set is bounded (running + queue).
+                                        // See `off_loop` module docs (Task #56).
+                                        let off_loop_response = if off_loop::dispatches_off_loop(&req.method) {
+                                            let dispatch = do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, ctx.connections.clone(), conn_id.clone(), ctx.client_is_local, caller_snapshot.clone());
+                                            match off_loop_rpcs.submit(req.id.clone(), dispatch) {
+                                                Ok(()) => continue,
+                                                // Saturated (running + queue full): an immediate
+                                                // JSON-RPC error for this id, never an inline await.
+                                                Err(busy_response) => Some(busy_response),
+                                            }
+                                        } else {
+                                            None
+                                        };
+
                                         // Check idempotency guard (only for non-Query lanes with a key)
-                                        let mut response = if let Some(ref key) = idempotency_key {
+                                        let mut response = if let Some(r) = off_loop_response {
+                                            r
+                                        } else if let Some(ref key) = idempotency_key {
                                             if lane.needs_idempotency() {
                                                 use crate::gateway::idempotency::AcquireResult;
                                                 match ctx.idempotency_guard.try_acquire(key) {
                                                     AcquireResult::Cached(cached) => {
                                                         debug!("Idempotency hit: key={}", key);
-                                                        let resp = JsonRpcResponse::success(req.id.clone(), cached);
-                                                        serde_json::to_string(&resp).unwrap_or_default()
+                                                        // Viewer payloads are only returnable while the
+                                                        // LIVE connection still holds the same principal.
+                                                        if dispatch::revalidate_for_dispatch(&ctx.connections, &conn_id, ctx.client_is_local, &req.method, &caller_snapshot).await.is_some() {
+                                                            let resp = JsonRpcResponse::success(req.id.clone(), cached);
+                                                            serde_json::to_string(&resp).unwrap_or_default()
+                                                        } else {
+                                                            dispatch::viewer_denied_response(req.id.clone())
+                                                        }
                                                     }
                                                     AcquireResult::Waiting(mut rx) => {
                                                         debug!("Idempotency: awaiting in-flight key={}", key);
@@ -672,8 +706,14 @@ pub async fn handle_connection(
                                                         ).await;
                                                         match result {
                                                             Ok(Some(val)) => {
-                                                                let resp = JsonRpcResponse::success(req.id.clone(), val);
-                                                                serde_json::to_string(&resp).unwrap_or_default()
+                                                                // Re-check after the wait: the connection may have
+                                                                // been invalidated or switched user meanwhile.
+                                                                if dispatch::revalidate_for_dispatch(&ctx.connections, &conn_id, ctx.client_is_local, &req.method, &caller_snapshot).await.is_some() {
+                                                                    let resp = JsonRpcResponse::success(req.id.clone(), val);
+                                                                    serde_json::to_string(&resp).unwrap_or_default()
+                                                                } else {
+                                                                    dispatch::viewer_denied_response(req.id.clone())
+                                                                }
                                                             }
                                                             _ => {
                                                                 serde_json::to_string(&JsonRpcResponse::error(
@@ -689,7 +729,7 @@ pub async fn handle_connection(
                                                         let lane_result = ctx.lane_manager.acquire(&req.method, ctx.channel_class).await;
                                                         match lane_result {
                                                             Ok(_permit) => {
-                                                                let resp = dispatch_with_caller_context(&text, &ctx.middleware_chain, caller_role.clone(), caller_user.clone(), ctx.client_is_local, Some(conn_id.clone())).await;
+                                                                let resp = dispatch::dispatch_for_connection(&text, &ctx.middleware_chain, &ctx.connections, &conn_id, ctx.client_is_local, &req.method, req.id.clone(), &caller_snapshot).await;
                                                                 if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
                                                                     if parsed.is_success() {
                                                                         if let Some(result) = parsed.result {
@@ -718,11 +758,11 @@ pub async fn handle_connection(
                                                 }
                                             } else {
                                                 // Query lane — skip idempotency
-                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_is_local, Some(conn_id.clone())).await
+                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, ctx.connections.clone(), conn_id.clone(), ctx.client_is_local, caller_snapshot.clone()).await
                                             }
                                         } else {
                                             // No idempotency key — standard lane dispatch
-                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_is_local, Some(conn_id.clone())).await
+                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, ctx.connections.clone(), conn_id.clone(), ctx.client_is_local, caller_snapshot.clone()).await
                                         };
                                         // --- End idempotency + lane block ---
 
@@ -769,17 +809,19 @@ pub async fn handle_connection(
                                                         )
                                                     } else {
                                                         // Device-token manager not wired: fall back to
-                                                        // the legacy shared-token-only behavior.
-                                                        let authorized = crate::gateway::handlers::connect::connect_authorized(
-                                                            ctx.client_is_local,
-                                                            presented_token,
-                                                            crate::gateway::security::SharedTokenManager::global_validate,
-                                                        );
-                                                        if authorized {
-                                                            crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized { device_id: None }
-                                                        } else {
-                                                            crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized
-                                                        }
+                                                        // the legacy shared-token-only behavior for
+                                                        // credential-less connects ONLY. An explicit
+                                                        // device_token / bootstrap_ticket cannot be
+                                                        // validated here, so it fails closed.
+                                                        auth::connect_auth_without_device_manager(
+                                                            device_token,
+                                                            bootstrap_ticket,
+                                                            || crate::gateway::handlers::connect::connect_authorized(
+                                                                ctx.client_is_local,
+                                                                presented_token,
+                                                                crate::gateway::security::SharedTokenManager::global_validate,
+                                                            ),
+                                                        )
                                                     };
 
                                                     // Credential verdict only — "did this connection
@@ -828,17 +870,49 @@ pub async fn handle_connection(
                                                     // Role + user for the login-wall gate and the
                                                     // config-tier tool gate. See
                                                     // `resolve_stamped_identity` (pure, unit-tested)
-                                                    // for the decision rules. Resolved BEFORE taking
-                                                    // the connection-map lock (it is a pure function;
-                                                    // holding the lock across it buys nothing) so the
-                                                    // very same verdict can be echoed to the client
-                                                    // in the response overlay below.
-                                                    let (resolved_user, resolved_role) = resolve_stamped_identity(
-                                                        authorized,
-                                                        ctx.client_is_local,
-                                                        authed_device_id.as_deref(),
-                                                        ctx.security_store.as_deref(),
-                                                    );
+                                                    // for the decision rules. The very same verdict
+                                                    // is echoed to the client in the response overlay
+                                                    // below.
+                                                    //
+                                                    // The FINAL verdict is derived under the connection-map
+                                                    // write guard (held through the stamp below), so it is
+                                                    // serialized against `revoke_device_and_kick`, which
+                                                    // writes the store revoke under the same guard: a
+                                                    // handshake that raced a revoke sees the device
+                                                    // unapproved (guest / no user / unverified) and can never
+                                                    // restore a verified identity after the clear. No map
+                                                    // entry ⇒ fail closed. The echo below derives from this
+                                                    // same verdict, so echo and stamp cannot disagree.
+                                                    let mut conns = ctx.connections.write().await;
+                                                    //
+                                                    // The credential itself is RE-VALIDATED here, under the
+                                                    // same guard (sync, no await): `resolve_connect_auth` ran
+                                                    // before the lock, and a revoke + re-pair of the same
+                                                    // device id in between would make `is_device_approved`
+                                                    // true again for a now-dead token. The fresh result gates
+                                                    // authorization and is the sole source of the
+                                                    // credential-verified device id (never the request's
+                                                    // claimed id; node admission below cannot reach it).
+                                                    let (authorized, resolved_user, resolved_role, verified_user) =
+                                                        if conns.contains_key(&conn_id) {
+                                                            let (fresh_ok, fresh_verified_device_id) =
+                                                                auth::revalidate_connect_credential_source(
+                                                                    &auth_outcome,
+                                                                    req.params.as_ref(),
+                                                                    ctx.device_token_mgr.as_deref(),
+                                                                );
+                                                            let authorized = authorized && fresh_ok;
+                                                            let (u, r, v) = auth::finalize_handshake_identity(
+                                                                authorized,
+                                                                ctx.client_is_local,
+                                                                authed_device_id.as_deref(),
+                                                                fresh_verified_device_id.as_deref(),
+                                                                ctx.security_store.as_deref(),
+                                                            );
+                                                            (authorized, u, r, v)
+                                                        } else {
+                                                            (false, None, "guest", None)
+                                                        };
                                                     // What the client is told, and what the event
                                                     // scope grants. A connect can be
                                                     // credential-authorized yet resolve to no
@@ -857,8 +931,27 @@ pub async fn handle_connection(
                                                     // produced.
                                                     let (echo_role, holds_authority, needs_token) =
                                                         connect_verdict(authorized, resolved_role);
+                                                    // Handshake-proved user: only a credential-proved
+                                                    // `credential_verified_device_id` (never the request's own
+                                                    // claim) bound to `resolved_user` in the store yields one;
+                                                    // implicit owner / shared token stay `None`.
+                                                    // Server-derived identity markers for the response.
+                                                    // `device_id` is only ever the id a *validated*
+                                                    // credential resolved to (never the client's own
+                                                    // claim) and `user_id` is the user that device is
+                                                    // bound to; both stay absent for credential-less
+                                                    // connects so the pre-existing response is
+                                                    // unchanged. Cloned here because the stamp below
+                                                    // moves `resolved_user`.
+                                                    let echo_identity: Option<(String, Option<String>)> =
+                                                        if holds_authority {
+                                                            authed_device_id
+                                                                .clone()
+                                                                .map(|d| (d, verified_user.clone()))
+                                                        } else {
+                                                            None
+                                                        };
                                                     {
-                                                        let mut conns = ctx.connections.write().await;
                                                         if let Some(state) = conns.get_mut(&conn_id) {
                                                             // Record the surface identity: client-declared
                                                             // kind, else inferred from loopback (same-machine
@@ -901,6 +994,7 @@ pub async fn handle_connection(
                                                                 );
                                                             state.caller_role = resolved_role.to_string();
                                                             state.caller_user = resolved_user;
+                                                            state.verified_user = verified_user;
                                                             // Device binding for the per-device revoke.
                                                             // Same value as the connection-local latch
                                                             // above, written under this one lock: the
@@ -911,6 +1005,7 @@ pub async fn handle_connection(
                                                             state.device_id.clone_from(&authed_device_id);
                                                         }
                                                     }
+                                                    drop(conns);
                                                     // Cluster: a node both *enrolls* and *registers*
                                                     // inside this one `connect`. Enrollment cannot be
                                                     // its own RPC — `connect` is the only frame that
@@ -1070,6 +1165,18 @@ pub async fn handle_connection(
                                                                 "device_token".to_string(),
                                                                 serde_json::Value::String(dt),
                                                             );
+                                                        }
+                                                        if let Some((did, uid)) = echo_identity {
+                                                            obj.insert(
+                                                                "device_id".to_string(),
+                                                                serde_json::Value::String(did),
+                                                            );
+                                                            if let Some(uid) = uid {
+                                                                obj.insert(
+                                                                    "user_id".to_string(),
+                                                                    serde_json::Value::String(uid),
+                                                                );
+                                                            }
                                                         }
                                                         if let Some(node) = node_payload {
                                                             obj.insert("node".to_string(), node);
@@ -1368,6 +1475,14 @@ pub async fn handle_connection(
                     }
                 }
             }
+            // Responses of read-only RPCs dispatched off-loop, written in
+            // completion order (each carries its own JSON-RPC id).
+            Some(response) = off_loop_rpcs.next_response(), if !off_loop_rpcs.is_empty() => {
+                if let Err(e) = write.send(WsMessage::Text(response.into())).await {
+                    error!("Failed to send response to {}: {}", conn_id, e);
+                    break;
+                }
+            }
             // Reverse-RPC outbound: write server-initiated frames verbatim.
             // Full JSON-RPC request strings produced by ReverseRpcChannel::call();
             // no filtering, no wrapping.
@@ -1450,6 +1565,10 @@ pub async fn handle_connection(
         }
     }
 
+    // Drop queued and abort active off-loop RPCs BEFORE cleanup, waiting at most
+    // `off_loop::OFF_LOOP_SHUTDOWN_GRACE`: a task stuck in a sync section must
+    // not hold teardown hostage (it is cancelled at its next yield point).
+    off_loop_rpcs.shutdown().await;
     cleanup::run_cleanup(&conn_id, &ctx, &rpc_pending).await;
     Ok(())
 }

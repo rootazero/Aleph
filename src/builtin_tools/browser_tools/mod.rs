@@ -3,6 +3,7 @@
 // Each tool wraps a ProfileManager and implements AlephTool for one operation.
 
 pub mod click;
+pub mod companion;
 pub mod console;
 pub mod cookies;
 pub mod dialog;
@@ -15,7 +16,9 @@ pub mod hover;
 pub mod navigate;
 pub mod network;
 pub mod open;
+pub(crate) mod operation_publish;
 pub mod pdf;
+pub mod present;
 pub mod press_key;
 pub mod profile_tool;
 pub mod qa;
@@ -767,6 +770,7 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
 }
 
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
+pub use companion::{BrowserCompanionArgs, BrowserCompanionOutput, BrowserCompanionTool};
 pub use console::{BrowserConsoleArgs, BrowserConsoleOutput, BrowserConsoleTool};
 pub use cookies::{BrowserCookiesArgs, BrowserCookiesOutput, BrowserCookiesTool};
 pub use dialog::{BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool};
@@ -1523,6 +1527,7 @@ mod approval_wiring_census {
     pub(super) const SOURCES: &[(&str, &str)] = &[
         ("exec", include_str!("exec.rs")),
         ("click", include_str!("click.rs")),
+        ("companion", include_str!("companion/tool.rs")),
         ("console", include_str!("console.rs")),
         ("cookies", include_str!("cookies.rs")),
         ("dialog", include_str!("dialog.rs")),
@@ -1535,6 +1540,7 @@ mod approval_wiring_census {
         ("network", include_str!("network.rs")),
         ("open", include_str!("open.rs")),
         ("pdf", include_str!("pdf.rs")),
+        ("present", include_str!("present.rs")),
         ("press_key", include_str!("press_key.rs")),
         ("profile_tool", include_str!("profile_tool.rs")),
         ("qa", include_str!("qa.rs")),

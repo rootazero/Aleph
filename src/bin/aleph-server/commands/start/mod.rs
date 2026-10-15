@@ -30,14 +30,15 @@ mod builder;
 use builder::{
     initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
     register_agent_handlers, register_agents_handlers, register_artifact_handlers,
-    register_canvas_handlers, register_config_handlers, register_core_handlers,
-    register_cron_handlers, register_daemon_handlers, register_extensions_handlers,
-    register_extensions_install_handlers, register_fs_handlers, register_graph_handlers,
-    register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
-    register_mcp_config_handlers, register_mcp_handlers, register_memory_handlers,
-    register_oauth_handlers, register_projects_handlers, register_pty_handlers,
-    register_session_handlers, register_teams_handlers, register_voice_capability_handlers,
-    register_workspace_handlers, setup_config_watcher, start_webchat_server,
+    register_browser_viewer_handlers, register_canvas_handlers, register_config_handlers,
+    register_core_handlers, register_cron_handlers, register_daemon_handlers,
+    register_extensions_handlers, register_extensions_install_handlers, register_fs_handlers,
+    register_graph_handlers, register_group_chat_handlers, register_heartbeat_handlers,
+    register_identity_handlers, register_mcp_config_handlers, register_mcp_handlers,
+    register_memory_handlers, register_oauth_handlers, register_projects_handlers,
+    register_pty_handlers, register_session_handlers, register_teams_handlers,
+    register_voice_capability_handlers, register_workspace_handlers, setup_config_watcher,
+    start_webchat_server,
 };
 
 mod orchestrator_init;
@@ -260,7 +261,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // ownership tree is the single runtime owner authority shared by the
     // facade and host; no request-local or second registry is created.
     let diagnostics_enabled = diagnostics_enabled_from_env(
-        std::env::var("ALEPH_CAPABILITY_DIAGNOSTICS").ok().as_deref(),
+        std::env::var("ALEPH_CAPABILITY_DIAGNOSTICS")
+            .ok()
+            .as_deref(),
     );
     let ownership_tree = Arc::new(OwnershipTree::new());
     let projection_host = ProjectionHost::mount_with_diagnostics(
@@ -706,15 +709,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         let rotate_bus = event_bus.clone();
         let rotate_devices = device_token_mgr.clone();
+        let rotate_connections = server.connections.clone();
         server
             .handlers_mut()
             .register("gateway.token.rotate", move |req| {
                 let bus = rotate_bus.clone();
                 let devices = rotate_devices.clone();
+                let conns = rotate_connections.clone();
+                let kick_bus = bus.clone();
                 async move {
                     let resp = alephcore::gateway::handlers::gateway_token::handle_token_rotate(
                         req,
                         Some(devices),
+                        conns,
+                        kick_bus,
                     )
                     .await;
                     // Only broadcast when rotation succeeded — don't kick sessions on failure.
@@ -873,6 +881,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // get below — deactivation withdraws the channel credential from
             // the store those two actually read.
             pairing: channel_pairing_store.clone(),
+            // Late-bound: the browser live runtime installs on this same
+            // `server` later in boot; deactivation then revokes viewer grants.
+            browser_viewer_grants: server.browser_viewer_grant_revocation(),
         };
         let s = users_store.clone();
         server.handlers_mut().register("users.me", move |req| {
@@ -2236,6 +2247,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         args.daemon,
     );
     register_daemon_handlers(&mut server, start_time, args.daemon);
+    // Explicit denying seam until the real browser backend/registry/public
+    // origin composition root is supplied. No bind-address origin inference.
+    register_browser_viewer_handlers(&mut server);
     // `pty.spawn` needs the live config to read `[policies.terminal]` (the
     // session gate, and the scrollback/session-cap values) — its siblings
     // are already registered stateless in `HandlerRegistry::new()`. See
@@ -3608,6 +3622,72 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     //     shared with the `clarification.*` RPC handlers (the Panel's only way
     //     to answer — its traffic never traverses the inbound router).
     let clarification_manager = Arc::new(alephcore::clarification::ClarificationManager::new());
+    // F-step: trusted A/B scope lifecycle. One `PublicApprovalLedger` is the
+    // process-global capability-slot instance (A-step). The `OperatorControl`
+    // wraps it and exposes the JSON-RPC surface an operator-tier connection
+    // uses to grant or deny A-stage reads (registered in the block below).
+    // The inbound router (E-step) takes the same `Arc` so the scope opened at
+    // run entry matches the one the operator resolves against. Created here,
+    // outside the handler-registration block, so it is still in scope when
+    // `initialize_inbound_router` runs.
+    let public_approval_ledger =
+        Arc::new(alephcore::gateway::telecom::public_approval::PublicApprovalLedger::new());
+    // Fail closed when the ledger cannot be installed: the capability slot
+    // would then report a different ledger than the one the operator RPC and
+    // the inbound router use. Without an OperatorControl, no operator handler
+    // is registered and the router opens no A/B scope.
+    let trusted_operator_control: Option<
+        Arc<alephcore::gateway::telecom::operator_control::OperatorControl>,
+    > = if alephcore::gateway::telecom::public_approval::install_global(
+        public_approval_ledger.clone(),
+    )
+    .is_ok()
+    {
+        Some(Arc::new(
+            alephcore::gateway::telecom::operator_control::OperatorControl::new(
+                public_approval_ledger.clone(),
+            ),
+        ))
+    } else {
+        tracing::warn!(
+            "telecom public-approval ledger already installed; operator approval surface disabled"
+        );
+        None
+    };
+    // `[telecom_private_read]`: the public private turn (owner memory,
+    // read-only search, A/B operator approvals). Built only when explicitly
+    // enabled AND the trusted operator plane is installed; the memory
+    // backend is mandatory at this point of startup. Otherwise public runs
+    // keep no tools and no private path.
+    let public_private_turn: Option<alephcore::gateway::telecom::PrivateTurnWiring> = {
+        let enabled = app_config_for_channels
+            .read()
+            .await
+            .telecom_private_read
+            .as_ref()
+            .is_some_and(|section| section.enabled);
+        match (enabled, trusted_operator_control.as_ref()) {
+            (false, _) => None,
+            (true, None) => {
+                tracing::warn!(
+                    "telecom_private_read enabled but the operator approval plane is unavailable; private turn disabled"
+                );
+                None
+            }
+            (true, Some(_)) => {
+                // This startup path already requires a real memory backend;
+                // initialization failure returns before reaching this block.
+                // Wiring is NOT authority: the router additionally requires a
+                // witness from its concrete registered SMS transport. The
+                // factory still attaches no hosted relay or credentials.
+                Some(alephcore::gateway::telecom::PrivateTurnWiring::new(
+                    Arc::new(alephcore::gateway::telecom::OwnerMemoryReadDriver::new(
+                        memory_db.clone(),
+                    )),
+                ))
+            }
+        }
+    };
     {
         use alephcore::approval::adapters::ChannelApprovalBridgeAdapter;
         use alephcore::exec::approval::channel_bridge::ChannelApprovalBridge;
@@ -3642,6 +3722,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             clarification_manager.clone(),
             session_store.clone(),
         );
+
+        // F-step: register the operator JSON-RPC surface over the
+        // `trusted_operator_control` created above this block, only when the
+        // ledger was actually installed.
+        if let Some(control) = trusted_operator_control.as_ref() {
+            alephcore::gateway::telecom::operator_control::register_handlers(
+                server.handlers_mut(),
+                control.clone(),
+            );
+            if !args.daemon {
+                println!("  Telecom public-approval ledger installed (A/B scope ready)");
+            }
+        }
 
         use alephcore::approval::adapters::FallbackApprovalRequester;
         use alephcore::approval::operator_requester::OperatorApprovalRequester;
@@ -3902,6 +3995,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         clarification_manager.clone(),
         agent_result.coord_task_store.clone(),
         agent_result.dispatch_signal.clone(),
+        trusted_operator_control.clone(),
+        public_private_turn,
         args.daemon,
     )
     .await;
@@ -4073,6 +4168,25 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // counterexample. Idempotent, so the wedged-shutdown failsafe in
     // `helpers.rs` may call it again for free; the awaits that follow give the
     // runtime the scheduler pass it needs to drop each aborted task's `Child`.
+    //
+    // Managed `browser_companion` children are deliberately skipped by that
+    // reaper (it would kill them without closing their published resource
+    // first), so they are drained here: resource closed, grants revoked, then
+    // kill and wait for the real exit. Bounded, because a child that will not
+    // die must not wedge the shutdown (the failsafe in `helpers.rs` follows).
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        alephcore::builtin_tools::browser_tools::companion::shutdown_all_companions(),
+    )
+    .await
+    {
+        Ok(0) => {}
+        Ok(unconfirmed) => tracing::warn!(
+            unconfirmed,
+            "managed companion exit was not confirmed on shutdown"
+        ),
+        Err(_) => tracing::warn!("managed companion shutdown timed out"),
+    }
     let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
     if reaped > 0 {
         tracing::info!(count = reaped, "reaped background bash jobs on shutdown");
@@ -4485,12 +4599,9 @@ mod tests {
             // it): every non-exact value must be decided "disabled".
             let enabled = diagnostics_enabled_from_env(value);
             assert!(!enabled, "{value:?} must not enable diagnostics");
-            let control = startup_diagnostics_control(
-                Arc::clone(&host),
-                Arc::clone(&other_tree),
-                enabled,
-            )
-            .expect("disabled values must not construct a mismatched control");
+            let control =
+                startup_diagnostics_control(Arc::clone(&host), Arc::clone(&other_tree), enabled)
+                    .expect("disabled values must not construct a mismatched control");
             assert!(
                 control.is_none(),
                 "diagnostics must be disabled for env value {value:?}"
@@ -4503,8 +4614,8 @@ mod tests {
             Arc::clone(&tree),
             diagnostics_enabled_from_env(Some("1")),
         )
-            .expect("the canonical host/tree pair must construct successfully")
-            .expect("exactly `1` must enable diagnostics");
+        .expect("the canonical host/tree pair must construct successfully")
+        .expect("exactly `1` must enable diagnostics");
         assert_eq!(
             control.status().unwrap().lifecycle,
             alephcore::capability::diagnostic_control::DiagnosticLifecycle::Active
@@ -4642,20 +4753,16 @@ mod tests {
         );
         let production = alephcore::utils::source_scan::code_text(&production);
 
-        let close_at = production
-            .find("close_and_await(")
-            .expect(
-                "start/mod.rs must call close_and_await in production — \
+        let close_at = production.find("close_and_await(").expect(
+            "start/mod.rs must call close_and_await in production — \
                  the host retains its Arc in a process slot, so without \
                  an explicit close the orderly/fatal shutdown funnel leaks \
                  the source and applier workers for the rest of the process",
-            );
-        let scope_take_at = production
-            .find("builtin_registration_scope.take()")
-            .expect(
-                "builtin_registration_scope.take() must exist in production — \
+        );
+        let scope_take_at = production.find("builtin_registration_scope.take()").expect(
+            "builtin_registration_scope.take() must exist in production — \
                  the sibling builtin-scope dispose census depends on it",
-            );
+        );
         assert!(
             close_at < scope_take_at,
             "close_and_await must run BEFORE builtin_registration_scope.take() — \

@@ -439,6 +439,10 @@ impl InboundMessageRouter {
             workspace_override: effective_workspace,
             max_iterations_override: None,
             model_override,
+            // Stamped from the TYPED `MessageMeta::Sms` the SMS interface
+            // produced, never from the string `metadata` map above.
+            telecom_public: telecom_public_from_message_meta(&ctx.message.metadata),
+            telecom_authority: None,
         };
 
         if !request.attachments.is_empty() {
@@ -784,6 +788,372 @@ impl InboundMessageRouter {
     }
 }
 
+/// Channel reply path of a public telecom run: one plain outbound text on the
+/// inbound's own reply route. No emitter, no streaming, no owner run record.
+struct ChannelPublicReplySink<'a> {
+    router: &'a InboundMessageRouter,
+    msg: &'a crate::gateway::channel::InboundMessage,
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::telecom::public_run::PublicReplySink for ChannelPublicReplySink<'_> {
+    async fn send_reply(&self, text: String) -> Result<(), crate::gateway::channel::ChannelError> {
+        let reply = crate::gateway::channel::OutboundMessage::text(
+            self.msg.conversation_id.as_str(),
+            &text,
+        );
+        // The driver's acknowledgment gate needs the actual send result.
+        // Do not stringify transport errors here: they can contain bodies or phones.
+        self.router
+            .channel_registry
+            .send_public_telecom(&self.msg.channel_id, reply)
+            .await
+            .map(|_| ())
+    }
+
+    async fn private_sms_lease(
+        &self,
+        ctx: &crate::gateway::telecom::TelecomPublicContext,
+    ) -> Option<crate::gateway::interfaces::sms::PrivateSmsLease> {
+        // Only typed SMS ingress is eligible; generic metadata cannot mint it.
+        let meta = self.msg.metadata.iter().find_map(|meta| match meta {
+            crate::gateway::channel::MessageMeta::Sms(meta) => Some(meta.as_ref()),
+            _ => None,
+        })?;
+        if crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(meta) != *ctx {
+            return None;
+        }
+        let peer =
+            crate::gateway::interfaces::sms::normalize_e164(self.msg.conversation_id.as_str())
+                .ok()?;
+        if peer != meta.peer_address {
+            return None;
+        }
+        self.router
+            .channel_registry
+            .private_sms_lease(&self.msg.channel_id, ctx, &peer)
+            .await
+    }
+
+    async fn send_approved_reply(
+        &self,
+        text: String,
+        lease: &crate::gateway::interfaces::sms::PrivateSmsLease,
+        cancel: &tokio_util::sync::CancellationToken,
+        validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+    ) -> Result<
+        crate::gateway::telecom::public_run::ApprovedReplyOutcome,
+        crate::gateway::channel::ChannelError,
+    > {
+        let reply = crate::gateway::channel::OutboundMessage::text(
+            self.msg.conversation_id.as_str(),
+            &text,
+        );
+        self.router
+            .channel_registry
+            .send_approved_public_telecom(&self.msg.channel_id, reply, lease, cancel, validate)
+            .await
+    }
+
+    async fn send_reply_if_not_cancelled(
+        &self,
+        text: String,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<
+        crate::gateway::telecom::public_run::PublicReplyOutcome,
+        crate::gateway::channel::ChannelError,
+    > {
+        use crate::gateway::telecom::public_run::PublicReplyOutcome;
+        let reply = crate::gateway::channel::OutboundMessage::text(
+            self.msg.conversation_id.as_str(),
+            &text,
+        );
+        self.router
+            .channel_registry
+            .send_public_telecom_if_not_cancelled(&self.msg.channel_id, reply, cancel)
+            .await
+            .map(|ack| match ack {
+                Some(_) => PublicReplyOutcome::Acknowledged,
+                None => PublicReplyOutcome::Cancelled,
+            })
+    }
+}
+
+impl InboundMessageRouter {
+    /// Public telecom isolation branch (contract §3–§6). Called at the very top
+    /// of `handle_message`, before any owner-state operation (route/agent
+    /// resolution, session key/epoch, link access, permission, hooks). It takes
+    /// the raw `InboundMessage` — no `InboundContext` is built, since that
+    /// would resolve an owner session key. Runs instead of the
+    /// whole owner pipeline: no hooks, HITL, slash/`/btw`/model commands, busy
+    /// lane, durable journal or owner session. `/stop` cancels this binding's
+    /// public run; every other text is plain caller text.
+    pub(super) async fn handle_public_telecom(
+        &self,
+        msg: &crate::gateway::channel::InboundMessage,
+        public: crate::gateway::telecom::TelecomPublicContext,
+    ) -> Result<(), RoutingError> {
+        let registry = crate::gateway::telecom::public_admission::PublicRunRegistry::global();
+        if matches!(
+            super::command_handler::classify_special_slash(&msg.text),
+            Some(super::command_handler::SpecialSlash::Stop)
+        ) {
+            let cancelled = registry.cancel_caller(&public);
+            info!("[Router] public telecom /stop (cancelled={cancelled})");
+            return Ok(());
+        }
+        let harness = self
+            .execution_adapter
+            .as_ref()
+            .and_then(|a| a.public_harness());
+        let sink = ChannelPublicReplySink { router: self, msg };
+        let disposition = crate::gateway::telecom::public_run::run_public_sms_with_private_read(
+            registry,
+            harness,
+            crate::gateway::telecom::public_history::installed().map(|s| s.as_ref()),
+            public,
+            msg.text.clone(),
+            &sink,
+            // The trusted A/B scope is opened only after admission, inside
+            // the run driver, and retired with the turn.
+            self.operator_control.as_ref(),
+            // Private turn only when `[telecom_private_read]` wired it.
+            self.private_turn.as_ref(),
+        )
+        .await;
+        info!("[Router] public telecom run: {disposition:?}");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod public_reply_sink_tests {
+    use super::*;
+    use crate::gateway::channel::{
+        Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
+        ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId, OutboundMessage,
+        SendResult, UserId,
+    };
+    use crate::gateway::channel_registry::ChannelRegistry;
+    use crate::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore, EnqueueOutcome};
+    use crate::gateway::pairing_store::SqlitePairingStore;
+    use crate::gateway::routing_config::RoutingConfig;
+    use crate::gateway::telecom::public_run::PublicReplySink;
+    use std::sync::Mutex;
+
+    struct SinkTransport {
+        info: ChannelInfo,
+        state: ChannelState,
+        sent: Arc<Mutex<Vec<OutboundMessage>>>,
+        fail: bool,
+    }
+
+    // Default Automatic delivery policy: the sink must isolate itself without
+    // relying on the real SMS adapter's ExplicitOnly policy.
+    #[async_trait::async_trait]
+    impl Channel for SinkTransport {
+        fn info(&self) -> &ChannelInfo {
+            &self.info
+        }
+        fn state(&self) -> &ChannelState {
+            &self.state
+        }
+        async fn start(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn stop(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+            self.sent.lock().unwrap().push(message);
+            if self.fail {
+                Err(ChannelError::RateLimited {
+                    retry_after_secs: 0,
+                })
+            } else {
+                Ok(SendResult {
+                    message_id: MessageId::new("transport-ack"),
+                    timestamp: chrono::Utc::now(),
+                })
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn actual_public_sink_preserves_route_and_result_without_replaying_owner_backlog() {
+        for fail in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let store = Arc::new(
+                DeliveryStore::open(
+                    &temp.path().join("delivery.db"),
+                    DeliveryQueueConfig::default(),
+                )
+                .unwrap(),
+            );
+            let registry = Arc::new(ChannelRegistry::new().with_delivery_store(store.clone()));
+            let sent = Arc::new(Mutex::new(Vec::new()));
+            let channel_id = registry
+                .register(Box::new(SinkTransport {
+                    info: ChannelInfo {
+                        id: ChannelId::new("public-sink-transport"),
+                        name: "test transport".into(),
+                        channel_type: "test".into(),
+                        status: ChannelStatus::Connected,
+                        capabilities: ChannelCapabilities::default(),
+                    },
+                    state: ChannelState::new(8),
+                    sent: sent.clone(),
+                    fail,
+                }))
+                .await;
+            let EnqueueOutcome::Queued(row) = store
+                .enqueue(
+                    channel_id.as_str(),
+                    &OutboundMessage::text("original-conversation", "owner-backlog"),
+                    "down",
+                    0,
+                )
+                .unwrap()
+            else {
+                panic!("fixture must queue");
+            };
+            let router = InboundMessageRouter::new(
+                registry,
+                Arc::new(SqlitePairingStore::in_memory().unwrap()),
+                RoutingConfig::default(),
+            );
+            let msg = InboundMessage {
+                id: MessageId::new("inbound"),
+                channel_id: channel_id.clone(),
+                conversation_id: ConversationId::new("original-conversation"),
+                sender_id: UserId::new("caller"),
+                sender_name: None,
+                text: "question".into(),
+                attachments: Vec::new(),
+                timestamp: chrono::Utc::now(),
+                reply_to: None,
+                is_group: false,
+                raw: None,
+                metadata: Vec::new(),
+            };
+            let sink = ChannelPublicReplySink {
+                router: &router,
+                msg: &msg,
+            };
+
+            // Exercise the actual trait implementation, not a source-string
+            // assertion or a duplicate helper standing in for the sink.
+            let result = sink.send_reply("public-answer".into()).await;
+            if fail {
+                assert!(matches!(
+                    result,
+                    Err(ChannelError::RateLimited {
+                        retry_after_secs: 0
+                    })
+                ));
+            } else {
+                assert!(result.is_ok());
+            }
+            {
+                let messages = sent.lock().unwrap();
+                assert_eq!(messages.len(), 1, "no queued replay or automatic retry");
+                let reply = &messages[0];
+                assert_eq!(reply.conversation_id, msg.conversation_id);
+                assert_eq!(reply.text, "public-answer");
+                assert!(reply.reply_to.is_none());
+                assert!(reply.attachments.is_empty());
+                assert!(reply.metadata.is_empty());
+            }
+            assert_eq!(store.len().unwrap(), 1);
+            let backlog = store
+                .claim_conversation(channel_id.as_str(), msg.conversation_id.as_str(), 10)
+                .unwrap();
+            assert_eq!(backlog.len(), 1);
+            assert_eq!(backlog[0].id, row);
+            assert_eq!(backlog[0].message.text, "owner-backlog");
+            assert_eq!(backlog[0].attempts, 0);
+            assert!(store.recent_dead_letters(10).unwrap().is_empty());
+
+            let mut unknown = msg.clone();
+            unknown.channel_id = ChannelId::new("unregistered-public-transport");
+            let unknown_sink = ChannelPublicReplySink {
+                router: &router,
+                msg: &unknown,
+            };
+            assert!(matches!(
+                unknown_sink.send_reply("unroutable".into()).await,
+                Err(ChannelError::NotConnected(_))
+            ));
+            assert_eq!(sent.lock().unwrap().len(), 1);
+            assert_eq!(store.len().unwrap(), 1);
+            assert!(store.recent_dead_letters(10).unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn actual_public_sink_returns_cancelled_without_transport_send_when_cancelled() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            DeliveryStore::open(
+                &temp.path().join("delivery.db"),
+                DeliveryQueueConfig::default(),
+            )
+            .unwrap(),
+        );
+        let registry = Arc::new(ChannelRegistry::new().with_delivery_store(store));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let channel_id = registry
+            .register(Box::new(SinkTransport {
+                info: ChannelInfo {
+                    id: ChannelId::new("cancelled-public-sink-transport"),
+                    name: "test transport".into(),
+                    channel_type: "test".into(),
+                    status: ChannelStatus::Connected,
+                    capabilities: ChannelCapabilities::default(),
+                },
+                state: ChannelState::new(8),
+                sent: sent.clone(),
+                fail: false,
+            }))
+            .await;
+        let router = InboundMessageRouter::new(
+            registry,
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        );
+        let msg = InboundMessage {
+            id: MessageId::new("cancelled-inbound"),
+            channel_id,
+            conversation_id: ConversationId::new("cancelled-conversation"),
+            sender_id: UserId::new("caller"),
+            sender_name: None,
+            text: "question".into(),
+            attachments: Vec::new(),
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: Vec::new(),
+        };
+        let sink = ChannelPublicReplySink {
+            router: &router,
+            msg: &msg,
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+
+        let result = sink
+            .send_reply_if_not_cancelled("public-answer".into(), &cancel)
+            .await;
+
+        assert!(matches!(
+            result,
+            Ok(crate::gateway::telecom::public_run::PublicReplyOutcome::Cancelled)
+        ));
+        assert!(sent.lock().unwrap().is_empty());
+    }
+}
+
 #[cfg(test)]
 mod permission_wiring_tests {
     use super::channel_run_identity;
@@ -896,5 +1266,154 @@ mod permission_wiring_tests {
         assert_eq!(workspace, None::<PathBuf>);
         // Config tier inherits the safe steer default unless explicitly opted in.
         assert_eq!(busy, "steer");
+    }
+}
+
+/// Derive the public-telecom context from the TYPED `MessageMeta::Sms` the SMS
+/// interface attached to an admitted inbound message. Any other channel yields
+/// `None` (legacy behaviour, unchanged). This is the only production stamp
+/// point of `RunRequest::telecom_public`, and the router's public-isolation
+/// branch (`InboundMessageRouter::handle_public_telecom`) reads the same
+/// derivation so the two can never disagree.
+pub(super) fn telecom_public_from_message_meta(
+    metadata: &[crate::gateway::channel::MessageMeta],
+) -> Option<crate::gateway::telecom::TelecomPublicContext> {
+    metadata.iter().find_map(|m| match m {
+        crate::gateway::channel::MessageMeta::Sms(meta) => {
+            Some(crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(meta))
+        }
+        _ => None,
+    })
+}
+
+#[cfg(test)]
+mod telecom_stamp_tests {
+    use super::telecom_public_from_message_meta;
+    use crate::gateway::channel::MessageMeta;
+    use crate::gateway::telecom::{SmsInboundMeta, TelecomChannel};
+    use aleph_protocol::telecom_relay::SmsEncoding;
+
+    fn sms_meta() -> SmsInboundMeta {
+        SmsInboundMeta {
+            region: "r".into(),
+            binding_ref: "b".into(),
+            provider_account_id: "a".into(),
+            provider_message_id: "m".into(),
+            envelope_event_id: "e".into(),
+            connection_generation: 9,
+            service_address: "+15550001111".into(),
+            peer_address: "+15552223333".into(),
+            encoding: SmsEncoding::Gsm7,
+            segment_count: 1,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn sms_meta_stamps_public_context_and_other_channels_stay_none() {
+        let stamped = telecom_public_from_message_meta(&[
+            MessageMeta::AppMention,
+            MessageMeta::Sms(Box::new(sms_meta())),
+        ])
+        .expect("typed Sms meta must stamp");
+        assert_eq!(stamped.provenance().channel(), TelecomChannel::Sms);
+        assert_eq!(stamped.provenance().connection_generation(), 9);
+
+        assert!(telecom_public_from_message_meta(&[]).is_none());
+        assert!(telecom_public_from_message_meta(&[MessageMeta::BotAuthored]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod trusted_scope_lifecycle_tests {
+    //! E-step: the inbound router hands its optional `OperatorControl` to
+    //! the public run driver, which opens a trusted A/B scope only after
+    //! admission (see `telecom::public_run` and `operator_control::ScopeGuard`
+    //! tests for the lifecycle). These tests pin what remains here:
+    //!
+    //! 1. re-registering the same binding replaces, not stacks (E-3).
+    //! 2. with no OperatorControl wired in, no scope is opened (E-4).
+
+    use super::*;
+    use crate::gateway::telecom::operator_control::OperatorControl;
+    use crate::gateway::telecom::public_approval::PublicApprovalLedger;
+    use crate::gateway::telecom::TelecomPublicContext;
+
+    fn ctx_for(binding: &str) -> TelecomPublicContext {
+        crate::gateway::telecom::public_context::test_support::sample_public_context(binding)
+    }
+
+    fn new_control() -> Arc<OperatorControl> {
+        Arc::new(OperatorControl::new(Arc::new(PublicApprovalLedger::new())))
+    }
+
+    /// E-3: registering the same binding twice auto-cancels any
+    /// outstanding approvals attached to the prior scope (per
+    /// `OperatorControl::register_scope`'s contract: replace, then
+    /// cancel_binding). The new scope is the only one visible to
+    /// `list_pending_for_test`.
+    #[test]
+    fn e_reregistering_same_binding_cancels_outstanding_approvals() {
+        let c = new_control();
+        let ctx = ctx_for("bind-e-3");
+        let first = crate::gateway::telecom::PublicApprovalScope::new(
+            &ctx,
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            ctx.provenance().connection_generation(),
+        );
+        c.register_scope(first);
+        let pending_after_first = c.list_pending_for_test();
+        assert_eq!(
+            pending_after_first
+                .iter()
+                .filter(|s| s.binding_ref() == "bind-e-3")
+                .count(),
+            1
+        );
+
+        // Second register on the same binding. The prior scope is
+        // cancelled by the contract.
+        let second = crate::gateway::telecom::PublicApprovalScope::new(
+            &ctx,
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            ctx.provenance().connection_generation() + 1,
+        );
+        c.register_scope(second);
+        let pending_after_second = c.list_pending_for_test();
+        assert_eq!(
+            pending_after_second
+                .iter()
+                .filter(|s| s.binding_ref() == "bind-e-3")
+                .count(),
+            1,
+            "re-register must replace, not stack"
+        );
+        c.retire_scope("bind-e-3");
+    }
+
+    /// E-4: with no OperatorControl wired in (default
+    /// `InboundMessageRouter::new`), the A/B path is closed. This is
+    /// the documented "disabled" mode: the public run still happens,
+    /// no scope is opened, and `retire_scope` is not called.
+    #[test]
+    fn e_no_operator_control_means_no_scope_opened() {
+        use crate::gateway::pairing_store::SqlitePairingStore;
+        use crate::gateway::routing_config::RoutingConfig;
+
+        // We can't construct a full `InboundMessageRouter` cheaply, so
+        // we instead assert via the field default: the public struct's
+        // `operator_control` is `None` when no builder wired it in.
+        let registry = Arc::new(crate::gateway::channel_registry::ChannelRegistry::new());
+        let pairing = Arc::new(SqlitePairingStore::in_memory().expect("pairing store"));
+        let router = InboundMessageRouter::new(registry, pairing, RoutingConfig::default());
+        assert!(
+            router.operator_control.is_none(),
+            "A/B scope path must be disabled by default"
+        );
     }
 }

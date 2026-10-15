@@ -77,6 +77,14 @@ pub trait ExecutionAdapter: Send + Sync {
     /// - Run is not active (`RunNotActive`)
     async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError>;
 
+    /// Runner of isolated public telecom runs (public isolation contract §4).
+    /// Default `None`: adapters without an orchestrator cannot serve public
+    /// runs, and the router then refuses with a fixed notice rather than
+    /// falling back to the owner path.
+    fn public_harness(&self) -> Option<Arc<dyn crate::orchestrator::dispatch::HarnessRunner>> {
+        None
+    }
+
     /// Cancel the `Running` run on `session_key`, if any.
     ///
     /// Channel-facing variant of [`ExecutionAdapter::cancel`]: a channel user
@@ -300,6 +308,8 @@ mod tests {
             workspace_override: None,
             max_iterations_override: None,
             model_override: None,
+            telecom_public: None,
+            telecom_authority: None,
         };
 
         let result = adapter.execute(request, agent, emitter).await;

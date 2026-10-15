@@ -23,6 +23,7 @@ pub mod exec_approval;
 pub mod factory;
 pub mod hooks;
 pub mod live_tail;
+pub mod managed;
 pub mod platforms;
 pub mod policy;
 pub mod protected_paths;
@@ -59,6 +60,13 @@ pub trait Sandbox: Send + Sync + 'static {
     /// for injection into the LLM system prompt. Default `None` keeps
     /// mock / no-op implementations silent. See [`SandboxSummary`].
     fn summary(&self) -> Option<SandboxSummary> {
+        None
+    }
+
+    /// Managed (owner-held, long-lived) spawn seam. `None` for every sandbox
+    /// that cannot hand a live child to a supervisor; only `WorkspaceSandbox`
+    /// (which runs the full approval/profile admission) provides one.
+    fn managed(&self) -> Option<&dyn crate::sandbox::managed::ManagedSandbox> {
         None
     }
 }

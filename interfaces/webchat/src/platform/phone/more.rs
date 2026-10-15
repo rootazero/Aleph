@@ -35,6 +35,7 @@ pub fn alert_badge_count() -> Memo<usize> {
         };
         unread_count(&dashboard.alerts.get(), &notif.dismissed.get())
             + dashboard.pending_approvals.get().len()
+            + dashboard.pending_telecom_approvals.get().len()
     })
 }
 

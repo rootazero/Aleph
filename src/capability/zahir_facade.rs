@@ -22,7 +22,9 @@ use crate::capability::ownership::{
     LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, VisibilityScope,
 };
 use crate::sync_primitives::Arc;
-use crate::tools::registry::{RegistryChange, RegistryEntry, RegistrySnapshot, ToolHandlerRegistry};
+use crate::tools::registry::{
+    RegistryChange, RegistryEntry, RegistrySnapshot, ToolHandlerRegistry,
+};
 use std::collections::HashMap;
 use tokio::sync::broadcast::{self, error::TryRecvError};
 
@@ -111,9 +113,12 @@ impl ZahirFacade {
         for name in snap.entries().keys() {
             let id = tool_id(name);
             let visibility = VisibilityScope::default();
-            let _ = self
-                .tree
-                .register_if_absent(id, OwnerRef::Runtime, LifetimeScope::Runtime, visibility);
+            let _ = self.tree.register_if_absent(
+                id,
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                visibility,
+            );
         }
     }
 
@@ -756,9 +761,7 @@ mod tests {
         assert_eq!(tree.generation(&id, &vis), Some(OwnerGeneration(0)));
         assert_eq!(tree.claim_state(&claim, &id, &vis), ClaimState::Active);
         // The incumbent can still claim; the Runtime reconcile owner cannot.
-        assert!(tree
-            .claim(&id, &vis, incumbent, "r2".to_string())
-            .is_some());
+        assert!(tree.claim(&id, &vis, incumbent, "r2".to_string()).is_some());
         assert!(tree
             .claim(&id, &vis, OwnerRef::Runtime, "r3".to_string())
             .is_none());
@@ -792,7 +795,9 @@ mod tests {
         def.input_schema = json!({"type": "object", "properties": {"x": {"type": "string"}}});
         reg.replace(
             ToolCapabilityDescriptor::from_definition(&def, 0),
-            Arc::new(FakeHandler { definition: def.clone() }),
+            Arc::new(FakeHandler {
+                definition: def.clone(),
+            }),
         )
         .expect("replace a");
         let snap2 = host.snapshot_entries_in_scope(&scope_all());
@@ -888,10 +893,7 @@ mod tests {
             namespace: Some("aleph/skills".to_string()),
             visibility: VisibilityScope::default(),
         };
-        assert!(host
-            .snapshot_entries_in_scope(&foreign)
-            .entries
-            .is_empty());
+        assert!(host.snapshot_entries_in_scope(&foreign).entries.is_empty());
 
         // Custom visibility with no bindings → owner map empty, so entries
         // empty (identical membership).
@@ -904,10 +906,7 @@ mod tests {
             namespace: None,
             visibility: ws,
         };
-        assert!(host
-            .snapshot_entries_in_scope(&ws_scope)
-            .entries
-            .is_empty());
+        assert!(host.snapshot_entries_in_scope(&ws_scope).entries.is_empty());
 
         // Default visibility → both present.
         assert_eq!(
@@ -927,11 +926,12 @@ mod tests {
         // Replace "a" with a changed schema and unregister "b": the OLD
         // snapshot must stay frozen (its `Arc`s point at the old generation).
         let mut def = fake_def("a");
-        def.input_schema =
-            json!({"type": "object", "properties": {"y": {"type": "number"}}});
+        def.input_schema = json!({"type": "object", "properties": {"y": {"type": "number"}}});
         reg.replace(
             ToolCapabilityDescriptor::from_definition(&def, 0),
-            Arc::new(FakeHandler { definition: def.clone() }),
+            Arc::new(FakeHandler {
+                definition: def.clone(),
+            }),
         )
         .expect("replace a");
         assert!(reg.unregister("b").is_some());

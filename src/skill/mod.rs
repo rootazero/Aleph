@@ -42,7 +42,7 @@ pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
 pub use usage::{record_use_in_dir, SkillState, UsageStats, UsageStore};
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicU64, Ordering};
 use std::path::{Path, PathBuf};
 
 use tokio::sync::RwLock;
@@ -79,6 +79,27 @@ struct Inner {
     /// always-failing `Config::load()` falls back to the initial empty value
     /// the same way the old inline path did.
     cached_config_value: RwLock<Option<serde_json::Value>>,
+    /// Generation fence for `rescan_dirs`. Each rescan takes a ticket from
+    /// `rescan_ticket` BEFORE reading its root set; `rescan_published` is the
+    /// ticket of the newest rescan whose registry was published. Concurrent
+    /// rescans run their blocking scans in parallel and may finish out of
+    /// order; an older ticket finishing last must not overwrite the newer
+    /// registry. `rescan_published` is only read-modified while holding the
+    /// `registry` write lock (see [`publish_if_newer`]).
+    rescan_ticket: AtomicU64,
+    rescan_published: AtomicU64,
+}
+
+/// Accept `ticket` for publication iff no newer rescan has published yet.
+///
+/// Caller must hold the `registry` write lock, which serialises every
+/// publication, so the load/store pair is not a race.
+fn publish_if_newer(published: &AtomicU64, ticket: u64) -> bool {
+    if ticket <= published.load(Ordering::Acquire) {
+        return false;
+    }
+    published.store(ticket, Ordering::Release);
+    true
 }
 
 /// Log a `JoinError` from `spawn_blocking`. The `JoinError` carries the panic
@@ -93,6 +114,92 @@ fn log_join_err(ctx: &'static str, err: tokio::task::JoinError) {
         tracing::error!(error = %err, ctx, "spawn_blocking task panicked; telemetry dropped");
     } else {
         tracing::warn!(error = %err, ctx, "spawn_blocking task cancelled");
+    }
+}
+
+/// Run synchronous filesystem work (recursive `SKILL.md` discovery, config
+/// load, `.usage.json` sidecar reads) on Tokio's blocking pool.
+///
+/// These are reached from async RPC handlers (`skills.status`,
+/// `extensions.installed`, `extensions.catalog` via
+/// `hub::reconcile::collect_installed`); running them inline would pin a
+/// runtime worker for the whole cold scan even when the caller is a spawned
+/// task (Task #56, D1). Only owned inputs cross into the closure — no
+/// `SkillSystem` lock or state is held or moved into the blocking thread.
+///
+/// A panic inside `f` is re-raised on the caller (unchanged semantics vs the
+/// old inline call, and it keeps the `assert_not_real_claude_home` test
+/// tripwire loud). Cancellation (runtime shutdown) is logged and yields
+/// `None`; callers keep their previous state in that case.
+pub(crate) async fn run_blocking_fs<T, F>(ctx: &'static str, f: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(v) => Some(v),
+        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+        Err(e) => {
+            log_join_err(ctx, e);
+            None
+        }
+    }
+}
+
+/// Append each `published` plugin dir to `roots` unless an already-present
+/// root (base dirs first, then earlier published dirs) is `equiv` to it.
+///
+/// Filesystem-identity dedup, not literal spelling: a published plugin dir
+/// reached through a symlinked $HOME is the same root the base list may
+/// already carry under another spelling. The first match wins, so base order,
+/// then publication order, is the priority order. Pure over owned inputs.
+fn merge_published_roots<E>(
+    mut roots: Vec<PathBuf>,
+    published: Vec<PathBuf>,
+    equiv: E,
+) -> Vec<PathBuf>
+where
+    E: Fn(&Path, &Path) -> bool,
+{
+    for dir in published {
+        if !roots.iter().any(|r| equiv(r, &dir)) {
+            roots.push(dir);
+        }
+    }
+    roots
+}
+
+/// [`merge_published_roots`] with `equiv` run on the blocking pool.
+///
+/// The production `equiv` (`paths::equivalent`) canonicalises both sides, i.e.
+/// two filesystem syscalls per root pair, so it must not run on a runtime
+/// worker. No published dirs (the common case) means no hop at all.
+///
+/// Cancellation (runtime shutdown) must not drop plugin roots: the fallback
+/// merges the same owned inputs with a LITERAL `==` comparison, which is
+/// cheap and does no I/O. Worst case a plugin dir reached through a second
+/// spelling of a base dir appears twice for that one shutdown-time call; no
+/// root is lost. A panic inside `equiv` is re-raised on the caller
+/// (`run_blocking_fs`).
+async fn merge_published_roots_off_loop<E>(
+    base: Vec<PathBuf>,
+    published: Vec<PathBuf>,
+    equiv: E,
+) -> Vec<PathBuf>
+where
+    E: Fn(&Path, &Path) -> bool + Send + 'static,
+{
+    if published.is_empty() {
+        return base;
+    }
+    let (base_fallback, published_fallback) = (base.clone(), published.clone());
+    match run_blocking_fs("SkillSystem::scan_roots", move || {
+        merge_published_roots(base, published, equiv)
+    })
+    .await
+    {
+        Some(roots) => roots,
+        None => merge_published_roots(base_fallback, published_fallback, |a, b| a == b),
     }
 }
 
@@ -121,6 +228,8 @@ impl SkillSystem {
                 config: RwLock::new(config),
                 config_path,
                 cached_config_value: RwLock::new(None),
+                rescan_ticket: AtomicU64::new(0),
+                rescan_published: AtomicU64::new(0),
             }),
         }
     }
@@ -159,7 +268,9 @@ impl SkillSystem {
                 }
             }
         }
-        self.rescan_dirs().await;
+        // Cancellation is already logged by `run_blocking_fs`; `init` keeps
+        // its fire-and-forget contract.
+        let _ = self.rescan_dirs().await;
     }
 
     /// Reload a single skill file into the registry and rebuild the snapshot.
@@ -204,19 +315,15 @@ impl SkillSystem {
     /// (`record_use` / `set_pinned` / `full_status`) see an active plugin's
     /// skills exactly as the scan does.
     async fn scan_roots(&self) -> Vec<PathBuf> {
-        let mut roots = self.inner.skill_dirs.read().await.clone();
-        for published in crate::utils::paths::plugin_skill_dirs() {
-            // Filesystem-identity dedup, not literal spelling: a published
-            // plugin dir reached through a symlinked $HOME is the same root
-            // the base list may already carry under another spelling.
-            if !roots
-                .iter()
-                .any(|r| crate::utils::paths::equivalent(r, &published.dir))
-            {
-                roots.push(published.dir);
-            }
-        }
-        roots
+        // Clone both inputs first: the `skill_dirs` read guard is released at
+        // the end of this statement, so no lock is held across the blocking
+        // hop below.
+        let base = self.inner.skill_dirs.read().await.clone();
+        let published: Vec<PathBuf> = crate::utils::paths::plugin_skill_dirs()
+            .into_iter()
+            .map(|p| p.dir)
+            .collect();
+        merge_published_roots_off_loop(base, published, crate::utils::paths::equivalent).await
     }
 
     /// Get a clone of the current snapshot.
@@ -266,28 +373,26 @@ impl SkillSystem {
     /// the old "empty on failure" behaviour rather than panicking or returning
     /// inconsistent data on subsequent calls.
     async fn load_or_cached_config_value(&self) -> serde_json::Value {
-        match crate::config::Config::load() {
-            Ok(c) => match serde_json::to_value(&c) {
-                Ok(v) => {
-                    let mut cache = self.inner.cached_config_value.write().await;
-                    *cache = Some(v.clone());
-                    v
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "skill snapshot: config serialization failed; using cached value"
-                    );
-                    self.cached_or_empty().await
-                }
-            },
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "skill snapshot: config load failed; using cached value"
-                );
+        // `Config::load` is synchronous file I/O + TOML parse: blocking pool.
+        let loaded = run_blocking_fs("SkillSystem::load_or_cached_config_value", || {
+            match crate::config::Config::load() {
+                Ok(c) => serde_json::to_value(&c)
+                    .map_err(|e| format!("config serialization failed: {e}")),
+                Err(e) => Err(format!("config load failed: {e}")),
+            }
+        })
+        .await;
+        match loaded {
+            Some(Ok(v)) => {
+                let mut cache = self.inner.cached_config_value.write().await;
+                *cache = Some(v.clone());
+                v
+            }
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "skill snapshot: config unavailable; using cached value");
                 self.cached_or_empty().await
             }
+            None => self.cached_or_empty().await,
         }
     }
 
@@ -327,9 +432,11 @@ impl SkillSystem {
     /// CLI) can see usage counts and lifecycle state at a glance.
     pub async fn full_status(&self) -> Vec<SkillStatusEntry> {
         let config_value = self.load_or_cached_config_value().await;
+        // Sidecar reads run on the blocking pool; do them before taking the
+        // registry/config read locks so those are not held across that await.
+        let usage_index = self.collect_usage_snapshot().await;
         let registry = self.inner.registry.read().await;
         let config = self.inner.config.read().await;
-        let usage_index = self.collect_usage_snapshot().await;
 
         let mut entries: Vec<SkillStatusEntry> = registry
             .list_all()
@@ -352,14 +459,18 @@ impl SkillSystem {
     /// deduped at load time).
     async fn collect_usage_snapshot(&self) -> std::collections::HashMap<String, UsageStats> {
         let dirs = self.scan_roots().await;
-        let mut merged: std::collections::HashMap<String, UsageStats> = Default::default();
-        for dir in &dirs {
-            let store = UsageStore::new(dir);
-            for (id, stats) in store.snapshot() {
-                merged.insert(id, stats);
+        run_blocking_fs("SkillSystem::collect_usage_snapshot", move || {
+            let mut merged: std::collections::HashMap<String, UsageStats> = Default::default();
+            for dir in &dirs {
+                let store = UsageStore::new(dir);
+                for (id, stats) in store.snapshot() {
+                    merged.insert(id, stats);
+                }
             }
-        }
-        merged
+            merged
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// Find the registered skills dir that owns this skill id.
@@ -639,29 +750,60 @@ impl SkillSystem {
     /// `pub(crate)` so `super::shared::ensure_shared_skill_system_initialized`
     /// can widen the base set with `ensure_dir_registered` and rescan without
     /// going through `init`.
-    pub(crate) async fn rescan_dirs(&self) {
+    ///
+    /// **Ordering.** Concurrent rescans are fenced by a generation ticket
+    /// taken before the root set is read: the registry is only replaced if no
+    /// newer rescan has already published, so a slow older scan finishing
+    /// last cannot clobber a newer registry. Because the base dir set only
+    /// grows and every widening caller rescans afterwards, the highest ticket
+    /// always reads a root set that contains every dir registered before it
+    /// ticketed; a later registration takes a later ticket. A superseded scan
+    /// is dropped without rebuilding the snapshot (the newer one does). No
+    /// async lock is held across the blocking scan.
+    ///
+    /// Returns `false` only if the blocking scan was cancelled (runtime
+    /// shutdown); the registry is then left untouched. `true` means the scan
+    /// completed and was either published or superseded by a newer one.
+    pub(crate) async fn rescan_dirs(&self) -> bool {
+        let ticket = self.inner.rescan_ticket.fetch_add(1, Ordering::AcqRel) + 1;
         let dirs = self.scan_roots().await;
 
         // Build a fresh registry so we can swap atomically — never expose an empty registry.
-        let mut new_registry = SkillRegistry::new();
-        for dir in &dirs {
-            // A real Claude root registered by ANY earlier test is rescanned
-            // by every later one (the set only grows), so the tripwire sits on
-            // the read as well as on the registrations.
-            #[cfg(test)]
-            crate::utils::paths::assert_not_real_claude_home(dir, "SkillSystem::rescan_dirs");
-            if dir.exists() {
-                let source = guess_source(dir);
-                let manifests = scan_directory(dir, source);
-                new_registry.register_all(manifests);
+        // The recursive scan is synchronous std::fs work: it runs on the
+        // blocking pool (see `run_blocking_fs`), touching only the owned
+        // `dirs` list; the registry swap below stays on the async side.
+        let scanned = run_blocking_fs("SkillSystem::rescan_dirs", move || {
+            let mut new_registry = SkillRegistry::new();
+            for dir in &dirs {
+                // A real Claude root registered by ANY earlier test is rescanned
+                // by every later one (the set only grows), so the tripwire sits on
+                // the read as well as on the registrations.
+                #[cfg(test)]
+                crate::utils::paths::assert_not_real_claude_home(dir, "SkillSystem::rescan_dirs");
+                if dir.exists() {
+                    let source = guess_source(dir);
+                    let manifests = scan_directory(dir, source);
+                    new_registry.register_all(manifests);
+                }
             }
-        }
+            new_registry
+        })
+        .await;
+        // Cancelled (runtime shutdown): keep the previous registry untouched.
+        let Some(new_registry) = scanned else {
+            return false;
+        };
 
         let mut registry = self.inner.registry.write().await;
+        if !publish_if_newer(&self.inner.rescan_published, ticket) {
+            // A newer rescan already published (and rebuilds the snapshot).
+            return true;
+        }
         *registry = new_registry;
         drop(registry);
 
         self.rebuild_snapshot().await;
+        true
     }
 
     /// Increment the version counter and build a new snapshot.
@@ -1026,6 +1168,18 @@ mod tests {
     use super::*;
     use crate::domain::skill::SkillSource;
 
+    /// Out-of-order rescan completion: ticket 2 publishes, then the slower
+    /// ticket 1 must be rejected; a later ticket 3 still publishes.
+    #[test]
+    fn rescan_generation_fence_rejects_stale_publication() {
+        let published = AtomicU64::new(0);
+        assert!(publish_if_newer(&published, 2));
+        assert!(!publish_if_newer(&published, 1));
+        assert!(!publish_if_newer(&published, 2));
+        assert!(publish_if_newer(&published, 3));
+        assert_eq!(published.load(Ordering::Acquire), 3);
+    }
+
     #[test]
     fn aleph_home_is_authoritative_for_default_skill_discovery() {
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -1089,6 +1243,142 @@ mod tests {
             SkillSource::Bundled,
         );
         assert!(!SkillSystem::api_key_present(&no_key));
+    }
+
+    /// D1 (Task #56): the cold-path filesystem work leaves the runtime thread.
+    /// On a current-thread runtime the only runtime worker is the test thread,
+    /// so a different thread id proves the closure ran on the blocking pool.
+    #[tokio::test]
+    async fn run_blocking_fs_runs_off_the_runtime_thread() {
+        let here = std::thread::current().id();
+        let there = run_blocking_fs("test", || std::thread::current().id())
+            .await
+            .expect("not cancelled");
+        assert_ne!(here, there);
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "blocking boom")]
+    async fn run_blocking_fs_reraises_a_panic_on_the_caller() {
+        let _: Option<()> = run_blocking_fs("test", || panic!("blocking boom")).await;
+    }
+
+    /// Every synchronous step of the cold skill path is routed through
+    /// `run_blocking_fs` (shape 4: assert the effect's route, not that a call
+    /// exists somewhere). Source guard over this file and `shared.rs`.
+    #[test]
+    fn the_cold_skill_path_routes_sync_fs_through_the_blocking_pool() {
+        // Production half only, so the needles below cannot match this test.
+        fn prod(src: &str) -> &str {
+            src.split("mod tests {").next().unwrap()
+        }
+        let src = prod(include_str!("mod.rs"));
+        for site in [
+            "rescan_dirs",
+            "collect_usage_snapshot",
+            "load_or_cached_config_value",
+            "scan_roots",
+        ] {
+            let needle = format!("run_blocking_fs(\"SkillSystem::{site}\"");
+            assert!(src.contains(&needle), "missing blocking route: {needle}");
+        }
+        // The root-level recursive scan has exactly one call site (inside the
+        // `rescan_dirs` blocking closure); recursion uses `&path`.
+        assert_eq!(src.matches("scan_directory(dir, source)").count(), 1);
+        let shared = prod(include_str!("shared.rs"));
+        // `default_skill_dirs()` and the singleton's first construction are
+        // both called INSIDE the one blocking closure, never before it.
+        let closure_start = shared
+            .find("run_blocking_fs(\"ensure_shared_skill_system_initialized\"")
+            .expect("blocking route in shared.rs");
+        let before = &shared[..closure_start];
+        let after = &shared[closure_start..];
+        assert!(!before.contains("shared_skill_system().clone()"));
+        assert!(!before.contains("default_skill_dirs()"));
+        assert!(after.contains("shared_skill_system().clone()"));
+        assert!(after.contains("super::default_skill_dirs()"));
+    }
+
+    /// `scan_roots`' canonicalisation dedup runs on the blocking pool, and the
+    /// merge keeps its rules: base order first, first match wins, published
+    /// dirs also dedup against each other. Injected `equiv` (case-insensitive
+    /// string compare): no filesystem, no real home, no global state. On a
+    /// current-thread runtime a different thread id proves the blocking pool.
+    #[tokio::test]
+    async fn merge_published_roots_runs_equiv_off_the_runtime_thread() {
+        let here = std::thread::current().id();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_in = std::sync::Arc::clone(&seen);
+        let equiv = move |a: &Path, b: &Path| {
+            seen_in.lock().unwrap().push(std::thread::current().id());
+            a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        };
+        let roots = merge_published_roots_off_loop(
+            vec![PathBuf::from("/base/A"), PathBuf::from("/base/b")],
+            vec![
+                PathBuf::from("/BASE/a"),   // equivalent to base[0]: dropped
+                PathBuf::from("/plug/one"), // new
+                PathBuf::from("/PLUG/ONE"), // equivalent to the one just added
+                PathBuf::from("/plug/two"), // new
+            ],
+            equiv,
+        )
+        .await;
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/base/A"),
+                PathBuf::from("/base/b"),
+                PathBuf::from("/plug/one"),
+                PathBuf::from("/plug/two"),
+            ]
+        );
+        let seen = seen.lock().unwrap();
+        assert!(!seen.is_empty(), "equiv must have been consulted");
+        assert!(
+            seen.iter().all(|t| *t != here),
+            "equiv ran on the runtime thread"
+        );
+    }
+
+    /// No published dirs: the base list is returned untouched and `equiv` is
+    /// never called (no blocking hop on the common path).
+    #[tokio::test]
+    async fn merge_published_roots_skips_the_hop_without_published_dirs() {
+        let roots = merge_published_roots_off_loop(
+            vec![PathBuf::from("/base/a")],
+            Vec::new(),
+            |_: &Path, _: &Path| -> bool { panic!("equiv must not run") },
+        )
+        .await;
+        assert_eq!(roots, vec![PathBuf::from("/base/a")]);
+    }
+
+    /// A panic inside `equiv` surfaces on the caller, not as a silently
+    /// shortened root list that would drop plugin roots.
+    #[tokio::test]
+    #[should_panic(expected = "equiv boom")]
+    async fn merge_published_roots_reraises_an_equiv_panic() {
+        let _ = merge_published_roots_off_loop(
+            vec![PathBuf::from("/base/a")],
+            vec![PathBuf::from("/plug/a")],
+            |_: &Path, _: &Path| -> bool { panic!("equiv boom") },
+        )
+        .await;
+    }
+
+    /// The cancellation fallback keeps every plugin root (literal compare).
+    #[test]
+    fn merge_published_roots_literal_fallback_keeps_plugin_roots() {
+        let roots = merge_published_roots(
+            vec![PathBuf::from("/base/a")],
+            vec![PathBuf::from("/base/a"), PathBuf::from("/plug/a")],
+            |a, b| a == b,
+        );
+        assert_eq!(
+            roots,
+            vec![PathBuf::from("/base/a"), PathBuf::from("/plug/a")]
+        );
     }
 
     #[test]

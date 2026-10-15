@@ -1,6 +1,5 @@
 //! `HookExecutor` implementation — action dispatch and execution logic
 
-use async_trait::async_trait;
 use super::matcher::{compile_matcher, matcher_verdict, CompiledMatcher, MatcherVerdict};
 use super::session_facts::SessionFacts;
 use super::{
@@ -18,6 +17,7 @@ use crate::session::{
 };
 use crate::sync_primitives::Arc;
 use crate::utils::no_window::NoWindow;
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
@@ -431,11 +431,8 @@ impl HookMemoSink for SessionHookMemoSink {
         let event_str = format!("{event:?}");
         let capability = capability.map(str::to_string);
         let outcome = outcome.to_string();
-        emit_for_ambient_call(
-            &self.session,
-            "hook",
-            "hook memo",
-            move |_, call_id| SessionEvent::HookMemo {
+        emit_for_ambient_call(&self.session, "hook", "hook memo", move |_, call_id| {
+            SessionEvent::HookMemo {
                 request_id: call_id,
                 memo: serde_json::json!({
                     "phase": phase,
@@ -445,8 +442,8 @@ impl HookMemoSink for SessionHookMemoSink {
                 })
                 .to_string(),
                 at: now_ms(),
-            },
-        )
+            }
+        })
         .await;
     }
 }
@@ -1241,7 +1238,8 @@ impl HookExecutor {
                                 );
                                 if accumulated.blocked || accumulated.denied {
                                     if let Some(sink) = &self.memo_sink {
-                                        sink.record(event, Some(&hook.plugin_name), "blocked").await;
+                                        sink.record(event, Some(&hook.plugin_name), "blocked")
+                                            .await;
                                     }
                                     return Ok((current_context, accumulated));
                                 }
@@ -1261,7 +1259,8 @@ impl HookExecutor {
                                 );
                                 if accumulated.blocked || accumulated.denied {
                                     if let Some(sink) = &self.memo_sink {
-                                        sink.record(event, Some(&hook.plugin_name), "blocked").await;
+                                        sink.record(event, Some(&hook.plugin_name), "blocked")
+                                            .await;
                                     }
                                     return Ok((current_context, accumulated));
                                 }
@@ -1312,7 +1311,8 @@ impl HookExecutor {
             // behaviour) silently handed downstream interceptors the ORIGINAL
             // input on stdin.
             if let Some(sink) = &self.memo_sink {
-                sink.record(event, Some(&hook.plugin_name), "completed").await;
+                sink.record(event, Some(&hook.plugin_name), "completed")
+                    .await;
             }
 
             if let Some(ref updated) = accumulated.updated_input {
@@ -1469,7 +1469,8 @@ impl HookExecutor {
                             // `scratch` is dropped — observers cannot modify.
                             if let HookAction::Command { .. } = action {
                                 if let Some(sink) = &self.memo_sink {
-                                    sink.record(event, Some(&hook.plugin_name), "completed").await;
+                                    sink.record(event, Some(&hook.plugin_name), "completed")
+                                        .await;
                                 }
                                 let mut scratch = super::HookResult::default();
                                 super::derive_decision(

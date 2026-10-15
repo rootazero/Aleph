@@ -37,6 +37,9 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tui_textarea::TextArea;
 
+use aleph_protocol::browser_live::{
+    CLOSED_TOPIC as BROWSER_LIVE_CLOSED_TOPIC, RESOURCE_TOPIC as BROWSER_LIVE_RESOURCE_TOPIC,
+};
 use aleph_protocol::providers::ProviderListResult;
 use aleph_protocol::runtime::{
     RuntimeAgentsListResponse, RUNTIME_AGENTS_CHANGED_TOPIC, RUNTIME_AGENTS_LIST_METHOD,
@@ -160,10 +163,7 @@ async fn refresh_runtime_agents(state: &mut AppState, client: &AlephClient) {
 /// iteration, and doing it this way is also what makes
 /// [`app::AgentPanelData::Loading`] observable at all (awaiting the fetch
 /// here left it permanently unreachable before the first frame ever drew).
-async fn subscribe_runtime_agents(
-    state: &mut AppState,
-    client: &AlephClient,
-) -> CliResult<()> {
+async fn subscribe_runtime_agents(state: &mut AppState, client: &AlephClient) -> CliResult<()> {
     // A non-operator's subscribe still "succeeds" as an RPC — the operator
     // gate lives on the event's publish side (`EventScopeGuard`), not on
     // `events.subscribe` itself — so its result is not worth failing on;
@@ -198,6 +198,33 @@ async fn subscribe_runtime_agents(
         // success here would create a feedback loop (clear → refresh
         // → subscribe → set → clear → refresh → …).
         state.runtime_agents_refetch_due = true;
+    }
+    result.map(|_| ())
+}
+
+/// `events.subscribe` params for the browser live-resource topics.
+/// Pure so the exact topic list and call shape are unit-testable.
+fn browser_live_subscribe_params() -> Value {
+    json!({ "topics": [BROWSER_LIVE_RESOURCE_TOPIC, BROWSER_LIVE_CLOSED_TOPIC] })
+}
+
+/// Subscribe this connection to `browser.live.resource` / `browser.live.closed`
+/// so `AppState::handle_topic_event` can feed the browser resource catalog.
+///
+/// `events.subscribe` is PER-CONNECTION server state, so this is called once
+/// after startup and once after each reconnect success — never from the
+/// runtime-agents refetch tick. Fail-soft: the TUI works without browser
+/// topics, so a failure only emits a fixed warn line (no error text or
+/// payload, which could carry secrets) and is returned for the caller to drop.
+async fn subscribe_browser_live_topics(client: &AlephClient) -> CliResult<()> {
+    let result = client
+        .call::<_, Value>("events.subscribe", Some(browser_live_subscribe_params()))
+        .await;
+    if result.is_err() {
+        tracing::warn!(
+            "events.subscribe for browser.live topics failed; \
+             browser resources unavailable on this connection"
+        );
     }
     result.map(|_| ())
 }
@@ -291,6 +318,13 @@ pub async fn run(
     }
     state.gateway_commands = gateway_commands;
     state.my_user_id = my_user_id;
+    // `/browser` can only open a viewer when the user opted in explicitly
+    // (ALEPH_VIEWER_ENABLED=1 plus trusted origins). A malformed opt-in stays
+    // disabled and says so once; the message never echoes the offending value.
+    match crate::viewer_launcher::config_from_env() {
+        Ok(cfg) => state.viewer_launcher_config = cfg,
+        Err(e) => state.add_system_message(format!("Viewer launcher disabled: {e}")),
+    }
     // A local command that matches a gateway one makes the gateway one
     // unreachable — this client resolves local first and never falls through.
     // Say so once at startup rather than letting a whole namespace vanish
@@ -327,6 +361,8 @@ pub async fn run(
     // create an infinite loop).
     let _ = subscribe_runtime_agents(&mut state, &client).await;
     state.runtime_agents_refetch_due = true;
+    // Browser live topics: per-connection, fail-soft, once at startup.
+    let _ = subscribe_browser_live_topics(&client).await;
 
     // 3c. Attach to the named conversation: transcript + the settings that
     // govern it (mode / tier / thinking depth / model / cumulative tokens /
@@ -609,6 +645,14 @@ async fn main_loop<'c>(
                     // next tick's flag-check actually runs the re-fetch.
                     let _ = subscribe_runtime_agents(state, client).await;
                     state.runtime_agents_refetch_due = true;
+                    // Browser live topics are per-connection too. Frames sent
+                    // while the socket was down (a `closed`, a new revision)
+                    // are lost, so drop the mirror BEFORE re-subscribing and
+                    // rebuild it only from what the Gateway publishes now.
+                    // Nothing else on the screen is touched here.
+                    state.browser_resources.clear_for_reconnect();
+                    // Re-arm them here (and only here / at startup).
+                    let _ = subscribe_browser_live_topics(client).await;
                 }
                 Err(e) => {
                     backoff = next_backoff(backoff);
@@ -979,8 +1023,8 @@ async fn main_loop<'c>(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_panel_data, model_caption, should_redraw_after_tick, AgentPanelData, AppState,
-        ModelCaption, RUNTIME_AGENTS_CHANGED_TOPIC,
+        agent_panel_data, browser_live_subscribe_params, model_caption, should_redraw_after_tick,
+        AgentPanelData, AppState, ModelCaption, RUNTIME_AGENTS_CHANGED_TOPIC,
     };
     use aleph_client::CliError;
     use aleph_protocol::jsonrpc::{ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED};
@@ -988,6 +1032,7 @@ mod tests {
     use aleph_protocol::runtime::{
         RuntimeAgentEntry, RuntimeAgentState, RuntimeAgentsListResponse,
     };
+    use serde_json::json;
 
     /// Build a `providers.list` reply the way the server does — from
     /// `ProviderInfo`, not from a JSON literal written here. A literal would
@@ -1205,6 +1250,41 @@ mod tests {
             block.contains("refresh_runtime_agents(state, client)"),
             "a pending re-fetch must be wired to the real re-fetch function, \
              or a topic event silently does nothing"
+        );
+    }
+
+    /// The browser live subscribe uses exactly the protocol constants, and is
+    /// called only at startup and reconnect success — not from the refetch tick.
+    #[test]
+    fn browser_live_topics_subscribe_shape_and_call_sites() {
+        use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
+        assert_eq!(
+            browser_live_subscribe_params(),
+            json!({ "topics": [RESOURCE_TOPIC, CLOSED_TOPIC] })
+        );
+        assert_eq!(RESOURCE_TOPIC, "browser.live.resource");
+        assert_eq!(CLOSED_TOPIC, "browser.live.closed");
+
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = src.split("#[cfg(test)]").next().expect("split yields one");
+        let code: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            code.matches("subscribe_browser_live_topics(").count(),
+            3,
+            "definition + startup + reconnect-success call sites only"
+        );
+        let tick = code
+            .split("if state.runtime_agents_refetch_due {")
+            .nth(1)
+            .and_then(|r| r.split("needs_redraw = true;").next())
+            .expect("refetch tick block");
+        assert!(
+            !tick.contains("subscribe_browser_live_topics"),
+            "refetch tick must not re-subscribe browser topics"
         );
     }
 

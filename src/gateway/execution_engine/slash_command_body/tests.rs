@@ -5,7 +5,6 @@ use super::*;
 use crate::discovery::DiscoveryConfig;
 use crate::extension::{ExtensionConfig, PluginKind, PluginOrigin, PluginRecord};
 use crate::gateway::agent_instance::AgentInstance;
-use std::time::Duration;
 use tempfile::TempDir;
 
 const PLUGIN: &str = "plug";
@@ -1018,6 +1017,7 @@ fn the_rescue_strips_the_command_and_the_run_directory_has_one_derivation() {
 async fn run_loop_with_prompt_hook(hook: Option<&str>, metadata: &[(&str, &str)]) -> bool {
     use crate::extension::hooks::HookExecutor;
     use crate::extension::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
+    use std::time::Duration;
     let f = Fixture::new("[!`touch RAN`]", None).await;
     f.approve("touch RAN");
     let temp = TempDir::new().unwrap();

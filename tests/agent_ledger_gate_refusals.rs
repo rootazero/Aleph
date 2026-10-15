@@ -84,6 +84,7 @@ fn chat_tier_turn(agent: &str) -> TurnContext {
         unattended: false,
         plan_gate: None,
         side_question: false,
+        telecom_authority: None,
     }
 }
 

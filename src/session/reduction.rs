@@ -40,6 +40,7 @@ use std::fmt;
 
 use serde::Serialize;
 
+use crate::gateway::telecom::persisted_marker::PersistedTelecomMarker;
 use crate::session::events::{
     EventSeq, ParkReason, RunEnvelopeSnapshot, SessionEvent, SessionEventRecord, Timestamp, TurnId,
 };
@@ -364,6 +365,7 @@ pub struct RunStartFacts {
     pub run_id: String,
     pub project_root: Option<String>,
     pub envelope: Option<RunEnvelopeSnapshot>,
+    pub telecom_provenance: crate::gateway::telecom::persisted_marker::PersistedTelecomMarker,
 }
 
 /// Everything the consumers need to know about one session's runs.
@@ -417,15 +419,64 @@ pub(crate) fn is_marker(event: &SessionEvent) -> bool {
     )
 }
 
-/// What [`reduce_disposition`] may be handed: the run markers and the two
-/// message kinds that decide "was the user answered". Anything else in a
-/// slice is the raw-log-by-mistake shape and is refused.
+/// What [`reduce_disposition`] may be handed: the run markers, the two
+/// message kinds that decide "was the user answered", and the seed-origin
+/// carrier ([`SessionEvent::SeedProvenance`]) the coordinator reads for an
+/// unanswered tail. Anything else in a slice is the raw-log-by-mistake shape
+/// and is refused. `SeedProvenance` is bearing but deliberately NOT a
+/// [`is_marker`]: the SQL marker slice every list face loads stays three
+/// types, and it never changes a disposition.
 pub(crate) fn is_disposition_bearing(event: &SessionEvent) -> bool {
     is_marker(event)
         || matches!(
             event,
-            SessionEvent::UserMessage { .. } | SessionEvent::AssistantMessage { .. }
+            SessionEvent::UserMessage { .. }
+                | SessionEvent::AssistantMessage { .. }
+                | SessionEvent::SeedProvenance { .. }
         )
+}
+
+/// The server-authored origin of an unanswered seed, read back for resume.
+///
+/// `bearing` is a disposition-bearing sequence (see [`is_disposition_bearing`])
+/// in `seq` order and `user_seq` the `user_seq` of a
+/// [`RunDisposition::Unanswered`] reduced from it. Returns the
+/// `telecom_provenance` of the [`SessionEvent::SeedProvenance`] whose
+/// `turn_id` is EXACTLY the `turn_id` of the `UserMessage` at `user_seq` and
+/// which was written before it. Everything else is
+/// [`PersistedTelecomMarker::Legacy`] (= unproven, resume refuses): no
+/// carrier, a carrier for another turn, a carrier written after the message,
+/// a `user_seq` that is not a real `UserMessage`. Never inferred from the
+/// message's `source_channel`, metadata or position — only the typed
+/// carrier, bound by id. When several carriers name the same turn the LATEST
+/// one before the message wins (a re-seed of the same id restates it).
+pub fn unanswered_seed_provenance(
+    bearing: &[SessionEventRecord],
+    user_seq: EventSeq,
+) -> PersistedTelecomMarker {
+    let Some(turn) = bearing.iter().find_map(|r| match &r.event {
+        SessionEvent::UserMessage {
+            turn_id,
+            synthetic: false,
+            ..
+        } if r.seq == user_seq => Some(*turn_id),
+        _ => None,
+    }) else {
+        return PersistedTelecomMarker::Legacy;
+    };
+    bearing
+        .iter()
+        .rev()
+        .filter(|r| r.seq < user_seq)
+        .find_map(|r| match &r.event {
+            SessionEvent::SeedProvenance {
+                turn_id,
+                telecom_provenance,
+                ..
+            } if *turn_id == turn => Some(telecom_provenance.clone()),
+            _ => None,
+        })
+        .unwrap_or(PersistedTelecomMarker::Legacy)
 }
 
 /// The one derivation of "is this interrupted, or is someone left waiting".
@@ -594,6 +645,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                 run_id: rid,
                 project_root,
                 envelope,
+                telecom_provenance,
                 ..
             } => {
                 run_anchor = Some(record.seq);
@@ -603,6 +655,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                     run_id: rid.clone(),
                     project_root: project_root.clone(),
                     envelope: envelope.clone(),
+                    telecom_provenance: telecom_provenance.clone(),
                 });
                 saw_run_started = true;
                 after_finish_without_start = false;
@@ -1044,6 +1097,8 @@ mod tests {
             at: 1,
             project_root: None,
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         }
     }
 
@@ -1053,6 +1108,8 @@ mod tests {
             at: 1,
             project_root: Some(root.to_string()),
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         }
     }
 
@@ -1065,6 +1122,8 @@ mod tests {
             at: 1,
             project_root: None,
             envelope,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         }
     }
 
@@ -1360,6 +1419,99 @@ mod tests {
             synthetic: false,
             author_user_id: None,
         }
+    }
+
+    fn user_on(turn_id: TurnId, synthetic: bool) -> SessionEvent {
+        SessionEvent::UserMessage {
+            turn_id,
+            content: content("body-never-in-marker"),
+            at: 5,
+            synthetic,
+            author_user_id: None,
+        }
+    }
+
+    fn carrier(turn_id: TurnId, m: PersistedTelecomMarker) -> SessionEvent {
+        SessionEvent::SeedProvenance {
+            turn_id,
+            telecom_provenance: m,
+            at: 5,
+        }
+    }
+
+    /// The carrier is read back by EXACT turn id and only when written before
+    /// the unanswered message; everything else reads `Legacy` (refuse).
+    #[test]
+    fn unanswered_seed_provenance_binds_by_exact_turn_id() {
+        use PersistedTelecomMarker as M;
+        let t = TurnId::new_v4();
+        let other = TurnId::new_v4();
+        let is = |m: &M, want: &M| format!("{m:?}") == format!("{want:?}");
+        // bound
+        let log = [rec(1, carrier(t, M::Ordinary)), rec(2, user_on(t, false))];
+        assert!(is(&unanswered_seed_provenance(&log, 2), &M::Ordinary));
+        // none / other turn / after the message / not a real user message
+        let none = [rec(2, user_on(t, false))];
+        assert!(is(&unanswered_seed_provenance(&none, 2), &M::Legacy));
+        let wrong = [
+            rec(1, carrier(other, M::Ordinary)),
+            rec(2, user_on(t, false)),
+        ];
+        assert!(is(&unanswered_seed_provenance(&wrong, 2), &M::Legacy));
+        let late = [rec(1, user_on(t, false)), rec(2, carrier(t, M::Ordinary))];
+        assert!(is(&unanswered_seed_provenance(&late, 1), &M::Legacy));
+        let synth = [rec(1, carrier(t, M::Ordinary)), rec(2, user_on(t, true))];
+        assert!(is(&unanswered_seed_provenance(&synth, 2), &M::Legacy));
+        assert!(is(&unanswered_seed_provenance(&log, 9), &M::Legacy));
+        // a stale carrier of an EARLIER answered turn never vouches for the
+        // later seed, even when it is the only carrier in the slice
+        let stale = [
+            rec(1, carrier(other, M::Ordinary)),
+            rec(2, user_on(other, false)),
+            rec(
+                3,
+                SessionEvent::AssistantMessage {
+                    turn_id: other,
+                    content: content("a"),
+                    usage: None,
+                    at: 5,
+                },
+            ),
+            rec(4, user_on(t, false)),
+        ];
+        assert!(is(&unanswered_seed_provenance(&stale, 4), &M::Legacy));
+        // the latest carrier for the same turn wins
+        let restated = [
+            rec(1, carrier(t, M::Ordinary)),
+            rec(2, carrier(t, M::Corrupt(serde_json::json!("x")))),
+            rec(3, user_on(t, false)),
+        ];
+        assert!(matches!(
+            unanswered_seed_provenance(&restated, 3).restore(),
+            crate::gateway::telecom::persisted_marker::MarkerRestore::Refuse(_)
+        ));
+    }
+
+    /// The carrier is bearing (a slice holding it is accepted) but changes no
+    /// disposition: alone it is `Clean`, with a seed it is still `Unanswered`.
+    #[test]
+    fn a_seed_carrier_never_changes_the_disposition() {
+        let t = TurnId::new_v4();
+        let alone = [rec(1, carrier(t, PersistedTelecomMarker::Ordinary))];
+        assert_eq!(reduce_disposition(&alone), Ok(RunDisposition::Clean));
+        let seeded = [
+            rec(1, carrier(t, PersistedTelecomMarker::Ordinary)),
+            rec(2, user_on(t, false)),
+        ];
+        assert_eq!(
+            reduce_disposition(&seeded),
+            Ok(RunDisposition::Unanswered {
+                user_seq: 2,
+                attempts: 0
+            })
+        );
+        assert!(!is_marker(&alone[0].event), "not in the SQL marker slice");
+        assert!(is_disposition_bearing(&alone[0].event));
     }
 
     fn system(text: &str) -> SessionEvent {
@@ -1930,6 +2082,8 @@ mod tests {
                 run_id: "b".into(),
                 project_root: Some("/p".into()),
                 envelope: None,
+                telecom_provenance:
+                    crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
             })
         );
         assert_eq!(r.run_anchor, Some(3));

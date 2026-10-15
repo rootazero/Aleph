@@ -80,6 +80,21 @@ task_local! {
     /// is not a `pty.close`, and nothing else fires when a tab is closed or
     /// a client crashes.
     pub static CALLER_CONN_ID: Option<String>;
+
+    /// The user id the originating connection **proved** (server-side), as
+    /// opposed to [`CALLER_USER`], which also carries the implicit-owner
+    /// compat identity (credential-less loopback, legacy shared token, an
+    /// unbound pre-v14 device all resolve to `OWNER_USER_ID`).
+    ///
+    /// `Some(uid)` only when the `connect` handshake authenticated a paired
+    /// device whose `devices.user_id` binding resolves to an Active user equal
+    /// to the stamped `CALLER_USER`. Never inferred from role, device name,
+    /// loopback or request params. Read it through
+    /// [`current_caller_verified_user`], which re-checks it against
+    /// `CALLER_USER` / `CALLER_ROLE`. Unset outside a
+    /// [`with_verified_caller_identity`] scope (so every legacy
+    /// [`with_caller_identity`] caller reads `None`).
+    pub static CALLER_VERIFIED_USER: Option<String>;
 }
 
 /// The originating connection's role for the current task, or `None` outside a
@@ -120,6 +135,45 @@ pub fn current_caller_is_loopback() -> bool {
 #[must_use]
 pub fn current_caller_user() -> Option<String> {
     CALLER_USER.try_with(|u| u.clone()).ok().flatten()
+}
+
+/// The server-verified user for the current task, or `None`.
+///
+/// Stricter than [`current_caller_user`]: that one answers "which user id is
+/// stamped" and includes the implicit-owner compat identity; this one answers
+/// "did the connection prove it is that user". It returns `Some` only when
+/// ALL hold: a [`CALLER_VERIFIED_USER`] scope carries a non-empty id, that id
+/// equals the scoped `CALLER_USER`, and the scoped role is `"member"` or
+/// `"operator"` (a walled `"guest"` never verifies). Anything else -- missing
+/// scope, mismatch, empty id, guest/absent role -- is `None` (fail closed).
+///
+/// Consumers that hand out per-user capabilities (the browser viewer grant
+/// RPCs) must use this instead of `current_caller_user`.
+#[must_use]
+pub fn current_caller_verified_user() -> Option<String> {
+    let verified = CALLER_VERIFIED_USER.try_with(|u| u.clone()).ok().flatten();
+    verified_caller_user(
+        current_caller_role().as_deref(),
+        current_caller_user().as_deref(),
+        verified.as_deref(),
+    )
+}
+
+/// The single pure viewer-authority predicate shared by
+/// [`current_caller_verified_user`] (task-local view) and the connection
+/// dispatch snapshot (live-state view), so the two can never drift.
+///
+/// `Some(verified)` iff the role is `member`/`operator`, the stamped user is
+/// non-blank, and the verified user is non-blank and equal to it.
+#[must_use]
+pub fn verified_caller_user(
+    role: Option<&str>,
+    user: Option<&str>,
+    verified: Option<&str>,
+) -> Option<String> {
+    let verified = verified.filter(|v| !v.trim().is_empty())?;
+    let user = user.filter(|u| !u.trim().is_empty())?;
+    (user == verified && matches!(role, Some("member" | "operator"))).then(|| verified.to_string())
 }
 
 /// The originating WebSocket connection id for the current task, or `None`
@@ -214,12 +268,44 @@ pub fn caller_may_choose_directory_as(role: Option<&str>, is_loopback: bool) -> 
 /// 2. `CALLER_USER`
 /// 3. `CALLER_ROLE`
 /// 4. `CALLER_IS_LOOPBACK`
-/// 5. `CALLER_CONN_ID` (innermost, wraps `fut` directly)
+/// 5. `CALLER_CONN_ID`
+/// 6. `CALLER_VERIFIED_USER` (innermost, wraps `fut` directly)
+///
+/// This helper carries NO verified user: it scopes `CALLER_VERIFIED_USER` to
+/// `None` explicitly, so a nested call can never inherit an outer scope's
+/// verified identity (MCP face, tests, any non-handshake surface read
+/// `current_caller_verified_user() == None`). Surfaces that actually hold a
+/// handshake-proved user use [`with_verified_caller_identity`].
 pub(crate) async fn with_caller_identity<F, T>(
     caller_role: Option<String>,
     caller_user: Option<String>,
     caller_is_loopback: bool,
     caller_conn_id: Option<String>,
+    fut: F,
+) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    with_verified_caller_identity(
+        caller_role,
+        caller_user,
+        caller_is_loopback,
+        caller_conn_id,
+        None,
+        fut,
+    )
+    .await
+}
+
+/// [`with_caller_identity`] plus the connection's server-verified user (see
+/// [`CALLER_VERIFIED_USER`]). The single scoping implementation: the WS
+/// dispatch stations call this through `dispatch_with_caller_context`.
+pub(crate) async fn with_verified_caller_identity<F, T>(
+    caller_role: Option<String>,
+    caller_user: Option<String>,
+    caller_is_loopback: bool,
+    caller_conn_id: Option<String>,
+    verified_user: Option<String>,
     fut: F,
 ) -> T
 where
@@ -235,7 +321,10 @@ where
                 caller_role,
                 CALLER_IS_LOOPBACK.scope(
                     caller_is_loopback,
-                    CALLER_CONN_ID.scope(caller_conn_id, fut),
+                    CALLER_CONN_ID.scope(
+                        caller_conn_id,
+                        CALLER_VERIFIED_USER.scope(verified_user, fut),
+                    ),
                 ),
             ),
         ),
@@ -385,5 +474,98 @@ mod tests {
         // Locals must not leak past the scope boundary.
         assert_eq!(current_caller_role(), None);
         assert_eq!(current_caller_user(), None);
+    }
+
+    async fn verified_in(
+        role: Option<&str>,
+        user: Option<&str>,
+        verified: Option<&str>,
+    ) -> Option<String> {
+        with_verified_caller_identity(
+            role.map(str::to_string),
+            user.map(str::to_string),
+            false,
+            Some("c".to_string()),
+            verified.map(str::to_string),
+            async { current_caller_verified_user() },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn verified_user_requires_scope_match_and_authorized_role() {
+        // Happy paths.
+        assert_eq!(
+            verified_in(Some("member"), Some("u-a"), Some("u-a"))
+                .await
+                .as_deref(),
+            Some("u-a")
+        );
+        assert_eq!(
+            verified_in(Some("operator"), Some("u-a"), Some("u-a"))
+                .await
+                .as_deref(),
+            Some("u-a")
+        );
+        // Missing scope / no verified value.
+        assert_eq!(current_caller_verified_user(), None);
+        assert_eq!(verified_in(Some("member"), Some("u-a"), None).await, None);
+        // Empty id, mismatch, missing caller user.
+        assert_eq!(
+            verified_in(Some("member"), Some("u-a"), Some("")).await,
+            None
+        );
+        assert_eq!(
+            verified_in(Some("member"), Some("u-a"), Some("u-b")).await,
+            None
+        );
+        assert_eq!(verified_in(Some("member"), None, Some("u-a")).await, None);
+        // Walled / absent / unknown roles never verify.
+        assert_eq!(
+            verified_in(Some("guest"), Some("u-a"), Some("u-a")).await,
+            None
+        );
+        assert_eq!(verified_in(None, Some("u-a"), Some("u-a")).await, None);
+        assert_eq!(
+            verified_in(Some("root"), Some("u-a"), Some("u-a")).await,
+            None
+        );
+    }
+
+    /// The legacy helper must scope `None` explicitly: a nested legacy scope
+    /// inside a verified one cannot inherit the outer verified identity.
+    #[tokio::test]
+    async fn legacy_helper_never_carries_or_inherits_a_verified_user() {
+        let seen = with_caller_identity(
+            Some("operator".to_string()),
+            Some("u-owner".to_string()),
+            true,
+            None,
+            async { current_caller_verified_user() },
+        )
+        .await;
+        assert_eq!(seen, None);
+
+        let nested = with_verified_caller_identity(
+            Some("member".to_string()),
+            Some("u-a".to_string()),
+            false,
+            None,
+            Some("u-a".to_string()),
+            async {
+                let outer = current_caller_verified_user();
+                let inner = with_caller_identity(
+                    Some("member".to_string()),
+                    Some("u-a".to_string()),
+                    false,
+                    None,
+                    async { current_caller_verified_user() },
+                )
+                .await;
+                (outer, inner)
+            },
+        )
+        .await;
+        assert_eq!(nested, (Some("u-a".to_string()), None));
     }
 }

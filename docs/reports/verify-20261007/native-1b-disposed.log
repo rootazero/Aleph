@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized] target(s) in 0.81s
+     Running unittests src\lib.rs (target\debug\deps\aleph_panel-6f39709417fbd5f3.exe)
+
+running 1 test
+
+thread 'disposed_reads::tests::no_plain_untracked_read_survives_an_await' (8948) panicked at interfaces\webchat\src\disposed_reads.rs:311:9:
+plain `get_untracked()` after an `.await` — the owning component may already be disposed there, and that read panics the whole panel. Use `try_get_untracked()` and skip the work (`.flatten()` keeps a comparison byte-identical).
+D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\interfaces\webchat\src\context.rs:1537: let loop_auth = self.native_auth.get_value();
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test disposed_reads::tests::no_plain_untracked_read_survives_an_await ... FAILED
+
+failures:
+
+failures:
+    disposed_reads::tests::no_plain_untracked_read_survives_an_await
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1514 filtered out; finished in 0.19s
+
+error: test failed, to rerun pass `-p aleph-panel --lib`

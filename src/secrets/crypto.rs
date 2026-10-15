@@ -45,6 +45,14 @@ impl SecretsCrypto {
         }
     }
 
+    /// Whether this engine has a usable caller-supplied master key.
+    ///
+    /// This deliberately exposes only a boolean, never the key material. It
+    /// lets dedicated stores reject an empty key before accepting data.
+    pub(crate) fn is_usable(&self) -> bool {
+        !self.master_key.expose_secret().is_empty()
+    }
+
     /// Derive a per-entry encryption key using HKDF-SHA256.
     ///
     /// The key is wrapped in `Zeroizing` so it is wiped from the stack on drop

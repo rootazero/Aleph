@@ -1,0 +1,22 @@
+   Compiling aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
+    Finished `test` profile [unoptimized] target(s) in 28.03s
+     Running unittests src\lib.rs (target\debug\deps\aleph_protocol-d8e52b62ea3451c0.exe)
+
+running 9 tests
+test native_credentials::tests::command_names_are_the_three_fixed_methods ... ok
+test native_credentials::tests::credential_rejects_unknown_ticket_and_role_fields ... ok
+test native_credentials::tests::credential_round_trips ... ok
+test native_credentials::tests::credential_debug_redacts_token ... ok
+test native_credentials::tests::credential_rejects_blank_and_missing_fields ... ok
+test native_credentials::tests::lease_round_trips_with_and_without_credential ... ok
+test native_credentials::tests::lease_debug_never_prints_token ... ok
+test native_credentials::tests::lease_rejects_zero_id_blank_url_unknown_and_missing_fields ... ok
+test native_credentials::tests::lease_schema_requires_nullable_credential_and_nonzero_id ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 384 filtered out; finished in 0.00s
+
+     Running unittests src\bin\export_desktop_bridge_schema.rs (target\debug\deps\export_desktop_bridge_schema-00e56a8bf5691bcd.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

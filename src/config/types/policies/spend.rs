@@ -42,6 +42,16 @@ pub struct SpendPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_usd: Option<f64>,
 
+    /// USD ceiling of the explicit telecom-public principal
+    /// ([`crate::spend::Principal::TelecomPublic`]) — spend on behalf of
+    /// unverified public SMS/PSTN callers, kept in its own ledger row and
+    /// never charged to an owner principal.
+    ///
+    /// Omitted means the public principal falls back to `per_user_usd`
+    /// (when that is set), and is otherwise bounded only by `total_usd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telecom_public_usd: Option<f64>,
+
     /// Billing cycle duration.
     #[serde(default)]
     pub period: SpendPeriod,
@@ -52,7 +62,7 @@ impl SpendPolicy {
     ///
     /// Returns `false` when no code may read or write the ledger.
     pub const fn enabled(&self) -> bool {
-        self.per_user_usd.is_some() || self.total_usd.is_some()
+        self.per_user_usd.is_some() || self.total_usd.is_some() || self.telecom_public_usd.is_some()
     }
 }
 
@@ -85,6 +95,22 @@ mod tests {
             ..SpendPolicy::default()
         };
         assert!(total_only.enabled());
+
+        let public_only = SpendPolicy {
+            telecom_public_usd: Some(2.0),
+            ..SpendPolicy::default()
+        };
+        assert!(public_only.enabled());
+    }
+
+    /// `telecom_public_usd` parses from TOML and, when unset, is not
+    /// emitted on serialization.
+    #[test]
+    fn telecom_public_usd_parses_and_is_skipped_when_unset() {
+        let policy: SpendPolicy = toml::from_str("telecom_public_usd = 1.5").unwrap();
+        assert_eq!(policy.telecom_public_usd, Some(1.5));
+        let unset = toml::to_string(&SpendPolicy::default()).unwrap();
+        assert!(!unset.contains("telecom_public_usd"));
     }
 
     /// `period = "day"` parses to `SpendPeriod::Day`. An unknown period

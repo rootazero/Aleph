@@ -162,6 +162,8 @@ where
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
+        telecom_authority: None,
     })
 }
 

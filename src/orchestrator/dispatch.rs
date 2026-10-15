@@ -150,6 +150,12 @@ pub struct FlowOutcome {
     pub serving_model: Option<String>,
     /// Provider id behind [`serving_model`](Self::serving_model).
     pub serving_provider: Option<String>,
+    /// Isolated public-telecom runs only: the bounded query the model filed
+    /// through the single `request_private_lookup` tool, when the request
+    /// allowed it ([`PublicRunRequest::allow_private_lookup`]). Recording it
+    /// had no external effect; the telecom driver alone decides what follows
+    /// (operator approval A). Always `None` for every other run.
+    pub private_lookup: Option<String>,
 }
 
 /// Loop-exit cause for an agent run. Each variant corresponds to a distinct
@@ -590,6 +596,10 @@ pub struct FlowRequest {
     /// configured model. `None` = no per-turn pick (every non-gateway
     /// dispatcher), leaving the directive chain byte-identical.
     pub model_directive: Option<crate::providers::session_model_handle::SessionModelPref>,
+    /// Public-telecom provenance copied verbatim from `RunRequest::telecom_public`.
+    /// `None` = legacy / non-telecom (neither deny nor grant). Forwarded to
+    /// `HarnessRunner::run` as its trailing argument; consumers are later slices.
+    pub telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -603,6 +613,7 @@ impl std::fmt::Debug for FlowRequest {
             .field("session_hint", &self.session_hint)
             .field("parent_session", &self.parent_session)
             .field("depth", &self.depth)
+            .field("telecom_public", &self.telecom_public)
             .field(
                 "tool_service",
                 &self.tool_service.as_ref().map(|_| "<dyn ToolService>"),
@@ -712,6 +723,68 @@ impl Drop for SessionLockGuard {
     }
 }
 
+/// Version tag of the fixed public system prompt. A [`PublicRunRequest`]
+/// naming any other version is refused by the production runner, so a
+/// prompt change is an explicit, reviewable bump.
+pub const PUBLIC_PROMPT_VERSION: &str = "telecom-public-v1";
+
+/// Error text of the default-deny [`HarnessRunner::run_public_text`].
+pub const PUBLIC_RUN_UNSUPPORTED: &str = "runner does not support isolated public telecom runs";
+
+/// Input of [`HarnessRunner::run_public_text`]. Intentionally narrow: typed
+/// public provenance, the caller's current text, the run id and the fixed
+/// prompt version. It has no owner session key, metadata map, workspace,
+/// tool override, model directive or approval reference.
+///
+/// `history` is the already-loaded, decrypted snapshot of *completed* public
+/// turns for this binding (oldest first), taken by the driver before the run.
+/// It is the only cross-turn input; empty when no isolated store is installed.
+#[derive(Debug, Clone)]
+pub struct PublicRunRequest {
+    pub ctx: crate::gateway::telecom::TelecomPublicContext,
+    pub text: String,
+    pub history: Vec<crate::gateway::telecom::PublicHistoryTurn>,
+    pub run_id: String,
+    pub prompt_version: &'static str,
+    /// Offer the model exactly one effect-free tool, `request_private_lookup`,
+    /// instead of no tools. Set by the telecom driver only when the owner
+    /// enabled `[telecom_private_read]` and the trusted operator plane plus a
+    /// read driver are wired. The tool only records a query into
+    /// [`FlowOutcome::private_lookup`]; no private data is reachable from the
+    /// public run itself.
+    pub allow_private_lookup: bool,
+}
+
+/// Input of [`HarnessRunner::run_private_draft`]: the same isolated public
+/// shape plus one operator-approved (A) private lookup result. Built only by
+/// the telecom private-turn driver after the A approval was consumed.
+#[derive(Clone)]
+pub struct PrivateDraftRequest {
+    pub ctx: crate::gateway::telecom::TelecomPublicContext,
+    /// The caller's text of this turn.
+    pub text: String,
+    /// Completed public turns (never contains private content).
+    pub history: Vec<crate::gateway::telecom::PublicHistoryTurn>,
+    pub run_id: String,
+    pub prompt_version: &'static str,
+    /// The approved lookup query.
+    pub query: String,
+    /// Bounded read-only lookup result; private, never logged.
+    pub private_result: crate::sync_primitives::Arc<str>,
+}
+
+impl std::fmt::Debug for PrivateDraftRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redacted: the query and result are private.
+        f.debug_struct("PrivateDraftRequest")
+            .field("run_id", &self.run_id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Error text of the default-deny [`HarnessRunner::run_private_draft`].
+pub const PRIVATE_DRAFT_UNSUPPORTED: &str = "runner does not support private telecom drafts";
+
 #[async_trait::async_trait]
 #[allow(clippy::too_many_arguments)] // trait shape driven by Orchestrator::dispatch wiring (Task 2)
 pub trait HarnessRunner: Send + Sync {
@@ -757,7 +830,49 @@ pub trait HarnessRunner: Send + Sync {
         // The engine's run id (`FlowRequest::run_id`). Implementations that
         // write run markers MUST write this id on them — see that field's doc.
         run_id: String,
+        // Public-telecom provenance of this run (`FlowRequest::telecom_public`).
+        // `None` = legacy / non-telecom. Contract slice only: implementations
+        // bind it; readers that narrow on it arrive in later slices.
+        telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<FlowOutcome, FlowError>;
+
+    /// Drive one isolated public-telecom text run (public session isolation
+    /// contract §4). Deliberately separate from [`Self::run`]: the request
+    /// carries no owner `SessionKey`, metadata, workspace, tool override or
+    /// model directive, so an implementation cannot reach owner state through
+    /// it by accident.
+    ///
+    /// Default-deny: a runner (test mock, simple engine) that does not
+    /// explicitly implement the isolated path refuses instead of silently
+    /// gaining public capability.
+    async fn run_public_text(
+        &self,
+        request: PublicRunRequest,
+        cancel: CancellationToken,
+        events: broadcast::Sender<FlowStreamEvent>,
+    ) -> Result<FlowOutcome, FlowError> {
+        let _ = (request, cancel, events);
+        Err(FlowError::InvalidConfig(PUBLIC_RUN_UNSUPPORTED.to_string()))
+    }
+
+    /// Draft the answer of an operator-approved private lookup (stage A
+    /// consumed) under the same isolation as [`Self::run_public_text`]: no
+    /// tools, no owner session, no streaming. The returned text is only a
+    /// draft; the telecom driver submits it verbatim for approval B and
+    /// sends nothing without it.
+    ///
+    /// Default-deny like the public path.
+    async fn run_private_draft(
+        &self,
+        request: PrivateDraftRequest,
+        cancel: CancellationToken,
+        events: broadcast::Sender<FlowStreamEvent>,
+    ) -> Result<FlowOutcome, FlowError> {
+        let _ = (request, cancel, events);
+        Err(FlowError::InvalidConfig(
+            PRIVATE_DRAFT_UNSUPPORTED.to_string(),
+        ))
+    }
 
     /// The guardrail registry this runner installs on its own harness, if
     /// any. The gateway threads it into `SubagentTool` so spawned subagents
@@ -1146,6 +1261,17 @@ impl Orchestrator {
         let model_directive = req.model_directive.clone();
         // rust-doctor-disable-next-line excessive-clone
         let run_id = req.run_id.clone();
+        // rust-doctor-disable-next-line excessive-clone
+        let telecom_public = req.telecom_public.clone();
+        // Sixth capture at the same boundary: the run-origin task-local
+        // (`telecom::run_origin`) is seeded by `run_loop::with_request_scope`
+        // on the gateway side and dies at this `tokio::spawn`, so a tool
+        // executing inside the harness task (`sessions.send`, `goal`, `loop`)
+        // would read "unseeded" and launder a public telecom run into an
+        // ordinary child. It is re-seeded from the request's own typed
+        // `telecom_public` -- never from metadata / source_channel -- and an
+        // ordinary request is seeded explicitly as ordinary (`None`).
+        let run_origin = req.telecom_public.clone();
         // P1 data isolation — captured before the spawn boundary (task-locals
         // do not cross `tokio::spawn`); re-derived into a `ScopeAttribution`
         // and re-seeded inside, sibling of `with_agent_id`/`with_project_root`.
@@ -1264,25 +1390,29 @@ impl Orchestrator {
                                         originator,
                                         crate::gateway::media::with_pending_media(
                                             pending_media,
-                                            crate::extension::hooks::with_transcript_source(
-                                                transcripts,
-                                                harness.run(
-                                                    session_key,
-                                                    spec_clone,
-                                                    input_clone,
-                                                    sandbox_clone,
-                                                    event_tx,
-                                                    cancel_clone,
-                                                    tool_service_override,
-                                                    trace_sink,
-                                                    interaction_manifest,
-                                                    workspace_override,
-                                                    max_iterations_override,
-                                                    transient_context,
-                                                    think_level,
-                                                    envelope,
-                                                    model_directive,
-                                                    run_id,
+                                            crate::gateway::telecom::run_origin::seed_run_origin(
+                                                run_origin,
+                                                crate::extension::hooks::with_transcript_source(
+                                                    transcripts,
+                                                    harness.run(
+                                                        session_key,
+                                                        spec_clone,
+                                                        input_clone,
+                                                        sandbox_clone,
+                                                        event_tx,
+                                                        cancel_clone,
+                                                        tool_service_override,
+                                                        trace_sink,
+                                                        interaction_manifest,
+                                                        workspace_override,
+                                                        max_iterations_override,
+                                                        transient_context,
+                                                        think_level,
+                                                        envelope,
+                                                        model_directive,
+                                                        run_id,
+                                                        telecom_public,
+                                                    ),
                                                 ),
                                             ),
                                         ),

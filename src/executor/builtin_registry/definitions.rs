@@ -442,6 +442,31 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true,
     },
     BuiltinToolDefinition {
+        name: "initiate_call",
+        description: <crate::builtin_tools::call_lifecycle::InitiateCallTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "answer_call",
+        description: <crate::builtin_tools::call_lifecycle::AnswerCallTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "hangup",
+        description: <crate::builtin_tools::call_lifecycle::HangupTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "cancel_output",
+        description: <crate::builtin_tools::call_lifecycle::CancelOutputTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "call_status",
+        description: <crate::builtin_tools::call_lifecycle::CallStatusTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "session_list",
         description: <crate::builtin_tools::sessions::list_tool::SessionsListTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires gateway_context
@@ -567,6 +592,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "browser_open",
         description: <crate::builtin_tools::browser_tools::open::BrowserOpenTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_companion",
+        description: <crate::builtin_tools::browser_tools::companion::BrowserCompanionTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -1036,6 +1066,46 @@ pub fn create_tool_boxed(
     config: Option<&BuiltinToolConfig>,
 ) -> Option<Box<dyn AlephToolDyn>> {
     match name {
+        "initiate_call" => Some(Box::new(
+            crate::builtin_tools::call_lifecycle::InitiateCallTool::new(
+                config
+                    .and_then(|c| c.gateway_context.as_ref())
+                    .and_then(|c| c.telecom_lifecycle())
+                    .cloned(),
+            ),
+        )),
+        "answer_call" => Some(Box::new(
+            crate::builtin_tools::call_lifecycle::AnswerCallTool::new(
+                config
+                    .and_then(|c| c.gateway_context.as_ref())
+                    .and_then(|c| c.telecom_lifecycle())
+                    .cloned(),
+            ),
+        )),
+        "hangup" => Some(Box::new(
+            crate::builtin_tools::call_lifecycle::HangupTool::new(
+                config
+                    .and_then(|c| c.gateway_context.as_ref())
+                    .and_then(|c| c.telecom_lifecycle())
+                    .cloned(),
+            ),
+        )),
+        "cancel_output" => Some(Box::new(
+            crate::builtin_tools::call_lifecycle::CancelOutputTool::new(
+                config
+                    .and_then(|c| c.gateway_context.as_ref())
+                    .and_then(|c| c.telecom_lifecycle())
+                    .cloned(),
+            ),
+        )),
+        "call_status" => Some(Box::new(
+            crate::builtin_tools::call_lifecycle::CallStatusTool::new(
+                config
+                    .and_then(|c| c.gateway_context.as_ref())
+                    .and_then(|c| c.telecom_lifecycle())
+                    .cloned(),
+            ),
+        )),
         "search" => {
             // A live handle wins: the tool then reads every `[search]`
             // hot-apply off the swap cell. Without one the "bare key, else
@@ -1281,13 +1351,14 @@ pub fn create_tool_boxed(
         // constructor. This session-less path would produce tools without the
         // approval gate — a security-relevant half-assembly — so they fall
         // through to `None`.
-        "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
-        | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
-        | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
-        | "browser_exec" | "browser_console" | "browser_hover" | "browser_scroll"
-        | "browser_pdf" | "browser_record" | "browser_qa" | "browser_network"
-        | "browser_dialog" | "browser_drag" | "browser_upload" | "browser_resize"
-        | "browser_emulate" | "browser_cookies" | "browser_session" | "browser_profile" => None,
+        "browser_open" | "browser_companion" | "browser_click" | "browser_type"
+        | "browser_screenshot" | "browser_snapshot" | "browser_navigate" | "browser_tabs"
+        | "browser_select" | "browser_evaluate" | "browser_fill_form" | "browser_press_key"
+        | "browser_wait_for" | "browser_exec" | "browser_console" | "browser_hover"
+        | "browser_scroll" | "browser_pdf" | "browser_record" | "browser_qa"
+        | "browser_network" | "browser_dialog" | "browser_drag" | "browser_upload"
+        | "browser_resize" | "browser_emulate" | "browser_cookies" | "browser_session"
+        | "browser_profile" => None,
         // Skill management tools — always available
         // Phase 2: share the process-wide initialized SkillSystem so
         // skill_status/install/manage see the same registry as the gateway.
@@ -3106,7 +3177,6 @@ mod tests {
     /// more; (3) no other tool names the restore surface — `list_folds` is a
     /// runtime answer (session_decompress{action:"list"}), not catalog
     /// bytes.
-    ///
     /// 2026-10-06 (terminal capability parity A4): 117_174 -> 117_865 B,
     /// measured by this test's own failure line on Linux (96_901 catalog +
     /// 16_613 registry-only + 1_039 injected + 1_944 bridge + 1_368
@@ -3119,7 +3189,28 @@ mod tests {
     /// `terminal` tool never exposed; (2) per-field detail lives in the
     /// schema, the descriptions carry the verb and the read-only contract
     /// only; (3) no other tool names the terminal-observation surface.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 117_865;
+    /// 2026-10-15 (offline telephone lifecycle tools): 118_383 B before the
+    /// remote browser-companion addition, measured by this guard on Linux:
+    /// 97_420 catalog + 16_612 registry-only + 1_039 injected + 1_944 bridge
+    /// + 1_368 canonical. The five new descriptions total 519 B (104
+    /// initiate, 95 answer, 96 hangup, 104 cancel, 120 status); the
+    /// registry-only subtotal is 1 B below the previous measurement. Three
+    /// questions: (1) the own-binding/approval boundary and the distinction
+    /// between cancellation acceptance and cleared playback are not inferable
+    /// from the tool names; (2) argument details remain in the schemas, and
+    /// the descriptions state only the operation and its authority/result
+    /// boundary; (3) no existing tool exposes these telephone lifecycle
+    /// operations.
+    ///
+    /// 2026-10-07 (#48 browser_companion tool): +194 B, measured by this
+    /// guard's Linux ledger after the telephone additions; the delta is the
+    /// whole DESCRIPTION. Three questions: (1) the verb (a managed,
+    /// sandbox-approved long-lived service whose page the viewer shows) is not
+    /// inferable from bash/browser_open, and no refusal names it; (2) every
+    /// per-field detail (argv/cwd/timeout bounds, the handshake, owner-only
+    /// status/stop) lives in the JsonSchema doc comments; (3) no other tool
+    /// names the managed-companion surface.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 118_577;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3610,7 +3701,12 @@ mod tests {
     /// recall_events / ctx_search / session_search), which is where this
     /// design keeps its intelligence; trimming it would buy bytes with
     /// misrouted calls.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 106_181;
+    /// 2026-10-15 (offline telephone lifecycle tools): +1,225 B for five
+    /// always-on schemas — initiate_call 288, call_status 278, cancel_output
+    /// 275, answer_call 194, and hangup 190. The guard's measured total is
+    /// 107,406 B across 60 tools; the refreshed table below is copied from
+    /// that same run so the ceiling and per-tool ledger remain one fact.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 107_406;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3640,10 +3736,13 @@ mod tests {
     /// this table exists to stop.
     const REGISTRY_SCHEMA_BASELINE: &[(&str, usize)] = &[
         ("agent_identity", 978),
+        ("answer_call", 194),
         ("artifact_publish", 841),
         ("ask_user", 2678),
         ("automation", 1244),
         ("bash", 2230),
+        ("call_status", 278),
+        ("cancel_output", 275),
         ("channel_directory", 627),
         ("channel_message", 2376),
         ("channel_outbox", 1519),
@@ -3659,8 +3758,10 @@ mod tests {
         ("find", 840),
         ("goal", 4985),
         ("grep", 1545),
+        ("hangup", 190),
         ("heartbeat_report", 764),
         ("hooks_manage", 2151),
+        ("initiate_call", 288),
         ("list_models", 597),
         ("local_voice", 332),
         ("loop", 2998),
@@ -3901,6 +4002,13 @@ mod tests {
     /// 2026-10-06: 134 -> 133: retired legacy terminal has no executor row;
     /// canonical observations are measured separately from their registry.
     ///
+    /// 2026-10-07: 133 -> 134 for `browser_companion` (#48) — class (b), same
+    /// shape as the other browser tools: it is built by the registry
+    /// constructor from the live `ProfileManager`, sandbox and producer, so
+    /// its schema is not in the session-less map; production wiring is pinned
+    /// by the `browser_companion` entries in `definitions.rs`, `groups.rs`,
+    /// `tool_registry_impl.rs` and the approval-wiring census.
+    ///
     /// 2026-10-01: 133 -> 134 for `browser_qa` (C3) — class (b), same shape
     /// as `browser_record`: the schema registers through the same browser
     /// tool loop, and the production wiring is pinned by the same
@@ -3922,8 +4030,8 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 133,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 133 \
+            missing.len() <= 134,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 134 \
              recorded here, so `registry_schema_bytes_ratchet` does not bound them. Three ways in, \
              and they are not equally fine. (a) The tool ships with no parameters at all — free, \
              and fine. (b) It registers only once a dependency is live, so its schema is unmeasured \
@@ -4202,6 +4310,7 @@ mod tests {
 
         // Verify browser tools
         assert!(names.contains(&"browser_open".to_string()));
+        assert!(names.contains(&"browser_companion".to_string()));
         assert!(names.contains(&"browser_click".to_string()));
         assert!(names.contains(&"browser_type".to_string()));
         assert!(names.contains(&"browser_screenshot".to_string()));
@@ -4329,6 +4438,7 @@ mod tests {
         // Test browser tools (require the live wiring from the registry
         // constructor — see the browser_* arm above — so None here)
         assert!(create_tool_boxed("browser_open", None).is_none());
+        assert!(create_tool_boxed("browser_companion", None).is_none());
         assert!(create_tool_boxed("browser_click", None).is_none());
         assert!(create_tool_boxed("browser_type", None).is_none());
         assert!(create_tool_boxed("browser_screenshot", None).is_none());

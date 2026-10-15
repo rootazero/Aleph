@@ -70,6 +70,39 @@ pub trait OsSandboxDriverTrait: Send + Sync + 'static {
         &[]
     }
 
+    /// Spawn a long-lived child the caller keeps ownership of (managed
+    /// companion). Default: unsupported. A driver may only implement this when
+    /// the process it spawns IS the service process; a wrapper/init process in
+    /// between (Windows `sandbox-init-windows`, Linux bwrap) must refuse.
+    ///
+    /// Single-process contract: the owner reaps the service PID only and no
+    /// process-tree kill exists, so the profile reaching here has
+    /// `process.allow_fork == false` (`ManagedSandbox::spawn_managed` refuses
+    /// otherwise) and the driver must not let the service fork around it.
+    async fn spawn_managed(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _env: &HashMap<String, String>,
+        _cwd: &Path,
+        _profile: &OsSandboxProfile,
+    ) -> Result<crate::sandbox::managed::ManagedChild, SandboxError> {
+        self.managed_spawn_preflight()?;
+        Err(SandboxError::Other(
+            "driver advertises managed spawn but does not implement it".into(),
+        ))
+    }
+
+    /// Cheap, side-effect-free answer to "can this driver ever hand the live
+    /// service child to an owner?" - asked BEFORE any approval card is raised.
+    fn managed_spawn_preflight(&self) -> Result<(), SandboxError> {
+        Err(SandboxError::UnsupportedPolicy {
+            platform: self.platform(),
+            feature: "managed_spawn".into(),
+            reason: "this sandbox driver cannot hand the live service child to an owner".into(),
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,

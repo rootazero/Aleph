@@ -261,6 +261,7 @@ async fn non_operator_caller_is_refused() {
         unattended: false,
         plan_gate: None,
         side_question: false,
+        telecom_authority: None,
     };
     let out = TURN_CONTEXT
         .scope(ctx, async { observe("list", serde_json::json!({})).await })
@@ -1263,6 +1264,7 @@ fn terminal_capability_ctx(role: Option<&str>) -> crate::tools::turn_context::Tu
         unattended: false,
         plan_gate: None,
         side_question: false,
+        telecom_authority: None,
     }
 }
 

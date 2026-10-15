@@ -131,7 +131,7 @@ pub fn ModeSidebar() -> impl IntoView {
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
 
     view! {
-        <aside class="aleph-sidebar w-64 flex flex-col flex-shrink-0 overflow-hidden">
+        <aside class="aleph-sidebar w-[14.5rem] flex flex-col flex-shrink-0 overflow-hidden">
             // Brand row — ℵ wordmark + theme picker, pinned to the top
             <SidebarBrand />
 
@@ -181,18 +181,18 @@ fn SidebarBrand() -> impl IntoView {
         // child (Aleph mark area, ThemeToggle, inline collapse button)
         // marks itself as no-drag so the buttons stay clickable.
         <div
-            class="aleph-sidebar-head flex items-center justify-between px-3.5 pb-2.5"
+            class="aleph-sidebar-head flex items-center justify-between px-3 pb-1.5"
             data-tauri-drag-region=""
         >
             <div
-                class="aleph-no-drag flex items-center gap-2.5"
+                class="aleph-no-drag flex items-center gap-2"
                 data-tauri-drag-region="false"
             >
-                <div class="aleph-mark w-7 h-7 rounded-xl flex items-center justify-center
+                <div class="aleph-mark w-6 h-6 rounded-lg flex items-center justify-center
                             text-text-inverse">
                     <span class="text-base font-semibold leading-none">"\u{2135}"</span>
                 </div>
-                <span class="text-[15px] font-semibold tracking-tight">"Aleph"</span>
+                <span class="text-sm font-semibold tracking-tight">"Aleph"</span>
             </div>
             <div
                 class="aleph-sidebar-head-actions aleph-no-drag flex items-center"
@@ -323,7 +323,7 @@ fn SettingsSidebar() -> impl IntoView {
         <div class="flex flex-col h-full">
             // Search filter input — sticky so it stays visible when the
             // tab list scrolls.
-            <div class="sticky top-0 z-10 bg-surface-base/95 aleph-blur-subtle px-3 pt-3 pb-2 border-b border-border/50">
+            <div class="sticky top-0 z-10 bg-sidebar px-2.5 pt-2.5 pb-1.5">
                 <div class="relative">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                          stroke="currentColor" stroke-width="2" stroke-linecap="round"
@@ -336,7 +336,7 @@ fn SettingsSidebar() -> impl IntoView {
                     <input
                         type="text"
                         placeholder="Search settings…"
-                        class="w-full pl-8 pr-2 py-1.5 rounded-md bg-surface-sunken border border-border text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
+                        class="w-full pl-8 pr-2 py-1.5 rounded-lg bg-surface-sunken text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                         prop:value=move || filter.get()
                         on:input=move |ev| filter.set(event_target_value(&ev))
                     />
@@ -367,8 +367,8 @@ fn SettingsSidebar() -> impl IntoView {
                         }
 
                         Some(view! {
-                            <div class="px-3 py-2 space-y-0.5">
-                                <h3 class="px-3 py-1 text-xs font-medium text-text-tertiary uppercase tracking-wider">
+                            <div class="px-2.5 py-1.5 space-y-0.5">
+                                <h3 class="px-2.5 py-1 text-caption font-medium text-text-tertiary uppercase tracking-[0.06em]">
                                     {group_label}
                                 </h3>
                                 {visible_tabs.into_iter().map(|tab| {
@@ -392,22 +392,22 @@ fn SettingsSidebar() -> impl IntoView {
                                             href=path
                                             attr:class=move || {
                                                 if is_active() {
-                                                    "nav-tile-active flex items-center gap-3 px-3 py-2 rounded-lg text-sm"
+                                                    "nav-tile-active flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-nav"
                                                 } else {
-                                                    "nav-tile flex items-center gap-3 px-3 py-2 rounded-lg text-sm"
+                                                    "nav-tile flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-nav"
                                                 }
                                             }
                                         >
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                                 stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
                                                  stroke-linejoin="round"
                                                  class=move || {
-                                                     if is_active() { "text-sidebar-accent flex-shrink-0" }
+                                                     if is_active() { "text-text-primary flex-shrink-0" }
                                                      else { "text-text-tertiary flex-shrink-0" }
                                                  }
                                                  inner_html=icon_svg
                                             />
-                                            <span>{tab_label}</span>
+                                            <span class="truncate">{tab_label}</span>
                                         </A>
                                     }
                                 }).collect_view()}

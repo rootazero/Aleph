@@ -920,6 +920,16 @@ impl SeatbeltDriver {
                     ));
                 }
             }
+            NetworkPolicy::LoopbackPorts(_) => {
+                return Err(SandboxError::UnsupportedPolicy {
+                    platform: "macos/seatbelt",
+                    feature: "NetworkPolicy::LoopbackPorts".into(),
+                    reason: "per-port loopback confinement is only implemented by the \
+                             Windows managed launcher; use AllowHosts with a loopback \
+                             IP literal on macOS"
+                        .into(),
+                });
+            }
         }
         Ok(())
     }
@@ -963,6 +973,64 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
     /// picking one.
     fn denial_signatures(&self) -> &'static [&'static str] {
         &["operation not permitted"]
+    }
+
+    /// Managed spawn: `sandbox-exec` exec()s the target in place, so the PID of
+    /// the child we spawn IS the service PID (no wrapper process survives).
+    /// Not compiled/verified on non-macOS hosts.
+    fn managed_spawn_preflight(&self) -> Result<(), SandboxError> {
+        if self.is_supported() {
+            Ok(())
+        } else {
+            Err(SandboxError::ExecutionFailed(
+                "sandbox-exec not available".into(),
+            ))
+        }
+    }
+
+    async fn spawn_managed(
+        &self,
+        program: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+        cwd: &Path,
+        profile: &OsSandboxProfile,
+    ) -> Result<crate::sandbox::managed::ManagedChild, SandboxError> {
+        if !self.is_supported() {
+            return Err(SandboxError::ExecutionFailed(
+                "sandbox-exec not available".into(),
+            ));
+        }
+        let profile_file = tempfile::NamedTempFile::new().map_err(|e| {
+            SandboxError::Io(format!("failed to create temp file for profile: {e}"))
+        })?;
+        tokio::fs::write(profile_file.path(), &profile.contents)
+            .await
+            .map_err(|e| SandboxError::Io(format!("failed to write profile: {e}")))?;
+        let mut cmd = Command::new(SANDBOX_EXEC_PATH);
+        cmd.arg("-f")
+            .arg(profile_file.path())
+            .arg(program)
+            .args(args)
+            .current_dir(cwd)
+            .env_clear()
+            .envs(env)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        if let Some(mb) = profile.max_memory_mb {
+            apply_memory_rlimit(&mut cmd, mb);
+        }
+        let child = cmd.spawn().map_err(|e| {
+            SandboxError::ExecutionFailed(format!("failed to spawn sandbox-exec: {e}"))
+        })?;
+        // `sandbox-exec` execs the target in place, so this child IS the
+        // service; the adapter refuses a child without a PID.
+        Ok(crate::sandbox::managed::ManagedChild {
+            process: Box::new(crate::sandbox::managed::TokioManagedProcess::new(child)?),
+            keepalive: Some(Box::new(profile_file)),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -36,6 +36,7 @@ async fn default_agent_roundtrip() {
             think_level: None,
             envelope: alephcore::thinker::TurnEnvelope::none(),
             model_directive: None,
+            telecom_public: None,
         })
         .await
         .expect("dispatch");
@@ -103,6 +104,7 @@ async fn an_agent_without_its_own_flow_runs_in_the_callers_session() {
             think_level: None,
             envelope: alephcore::thinker::TurnEnvelope::none(),
             model_directive: None,
+            telecom_public: None,
         })
         .await
         .expect("dispatch");

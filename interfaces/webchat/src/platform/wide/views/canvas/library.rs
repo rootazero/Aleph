@@ -173,12 +173,7 @@ pub(super) fn fetch_open_doc(
 /// through this one function (re-exported by [`super`]), so a canvas opened
 /// from chat is fetched exactly like one opened from the picker. A second
 /// "set `open_canvas` and hope" call site would render an empty editor.
-pub(crate) fn open_canvas(
-    state: DashboardState,
-    canvas: CanvasState,
-    i18n: I18nCtx,
-    id: String,
-) {
+pub(crate) fn open_canvas(state: DashboardState, canvas: CanvasState, i18n: I18nCtx, id: String) {
     canvas.open_canvas.set(Some(id.clone()));
     canvas.doc.set(None);
     fetch_open_doc(state, canvas, i18n, id);

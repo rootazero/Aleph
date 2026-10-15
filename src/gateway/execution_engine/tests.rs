@@ -14,6 +14,10 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
+mod goal_origin_effects;
+mod goal_origin_race;
+mod loop_origin_race;
+
 /// Test event emitter that collects events
 pub(super) struct TestEmitter {
     events: Arc<RwLock<Vec<StreamEvent>>>,
@@ -74,6 +78,11 @@ fn goal_store_global() -> Arc<crate::goal::GoalStore> {
     // `OnceLock<TempDir>` never drops (statics don't), so the directory is
     // registered for removal at process exit instead of abandoned.
     static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    // Every caller re-opens the SAME sqlite file; opening it concurrently from
+    // parallel tests races sqlite's schema setup ("database is locked"), so the
+    // open + install is serialized.
+    static OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
     let dir = DIR.get_or_init(|| {
         crate::utils::scratch::keep_until_exit(tempfile::tempdir().expect("goal store dir"))
     });
@@ -110,6 +119,8 @@ async fn test_simple_execution_engine_basic() {
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
+        telecom_authority: None,
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -162,6 +173,8 @@ async fn test_session_state_returns_to_idle_after_run() {
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
+        telecom_authority: None,
     };
 
     // Persisting the user message transitions the session to Running.
@@ -227,6 +240,8 @@ async fn test_first_message_publishes_session_updated_on_bus() {
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
+        telecom_authority: None,
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -308,6 +323,8 @@ async fn panel_originated_session_update_names_its_run_not_just_gui_chat() {
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
+        telecom_authority: None,
     };
 
     engine.execute(request, agent, emitter).await.unwrap();
@@ -367,6 +384,8 @@ async fn test_simple_execution_engine_run() {
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
+        telecom_authority: None,
     };
 
     // This should succeed and complete quickly
@@ -490,6 +509,8 @@ pub(super) fn gate_test_request(session_key: &SessionKey, run_id: &str) -> RunRe
         workspace_override: None,
         max_iterations_override: None,
         model_override: None,
+        telecom_public: None,
+        telecom_authority: None,
     }
 }
 
@@ -1200,6 +1221,7 @@ fn inv_iso_turn(session_key: SessionKey) -> crate::tools::turn_context::TurnCont
         unattended: false,
         plan_gate: None,
         side_question: false,
+        telecom_authority: None,
     }
 }
 
@@ -2223,6 +2245,7 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
         Some(sessions),
         None,
         super::execute::ContinuationKind::Goal { wake_ms },
+        None,
     );
 
     let request = adapter
@@ -2233,6 +2256,99 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
         request.workspace_override,
         Some(project),
         "the continuation must run inside the project the goal was set in"
+    );
+}
+
+/// A goal continuation spawned from a public-telecom (SMS) run must reach the
+/// adapter still marked public. `spawn_continuation_run` used to hardcode
+/// `telecom_public: None`, which silently turned a public-line run's autonomous
+/// follow-up into an unrestricted legacy run.
+#[tokio::test]
+async fn goal_continuation_inherits_the_originating_runs_public_telecom_context() {
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    use crate::goal::{ContinuationDecision, Goal, PursuitMode};
+
+    let temp = tempfile::tempdir().unwrap();
+    let store = goal_store_global();
+
+    let session = SessionKey::main("i2-continuation-telecom");
+    let session_str = session.to_key_string();
+    let public = crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(
+        &crate::gateway::telecom::SmsInboundMeta {
+            region: "r".into(),
+            binding_ref: "b".into(),
+            provider_account_id: "a".into(),
+            provider_message_id: "m".into(),
+            envelope_event_id: "e".into(),
+            connection_generation: 3,
+            service_address: "+15550001111".into(),
+            peer_address: "+15552223333".into(),
+            encoding: aleph_protocol::telecom_relay::SmsEncoding::Gsm7,
+            segment_count: 1,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now(),
+        },
+    );
+    let now = 1_000u64;
+    // The goal was created BY this public run, so its stored creator origin is
+    // that context. (Seeding it with a bare `put` — a legacy, origin-less goal —
+    // and then running it as public is the inconsistent state the fire-time
+    // origin check now rightly supersedes.)
+    store
+        .put_with_origin(
+            &Goal::new(&session_str, "keep going", 0, now)
+                .with_pursuit(PursuitMode::Active { max_iterations: 5 }),
+            Some(&public),
+        )
+        .unwrap();
+    let ContinuationDecision::Fire {
+        wake_ms, prompt, ..
+    } = store
+        .try_claim_continuation(&session_str, None, now, false, None)
+        .unwrap()
+    else {
+        panic!("an Active goal with runway must claim a continuation");
+    };
+
+    let sessions: Arc<dyn crate::gateway::session_store::SessionStore> =
+        test_session_manager(&temp);
+    let agent = AgentInstance::new(
+        AgentInstanceConfig {
+            agent_id: session.agent_id().to_string(),
+            workspace: temp.path().join("agent-workspace"),
+            agent_dir: temp.path().join("agents"),
+            ..Default::default()
+        },
+        Arc::clone(&sessions),
+    )
+    .unwrap();
+    let registry = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
+    registry.register(agent).await;
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    super::execute::spawn_continuation_run(
+        registry,
+        Arc::clone(&adapter) as Arc<dyn ExecutionAdapter>,
+        session.clone(),
+        session_str,
+        prompt,
+        HashMap::new(),
+        None,
+        None,
+        Some(sessions),
+        None,
+        super::execute::ContinuationKind::Goal { wake_ms },
+        Some(public.clone()),
+    );
+
+    let request = adapter
+        .await_one()
+        .await
+        .expect("the claimed continuation must reach the execution adapter");
+    assert_eq!(
+        request.telecom_public,
+        Some(public),
+        "the continuation must stay under the originating run's public ceiling"
     );
 }
 
@@ -2303,6 +2419,104 @@ async fn a_goal_hook_continuation_acts_for_the_stored_author_not_the_last_speake
         Some("u-bob"),
         "the continuation must act for the goal's stored author"
     );
+}
+
+/// Shared harness for the origin tests: store a goal under `origin`, run
+/// `post_run` as a completing turn that carried NO telecom context, return the
+/// request the adapter saw (if any).
+async fn post_run_for_goal_origin(
+    tag: &str,
+    origin: Option<&crate::gateway::telecom::TelecomPublicContext>,
+    corrupt_marker: bool,
+) -> Option<RunRequest> {
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    use crate::goal::{Goal, PursuitMode};
+
+    let temp = tempfile::tempdir().unwrap();
+    let store = goal_store_global();
+    let session = SessionKey::main(tag);
+    let session_str = session.to_key_string();
+    store
+        .put_with_origin(
+            &Goal::new(&session_str, "keep going", 0, 0)
+                .with_pursuit(PursuitMode::Active { max_iterations: 5 }),
+            origin,
+        )
+        .unwrap();
+    if corrupt_marker {
+        store.corrupt_origin_marker_for_test(&session_str);
+    }
+    let sessions: Arc<dyn crate::gateway::session_store::SessionStore> =
+        test_session_manager(&temp);
+    let agent = AgentInstance::new(
+        AgentInstanceConfig {
+            agent_id: session.agent_id().to_string(),
+            workspace: temp.path().join("agent-workspace"),
+            agent_dir: temp.path().join("agents"),
+            ..Default::default()
+        },
+        Arc::clone(&sessions),
+    )
+    .unwrap();
+    let registry = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
+    registry.register(agent).await;
+    let agent = registry.get(session.agent_id()).await.expect("agent");
+    let adapter = Arc::new(RecordingAdapter::new());
+    let deps = super::ContinuationDeps {
+        registry,
+        adapter: Arc::clone(&adapter) as Arc<dyn ExecutionAdapter>,
+        gate: None,
+        event_bus: None,
+    };
+    super::goal_continuation::post_run(
+        &deps,
+        &Some(sessions),
+        &session,
+        &agent,
+        &HashMap::new(),
+        None,
+    )
+    .await;
+    let fired = tokio::time::timeout(std::time::Duration::from_secs(3), adapter.await_one())
+        .await
+        .ok()
+        .flatten();
+    if corrupt_marker {
+        // Refusal happens BEFORE the claim: no iteration spent, nothing pending.
+        let live = store.get(&session_str).unwrap().unwrap();
+        assert!(live.pending_continuation_ms.is_none());
+    }
+    fired
+}
+
+/// N1: the continuation takes the goal CREATOR's public context even when the
+/// turn that just completed carried none (a later ordinary turn must not
+/// launder a public goal into an unrestricted run).
+#[tokio::test]
+async fn a_public_goal_continues_public_even_after_an_ordinary_turn_completes() {
+    let ctx = crate::gateway::telecom::run_origin::sample_public_context("b-goal");
+    let request = post_run_for_goal_origin("origin-public-goal", Some(&ctx), false)
+        .await
+        .expect("an Active goal with runway must fire");
+    assert_eq!(request.telecom_public, Some(ctx));
+}
+
+/// And the reverse: an ordinary goal stays ordinary (ordinary behavior is
+/// unaffected).
+#[tokio::test]
+async fn an_ordinary_goal_continues_ordinary() {
+    let request = post_run_for_goal_origin("origin-ordinary-goal", None, false)
+        .await
+        .expect("an Active goal with runway must fire");
+    assert_eq!(request.telecom_public, None);
+}
+
+/// A goal whose origin record cannot be trusted is never run as ordinary.
+#[tokio::test]
+async fn a_goal_with_an_untrustworthy_origin_is_not_continued() {
+    let ctx = crate::gateway::telecom::run_origin::sample_public_context("b-bad");
+    let fired = post_run_for_goal_origin("origin-corrupt-goal", Some(&ctx), true).await;
+    assert!(fired.is_none(), "must fail closed, got {fired:?}");
 }
 
 /// A refused goal continuation BLOCKS the goal with the reason as its note

@@ -782,6 +782,11 @@ async fn handle_process_action(
                     "process_id": id,
                     "status": "already_finished",
                 })),
+                // An owner-supervised child (browser_companion): nothing was
+                // killed. Aborting it here would skip the close-first ordering.
+                KillOutcome::Managed => error_output(
+                    "bash: this process is owned by a managed tool (browser_companion); stop it with the owning stop action - nothing was killed",
+                ),
                 // A journaled job has no `AbortHandle` in this process, so the
                 // kill is NOT attempted — and saying so is the whole point:
                 // silence here would read as "terminated". When the boot probe
@@ -1726,6 +1731,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
 
         SESSION_ID

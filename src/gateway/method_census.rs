@@ -102,6 +102,10 @@ pub(crate) mod tests {
         ("artifacts.read_text", Class::Open),
         ("behavior_config.get", Class::Admin),
         ("behavior_config.update", Class::Admin),
+        ("browser.viewer.grant.issue", Class::Open),
+        ("browser.viewer.grant.revoke", Class::Open),
+        ("browser.viewer.resource.decide", Class::Open),
+        ("browser.viewer.resource.list", Class::Open),
         ("browser_config.get", Class::Admin),
         ("browser_config.update", Class::Admin),
         ("bundled.sync", Class::Admin),
@@ -445,6 +449,12 @@ pub(crate) mod tests {
         ("teams.usage", Class::Open),
         ("teams.workflow.approve_step", Class::Open),
         ("teams.workflow.reject_step", Class::Open),
+        // Operator-only telecom A/B approval service; registered by startup
+        // only when the shared public-approval ledger was installed.
+        ("telecom.approval.pending", Class::Admin),
+        ("telecom.approval.request", Class::Admin),
+        ("telecom.approval.resolve", Class::Admin),
+        ("telecom.approval.review", Class::Admin),
         ("tools.cancel_call", Class::Admin),
         ("tools.catalog", Class::Admin),
         ("tools.effective", Class::Admin),

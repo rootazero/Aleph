@@ -21,6 +21,7 @@ use alephcore::gateway::interfaces::telegram::parse_telegram_channel_config;
 use alephcore::gateway::interfaces::IMessageChannel;
 use alephcore::gateway::interfaces::IMessageConfig;
 use alephcore::gateway::interfaces::TelegramChannel;
+use alephcore::gateway::telecom::operator_control::OperatorControl;
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig};
 
@@ -195,6 +196,53 @@ pub(in crate::commands::start) async fn initialize_channels(
         create_channel_from_config, inject_channel_secrets,
     };
     use alephcore::gateway::interfaces::register_channel_plugins;
+
+    // Startup-only public telecom history, deliberately independent of the
+    // login vault/shared token. Off/zero-TTL never even resolves the data dir.
+    // Missing/unusable keys leave the public driver without a history store;
+    // ordinary public single-turn execution remains usable, with no fallback.
+    if let Some(history) = app_config
+        .telecom_public_history
+        .as_ref()
+        .filter(|history| history.enabled && history.ttl_secs != 0)
+    {
+        use alephcore::gateway::telecom::public_history_startup::open_configured_history;
+
+        match alephcore::utils::paths::get_data_dir() {
+            Ok(data_dir) => match open_configured_history(history, &data_dir) {
+                Ok(Some(store)) => {
+                    let install_result =
+                        alephcore::gateway::telecom::public_history::install_global(store);
+                    if install_result.is_err() {
+                        tracing::warn!(
+                            "Public telecom history store already installed; configured startup store was not installed. Config/key changes require a process restart"
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    alephcore::gateway::telecom::public_history::decline_global(
+                        "dedicated public history key or private storage unavailable",
+                    );
+                    tracing::warn!(
+                        "Public telecom history startup failed (dedicated key missing/unusable, unsupported platform, or private storage unavailable); persistent history disabled. Ordinary public single-turn execution remains usable"
+                    );
+                }
+            },
+            Err(_) => {
+                alephcore::gateway::telecom::public_history::decline_global(
+                    "public history data directory unavailable",
+                );
+                tracing::warn!(
+                    "Public telecom history data directory unavailable; persistent history disabled. Ordinary public single-turn execution remains usable"
+                );
+            }
+        }
+    } else {
+        alephcore::gateway::telecom::public_history::decline_global(
+            "dedicated public history disabled or not configured",
+        );
+    }
 
     register_channel_plugins();
 
@@ -604,6 +652,14 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // and wakes the dispatcher to unblock the dependents.
     workflow_clarify_store: Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>>,
     dispatch_signal: Option<Arc<tokio::sync::Notify>>,
+    // Trusted A/B scope lifecycle: when set, the inbound router opens a
+    // `PublicApprovalScope` for every public SMS run and retires it on
+    // the way out. `None` keeps the path disabled (the public run still
+    // happens — just without the A/B stage attached).
+    operator_control: Option<Arc<OperatorControl>>,
+    // `[telecom_private_read]`: built by the caller only when enabled, the
+    // operator control plane is installed and the memory backend exists.
+    private_turn: Option<alephcore::gateway::telecom::PrivateTurnWiring>,
     daemon: bool,
 ) {
     // Single source of truth for dm_scope: the user's [session] block.
@@ -645,6 +701,28 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         inbound_router = inbound_router.with_approval_callback_sink(sink);
         if !daemon {
             println!("  Inbound router: exec-approval callback dispatch enabled");
+        }
+    }
+
+    // Wire the trusted A/B scope lifecycle (E-step). The
+    // `InboundMessageRouter::handle_public_telecom` branch is the only
+    // place that opens a scope, so this single injection point is
+    // sufficient to light the whole path.
+    if let Some(c) = operator_control {
+        inbound_router = inbound_router.with_operator_control(c);
+        if !daemon {
+            println!("  Inbound router: trusted public-approval scope enabled");
+        }
+    }
+
+    // The private turn rides the same trusted plane; the router ignores it
+    // without `operator_control`.
+    if let Some(wiring) = private_turn {
+        inbound_router = inbound_router.with_private_turn(wiring);
+        if !daemon {
+            println!(
+                "  Inbound router: public private-read turn enabled (owner memory, read-only)"
+            );
         }
     }
 

@@ -217,11 +217,35 @@ impl GoalWakeService {
                         self.arbitrate_out_of_bounds(&goal, now).await;
                         continue;
                     }
+                    // No claim to bind to here (the marker was claimed by the
+                    // previous process), so read the creator origin for the
+                    // goal we just listed, in one store call that also checks
+                    // it is still that goal. A goal replaced after this read
+                    // is caught by the run's marker-keyed `confirm_fire`.
+                    let origin = match store.bound_origin(&goal) {
+                        Ok(crate::goal::BoundOrigin::Origin(origin)) => origin,
+                        Ok(crate::goal::BoundOrigin::Replaced) => {
+                            info!(session = %goal.session_id,
+                                "goal wake: goal replaced before the boot re-arm; wake dropped");
+                            continue;
+                        }
+                        Ok(crate::goal::BoundOrigin::Refused(reason)) => {
+                            warn!(session = %goal.session_id, %reason,
+                                "goal wake: telecom origin untrustworthy; boot re-arm dropped");
+                            continue;
+                        }
+                        Err(e) => {
+                            warn!(session = %goal.session_id, error = %e,
+                                "goal wake: telecom origin lookup failed; boot re-arm dropped");
+                            continue;
+                        }
+                    };
                     self.spawn_wake_run(
                         &goal,
                         crate::goal::pursuit::wait_resume_prompt(&goal, "the wait elapsed"),
                         wake_ms.saturating_sub(now),
                         wake_ms,
+                        origin,
                     )
                     .await;
                 }
@@ -397,9 +421,25 @@ impl GoalWakeService {
             }
             None => None,
         };
-        let decision =
-            match store.try_claim_continuation(&session, tokens, now_ms(), gate_configured, None) {
-                Ok(d) => d,
+        // BOUND to the snapshot `goal`: the token read above was awaited, so the
+        // user may have replaced the goal since the wake service read it. The
+        // store checks identity and resolves the goal CREATOR's telecom origin
+        // atomically with the claim and returns it; the wake run is spawned
+        // from that origin and no other (a wake has no completing run).
+        let (decision, origin) =
+            match store.try_claim_continuation_bound(goal, tokens, now_ms(), gate_configured, None)
+            {
+                Ok(crate::goal::BoundClaim::Claimed { decision, origin }) => (decision, origin),
+                Ok(crate::goal::BoundClaim::Replaced) => {
+                    info!(session = %session,
+                    "goal wake: goal was replaced or cleared before the claim; wake dropped");
+                    return;
+                }
+                Ok(crate::goal::BoundClaim::Refused(reason)) => {
+                    warn!(session = %session, %reason,
+                    "goal wake: telecom origin untrustworthy; wake dropped");
+                    return;
+                }
                 Err(e) => {
                     warn!(session = %session, error = %e, "goal wake: claim failed");
                     return;
@@ -411,8 +451,14 @@ impl GoalWakeService {
                 wake_ms,
                 prompt,
             } => {
-                self.spawn_wake_run(goal, override_prompt.unwrap_or(prompt), delay_ms, wake_ms)
-                    .await;
+                self.spawn_wake_run(
+                    goal,
+                    override_prompt.unwrap_or(prompt),
+                    delay_ms,
+                    wake_ms,
+                    origin,
+                )
+                .await;
             }
             ContinuationDecision::Exhausted { note } => {
                 // The wake found no runway left — the store already blocked
@@ -440,7 +486,14 @@ impl GoalWakeService {
     }
 
     /// Spawn the wake continuation run with re-derived (fail-closed) identity.
-    async fn spawn_wake_run(&self, goal: &Goal, prompt: String, delay_ms: u64, wake_ms: u64) {
+    async fn spawn_wake_run(
+        &self,
+        goal: &Goal,
+        prompt: String,
+        delay_ms: u64,
+        wake_ms: u64,
+        origin: Option<crate::gateway::telecom::TelecomPublicContext>,
+    ) {
         let session = goal.session_id.clone();
         let Some(key) = SessionKey::parse(&session) else {
             warn!(session = %session, "goal wake: unparseable session key; cannot wake");
@@ -451,6 +504,8 @@ impl GoalWakeService {
                 "goal wake: agent not registered; wake dropped (confirm_fire will lapse via stale grace)");
             return;
         };
+        // `origin` is the goal CREATOR's telecom origin, resolved atomically
+        // with the claim (see `claim_and_spawn`), never re-read here.
         let policy_meta = rehydrate_owner_scope(goal, wake_identity(&agent, &key).await);
         // Rebuild the wake run in the project the last claiming run recorded
         // (the post-run hook writes it into the goal row); `None` falls back
@@ -474,6 +529,9 @@ impl GoalWakeService {
             session_manager,
             Some(delay_ms),
             ContinuationKind::Goal { wake_ms },
+            // Restored from the goal's creator record (separate origin table),
+            // never from the goal row JSON and never guessed.
+            origin,
         );
     }
 

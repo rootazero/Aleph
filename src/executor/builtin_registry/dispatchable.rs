@@ -571,20 +571,24 @@ mod tests {
         let async_brace_open = dispatch_src[body_start..]
             .find("async move {")
             .map(|i| body_start + i + "async move ".len())
-            .unwrap_or_else(|| panic!(
-                "diagnostics dispatch arm has no `async move {{` after the `=>` — \
+            .unwrap_or_else(|| {
+                panic!(
+                    "diagnostics dispatch arm has no `async move {{` after the `=>` — \
                  the gate shape this test pins (a `Box::pin(async move {{ ... }})` \
                  returning `Result<_, AlephError>`) is no longer there. The arm body \
                  up to 4 KiB after the `=>` is:\n{}",
-                &dispatch_src[body_start..(body_start + 4096).min(dispatch_src.len())]
-            ));
+                    &dispatch_src[body_start..(body_start + 4096).min(dispatch_src.len())]
+                )
+            });
         let async_brace_close = find_matching_close(&dispatch_src, async_brace_open)
-            .unwrap_or_else(|| panic!(
-                "diagnostics dispatch arm's `async move` block has no matching `}}` — \
+            .unwrap_or_else(|| {
+                panic!(
+                    "diagnostics dispatch arm's `async move` block has no matching `}}` — \
                  the block is unterminated; either the gate was deleted or the source \
                  was edited mid-string. The arm body up to 4 KiB after the `=>` is:\n{}",
-                &dispatch_src[body_start..(body_start + 4096).min(dispatch_src.len())]
-            ));
+                    &dispatch_src[body_start..(body_start + 4096).min(dispatch_src.len())]
+                )
+            });
         let arm_body = &dispatch_src[body_start..=async_brace_close];
 
         // The arm must read `self.diagnostics_control` (the same shape as

@@ -6,7 +6,10 @@ pub mod pursuit;
 pub mod store;
 pub mod types;
 
-pub use store::{ContinuationDecision, FieldUpdate, FireDecision, GoalStore, RearmDecision};
+pub use store::{
+    BoundClaim, BoundOrigin, ContinuationDecision, FieldUpdate, FireDecision, GoalStore,
+    RearmDecision,
+};
 pub use types::{GateOutcome, Goal, GoalStatus, PursuitMode};
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};

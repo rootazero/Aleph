@@ -567,6 +567,8 @@ mod tests {
                     at: 1,
                     project_root: None,
                     envelope: None,
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
                 },
             ),
             (
@@ -630,6 +632,8 @@ mod tests {
                     at: 3,
                     project_root: None,
                     envelope: None,
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
                 },
             ),
             (6, assistant(tid, tin, tout, 6)),
@@ -715,6 +719,8 @@ mod tests {
                     at: now,
                     project_root: None,
                     envelope: None,
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
                 },
             ),
         ] {
@@ -1315,6 +1321,8 @@ mod tests {
                     at: 3,
                     project_root: None,
                     envelope: None,
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
                 },
             ),
             (4, assistant(tid, 10, 20, 4)),

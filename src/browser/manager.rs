@@ -897,6 +897,22 @@ impl ProfileManager {
             .get(profile)
             .await
             .ok_or_else(|| BrowserError::NoSession(profile.into()))?;
+        source
+            .live_owner()
+            .mutate(
+                None,
+                self.switch_engine_bound(profile, to, migrate, source.clone()),
+            )
+            .await
+    }
+
+    async fn switch_engine_bound(
+        &self,
+        profile: &str,
+        to: Engine,
+        migrate: bool,
+        source: Arc<EngineHandle>,
+    ) -> Result<SwitchReport, BrowserError> {
         let from = source.engine;
         if from == to {
             return Err(BrowserError::AlreadyOnEngine {
@@ -953,6 +969,9 @@ impl ProfileManager {
         };
 
         let displaced = self.engines().replace(profile, Arc::clone(&target)).await;
+        // Retire the old control/stream/Fetch owner even if shutdown cannot
+        // reap its process. Queued operations remain bound to this tombstone.
+        source.live_owner().retire();
         // Immediately after the swap and before anything can read the profile
         // again: between these two lines the registry says `to` while the
         // profile still resolves `from`, so a concurrent verb gets

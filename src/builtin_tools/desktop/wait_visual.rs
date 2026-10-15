@@ -371,6 +371,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
 
         let steered = session.clone();
@@ -421,6 +422,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
 
         tokio::spawn(async move {

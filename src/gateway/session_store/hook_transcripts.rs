@@ -39,7 +39,6 @@ impl TranscriptSource for StoreTranscripts {
 mod tests {
     use super::*;
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
-    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
     use crate::gateway::session_store::types::MessageRecord;
     use tempfile::TempDir;
 
@@ -70,6 +69,9 @@ mod tests {
     async fn a_hook_fired_under_the_published_store_is_handed_the_file_it_wrote() {
         use crate::extension::hooks::{with_transcript_source, HookContext, HookExecutor};
         use crate::extension::{HookAction, HookConfig, HookEvent, HookKind};
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
 
         let data = TempDir::new().unwrap();
         let store: Arc<dyn SessionStore> = Arc::new(

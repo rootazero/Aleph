@@ -141,6 +141,7 @@ impl Fixture {
                 unattended: false,
                 plan_gate: None,
                 side_question: false,
+                telecom_authority: None,
             });
         if matches!(caller, Caller::OperatorWithBashDenied) {
             svc = svc.with_tool_permissions(ToolPermissionsConfig {

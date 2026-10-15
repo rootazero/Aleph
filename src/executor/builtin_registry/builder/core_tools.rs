@@ -17,6 +17,9 @@ use super::BuiltinToolRegistry;
 impl BuiltinToolRegistry {
     /// Register always-available core tool metadata with JSON Schema parameters.
     pub(crate) fn register_core_tools(tools: &mut HashMap<String, UnifiedTool>) {
+        // Use the same schema registration for production and the budget census.
+        crate::builtin_tools::call_lifecycle::CallLifecycleTools::register(tools);
+
         fn schema<T: schemars::JsonSchema>(name: &str) -> serde_json::Value {
             serde_json::to_value(schemars::schema_for!(T)).unwrap_or_else(|e| {
                 tracing::warn!("Failed to serialize schema for {}: {}", name, e);

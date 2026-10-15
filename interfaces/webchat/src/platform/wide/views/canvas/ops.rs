@@ -110,9 +110,7 @@ pub(super) fn invert(doc_before: &CanvasDoc, ops: &[CanvasOp]) -> Vec<CanvasOp> 
             // the applier stores as none (`Timeline::is_empty`).
             CanvasOp::SetDocMeta { timeline, .. } => Some(CanvasOp::SetDocMeta {
                 title: doc.title.clone(),
-                timeline: timeline
-                    .is_some()
-                    .then(|| doc.timeline.unwrap_or_default()),
+                timeline: timeline.is_some().then(|| doc.timeline.unwrap_or_default()),
             }),
             CanvasOp::UpsertDeck { deck } => {
                 Some(match doc.decks.iter().find(|d| d.id == deck.id) {

@@ -54,9 +54,10 @@
 //! [`ApprovalDecisionType::clamped`], shared by every surface).
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::exec::decision::ApprovalRequest;
-use crate::exec::manager::ExecApprovalManager;
+use crate::exec::manager::{ExecApprovalManager, ExecApprovalRecord};
 use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
@@ -101,6 +102,142 @@ impl OperatorApprovalRequester {
             manager,
             event_bus,
             operator_only: true,
+        }
+    }
+
+    /// Independent single-use approval for telephone start/answer. The
+    /// lifecycle service checks typed ownership/capability before calling;
+    /// this helper checks only that it was wired to an operator-scoped instance.
+    ///
+    /// `action.summary` must contain the caller's complete bounded, redacted
+    /// action body. Store it intact once; events carry only the addressing id,
+    /// with an empty session key so the existing operator RPC is the surface.
+    /// No standing grant, caller notice, detached timer or reminder is created.
+    pub(crate) async fn request_operator_once(
+        &self,
+        action: &ApprovalAction,
+        cancel: &CancellationToken,
+        deadline: tokio::time::Instant,
+    ) -> ApprovalResponse {
+        fn deny() -> ApprovalResponse {
+            ApprovalResponse {
+                outcome: ApprovalOutcome::Denied,
+                deny_reason: Some("operator single-use approval was not granted".to_string()),
+            }
+        }
+
+        let created_now = tokio::time::Instant::now();
+        let deadline = deadline.min(created_now + std::time::Duration::from_secs(60));
+        if !self.operator_only || cancel.is_cancelled() || created_now >= deadline {
+            return deny();
+        }
+
+        let turn = crate::tools::turn_context::current_turn_context();
+        let (session_key, agent_id, channel_id, conversation_id) = match &turn {
+            Some(t) => (
+                t.session_key.to_key_string(),
+                t.session_key.agent_id().to_string(),
+                t.channel_id.clone(),
+                t.conversation_id.clone(),
+            ),
+            None => (String::new(), String::new(), String::new(), String::new()),
+        };
+        let request = ApprovalRequest {
+            id: uuid::Uuid::new_v4().to_string(),
+            command: action.summary.clone(),
+            cwd: action.cwd.clone(),
+            analysis: action.analysis_for_record(),
+            agent_id,
+            session_key,
+            reason: (!action.reason.is_empty()).then(|| action.reason.clone()),
+            originator_user_id: crate::tools::turn_context::current_originator(),
+            grant_key: None,
+            allowed_decisions: crate::exec::allowed_decisions::once_only(),
+        };
+        // Do not use manager.create(): its debug log includes the command.
+        // Floor the remaining window; zero means deny, NOT the manager's
+        // no-expiry sentinel. A sub-millisecond budget cannot carry a record.
+        let mut record = ExecApprovalRecord::from_request(&request, 1);
+        let remaining_ms = deadline
+            .saturating_duration_since(tokio::time::Instant::now())
+            .as_millis() as u64;
+        if cancel.is_cancelled() || remaining_ms == 0 {
+            return deny();
+        }
+        record.expires_at_ms = record.created_at_ms.saturating_add(remaining_ms);
+        let tool_call_id = record.tool_call_id.clone();
+        // This registration forces operator_only + once_only + no grant key.
+        // The guard exists before notification and lives across every await.
+        let Some((approval_id, rx, timeout, registration)) =
+            self.manager.register_operator_once(record)
+        else {
+            // A colliding id never replaces another approval or publishes a
+            // notification for it. Fail closed through the existing outcome.
+            return deny();
+        };
+        // Check again immediately before notification in case cancellation or
+        // expiry happened during synchronous record construction/registration.
+        if cancel.is_cancelled() || tokio::time::Instant::now() >= deadline {
+            return deny();
+        }
+        if !matches!(
+            self.event_bus.publish_frame(&GatewayEventFrame::ApprovalRequested {
+                approval_id: approval_id.clone(),
+                session_key: String::new(),
+                channel_id,
+                conversation_id,
+                tool_call_id,
+            }),
+            Ok(n) if n > 0
+        ) {
+            // Remove only this registration via RAII. Resolving Deny as cleanup could
+            // turn an undelivered notification into a refusal of sibling cards.
+            return deny();
+        }
+
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let timeout = Some(timeout.map_or(remaining, |t| t.min(remaining)));
+        let resolved = tokio::select! {
+            biased;
+            () = cancel.cancelled() => None,
+            () = tokio::time::sleep_until(deadline) => None,
+            response = registration.wait(rx, timeout) => Some(response),
+        };
+        // A ready oneshot can win even though the decision was queued before
+        // cancellation/expiry and consumed afterwards. Never trust readiness
+        // (or the manager's wall-clock TTL) as the permission to execute.
+        // Close the registry before the final event prompts the operator UI to
+        // refetch it. On cancellation/expiry the guard-owned wait was dropped.
+        drop(registration);
+        let still_valid = !cancel.is_cancelled() && tokio::time::Instant::now() < deadline;
+        let decision = resolved.and_then(|r| r.decision).filter(|_| still_valid);
+        let frame = match decision {
+            Some(d @ (ApprovalDecisionType::AllowOnce | ApprovalDecisionType::Deny)) => {
+                GatewayEventFrame::ApprovalResolved {
+                    approval_id,
+                    session_key: String::new(),
+                    decision: d,
+                    resolved_by: None,
+                }
+            }
+            _ => GatewayEventFrame::ApprovalExpired {
+                approval_id,
+                session_key: String::new(),
+            },
+        };
+        let _ = self.event_bus.publish_frame(&frame);
+        // Only an ACTUAL AllowOnce is permission. Never map/clamp a wider
+        // decision here, and never return a session or persistent outcome.
+        if decision == Some(ApprovalDecisionType::AllowOnce)
+            && !cancel.is_cancelled()
+            && tokio::time::Instant::now() < deadline
+        {
+            ApprovalResponse {
+                outcome: ApprovalOutcome::Approved,
+                deny_reason: None,
+            }
+        } else {
+            deny()
         }
     }
 
@@ -393,6 +530,507 @@ mod tests {
     use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
     use std::time::Duration;
 
+    // Manual polling prevents paused-clock auto-advance and makes queued-response
+    // races reproducible without spawned tasks or scheduling assumptions.
+    fn poll_once<F: std::future::Future>(
+        future: std::pin::Pin<&mut F>,
+    ) -> std::task::Poll<F::Output> {
+        future.poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+    }
+
+    fn once_fixture() -> (
+        Arc<ExecApprovalManager>,
+        OperatorApprovalRequester,
+        tokio::sync::broadcast::Receiver<GatewayEventFrame>,
+    ) {
+        let bus = Arc::new(GatewayEventBus::new());
+        let manager = Arc::new(ExecApprovalManager::new());
+        let requester = OperatorApprovalRequester::for_config_tier(manager.clone(), bus.clone());
+        (manager, requester, bus.subscribe_typed())
+    }
+
+    fn once_action() -> ApprovalAction {
+        let mut action = ApprovalAction::bare("telephone", "start/answer requires approval");
+        // The lifecycle caller supplies a complete bounded body in summary,
+        // not the generic tool preview (which truncates at 200 characters).
+        action.summary = format!(
+            "telephone start: destination=+15551234567 body={}",
+            "x".repeat(1024)
+        );
+        action.grant_key = Some("telephone-action".to_string());
+        action.allowed_decisions = crate::exec::allowed_decisions::with_persistent();
+        action
+    }
+
+    fn once_request_id(events: &mut tokio::sync::broadcast::Receiver<GatewayEventFrame>) -> String {
+        match events
+            .try_recv()
+            .expect("registration must notify synchronously")
+        {
+            GatewayEventFrame::ApprovalRequested {
+                approval_id,
+                session_key,
+                ..
+            } => {
+                assert!(
+                    session_key.is_empty(),
+                    "only the operator may receive the event"
+                );
+                approval_id
+            }
+            other => panic!("unexpected frame: {other:?}"),
+        }
+    }
+
+    fn denied(response: ApprovalResponse) {
+        assert_eq!(response.outcome, ApprovalOutcome::Denied);
+        assert!(response.deny_reason.is_some());
+    }
+
+    // Removing either preflight guard would leave a pending entry/event behind.
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_preflight_refuses_without_registering_or_notifying() {
+        for case in ["expired", "cancelled", "owner"] {
+            let bus = Arc::new(GatewayEventBus::new());
+            let manager = Arc::new(ExecApprovalManager::new());
+            let mut events = bus.subscribe_typed();
+            let requester = if case == "owner" {
+                OperatorApprovalRequester::new(manager.clone(), bus)
+            } else {
+                OperatorApprovalRequester::for_config_tier(manager.clone(), bus)
+            };
+            let cancel = tokio_util::sync::CancellationToken::new();
+            if case == "cancelled" {
+                cancel.cancel();
+            }
+            let deadline = tokio::time::Instant::now()
+                + if case == "expired" {
+                    Duration::ZERO
+                } else {
+                    Duration::from_secs(30)
+                };
+            denied(
+                requester
+                    .request_operator_once(&once_action(), &cancel, deadline)
+                    .await,
+            );
+            assert!(
+                manager.list_pending().is_empty(),
+                "{case} must not register"
+            );
+            assert!(events.try_recv().is_err(), "{case} must not publish");
+        }
+    }
+
+    // Catches owner routing, body truncation, widening decisions and failure to
+    // register before notification (the record must already be resolvable).
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_preserves_full_body_and_real_session_but_is_operator_only() {
+        let (manager, requester, mut events) = once_fixture();
+        let action = once_action();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let mut future = Box::pin(TURN_CONTEXT.scope(
+            guest_turn("once-run"),
+            requester.request_operator_once(&action, &cancel, deadline),
+        ));
+        assert!(poll_once(future.as_mut()).is_pending());
+        let id = once_request_id(&mut events);
+        let record = manager
+            .get_pending(&id)
+            .expect("registered before notification")
+            .record;
+        assert!(record.operator_only);
+        assert_eq!(
+            record.session_key,
+            SessionKey::main("approval-test").to_key_string()
+        );
+        assert_eq!(
+            record.command, action.summary,
+            "full bounded body, not another preview"
+        );
+        assert_eq!(
+            record.allowed_decisions,
+            vec![ApprovalDecisionType::AllowOnce, ApprovalDecisionType::Deny]
+        );
+        assert!(
+            record.grant_key.is_none(),
+            "isolated from grants and denials on other cards"
+        );
+        assert!(manager.resolve(&id, ApprovalDecisionType::AllowOnce, None));
+        let std::task::Poll::Ready(response) = poll_once(future.as_mut()) else {
+            panic!("answer lost");
+        };
+        assert_eq!(response.outcome, ApprovalOutcome::Approved);
+        assert!(response.deny_reason.is_none());
+        assert!(manager.get_pending(&id).is_none());
+        match events.try_recv().expect("final notification") {
+            GatewayEventFrame::ApprovalResolved {
+                session_key,
+                decision,
+                ..
+            } => {
+                assert!(session_key.is_empty());
+                assert_eq!(decision, ApprovalDecisionType::AllowOnce);
+            }
+            other => panic!("unexpected final frame: {other:?}"),
+        }
+        assert!(
+            events.try_recv().is_err(),
+            "no second request, reminder or caller notice"
+        );
+    }
+
+    // Catches both replacing the caller deadline with 60s and allowing a later
+    // caller deadline to extend the one-shot beyond 60s.
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_uses_the_earlier_absolute_deadline_and_caps_at_sixty_seconds() {
+        for (caller_secs, budget_secs) in [(10, 10), (3600, 60)] {
+            let (manager, requester, mut events) = once_fixture();
+            let action = once_action();
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let mut future = Box::pin(requester.request_operator_once(
+                &action,
+                &cancel,
+                tokio::time::Instant::now() + Duration::from_secs(caller_secs),
+            ));
+            assert!(poll_once(future.as_mut()).is_pending());
+            let id = once_request_id(&mut events);
+            let record = manager.get_pending(&id).unwrap().record;
+            let timeout_ms = record.expires_at_ms - record.created_at_ms;
+            assert!(timeout_ms > 0 && timeout_ms <= budget_secs * 1000);
+            tokio::time::advance(Duration::from_secs(budget_secs - 1)).await;
+            assert!(poll_once(future.as_mut()).is_pending());
+            tokio::time::advance(Duration::from_secs(1)).await;
+            let std::task::Poll::Ready(response) = poll_once(future.as_mut()) else {
+                panic!("deadline ignored");
+            };
+            denied(response);
+            assert!(manager.get_pending(&id).is_none());
+            assert!(
+                matches!(events.try_recv().unwrap(), GatewayEventFrame::ApprovalExpired { session_key, .. } if session_key.is_empty())
+            );
+            assert!(
+                events.try_recv().is_err(),
+                "bounded approvals do not remind"
+            );
+        }
+    }
+
+    // The manager's wall clock need not notice a late resolve: the helper must
+    // re-check its monotonic clock even with an already-ready oneshot.
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_refuses_answers_at_or_after_deadline() {
+        for (elapsed, approved) in [(9, true), (10, false), (11, false)] {
+            let (manager, requester, mut events) = once_fixture();
+            let action = once_action();
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let mut future = Box::pin(requester.request_operator_once(
+                &action,
+                &cancel,
+                tokio::time::Instant::now() + Duration::from_secs(10),
+            ));
+            assert!(poll_once(future.as_mut()).is_pending());
+            let id = once_request_id(&mut events);
+            tokio::time::advance(Duration::from_secs(elapsed)).await;
+            // Paused Tokio time is independent of the manager's wall clock.
+            assert!(manager.resolve(&id, ApprovalDecisionType::AllowOnce, None));
+            let std::task::Poll::Ready(response) = poll_once(future.as_mut()) else {
+                panic!("answer lost");
+            };
+            if approved {
+                assert_eq!(response.outcome, ApprovalOutcome::Approved);
+            } else {
+                denied(response);
+            }
+            assert!(manager.get_pending(&id).is_none());
+            let final_frame = events.try_recv().unwrap();
+            if !approved {
+                assert!(
+                    matches!(final_frame, GatewayEventFrame::ApprovalExpired { session_key, .. } if session_key.is_empty()),
+                    "late approval must not be announced as allowed"
+                );
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_queued_timely_answer_is_refused_when_consumed_at_deadline() {
+        let (manager, requester, mut events) = once_fixture();
+        let action = once_action();
+        let cancel = CancellationToken::new();
+        let mut future = Box::pin(requester.request_operator_once(
+            &action,
+            &cancel,
+            tokio::time::Instant::now() + Duration::from_secs(10),
+        ));
+        assert!(poll_once(future.as_mut()).is_pending());
+        let id = once_request_id(&mut events);
+        assert!(manager.resolve(&id, ApprovalDecisionType::AllowOnce, None));
+        tokio::time::advance(Duration::from_secs(10)).await;
+        let std::task::Poll::Ready(response) = poll_once(future.as_mut()) else {
+            panic!("queued answer lost");
+        };
+        denied(response);
+        assert!(manager.get_pending(&id).is_none());
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            GatewayEventFrame::ApprovalExpired { .. }
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_expired_submillisecond_budget_never_becomes_an_unbounded_wait() {
+        let (manager, requester, mut events) = once_fixture();
+        let cancel = CancellationToken::new();
+        denied(
+            requester
+                .request_operator_once(
+                    &once_action(),
+                    &cancel,
+                    tokio::time::Instant::now() + Duration::from_nanos(1),
+                )
+                .await,
+        );
+        assert!(manager.list_pending().is_empty());
+        assert!(events.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_human_denial_returns_only_a_static_reason() {
+        let (manager, requester, mut events) = once_fixture();
+        let action = once_action();
+        let cancel = CancellationToken::new();
+        let mut future = Box::pin(requester.request_operator_once(
+            &action,
+            &cancel,
+            tokio::time::Instant::now() + Duration::from_secs(30),
+        ));
+        assert!(poll_once(future.as_mut()).is_pending());
+        let id = once_request_id(&mut events);
+        assert!(manager.resolve_with_reason(
+            &id,
+            ApprovalDecisionType::Deny,
+            None,
+            Some("sensitive operator text".to_string())
+        ));
+        let std::task::Poll::Ready(response) = poll_once(future.as_mut()) else {
+            panic!("denial lost");
+        };
+        assert!(!response
+            .deny_reason
+            .as_ref()
+            .unwrap()
+            .contains("sensitive operator text"));
+        denied(response);
+        assert!(
+            matches!(events.try_recv().unwrap(), GatewayEventFrame::ApprovalResolved { decision: ApprovalDecisionType::Deny, session_key, .. } if session_key.is_empty())
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_cancellation_wins_over_an_already_queued_answer() {
+        let (manager, requester, mut events) = once_fixture();
+        let action = once_action();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut future = Box::pin(requester.request_operator_once(
+            &action,
+            &cancel,
+            tokio::time::Instant::now() + Duration::from_secs(30),
+        ));
+        assert!(poll_once(future.as_mut()).is_pending());
+        let id = once_request_id(&mut events);
+        assert!(manager.resolve(&id, ApprovalDecisionType::AllowOnce, None));
+        cancel.cancel();
+        let std::task::Poll::Ready(response) = poll_once(future.as_mut()) else {
+            panic!("cancellation ignored");
+        };
+        denied(response);
+        assert!(manager.get_pending(&id).is_none());
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            GatewayEventFrame::ApprovalExpired { .. }
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_cancel_or_drop_leaves_sibling_cards_waiting() {
+        for drop_future in [false, true] {
+            let (manager, requester, mut events) = once_fixture();
+            let action = once_action();
+            let sibling_request = ApprovalRequest {
+                id: "sibling".to_string(),
+                command: "sibling".to_string(),
+                cwd: None,
+                analysis: action.analysis_for_record(),
+                agent_id: "approval-test".to_string(),
+                session_key: SessionKey::main("approval-test").to_key_string(),
+                reason: None,
+                originator_user_id: None,
+                grant_key: action.grant_key.clone(),
+                allowed_decisions: crate::exec::allowed_decisions::with_persistent(),
+            };
+            let (sibling_id, mut sibling_rx, _) =
+                manager.register_pending(manager.create(&sibling_request, 60_000));
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let mut future = Box::pin(TURN_CONTEXT.scope(
+                guest_turn("cancel-run"),
+                requester.request_operator_once(
+                    &action,
+                    &cancel,
+                    tokio::time::Instant::now() + Duration::from_secs(30),
+                ),
+            ));
+            assert!(poll_once(future.as_mut()).is_pending());
+            let id = once_request_id(&mut events);
+            if drop_future {
+                drop(future);
+            } else {
+                cancel.cancel();
+                let std::task::Poll::Ready(response) = poll_once(future.as_mut()) else {
+                    panic!("cancel ignored");
+                };
+                denied(response);
+            }
+            assert!(manager.get_pending(&id).is_none());
+            assert!(manager.get_pending(&sibling_id).is_some());
+            assert!(
+                matches!(
+                    sibling_rx.try_recv(),
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+                ),
+                "cleanup must not cascade a denial"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_no_subscribers_denies_without_cascading() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let requester = OperatorApprovalRequester::for_config_tier(
+            manager.clone(),
+            Arc::new(GatewayEventBus::new()),
+        );
+        let action = once_action();
+        let request = ApprovalRequest {
+            id: "sibling".to_string(),
+            command: "sibling".to_string(),
+            cwd: None,
+            analysis: action.analysis_for_record(),
+            agent_id: String::new(),
+            session_key: String::new(),
+            reason: None,
+            originator_user_id: None,
+            grant_key: action.grant_key.clone(),
+            allowed_decisions: crate::exec::allowed_decisions::session_max(),
+        };
+        let (id, mut rx, _) = manager.register_pending(manager.create(&request, 60_000));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        denied(
+            requester
+                .request_operator_once(
+                    &action,
+                    &cancel,
+                    tokio::time::Instant::now() + Duration::from_secs(30),
+                )
+                .await,
+        );
+        assert_eq!(
+            manager.list_pending().len(),
+            1,
+            "failed notification must remove only its own entry"
+        );
+        assert!(manager.get_pending(&id).is_some());
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+    }
+
+    // Exercises the existing in-process RPC, not just a card renderer: a
+    // forged wider decision must fail at the resolver, not become AllowOnce.
+    #[tokio::test(start_paused = true)]
+    async fn operator_once_rpc_rejects_session_and_persistent_decisions() {
+        use crate::gateway::handlers::{exec_approvals, HandlerRegistry};
+        use crate::gateway::protocol::JsonRpcRequest;
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
+        let (manager, requester, mut events) = once_fixture();
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: dir.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let mut registry = HandlerRegistry::new();
+        exec_approvals::register_handlers(&mut registry, manager.clone(), sessions);
+        let action = once_action();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut future = Box::pin(TURN_CONTEXT.scope(
+            guest_turn("once-rpc-run"),
+            crate::tools::turn_context::with_originator(
+                Some("alice".to_string()),
+                requester.request_operator_once(
+                    &action,
+                    &cancel,
+                    tokio::time::Instant::now() + Duration::from_secs(30),
+                ),
+            ),
+        ));
+        assert!(poll_once(future.as_mut()).is_pending());
+        let id = once_request_id(&mut events);
+        assert_eq!(
+            manager.resolve_for_session(
+                &SessionKey::main("approval-test").to_key_string(),
+                None,
+                ApprovalDecisionType::AllowOnce,
+                Some("alice".to_string()),
+                None,
+            ),
+            crate::exec::manager::SessionResolveOutcome::NothingPending,
+            "the real helper must not grant via the originator's /approve",
+        );
+        use crate::gateway::inbound_router::approval_callback::ApprovalCallbackSink;
+        let sink = crate::approval::callback_sink::ManagerCallbackSink::new(manager.clone());
+        let callback = sink
+            .handle_callback(&format!("approve:{id}:once"), "alice")
+            .await
+            .unwrap();
+        assert!(!callback.resolved);
+        assert!(poll_once(future.as_mut()).is_pending());
+        for decision in [
+            ApprovalDecisionType::AllowSession,
+            ApprovalDecisionType::AllowAlways,
+            ApprovalDecisionType::AllowOnce,
+        ] {
+            let request = JsonRpcRequest::with_id(
+                "exec.approval.resolve",
+                Some(serde_json::json!({"id": id, "decision": decision})),
+                serde_json::json!(1),
+            );
+            let response = crate::gateway::caller_identity::CALLER_ROLE
+                .scope(Some("operator".to_string()), registry.handle(&request))
+                .await;
+            if decision == ApprovalDecisionType::AllowOnce {
+                assert!(response.error.is_none());
+            } else {
+                assert!(response.error.is_some());
+                assert!(
+                    manager.get_pending(&id).is_some(),
+                    "invalid decision must not grant or consume"
+                );
+                assert!(poll_once(future.as_mut()).is_pending());
+            }
+        }
+        let std::task::Poll::Ready(response) = poll_once(future.as_mut()) else {
+            panic!("AllowOnce lost");
+        };
+        assert_eq!(response.outcome, ApprovalOutcome::Approved);
+    }
+
     fn guest_turn(run_id: &str) -> TurnContext {
         TurnContext {
             session_key: SessionKey::main("approval-test"),
@@ -404,6 +1042,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         }
     }
 

@@ -53,6 +53,18 @@ cargo clippy --workspace --all-targets    # 先 just _stage-shell-placeholders�
 
 ---
 
+## 浏览器 Live Viewer 门禁 (Browser Live Viewer gates)
+<!-- browser-live-docs:begin -->
+- **内存门 / memory gate**：每次 cargo 调用前跑 `python qa/browser_live/check_memory.py`（可用内存 >= 4 GiB = 4294967296 字节才放行；10 GiB 是重链接的建议余量；exit 0 允许 / 1 阻止 / 2 探测错误，未知输入 fail closed）；自检 `python qa/browser_live/check_memory.py --self-test`（纯 fixture，不调 cargo）。
+- **环境 gate**：hook / include_dir 的 `STATUS_DLL_INIT_FAILED` 未诊断前，视为 environment-blocked，不得记作 green。
+- **文档入口检查 / docs gate**：`python qa/browser_live/check_docs.py --self-test` 然后 `python qa/browser_live/check_docs.py`（纯标准库，不联网、不调 cargo）。
+- **真机 selectors**：十一个 selector（`stream`, `control-all-entries`, `standalone-same-target`, `binding-switch`, `managed-companion`, `grant-boundary`, `reap`, `revoke-live`, `navigate-fence`, `target-destroy`, `ttl-expiry`）由真实 Playwright runner `qa/browser_live/run.sh --case <selector>` 执行；命令要求 Gateway-issued viewer URL，缺少对应环境变量就 fail closed，没有任何 selector 的退出 0 结果前不得当作通过。`revoke-live` / `navigate-fence` / `target-destroy` / `ttl-expiry` 另需 `ALEPH_BROWSER_LIVE_SIGNAL_DIR`：viewer 测试出帧后写 `<case>.ready`，由**外部 driver** 执行真实 Gateway 侧动作（撤销 grant / owner 导航同一 target）；viewer 测试本身不持有长期凭据。真实运行（Windows，仅 LLM 为 mock；重建 server 后 2026-10-11 重跑，见 `docs/reports/verify-20261007/browser-live-final-run.md`）：8 个 exit 0，`managed-companion` exit 1 BLOCKED（无生产 producer）；仅为 Windows 单机证据。详见 `qa/README.md` 与 [BROWSER_LIVE_VIEWER.md](BROWSER_LIVE_VIEWER.md) §4.1/§5。
+- **共同边界 / Shared boundary**：Gateway 独占 CDP（Gateway owns CDP）；Panel/TUI 仅 I/O only 呈现；仅显式合法 `[gateway] browser_viewer_origin` 才 opt-in，默认（None / 非法）deny-only；producer 的 `Safe` 被钳为 `Pending`，`Safe` 只来自用户经 `browser.viewer.resource.decide` 的 revision CAS；绑定走精确 binding / owner / generation；#27 TUI paired/browser 已接线，Windows Credential Manager standalone probe 1/1 已通过；macOS/Linux provider 与真实 pairing/browser E2E 仍 blocked；`NetworkContextGrant` / proxy 未触碰；**not production ready**。
+Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[gateway] browser_viewer_origin`, default deny-only; producer `Safe` is clamped to `Pending` and `Safe` comes only from the user's decision CAS; exact binding/owner/generation; #27 TUI paired/browser wiring is implemented; the Windows Credential Manager standalone probe passed 1/1; macOS/Linux providers and real pairing/browser E2E remain blocked; network grants untouched; not production ready.
+<!-- browser-live-docs:end -->
+
+---
+
 ## 分发形态与信任模型
 
 - **三产物**（同一 tag）：完整桌面 App（内置 `aleph-server`，单机零配置）/ Aleph Panel 纯壳 App（连局域网 server）/ 独立 `aleph-server` 二进制 → [PRODUCT_TOPOLOGY.md](docs/reference/PRODUCT_TOPOLOGY.md)

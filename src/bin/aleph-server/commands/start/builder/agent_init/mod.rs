@@ -554,6 +554,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             None
         };
 
+        // Browser live runtime: composed (and the viewer backend mounted) only
+        // for an explicit, valid `[gateway] browser_viewer_origin`; otherwise
+        // `None`, the viewer stays deny-only and the browser tools publish
+        // nothing. The guard is built from the same `[general.browser].policy`
+        // the ProfileManager below uses.
+        let browser_live_producer = server.install_browser_live_runtime(
+            full_config.gateway.browser_viewer_origin.as_deref(),
+            alephcore::browser::network_policy::BrowserSsrfGuard::new(
+                app_config.general.browser.policy.clone(),
+            ),
+        );
+
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
@@ -591,6 +603,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     app_config.general.browser.clone(),
                 ),
             )),
+            browser_live_producer,
             // Spec 4 Task 11: thread capture-filter registry into session_complete tool.
             capture_registry: Some(memory_ext_registry.clone()),
             // Spec 5 Task 12: wiki orientation tools.
@@ -1541,6 +1554,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let app_config_run = app_config_arc.clone();
         let wm_run = workspace_manager.clone();
         let sm_run = session_store.clone();
+        let telecom_context_run = gateway_context_cell.clone();
         server.handlers_mut().register("agent.run", move |req| {
             let engine = engine_clone.clone();
             let event_bus = event_bus_clone.clone();
@@ -1549,9 +1563,23 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let cfg = app_config_run.clone();
             let wm = wm_run.clone();
             let sm = sm_run.clone();
+            let telecom_service = telecom_context_run
+                .get()
+                .and_then(|ctx| ctx.telecom_lifecycle())
+                .cloned();
             async move {
-                handle_run_with_engine(req, engine, event_bus, router, agent_registry, cfg, wm, sm)
-                    .await
+                handle_run_with_engine(
+                    req,
+                    engine,
+                    event_bus,
+                    router,
+                    agent_registry,
+                    cfg,
+                    wm,
+                    sm,
+                    telecom_service,
+                )
+                .await
             }
         });
 
@@ -1564,6 +1592,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let wm_chat = workspace_manager.clone();
         let pr_chat = topic_provider_registry.clone();
         let sm_chat = session_store.clone();
+        let telecom_context_chat = gateway_context_cell.clone();
         server.handlers_mut().register("chat.send", move |req| {
             let engine = engine_chat.clone();
             let event_bus = event_bus_chat.clone();
@@ -1573,6 +1602,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let wm = wm_chat.clone();
             let pr = pr_chat.clone();
             let sm = sm_chat.clone();
+            let telecom_service = telecom_context_chat
+                .get()
+                .and_then(|ctx| ctx.telecom_lifecycle())
+                .cloned();
             async move {
                 handle_chat_send_with_engine(
                     req,
@@ -1584,6 +1617,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     wm,
                     pr,
                     sm,
+                    telecom_service,
                 )
                 .await
             }

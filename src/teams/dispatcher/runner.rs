@@ -476,6 +476,8 @@ pub async fn execute_member_task(
         // Per-step model override (workflow `model`); `None` for plain team
         // tasks → the run stays on the agent's default model.
         model_override,
+        telecom_public: None,
+        telecom_authority: None,
     };
 
     let execution_adapter = Arc::clone(context.execution_adapter());

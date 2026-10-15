@@ -191,8 +191,10 @@ pub struct ExtensionManager {
     /// Service lifecycle manager
     service_manager: Arc<RwLock<ServiceManager>>,
 
-    /// Adapter registry for capability-driven manifest parsing
-    adapter_registry: AdapterRegistry,
+    /// Adapter registry for capability-driven manifest parsing. Shared
+    /// (`Arc`) so the cold discovery scan can run it on the blocking pool
+    /// (`lifecycle.rs::scan_plugins_blocking`) without building a second one.
+    adapter_registry: Arc<AdapterRegistry>,
 
     /// Skill System v2 (independent bounded context)
     skill_system: crate::skill::SkillSystem,
@@ -385,7 +387,7 @@ impl ExtensionManager {
         let plugin_loader = Arc::new(RwLock::new(PluginLoader::new()));
         let plugin_registry = Arc::new(RwLock::new(PluginRegistry::new()));
         let service_manager = Arc::new(RwLock::new(ServiceManager::new()));
-        let adapter_registry = AdapterRegistry::with_defaults();
+        let adapter_registry = Arc::new(AdapterRegistry::with_defaults());
 
         // Mirrors `crate::skill::SkillSystem::new`: `get_config_dir` is a pure
         // lookup (it does not create), so constructing a manager never makes a
@@ -710,6 +712,30 @@ impl ExtensionManager {
     /// load stores them with its rows, so "unknown this load" is never read
     /// as "not installed" downstream.
     fn collect_plugin_dirs(&self) -> ExtensionResult<CollectedPluginDirs> {
+        Self::collect_plugin_dirs_with(&self.discovery, self.extra_plugin_scan_parents())
+    }
+
+    /// The test-only extra plugin parents as an owned list (empty outside
+    /// tests), so the scan can be handed to the blocking pool by value.
+    fn extra_plugin_scan_parents(&self) -> Vec<crate::discovery::ProjectPluginParent> {
+        #[cfg(test)]
+        {
+            self.extra_plugin_parents.clone()
+        }
+        #[cfg(not(test))]
+        {
+            Vec::new()
+        }
+    }
+
+    /// [`Self::collect_plugin_dirs`] over owned inputs and no `&self`: the
+    /// synchronous walk (project registry read, `read_dir`, `canonicalize`)
+    /// that the cold load runs on the blocking pool. Sync and blocking; never
+    /// call it on a runtime worker from async code.
+    fn collect_plugin_dirs_with(
+        discovery: &DiscoveryManager,
+        extra_parents: Vec<crate::discovery::ProjectPluginParent>,
+    ) -> ExtensionResult<CollectedPluginDirs> {
         use std::collections::HashSet;
 
         let mut seen = HashSet::new();
@@ -746,10 +772,9 @@ impl ExtensionManager {
                 })
                 .unwrap_or_default();
 
-        #[cfg(test)]
         let project_plugin_parents = {
             let mut parents = project_plugin_parents;
-            parents.extend(self.extra_plugin_parents.iter().cloned());
+            parents.extend(extra_parents);
             parents
         };
 
@@ -758,9 +783,7 @@ impl ExtensionManager {
         // plugin root — no manifest adapter can match one — so unioning them
         // here only manufactured `Error` rows in `plugins.list` (88 of 89 on
         // the first real-machine run of the 2026-09-20 round, D-2).
-        let discovery = self
-            .discovery
-            .discover_plugins_with_extra(&project_plugin_parents)?;
+        let discovery = discovery.discover_plugins_with_extra(&project_plugin_parents)?;
         for d in discovery.found {
             let canonical = match d.path.canonicalize() {
                 Ok(path) => path,

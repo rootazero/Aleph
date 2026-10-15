@@ -407,7 +407,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // from inside the tool body; a refusing service that must see zero
         // dispatches), not only by the source census below.
         let journal = session.map(|svc| {
-            super::fast_path::FastPathJournal::new(svc, request.session_key.clone(), tool_id)
+            super::fast_path::FastPathJournal::new_with_telecom_public(
+                svc,
+                request.session_key.clone(),
+                tool_id,
+                request.telecom_public.as_ref(),
+            )
         });
         if let Some(journal) = journal.as_ref() {
             journal

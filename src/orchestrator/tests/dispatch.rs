@@ -38,6 +38,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for MockHarness {
         _envelope: crate::thinker::TurnEnvelope,
         _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
         _run_id: String,
+        _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
         self.invocations
             .lock()
@@ -137,6 +138,7 @@ async fn dispatch_happy_path_returns_handle_and_completes() {
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
             model_directive: None,
+            telecom_public: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production
@@ -188,6 +190,7 @@ async fn dispatch_subscribes_to_a_caller_supplied_channel() {
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
             model_directive: None,
+            telecom_public: None,
         })
         .await
         .expect("dispatch ok");
@@ -252,6 +255,7 @@ async fn dispatch_unknown_flow_id_returns_error() {
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
             model_directive: None,
+            telecom_public: None,
         })
         .await
         .unwrap_err();
@@ -288,6 +292,7 @@ async fn dispatch_unregistered_agent_routes_through_default_flow() {
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
             model_directive: None,
+            telecom_public: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production
@@ -328,6 +333,7 @@ async fn dispatch_above_max_depth_returns_recursion_error() {
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
             model_directive: None,
+            telecom_public: None,
         })
         .await
         .unwrap_err();
@@ -376,6 +382,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
             _envelope: crate::thinker::TurnEnvelope,
             _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
             _run_id: String,
+            _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
         ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
             cancel.cancelled().await;
             Ok(crate::orchestrator::dispatch::FlowOutcome {
@@ -415,6 +422,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
         think_level: None,
         envelope: crate::thinker::TurnEnvelope::none(),
         model_directive: None,
+        telecom_public: None,
     };
 
     // rust-doctor-disable-next-line unwrap-in-production
@@ -450,6 +458,7 @@ async fn dispatch_releases_session_lock_after_completion() {
         think_level: None,
         envelope: crate::thinker::TurnEnvelope::none(),
         model_directive: None,
+        telecom_public: None,
     };
 
     // First dispatch — await completion.
@@ -483,6 +492,7 @@ struct CapturingHarness {
     received_tool_service: Arc<Mutex<Option<bool>>>,
     received_trace_sink: Arc<Mutex<Option<bool>>>,
     received_run_id: Arc<Mutex<Option<String>>>,
+    received_telecom: Arc<Mutex<Option<crate::gateway::telecom::TelecomPublicContext>>>,
 }
 
 #[async_trait]
@@ -505,11 +515,16 @@ impl crate::orchestrator::dispatch::HarnessRunner for CapturingHarness {
         _envelope: crate::thinker::TurnEnvelope,
         _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
         run_id: String,
+        telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
         *self
             .received_run_id
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(run_id);
+        *self
+            .received_telecom
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = telecom_public;
         *self
             .received_tool_service
             .lock()
@@ -537,6 +552,19 @@ fn fixture_capturing_orchestrator() -> (
     Arc<Mutex<Option<bool>>>,
     Arc<Mutex<Option<String>>>,
 ) {
+    let (orch, tool, sink, run_id, _telecom) = fixture_capturing_orchestrator_with_telecom();
+    (orch, tool, sink, run_id)
+}
+
+type TelecomSlot = Arc<Mutex<Option<crate::gateway::telecom::TelecomPublicContext>>>;
+
+fn fixture_capturing_orchestrator_with_telecom() -> (
+    Orchestrator,
+    Arc<Mutex<Option<bool>>>,
+    Arc<Mutex<Option<bool>>>,
+    Arc<Mutex<Option<String>>>,
+    TelecomSlot,
+) {
     let mut spec_map = FlowSet::new();
     let spec = FlowSpec {
         id: "default-agent".into(),
@@ -560,8 +588,11 @@ fn fixture_capturing_orchestrator() -> (
     let received_tool_service = Arc::new(Mutex::new(None::<bool>));
     let received_trace_sink = Arc::new(Mutex::new(None::<bool>));
     let received_run_id = Arc::new(Mutex::new(None::<String>));
+    let received_telecom: TelecomSlot = Arc::new(Mutex::new(None));
 
     let harness = Arc::new(CapturingHarness {
+        // rust-doctor-disable-next-line excessive-clone
+        received_telecom: received_telecom.clone(),
         // rust-doctor-disable-next-line excessive-clone
         received_tool_service: received_tool_service.clone(),
         // rust-doctor-disable-next-line excessive-clone
@@ -581,6 +612,7 @@ fn fixture_capturing_orchestrator() -> (
         received_tool_service,
         received_trace_sink,
         received_run_id,
+        received_telecom,
     )
 }
 
@@ -639,6 +671,7 @@ async fn dispatch_forwards_tool_service_override() {
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
             model_directive: None,
+            telecom_public: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production
@@ -685,6 +718,7 @@ async fn dispatch_forwards_trace_sink() {
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
             model_directive: None,
+            telecom_public: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production
@@ -728,6 +762,7 @@ async fn dispatch_forwards_run_id() {
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
             model_directive: None,
+            telecom_public: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production
@@ -741,6 +776,200 @@ async fn dispatch_forwards_run_id() {
             .as_deref(),
         Some("engine-run-7"),
         "dispatch must hand the runner the request's run id"
+    );
+}
+
+fn telecom_flow_request(
+    telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
+) -> FlowRequest {
+    FlowRequest {
+        flow_id: None,
+        agent_id: "main".into(),
+        run_id: "telecom-run".into(),
+        input: FlowInput::Prompt("test".into()),
+        channel: None,
+        session_hint: None,
+        scope: crate::scope::FlowScope::unscoped(),
+        parent_session: None,
+        depth: 0,
+        tool_service: None,
+        trace_sink: None,
+        event_tx: None,
+        interaction_manifest: None,
+        sandbox_override: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        transient_context: None,
+        think_level: None,
+        envelope: crate::thinker::TurnEnvelope::none(),
+        model_directive: None,
+        telecom_public,
+    }
+}
+
+fn sms_public_context() -> crate::gateway::telecom::TelecomPublicContext {
+    use aleph_protocol::telecom_relay::SmsEncoding;
+    let meta = crate::gateway::telecom::SmsInboundMeta {
+        region: "r".into(),
+        binding_ref: "b".into(),
+        provider_account_id: "a".into(),
+        provider_message_id: "m".into(),
+        envelope_event_id: "e".into(),
+        connection_generation: 3,
+        service_address: "+15550001111".into(),
+        peer_address: "+15552223333".into(),
+        encoding: SmsEncoding::Gsm7,
+        segment_count: 1,
+        created_at: chrono::Utc::now(),
+        expires_at: chrono::Utc::now(),
+    };
+    crate::gateway::telecom::TelecomPublicContext::from_admitted_sms(&meta)
+}
+
+/// `FlowRequest::telecom_public` reaches the runner verbatim; `None` stays
+/// `None` (legacy channels are byte-identical).
+#[tokio::test]
+async fn dispatch_forwards_telecom_public_context_and_none_stays_none() {
+    let expected = sms_public_context();
+    let (orch, _t, _s, _r, slot) = fixture_capturing_orchestrator_with_telecom();
+    let handle = orch
+        .dispatch(telecom_flow_request(Some(expected.clone())))
+        .await
+        .expect("dispatch ok");
+    let _ = handle.completion.await.unwrap();
+    assert_eq!(
+        slot.lock().unwrap_or_else(|e| e.into_inner()).as_ref(),
+        Some(&expected),
+        "the runner must receive the request's telecom context unchanged"
+    );
+
+    let (orch, _t, _s, _r, slot) = fixture_capturing_orchestrator_with_telecom();
+    let handle = orch
+        .dispatch(telecom_flow_request(None))
+        .await
+        .expect("dispatch ok");
+    let _ = handle.completion.await.unwrap();
+    assert!(
+        slot.lock().unwrap_or_else(|e| e.into_inner()).is_none(),
+        "None must reach the runner as None"
+    );
+}
+
+/// Harness that reports the run-origin task-local as seen INSIDE the spawned
+/// harness task (the thing `tokio::spawn` drops), next to the typed argument.
+struct OriginProbeHarness {
+    seen: Arc<Mutex<Option<ProbeSeen>>>,
+}
+
+#[derive(Debug, PartialEq)]
+struct ProbeSeen {
+    ambient: Option<crate::gateway::telecom::TelecomPublicContext>,
+    typed: Option<crate::gateway::telecom::TelecomPublicContext>,
+}
+
+#[async_trait]
+impl crate::orchestrator::dispatch::HarnessRunner for OriginProbeHarness {
+    async fn run(
+        &self,
+        _session_key: String,
+        _spec: Arc<FlowSpec>,
+        _input: FlowInput,
+        _sandbox: Arc<dyn Sandbox>,
+        _events: broadcast::Sender<crate::orchestrator::dispatch::FlowStreamEvent>,
+        _cancel: CancellationToken,
+        _tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
+        _trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+        _interaction_manifest: Option<crate::thinker::InteractionManifest>,
+        _workspace_override: Option<std::path::PathBuf>,
+        _max_iterations_override: Option<u32>,
+        _transient_context: Option<String>,
+        _think_level: Option<crate::agents::thinking::ThinkLevel>,
+        _envelope: crate::thinker::TurnEnvelope,
+        _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+        _run_id: String,
+        telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
+    ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
+        *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(ProbeSeen {
+            ambient: crate::gateway::telecom::run_origin::current_run_origin(),
+            typed: telecom_public,
+        });
+        Ok(crate::orchestrator::dispatch::FlowOutcome::default())
+    }
+}
+
+fn origin_probe_orchestrator() -> (Orchestrator, Arc<Mutex<Option<ProbeSeen>>>) {
+    let mut spec_map = FlowSet::new();
+    spec_map.insert(
+        "default-agent".into(),
+        Arc::new(FlowSpec {
+            id: "default-agent".into(),
+            description: "t".into(),
+            agent: "main".into(),
+            brain: BrainRef::Default,
+            session_strategy: SessionStrategy::Fresh,
+            overrides: FlowOverrides::default(),
+        }),
+    );
+    let mut defaults = std::collections::HashMap::new();
+    defaults.insert("main".into(), "default-agent".into());
+    let seen = Arc::new(Mutex::new(None));
+    let orch = Orchestrator::new(
+        Arc::new(FlowRegistry::new(spec_map)),
+        Arc::new(defaults),
+        fake_session_service(),
+        build_sandbox_factory(Arc::new(|_| {
+            Ok(Arc::new(crate::sandbox::NoopSandbox) as Arc<dyn Sandbox>)
+        })),
+        Arc::new(OriginProbeHarness {
+            // rust-doctor-disable-next-line excessive-clone
+            seen: seen.clone(),
+        }),
+    );
+    (orch, seen)
+}
+
+/// The run-origin task-local must be live INSIDE the harness spawn, derived
+/// from the request's typed `telecom_public` only. A public request reads
+/// `Some`; an ordinary request reads `None` even when the dispatching task
+/// happens to carry some other (stale) origin; an unseeded dispatcher still
+/// yields the request's own origin.
+#[tokio::test]
+async fn the_harness_spawn_seeds_run_origin_from_the_typed_request_field() {
+    use crate::gateway::telecom::run_origin::{current_run_origin, seed_run_origin};
+    let expected = sms_public_context();
+
+    // public request, unseeded dispatcher (no gateway run scope).
+    let (orch, seen) = origin_probe_orchestrator();
+    assert_eq!(current_run_origin(), None);
+    let handle = orch
+        .dispatch(telecom_flow_request(Some(expected.clone())))
+        .await
+        .expect("dispatch ok");
+    let _ = handle.completion.await.unwrap();
+    assert_eq!(
+        seen.lock().unwrap_or_else(|e| e.into_inner()).take(),
+        Some(ProbeSeen {
+            ambient: Some(expected.clone()),
+            typed: Some(expected.clone()),
+        })
+    );
+
+    // ordinary request dispatched under a DIFFERENT public origin: the typed
+    // field wins; nothing is inherited from the dispatcher's task-local.
+    let stale = crate::gateway::telecom::run_origin::sample_public_context("stale");
+    let (orch, seen) = origin_probe_orchestrator();
+    let handle = seed_run_origin(Some(stale), async {
+        orch.dispatch(telecom_flow_request(None)).await
+    })
+    .await
+    .expect("dispatch ok");
+    let _ = handle.completion.await.unwrap();
+    assert_eq!(
+        seen.lock().unwrap_or_else(|e| e.into_inner()).take(),
+        Some(ProbeSeen {
+            ambient: None,
+            typed: None,
+        })
     );
 }
 
@@ -770,6 +999,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for NoCompleteHarness {
         _envelope: crate::thinker::TurnEnvelope,
         _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
         _run_id: String,
+        _telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
         if let Some(sink) = trace_sink {
             sink.on_trace(&crate::harness::trace::LoopTraceEvent::TurnStarted { iteration: 1 });
@@ -843,6 +1073,7 @@ async fn no_sender_outlives_dispatch() {
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
             model_directive: None,
+            telecom_public: None,
         })
         .await
         .expect("dispatch ok");
@@ -877,4 +1108,44 @@ async fn no_sender_outlives_dispatch() {
     );
     // The holder is still alive here — that is the point.
     drop(held_sink);
+}
+
+/// Public isolation contract §4: a runner that never opted into the isolated
+/// public path refuses instead of silently running public text.
+#[tokio::test]
+async fn run_public_text_is_default_deny_for_mock_runners() {
+    use crate::orchestrator::dispatch::{
+        HarnessRunner, PublicRunRequest, PUBLIC_PROMPT_VERSION, PUBLIC_RUN_UNSUPPORTED,
+    };
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    let mock = MockHarness {
+        outcome: crate::orchestrator::dispatch::FlowOutcome::default(),
+        invocations: invocations.clone(),
+    };
+    let (tx, _rx) = broadcast::channel(4);
+    let err = mock
+        .run_public_text(
+            PublicRunRequest {
+                ctx: crate::gateway::telecom::public_context::test_support::sample_public_context(
+                    "bind-deny",
+                ),
+                text: "hi".into(),
+                history: Vec::new(),
+                run_id: "r".into(),
+                prompt_version: PUBLIC_PROMPT_VERSION,
+                allow_private_lookup: false,
+            },
+            CancellationToken::new(),
+            tx,
+        )
+        .await
+        .unwrap_err();
+    match err {
+        FlowError::InvalidConfig(msg) => assert_eq!(msg, PUBLIC_RUN_UNSUPPORTED),
+        other => panic!("expected default deny, got {other:?}"),
+    }
+    assert!(
+        invocations.lock().unwrap().is_empty(),
+        "owner run must not be invoked"
+    );
 }

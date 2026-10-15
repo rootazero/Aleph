@@ -46,6 +46,8 @@ pub struct BrowserOpenOutput {
 pub struct BrowserOpenTool {
     manager: Arc<ProfileManager>,
     approval_policy: Option<Arc<dyn ApprovalPolicy>>,
+    /// Shared browser-live producer; `None` (the default) publishes nothing.
+    live_producer: Option<super::present::BrowserLiveProducer>,
 }
 
 impl BrowserOpenTool {
@@ -53,7 +55,19 @@ impl BrowserOpenTool {
         Self {
             manager,
             approval_policy: None,
+            live_producer: None,
         }
+    }
+
+    /// Install the registry's EXISTING browser-live producer (never a second
+    /// store). After a successful CDP open it publishes best-effort; a
+    /// publication failure never changes this tool's output.
+    pub fn with_live_producer(
+        mut self,
+        producer: Option<super::present::BrowserLiveProducer>,
+    ) -> Self {
+        self.live_producer = producer;
+        self
     }
 
     /// Gate `browser_open` behind the same approval policy as
@@ -152,7 +166,13 @@ impl AlephTool for BrowserOpenTool {
                 });
             }
         };
-        match backend.open_tab(&args.url).await {
+        match super::operation_publish::open_tab_and_present(
+            backend.as_ref(),
+            self.live_producer.as_ref(),
+            &args.url,
+        )
+        .await
+        {
             Ok(tab_id) => {
                 // Register the tab we just created. Every OTHER browser verb
                 // reaches the registry through `make_backend_and_tab`, but this

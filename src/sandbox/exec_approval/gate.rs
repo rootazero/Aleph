@@ -352,6 +352,7 @@ mod tests {
             unattended,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
 
         // Attended (and outside any turn) still reaches the requester.

@@ -207,10 +207,11 @@ impl DeviceTokenManager {
         Ok(self.store.validate_device_token_hash(&hash)?)
     }
 
-    /// Revoke every token for a device and mark the device revoked.
+    /// Revoke every token for a device and mark the device revoked, atomically
+    /// (an error leaves both the tokens and the device row untouched).
     pub fn revoke_device(&self, device_id: &str) -> Result<bool, DeviceTokenError> {
-        self.store.revoke_device_tokens(device_id)?;
-        Ok(self.store.revoke_device(device_id)?)
+        // One atomic store write: tokens + device row commit together or not at all.
+        Ok(self.store.revoke_device_with_tokens(device_id)?)
     }
 
     /// Prune expired bootstrap tickets and device tokens older than `before_ms`.
@@ -583,5 +584,83 @@ mod tests {
             .validate_device_token(&repaired.device_token)
             .unwrap()
             .is_none());
+    }
+
+    /// Test fixture only: make every `devices` UPDATE abort, simulating the
+    /// device-row write failing after the token write would have succeeded.
+    fn install_devices_update_abort(store: &SecurityStore) {
+        store
+            .conn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .execute_batch(
+                "CREATE TRIGGER fail_devices_update BEFORE UPDATE ON devices \
+                 BEGIN SELECT RAISE(ABORT, 'injected devices update failure'); END;",
+            )
+            .unwrap();
+    }
+
+    fn remove_devices_update_abort(store: &SecurityStore) {
+        store
+            .conn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .execute_batch("DROP TRIGGER fail_devices_update;")
+            .unwrap();
+    }
+
+    /// Regression: tokens and the device row used to be revoked in two
+    /// independent writes, so a failing second write left the tokens dead but
+    /// the device still approved. The revocation must be all-or-nothing.
+    #[test]
+    fn revoke_device_is_atomic_when_device_write_fails() {
+        let (mgr, store) = manager_fixture();
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
+        let paired = mgr
+            .exchange_bootstrap_ticket(&ticket, Some("dev-x".to_string()), None, None)
+            .unwrap();
+
+        install_devices_update_abort(&store);
+        assert!(mgr.revoke_device("dev-x").is_err());
+        // No half revocation: token still valid, device still approved.
+        assert!(mgr
+            .validate_device_token(&paired.device_token)
+            .unwrap()
+            .is_some());
+        assert!(store.is_device_approved("dev-x").unwrap());
+
+        // Retry once the fault is gone: both effects land.
+        remove_devices_update_abort(&store);
+        assert!(mgr.revoke_device("dev-x").unwrap());
+        assert!(mgr
+            .validate_device_token(&paired.device_token)
+            .unwrap()
+            .is_none());
+        assert!(!store.is_device_approved("dev-x").unwrap());
+    }
+
+    /// `revoke_device` keeps the legacy `bool` contract: `false` for an unknown
+    /// id and for an already-revoked device, `true` only for the first revoke.
+    #[test]
+    fn revoke_device_bool_contract_for_unknown_and_already_revoked() {
+        let mgr = manager();
+        assert!(!mgr.revoke_device("never-existed").unwrap());
+
+        let ticket = mgr.create_bootstrap_ticket(None, None).unwrap();
+        mgr.exchange_bootstrap_ticket(&ticket, Some("dev-x".to_string()), None, None)
+            .unwrap();
+        assert!(mgr.revoke_device("dev-x").unwrap());
+        assert!(!mgr.revoke_device("dev-x").unwrap());
+    }
+
+    /// The panel guard still runs BEFORE the atomic revoke: a node id (and an
+    /// unknown id) is refused without touching the node's device row.
+    #[test]
+    fn revoke_panel_device_does_not_widen_to_nodes_or_unknown() {
+        let mgr = manager();
+        seed_node(&mgr, "node-1");
+        assert!(!mgr.revoke_panel_device("node-1").unwrap());
+        assert!(!mgr.revoke_panel_device("ghost").unwrap());
+        assert!(mgr.store.is_device_approved("node-1").unwrap());
     }
 }

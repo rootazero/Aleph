@@ -114,7 +114,11 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             }
             // Reset to the local daemon (launch + supervise it again).
             "connect_local" => {
-                let _ = crate::connection::clear_connection_target(app.clone());
+                // Async command: must be driven, not dropped (a bare call never runs).
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = crate::connection::clear_connection_target(app).await;
+                });
             }
             "quit" => app.exit(0),
             "quit_stop" => {

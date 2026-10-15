@@ -30,6 +30,19 @@ impl ApprovalCallbackSink for ManagerCallbackSink {
         callback_data: &str,
         user_id: &str,
     ) -> Option<ApprovalCallbackResult> {
+        // Inspect the id BEFORE parsing the action: a known operator card is
+        // never a channel capability, even for its originator or a user named
+        // operator. None/missing originator below must not grant this access.
+        if let Some(rest) = callback_data.strip_prefix("approve:") {
+            if let Some((id, _action)) = rest.split_once(':') {
+                if self.manager.is_operator_approval(id) {
+                    return Some(ApprovalCallbackResult {
+                        resolved: false,
+                        response_text: "此审批仅可由操作员通过 operator RPC 处理。".to_string(),
+                    });
+                }
+            }
+        }
         // Failed parse means this is not an approval callback — return None so
         // the router lets the request through.
         let (id, decision) = ApprovalBridge::parse_callback(callback_data)?;
@@ -63,7 +76,7 @@ impl ApprovalCallbackSink for ManagerCallbackSink {
             .unwrap_or_default();
         let resolved = self
             .manager
-            .resolve(&id, decision, Some(user_id.to_string()));
+            .resolve_for_channel(&id, decision, Some(user_id.to_string()));
         let response_text = if resolved {
             // Pass the POST-clamp decision to decision_response_text. The
             // manager internally clamps `decision` against allowed_decisions;
@@ -107,6 +120,54 @@ mod tests {
             originator_user_id: None,
             grant_key: None,
             allowed_decisions: crate::exec::allowed_decisions::session_max(),
+        }
+    }
+
+    // Known operator ids are not channel capabilities, even for the matching
+    // originator (or an actor called operator) and even before action parsing.
+    #[tokio::test]
+    async fn both_operator_kinds_refuse_channel_callbacks_without_consuming_approval() {
+        for independent in [false, true] {
+            for originator in [Some("alice".to_string()), None] {
+                let manager = Arc::new(ExecApprovalManager::new());
+                let mut request = mock_request("operator-card");
+                request.originator_user_id = originator;
+                let mut record = manager.create(&request, 5_000);
+                record.operator_only = true;
+                let (id, mut rx, timeout, guard) = if independent {
+                    let (id, rx, timeout, guard) = manager.register_operator_once(record).unwrap();
+                    (id, rx, timeout, Some(guard))
+                } else {
+                    let (id, rx, timeout) = manager.register_pending(record);
+                    (id, rx, timeout, None)
+                };
+                let sink = ManagerCallbackSink::new(manager.clone());
+                for actor in ["alice", "operator"] {
+                    for action in ["once", "session", "always", "deny", "unknown-action"] {
+                        let response = sink
+                            .handle_callback(&format!("approve:{id}:{action}"), actor)
+                            .await
+                            .expect("operator card is rejected before parsing the action");
+                        assert!(!response.resolved);
+                        assert!(manager.get_pending(&id).is_some());
+                        assert!(matches!(
+                            rx.try_recv(),
+                            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+                        ));
+                    }
+                }
+                assert!(manager.resolve(
+                    &id,
+                    ApprovalDecisionType::AllowOnce,
+                    Some("operator".to_string())
+                ));
+                let resolved = if let Some(ref guard) = guard {
+                    guard.wait(rx, timeout).await
+                } else {
+                    manager.await_registered(id, rx, timeout).await
+                };
+                assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+            }
         }
     }
 

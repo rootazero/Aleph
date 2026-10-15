@@ -433,6 +433,16 @@ pub enum SessionEvent {
         /// byte-identical.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         envelope: Option<RunEnvelopeSnapshot>,
+        /// Server-authored telecom provenance marker for crash/boot/manual
+        /// resume. `Legacy` (default) on every marker written before this
+        /// field existed; omitted from wire when `Legacy` so legacy forms
+        /// stay byte-identical. Resume uses this to restore the typed
+        /// telecom context or refuse if unrecognised/corrupt.
+        #[serde(
+            default,
+            skip_serializing_if = "crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::is_legacy"
+        )]
+        telecom_provenance: crate::gateway::telecom::persisted_marker::PersistedTelecomMarker,
     },
     /// A harness run reached a terminal state on this session.
     RunFinished {
@@ -446,6 +456,29 @@ pub enum SessionEvent {
     ResumeAttempted {
         target: EventSeq,
         attempt: u32,
+    },
+    /// Server-authored run-origin carrier for the seed -> `RunStarted` crash
+    /// window. `session_seed::seed_session` writes it immediately BEFORE the
+    /// final real seed `UserMessage` of a run and binds it to that message by
+    /// `turn_id` (exact id, never position or heuristic). A crash after the
+    /// `UserMessage` but before `RunStarted` leaves an unanswered tail whose
+    /// origin ([`PersistedTelecomMarker`]) would otherwise be unknowable;
+    /// `ResumeCoordinator::handle_unanswered` reads it back through
+    /// `reduction::unanswered_seed_provenance`.
+    ///
+    /// Marker-class: no turn of its own, not prompt-bearing (the prompt
+    /// builder, projector and fold ignore it). Carries no body, phone or
+    /// secret. `telecom_provenance` defaults to `Legacy` (= unproven, refuse)
+    /// so a record that lost the field can never restore as ordinary.
+    SeedProvenance {
+        /// `turn_id` of the seed `UserMessage` this marker vouches for.
+        turn_id: TurnId,
+        #[serde(
+            default,
+            skip_serializing_if = "crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::is_legacy"
+        )]
+        telecom_provenance: crate::gateway::telecom::persisted_marker::PersistedTelecomMarker,
+        at: Timestamp,
     },
 
     /// A turn opened. There is deliberately no closing `TurnEnded` marker: a
@@ -809,6 +842,10 @@ pub const fn durability_of(event: &SessionEvent) -> Durability {
         | SessionEvent::UserMessage { .. } => Durability::Barrier,
         SessionEvent::SessionWoken { .. }
         | SessionEvent::RunFinished { .. }
+        // The marker is committed BEFORE the Barrier `UserMessage` it binds;
+        // WAL order means that message's fsync also covers the marker, and
+        // losing both reads "no unanswered seed" (Clean) — the safe side.
+        | SessionEvent::SeedProvenance { .. }
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::AssistantMessage { .. }
         | SessionEvent::AssistantRunMeta { .. }
@@ -899,6 +936,8 @@ pub(crate) mod fixtures {
                     at: 0,
                     project_root: None,
                     envelope: None,
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Legacy,
                 },
             ),
             (
@@ -914,6 +953,15 @@ pub(crate) mod fixtures {
                 SessionEvent::ResumeAttempted {
                     target: 1,
                     attempt: 1,
+                },
+            ),
+            (
+                "SeedProvenance",
+                SessionEvent::SeedProvenance {
+                    turn_id: t,
+                    telecom_provenance:
+                        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+                    at: 0,
                 },
             ),
             (
@@ -1202,6 +1250,71 @@ mod tests {
         }
     }
 
+    /// `SeedProvenance` wire: Ordinary/Public round-trip; a record that lost
+    /// the field reads `Legacy` (never Ordinary); `Legacy` is omitted from the
+    /// wire; the payload holds no body.
+    #[test]
+    fn seed_provenance_round_trips_and_missing_field_is_legacy() {
+        use crate::gateway::telecom::persisted_marker::PersistedTelecomMarker as M;
+        let t = uuid::Uuid::new_v4();
+        let ev = SessionEvent::SeedProvenance {
+            turn_id: t,
+            telecom_provenance: M::Ordinary,
+            at: 7,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"type\":\"seed_provenance\""));
+        match serde_json::from_str::<SessionEvent>(&json).unwrap() {
+            SessionEvent::SeedProvenance {
+                turn_id,
+                telecom_provenance,
+                at,
+            } => {
+                assert_eq!((turn_id, at), (t, 7));
+                assert!(matches!(telecom_provenance, M::Ordinary));
+            }
+            other => panic!("expected SeedProvenance, got {other:?}"),
+        }
+        let bare = format!("{{\"type\":\"seed_provenance\",\"turn_id\":\"{t}\",\"at\":7}}");
+        match serde_json::from_str::<SessionEvent>(&bare).unwrap() {
+            SessionEvent::SeedProvenance {
+                telecom_provenance, ..
+            } => assert!(matches!(telecom_provenance, M::Legacy)),
+            other => panic!("expected SeedProvenance, got {other:?}"),
+        }
+        let legacy = SessionEvent::SeedProvenance {
+            turn_id: t,
+            telecom_provenance: M::Legacy,
+            at: 7,
+        };
+        assert!(!serde_json::to_string(&legacy)
+            .unwrap()
+            .contains("telecom_provenance"));
+    }
+
+    /// Existing `UserMessage` wire is byte-compatible: no new field.
+    #[test]
+    fn user_message_wire_is_unchanged_by_the_seed_carrier() {
+        let json = serde_json::to_value(
+            SessionEvent::user_turn(
+                uuid::Uuid::new_v4(),
+                MessageContent {
+                    text: "u".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                None,
+                1,
+            )[1]
+            .clone(),
+        )
+        .unwrap();
+        let mut keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert!(!keys.iter().any(|k| k.contains("provenance")), "{keys:?}");
+    }
+
     /// The intent stamp's two numbers survive the wire byte-for-byte: `target`
     /// is what the reducer matches against a `RunStarted` seq, `attempt` is
     /// the ordinal the operator reads in a boot log.
@@ -1333,6 +1446,8 @@ mod tests {
             at: 1_700_000_000_000,
             project_root: None,
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         };
         let json = serde_json::to_string(&ev).unwrap();
         let back: SessionEvent = serde_json::from_str(&json).unwrap();
@@ -1354,6 +1469,8 @@ mod tests {
             at: 1_700_000_000_000,
             project_root: Some("/Users/alice/proj".into()),
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"project_root\":\"/Users/alice/proj\""));
@@ -1412,6 +1529,8 @@ mod tests {
                 allowed_tools: Some(vec!["grep".into()]),
                 btw: Some("is it green?".into()),
             }),
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         };
         let json = serde_json::to_string(&ev).unwrap();
         let back: SessionEvent = serde_json::from_str(&json).unwrap();
@@ -1482,6 +1601,8 @@ mod tests {
             at: 1,
             project_root: None,
             envelope: Some(RunEnvelopeSnapshot::default()),
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"envelope\":{}"), "{json}");

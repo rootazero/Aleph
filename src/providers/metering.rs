@@ -42,6 +42,11 @@ pub struct MeteringProvider {
     inner: Arc<dyn AiProvider>,
     sink: Option<Arc<dyn TraceSink>>,
     agent_id: String,
+    /// Explicit spend principal. `None` (every ordinary caller) charges the
+    /// ambient person, exactly as before. `Some` charges that principal and
+    /// never consults the ambient owner — the public telecom path, where the
+    /// task-local owner scope must not decide who pays.
+    principal: Option<crate::spend::Principal>,
 }
 
 impl MeteringProvider {
@@ -54,8 +59,44 @@ impl MeteringProvider {
             inner,
             sink,
             agent_id: agent_id.into(),
+            principal: None,
         }
     }
+
+    /// Like [`Self::new`], but both the pre-call ceiling check and the
+    /// post-call ledger write use `principal` instead of the ambient person.
+    pub fn with_principal(
+        inner: Arc<dyn AiProvider>,
+        sink: Option<Arc<dyn TraceSink>>,
+        agent_id: impl Into<String>,
+        principal: crate::spend::Principal,
+    ) -> Self {
+        Self {
+            principal: Some(principal),
+            ..Self::new(inner, sink, agent_id)
+        }
+    }
+
+    /// The principal this call is charged to: the explicit one when set,
+    /// otherwise the ambient person (floor-arm default).
+    fn resolve_principal(explicit: Option<&crate::spend::Principal>) -> crate::spend::Principal {
+        explicit.cloned().unwrap_or_else(|| {
+            crate::spend::Principal::from_person(crate::gateway::visibility::ambient_principal())
+        })
+    }
+}
+
+/// Wrap `inner` (the Core default provider chain, failover included) so every
+/// public-telecom LLM call is floor-checked against and recorded under the
+/// explicit [`crate::spend::Principal::TelecomPublic`] — never the ambient
+/// owner, never inferred from metadata.
+pub(crate) fn metered_public_provider(inner: Arc<dyn AiProvider>) -> Arc<dyn AiProvider> {
+    Arc::new(MeteringProvider::with_principal(
+        inner,
+        None,
+        "telecom-public",
+        crate::spend::Principal::TelecomPublic,
+    ))
 }
 
 impl MeteringProvider {
@@ -88,6 +129,7 @@ impl MeteringProvider {
         prefix_hash: Option<u64>,
         pricing_provider: &str,
         pricing_model: &str,
+        principal: Option<&crate::spend::Principal>,
     ) {
         let Some(usage) = resp.usage.as_ref() else {
             return;
@@ -139,7 +181,7 @@ impl MeteringProvider {
                 });
             }
         }
-        Self::record_spend(usage, pricing_provider, pricing_model);
+        Self::record_spend(usage, pricing_provider, pricing_model, principal);
     }
 
     /// Deny before the call ever leaves the box. The first statement inside
@@ -156,9 +198,8 @@ impl MeteringProvider {
     /// front — would need a refund on every error path, and a single missed
     /// refund silently shrinks someone's ceiling forever; a bounded
     /// overshoot is the cheaper failure to accept.
-    fn enforce_spend_ceiling() -> Result<()> {
-        let principal =
-            crate::spend::Principal::from_person(crate::gateway::visibility::ambient_principal());
+    fn enforce_spend_ceiling(explicit: Option<&crate::spend::Principal>) -> Result<()> {
+        let principal = Self::resolve_principal(explicit);
         let now_ms = chrono::Utc::now().timestamp_millis();
         match crate::spend::check(&principal, now_ms) {
             crate::spend::Verdict::Allowed(_) => Ok(()),
@@ -188,13 +229,13 @@ impl MeteringProvider {
         usage: &crate::providers::adapter::TokenUsage,
         pricing_provider: &str,
         pricing_model: &str,
+        explicit: Option<&crate::spend::Principal>,
     ) {
         let policy = crate::spend::current_policy();
         if !policy.enabled() {
             return;
         }
-        let principal =
-            crate::spend::Principal::from_person(crate::gateway::visibility::ambient_principal());
+        let principal = Self::resolve_principal(explicit);
         if let Err(error) = Self::record_spend_with(
             usage,
             pricing_provider,
@@ -303,6 +344,7 @@ impl AiProvider for MeteringProvider {
         let fut = self.inner.process(req);
         let sink = self.sink.clone();
         let agent_id = self.agent_id.clone();
+        let principal = self.principal.clone();
         let provider_name = self.inner.name().to_string();
         let pricing_provider = self
             .inner
@@ -313,7 +355,7 @@ impl AiProvider for MeteringProvider {
             .serving_model_hint()
             .map_or_else(String::new, Cow::into_owned);
         Box::pin(async move {
-            Self::enforce_spend_ceiling()?;
+            Self::enforce_spend_ceiling(principal.as_ref())?;
             let resp = fut.await?;
             Self::record_usage(
                 &resp,
@@ -324,6 +366,7 @@ impl AiProvider for MeteringProvider {
                 prefix_hash,
                 &pricing_provider,
                 &pricing_model,
+                principal.as_ref(),
             );
             Ok(resp)
         })
@@ -344,6 +387,7 @@ impl AiProvider for MeteringProvider {
         let fut = self.inner.execute_streaming_dyn(payload, stream_sink);
         let sink = self.sink.clone();
         let agent_id = self.agent_id.clone();
+        let principal = self.principal.clone();
         let provider_name = self.inner.name().to_string();
         let pricing_provider = self
             .inner
@@ -354,7 +398,7 @@ impl AiProvider for MeteringProvider {
             .serving_model_hint()
             .map_or_else(String::new, Cow::into_owned);
         Box::pin(async move {
-            Self::enforce_spend_ceiling()?;
+            Self::enforce_spend_ceiling(principal.as_ref())?;
             let resp = fut.await?;
             Self::record_usage(
                 &resp,
@@ -365,6 +409,7 @@ impl AiProvider for MeteringProvider {
                 prefix_hash,
                 &pricing_provider,
                 &pricing_model,
+                principal.as_ref(),
             );
             Ok(resp)
         })
@@ -858,6 +903,7 @@ mod tests {
         let policy = crate::config::types::policies::SpendPolicy {
             per_user_usd: Some(1_000_000.0),
             total_usd: None,
+            telecom_public_usd: None,
             period: crate::config::types::policies::SpendPeriod::Month,
         };
         // Two calls, and the second is the one that matters. `install_policy`
@@ -1136,6 +1182,158 @@ mod tests {
         assert!(
             message.contains("Spend ceiling reached"),
             "error text must name the ceiling, got: {message}"
+        );
+    }
+
+    /// Charge-target tests share one process-wide ledger row for
+    /// `Principal::TelecomPublic`, so they compare before/after deltas.
+    fn spent_now(principal: &crate::spend::Principal) -> crate::spend::Spent {
+        let policy = crate::spend::current_policy();
+        let start = crate::spend::period::period_start_ms(
+            chrono::Utc::now().timestamp_millis(),
+            policy.period,
+        );
+        crate::spend::global_ledger()
+            .spent_for(principal, start)
+            .unwrap()
+    }
+
+    /// An explicit principal wins over the ambient owner: under a live owner
+    /// scope, a `with_principal(.., TelecomPublic)` provider records the call
+    /// on the public row and leaves the owner's row untouched — on both the
+    /// non-streaming and the streaming arm.
+    #[tokio::test]
+    #[serial_test::serial(spend_global_policy)]
+    async fn explicit_public_principal_records_under_public_row_not_ambient_person() {
+        install_test_spend_globals();
+        let owner = crate::spend::Principal::User("u-metering-public-owner".to_string());
+        let attr = crate::scope::ScopeAttribution::personal("u-metering-public-owner");
+        let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+        let public_before = spent_now(&crate::spend::Principal::TelecomPublic);
+        let owner_before = spent_now(&owner);
+
+        let provider = MeteringProvider::with_principal(
+            Arc::new(FakeProvider {
+                usage: spend_test_usage(10, 10),
+            }),
+            None,
+            "telecom-public",
+            crate::spend::Principal::TelecomPublic,
+        );
+        let sink = crate::providers::NoopSink;
+        crate::scope::with_scope(Some(attr), async {
+            provider
+                .process(RequestPayload::new(&msgs))
+                .await
+                .expect("process");
+            provider
+                .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+                .await
+                .expect("stream");
+        })
+        .await;
+
+        assert_eq!(
+            spent_now(&crate::spend::Principal::TelecomPublic).unpriced_calls
+                - public_before.unpriced_calls,
+            2,
+            "both arms must record on the explicit public principal"
+        );
+        assert_eq!(
+            spent_now(&owner).unpriced_calls,
+            owner_before.unpriced_calls,
+            "the ambient owner must not be charged for a public call"
+        );
+    }
+
+    /// Ordinary spend is unchanged: `MeteringProvider::new` still charges the
+    /// ambient person and never the public row.
+    #[tokio::test]
+    #[serial_test::serial(spend_global_policy)]
+    async fn ordinary_provider_still_charges_ambient_person_not_public() {
+        install_test_spend_globals();
+        let owner = crate::spend::Principal::User("u-metering-ordinary".to_string());
+        let attr = crate::scope::ScopeAttribution::personal("u-metering-ordinary");
+        let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+        let public_before = spent_now(&crate::spend::Principal::TelecomPublic);
+        let owner_before = spent_now(&owner);
+
+        let provider = MeteringProvider::new(
+            Arc::new(FakeProvider {
+                usage: spend_test_usage(10, 10),
+            }),
+            None,
+            "ordinary",
+        );
+        crate::scope::with_scope(Some(attr), async {
+            provider
+                .process(RequestPayload::new(&msgs))
+                .await
+                .expect("process");
+        })
+        .await;
+
+        assert_eq!(
+            spent_now(&owner).unpriced_calls - owner_before.unpriced_calls,
+            1
+        );
+        assert_eq!(
+            spent_now(&crate::spend::Principal::TelecomPublic).unpriced_calls,
+            public_before.unpriced_calls
+        );
+    }
+
+    /// The floor arm checks the explicit principal's own line: a public cap
+    /// of $0 denies a public call before the inner provider runs, while an
+    /// ordinary (ambient owner) call under the same policy still passes.
+    #[tokio::test]
+    #[serial_test::serial(spend_global_policy)]
+    async fn public_over_cap_denies_before_inner_call_without_touching_owner() {
+        install_test_spend_globals();
+        let capped = crate::config::types::policies::SpendPolicy {
+            per_user_usd: Some(1_000_000.0),
+            telecom_public_usd: Some(0.0),
+            ..Default::default()
+        };
+        assert!(crate::spend::update_policy(capped));
+
+        let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+        let attr = crate::scope::ScopeAttribution::personal("u-metering-public-cap-owner");
+
+        let public = MeteringProvider::with_principal(
+            Arc::new(FakeProvider {
+                usage: spend_test_usage(1, 1),
+            }),
+            None,
+            "telecom-public",
+            crate::spend::Principal::TelecomPublic,
+        );
+        let public_result = crate::scope::with_scope(Some(attr.clone()), async {
+            public.process(RequestPayload::new(&msgs)).await
+        })
+        .await;
+        let ordinary = MeteringProvider::new(
+            Arc::new(FakeProvider {
+                usage: spend_test_usage(1, 1),
+            }),
+            None,
+            "ordinary",
+        );
+        let ordinary_result = crate::scope::with_scope(Some(attr), async {
+            ordinary.process(RequestPayload::new(&msgs)).await
+        })
+        .await;
+
+        // Restore the shared policy for whoever runs next in this group.
+        install_test_spend_globals();
+
+        let message = public_result
+            .expect_err("public cap of $0 must deny")
+            .to_string();
+        assert!(message.contains("Spend ceiling reached"), "got: {message}");
+        assert!(
+            ordinary_result.is_ok(),
+            "the public line must not cap ordinary principals"
         );
     }
 }

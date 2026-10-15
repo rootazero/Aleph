@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-approve-cert"
+description = "Enables the approve_cert command without any pre-configured scope."
+commands.allow = ["approve_cert"]
+
+[[permission]]
+identifier = "deny-approve-cert"
+description = "Denies the approve_cert command without any pre-configured scope."
+commands.deny = ["approve_cert"]
