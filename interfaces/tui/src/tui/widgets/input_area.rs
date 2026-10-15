@@ -49,7 +49,12 @@ impl InputWidget<'_> {
         if area.height == 0 || area.width == 0 {
             return;
         }
-        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+        let rows = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(u16::from(area.height >= 3)),
+        ])
+        .split(area);
         let rule_area = rows.first().copied().unwrap_or_default();
         let text_area = rows.get(1).copied().unwrap_or_default();
 
@@ -68,6 +73,14 @@ impl InputWidget<'_> {
             ))),
             rule_area,
         );
+
+        if let Some(bottom) = rows.get(2).filter(|r| r.height > 0) {
+            frame.render_widget(
+                Paragraph::new("─".repeat(bottom.width as usize))
+                    .style(Style::default().fg(rule_color)),
+                *bottom,
+            );
+        }
 
         if text_area.height == 0 || text_area.width <= GUTTER {
             return;
@@ -107,13 +120,13 @@ impl InputWidget<'_> {
     }
 }
 
-/// Height of the composer chunk: one rule row plus the draft, clamped.
+/// Height of the composer chunk: two thin rules plus the draft, clamped.
 ///
 /// `min`/`max` count the whole chunk, rule included, so a caller's numbers
 /// keep meaning "rows of screen this thing may occupy".
 pub fn input_height(textarea: &TextArea, min: u16, max: u16) -> u16 {
     let line_count = u16::try_from(textarea.lines().len()).unwrap_or(u16::MAX);
-    let desired = line_count.saturating_add(1); // +1 for the rule
+    let desired = line_count.saturating_add(2); // two thin rules
     desired.clamp(min, max)
 }
 
@@ -145,8 +158,8 @@ mod tests {
     #[test]
     fn input_height_single_line() {
         let ta = TextArea::default();
-        // 1 line + 1 rule = 2.
-        assert_eq!(input_height(&ta, 2, 10), 2);
+        // One draft line between two thin rules.
+        assert_eq!(input_height(&ta, 3, 10), 3);
     }
 
     #[test]
@@ -171,7 +184,7 @@ mod tests {
             let ta = TextArea::new((0..n).map(|i| format!("l{i}")).collect());
             assert_eq!(
                 input_height(&ta, 2, 9),
-                u16::try_from(n).expect("small") + 1,
+                u16::try_from(n).expect("small") + 2,
                 "{n} lines"
             );
         }
@@ -195,6 +208,7 @@ mod tests {
             "row 0 must be the rule"
         );
         assert_eq!(row(&buf, 1).trim_end(), format!("{CARET} hello"));
+        assert_eq!(row(&buf, 2), "─".repeat(20));
         for y in 0..3 {
             let line = row(&buf, y);
             for corner in ['\u{250c}', '\u{2510}', '\u{2514}', '\u{2518}', '\u{2502}'] {

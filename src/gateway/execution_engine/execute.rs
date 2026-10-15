@@ -1001,23 +1001,17 @@ where
             "Agent execution completed"
         );
 
-        // Close out the active-run record (state, completion timestamp).
-        // `final_seq` is only needed by the error branch's `RunError` emit —
-        // the terminal `RunComplete` is single-sourced from the orchestrator
-        // drain inside `run_agent_loop` (see `helpers::run_dispatch_and_drain
-        // _classified`), which carries the enriched summary; the all-zeros
-        // duplicate previously emitted here is gone.
-        let final_seq = {
+        // Close the active-run record. Stream sequence numbers belong to the
+        // emitter, not this bookkeeping record: the drain has already emitted
+        // RunComplete and a separate counter would order RunError before it.
+        {
             let mut runs = active_runs.write().await;
             if let Some(run) = runs.get_mut(&run_id) {
                 run.state = final_state.clone();
                 run.completed_at = Some(chrono::Utc::now());
                 run.cancel_tx = None;
-                run.next_seq()
-            } else {
-                0
             }
-        };
+        }
 
         // The session claim + concurrency permit (`_run_slot`) is released
         // explicitly inside each arm below — not left to drop at the end of
@@ -1187,7 +1181,7 @@ where
                 if let Err(emit_err) = emitter
                     .emit(StreamEvent::RunError {
                         run_id: run_id.clone(),
-                        seq: final_seq,
+                        seq: emitter.next_seq(),
                         error: error_message,
                         error_code: Some(error_code.to_string()),
                         // Post-admission: `RunAccepted` already seeded the index.

@@ -348,6 +348,22 @@ impl AppState {
             }
         }
 
+        // A failed run emits its enriched RunComplete before the sanitized
+        // error receipt. Do not re-adopt that settled run or trigger hydration
+        // which would immediately erase the only visible failure message.
+        if self.current_run.is_none() {
+            if let StreamEvent::RunError { run_id, error, .. } = &event {
+                if self
+                    .run_sessions
+                    .iter()
+                    .any(|(id, key)| id == run_id && key == &self.session_key)
+                {
+                    self.add_system_message(format!("Error: {error}"));
+                    return Action::None;
+                }
+            }
+        }
+
         if !matches!(&event, StreamEvent::RunAccepted { .. }) {
             if let Some(run_id) = run_scoped_id(&event) {
                 if self.current_run.is_none() || self.current_run.as_deref() == Some(run_id) {

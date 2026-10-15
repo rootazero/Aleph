@@ -36,10 +36,8 @@ use crate::tui::widgets::{
 /// agent panel existed (R8-9: not even a nominally zero-width chunk, which
 /// 判据 §2 calls a different bug class from an absent split).
 pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
-    // 2 = the flat rule plus one line of draft; 8 caps how much of the screen
-    // a long paste may take. The box that used to need two of these rows for
-    // its borders is gone — see `widgets::input_area`.
-    let input_h = input_height(textarea, 2, 8);
+    // One draft row between two thin rules; long drafts remain capped.
+    let input_h = input_height(textarea, 3, 8);
     let full_area = frame.area();
 
     let main_area = if state.agent_panel_visible {
@@ -193,7 +191,7 @@ mod tests {
     /// (single-line) textarea, `input_height` is 2, the hint and status rows
     /// take one each, so the chat area gets `Min(5)` = 6 rows and the rule
     /// lands on y=6.
-    const RULE_Y: u16 = 6;
+    const RULE_Y: u16 = 5;
 
     /// R8-9: when the panel is hidden, `render()` must take the exact path
     /// it took before the agent-panel column existed — observed through the

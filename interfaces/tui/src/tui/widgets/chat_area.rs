@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -19,7 +19,7 @@ use shared_ui_logic::transcript::{
     TranscriptEntry, TuiAttachment,
 };
 
-use crate::tui::app::{AppState, Focus};
+use crate::tui::app::AppState;
 use crate::tui::markdown::{
     markdown_to_lines, markdown_to_lines_incremental, StreamLines, StreamPrefix,
 };
@@ -258,18 +258,12 @@ const BACK_TO_BOTTOM_UNSEEN: &str = " \u{2193} New output \u{b7} ctrl+end ";
 
 /// Render the chat area with all messages, handling scrolling.
 pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
-    let border_color = match state.focus {
-        Focus::Chat => theme().border_focused,
-        _ => theme().border,
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color))
-        .title(" Chat ");
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    // The transcript is an open reading surface. Keep a single-column gutter
+    // without spending rows or columns on a titled rectangle.
+    let inner = area.inner(ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
 
     // Rebuilt from scratch every frame, because the transcript reflows every
     // frame — see `regions.rs` for why a maintained table would be the copy
@@ -2216,15 +2210,15 @@ mod header_tests {
     fn the_header_is_the_first_row_of_the_transcript() {
         let mut state = short_state();
         let rows = draw(&mut state);
-        // Row 0 is the block's top border; row 1 is the first content row.
-        assert!(rows[1].contains("\u{2135} Aleph"), "{:?}", &rows[..3]);
-        assert!(rows[1].contains("claude-opus-5"), "{:?}", &rows[..3]);
+        // The borderless viewport starts directly with transcript content.
+        assert!(rows[0].contains("\u{2135} Aleph"), "{:?}", &rows[..3]);
+        assert!(rows[0].contains("claude-opus-5"), "{:?}", &rows[..3]);
 
         // It follows the model, because it is derived rather than stored.
         state.model_name = "gpt-5".into();
         let rows = draw(&mut state);
-        assert!(rows[1].contains("gpt-5"), "{:?}", &rows[..3]);
-        assert!(!rows[1].contains("claude-opus-5"), "{:?}", &rows[..3]);
+        assert!(rows[0].contains("gpt-5"), "{:?}", &rows[..3]);
+        assert!(!rows[0].contains("claude-opus-5"), "{:?}", &rows[..3]);
     }
 
     /// The folder and branch appear only when the server said there is one.
@@ -2234,7 +2228,7 @@ mod header_tests {
         let mut state = short_state();
         assert!(state.project_root().is_none());
         let rows = draw(&mut state);
-        assert!(!rows[1].contains('('), "no folder, no branch: {}", rows[1]);
+        assert!(!rows[0].contains('('), "no folder, no branch: {}", rows[0]);
 
         state.apply_session_snapshot(aleph_protocol::SessionSnapshot {
             session_key: "s".into(),
@@ -2242,7 +2236,7 @@ mod header_tests {
             ..Default::default()
         });
         let rows = draw(&mut state);
-        assert!(rows[1].contains("/w/proj"), "{}", rows[1]);
+        assert!(rows[0].contains("/w/proj"), "{}", rows[0]);
     }
 
     /// **The rows it takes are rows everything below it moved by.**
@@ -2272,11 +2266,11 @@ mod header_tests {
             &state.messages,
             state.verbose,
             0,
-            W - 2, // the block's borders
+            W,
             &mut cache,
             KEY_MODALITY,
             0,
-            H as usize - 2,
+            H as usize,
         );
         let without_header = headerless
             .iter()
@@ -2289,8 +2283,8 @@ mod header_tests {
             })
             .expect("the tool row is built");
 
-        // +1 for the block's top border, +2 for the header and its separator.
-        assert_eq!(with_header, without_header + 1 + 2);
+        // The header and its blank separator occupy two physical rows.
+        assert_eq!(with_header, without_header + 2);
     }
 
     /// It scrolls away like any other entry — it is a transcript row, not a
@@ -2310,7 +2304,7 @@ mod header_tests {
         state.scroll_offset = usize::MAX / 2; // Home
         let rows = draw(&mut state);
         assert!(
-            rows[1].contains("\u{2135} Aleph"),
+            rows[0].contains("\u{2135} Aleph"),
             "scrolled to the top it is the first row again: {:?}",
             &rows[..3]
         );

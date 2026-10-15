@@ -58,6 +58,39 @@ fn tool_rows(state: &AppState) -> Vec<&ToolRow> {
 }
 
 #[test]
+fn failure_receipt_after_run_complete_stays_visible_without_reopening_the_run() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "failed-run".into(),
+        session_key: "s".into(),
+        accepted_at: "2026-10-16T00:00:00Z".into(),
+    });
+    state.transcript_needs_resync = false;
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "failed-run".into(),
+        seq: 1,
+        summary: RunSummary {
+            terminate_reason: Some("failed".into()),
+            ..Default::default()
+        },
+        total_duration_ms: 10,
+    });
+    state.handle_gateway_event(StreamEvent::RunError {
+        run_id: "failed-run".into(),
+        seq: 2,
+        error: "Provider credentials unavailable".into(),
+        error_code: Some("FAILED".into()),
+    });
+    assert!(state.current_run.is_none());
+    assert!(
+        !state.transcript_needs_resync,
+        "a late receipt must not schedule a rebuild that erases itself"
+    );
+    assert!(state.messages.iter().any(|entry| matches!(entry,
+        TranscriptEntry::SystemNotice { text, .. } if text.contains("Provider credentials unavailable"))));
+}
+
+#[test]
 fn live_run_has_one_reducer_owned_step_and_recursive_tool_lookup() {
     let mut state = AppState::new("s".into(), "m".into());
     state.handle_gateway_event(StreamEvent::RunAccepted {
