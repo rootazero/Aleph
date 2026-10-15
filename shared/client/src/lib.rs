@@ -13,7 +13,7 @@ mod session_resolve;
 mod tls;
 
 pub use config::{CliConfig, ManifestConfig};
-pub use connection::{AlephClient, TopicEvent};
+pub use connection::{AlephClient, StreamContinuity, TopicEvent};
 pub use credential::{DeviceCredential, VerifiedIdentity};
 pub use credential_store::DeviceCredentialStore;
 pub use error::{CliError, CliResult};
