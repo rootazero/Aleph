@@ -801,7 +801,6 @@ impl BuiltinToolRegistry {
 
         // Register always-available tool metadata
         Self::register_core_tools(&mut tools);
-        crate::builtin_tools::call_lifecycle::CallLifecycleTools::register(&mut tools);
 
         // Register browser tools metadata (with parameter schemas from AlephTool::definition)
         {
