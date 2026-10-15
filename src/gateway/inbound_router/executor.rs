@@ -442,6 +442,7 @@ impl InboundMessageRouter {
             // Stamped from the TYPED `MessageMeta::Sms` the SMS interface
             // produced, never from the string `metadata` map above.
             telecom_public: telecom_public_from_message_meta(&ctx.message.metadata),
+            telecom_authority: None,
         };
 
         if !request.attachments.is_empty() {

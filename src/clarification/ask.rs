@@ -505,6 +505,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         }
     }
 
@@ -547,6 +548,7 @@ mod tests {
             unattended: true,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
             ..routable_turn()
         };
         let err = ask_in(turn, ClarificationRequest::text("Which one?"))

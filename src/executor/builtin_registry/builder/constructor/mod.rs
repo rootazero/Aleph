@@ -801,6 +801,7 @@ impl BuiltinToolRegistry {
 
         // Register always-available tool metadata
         Self::register_core_tools(&mut tools);
+        crate::builtin_tools::call_lifecycle::CallLifecycleTools::register(&mut tools);
 
         // Register browser tools metadata (with parameter schemas from AlephTool::definition)
         {
@@ -1245,6 +1246,7 @@ impl BuiltinToolRegistry {
             memory_timeline_tool: timeline_tool,
             memory_workspace_handle,
             memory_session_key_handle,
+            call_lifecycle: crate::builtin_tools::call_lifecycle::CallLifecycleTools,
             gateway_context: {
                 let cell = Arc::new(tokio::sync::OnceCell::new());
                 if let Some(ref ctx) = config.gateway_context {

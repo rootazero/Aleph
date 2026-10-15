@@ -120,6 +120,7 @@ async fn test_simple_execution_engine_basic() {
         max_iterations_override: None,
         model_override: None,
         telecom_public: None,
+        telecom_authority: None,
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -173,6 +174,7 @@ async fn test_session_state_returns_to_idle_after_run() {
         max_iterations_override: None,
         model_override: None,
         telecom_public: None,
+        telecom_authority: None,
     };
 
     // Persisting the user message transitions the session to Running.
@@ -239,6 +241,7 @@ async fn test_first_message_publishes_session_updated_on_bus() {
         max_iterations_override: None,
         model_override: None,
         telecom_public: None,
+        telecom_authority: None,
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -321,6 +324,7 @@ async fn panel_originated_session_update_names_its_run_not_just_gui_chat() {
         max_iterations_override: None,
         model_override: None,
         telecom_public: None,
+        telecom_authority: None,
     };
 
     engine.execute(request, agent, emitter).await.unwrap();
@@ -381,6 +385,7 @@ async fn test_simple_execution_engine_run() {
         max_iterations_override: None,
         model_override: None,
         telecom_public: None,
+        telecom_authority: None,
     };
 
     // This should succeed and complete quickly
@@ -505,6 +510,7 @@ pub(super) fn gate_test_request(session_key: &SessionKey, run_id: &str) -> RunRe
         max_iterations_override: None,
         model_override: None,
         telecom_public: None,
+        telecom_authority: None,
     }
 }
 
@@ -1215,6 +1221,7 @@ fn inv_iso_turn(session_key: SessionKey) -> crate::tools::turn_context::TurnCont
         unattended: false,
         plan_gate: None,
         side_question: false,
+        telecom_authority: None,
     }
 }
 

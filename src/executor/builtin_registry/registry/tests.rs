@@ -110,6 +110,7 @@ async fn flag_user_correction_files_under_the_turns_agent_not_the_boot_agent() {
         unattended: false,
         plan_gate: None,
         side_question: false,
+        telecom_authority: None,
     };
     let out = TURN_CONTEXT
         .scope(ctx, async {

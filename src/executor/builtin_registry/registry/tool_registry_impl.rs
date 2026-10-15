@@ -68,6 +68,17 @@ impl ToolRegistry for BuiltinToolRegistry {
         // Use AlephTool::call_json directly for migrated tools
         // This simplifies the code by avoiding intermediate execute_* methods
         match tool_name {
+            "initiate_call" | "answer_call" | "hangup" | "cancel_output" | "call_status" => {
+                let name = tool_name.to_owned();
+                Box::pin(async move {
+                    let service = self
+                        .gateway_context
+                        .get()
+                        .and_then(|ctx| ctx.telecom_lifecycle())
+                        .cloned();
+                    self.call_lifecycle.execute(service, &name, arguments).await
+                })
+            }
             // Core tools - use call_json directly via AlephTool trait
             "search" => Box::pin(async move { self.search_tool.call_json(arguments).await }),
             "web_fetch" => Box::pin(async move { self.web_fetch_tool.call_json(arguments).await }),
@@ -1860,6 +1871,7 @@ mod recall_context_identity_tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         }
     }
 

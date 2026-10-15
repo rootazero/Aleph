@@ -398,6 +398,9 @@ pub struct RunRequest {
     /// reinjection, crash resume, goal-wait wake) carry `None` — see the Task 4
     /// contract-fix report for that residual gap.
     pub telecom_public: Option<crate::gateway::telecom::TelecomPublicContext>,
+    /// Non-serialized authority minted only by an authenticated server builder.
+    /// New/derived/resumed requests initialize this to None.
+    pub telecom_authority: Option<crate::gateway::telecom::lifecycle_tools::TelecomToolAuthority>,
 }
 
 /// `metadata` key: an execution-tier **ceiling** for this run.

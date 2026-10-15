@@ -117,12 +117,15 @@ pub async fn handle_run_with_engine<P, R>(
     app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
     _workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     session_manager: Arc<dyn alephcore::gateway::session_store::SessionStore>,
+    telecom_lifecycle: Option<
+        Arc<alephcore::gateway::telecom::lifecycle_tools::TelecomLifecycleService>,
+    >,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
     R: alephcore::executor::ToolRegistry + 'static,
 {
-    use alephcore::gateway::handlers::agent::{build_run_request, AgentRunParams};
+    use alephcore::gateway::handlers::agent::AgentRunParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
     use serde::Serialize;
     use serde_json::{json, Value};
@@ -246,13 +249,14 @@ where
     // engine path and the Simulated-fallback `AgentRunManager::start_run`
     // call — see `gateway::handlers::agent::build_run_request`.
     let slash_input = params.input.clone();
-    let mut run_request = match build_run_request(
+    let mut run_request = match alephcore::gateway::handlers::agent::build_run_request_with_telecom(
         run_id.clone(),
         &session_key,
         params,
         Some(&app_config),
         Some(&session_manager),
         agent.config(),
+        telecom_lifecycle.as_ref(),
     )
     .await
     {
@@ -309,12 +313,15 @@ pub async fn handle_chat_send_with_engine<P, R>(
     _workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     _provider_registry: Arc<P>,
     session_manager: Arc<dyn alephcore::gateway::session_store::SessionStore>,
+    telecom_lifecycle: Option<
+        Arc<alephcore::gateway::telecom::lifecycle_tools::TelecomLifecycleService>,
+    >,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
     R: alephcore::executor::ToolRegistry + 'static,
 {
-    use alephcore::gateway::handlers::agent::{build_run_request, AgentRunParams};
+    use alephcore::gateway::handlers::agent::AgentRunParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
     use serde::Serialize;
     use serde_json::{json, Value};
@@ -435,13 +442,14 @@ where
     };
     let stream = run_params.stream;
     let slash_input = run_params.input.clone();
-    let mut run_request = match build_run_request(
+    let mut run_request = match alephcore::gateway::handlers::agent::build_run_request_with_telecom(
         run_id.clone(),
         &session_key,
         run_params,
         Some(&app_config),
         Some(&session_manager),
         agent.config(),
+        telecom_lifecycle.as_ref(),
     )
     .await
     {

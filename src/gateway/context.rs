@@ -57,6 +57,10 @@ pub struct GatewayContext {
     /// prefix from teams-r2 WIP) to an external coding CLI (Claude Code,
     /// Codex, Gemini CLI, …) instead of the in-process registry.
     acp_manager: Option<Arc<AcpAdapterManager>>,
+
+    /// Immutable trusted lifecycle service; None is explicitly unavailable.
+    telecom_lifecycle:
+        Option<Arc<crate::gateway::telecom::lifecycle_tools::TelecomLifecycleService>>,
 }
 
 impl GatewayContext {
@@ -80,6 +84,7 @@ impl GatewayContext {
             execution_adapter,
             a2a_policy,
             acp_manager: None,
+            telecom_lifecycle: None,
         }
     }
 
@@ -92,6 +97,22 @@ impl GatewayContext {
     pub fn with_acp_manager(mut self, acp_manager: Arc<AcpAdapterManager>) -> Self {
         self.acp_manager = Some(acp_manager);
         self
+    }
+
+    /// Inject before sharing the context. The same service issues run
+    /// capabilities and validates them at real builtin dispatch.
+    pub fn with_telecom_lifecycle(
+        mut self,
+        service: Arc<crate::gateway::telecom::lifecycle_tools::TelecomLifecycleService>,
+    ) -> Self {
+        self.telecom_lifecycle = Some(service);
+        self
+    }
+
+    pub fn telecom_lifecycle(
+        &self,
+    ) -> Option<&Arc<crate::gateway::telecom::lifecycle_tools::TelecomLifecycleService>> {
+        self.telecom_lifecycle.as_ref()
     }
 
     /// Get a reference to the session store.

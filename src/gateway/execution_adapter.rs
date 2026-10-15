@@ -309,6 +309,7 @@ mod tests {
             max_iterations_override: None,
             model_override: None,
             telecom_public: None,
+            telecom_authority: None,
         };
 
         let result = adapter.execute(request, agent, emitter).await;

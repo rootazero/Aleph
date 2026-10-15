@@ -376,6 +376,7 @@ pub async fn handle(
         max_iterations_override: None,
         model_override: None,
         telecom_public: None,
+        telecom_authority: None,
     };
 
     let is_streaming = req.stream.unwrap_or(false);

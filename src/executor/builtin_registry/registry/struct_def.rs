@@ -155,6 +155,7 @@ pub struct BuiltinToolRegistry {
     /// Uses `OnceCell` for deferred injection: `BuiltinToolRegistry` is created before
     /// `ExecutionAdapter` exists, but `GatewayContext` needs `ExecutionAdapter`.
     pub(crate) gateway_context: Arc<tokio::sync::OnceCell<Arc<GatewayContext>>>,
+    pub(crate) call_lifecycle: crate::builtin_tools::call_lifecycle::CallLifecycleTools,
     /// Session new tool (optional - requires `SessionManager`)
     pub(crate) session_new_tool: Option<crate::builtin_tools::sessions::SessionNewTool>,
     /// Session compact tool (optional - requires `SessionManager`)

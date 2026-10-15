@@ -500,6 +500,13 @@ impl CallState {
         self.cancelled_output_epochs.insert(output_epoch);
     }
 
+    /// True if `output_epoch` was already fenced by a previous `Cleared`
+    /// playback event or an explicit `cancel_output_epoch` call. Read-only;
+    /// does not mutate state and may be called from a cloned reducer.
+    pub fn is_output_epoch_cancelled(&self, output_epoch: u64) -> bool {
+        self.cancelled_output_epochs.contains(&output_epoch)
+    }
+
     /// Record generation as an explicit local event. This does not imply that
     /// the carrier queued or played the text.
     pub fn record_generated_output(
@@ -693,11 +700,17 @@ impl CallState {
                 return Ok(ApplyOutcome::Ignored(IgnoredEvent::DuplicateSequence));
             }
         }
-        let generated = turn.generated_chunks.get(&event.output_seq).ok_or(
-            CallStateError::UnknownOutputSequence {
-                seq: event.output_seq,
-            },
-        )?;
+        let Some(generated) = turn.generated_chunks.get(&event.output_seq) else {
+            // Cleared acknowledges the whole epoch even without a known chunk.
+            // Commit only its fence; do not invent playback, queue or heard facts.
+            return if event.state == PlaybackState::Cleared {
+                Ok(ApplyOutcome::Applied)
+            } else {
+                Err(CallStateError::UnknownOutputSequence {
+                    seq: event.output_seq,
+                })
+            };
+        };
         let generated_chars = generated.chars().count();
 
         let range = match (event.state, event.extent) {

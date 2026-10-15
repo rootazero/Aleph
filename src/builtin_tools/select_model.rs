@@ -330,6 +330,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -371,6 +372,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -412,6 +414,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -538,6 +541,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -580,6 +584,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -620,6 +625,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -665,6 +671,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -704,6 +711,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -733,6 +741,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let out2 = TURN_CONTEXT
             .scope(ctx2, async {

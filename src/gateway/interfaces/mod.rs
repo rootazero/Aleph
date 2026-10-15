@@ -75,6 +75,7 @@ pub use telegram::{TelegramChannel, TelegramChannelFactory, TelegramConfig};
 pub use voice_call::{
     ApplyOutcome, CallAvailability, CallCommand, CallSession, CallState, CallStateError,
     CallTransport, CallTransportError, IgnoredEvent, OfflineCallTransport, PlayedRange, TurnState,
+    VoiceCallChannel, VoiceCallChannelFactory, VoiceCallConfig,
 };
 pub use webhook::{WebhookChannel, WebhookChannelConfig, WebhookChannelFactory};
 pub use wechat::{WeChatChannel, WeChatChannelFactory, WeChatConfig};
@@ -134,6 +135,7 @@ pub fn register_channel_plugins() {
     register_plain_channel!("signal", SignalChannelFactory);
     register_plain_channel!("slack", SlackChannelFactory);
     register_plain_channel!("sms", SmsChannelFactory);
+    register_plain_channel!("voice_call", VoiceCallChannelFactory);
     register_plain_channel!("webhook", WebhookChannelFactory);
     register_plain_channel!("xmpp", XmppChannelFactory);
 }

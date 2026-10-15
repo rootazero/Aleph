@@ -9,6 +9,8 @@
 //!
 //! Spec: `docs/superpowers/specs/2026-10-09-pstn-sms-thin-relay-design.md` §6, §8.
 
+pub mod lifecycle_bridge;
+pub mod lifecycle_tools;
 pub mod operator_control;
 pub mod owner_memory_read;
 pub mod persisted_marker;
@@ -25,6 +27,10 @@ pub mod run_origin;
 pub mod sms_inbox;
 pub mod sms_meta;
 
+pub use lifecycle_bridge::{
+    ControlCompletion, ControlHandle, ControlPhase, ControlReceipt, CurrentCallStatus,
+    LifecycleControlReceiver,
+};
 pub use owner_memory_read::OwnerMemoryReadDriver;
 pub use persisted_marker::{MarkerRestore, PersistedTelecomMarker};
 pub use private_read::{

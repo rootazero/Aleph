@@ -1052,6 +1052,7 @@ where
         max_iterations_override: None,
         model_override,
         telecom_public,
+        telecom_authority: None,
     })
 }
 

@@ -1750,6 +1750,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let bound = TURN_CONTEXT.scope(turn, tool.session()).await;
         assert_eq!(bound, run_key.to_key_string());
@@ -2068,6 +2069,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
 
         let out = TURN_CONTEXT
@@ -2108,6 +2110,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
 
         let remote_stop = LoopArgs {

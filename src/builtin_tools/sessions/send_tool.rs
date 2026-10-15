@@ -511,6 +511,7 @@ impl SessionsSendTool {
             max_iterations_override: None,
             model_override: None,
             telecom_public: inherited_telecom_public.clone(),
+            telecom_authority: None,
         };
 
         // Get execution adapter
@@ -593,6 +594,7 @@ impl SessionsSendTool {
                                 max_iterations_override: None,
                                 model_override: None,
                                 telecom_public: inherited_telecom_public.clone(),
+                                telecom_authority: None,
                             };
                             let continue_emitter: Arc<
                                 dyn crate::gateway::event_emitter::EventEmitter + Send + Sync,

@@ -1,5 +1,16 @@
 # SDD ledger — plan: docs/superpowers/plans/2026-10-09-pstn-sms-thin-relay-implementation.md
 
+## Latest accepted checkpoint — Task15/16 offline complete / 最新验收：任务15/16离线完成
+
+- **Task15 (plan Task5) and Task16 (plan Task6): COMPLETE in the user-authorized OFFLINE Core + contract scope.** No registered real telephone/SMS service is required for this verdict. / **任务15、16在用户授权的离线 Core 与契约范围内完成**，此判定不要求注册真实电话/SMS 服务。
+- Actual `BuiltinToolRegistry::execute_tool` → configured `GatewayContext` → actual operator requester/approval manager → fake lifecycle/voice peer → isolated same-Core public run/history is covered. Eight registry/lifetime E2E cases plus three supplemental deadline/byte-boundary cases passed. / 实际 registry、GatewayContext、operator 审批、fake peer 到同一 Core 隔离公共执行/历史接缝已覆盖。
+- Review fixes are closed: exact-lease owned cleanup, remote hangup outcome independent of local closure, terminal-only bounded retention, waiter final snapshots, ringing cancellation/deadline, cleanup-drop unknown-spend sealing and reservation-lock budget recheck. / 对应租约清理、远端结果、终态留存、waiter 快照、来电取消/期限、drop 封账与锁内预算复检的问题已关闭。
+- Fresh verification: check `--lib --tests --bins` PASS; Core targeted **449 passed / 0 failed**; shared protocol **7 passed / 0 failed**; clippy `--lib --tests --bins` exit **0**, warnings remain. Independent read-only review found no remaining concrete offline blocker. / 新鲜定向验证及独立源码复核通过；不声明零警告。
+- Source is the uncommitted worktree at HEAD `41d421dece1476b2276284ef77984d06e8d16563`. Frozen reviewed source hashes stayed unchanged through final verification. Three protected dirty-document full SHA-256 hashes match the preexisting baseline; none is staged. No commit/stage/merge/push. / 验收对象是未提交工作树；冻结源码与三份保护文档校验一致，未暂存/提交/合并/推送。
+- [Current acceptance matrix / 当前验收矩阵](task-16-code-acceptance-matrix.md), [independent review / 独立复核](task-15-16-offline-final-review.md), [durable commands/results / 持久化命令与结果](task-15-16-offline-validation/results.json), [source hashes / 源码哈希](task-15-16-offline-validation/final-source-snapshot.json).
+- **Task37 remains OPEN, DEFERRED and UNVERIFIED:** production Relay/provider adapters, trusted startup/authority wiring, private live transport attachment, actual SMS/PSTN audio/effects, +86/overseas availability, carrier billing, G1–G5 and release. / **任务37保持待办、延后、未验证**：生产 Relay/适配、可信启动/权威与私有 live transport 接入、真实通信/音频、地区可用性、运营商计费及发布闸门。 [Follow-up checklist / 后续清单](../../../docs/superpowers/plans/telecom-real-line-verification-follow-up.md).
+- Current full workspace was not run to green; historical full-lib was 21,063 passed / 25 failed / 19 ignored. Earlier ledger entries below are historical checkpoints, not the current Task15/16 verdict. / 当前完整 workspace 未跑至全绿；以下早期记录属于历史检查点，不代表当前任务15/16判定。
+
 ## Setup
 
 - User chose `Subagent-driven` execution in message m00763.

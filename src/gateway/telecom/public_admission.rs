@@ -31,7 +31,7 @@ use crate::spend::{Principal, SpendLedger, Verdict};
 use crate::sync_primitives::{Arc, AtomicU64, Mutex, OnceLock, Ordering};
 use tokio_util::sync::CancellationToken;
 
-use super::TelecomPublicContext;
+use super::{TelecomProvenance, TelecomPublicContext};
 
 /// The explicit spend principal of every public telecom run — a typed
 /// variant, never derived from metadata or the ambient owner.
@@ -127,14 +127,88 @@ pub struct PublicRunPermit {
     registry: Arc<PublicRunRegistry>,
     binding: String,
     id: u64,
+    caller_digest: super::public_context::CallerDigest,
+    provenance: TelecomProvenance,
     cancel: CancellationToken,
 }
 
+/// Crate-private witness minted only by validating a live admission. It cannot
+/// admit a run or release its slot; the owned permit remains the sole RAII owner.
+#[derive(Clone)]
+pub(crate) struct PublicRunIdentity {
+    registry: Arc<PublicRunRegistry>,
+    binding: String,
+    id: u64,
+    caller_digest: super::public_context::CallerDigest,
+    provenance: TelecomProvenance,
+    cancel: CancellationToken,
+}
+
+impl PublicRunIdentity {
+    pub(crate) fn is_current(&self) -> bool {
+        if self.cancel.is_cancelled() {
+            return false;
+        }
+        let active = self
+            .registry
+            .active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        active.get(&self.binding).is_some_and(|entry| {
+            entry.id == self.id
+                && entry.caller_digest == self.caller_digest
+                && !entry.cancel.is_cancelled()
+        })
+    }
+
+    pub(crate) fn same_run(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.registry, &other.registry)
+            && self.binding == other.binding
+            && self.id == other.id
+            && self.caller_digest == other.caller_digest
+            && self.provenance == other.provenance
+    }
+
+    pub(crate) fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+}
+
 impl PublicRunPermit {
+    /// Seal unknown cost before this permit releases the binding reservation.
+    pub(crate) fn exhaust_unaccounted_spend(&self) {
+        self.registry.exhaust_unaccounted_spend();
+    }
+
     /// Cancellation token of this run; fired by
     /// [`PublicRunRegistry::cancel_binding`].
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel.clone()
+    }
+
+    /// Validate exact registry allocation, full authenticated provenance and
+    /// current Entry id/digest, not just equal metadata or an uncancelled token.
+    pub(crate) fn validated_identity(
+        &self,
+        registry: &Arc<PublicRunRegistry>,
+        ctx: &TelecomPublicContext,
+    ) -> Option<PublicRunIdentity> {
+        if !Arc::ptr_eq(&self.registry, registry)
+            || self.binding != ctx.provenance().binding_ref()
+            || self.caller_digest != *ctx.provenance().caller_digest()
+            || self.provenance != *ctx.provenance()
+        {
+            return None;
+        }
+        let identity = PublicRunIdentity {
+            registry: self.registry.clone(),
+            binding: self.binding.clone(),
+            id: self.id,
+            caller_digest: self.caller_digest.clone(),
+            provenance: self.provenance.clone(),
+            cancel: self.cancel.clone(),
+        };
+        identity.is_current().then_some(identity)
     }
 }
 
@@ -201,6 +275,13 @@ impl PublicRunRegistry {
         }
     }
 
+    /// Recheck the same public spend gate between utterances while a voice
+    /// call retains its single permit. Does not acquire another admission slot
+    /// or introduce a second accounting policy.
+    pub(crate) fn recheck_spend(&self) -> bool {
+        !self.over_spend()
+    }
+
     /// Admit one public run for `ctx`'s binding, or refuse with a reason.
     /// Never queues.
     pub fn try_admit(self: &Arc<Self>, ctx: &TelecomPublicContext) -> PublicAdmission {
@@ -209,6 +290,11 @@ impl PublicRunRegistry {
         }
         let binding = ctx.provenance().binding_ref().to_string();
         let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        // The fast check may predate an unknown-cost seal while this caller
+        // waits for the reservation lock. Recheck at allocation time.
+        if self.over_spend() {
+            return PublicAdmission::OverSpend;
+        }
         if active.contains_key(&binding) {
             return PublicAdmission::Busy;
         }
@@ -229,6 +315,8 @@ impl PublicRunRegistry {
             registry: Arc::clone(self),
             binding,
             id,
+            caller_digest: ctx.provenance().caller_digest().clone(),
+            provenance: ctx.provenance().clone(),
             cancel,
         })
     }
@@ -278,6 +366,9 @@ impl PublicRunRegistry {
     /// unknown cost as zero; the next run must use a configured spend policy or
     /// wait for restart. Formal metering remains the source of truth when on.
     pub fn exhaust_unaccounted_spend(&self) {
+        // Serialize fallback sealing with reservation allocation. An existing
+        // permit is retained by its owner until after this lock is released.
+        let _active = self.active.lock().unwrap_or_else(|e| e.into_inner());
         if self.gate.formal().is_none() {
             self.tokens_spent
                 .fetch_max(self.token_cap, Ordering::AcqRel);
@@ -308,6 +399,21 @@ mod tests {
         drop(first);
         assert_eq!(reg.active_count(), 0);
         assert!(matches!(reg.try_admit(&ctx), PublicAdmission::Admitted(_)));
+    }
+
+    #[test]
+    fn same_run_includes_the_full_provenance_witness() {
+        let reg = PublicRunRegistry::new(4, 1_000);
+        let ctx = sample_public_context("bind-a");
+        let PublicAdmission::Admitted(permit) = reg.try_admit(&ctx) else {
+            panic!("admit");
+        };
+        let identity = permit.validated_identity(&reg, &ctx).unwrap();
+        let mut other = identity.clone();
+        assert!(identity.same_run(&other));
+        // Keep registry/id/binding/digest unchanged to isolate the witness.
+        other.provenance = sample_public_context("bind-b").provenance().clone();
+        assert!(!identity.same_run(&other));
     }
 
     #[test]
@@ -367,6 +473,64 @@ mod tests {
         assert!(!reg.cancel_binding("bind-other"));
         assert!(reg.cancel_binding("bind-a"));
         assert!(permit.cancel_token().is_cancelled());
+    }
+
+    #[test]
+    fn admission_rechecks_spend_after_waiting_for_reservation_lock() {
+        use std::sync::mpsc;
+        struct ReadNotice {
+            ledger: crate::spend::InMemorySpendLedger,
+            first_read: Mutex<Option<mpsc::Sender<()>>>,
+        }
+        impl SpendLedger for ReadNotice {
+            fn record(&self, p: &Principal, t: i64, d: crate::spend::Delta) -> anyhow::Result<()> {
+                self.ledger.record(p, t, d)
+            }
+            fn spent_for(&self, p: &Principal, t: i64) -> anyhow::Result<crate::spend::Spent> {
+                let snapshot = self.ledger.spent_for(p, t)?;
+                if let Some(sender) = self.first_read.lock().unwrap().take() {
+                    sender.send(()).unwrap();
+                }
+                Ok(snapshot)
+            }
+            fn total_for(&self, s: i64, e: i64) -> anyhow::Result<crate::spend::Spent> {
+                self.ledger.total_for(s, e)
+            }
+            fn sweep_before(&self, t: i64) -> anyhow::Result<usize> {
+                self.ledger.sweep_before(t)
+            }
+            fn principals_in(
+                &self,
+                t: i64,
+            ) -> anyhow::Result<Vec<(Principal, crate::spend::Spent)>> {
+                self.ledger.principals_in(t)
+            }
+        }
+        let (sender, read) = mpsc::channel();
+        let policy = enabled_policy(Some(1.0), None);
+        let ledger: Arc<dyn SpendLedger> = Arc::new(ReadNotice {
+            ledger: crate::spend::InMemorySpendLedger::default(),
+            first_read: Mutex::new(Some(sender)),
+        });
+        let reg = PublicRunRegistry::with_gate(
+            4,
+            1000,
+            SpendGate::Injected {
+                policy: policy.clone(),
+                ledger: ledger.clone(),
+            },
+        );
+        let reservation_lock = reg.active.lock().unwrap();
+        let pending = reg.clone();
+        let thread =
+            std::thread::spawn(move || pending.try_admit(&sample_public_context("bind-a")));
+        read.recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        // The caller already read a zero-spend snapshot, but cannot allocate.
+        record_usd(&ledger, &policy, &Principal::TelecomPublic, 1.0);
+        drop(reservation_lock);
+        assert!(matches!(thread.join().unwrap(), PublicAdmission::OverSpend));
+        assert_eq!(reg.active_count(), 0);
     }
 
     fn enabled_policy(telecom_public_usd: Option<f64>, per_user_usd: Option<f64>) -> SpendPolicy {

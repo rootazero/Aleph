@@ -86,6 +86,8 @@ All attribution below is **static Git-object comparison** — no baseline run wa
 - 6 项原环境仍失败的测试，在每项独立临时 `HOME`、`ALEPH_HOME`、XDG 路径下全部通过：project-skill-empty 与 5 项 dreaming pipeline 测试。精确日志与临时目录记录在 `/tmp/aleph-telecom-task16/env-reruns/isolated-home-results.json`；不修改真实 home、项目代码或测试断言。/ All six passed with fresh per-test temporary home directories, without source/assertion changes.
 - 其余 4 项仍失败：2 个 skill-doc 守卫、plugin installer validation、btw bundled-command census。错误明确报告缺失的 skills/plugins 子模块、扫描到 0 个文件／manifest。未初始化／下载子模块，未把零覆盖改成 skip。/ Four still fail on missing skills/plugins submodules; no submodule download or zero-coverage skip was performed.
 
+10 项 B 类测试也在每项独立临时 HOME／ALEPH_HOME 下逐个 `--exact --test-threads=1` 重跑，全部仍失败；记录位于 `/tmp/aleph-telecom-task16/static-reruns/results.json`。这验证当前失败可单独复现，不等于实际运行了 merge-base 基线。/ All ten B-class failures reproduced in isolated single-test runs; this is not a tested merge-base baseline.
+
 修复新增守卫违规后的相关测试也用已重新编译的同一 binary 逐组串行重跑并通过：`gateway::telecom` 157、`gateway::busy_queue::durable` 16、`public_spend_tests` 2、`providers::metering` 15；日志依次位于 `/tmp/aleph-telecom-task16/telecom-guard-fixes.log`、`/tmp/aleph-telecom-task16/durable-guard-fixes.log`、`/tmp/aleph-telecom-task16/public-spend-guard-fixes.log`、`/tmp/aleph-telecom-task16/metering-guard-fixes.log`。/ The affected canary groups passed after rebuilding: 157, 16, 2 and 15 tests respectively.
 
 这些定向探针增加了归因证据，**不替代完整当前快照测试，也不表示原 full-lib 结果变成通过**。/ These probes strengthen attribution but do not replace a full current-snapshot run or turn the original failing full suite green.

@@ -71,6 +71,8 @@ const ICON_SLACK: &str = r#"<path d="M14.5 2c-.83 0-1.5.67-1.5 1.5v5c0 .83.67 1.
 
 const ICON_SMS: &str = r#"<path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM7 9h10v2H7V9zm6 5H7v-2h6v2zm4-6H7V6h10v2z"/>"#;
 
+const ICON_VOICE_CALL: &str = r#"<path d="M6.6 10.8c1.4 2.8 3.7 5.1 6.5 6.5l2.2-2.2c.3-.3.8-.4 1.2-.3 1.3.4 2.7.6 4.1.6.7 0 1.2.5 1.2 1.2V20c0 .7-.5 1.2-1.2 1.2C10.2 21.2 2.8 13.8 2.8 4.8 2.8 4.1 3.3 3.6 4 3.6h3.4c.7 0 1.2.5 1.2 1.2 0 1.4.2 2.8.6 4.1.1.4 0 .9-.3 1.2l-2.3 2.2z"/>"#;
+
 const ICON_EMAIL: &str =
     r#"<rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22,7 12,13 2,7"/>"#;
 
@@ -395,6 +397,69 @@ static SMS_FIELDS: &[FieldDef] = &[
         help: "Longest outbound message, in SMS segments (long messages are billed per segment)",
         required: false,
         default_value: "3",
+        options: &[],
+    },
+    FieldDef {
+        key: "command_ttl_secs",
+        label: "Command TTL (seconds)",
+        kind: FieldKind::Number { min: 1, max: 300 },
+        placeholder: "300",
+        help: "How long an outbound SMS command remains valid before it expires",
+        required: false,
+        default_value: "300",
+        options: &[],
+    },
+];
+
+static VOICE_CALL_FIELDS: &[FieldDef] = &[
+    FieldDef {
+        key: "region",
+        label: "Region",
+        kind: FieldKind::Text,
+        placeholder: "CN",
+        help: "ISO 3166-1 alpha-2 region of the service number. Aleph never infers it from the phone number",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "service_address",
+        label: "Service Number",
+        kind: FieldKind::Text,
+        placeholder: "+8613800000000",
+        help: "Your PSTN service number in strict E.164 form (leading +, 8-15 digits)",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "binding_ref",
+        label: "Relay Binding",
+        kind: FieldKind::Text,
+        placeholder: "core-binding-1",
+        help: "Reference to the telecom Relay binding that carries this number. Provider credentials are never entered here",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "inbound_enabled",
+        label: "Receive Calls",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Allow authenticated inbound PSTN calls to reach the Core",
+        required: false,
+        default_value: "true",
+        options: &[],
+    },
+    FieldDef {
+        key: "outbound_enabled",
+        label: "Make Calls",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Allow the Core to request outbound PSTN calls; a live Relay is still required",
+        required: false,
+        default_value: "true",
         options: &[],
     },
 ];
@@ -1561,6 +1626,17 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         brand_color: "#34A853",
         config_section: "channels.sms",
         fields: SMS_FIELDS,
+        docs_url: "https://www.itu.int/rec/T-REC-E.164",
+    },
+    // Phone (PSTN)
+    ChannelDefinition {
+        id: "voice_call",
+        name: "Phone (PSTN)",
+        description: "Voice calls through a thin telecom Relay (experimental; requires an authenticated Relay binding)",
+        icon_svg: ICON_VOICE_CALL,
+        brand_color: "#2563EB",
+        config_section: "channels.voice_call",
+        fields: VOICE_CALL_FIELDS,
         docs_url: "https://www.itu.int/rec/T-REC-E.164",
     },
 ];

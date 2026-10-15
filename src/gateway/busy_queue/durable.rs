@@ -454,6 +454,7 @@ where
         max_iterations_override: payload.max_iterations_override,
         model_override: payload.model_override.clone(),
         telecom_public,
+        telecom_authority: None,
     })
 }
 
@@ -901,6 +902,7 @@ mod tests {
             max_iterations_override: None,
             model_override: None,
             telecom_public,
+            telecom_authority: None,
         }
     }
 

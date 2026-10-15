@@ -101,6 +101,13 @@ impl TurnPermissions {
             // reach. `None` on every non-planning turn.
             plan_gate: self.plan_gate.clone(),
             side_question: self.side_question,
+            telecom_authority: request
+                .telecom_authority
+                .as_ref()
+                .filter(|authority| {
+                    !request.is_resume() && !self.side_question && authority.valid_for_run(run_id)
+                })
+                .cloned(),
         }
     }
 

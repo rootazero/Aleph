@@ -1081,7 +1081,29 @@ pub async fn build_run_request(
         max_iterations_override: None,
         model_override,
         telecom_public: None,
+        telecom_authority: None,
     })
+}
+
+/// Authenticated server-only run path. Capture the transport identity here,
+/// before awaits/spawn, and issue only from the explicitly injected context
+/// service. This input is never part of AgentRunParams or metadata.
+pub async fn build_run_request_with_telecom(
+    run_id: String,
+    session_key: &SessionKey,
+    params: AgentRunParams,
+    app_config: Option<&Arc<RwLock<crate::Config>>>,
+    sessions: Option<&Arc<dyn crate::gateway::session_store::SessionStore>>,
+    agent: &crate::gateway::agent_instance::AgentInstanceConfig,
+    service: Option<&Arc<crate::gateway::telecom::lifecycle_tools::TelecomLifecycleService>>,
+) -> Result<RunRequest, BuildRunError> {
+    let authenticated_user = crate::gateway::caller_identity::current_caller_user();
+    let mut request =
+        build_run_request(run_id, session_key, params, app_config, sessions, agent).await?;
+    request.telecom_authority = service
+        .zip(authenticated_user.as_deref())
+        .and_then(|(service, user)| service.issue_for_authenticated_user(user, &request.run_id));
+    Ok(request)
 }
 
 /// Round-2 E3: a picker selection of the "moa" pseudo-provider arms session

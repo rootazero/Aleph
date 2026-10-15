@@ -442,6 +442,31 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true,
     },
     BuiltinToolDefinition {
+        name: "initiate_call",
+        description: <crate::builtin_tools::call_lifecycle::InitiateCallTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "answer_call",
+        description: <crate::builtin_tools::call_lifecycle::AnswerCallTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "hangup",
+        description: <crate::builtin_tools::call_lifecycle::HangupTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "cancel_output",
+        description: <crate::builtin_tools::call_lifecycle::CancelOutputTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "call_status",
+        description: <crate::builtin_tools::call_lifecycle::CallStatusTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "session_list",
         description: <crate::builtin_tools::sessions::list_tool::SessionsListTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires gateway_context
@@ -1036,6 +1061,46 @@ pub fn create_tool_boxed(
     config: Option<&BuiltinToolConfig>,
 ) -> Option<Box<dyn AlephToolDyn>> {
     match name {
+        "initiate_call" => Some(Box::new(
+            crate::builtin_tools::call_lifecycle::InitiateCallTool::new(
+                config
+                    .and_then(|c| c.gateway_context.as_ref())
+                    .and_then(|c| c.telecom_lifecycle())
+                    .cloned(),
+            ),
+        )),
+        "answer_call" => Some(Box::new(
+            crate::builtin_tools::call_lifecycle::AnswerCallTool::new(
+                config
+                    .and_then(|c| c.gateway_context.as_ref())
+                    .and_then(|c| c.telecom_lifecycle())
+                    .cloned(),
+            ),
+        )),
+        "hangup" => Some(Box::new(
+            crate::builtin_tools::call_lifecycle::HangupTool::new(
+                config
+                    .and_then(|c| c.gateway_context.as_ref())
+                    .and_then(|c| c.telecom_lifecycle())
+                    .cloned(),
+            ),
+        )),
+        "cancel_output" => Some(Box::new(
+            crate::builtin_tools::call_lifecycle::CancelOutputTool::new(
+                config
+                    .and_then(|c| c.gateway_context.as_ref())
+                    .and_then(|c| c.telecom_lifecycle())
+                    .cloned(),
+            ),
+        )),
+        "call_status" => Some(Box::new(
+            crate::builtin_tools::call_lifecycle::CallStatusTool::new(
+                config
+                    .and_then(|c| c.gateway_context.as_ref())
+                    .and_then(|c| c.telecom_lifecycle())
+                    .cloned(),
+            ),
+        )),
         "search" => {
             // A live handle wins: the tool then reads every `[search]`
             // hot-apply off the swap cell. Without one the "bare key, else

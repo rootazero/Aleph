@@ -250,6 +250,7 @@ impl McpFace {
             unattended,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         crate::gateway::execution_engine::build_request_tool_service(
             registry,

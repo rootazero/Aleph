@@ -82,6 +82,7 @@ impl AgentLoopBridge {
             max_iterations_override: None,
             model_override: None,
             telecom_public: None,
+            telecom_authority: None,
         }
     }
 
@@ -135,6 +136,7 @@ impl AgentLoopBridge {
             unattended: true,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         }
     }
 

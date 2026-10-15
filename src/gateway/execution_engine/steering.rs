@@ -588,6 +588,7 @@ pub(super) async fn build_steering_rescue_request(
         // A rescue continues THIS run's session log: it keeps the originating
         // run's public-telecom provenance (never widened, never re-derived).
         telecom_public: request.telecom_public.clone(),
+        telecom_authority: None,
     })
 }
 
@@ -1042,6 +1043,7 @@ mod tests {
             max_iterations_override: None,
             model_override: None,
             telecom_public: None,
+            telecom_authority: None,
         }
     }
 

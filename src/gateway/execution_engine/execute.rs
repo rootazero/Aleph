@@ -1534,6 +1534,7 @@ fn continuation_request(
         // Inherited, never re-derived or widened: a continuation of a
         // public-telecom run stays under that run's public ceiling.
         telecom_public,
+        telecom_authority: None,
     }
 }
 

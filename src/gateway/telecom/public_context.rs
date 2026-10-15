@@ -14,12 +14,13 @@
 //!
 //! The types have private fields, no `serde` derives and only `pub(crate)`
 //! constructors, so no payload, metadata map or persisted marker deserializes
-//! into one. The SMS adapter is the only production producer: the inbound
+//! into one. SMS and authenticated voice Relay are production producers: the inbound
 //! router derives the context from the *typed* `MessageMeta::Sms` that
 //! interface attaches — never from the string `metadata` map. This is an
 //! in-crate construction convention, not a cryptographic or "unforgeable"
-//! guarantee: any code in this crate could still call a `pub(crate)`
-//! constructor.
+//! guarantee for SMS: any code in this crate could still call its `pub(crate)`
+//! constructor. Voice instead requires a privately minted Relay ingress proof;
+//! no wire payload or public context constructor supplies voice authority.
 //!
 //! This slice only defines and propagates the contract. Consumers (history /
 //! memory readers, approval, tool surface) are later slices.
@@ -135,6 +136,22 @@ impl TelecomPublicContext {
                 binding_ref: meta.binding_ref.clone(),
                 caller_digest: CallerDigest::from_normalized_e164(&meta.peer_address),
                 connection_generation: meta.connection_generation,
+            },
+        }
+    }
+
+    /// Voice authority requires the Relay module's privately minted ingress
+    /// proof. A wire CallSession or raw payload is not proof.
+    pub(crate) fn from_admitted_voice(
+        proof: &crate::gateway::interfaces::voice_call::relay::VoiceIngressProof,
+    ) -> Self {
+        Self {
+            provenance: TelecomProvenance {
+                channel: TelecomChannel::Voice,
+                region: proof.region().to_owned(),
+                binding_ref: proof.binding().to_owned(),
+                caller_digest: proof.caller_digest(),
+                connection_generation: proof.generation(),
             },
         }
     }

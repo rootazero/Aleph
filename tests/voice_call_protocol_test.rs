@@ -778,8 +778,15 @@ fn unknown_cleared_sequence_fences_the_output_epoch() {
             PlaybackState::Cleared,
             PlayedExtent::None,
         )))),
-        Err(CallStateError::UnknownOutputSequence { seq: 99 }.into())
+        Ok(ApplyOutcome::Applied)
     );
+    let state = transport.state().unwrap();
+    assert!(state.is_output_epoch_cancelled(1));
+    let active = state.active_turn.as_ref().unwrap();
+    assert!(active.generated_text.is_empty());
+    assert!(active.queued_text.is_empty());
+    assert_eq!(active.playback_state_for_output(99), None);
+    assert_eq!(active.heard_text(), None);
     let output = turn("turn-1", 1, 1, CallTurnRole::AssistantText, "answer");
     assert_eq!(
         transport.record_generated_output(&output),
@@ -795,6 +802,91 @@ fn unknown_cleared_sequence_fences_the_output_epoch() {
             .unwrap(),
         ApplyOutcome::Ignored(IgnoredEvent::CancelledOutputEpoch)
     );
+}
+
+#[test]
+fn unknown_cleared_fences_pending_transport_output_without_fabricating_facts() {
+    let mut transport = started_transport();
+    transport
+        .receive_committed_transcript(&envelope(TelecomKind::CallTurn(turn(
+            "turn-1",
+            1,
+            1,
+            CallTurnRole::UserTranscript,
+            "hello",
+        ))))
+        .unwrap();
+    let output = turn(
+        "turn-1",
+        1,
+        1,
+        CallTurnRole::AssistantText,
+        "pending answer",
+    );
+    transport.record_generated_output(&output).unwrap();
+    transport.record_output_queued(&output).unwrap();
+    let before = transport.state().unwrap().active_turn.clone();
+    let commands_before = transport.commands().to_vec();
+    for state in [
+        PlaybackState::Queued,
+        PlaybackState::Started,
+        PlaybackState::Played,
+        PlaybackState::Failed,
+    ] {
+        assert_eq!(
+            transport.publish_playback_ack(&envelope(TelecomKind::PlaybackEvent(playback(
+                99,
+                state,
+                PlayedExtent::None,
+            )))),
+            Err(CallStateError::UnknownOutputSequence { seq: 99 }.into())
+        );
+        assert!(!transport.state().unwrap().is_output_epoch_cancelled(1));
+        assert_eq!(transport.state().unwrap().active_turn, before);
+    }
+    let clear = envelope(TelecomKind::PlaybackEvent(playback(
+        99,
+        PlaybackState::Cleared,
+        PlayedExtent::None,
+    )));
+
+    assert_eq!(
+        transport.publish_playback_ack(&clear),
+        Ok(ApplyOutcome::Applied)
+    );
+    assert!(transport.state().unwrap().is_output_epoch_cancelled(1));
+    assert_eq!(transport.state().unwrap().active_turn, before);
+    let active = transport.state().unwrap().active_turn.as_ref().unwrap();
+    assert_eq!(active.queued_text, "pending answer");
+    assert_eq!(active.playback_state_for_output(99), None);
+    assert_eq!(active.heard_text(), None);
+    assert_eq!(
+        transport.send_text_output(output.clone()),
+        Err(CallStateError::CancelledOutputEpoch { output_epoch: 1 }.into())
+    );
+    assert_eq!(
+        transport.record_generated_output(&output),
+        Err(CallStateError::CancelledOutputEpoch { output_epoch: 1 }.into())
+    );
+    assert_eq!(
+        transport.record_output_queued(&output),
+        Err(CallStateError::CancelledOutputEpoch { output_epoch: 1 }.into())
+    );
+    for event in [
+        clear,
+        envelope(TelecomKind::PlaybackEvent(playback(
+            1,
+            PlaybackState::Played,
+            PlayedExtent::Exact { chars: 14 },
+        ))),
+    ] {
+        assert_eq!(
+            transport.publish_playback_ack(&event),
+            Ok(ApplyOutcome::Ignored(IgnoredEvent::CancelledOutputEpoch))
+        );
+    }
+    assert_eq!(transport.state().unwrap().active_turn, before);
+    assert_eq!(transport.commands(), commands_before);
 }
 
 #[test]

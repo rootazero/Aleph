@@ -989,7 +989,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     loop_registry.clone(),
                     allowed_names.clone(),
                     None,
-                    Some(turn_context.clone()),
+                    Some(turn_context.clone().without_telecom_authority()),
                     hook_executor.clone(),
                     hook_session_id.clone(),
                     turn_permissions

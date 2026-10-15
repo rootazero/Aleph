@@ -64,6 +64,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let (agent_id, context) =
             TURN_CONTEXT.sync_scope(turn, || audit_identity("browser", "navigate", "https://x"));
@@ -83,6 +84,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let (agent_id, context) =
             TURN_CONTEXT.sync_scope(turn, || audit_identity("automation", "run_script", "sh"));
