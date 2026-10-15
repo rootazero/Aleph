@@ -1059,4 +1059,33 @@ fn a_halted_stream_with_no_record_and_no_final_text_drops_the_uncovered_text() {
     assert!(steps(&text_only).is_empty(), "{:?}", text_only.entries());
 }
 
+#[test]
+fn adopting_same_run_preserves_open_step_and_cursors() {
+    let mut t = Transcript::new();
+    assert!(t.adopt_live_run(RUN, 1_000).is_empty());
+    drive(&mut t, &[turn(1), chunk("partial")]);
+    let before = t.entries().to_vec();
+    assert!(t.adopt_live_run(RUN, 2_000).is_empty());
+    assert_eq!(t.entries(), before);
+    drive(&mut t, &[chunk(" answer")]);
+    assert_eq!(steps(&t)[0].text.as_deref(), Some("partial answer"));
+}
+
+#[test]
+fn replay_during_live_requires_resync_without_mutation() {
+    let mut t = Transcript::new();
+    t.adopt_live_run(RUN, 1_000);
+    drive(&mut t, &[turn(1), tool_start("nested", "bash")]);
+    let before = t.entries().to_vec();
+    assert_eq!(
+        t.apply_replay(&AgentTraceEvent::TurnStarted { iteration: 2 }),
+        vec![Change::NeedsResync]
+    );
+    assert_eq!(t.entries(), before);
+    t.adopt_live_run("run-2", 2_000);
+    let s = steps(&t);
+    assert_eq!(s[0].status, StepStatus::Pending);
+    assert_eq!(s[0].tools[0].status, RowStatus::Pending);
+}
+
 mod g2;

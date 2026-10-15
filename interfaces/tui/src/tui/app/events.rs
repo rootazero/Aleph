@@ -210,6 +210,8 @@ impl AppState {
         };
         let session_key = self.session_key.clone();
         self.mark_run_session(run_id.clone(), session_key);
+        let changes = self.messages.adopt_live_run(&run_id, self.now_ms());
+        self.observe_transcript_changes(&changes);
         self.current_run = Some(run_id);
         // Back-dated by the age the SERVER measured, so the working indicator
         // reports the turn's age rather than this screen's attachment. Without
@@ -349,6 +351,19 @@ impl AppState {
             }
         }
 
+        if !matches!(&event, StreamEvent::RunAccepted { session_key, .. } if session_key != &self.session_key)
+        {
+            if matches!(
+                &event,
+                StreamEvent::RunAccepted { .. }
+                    | StreamEvent::RunComplete { .. }
+                    | StreamEvent::RunError { .. }
+            ) {
+                self.transcript_generation = self.transcript_generation.wrapping_add(1);
+            }
+            let changes = self.messages.apply_live(&event, self.now_ms());
+            self.observe_transcript_changes(&changes);
+        }
         match event {
             StreamEvent::RunAccepted {
                 run_id,
@@ -393,44 +408,11 @@ impl AppState {
                 self.apply_agent_trace_event(&event)
             }
 
-            StreamEvent::Reasoning { content, .. } => {
-                self.append_reasoning_chunk(&content);
-                Action::None
-            }
+            StreamEvent::Reasoning { .. } => Action::None,
 
-            StreamEvent::ToolStart {
-                tool_name,
-                tool_id,
-                params,
-                ..
-            } => {
-                if self.current_run_uses_agent_trace {
-                    return Action::None;
-                }
-                if matches!(self.tool_progress_mode, ToolProgressMode::Off) {
-                    return Action::None;
-                }
-                self.start_tool_execution(tool_id, tool_name, &params);
-                Action::None
-            }
+            StreamEvent::ToolStart { .. } => Action::None,
 
-            StreamEvent::ToolUpdate {
-                tool_id, progress, ..
-            } => {
-                // /tools off|new — suppress mid-execution progress updates entirely.
-                // /tools all|verbose — surface them.
-                match self.tool_progress_mode {
-                    ToolProgressMode::Off | ToolProgressMode::New => return Action::None,
-                    ToolProgressMode::All | ToolProgressMode::Verbose => {}
-                }
-                // A progress line IS the row's body while it runs: the result
-                // replaces it on `finish`, so there is no second field holding
-                // a caption that outlives the call it described.
-                if let Some(row) = self.find_tool_mut(&tool_id) {
-                    row.body = RowBody::Text(progress);
-                }
-                Action::None
-            }
+            StreamEvent::ToolUpdate { .. } => Action::None,
 
             StreamEvent::ToolEnd {
                 tool_id,
@@ -464,15 +446,7 @@ impl AppState {
                         self.maybe_apply_plan_from_tool(&name, &output_value);
                     }
                 }
-                if matches!(self.tool_progress_mode, ToolProgressMode::Off) {
-                    return Action::None;
-                }
-                // Passed straight through rather than re-wrapped: this frame IS
-                // the wire `ToolResult`, `presentation` and all. Converting it
-                // to the trace's own result shape here is what used to drop the
-                // structured diff on this path — the authoritative one — while
-                // the lossy mirror carried it.
-                self.finish_tool_execution(&tool_id, &result, duration_ms);
+                let _ = duration_ms;
                 Action::None
             }
 
@@ -482,7 +456,7 @@ impl AppState {
                 // would kill the live typewriter. The de-dup happens on the
                 // other side — see `turn_streamed_len`.
                 self.turn_streamed_len += content.len();
-                self.append_assistant_content(&content);
+                self.run_rendered_assistant_text |= !content.is_empty();
                 Action::None
             }
 
@@ -510,8 +484,7 @@ impl AppState {
                 // terminal record — the live rows came off the lossy
                 // `agent_trace` mirror. Order matters: fill from the summary
                 // first, then settle whatever it did not mention.
-                self.reconcile_tools_from_summary(&summary.tool_summaries, &summary.errors);
-                self.settle_orphan_tools();
+                // The reducer already reconciled authoritative tool summaries.
                 // Same invariant, second object: the todo panel's live frames
                 // ride the same lossy mirror. `RunSummary.plan` is present iff
                 // scratchpad ran this run — a `clear` arrives as an EMPTY
@@ -529,12 +502,7 @@ impl AppState {
                 // without this the surface that owns the `p` key showed a
                 // spinner and then silence for both of the outcomes that are
                 // not errors.
-                if !self.run_rendered_assistant_text {
-                    if let Some(text) = summary.final_response.as_deref() {
-                        self.append_assistant_content(text.trim_end());
-                    }
-                }
-                self.mark_current_assistant_complete();
+                // The reducer owns streamed text and final-response fill.
 
                 // Surface non-clean terminations (a hit cap / a crash) so a
                 // truncated answer doesn't read as a clean finish. Both the
@@ -551,7 +519,7 @@ impl AppState {
                 }
 
                 // Last, so the turn closes on it.
-                self.append_turn_trailers(&summary.tool_summaries, total_duration_ms);
+                let _ = total_duration_ms;
 
                 Action::None
             }
@@ -566,8 +534,7 @@ impl AppState {
                 // No summary on this path, so there is nothing to reconcile
                 // against — but the run is over, so a spinning row is a lie
                 // either way.
-                self.settle_orphan_tools();
-                self.mark_current_assistant_complete();
+                // The reducer closes open steps and unknown tool rows.
 
                 self.add_system_message(format!("Error: {error}"));
                 Action::None
@@ -605,6 +572,7 @@ impl AppState {
             StreamEvent::ClarificationEnded {
                 session_key,
                 outcome,
+                ..
             } => {
                 let mine = self
                     .dialog
@@ -668,20 +636,9 @@ impl AppState {
                     // and wires the real list.
                     attachments: Vec::new(),
                 };
-                // Placed BEFORE a bubble that is still streaming. The peer's
-                // run may have opened its assistant message already, and a
-                // question rendered under its own answer reads as a reply to
-                // it. Anything settled stays above, so this only ever moves the
-                // row past the one bubble that is still being written.
-                match self.messages.last() {
-                    Some(TranscriptEntry::AssistantText {
-                        streaming: true, ..
-                    }) => {
-                        let at = self.messages.len() - 1;
-                        self.messages.insert(at, row);
-                    }
-                    _ => self.messages.push(row),
-                }
+                self.messages.import_legacy(row);
+                self.transcript_generation = self.transcript_generation.wrapping_add(1);
+                self.invalidate_rendered_lines();
                 Action::None
             }
 

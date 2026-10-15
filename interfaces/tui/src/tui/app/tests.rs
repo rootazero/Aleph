@@ -23,6 +23,7 @@ fn reasoning_text(state: &AppState) -> Option<String> {
         .iter()
         .filter_map(|m| match m {
             TranscriptEntry::Reasoning { text, .. } => Some(text.as_str()),
+            TranscriptEntry::Step(step) => step.thinking.as_ref().map(|v| v.text.as_str()),
             _ => None,
         })
         .collect();
@@ -36,6 +37,7 @@ fn assistant_text(state: &AppState) -> String {
         .iter()
         .filter_map(|m| match m {
             TranscriptEntry::AssistantText { markdown, .. } => Some(markdown.as_str()),
+            TranscriptEntry::Step(step) => step.text.as_deref(),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -47,11 +49,50 @@ fn tool_rows(state: &AppState) -> Vec<&ToolRow> {
     state
         .messages
         .iter()
-        .filter_map(|m| match m {
-            TranscriptEntry::Tool(row) => Some(row),
-            _ => None,
+        .flat_map(|m| match m {
+            TranscriptEntry::Tool(row) => vec![row],
+            TranscriptEntry::Step(step) => step.tools.iter().collect(),
+            _ => Vec::new(),
         })
         .collect()
+}
+
+#[test]
+fn live_run_has_one_reducer_owned_step_and_recursive_tool_lookup() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run".into(),
+        session_key: "s".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::Reasoning {
+        run_id: "run".into(),
+        seq: 2,
+        content: "thinking".into(),
+        is_complete: false,
+    });
+    state.handle_gateway_event(StreamEvent::ToolStart {
+        run_id: "run".into(),
+        seq: 3,
+        tool_id: "t".into(),
+        tool_name: "file_read".into(),
+        params: json!({"path":"a.rs"}),
+    });
+    assert_eq!(reasoning_text(&state).as_deref(), Some("thinking"));
+    assert_eq!(state.tool_name_of("t").as_deref(), Some("file_read"));
+    assert_eq!(tool_rows(&state).len(), 1);
+    assert_eq!(
+        state
+            .messages
+            .iter()
+            .filter(|e| matches!(e, TranscriptEntry::Step(_)))
+            .count(),
+        1
+    );
+    assert!(!state.messages.iter().any(|e| matches!(
+        e,
+        TranscriptEntry::Tool(_) | TranscriptEntry::Reasoning { .. }
+    )));
 }
 
 /// The lead-in and the label have to move together — a localised label under an
