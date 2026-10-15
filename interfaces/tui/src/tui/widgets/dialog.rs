@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 use crate::tui::app::{ApprovalState, DialogState};
+use crate::tui::interaction::{InteractionController, ModalOwner, SubmissionPhase};
 use crate::tui::theme::theme;
 
 /// The answer buffer as it should appear on screen.
@@ -57,6 +58,51 @@ fn hint_for(dialog: &DialogState) -> &'static str {
 
 /// Render the confirmation dialog as a centered overlay.
 pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
+    render_dialog_with_status(frame, dialog, area, None);
+}
+
+/// Render exactly the owner's card. Keyboard routing must query the same
+/// `controller.displayed_owner(approval)` before dispatching a key; do not paint both
+/// overlays and let z-order decide which target receives the answer.
+/// The approval state must match the selected ID, otherwise nothing is drawn.
+pub fn render_active_interaction(
+    frame: &mut Frame,
+    controller: &InteractionController,
+    approval: Option<&ApprovalState>,
+    area: Rect,
+) -> Option<ModalOwner> {
+    let owner = controller.displayed_owner(approval)?;
+    match owner {
+        ModalOwner::Clarification { .. } => {
+            let dialog = controller.active_dialog()?;
+            let status = match controller.active_phase()? {
+                SubmissionPhase::Editing if controller.active_was_superseded() => {
+                    Some("Previous question replaced · Enter to send · Esc hide")
+                }
+                SubmissionPhase::Editing => Some("Enter send · Esc hide · Ctrl+C cancel this run"),
+                SubmissionPhase::Submitting => Some("Sending answer…"),
+                SubmissionPhase::Reconciling => Some("Checking pending question…"),
+                SubmissionPhase::Error => Some("Delivery uncertain · Refresh pending before retry"),
+                SubmissionPhase::LegacyConfirmation => {
+                    Some("Legacy server: refresh pending, then confirm manually")
+                }
+            };
+            render_dialog_with_status(frame, dialog, area, status);
+        }
+        ModalOwner::Approval { id, .. } => {
+            let current = approval.filter(|a| &a.id == id)?;
+            render_approval(frame, current, area);
+        }
+    }
+    Some(owner.clone())
+}
+
+fn render_dialog_with_status(
+    frame: &mut Frame,
+    dialog: &DialogState,
+    area: Rect,
+    status: Option<&str>,
+) {
     // Calculate dialog dimensions
     let dialog_width = area.width.clamp(20, 50);
     let option_count = u16::try_from(dialog.options.len()).unwrap_or(u16::MAX);
@@ -165,7 +211,7 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
 
     // Render hint
     let hint = Paragraph::new(Line::from(Span::styled(
-        hint_for(dialog),
+        status.unwrap_or_else(|| hint_for(dialog)),
         Style::default().fg(theme().muted),
     )));
     frame.render_widget(hint, hint_area);
@@ -354,6 +400,92 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn owner_selection_is_the_painted_card_and_mismatch_paints_nothing() {
+        use aleph_protocol::{AskUserQuestion, PendingClarification};
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut controller = InteractionController::new("s");
+        controller.offer_approval("s", "approval-1");
+        controller.offer_question(PendingClarification {
+            session_key: "s".into(),
+            request_id: "req".into(),
+            run_id: "run".into(),
+            question: "Question card".into(),
+            options: vec![],
+            questions: vec![AskUserQuestion {
+                id: "q".into(),
+                header: None,
+                prompt: "Question card".into(),
+                options: vec![],
+                multi_select: false,
+                secret: false,
+            }],
+            answered: 0,
+        });
+        let approval = ApprovalState {
+            id: "approval-1".into(),
+            command: "Allow action?".into(),
+            reason: None,
+            selected: 0,
+            decisions: vec![("Deny", "deny")],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(90, 25)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                assert_eq!(
+                    render_active_interaction(frame, &controller, Some(&approval), area),
+                    controller.active_owner().cloned()
+                );
+            })
+            .unwrap();
+        let screen = |terminal: &Terminal<TestBackend>| {
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>()
+        };
+        assert!(screen(&terminal).contains("Allow action?"));
+        assert!(!screen(&terminal).contains("Question card"));
+        assert!(matches!(
+            controller.active_owner(),
+            Some(ModalOwner::Approval { .. })
+        ));
+        controller.retire_approval("s", "approval-1");
+        assert!(matches!(
+            controller.active_owner(),
+            Some(ModalOwner::Clarification { .. })
+        ));
+        terminal.clear().unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                assert_eq!(
+                    render_active_interaction(frame, &controller, Some(&approval), area),
+                    controller.active_owner().cloned()
+                );
+            })
+            .unwrap();
+        assert!(screen(&terminal).contains("Question card"));
+        assert!(!screen(&terminal).contains("Allow action?"));
+        controller.offer_approval("s", "approval-2");
+        let hidden = controller.hide_active().unwrap();
+        assert!(matches!(hidden, ModalOwner::Clarification { .. }));
+        assert!(controller.displayed_owner(Some(&approval)).is_none());
+        terminal.clear().unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                assert!(
+                    render_active_interaction(frame, &controller, Some(&approval), area).is_none()
+                );
+            })
+            .unwrap();
     }
 
     fn dialog_with(options: Vec<&'static str>) -> DialogState {
