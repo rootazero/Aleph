@@ -100,8 +100,7 @@ pub(super) fn AddCustomProviderPanel(
         let url = config.base_url.clone();
 
         spawn_local(async move {
-            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, None).await
-            {
+            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, None).await {
                 Ok(result) => {
                     set_testing.set(false);
                     set_test_result.set(Some((result.success, result.message)));

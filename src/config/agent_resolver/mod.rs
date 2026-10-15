@@ -875,6 +875,7 @@ mod tests {
             metadata_user_id: None,
             effort: None,
             server_context_editing: Default::default(),
+            model_defs: vec![],
         }
     }
 

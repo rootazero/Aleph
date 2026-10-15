@@ -78,6 +78,7 @@ pub mod moa;
 pub mod mock;
 pub mod model_behaviors;
 pub mod model_catalog;
+pub mod model_compat;
 pub mod model_override_provider;
 pub mod ollama;
 pub mod openai;

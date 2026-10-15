@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::config::types::provider::ModelDef;
 use crate::config::Config;
 use crate::error::Result;
 use crate::gateway::security::SharedTokenManager;
@@ -315,6 +316,13 @@ impl ListModelsTool {
     }
 }
 
+/// Look up the operator-declared override for `model` from a `model_defs`
+/// list. None if no row matches — `enrich` then falls back to the catalog
+/// join for that id.
+fn model_def_for<'a>(model_defs: &'a [ModelDef], model: &str) -> Option<&'a ModelDef> {
+    model_defs.iter().find(|d| d.id == model)
+}
+
 /// Project a `(provider, model)` pair into a fully-enriched [`ModelEntry`].
 ///
 /// The four-table join itself lives in
@@ -329,8 +337,9 @@ fn enrich(
     display_name: Option<String>,
     base_url: Option<&str>,
     source: ModelSource,
+    model_def: Option<&crate::config::types::provider::ModelDef>,
 ) -> ModelEntry {
-    let record = ModelRecord::resolve(provider, model, base_url, source);
+    let record = ModelRecord::resolve(provider, model, base_url, source, model_def);
     let caps = record.capabilities;
     let rate = record.cost;
     ModelEntry {
@@ -494,6 +503,7 @@ impl crate::tools::AlephTool for ListModelsTool {
                     display_name.clone(),
                     Some(preset.base_url),
                     source,
+                    None,
                 ));
             }
         }
@@ -542,6 +552,7 @@ impl crate::tools::AlephTool for ListModelsTool {
                     None,
                     cfg.base_url.as_deref(),
                     source,
+                    model_def_for(&cfg.model_defs, model),
                 ));
             }
         }
@@ -748,6 +759,7 @@ mod tests {
             None,
             Some("https://api.anthropic.com"),
             ModelSource::PresetDefault,
+            None,
         );
         assert_eq!(cloud.endpoint, "cloud");
 
@@ -759,6 +771,7 @@ mod tests {
             None,
             Some("http://localhost:11434"),
             ModelSource::Configured,
+            None,
         );
         assert_eq!(local.endpoint, "local");
 
@@ -771,6 +784,7 @@ mod tests {
             None,
             None,
             ModelSource::Configured,
+            None,
         );
         assert_eq!(unknown.endpoint, "cloud");
     }
@@ -850,6 +864,7 @@ mod tests {
             None,
             Some("https://openrouter.ai/api"),
             ModelSource::Configured,
+            None,
         );
         assert_eq!(row.price_basis.as_deref(), Some("vendor_inferred"));
         assert!(row.input_per_mtok.is_some());
@@ -862,6 +877,7 @@ mod tests {
             None,
             Some("https://api.anthropic.com"),
             ModelSource::PresetDefault,
+            None,
         );
         assert_eq!(direct.price_basis.as_deref(), Some("direct"));
     }

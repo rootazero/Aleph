@@ -26,6 +26,7 @@ use crate::components::provider_key_field::ProviderKeyField;
 use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+use aleph_protocol::providers::{ModelCostJson, ModelDefJson, ModelInputJson};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -45,6 +46,238 @@ fn provider_key(selected: Option<&str>) -> Option<String> {
     let sel = selected?;
     let key = sel.strip_prefix("__preset__").unwrap_or(sel);
     (!key.starts_with("__")).then(|| key.to_string())
+}
+
+/// Minimal per-model override editor.
+///
+/// Edits the basic fields in place — `id`, `context_window`,
+/// `max_output_tokens`, `reasoning`, `input.text`, `input.image`, and the base
+/// cost `input`/`output` — while leaving the complex fields
+/// (`thinking_level_map`, `compat`, `tiers`, `name`, `base_url`) untouched so a
+/// save never drops what the Panel does not yet render. Labels resolve through
+/// the i18n context so they follow the active locale.
+#[component]
+fn ModelDefsEditor(model_defs: RwSignal<Vec<ModelDefJson>>) -> impl IntoView {
+    let i18n = use_i18n();
+    let add = move |_| {
+        model_defs.update(|list| {
+            list.push(ModelDefJson {
+                id: String::new(),
+                name: None,
+                base_url: None,
+                context_window: None,
+                max_output_tokens: None,
+                input: None,
+                reasoning: None,
+                thinking_level_map: None,
+                cost: None,
+                compat: None,
+            });
+        });
+    };
+
+    view! {
+        <div class="space-y-3">
+            {move || {
+                let count = model_defs.get().len();
+                (0..count)
+                    .map(|i| {
+                        view! {
+                            <div class="border border-border rounded-lg p-3 space-y-2">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-xs font-medium text-text-secondary">
+                                        {format!("{} #{}", t_string!(i18n, settings.providers.model_override_label), i + 1)}
+                                    </span>
+                                    <button
+                                        on:click=move |_| {
+                                            model_defs.update(|list| {
+                                                if i < list.len() {
+                                                    list.remove(i);
+                                                }
+                                            });
+                                        }
+                                        class="text-xs text-danger hover:underline"
+                                    >
+                                        {t!(i18n, settings.providers.models_remove)}
+                                    </button>
+                                </div>
+
+                                <div>
+                                    <label class="block text-xs text-text-secondary mb-1">{t!(i18n, settings.providers.model_override_id)}</label>
+                                    <input
+                                        type="text"
+                                        prop:value=move || {
+                                            model_defs.get().get(i).map(|d| d.id.clone()).unwrap_or_default()
+                                        }
+                                        on:input=move |ev| {
+                                            let v = event_target_value(&ev);
+                                            model_defs.update(|list| {
+                                                if let Some(d) = list.get_mut(i) {
+                                                    d.id = v;
+                                                }
+                                            });
+                                        }
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                        placeholder="gpt-4o"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label class="block text-xs text-text-secondary mb-1">{t!(i18n, settings.providers.model_override_context_window)}</label>
+                                    <input
+                                        type="number"
+                                        prop:value=move || {
+                                            model_defs.get().get(i).and_then(|d| d.context_window).map(|v| v.to_string()).unwrap_or_default()
+                                        }
+                                        on:input=move |ev| {
+                                            let v = event_target_value(&ev);
+                                            let parsed = v.trim().parse::<u32>().ok();
+                                            model_defs.update(|list| {
+                                                if let Some(d) = list.get_mut(i) {
+                                                    d.context_window = parsed;
+                                                }
+                                            });
+                                        }
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                        placeholder="Optional"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label class="block text-xs text-text-secondary mb-1">{t!(i18n, settings.providers.model_override_max_output_tokens)}</label>
+                                    <input
+                                        type="number"
+                                        prop:value=move || {
+                                            model_defs.get().get(i).and_then(|d| d.max_output_tokens).map(|v| v.to_string()).unwrap_or_default()
+                                        }
+                                        on:input=move |ev| {
+                                            let v = event_target_value(&ev);
+                                            let parsed = v.trim().parse::<u32>().ok();
+                                            model_defs.update(|list| {
+                                                if let Some(d) = list.get_mut(i) {
+                                                    d.max_output_tokens = parsed;
+                                                }
+                                            });
+                                        }
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                        placeholder="Optional"
+                                    />
+                                </div>
+
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        prop:checked=move || {
+                                            model_defs.get().get(i).and_then(|d| d.reasoning).unwrap_or(false)
+                                        }
+                                        on:change=move |ev| {
+                                            let v = event_target_checked(&ev);
+                                            model_defs.update(|list| {
+                                                if let Some(d) = list.get_mut(i) {
+                                                    d.reasoning = Some(v);
+                                                }
+                                            });
+                                        }
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-sm text-text-primary">{t!(i18n, settings.providers.model_override_reasoning)}</span>
+                                </label>
+
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        prop:checked=move || {
+                                            model_defs.get().get(i).and_then(|d| d.input.as_ref()).map(|inp| inp.text).unwrap_or(false)
+                                        }
+                                        on:change=move |ev| {
+                                            let v = event_target_checked(&ev);
+                                            model_defs.update(|list| {
+                                                if let Some(d) = list.get_mut(i) {
+                                                    d.input.get_or_insert_with(ModelInputJson::default).text = v;
+                                                }
+                                            });
+                                        }
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-sm text-text-primary">{t!(i18n, settings.providers.model_override_text_input)}</span>
+                                </label>
+
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        prop:checked=move || {
+                                            model_defs.get().get(i).and_then(|d| d.input.as_ref()).map(|inp| inp.image).unwrap_or(false)
+                                        }
+                                        on:change=move |ev| {
+                                            let v = event_target_checked(&ev);
+                                            model_defs.update(|list| {
+                                                if let Some(d) = list.get_mut(i) {
+                                                    d.input.get_or_insert_with(ModelInputJson::default).image = v;
+                                                }
+                                            });
+                                        }
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-sm text-text-primary">{t!(i18n, settings.providers.model_override_image_input)}</span>
+                                </label>
+
+                                <div>
+                                    <label class="block text-xs text-text-secondary mb-1">{t!(i18n, settings.providers.model_override_input_cost)}</label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        prop:value=move || {
+                                            model_defs.get().get(i).and_then(|d| d.cost.as_ref()).and_then(|c| c.input).map(|v| v.to_string()).unwrap_or_default()
+                                        }
+                                        on:input=move |ev| {
+                                            let v = event_target_value(&ev);
+                                            let parsed = v.trim().parse::<f64>().ok();
+                                            model_defs.update(|list| {
+                                                if let Some(d) = list.get_mut(i) {
+                                                    d.cost.get_or_insert_with(ModelCostJson::default).input = parsed;
+                                                }
+                                            });
+                                        }
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                        placeholder="Optional"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label class="block text-xs text-text-secondary mb-1">{t!(i18n, settings.providers.model_override_output_cost)}</label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        prop:value=move || {
+                                            model_defs.get().get(i).and_then(|d| d.cost.as_ref()).and_then(|c| c.output).map(|v| v.to_string()).unwrap_or_default()
+                                        }
+                                        on:input=move |ev| {
+                                            let v = event_target_value(&ev);
+                                            let parsed = v.trim().parse::<f64>().ok();
+                                            model_defs.update(|list| {
+                                                if let Some(d) = list.get_mut(i) {
+                                                    d.cost.get_or_insert_with(ModelCostJson::default).output = parsed;
+                                                }
+                                            });
+                                        }
+                                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                        placeholder="Optional"
+                                    />
+                                </div>
+                            </div>
+                        }.into_any()
+                    })
+                    .collect_view()
+            }}
+
+            <button
+                on:click=add
+                class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm text-text-secondary hover:bg-surface-raised transition-colors"
+            >
+                {t!(i18n, settings.providers.model_override_add)}
+            </button>
+        </div>
+    }
 }
 
 #[component]
@@ -68,6 +301,12 @@ pub(super) fn ProviderDetailPanel(
     let form_timeout = RwSignal::new(300u64);
     let form_max_tokens = RwSignal::new(String::new());
     let form_temperature = RwSignal::new(String::new());
+    let form_context_window = RwSignal::new(String::new());
+    let form_top_p = RwSignal::new(String::new());
+    let form_top_k = RwSignal::new(String::new());
+    // Full per-model override list. Loaded from readback so the complex fields
+    // survive a save; the editor mutates only the basic fields in place.
+    let form_model_defs = RwSignal::new(Vec::<ModelDefJson>::new());
 
     let saving = RwSignal::new(false);
     let testing = RwSignal::new(false);
@@ -112,6 +351,10 @@ pub(super) fn ProviderDetailPanel(
                 form_timeout.set(300);
                 form_max_tokens.set(String::new());
                 form_temperature.set(String::new());
+                form_context_window.set(String::new());
+                form_top_p.set(String::new());
+                form_top_k.set(String::new());
+                form_model_defs.set(Vec::new());
             } else if let Some(preset_id) = sel.strip_prefix("__preset__") {
                 let cat = catalog.get_untracked();
                 if let Some(entry) = row_for(&cat, preset_id) {
@@ -131,6 +374,10 @@ pub(super) fn ProviderDetailPanel(
                     form_timeout.set(300);
                     form_max_tokens.set(String::new());
                     form_temperature.set(String::new());
+                    form_context_window.set(String::new());
+                    form_top_p.set(String::new());
+                    form_top_k.set(String::new());
+                    form_model_defs.set(Vec::new());
                 }
             } else {
                 // Existing provider — populate form with actual values.
@@ -163,6 +410,15 @@ pub(super) fn ProviderDetailPanel(
                             .map(|v| v.to_string())
                             .unwrap_or_default(),
                     );
+                    form_context_window.set(
+                        provider
+                            .context_window
+                            .map(|v| v.to_string())
+                            .unwrap_or_default(),
+                    );
+                    form_top_p.set(String::new());
+                    form_top_k.set(String::new());
+                    form_model_defs.set(provider.model_defs.clone());
                 }
             }
         }
@@ -232,7 +488,14 @@ pub(super) fn ProviderDetailPanel(
                     t.parse().ok()
                 }
             },
-            context_window: None,
+            context_window: {
+                let c = form_context_window.get();
+                if c.is_empty() {
+                    None
+                } else {
+                    c.parse().ok()
+                }
+            },
             temperature: {
                 let t = form_temperature.get();
                 if t.is_empty() {
@@ -241,8 +504,41 @@ pub(super) fn ProviderDetailPanel(
                     t.parse().ok()
                 }
             },
-            top_p: None,
-            top_k: None,
+            top_p: {
+                let v = form_top_p.get();
+                if v.is_empty() {
+                    None
+                } else {
+                    v.parse().ok()
+                }
+            },
+            top_k: {
+                let v = form_top_k.get();
+                if v.is_empty() {
+                    None
+                } else {
+                    v.parse().ok()
+                }
+            },
+            model_defs: Some(form_model_defs.get()),
+            thinking_level: None,
+            effort: None,
+            cache_retention: None,
+            service_tier: None,
+            stop_sequences: None,
+            media_resolution: None,
+            system_prompt_mode: None,
+            model_behavior: None,
+            metadata_user_id: None,
+            response_format: None,
+            stream_idle_timeout_secs: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            repeat_penalty: None,
+            seed: None,
+            logprobs: None,
+            top_logprobs: None,
+            parallel_tool_calls: None,
         }
     };
 
@@ -877,6 +1173,43 @@ pub(super) fn ProviderDetailPanel(
                                                     placeholder="0.0 - 2.0"
                                                 />
                                             </div>
+                                            <div>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.context_window)}</label>
+                                                <input
+                                                    type="number"
+                                                    prop:value=move || form_context_window.get()
+                                                    on:input=move |ev| form_context_window.set(event_target_value(&ev))
+                                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                                    placeholder="Optional"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.top_p)}</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    prop:value=move || form_top_p.get()
+                                                    on:input=move |ev| form_top_p.set(event_target_value(&ev))
+                                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                                    placeholder="Optional"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.top_k)}</label>
+                                                <input
+                                                    type="number"
+                                                    prop:value=move || form_top_k.get()
+                                                    on:input=move |ev| form_top_k.set(event_target_value(&ev))
+                                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                                    placeholder="Optional"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        // Per-model parameter overrides
+                                        <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
+                                            <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{t!(i18n, settings.providers.model_overrides)}</h3>
+                                            <ModelDefsEditor model_defs=form_model_defs />
                                         </div>
 
                                         // Actions
