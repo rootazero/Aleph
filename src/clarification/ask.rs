@@ -96,7 +96,11 @@ impl ClarificationDeps {
 /// subcommands, unit tests) or no gateway run to correlate against — so the
 /// caller can roll the pending clarification back instead of blocking on a
 /// reply that can never arrive.
-fn publish_to_event_bus(turn: &TurnContext, request: &ClarificationRequest) -> bool {
+fn publish_to_event_bus(
+    turn: &TurnContext,
+    request_id: &str,
+    request: &ClarificationRequest,
+) -> bool {
     if turn.run_id.is_empty() {
         return false;
     }
@@ -106,6 +110,7 @@ fn publish_to_event_bus(turn: &TurnContext, request: &ClarificationRequest) -> b
     let frame = ask_user_frame(
         &turn.run_id,
         &turn.session_key.to_string(),
+        request_id,
         request,
         // Freshly registered: nothing answered yet.
         0,
@@ -159,6 +164,7 @@ pub struct AskOutcome {
 struct RetireOnAbandon {
     manager: Arc<ClarificationManager>,
     session_key: String,
+    request_id: String,
     /// Owned so [`Drop`] closes it **before** asking the manager to retire the
     /// entry: `cancel_abandoned` decides by reading this channel's closed flag,
     /// so retirement must not race the drop of what it reads.
@@ -173,11 +179,13 @@ impl RetireOnAbandon {
     fn new(
         manager: Arc<ClarificationManager>,
         session_key: String,
+        request_id: String,
         rx: oneshot::Receiver<ClarificationResult>,
     ) -> Self {
         Self {
             manager,
             session_key,
+            request_id,
             rx: Some(rx),
             armed: true,
         }
@@ -222,12 +230,15 @@ impl Drop for RetireOnAbandon {
         };
         let manager = Arc::clone(&self.manager);
         let session_key = std::mem::take(&mut self.session_key);
+        let request_id = std::mem::take(&mut self.request_id);
         // `Handle::spawn` returns a `JoinHandle`, not a `Result`; on a runtime
         // that is shutting down the spawn still produces a handle and the
         // future fails with `JoinError` on the receive side. Drop the handle —
         // the next `register`'s sweep is the backstop for the rare aborted case.
         let _join = handle.spawn(async move {
-            manager.cancel_abandoned(&session_key).await;
+            manager
+                .cancel_abandoned_if_request(&session_key, Some(&request_id))
+                .await;
         });
     }
 }
@@ -317,9 +328,9 @@ pub async fn ask(
     }
 
     // Register BEFORE delivery so a reply arriving immediately is not lost.
-    let rx = deps
+    let (request_id, rx) = deps
         .clarification
-        .register(
+        .register_with_identity(
             session_key.clone(),
             request.clone(),
             DEFAULT_CLARIFY_TIMEOUT,
@@ -328,7 +339,12 @@ pub async fn ask(
         .await;
     // The receiver moves into the guard: a cancelled run drops this whole
     // future at the park below, and the guard is the only thing that runs then.
-    let mut parked = RetireOnAbandon::new(Arc::clone(&deps.clarification), session_key.clone(), rx);
+    let mut parked = RetireOnAbandon::new(
+        Arc::clone(&deps.clarification),
+        session_key.clone(),
+        request_id.clone(),
+        rx,
+    );
 
     // Recomputed AFTER the partition, so it can only be true on a turn with no
     // third-party transport (the Panel's `gui:chat`, or a stopped channel).
@@ -338,7 +354,7 @@ pub async fn ask(
     let wants_secret = request.questions.iter().any(|q| q.secret);
     let delivered = if wants_secret {
         // Bus only — see the module doc.
-        publish_to_event_bus(&turn, &request)
+        publish_to_event_bus(&turn, &request_id, &request)
     } else {
         let RenderedQuestion { text, keyboard } = super::render::render(
             request
@@ -352,7 +368,7 @@ pub async fn ask(
         match deps.channels.send(&channel, message).await {
             Ok(_) => true,
             Err(e) => {
-                let published = publish_to_event_bus(&turn, &request);
+                let published = publish_to_event_bus(&turn, &request_id, &request);
                 if !published {
                     warn!(error = %e, "ask: failed to deliver question to channel");
                 }
@@ -364,7 +380,9 @@ pub async fn ask(
     if !delivered {
         // Neither transport can reach the user — nobody can ever answer. Drop
         // the registration rather than park on a reply that cannot arrive.
-        deps.clarification.cancel(&session_key).await;
+        deps.clarification
+            .cancel_if_request(&session_key, Some(&request_id))
+            .await;
         parked.disarm();
         return Err(AlephError::tool(
             "failed to deliver the question to the user — no channel accepted it and no Panel \

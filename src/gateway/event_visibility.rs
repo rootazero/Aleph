@@ -3471,6 +3471,7 @@ mod tests {
                 run_id: "r1".into(),
                 seq: 1,
                 session_key: "agent:main:main".into(),
+                request_id: "request-1".into(),
                 question: "q".into(),
                 options: vec![],
                 questions: vec![],
@@ -3478,6 +3479,7 @@ mod tests {
             },
             GatewayEventFrame::ClarificationEnded {
                 session_key: "agent:main:main".into(),
+                request_id: "request-1".into(),
                 outcome: ClarificationOutcome::Resolved,
             },
             GatewayEventFrame::UncertaintySignal {
