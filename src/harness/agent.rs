@@ -531,6 +531,15 @@ impl AgentHarness {
         // Split-safety: StallTracker is time-based (Instant) with no session id — split-safe.
         // TraceSink receives LoopTraceEvent payloads that carry no session id field — split-safe.
         let mut current_session: SessionId = session_id.clone();
+        // Only messages appended by this invocation can be its final reply.
+        // An unavailable boundary yields no fallback rather than old text.
+        let mut reply_boundary = self
+            .deps
+            .session
+            .attach(session_id.clone())
+            .await
+            .ok()
+            .map(|h| h.head_seq);
         let cap = self.deps.max_iterations;
         let mut iterations: usize = 0;
         let mut tool_calls_made: usize = 0;
@@ -629,6 +638,13 @@ impl AgentHarness {
                     let split = split_child.is_some();
                     if let Some(child) = split_child {
                         current_session = child;
+                        reply_boundary = self
+                            .deps
+                            .session
+                            .attach(current_session.clone())
+                            .await
+                            .ok()
+                            .map(|h| h.head_seq);
                         // Reset the prompt watermark when switching sessions:
                         // `last_prompt_seq` was captured from the PARENT's
                         // event log, but the child's seqs are independent.
@@ -864,28 +880,16 @@ impl AgentHarness {
         // A read failure here is non-fatal — the trace event is still emitted
         // with `final_text: None`, matching the legacy behaviour.
         // Must happen before the `current_session` move below.
-        let final_text = self
-            .deps
-            .session
-            .get_events(&current_session, None, None)
-            .await
-            .ok()
-            .and_then(|events| {
-                events.iter().rev().find_map(|r| match &r.event {
-                    // Stop at the genuine last assistant turn: returning `None`
-                    // when both text and thinking are empty made find_map walk
-                    // back and surface an older turn's text as this run's
-                    // final_text. Always resolve at the first one encountered.
-                    SessionEvent::AssistantMessage { content, .. } => {
-                        Some(if content.text.is_empty() {
-                            content.thinking.clone().unwrap_or_default()
-                        } else {
-                            content.text.clone()
-                        })
-                    }
-                    _ => None,
-                })
-            });
+        let final_text = match reply_boundary {
+            Some(boundary) => self
+                .deps
+                .session
+                .get_events(&current_session, Some(boundary.saturating_add(1)), None)
+                .await
+                .ok()
+                .and_then(|events| final_reply_in(&events)),
+            None => None,
+        };
 
         // Store the final session id — either the original or a split child.
         *self
@@ -1001,6 +1005,18 @@ pub(crate) fn tool_use_blocks(tool_calls: &[NativeToolCall]) -> Vec<Value> {
             block
         })
         .collect()
+}
+
+/// Last assistant record from an already run-scoped event range.
+fn final_reply_in(events: &[SessionEventRecord]) -> Option<String> {
+    events.iter().rev().find_map(|record| match &record.event {
+        SessionEvent::AssistantMessage { content, .. } => Some(if content.text.is_empty() {
+            content.thinking.clone().unwrap_or_default()
+        } else {
+            content.text.clone()
+        }),
+        _ => None,
+    })
 }
 
 /// Stable serialization of a JSON value for memo cache keys.
