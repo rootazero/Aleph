@@ -14,12 +14,15 @@ mod commands;
 mod event;
 mod gateway_error;
 mod highlight;
+mod interaction;
 mod keys;
 mod markdown;
 mod regions;
 mod render;
+mod rpc_jobs;
 mod slash;
 mod theme;
+mod tool_output;
 mod widgets;
 
 use std::future::Future;
@@ -44,16 +47,15 @@ use aleph_protocol::providers::ProviderListResult;
 use aleph_protocol::runtime::{
     RuntimeAgentsListResponse, RUNTIME_AGENTS_CHANGED_TOPIC, RUNTIME_AGENTS_LIST_METHOD,
 };
-use aleph_protocol::StreamEvent;
+use aleph_protocol::{ClarificationResolveResponse, PendingListResponse, StreamEvent};
 
 use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 use app::{Action, AgentPanelData, AppState, Focus};
 use commands::{
-    attach_session, btw_abort_or_close, confirm_provider_pick, confirm_session_switch,
-    dispatch_gateway_text, execute_local_command, fetch_gateway_commands, fetch_my_user_id,
-    open_agent_detail, reconcile_side_question, refresh_picker_provider, send_to_agent,
-    shadowed_gateway_commands, AttachMode,
+    btw_abort_or_close, confirm_provider_pick, dispatch_gateway_text, execute_local_command,
+    fetch_gateway_commands, fetch_my_user_id, open_agent_detail, refresh_picker_provider,
+    send_to_agent, shadowed_gateway_commands, AttachMode,
 };
 use slash::ParsedInput;
 
@@ -131,20 +133,9 @@ fn agent_panel_data(result: CliResult<RuntimeAgentsListResponse>) -> AgentPanelD
     }
 }
 
-/// Fetch `runtime.agents.list` and store the result in
-/// `state.runtime_agents`. Called once per iteration of `main_loop` where
-/// `state.runtime_agents_refetch_due` is set — by [`subscribe_runtime_agents`]
-/// at startup and after every reconnect, or by a `runtime.agents.changed`
-/// topic event (see [`app::AppState::handle_topic_event`]).
-async fn refresh_runtime_agents(state: &mut AppState, client: &AlephClient) {
-    state.runtime_agents = agent_panel_data(
-        client
-            .call::<_, RuntimeAgentsListResponse>(RUNTIME_AGENTS_LIST_METHOD, None::<()>)
-            .await,
-    );
-}
-
 /// Subscribe to the agent panel's topic and mark a re-fetch as due.
+///
+/// Startup uses this helper; runtime refresh uses the bounded RPC queue.
 ///
 /// One derivation, two callers (判据 §9/§1) — `run()` at startup, and the
 /// reconnect-success arm in `main_loop`, beside `reconcile_side_question`.
@@ -370,7 +361,8 @@ pub async fn run(
     // were; before this, `--session <key>` opened a blank screen and the status
     // bar reported the install defaults over a conversation that had its own.
     if let Some(key) = session_key.as_deref().filter(|k| !k.is_empty()) {
-        attach_session(&mut state, &client, key, AttachMode::Append).await;
+        state.session_key = key.to_owned();
+        state.transcript_needs_resync = true;
     }
     let mut textarea = TextArea::default();
     textarea.set_placeholder_text("Type a message... (/ for commands)");
@@ -483,6 +475,55 @@ fn should_redraw_after_tick(has_active_run: bool, connection_state_changed: bool
 
 /// The main event loop. Separated from `run()` so terminal restoration
 /// happens even if this function returns an error.
+/// A lost terminal notification must not leave a run permanently blocking
+/// history recovery. The server's identity and phase are the only verdict.
+fn recover_missing_terminal(
+    state: &mut AppState,
+    run: &str,
+    report: &aleph_protocol::AgentRunStatusReport,
+) {
+    if state.current_run.as_deref() != Some(run) || report.run_id != run {
+        return;
+    }
+    if matches!(
+        report.phase(),
+        aleph_protocol::RunPhase::Completed
+            | aleph_protocol::RunPhase::Failed
+            | aleph_protocol::RunPhase::Cancelled
+    ) {
+        state.begin_reattach();
+        state.transcript_needs_resync = true;
+    }
+}
+
+fn enqueue_command_rpc<'a>(
+    state: &mut AppState,
+    client: &'a AlephClient,
+    jobs: &mut rpc_jobs::RpcJobs<'a>,
+    scope: &rpc_jobs::RpcScope,
+    request: Option<(&'static str, Value)>,
+    replay_sequence: &mut u64,
+) {
+    let Some((method, params)) = request else {
+        return;
+    };
+    let identity = if method == "trace.get" {
+        state.transcript_generation = state.transcript_generation.wrapping_add(1);
+        *replay_sequence = replay_sequence.wrapping_add(1);
+        replay_sequence.to_string()
+    } else {
+        "list".to_owned()
+    };
+    let tag = rpc_jobs::RpcTag {
+        scope: scope.clone(),
+        method,
+        identity,
+    };
+    if !jobs.enqueue(client, tag, Some(params)) {
+        state.add_system_message("Request queue is busy; retry the replay command shortly.".into());
+    }
+}
+
 async fn main_loop<'c>(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
@@ -513,7 +554,45 @@ async fn main_loop<'c>(
     // `should_redraw_after_tick` for the one arm, `Action::Tick`, that
     // decides for itself instead of redrawing unconditionally).
     let mut needs_redraw = true;
+    let mut rpc_jobs = rpc_jobs::RpcJobs::default();
+    let mut runtime_refresh_after = std::time::Instant::now();
+    let mut continuity = client.stream_continuity();
+    let mut recovery_after = std::time::Instant::now();
+    let mut run_probe_after = std::time::Instant::now();
+    let mut pending_refresh_due = true;
+    let mut pending_revision = 0_u64;
+    let mut approval_revision = 0_u64;
+    let mut observed_run = state.current_run.clone();
+    let mut replay_sequence = 0_u64;
+    let mut pending_refresh_after = std::time::Instant::now();
+    let mut submissions = std::collections::HashMap::<String, interaction::Submission>::new();
+    let mut modal_scope: Option<rpc_jobs::RpcScope> = None;
+    let mut browser_subscribe_due = false;
+    let mut side_recovery_due = false;
+    let mut rpc_scope = rpc_jobs::RpcScope {
+        session_key: state.session_key.clone(),
+        generation: 0,
+    };
     loop {
+        if observed_run != state.current_run {
+            observed_run = state.current_run.clone();
+            approval_revision = approval_revision.wrapping_add(1);
+            replay_sequence = replay_sequence.wrapping_add(1);
+        }
+        if rpc_scope.session_key != state.session_key {
+            rpc_scope.session_key.clone_from(&state.session_key);
+            rpc_scope.generation = rpc_scope.generation.wrapping_add(1);
+            pending_refresh_due = true;
+            pending_refresh_after = std::time::Instant::now();
+        }
+        if modal_scope.as_ref() != Some(&rpc_scope) {
+            state
+                .interaction
+                .set_context(state.session_key.clone(), rpc_scope.generation);
+            modal_scope = Some(rpc_scope.clone());
+        }
+        state.sync_modal_focus();
+        submissions.retain(|_, ticket| ticket.generation == rpc_scope.generation);
         // Settled by the reconnect branch below; read after the select, where
         // `reconnecting` is no longer borrowed.
         let mut reconnect_outcome: Option<CliResult<()>> = None;
@@ -542,6 +621,10 @@ async fn main_loop<'c>(
                 // the AskUser dialog, a streamed chunk) while returning
                 // Action::None.
                 needs_redraw = true;
+                if matches!(&ge, StreamEvent::AskUser { .. } | StreamEvent::ClarificationEnded { .. }) {
+                    pending_revision = pending_revision.wrapping_add(1);
+                    pending_refresh_due = true;
+                }
                 let mut action = state.handle_gateway_event(ge);
                 // Coalesce a burst: chunks already queued behind this one
                 // are state mutations that need ONE draw, not one draw
@@ -550,7 +633,12 @@ async fn main_loop<'c>(
                 // high-rate token stream into far fewer terminal draws. The
                 // first frame of a run is unaffected: the loop-top draw
                 // fires immediately after this branch either way.
-                while let Ok(queued) = gateway_events.try_recv() {
+                for _ in 1..rpc_jobs::EVENT_BATCH {
+                    let Ok(queued) = gateway_events.try_recv() else { break };
+                    if matches!(&queued, StreamEvent::AskUser { .. } | StreamEvent::ClarificationEnded { .. }) {
+                        pending_revision = pending_revision.wrapping_add(1);
+                        pending_refresh_due = true;
+                    }
                     let next = state.handle_gateway_event(queued);
                     if !matches!(next, Action::None) {
                         action = next;
@@ -562,7 +650,8 @@ async fn main_loop<'c>(
                 needs_redraw = true;
                 state.handle_topic_event(&topic.topic, topic.data);
                 // Coalesce a burst the same way the gateway-event arm does.
-                while let Some(rx) = topic_events.as_mut() {
+                for _ in 1..rpc_jobs::EVENT_BATCH {
+                    let Some(rx) = topic_events.as_mut() else { break };
                     match rx.try_recv() {
                         Ok(queued) => state.handle_topic_event(&queued.topic, queued.data),
                         Err(_) => break,
@@ -572,6 +661,129 @@ async fn main_loop<'c>(
             }
             _ = tick_interval.tick() => {
                 Action::Tick
+            }
+            completed = rpc_jobs.next() => {
+                if completed.tag.scope == rpc_scope {
+                    match completed.tag.method {
+                        RUNTIME_AGENTS_LIST_METHOD => {
+                            state.runtime_agents = agent_panel_data(completed.result.and_then(|value| {
+                                serde_json::from_value(value).map_err(CliError::from)
+                            }));
+                        }
+                        "session.snapshot" => {
+                            recovery_after = std::time::Instant::now() + Duration::from_secs(5);
+                            match completed.result.and_then(|v| serde_json::from_value(v).map_err(CliError::from)) {
+                                Ok(snapshot) => {
+                                    commands::apply_acquired_session(state, snapshot, AttachMode::Replace);
+                                }
+                                Err(_) => state.add_system_message("Conversation recovery failed; keeping the current view and retrying.".into()),
+                            }
+                        }
+                        "events.subscribe" => {
+                            if completed.result.is_err() {
+                                state.runtime_agents_refetch_due = true;
+                            }
+                        }
+                        "agent.status" => {
+                            if let Some(run) = completed.tag.identity.strip_prefix("main:") {
+                                if let Ok(value) = completed.result {
+                                    if let Ok(report) = serde_json::from_value::<aleph_protocol::AgentRunStatusReport>(value) {
+                                        recover_missing_terminal(state, run, &report);
+                                    }
+                                }
+                            } else {
+                                let answer = completed.result.and_then(|v| serde_json::from_value(v).map_err(CliError::from));
+                                commands::apply_side_question_status(state, &completed.tag.identity, answer);
+                            }
+                        }
+                        "agent.cancel" => {
+                            state.add_system_message(if completed.result.is_ok() {
+                                "Cancellation requested; waiting for the run to settle.".into()
+                            } else {
+                                "Cancellation request failed; retry when connected.".into()
+                            });
+                        }
+                        "clarification.resolve" => {
+                            if let Some(ticket) = submissions.remove(&completed.tag.identity) {
+                                let response = completed.result.ok().and_then(|v| serde_json::from_value::<ClarificationResolveResponse>(v).ok());
+                                let effect = state.interaction.acknowledge(&ticket, response.as_ref());
+                                if effect != interaction::AckEffect::Ignored {
+                                    pending_revision = pending_revision.wrapping_add(1);
+                                    pending_refresh_due = true;
+                                    pending_refresh_after = std::time::Instant::now();
+                                }
+                                state.sync_modal_focus();
+                            }
+                        }
+                        "clarification.pending" => {
+                            pending_refresh_after = std::time::Instant::now() + Duration::from_secs(5);
+                            if completed.tag.identity != pending_revision.to_string() {
+                                pending_refresh_due = true;
+                                pending_refresh_after = std::time::Instant::now();
+                            } else {
+                            match completed.result.and_then(|v| serde_json::from_value::<PendingListResponse>(v).map_err(CliError::from)) {
+                                Ok(snapshot) => {
+                                    let mut keys: std::collections::BTreeSet<String> = state.interaction.question_sessions().into_iter().collect();
+                                    keys.insert(state.session_key.clone());
+                                    keys.extend(snapshot.pending.iter().map(|p| p.session_key.clone()));
+                                    for key in keys {
+                                        let pending = snapshot.pending.iter().find(|p| p.session_key == key).cloned();
+                                        state.interaction.reconcile_pending(&key, pending);
+                                    }
+                                    state.sync_modal_focus();
+                                }
+                                Err(_) => pending_refresh_due = true,
+                            }
+                            }
+                        }
+                        "trace.tool_output" => {
+                            if let Some(view) = &mut state.tool_output {
+                                if completed.tag.identity == format!("{}:{}:{}", view.generation, view.tool_call_id, view.next_offset) {
+                                    match completed.result.ok().and_then(|v| serde_json::from_value::<aleph_protocol::ToolOutputPage>(v).ok()) {
+                                        Some(page) => view.apply(view.next_offset, page),
+                                        None => view.fail(),
+                                    }
+                                }
+                            }
+                        }
+                        "exec.approval.resolve" => {
+                            if state.approval.as_ref().is_some_and(|a| a.id == completed.tag.identity) {
+                                if completed.result.is_ok() {
+                                    approval_revision = approval_revision.wrapping_add(1);
+                                    let key = state.session_key.clone();
+                                    state.interaction.retire_approval(&key, &completed.tag.identity);
+                                    state.close_approval();
+                                } else {
+                                    state.add_system_message("Approval submission failed; the pending card is retained for retry.".into());
+                                }
+                                state.sync_modal_focus();
+                            }
+                        }
+                        "trace.list" => {
+                            match completed.result.and_then(|value| serde_json::from_value::<aleph_protocol::AgentTraceListPage>(value).map_err(CliError::from)) {
+                                Ok(page) => state.add_system_message(commands::format_replay_list(&page)),
+                                Err(_) => state.add_system_message("Replay list could not be loaded. Retry /replay list.".into()),
+                            }
+                        }
+                        "trace.get" => {
+                            if completed.tag.identity == replay_sequence.to_string() && state.current_run.is_none() {
+                                match completed.result.and_then(|value| serde_json::from_value::<aleph_protocol::AgentTraceReplay>(value).map_err(CliError::from)) {
+                                    Ok(replay) => state.load_trace_replay(&replay),
+                                    Err(_) => state.add_system_message("Replay could not be loaded; the conversation is retained.".into()),
+                                }
+                            }
+                        }
+                        "exec.approvals.pending"
+                            if completed.tag.identity == format!("{}:{}", approval_revision, state.current_run.as_deref().unwrap_or_default()) => {
+                            if let Ok(snapshot) = completed.result {
+                                approval::reconcile_approvals(state, &snapshot);
+                            }
+                        }
+                        _ => {}
+                    }
+                    needs_redraw = true;
+                }
+                Action::None
             }
             outcome = awaiting_reconnect(&mut reconnecting) => {
                 reconnect_outcome = Some(outcome);
@@ -590,6 +802,8 @@ async fn main_loop<'c>(
             needs_redraw = true;
             match outcome {
                 Ok(()) => {
+                    rpc_scope.generation = rpc_scope.generation.wrapping_add(1);
+                    continuity = client.stream_continuity();
                     backoff = Duration::ZERO;
                     state.is_connected = true;
                     // Everything on this screen came from a connection that no
@@ -599,60 +813,11 @@ async fn main_loop<'c>(
                     // completed, and a peer can have spoken, while this client
                     // was away.
                     state.begin_reattach();
-                    let key = state.session_key.clone();
-                    if key.is_empty() {
-                        // Nothing to re-open: the gateway has not routed a
-                        // conversation for this screen yet. `begin_reattach`
-                        // still ran, which is what re-arms reconciliation.
-                        state.add_system_message("Reconnected.".to_string());
-                    } else {
-                        attach_session(state, client, &key, AttachMode::Replace).await;
-                        state.add_system_message(
-                            "Reconnected; conversation reloaded from the server. \
-                             Locally-generated notices from before the drop are not \
-                             part of it and are gone."
-                                .to_string(),
-                        );
-                        state.scroll_to_bottom();
-                    }
-                    // The side thread is NOT covered by the reattach above.
-                    // `chat.history` answers for the conversation on screen; a
-                    // `/btw` run executes on a derived session this client
-                    // cannot name, so its terminal frame is the only thing that
-                    // ever settles the overlay — and that frame may have been
-                    // sent to the socket that just died. Outside the
-                    // `key.is_empty()` branch on purpose: a side question
-                    // implies a prior `agent.run`, but which conversation this
-                    // screen is on has no bearing on whether one is in flight.
-                    reconcile_side_question(state, client).await;
-                    // The agent panel's subscription is likewise NOT covered
-                    // by the reattach above — it is per-CONNECTION server
-                    // state, and this is a new connection. See
-                    // `subscribe_runtime_agents`'s own doc for why skipping
-                    // this silently and permanently freezes the panel after
-                    // the first reconnect.
-                    //
-                    // Result is dropped on purpose (T1.8): a failed subscribe
-                    // on a freshly re-opened socket already logs a warn and
-                    // still arms the re-fetch flag inside the helper, so the
-                    // next `main_loop` tick retries — and tearing down the
-                    // whole reconnect-success path because one optional
-                    // subscription call didn't go through would lose every
-                    // other repair this arm performed.
-                    //
-                    // The helper now arms the re-fetch flag ONLY on failure.
-                    // On a successful subscribe here, set it ourselves so the
-                    // next tick's flag-check actually runs the re-fetch.
-                    let _ = subscribe_runtime_agents(state, client).await;
                     state.runtime_agents_refetch_due = true;
-                    // Browser live topics are per-connection too. Frames sent
-                    // while the socket was down (a `closed`, a new revision)
-                    // are lost, so drop the mirror BEFORE re-subscribing and
-                    // rebuild it only from what the Gateway publishes now.
-                    // Nothing else on the screen is touched here.
                     state.browser_resources.clear_for_reconnect();
-                    // Re-arm them here (and only here / at startup).
-                    let _ = subscribe_browser_live_topics(client).await;
+                    browser_subscribe_due = true;
+                    side_recovery_due = true;
+                    pending_refresh_due = true;
                 }
                 Err(e) => {
                     backoff = next_backoff(backoff);
@@ -682,25 +847,137 @@ async fn main_loop<'c>(
         // fires exactly when `stream.*` chunks are also flying, which is not
         // a rare shape for this loop to see. A `bool` on `AppState` cannot be
         // coalesced away by a later frame the way a returned `Action` could.
-        if state.runtime_agents_refetch_due {
-            state.runtime_agents_refetch_due = false;
-            refresh_runtime_agents(state, client).await;
-            // T1.8 retry wiring (review round 2): the re-fetch alone
-            // does NOT re-arm the per-connection topic stream on the
-            // gateway side — `events.subscribe` registers per-CONNECTION
-            // server state that was dropped when the socket closed, and
-            // a frozen subscribe RPC leaves the new socket subscribed to
-            // nothing even when every subsequent `runtime.agents.list`
-            // fetch succeeds. Call the same helper the reconnect-success
-            // arm uses; on a failed `events.subscribe` the helper sets
-            // the re-fetch flag back to true so the next tick retries
-            // BOTH calls, and on success the helper leaves the flag
-            // alone — which is what stops this block from spinning.
-            let _ = subscribe_runtime_agents(state, client).await;
-            needs_redraw = true;
+        if state.runtime_agents_refetch_due && std::time::Instant::now() >= runtime_refresh_after {
+            let fetch = rpc_jobs.enqueue(
+                client,
+                rpc_jobs::RpcTag {
+                    scope: rpc_scope.clone(),
+                    method: RUNTIME_AGENTS_LIST_METHOD,
+                    identity: String::new(),
+                },
+                None,
+            );
+            let subscribe = rpc_jobs.enqueue(
+                client,
+                rpc_jobs::RpcTag {
+                    scope: rpc_scope.clone(),
+                    method: "events.subscribe",
+                    identity: "runtime-agents".into(),
+                },
+                Some(json!({ "topics": [RUNTIME_AGENTS_CHANGED_TOPIC] })),
+            );
+            if fetch && subscribe {
+                state.runtime_agents_refetch_due = false;
+            }
+            runtime_refresh_after = std::time::Instant::now() + Duration::from_secs(1);
+        }
+
+        // Recovery is a durable due flag: a full worker queue cannot discard
+        // it, and an active run is never spliced with an unwatermarked replay.
+        if state.transcript_needs_resync
+            && !state.replaying_trace
+            && state.current_run.is_none()
+            && !state.session_key.is_empty()
+            && state.is_connected
+            && std::time::Instant::now() >= recovery_after
+        {
+            let key = state.session_key.clone();
+            let generation = state.transcript_generation;
+            rpc_jobs.enqueue_work(
+                rpc_jobs::RpcTag {
+                    scope: rpc_scope.clone(),
+                    method: "session.snapshot",
+                    identity: generation.to_string(),
+                },
+                Box::pin(async move {
+                    commands::acquire_session_snapshot(client, key, generation)
+                        .await
+                        .map_err(CliError::Config)
+                        .and_then(|s| serde_json::to_value(s).map_err(CliError::from))
+                }),
+            );
+        }
+        if (pending_refresh_due || state.spinner_frame.is_multiple_of(100))
+            && state.is_connected
+            && !state.session_key.is_empty()
+            && std::time::Instant::now() >= pending_refresh_after
+            && rpc_jobs.enqueue(
+                client,
+                rpc_jobs::RpcTag {
+                    scope: rpc_scope.clone(),
+                    method: "clarification.pending",
+                    identity: pending_revision.to_string(),
+                },
+                None,
+            )
+        {
+            pending_refresh_due = false;
+            pending_refresh_after = std::time::Instant::now() + Duration::from_secs(5);
+        }
+        if side_recovery_due && state.is_connected {
+            if let Some(run) = state.btw.active_run_id() {
+                if rpc_jobs.enqueue(
+                    client,
+                    rpc_jobs::RpcTag {
+                        scope: rpc_scope.clone(),
+                        method: "agent.status",
+                        identity: run.into(),
+                    },
+                    Some(json!({"run_id":run})),
+                ) {
+                    side_recovery_due = false;
+                }
+            } else {
+                side_recovery_due = false;
+            }
+        }
+        if state.transcript_needs_resync && std::time::Instant::now() >= run_probe_after {
+            if let Some(run) = state.current_run.as_deref() {
+                if rpc_jobs.enqueue(
+                    client,
+                    rpc_jobs::RpcTag {
+                        scope: rpc_scope.clone(),
+                        method: "agent.status",
+                        identity: format!("main:{run}"),
+                    },
+                    Some(json!({"run_id":run})),
+                ) {
+                    run_probe_after = std::time::Instant::now() + Duration::from_secs(5);
+                }
+            }
+        }
+        if browser_subscribe_due
+            && rpc_jobs.enqueue(
+                client,
+                rpc_jobs::RpcTag {
+                    scope: rpc_scope.clone(),
+                    method: "events.subscribe",
+                    identity: "browser-live".into(),
+                },
+                Some(json!({"topics": [BROWSER_LIVE_RESOURCE_TOPIC, BROWSER_LIVE_CLOSED_TOPIC]})),
+            )
+        {
+            browser_subscribe_due = false;
         }
 
         // Execute action
+        if let Some(view) = &mut state.tool_output {
+            if view.load_due && view.can_load() {
+                let tag = rpc_jobs::RpcTag {
+                    scope: rpc_scope.clone(),
+                    method: "trace.tool_output",
+                    identity: format!(
+                        "{}:{}:{}",
+                        view.generation, view.tool_call_id, view.next_offset
+                    ),
+                };
+                let params = json!({ "session_key": view.session_key, "tool_call_id": view.tool_call_id, "offset": view.next_offset, "limit": tool_output::PAGE_BYTES });
+                if rpc_jobs.enqueue(client, tag, Some(params)) {
+                    view.load_due = false;
+                    view.loading = true;
+                }
+            }
+        }
         match action {
             Action::None => {}
             Action::Quit => {
@@ -737,9 +1014,33 @@ async fn main_loop<'c>(
                 // receives no event for; ~1s cadence (every 20th 50ms tick)
                 // keeps the 120s approval window responsive without chatter.
                 if state.current_run.is_some() && state.spinner_frame.is_multiple_of(20) {
-                    approval::poll_approvals(state, client).await;
+                    rpc_jobs.enqueue(
+                        client,
+                        rpc_jobs::RpcTag {
+                            scope: rpc_scope.clone(),
+                            method: "exec.approvals.pending",
+                            identity: format!(
+                                "{}:{}",
+                                approval_revision,
+                                state.current_run.as_deref().unwrap_or_default()
+                            ),
+                        },
+                        None,
+                    );
                 }
-                needs_redraw = should_redraw_after_tick(
+                let latest_continuity = client.stream_continuity();
+                if latest_continuity != continuity {
+                    continuity = latest_continuity;
+                    rpc_scope.generation = rpc_scope.generation.wrapping_add(1);
+                    state.add_system_message(
+                        "Stream continuity changed; recorded conversation and pending requests need recovery.".into()
+                    );
+                    state.transcript_needs_resync = true;
+                    pending_refresh_due = true;
+                    recovery_after = std::time::Instant::now();
+                    state.runtime_agents_refetch_due = true;
+                }
+                needs_redraw |= should_redraw_after_tick(
                     // `state.dialog` (the AskUser overlay) is OR'd in for the
                     // same reason as `btw`: `StreamEvent::AskUser` is exempt
                     // from the cross-session run-id guard by design (see
@@ -770,7 +1071,15 @@ async fn main_loop<'c>(
                 send_to_agent(state, client, &msg, "Send error").await;
             }
             Action::LocalCommand(cmd) => {
-                execute_local_command(state, textarea, client, cmd).await;
+                let request = execute_local_command(state, textarea, client, cmd).await;
+                enqueue_command_rpc(
+                    state,
+                    client,
+                    &mut rpc_jobs,
+                    &rpc_scope,
+                    request,
+                    &mut replay_sequence,
+                );
             }
             Action::GatewayCommand(text) => {
                 state.ctrl_c_count = 0;
@@ -786,20 +1095,18 @@ async fn main_loop<'c>(
                 dispatch_gateway_text(state, client, &text, "Command error").await;
             }
             Action::CancelRun(run_id) => {
-                let params = json!({ "run_id": run_id });
-                match client.call::<_, Value>("agent.cancel", Some(params)).await {
-                    Ok(_) => {
-                        state.add_system_message("Run cancelled.".to_string());
-                        state.current_run = None;
-                        state.run_started_at = None;
-                        // The cancelled run may have been parked on an approval;
-                        // retract its overlay (the poll stops once current_run
-                        // clears and can no longer do it).
-                        state.dismiss_pending_approval();
-                    }
-                    Err(e) => {
-                        state.add_system_message(format!("Cancel error: {e}"));
-                    }
+                if !rpc_jobs.enqueue(
+                    client,
+                    rpc_jobs::RpcTag {
+                        scope: rpc_scope.clone(),
+                        method: "agent.cancel",
+                        identity: run_id.clone(),
+                    },
+                    Some(json!({ "run_id": run_id })),
+                ) {
+                    state.add_system_message(
+                        "Cancellation already pending or requests busy; retry shortly.".into(),
+                    );
                 }
             }
 
@@ -862,7 +1169,16 @@ async fn main_loop<'c>(
                         // Parse through our unified parser
                         match slash::parse_input(&cmd_str) {
                             ParsedInput::Local(cmd) => {
-                                execute_local_command(state, textarea, client, cmd).await;
+                                let request =
+                                    execute_local_command(state, textarea, client, cmd).await;
+                                enqueue_command_rpc(
+                                    state,
+                                    client,
+                                    &mut rpc_jobs,
+                                    &rpc_scope,
+                                    request,
+                                    &mut replay_sequence,
+                                );
                             }
                             ParsedInput::Gateway(text) => {
                                 // Same single dispatcher as the typed path —
@@ -887,30 +1203,56 @@ async fn main_loop<'c>(
             // first character of a typed answer. Moving the highlight is what
             // the arrow keys do, and they mutate `DialogState` in place.
             Action::RespondToDialog { session_key, reply } => {
-                // The AskUser answer resolves the clarification the server's
-                // `ask_user` tool is parked on — keyed by session, not run
-                // (`agent.respondToInput` never existed server-side; this was a
-                // dead wire that timed every TUI answer out after 600s). Same
-                // RPC the Panel and CLI use.
-                let params = json!({
-                    "session_key": session_key,
-                    "reply": reply,
-                });
-                match client
-                    .call::<_, Value>("clarification.resolve", Some(params))
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) => {
-                        state.add_system_message(format!("Dialog response error: {e}"));
-                    }
+                if !state.interaction.active_dialog().is_some_and(|dialog| {
+                    dialog.session_key == session_key
+                        && dialog.pending_reply().as_deref() == Some(reply.as_str())
+                }) {
+                    continue;
                 }
-                state.close_overlay();
+                if let Some(ticket) = state.interaction.submit() {
+                    let identity = ticket.rpc_identity();
+                    let params = serde_json::to_value(&ticket.params)?;
+                    let tag = rpc_jobs::RpcTag {
+                        scope: rpc_scope.clone(),
+                        method: "clarification.resolve",
+                        identity: identity.clone(),
+                    };
+                    if rpc_jobs.enqueue(client, tag, Some(params)) {
+                        submissions.insert(identity, ticket);
+                    } else {
+                        state.interaction.acknowledge(&ticket, None);
+                        state.add_system_message(
+                            "Request queue is busy; the answer is retained. Retry shortly.".into(),
+                        );
+                    }
+                    state.sync_modal_focus();
+                }
             }
 
             // -- Tool approval --
+            Action::JumpToUser(target) => state.request_sticky_jump(target),
+            Action::LoadToolOutput { tool_call_id } => {
+                if let Some(view) = &mut state.tool_output {
+                    if view.tool_call_id == tool_call_id && view.can_load() {
+                        view.load_due = true;
+                    }
+                }
+            }
             Action::ResolveApproval { index } => {
-                approval::resolve_approval(state, client, index).await;
+                if let Some(card) = state.approval.as_ref() {
+                    if let Some((_, decision)) = card.decisions.get(index) {
+                        let tag = rpc_jobs::RpcTag {
+                            scope: rpc_scope.clone(),
+                            method: "exec.approval.resolve",
+                            identity: card.id.clone(),
+                        };
+                        let params =
+                            json!({ "id": card.id, "decision": decision, "resolved_by": "TUI" });
+                        if !rpc_jobs.enqueue(client, tag, Some(params)) {
+                            state.add_system_message("Approval is already submitting or the request queue is busy; the card is retained.".into());
+                        }
+                    }
+                }
             }
 
             // -- Side question (`/btw`) --
@@ -955,7 +1297,13 @@ async fn main_loop<'c>(
                 }
             }
             Action::SessionPickerConfirm => {
-                confirm_session_switch(state, client).await;
+                if let Some(key) = state.selected_session_key() {
+                    state.close_overlay();
+                    state.switch_session(&key);
+                    state.transcript_needs_resync = true;
+                    pending_refresh_due = true;
+                    recovery_after = std::time::Instant::now();
+                }
             }
 
             // -- Agents overlay --
@@ -1198,61 +1546,6 @@ mod tests {
         }
     }
 
-    /// The last link in the chain the test above cannot reach: that
-    /// `main_loop` actually reads `state.runtime_agents_refetch_due`, clears
-    /// it, and calls `refresh_runtime_agents` — not just that the flag gets
-    /// set (which the round-trip test above and `app::tests` already cover).
-    ///
-    /// `main_loop` owns a real terminal and two live channels, so (like
-    /// `a_successful_reconnect_reconciles_the_side_question` in
-    /// `reconnect_tests` below, which hits the identical wall for a
-    /// different arm of the same match) there is no in-process way to drive
-    /// it end to end. Source-level, for the same reason that one is: a
-    /// runtime check cannot tell "the check calls the wrong function" from
-    /// "the check was never reached", and comment lines are stripped first
-    /// so a comment naming the function cannot satisfy this on its own.
-    #[test]
-    fn a_runtime_agents_refetch_flag_is_wired_to_the_refetch_call() {
-        let src = include_str!("mod.rs").replace('\r', "");
-        let production = src.split("#[cfg(test)]").next().expect("split yields one");
-        let code: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Bounded to `main_loop`'s own body, not the whole production slice:
-        // an identical `if state.runtime_agents_refetch_due { … }` block
-        // sitting in some OTHER function (including a dead one nothing calls)
-        // would otherwise satisfy this test while the assertion below claims
-        // it is "checked in main_loop" — which would then be false.
-        let main_loop_start = code
-            .find("async fn main_loop")
-            .expect("main_loop must still exist");
-        let main_loop_body = &code[main_loop_start..];
-
-        let start = main_loop_body
-            .find("if state.runtime_agents_refetch_due {")
-            .map(|i| main_loop_start + i)
-            .expect("the flag must still be checked inside main_loop");
-        let end = code[start..]
-            .find('}')
-            .map(|i| start + i)
-            .expect("the flag-check block must close");
-        let block = &code[start..end];
-
-        assert!(
-            block.contains("state.runtime_agents_refetch_due = false;"),
-            "the flag must be cleared before the fetch runs, or a topic event \
-             re-fetches on every single loop iteration forever"
-        );
-        assert!(
-            block.contains("refresh_runtime_agents(state, client)"),
-            "a pending re-fetch must be wired to the real re-fetch function, \
-             or a topic event silently does nothing"
-        );
-    }
-
     /// The browser live subscribe uses exactly the protocol constants, and is
     /// called only at startup and reconnect success — not from the refetch tick.
     #[test]
@@ -1264,28 +1557,6 @@ mod tests {
         );
         assert_eq!(RESOURCE_TOPIC, "browser.live.resource");
         assert_eq!(CLOSED_TOPIC, "browser.live.closed");
-
-        let src = include_str!("mod.rs").replace('\r', "");
-        let production = src.split("#[cfg(test)]").next().expect("split yields one");
-        let code: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(
-            code.matches("subscribe_browser_live_topics(").count(),
-            3,
-            "definition + startup + reconnect-success call sites only"
-        );
-        let tick = code
-            .split("if state.runtime_agents_refetch_due {")
-            .nth(1)
-            .and_then(|r| r.split("needs_redraw = true;").next())
-            .expect("refetch tick block");
-        assert!(
-            !tick.contains("subscribe_browser_live_topics"),
-            "refetch tick must not re-subscribe browser topics"
-        );
     }
 
     /// On T1.8's bug shape: a `subscribe_runtime_agents` whose `events.subscribe`
@@ -1365,56 +1636,6 @@ mod tests {
             body,
         );
     }
-
-    /// Companion to the test above: the retry wiring the brief's Step A3.4
-    /// asks for — `main_loop`'s flag-check block, the path that runs on
-    /// every tick, must re-call `subscribe_runtime_agents` when the flag
-    /// is set, not just `refresh_runtime_agents`. The previous fix-round-1
-    /// helper-only change missed this path: `refresh_runtime_agents`
-    /// re-fetches the agent table, but `events.subscribe` registers
-    /// PER-CONNECTION server state that was dropped on socket close, and
-    /// re-fetching the table does NOT re-arm the topic stream on a fresh
-    /// socket. A failed subscribe on reconnect therefore needed the same
-    /// retry treatment as a stale `runtime.agents.changed` notification,
-    /// and that is the flag-check block's job.
-    ///
-    /// Source-level for the same reason the wiring tests above are:
-    /// `main_loop` owns a terminal and two live channels.
-    #[test]
-    fn a_runtime_agents_refetch_due_tick_re_subscribes_to_runtime_agents() {
-        let src = include_str!("mod.rs").replace('\r', "");
-        let production = src.split("#[cfg(test)]").next().expect("split yields one");
-        let code: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Bounded to the same `if state.runtime_agents_refetch_due { … }`
-        // block `a_runtime_agents_refetch_flag_is_wired_to_the_refetch_call`
-        // bounds it to, so an identical subscribe call sitting in some
-        // OTHER arm of `main_loop` (or in `run()`'s startup) cannot
-        // satisfy "main_loop retries subscribe after failure" — the
-        // brief's Test 2 wording.
-        let start = code
-            .find("if state.runtime_agents_refetch_due {")
-            .expect("main_loop must still check the runtime_agents_refetch_due flag");
-        let end = code[start..]
-            .find('}')
-            .map(|i| start + i)
-            .expect("the flag-check block must close");
-        let block = &code[start..end];
-
-        assert!(
-            block.contains("subscribe_runtime_agents(state, client)"),
-            "the runtime_agents_refetch_due flag-check block in main_loop must \
-             re-call subscribe_runtime_agents — re-fetching the agent list alone \
-             does NOT re-arm the per-connection topic stream on a freshly \
-             re-opened socket, so a failed events.subscribe on reconnect leaves \
-             the panel dark even when every refresh succeeds. Got block:\n{}",
-            block,
-        );
-    }
 }
 
 #[cfg(test)]
@@ -1452,48 +1673,27 @@ mod reconnect_tests {
             Duration::from_secs(15)
         );
     }
+}
 
-    /// The side-question repair is actually reached when a reconnect succeeds.
-    ///
-    /// `main_loop` owns a terminal and two channels, so this arm has no
-    /// in-process test — and the defect it closes is precisely a severed wire:
-    /// `reconcile_side_question` is fully implemented and fully tested on its
-    /// own, and an overlay that spins forever looks exactly the same whether
-    /// the repair is wrong or simply never called.
-    ///
-    /// Source-level because a runtime check cannot tell "never called" from
-    /// "called and found nothing to do". Comment lines are stripped first: a
-    /// comment naming the function must not satisfy a guard about calling it.
-    /// `\r` goes first because this repo is checked out CRLF on Windows, where
-    /// a separator anchored to a bare `\n` matches nothing and the scan reads
-    /// the whole file — its own test module included — as production code.
+#[cfg(test)]
+mod recovery_probe_tests {
+    use super::*;
     #[test]
-    fn a_successful_reconnect_reconciles_the_side_question() {
-        let src = include_str!("mod.rs").replace('\r', "");
-        let production = src.split("#[cfg(test)]").next().expect("split yields one");
-        let code: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Self-protection: these two bound the reconnect's success arm, and
-        // without them the search below would pass over an empty slice.
-        let start = code
-            .find("state.begin_reattach();")
-            .expect("the reconnect success arm must still reset the run state");
-        let end = code
-            .find("backoff = next_backoff(backoff);")
-            .expect("the reconnect failure arm must still back off");
-        assert!(start < end, "the two arms are no longer in that order");
-
-        assert!(
-            code[start..end].contains("reconcile_side_question(state, client)"),
-            "a reconnect must re-decide the side question's fate. `chat.history` \
-             answers only for the conversation on screen; a `/btw` run executes \
-             on a derived session this client cannot name, so without this call \
-             its overlay spins forever on a terminal frame that went to the dead \
-             socket."
-        );
+    fn only_a_matching_authoritative_terminal_unblocks_history_recovery() {
+        let mut state = AppState::new("s".into(), "m".into());
+        state.current_run = Some("r".into());
+        let mut report = aleph_protocol::AgentRunStatusReport {
+            run_id: "r".into(),
+            status: "running".into(),
+            ..Default::default()
+        };
+        recover_missing_terminal(&mut state, "r", &report);
+        assert_eq!(state.current_run.as_deref(), Some("r"));
+        report.status = "completed".into();
+        recover_missing_terminal(&mut state, "other", &report);
+        assert_eq!(state.current_run.as_deref(), Some("r"));
+        recover_missing_terminal(&mut state, "r", &report);
+        assert!(state.current_run.is_none());
+        assert!(state.transcript_needs_resync);
     }
 }

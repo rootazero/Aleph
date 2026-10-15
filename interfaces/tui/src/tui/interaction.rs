@@ -59,7 +59,6 @@ pub enum AckEffect {
 pub struct Submission {
     pub params: ClarificationResolveParams,
     pub generation: u64,
-    pub run_id: String,
     nonce: u64,
 }
 
@@ -138,6 +137,16 @@ pub struct InteractionController {
     /// Retired identities are tombstoned so an out-of-order AskUser frame
     /// cannot resurrect a superseded or completed waiter. Bound memory per UI.
     retired: VecDeque<(String, String)>,
+    retired_approvals: VecDeque<(String, String)>,
+}
+
+impl std::fmt::Debug for InteractionController {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InteractionController")
+            .field("cards", &self.cards.len())
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
+    }
 }
 
 impl InteractionController {
@@ -150,6 +159,7 @@ impl InteractionController {
             paused_for_picker: false,
             next_nonce: 0,
             retired: VecDeque::new(),
+            retired_approvals: VecDeque::new(),
         }
     }
 
@@ -182,10 +192,7 @@ impl InteractionController {
         if self.paused_for_picker {
             return None;
         }
-        self.cards
-            .iter()
-            .find(|c| c.owner().session_key() == self.session_key && !c.hidden())
-            .map(Card::owner)
+        self.cards.iter().find(|c| !c.hidden()).map(Card::owner)
     }
 
     /// The actionable owner for both renderer and key dispatch. A queued
@@ -272,7 +279,20 @@ impl InteractionController {
         }
     }
 
+    pub fn approval_retired(&self, session_key: &str, id: &str) -> bool {
+        self.retired_approvals
+            .iter()
+            .any(|(key, retired)| key == session_key && retired == id)
+    }
+
     pub fn retire_approval(&mut self, session_key: &str, id: &str) {
+        if !self.approval_retired(session_key, id) {
+            self.retired_approvals
+                .push_back((session_key.to_owned(), id.to_owned()));
+            if self.retired_approvals.len() > 256 {
+                self.retired_approvals.pop_front();
+            }
+        }
         self.cards.retain(|card| {
             !matches!(card.owner(), ModalOwner::Approval { session_key: key, id: current }
                 if key == session_key && current == id)
@@ -512,7 +532,6 @@ impl InteractionController {
                 expected_question_id: (!q.question_id.is_empty()).then(|| q.question_id.clone()),
             },
             generation: self.generation,
-            run_id: q.run_id.clone(),
             nonce: q.nonce,
         })
     }
@@ -566,6 +585,17 @@ impl InteractionController {
     /// the authoritative list and advance cursors. A failed snapshot must NOT
     /// call this method; it leaves every draft intact and visibly uncertain.
     /// Only one live Core clarification exists per session.
+    /// Sessions whose drafts need reconciliation after a complete pending list.
+    pub fn question_sessions(&self) -> Vec<String> {
+        self.cards
+            .iter()
+            .filter_map(|c| match c {
+                Card::Question(q) => Some(q.owner.session_key().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn reconcile_pending(&mut self, session_key: &str, pending: Option<PendingClarification>) {
         let matching = pending.filter(|p| p.session_key == session_key);
         match matching {
@@ -649,9 +679,11 @@ fn dialog_from_pending(pending: &PendingClarification) -> Option<(String, Dialog
         return None;
     }
     let (id, question, options, multi_select, secret) = if let Some(current) = current {
-        let position = (pending.questions.len() > 1)
-            .then(|| format!("{}/{} · ", pending.answered + 1, pending.questions.len()))
-            .unwrap_or_default();
+        let position = if pending.questions.len() > 1 {
+            format!("{}/{} · ", pending.answered + 1, pending.questions.len())
+        } else {
+            String::new()
+        };
         let header = current
             .header
             .as_deref()
@@ -780,7 +812,7 @@ mod tests {
         );
         c.set_context("s2", 1);
         assert!(
-            matches!(c.active_owner(), Some(ModalOwner::Clarification { request_id, .. }) if request_id == "third")
+            matches!(c.active_owner(), Some(ModalOwner::Clarification { request_id, .. }) if request_id == "first")
         );
         c.set_context("s1", 2);
         assert_eq!(c.active_dialog().unwrap().input, "private");
@@ -789,7 +821,9 @@ mod tests {
             matches!(c.active_owner(), Some(ModalOwner::Approval { id, .. }) if id == "second")
         );
         c.retire_approval("s1", "second");
-        assert!(c.active_owner().is_none());
+        assert!(
+            matches!(c.active_owner(), Some(ModalOwner::Clarification { request_id, .. }) if request_id == "third")
+        );
         assert!(c.reopen(&first));
         assert_eq!(c.active_dialog().unwrap().input, "private");
     }
@@ -908,7 +942,7 @@ mod tests {
         let old = c.submit().unwrap();
         c.set_context("s2", 1);
         c.offer_question(pending("s2", "r2", "", false));
-        assert_eq!(c.active_cancel_run(), None);
+        assert_eq!(c.active_cancel_run(), Some("run1"));
         assert_eq!(
             c.acknowledge(
                 &old,
@@ -924,7 +958,11 @@ mod tests {
         assert_eq!(c.active_dialog().unwrap().input, "secret-s1");
         assert_eq!(c.active_phase(), Some(SubmissionPhase::Reconciling));
         c.reconcile_pending("s1", None);
-        assert!(c.active_owner().is_none());
+        assert_eq!(
+            c.active_cancel_run(),
+            None,
+            "the queued identity-less run must never target the previous task"
+        );
         c.set_context("s2", 3);
         assert!(c.active_dialog().is_some());
     }

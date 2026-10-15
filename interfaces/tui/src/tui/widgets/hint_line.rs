@@ -60,11 +60,18 @@ pub const fn hint_text(running: bool, typing: bool) -> &'static str {
 }
 
 /// Paint the hint row.
-pub fn render_hint_line(frame: &mut Frame, area: Rect, running: bool, typing: bool) {
+pub fn render_hint_line(frame: &mut Frame, area: Rect, running: bool, typing: bool, hidden: bool) {
     let dim = Style::default().fg(palette().color(SemanticColor::Dim));
     let line = Line::from(vec![
         Span::styled(MARKER.to_string(), dim),
-        Span::styled(hint_text(running, typing).to_string(), dim),
+        Span::styled(
+            if hidden {
+                format!("ctrl+p reopen request · {}", hint_text(running, typing))
+            } else {
+                hint_text(running, typing).to_string()
+            },
+            dim,
+        ),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }

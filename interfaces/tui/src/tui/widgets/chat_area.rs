@@ -68,10 +68,9 @@ pub struct LineCache {
 #[derive(Debug)]
 struct CachedEntry {
     kind: MessageKind,
-    /// Sampled fingerprint of the message content (see
-    /// [`content_fingerprint`]) — a bare length match can serve lines
-    /// rendered from *different* content after a same-length replacement
-    /// (e.g. a peer message inserted before the tail shifting indices).
+    /// Full fingerprint for legacy text rows (see [`content_fingerprint`]);
+    /// Step rows use identity/status plus explicit reducer invalidation.
+    /// Length alone cannot detect a same-size replacement.
     fingerprint: u64,
     width: u16,
     /// Which syntax-highlighting generation these lines were built with.
@@ -145,19 +144,11 @@ enum MessageKind {
     System,
 }
 
-/// Full content fingerprint for cache validation.
+/// Full content fingerprint for legacy text cache validation.
 ///
-/// The previous version sampled only the first and last 32 bytes plus the
-/// length — a same-length replacement whose middle differs produced the same
-/// fingerprint, and the cache served stale lines for a message whose text
-/// had in fact changed. Hashing the full bytes makes that class of
-/// collision effectively impossible (DefaultHasher's 64-bit output is
-/// collision-resistant for the transcript sizes a TUI holds).
-///
-/// The "re-scan every settled message on every frame" concern from the
-/// earlier comment is mis-framed: `DefaultHasher` hashes ~1 GB/s, so even
-/// a 100-message × 10 KB transcript hashes in ~1 ms, well under one frame
-/// at 60 fps. The cache saves *rendering*, which is the expensive part.
+/// Sampling only the ends misses a same-length edit in the middle. Legacy
+/// text rows therefore hash their bytes; settled Step bodies rely on reducer
+/// change invalidation instead. No runtime throughput claim is made here.
 fn content_fingerprint(content: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -258,6 +249,10 @@ fn message_kind_and_fingerprint(message: &TranscriptEntry) -> (MessageKind, u64)
 /// One string so the button and the key binding cannot drift apart — the
 /// label is the only place a reader is told which key this is (判据 §1).
 pub(crate) const BACK_TO_BOTTOM: &str = " \u{2193} Back to bottom \u{b7} ctrl+end ";
+
+#[cfg(test)]
+#[path = "sticky_render_tests.rs"]
+mod sticky_render_tests;
 /// Its wording when rows landed below the reader while they were scrolled up.
 const BACK_TO_BOTTOM_UNSEEN: &str = " \u{2193} New output \u{b7} ctrl+end ";
 
@@ -306,7 +301,7 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
         state.project_root(),
         state.project_branch.as_deref(),
     )];
-    let (total_lines, visible, hits) = build_visible_lines_detail(
+    let viewport = build_visible_lines_anchored(
         &header,
         &state.messages,
         verbose,
@@ -318,7 +313,12 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
         visible_height,
         state.detail,
         &state.step_overrides,
+        Some((&mut state.sticky_user, &state.session_key)),
     );
+    let total_lines = viewport.total;
+    let visible = viewport.lines;
+    let hits = viewport.hits;
+    state.scroll_offset = viewport.offset;
     // Write the offset back clamped to what the transcript can actually
     // reach. `visible_window` already clamps for its own arithmetic, so the
     // frame would look right either way; what this buys is the NEXT
@@ -373,6 +373,67 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
         state.scroll_offset,
     );
     render_back_to_bottom(frame, state, inner);
+    render_sticky_user(frame, state, inner, total_lines, &viewport.user_rows);
+}
+
+fn render_sticky_user(
+    frame: &mut Frame,
+    state: &mut AppState,
+    inner: Rect,
+    total: usize,
+    user_rows: &[(String, super::sticky_user::UserPlacement)],
+) {
+    let Some((id, text)) = state.messages.iter().rev().find_map(|entry| match entry {
+        TranscriptEntry::UserText { id, text, .. } => Some((id, text)),
+        _ => None,
+    }) else {
+        return;
+    };
+    let Some((_, placement)) = user_rows.iter().find(|(key, _)| key == id) else {
+        return;
+    };
+    let (start, _) = visible_window(total, usize::from(inner.height), state.scroll_offset);
+    if !super::sticky_user::is_above(*placement, start) {
+        return;
+    }
+    // A compact floating chip, never a full-width replacement for a chat row.
+    let Some(text) = super::sticky_user::label(text, inner.width.min(48), inner.height) else {
+        return;
+    };
+    let text_width = UnicodeWidthStr::width(text.as_str()) as u16;
+    let bar = Rect {
+        width: text_width,
+        height: 1,
+        ..inner
+    };
+    // Reset background inherits the terminal's own opacity. Terminals do not
+    // expose portable per-cell alpha; do not paint an opaque full-width slab.
+    let style = Style::default()
+        .fg(theme().muted)
+        .bg(ratatui::style::Color::Reset)
+        .add_modifier(Modifier::DIM);
+    frame.render_widget(Paragraph::new(text).style(style), bar);
+    let label_width = UnicodeWidthStr::width(super::sticky_user::JUMP_LABEL) as u16;
+    let action = Rect {
+        x: inner.x + text_width.saturating_sub(label_width),
+        width: label_width,
+        ..bar
+    };
+    frame.render_widget(
+        Paragraph::new(super::sticky_user::JUMP_LABEL).style(style.fg(theme().primary)),
+        action,
+    );
+    state
+        .regions
+        .push(bar, RegionKind::StickyUserShield, String::new());
+    state.regions.push_jump(
+        action,
+        crate::tui::regions::JumpTarget {
+            session_key: state.session_key.clone(),
+            generation: state.transcript_generation,
+            entry_id: id.clone(),
+        },
+    );
 }
 
 /// Truncate a line to `width` columns, marking the cut with `…`.
@@ -528,7 +589,7 @@ fn build_all_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
 #[cfg(test)]
 fn build_all_lines_at(state: &AppState, width: u16, now_ms: u64) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for message in &state.messages {
+    for message in state.messages.iter() {
         render_settled_message(
             message,
             state.verbose,
@@ -595,6 +656,7 @@ fn build_all_lines_cached(
 /// old `build_all_lines` pushed after every message is folded into the
 /// height so window arithmetic stays exact.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn build_visible_lines(
     header: &[Line<'static>],
     messages: &[TranscriptEntry],
@@ -622,6 +684,7 @@ fn build_visible_lines(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn build_visible_lines_detail(
     header: &[Line<'static>],
     messages: &[TranscriptEntry],
@@ -635,6 +698,46 @@ fn build_visible_lines_detail(
     detail: DetailLevel,
     step_overrides: &HashSet<String>,
 ) -> (usize, Vec<Line<'static>>, Vec<VisibleToggle>) {
+    let viewport = build_visible_lines_anchored(
+        header,
+        messages,
+        verbose,
+        now_ms,
+        width,
+        cache,
+        modality,
+        scroll_offset,
+        visible_height,
+        detail,
+        step_overrides,
+        None,
+    );
+    (viewport.total, viewport.lines, viewport.hits)
+}
+
+struct ViewportLines {
+    total: usize,
+    lines: Vec<Line<'static>>,
+    hits: Vec<VisibleToggle>,
+    user_rows: Vec<(String, super::sticky_user::UserPlacement)>,
+    offset: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_visible_lines_anchored(
+    header: &[Line<'static>],
+    messages: &[TranscriptEntry],
+    verbose: bool,
+    now_ms: u64,
+    width: u16,
+    cache: &mut LineCache,
+    modality: Modality,
+    scroll_offset: usize,
+    visible_height: usize,
+    detail: DetailLevel,
+    step_overrides: &HashSet<String>,
+    anchor: Option<(&mut super::sticky_user::StickyUserState, &str)>,
+) -> ViewportLines {
     // The header is a transcript entry in every way that matters here — it
     // occupies rows at the top, it scrolls away, and everything below it is
     // offset by its height — but it is not IN `messages`: it is derived from
@@ -749,6 +852,26 @@ fn build_visible_lines_detail(
     cache.entries.retain(|idx, _| *idx < messages.len());
 
     let total_lines: usize = header_height + heights.iter().sum::<usize>();
+    let mut pos = header_height;
+    let mut user_rows = Vec::new();
+    for (entry, height) in messages.iter().zip(&heights) {
+        if let TranscriptEntry::UserText { id, .. } = entry {
+            user_rows.push((
+                id.clone(),
+                super::sticky_user::UserPlacement {
+                    start: pos,
+                    end: pos + height.saturating_sub(1),
+                },
+            ));
+        }
+        pos += height;
+    }
+    let scroll_offset = anchor
+        .and_then(|(anchor, session)| {
+            anchor.anchored_offset(session, &user_rows, total_lines, visible_height)
+        })
+        .unwrap_or(scroll_offset)
+        .min(total_lines.saturating_sub(visible_height));
     let (start, end) = visible_window(total_lines, visible_height, scroll_offset);
 
     // Pass 2: clone out only the intersecting rows.
@@ -769,7 +892,7 @@ fn build_visible_lines_detail(
         }
     }
     pos += header_height;
-    for (idx, message) in messages.iter().enumerate() {
+    for (idx, _message) in messages.iter().enumerate() {
         let height = heights[idx];
         let mstart = pos;
         pos += height;
@@ -803,7 +926,13 @@ fn build_visible_lines_detail(
             out.push(Line::default());
         }
     }
-    (total_lines, out, hits)
+    ViewportLines {
+        total: total_lines,
+        lines: out,
+        hits,
+        user_rows,
+        offset: scroll_offset,
+    }
 }
 
 /// The `[start, end)` row range the viewport shows.

@@ -15,9 +15,8 @@ use aleph_protocol::providers::{
     ModelsRefreshResult, ModelsRefreshRow, RefreshOutcome,
 };
 use aleph_protocol::{
-    AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest,
-    AgentTraceListPage, AgentTraceReplay, LastRunDisposition, LastRunState, RunPhase,
-    SessionListRow, SessionSnapshot,
+    AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentTraceListPage,
+    LastRunDisposition, LastRunState, RunPhase, SessionListRow, SessionSnapshot,
 };
 
 use aleph_client::{AlephClient, CliError, CliResult};
@@ -251,24 +250,20 @@ fn side_run_verdict(answer: &CliResult<AgentRunStatusReport>) -> SideRunVerdict 
 /// alive at reconnect and dead a few milliseconds later. Closing it would mean
 /// letting a late terminal frame overwrite a settled exchange, which is the
 /// misattribution `for_active_run` exists to prevent.
-pub(super) async fn reconcile_side_question(state: &mut AppState, client: &AlephClient) {
-    let Some(run_id) = state.btw.active_run_id().map(str::to_string) else {
+pub(super) fn apply_side_question_status(
+    state: &mut AppState,
+    run_id: &str,
+    answer: Result<AgentRunStatusReport, CliError>,
+) {
+    if state.btw.active_run_id() != Some(run_id) {
         return;
-    };
-    let answer = client
-        .call::<_, AgentRunStatusReport>(
-            "agent.status",
-            Some(AgentRunStatusRequest {
-                run_id: run_id.clone(),
-            }),
-        )
-        .await;
+    }
     match side_run_verdict(&answer) {
         // Nothing is claimed on either: one is "it is still going", the other
         // is "I do not know". Both leave the overlay as it is.
         SideRunVerdict::StillAnswering | SideRunVerdict::CouldNotAsk => {}
-        SideRunVerdict::Failed(reason) => state.btw.fail_active(&run_id, reason),
-        SideRunVerdict::Disconnected(note) => state.btw.settle_disconnected(&run_id, note),
+        SideRunVerdict::Failed(reason) => state.btw.fail_active(run_id, reason),
+        SideRunVerdict::Disconnected(note) => state.btw.settle_disconnected(run_id, note),
     }
 }
 
@@ -334,14 +329,43 @@ pub(super) async fn btw_abort_or_close(state: &mut AppState, client: &AlephClien
     state.btw.abort_active();
 }
 
-/// Execute a local slash command (TUI-only, no Gateway RPC needed).
+/// Apply a local command; return read-only replay RPCs for the bounded UI queue.
 pub(super) async fn execute_local_command(
     state: &mut AppState,
     _textarea: &TextArea<'_>,
     client: &AlephClient,
     cmd: LocalCommand,
-) {
+) -> Option<(&'static str, Value)> {
     match cmd {
+        LocalCommand::JumpUser => state.jump_to_last_user(),
+        LocalCommand::Requests => {
+            if let Some(owner) =
+                state
+                    .interaction
+                    .hidden_owners()
+                    .into_iter()
+                    .find(|owner| match owner {
+                        crate::tui::interaction::ModalOwner::Clarification {
+                            session_key, ..
+                        }
+                        | crate::tui::interaction::ModalOwner::Approval { session_key, .. } => {
+                            session_key == &state.session_key
+                        }
+                    })
+            {
+                state.interaction.reopen(&owner);
+                state.sync_modal_focus();
+            } else {
+                state.add_system_message("No hidden requests for this conversation.".into());
+            }
+        }
+        LocalCommand::ToolOutput { tool_call_id } => {
+            if tool_call_id.is_empty() {
+                state.add_system_message("Usage: /tool-output <tool_call_id>".into());
+            } else {
+                state.open_tool_output(tool_call_id);
+            }
+        }
         LocalCommand::Clear => {
             state.clear_screen();
         }
@@ -378,28 +402,14 @@ pub(super) async fn execute_local_command(
             let help_text = build_help_text(state);
             state.add_system_message(help_text);
         }
-        LocalCommand::ReplayList => {
-            let params = json!({ "limit": 10 });
-            // The server answers `{traces, next_cursor}`. This asked for
-            // `Vec<AgentTraceTaskSummary>` — a THIRD shape, different from both
-            // the server's and the CLI's — so `/replay list` had never once
-            // rendered a row. One contract type now, shared by both clients.
-            match client
-                .call::<_, AgentTraceListPage>("trace.list", Some(params))
-                .await
-            {
-                Ok(page) => state.add_system_message(format_replay_list(&page)),
-                Err(e) => state.add_system_message(format!("Replay list error: {e}")),
-            }
-        }
+        LocalCommand::ReplayList => return Some(("trace.list", json!({"limit": 10}))),
         LocalCommand::ReplayShow { task_id } => {
-            let params = json!({ "task_id": task_id });
-            match client
-                .call::<_, AgentTraceReplay>("trace.get", Some(params))
-                .await
-            {
-                Ok(replay) => state.load_trace_replay(&replay),
-                Err(e) => state.add_system_message(format!("Replay load error: {e}")),
+            if state.current_run.is_some() {
+                state.add_system_message(
+                    "Wait for this run to settle before opening a replay.".into(),
+                );
+            } else {
+                return Some(("trace.get", json!({"task_id": task_id})));
             }
         }
         LocalCommand::Usage => execute_usage(state, client).await,
@@ -490,6 +500,7 @@ pub(super) async fn execute_local_command(
             execute_browser(state, client, &resource_id).await;
         }
     }
+    None
 }
 
 /// Usage text for a blank `/browser` argument.
@@ -833,20 +844,6 @@ fn last_run_mark(last_run: &LastRunState) -> Option<&'static str> {
         }
         LastRunDisposition::Clean | LastRunDisposition::NeverRan => None,
     }
-}
-
-/// Confirm the highlighted session: load its history and re-point the session.
-pub(super) async fn confirm_session_switch(state: &mut AppState, client: &AlephClient) {
-    let Some(key) = state.selected_session_key() else {
-        state.close_overlay();
-        return;
-    };
-    state.close_overlay();
-    // switch_session clears transient state (including the token counter and
-    // the settings of the conversation being left) and adds a "Switched"
-    // banner; `attach_session` then restores the incoming conversation's own.
-    state.switch_session(&key);
-    attach_session(state, client, &key, AttachMode::Append).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1193,6 +1190,7 @@ pub(super) async fn confirm_provider_pick(state: &mut AppState, client: &AlephCl
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AttachMode {
     /// Append to what the caller has already prepared.
+    #[cfg(test)]
     Append,
     /// Swap in the server's copy, but only once it has arrived.
     Replace,
@@ -1215,6 +1213,7 @@ pub(super) enum AttachMode {
 /// leaves the client on the key it was given with no settings, which the status
 /// bar renders as "unknown" rather than as the global defaults. `AttachMode`
 /// exists so that survivability holds for the reconnect path too — see its doc.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(super) struct SessionAcquisition {
     pub session_key: String,
     pub generation: u64,
@@ -1243,7 +1242,11 @@ pub(super) async fn acquire_session_snapshot(
         .into_iter()
         .flatten()
         .filter(|v| v.get("role").and_then(Value::as_str) == Some("assistant"))
-        .filter_map(|v| v.get("run_id").and_then(Value::as_str))
+        .filter_map(|v| {
+            v.get("run_id")
+                .or_else(|| v.get("metadata").and_then(|m| m.get("run_id")))
+                .and_then(Value::as_str)
+        })
         .filter(|id| Some(*id) != active_run.as_deref())
         .map(str::to_owned)
         .collect::<std::collections::HashSet<_>>()
@@ -1252,13 +1255,25 @@ pub(super) async fn acquire_session_snapshot(
     let traces = if run_ids.is_empty() {
         Some(json!({ "runs": {} }))
     } else {
-        client
-            .call::<_, Value>(
-                "trace.by_runs",
-                Some(json!({ "session_key": key, "run_ids": run_ids })),
-            )
-            .await
-            .ok()
+        // The server accepts at most 200 run IDs per request. Retain each
+        // successful batch without claiming missing/expired runs are complete.
+        let mut runs = serde_json::Map::new();
+        let mut available = false;
+        for batch in run_ids.chunks(200) {
+            if let Ok(reply) = client
+                .call::<_, Value>(
+                    "trace.by_runs",
+                    Some(json!({"session_key": key, "run_ids": batch})),
+                )
+                .await
+            {
+                if let Some(batch_runs) = reply.get("runs").and_then(Value::as_object) {
+                    runs.extend(batch_runs.clone());
+                    available = true;
+                }
+            }
+        }
+        available.then(|| json!({"runs": runs}))
     };
     Ok(SessionAcquisition {
         session_key: key,
@@ -1282,6 +1297,7 @@ pub(super) fn apply_acquired_session(
     }
     let active = active_run_from_history(&acquired.history);
     if state.current_run.is_some() {
+        state.transcript_needs_resync = true;
         // Frames may have arrived during the two RPC calls. Without a
         // watermark the snapshot cannot be spliced into that live run.
         return false;
@@ -1314,23 +1330,6 @@ pub(super) fn apply_acquired_session(
     }
     apply_history_settings(state, &acquired.history);
     true
-}
-
-pub(super) async fn attach_session(
-    state: &mut AppState,
-    client: &AlephClient,
-    key: &str,
-    mode: AttachMode,
-) {
-    let generation = state.transcript_generation;
-    match acquire_session_snapshot(client, key.to_owned(), generation).await {
-        Ok(acquired) => {
-            if apply_acquired_session(state, acquired, mode) {
-                refresh_agents(state, client).await;
-            }
-        }
-        Err(e) => state.add_system_message(format!("History error: {e}")),
-    }
 }
 
 /// Apply one `chat.history` response to this screen.
@@ -1984,7 +1983,7 @@ fn pop_last_turn_locally(state: &mut AppState) {
     state.messages.truncate(at);
 }
 
-fn format_replay_list(page: &AgentTraceListPage) -> String {
+pub(super) fn format_replay_list(page: &AgentTraceListPage) -> String {
     if page.traces.is_empty() {
         return "Recent replays:\n  (none)\n\nUse /replay <task_id> after traces are persisted."
             .to_string();
@@ -4011,7 +4010,7 @@ mod active_run_tests {
 
 #[cfg(test)]
 mod attach_mode_tests {
-    use super::{apply_history, AttachMode};
+    use super::{apply_acquired_session, apply_history, AttachMode, SessionAcquisition};
     use crate::tui::app::{AppState, TranscriptEntry};
     use serde_json::json;
 
@@ -4125,39 +4124,23 @@ mod attach_mode_tests {
     /// reaches this function, so it cannot leave the user on a blank screen at
     /// the exact moment the connection came back.
     #[test]
-    fn nothing_is_thrown_away_until_the_servers_copy_is_in_hand() {
-        let src = include_str!("commands.rs");
-        let production = src.split("#[cfg(test)]").next().unwrap_or_default();
-        let attach = production
-            .split("pub(super) async fn attach_session")
-            .nth(1)
-            .expect("attach_session must exist");
-        let body = attach
-            .split("\n#[cfg(test)]\nfn apply_history")
-            .next()
-            .unwrap_or_default();
-        // Self-protection: a scanner that matched nothing would agree with
-        // everything below. Pin that this really is the function's body.
-        assert!(
-            body.contains("acquire_session_snapshot"),
-            "the scan found no snapshot acquisition — the guard is blind, not clean"
-        );
-        assert!(
-            !body.contains("messages.clear()"),
-            "attach_session must not touch the transcript itself — the clear \
-             belongs in `apply_history`, which only runs on a successful fetch"
-        );
-        // Normalize line endings first: `include_str!` preserves the checkout's
-        // bytes, and a CRLF checkout would turn a `\n`-carrying needle into a
-        // guard that can never match (the "guard only recognizes the shape it
-        // was written on" defect, CRLF edition).
-        let body = body.replace("\r\n", "\n");
-        assert!(
-            body.contains(
-                "Ok(acquired) => {\n            if apply_acquired_session(state, acquired, mode)"
-            ),
-            "the staged applier must be reached only from the success arm"
-        );
+    fn a_late_snapshot_cannot_replace_the_new_session() {
+        let mut state = AppState::new("new".into(), "m".into());
+        state.add_user_message("keep".into(), vec![]);
+        let acquired = SessionAcquisition {
+            session_key: "old".into(),
+            generation: state.transcript_generation,
+            history: json!({"messages": []}),
+            traces: None,
+        };
+        assert!(!apply_acquired_session(
+            &mut state,
+            acquired,
+            AttachMode::Replace
+        ));
+        assert!(state.messages.iter().any(
+            |entry| matches!(entry, TranscriptEntry::UserText { text, .. } if text == "keep")
+        ));
     }
 }
 

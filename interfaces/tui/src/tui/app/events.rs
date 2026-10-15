@@ -8,10 +8,7 @@ use std::time::{Duration, Instant};
 use aleph_protocol::terminate::{self, UiLocale};
 use aleph_protocol::{peer_message_is_renderable, AskUserQuestion, StreamEvent};
 
-use super::super::slash::ToolProgressMode;
-use super::{
-    row_timestamp, Action, ActiveRunJoin, AppState, AskDialogView, RowBody, TranscriptEntry,
-};
+use super::{row_timestamp, Action, ActiveRunJoin, AppState, AskDialogView};
 
 /// Bound on how many `(run_id, session_key)` pairs [`AppState`] remembers,
 /// learned one per `RunAccepted`. A background/cron/subagent-heavy install
@@ -351,6 +348,19 @@ impl AppState {
             }
         }
 
+        if !matches!(&event, StreamEvent::RunAccepted { .. }) {
+            if let Some(run_id) = run_scoped_id(&event) {
+                if self.current_run.is_none() || self.current_run.as_deref() == Some(run_id) {
+                    let changes = self.messages.adopt_live_run(run_id, self.now_ms());
+                    self.observe_transcript_changes(&changes);
+                    if self.current_run.is_none() {
+                        self.current_run = Some(run_id.to_owned());
+                        self.run_started_at = Some(Instant::now());
+                        self.transcript_needs_resync = true;
+                    }
+                }
+            }
+        }
         if !matches!(&event, StreamEvent::RunAccepted { session_key, .. } if session_key != &self.session_key)
         {
             if matches!(
@@ -364,6 +374,22 @@ impl AppState {
             let changes = self.messages.apply_live(&event, self.now_ms());
             self.observe_transcript_changes(&changes);
         }
+        let ended_displayed = match (&event, self.displayed_interaction()) {
+            (
+                StreamEvent::ClarificationEnded {
+                    session_key,
+                    request_id,
+                    ..
+                },
+                Some(super::super::interaction::ModalOwner::Clarification {
+                    session_key: key,
+                    request_id: id,
+                }),
+            ) => !request_id.is_empty() && session_key == &key && request_id == &id,
+            _ => false,
+        };
+        self.interaction.observe_event(&event);
+        self.sync_modal_focus();
         match event {
             StreamEvent::RunAccepted {
                 run_id,
@@ -461,10 +487,14 @@ impl AppState {
             }
 
             StreamEvent::RunComplete {
+                run_id,
                 summary,
                 total_duration_ms,
                 ..
             } => {
+                if self.current_run.as_deref() != Some(run_id.as_str()) {
+                    return Action::None;
+                }
                 self.current_run = None;
                 self.run_started_at = None;
                 self.dismiss_pending_approval();
@@ -524,7 +554,10 @@ impl AppState {
                 Action::None
             }
 
-            StreamEvent::RunError { error, .. } => {
+            StreamEvent::RunError { run_id, error, .. } => {
+                if self.current_run.as_deref() != Some(run_id.as_str()) {
+                    return Action::None;
+                }
                 self.current_run = None;
                 self.run_started_at = None;
                 self.dismiss_pending_approval();
@@ -551,8 +584,11 @@ impl AppState {
                 // The structured view when core sends one, the flat projection
                 // otherwise. Indices are identical either way, which is what
                 // lets the overlay keep answering with a bare 1-based number.
-                let view = render_ask_user(&question, &options, &questions, answered);
-                self.show_dialog(session_key, view);
+                if session_key.is_empty() {
+                    let view = render_ask_user(&question, &options, &questions, answered);
+                    self.show_dialog(self.session_key.clone(), view);
+                }
+                self.sync_modal_focus();
                 Action::None
             }
 
@@ -574,20 +610,11 @@ impl AppState {
                 outcome,
                 ..
             } => {
-                let mine = self
-                    .dialog
-                    .as_ref()
-                    .is_some_and(|d| d.session_key == session_key);
-                if !mine {
-                    return Action::None;
+                let _ = session_key;
+                if ended_displayed {
+                    self.add_system_message(format!("The agent's question ended ({outcome})."));
                 }
-                self.close_overlay();
-                // Say WHICH ending it was rather than letting the card vanish:
-                // "you answered" and "it expired while you were reading" leave
-                // the user in very different positions. The outcome word is
-                // core's, printed verbatim — this client does not own that
-                // vocabulary and must not paraphrase it.
-                self.add_system_message(format!("The agent's question ended ({outcome})."));
+                self.sync_modal_focus();
                 Action::None
             }
 
@@ -625,18 +652,10 @@ impl AppState {
                 if !peer_message_is_renderable(&author_user_id, self.my_user_id.as_deref()) {
                     return Action::None;
                 }
-                let id = self.next_entry_id();
-                let row = TranscriptEntry::UserText {
-                    id,
-                    text: content,
-                    at_ms: u64::try_from(row_timestamp(Some(&timestamp)).timestamp_millis()).ok(),
-                    // The wire for `session_user_message` does not carry
-                    // attachments yet, so peer messages land with no chips.
-                    // The local composer path goes through `add_user_message`
-                    // and wires the real list.
-                    attachments: Vec::new(),
-                };
-                self.messages.import_legacy(row);
+                self.messages.push_peer_user(
+                    &content,
+                    u64::try_from(row_timestamp(Some(&timestamp)).timestamp_millis()).ok(),
+                );
                 self.transcript_generation = self.transcript_generation.wrapping_add(1);
                 self.invalidate_rendered_lines();
                 Action::None

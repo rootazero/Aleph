@@ -57,6 +57,7 @@ fn hint_for(dialog: &DialogState) -> &'static str {
 }
 
 /// Render the confirmation dialog as a centered overlay.
+#[cfg(test)]
 pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     render_dialog_with_status(frame, dialog, area, None);
 }
@@ -84,7 +85,7 @@ pub fn render_active_interaction(
                 SubmissionPhase::Reconciling => Some("Checking pending question…"),
                 SubmissionPhase::Error => Some("Delivery uncertain · Refresh pending before retry"),
                 SubmissionPhase::LegacyConfirmation => {
-                    Some("Legacy server: refresh pending, then confirm manually")
+                    Some("Legacy server: refresh pending, Ctrl+Enter confirm, then Enter send")
                 }
             };
             render_dialog_with_status(frame, dialog, area, status);

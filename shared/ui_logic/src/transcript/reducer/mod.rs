@@ -208,6 +208,48 @@ impl Transcript {
         Change::Inserted(id)
     }
 
+    /// A peer's user row can arrive after its answer started streaming.
+    /// Insert before the open presentation and repair reducer-owned indices.
+    pub fn push_peer_user(&mut self, text: &str, at_ms: Option<u64>) -> Change {
+        let id = self.next_id("user");
+        let at = self
+            .run
+            .as_ref()
+            .and_then(|run| run.open_step)
+            .or_else(|| {
+                self.entries.iter().rposition(|entry| {
+                    matches!(
+                        entry,
+                        TranscriptEntry::AssistantText {
+                            streaming: true,
+                            ..
+                        }
+                    )
+                })
+            })
+            .unwrap_or(self.entries.len());
+        self.entries.insert(
+            at,
+            TranscriptEntry::UserText {
+                id: id.clone(),
+                text: text.to_owned(),
+                at_ms,
+                attachments: Vec::new(),
+            },
+        );
+        if let Some(run) = &mut self.run {
+            if run.first_entry >= at {
+                run.first_entry += 1;
+            }
+            if let Some(open) = &mut run.open_step {
+                if *open >= at {
+                    *open += 1;
+                }
+            }
+        }
+        Change::Inserted(id)
+    }
+
     // ---- live leg --------------------------------------------------------
 
     pub fn apply_live(&mut self, ev: &StreamEvent, now_ms: u64) -> Vec<Change> {

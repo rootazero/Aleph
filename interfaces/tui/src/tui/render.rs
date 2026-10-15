@@ -17,7 +17,6 @@ use crate::tui::widgets::{
     chat_area::render_chat_area,
     command_palette::render_command_palette,
     context_overlay::render_context_overlay,
-    dialog::{render_approval, render_dialog},
     hint_line::render_hint_line,
     input_area::{input_height, InputWidget},
     provider_picker::render_provider_picker,
@@ -113,6 +112,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
         hint_area,
         state.current_run.is_some(),
         textarea.lines().iter().any(|l| !l.is_empty()),
+        state.interaction.hidden_count() > 0,
     );
 
     // Status bar
@@ -156,18 +156,25 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     // The `/context` report centers over the transcript for the same reason
     // the agent detail view does: it is read, not picked from.
     render_context_overlay(frame, state, frame.area());
-    if let Some(dialog) = &state.dialog {
-        render_dialog(frame, dialog, frame.area());
+    if state.displayed_interaction().is_some() {
+        crate::tui::widgets::dialog::render_active_interaction(
+            frame,
+            &state.interaction,
+            state.approval.as_ref(),
+            frame.area(),
+        );
     }
     // The side-question overlay renders over the transcript it is deliberately
     // not part of. Below the approval overlay: a parked run is waiting on that
     // one, and nothing is waiting on this.
-    if state.btw.open {
+    if state.btw.open && state.displayed_interaction().is_none() {
         render_btw_panel(frame, &state.btw, state.spinner_frame, frame.area());
     }
     // Approval overlay renders above everything — a parked run is waiting on it.
-    if let Some(approval) = &state.approval {
-        render_approval(frame, approval, frame.area());
+    if state.focus == Focus::ToolOutput {
+        if let Some(view) = &mut state.tool_output {
+            crate::tui::tool_output::render(frame, view, frame.area());
+        }
     }
 }
 

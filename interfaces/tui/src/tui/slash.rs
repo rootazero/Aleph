@@ -115,6 +115,13 @@ pub enum LocalCommand {
     /// handler only honours ids present in the live `BrowserResourceCatalog` -
     /// this command never derives an id from a URL, tab, or profile.
     Browser { resource_id: String },
+    /// Jump the chat viewport back to your most recent message — the
+    /// mouseless form of the sticky bar's `[click to jump]` (spec §6.1).
+    JumpUser,
+    /// Reopen a dismissed pending question or approval.
+    Requests,
+    /// Inspect masked, paginated output for one tool call.
+    ToolOutput { tool_call_id: String },
 }
 
 /// A per-conversation knob reachable from a slash command.
@@ -244,10 +251,22 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
         "/context",
         "Break down what is filling the context window right now",
     ),
+    (
+        "/requests",
+        "Reopen a dismissed pending question or approval",
+    ),
+    (
+        "/tool-output",
+        "Inspect tool output (/tool-output <tool_call_id>)",
+    ),
     ("/theme", "Switch the colour preset: dark|light|terminal"),
     (
         "/browser",
         "List browser resource IDs (/browser), or open one in the viewer (/browser <resource_id>)",
+    ),
+    (
+        "/jump-user",
+        "Jump the chat view back to your most recent message",
     ),
     ("/replays", "List recent persisted trace replays"),
     ("/replay", "Load a persisted trace replay by task ID"),
@@ -358,6 +377,11 @@ pub fn parse_input(input: &str) -> ParsedInput {
             resource_id: args.to_string(),
         }),
         "/agentpanel" => ParsedInput::Local(LocalCommand::AgentPanel),
+        "/jump-user" => ParsedInput::Local(LocalCommand::JumpUser),
+        "/requests" => ParsedInput::Local(LocalCommand::Requests),
+        "/tool-output" => ParsedInput::Local(LocalCommand::ToolOutput {
+            tool_call_id: args.to_owned(),
+        }),
         "/replays" => ParsedInput::Local(LocalCommand::ReplayList),
         "/replay" => {
             if args.is_empty() {
@@ -398,6 +422,24 @@ mod tests {
         assert_eq!(parse_input("/quit"), ParsedInput::Local(LocalCommand::Quit));
         assert_eq!(parse_input("/q"), ParsedInput::Local(LocalCommand::Quit));
         assert_eq!(parse_input("/exit"), ParsedInput::Local(LocalCommand::Quit));
+    }
+
+    #[test]
+    fn parse_jump_user() {
+        assert_eq!(
+            parse_input("/jump-user"),
+            ParsedInput::Local(LocalCommand::JumpUser)
+        );
+        assert_eq!(
+            parse_input("/JUMP-USER"),
+            ParsedInput::Local(LocalCommand::JumpUser)
+        );
+        // An argument is meaningless to a navigation command; the word alone
+        // is the command, like /clear.
+        assert_eq!(
+            parse_input("/jump-user now"),
+            ParsedInput::Local(LocalCommand::JumpUser)
+        );
     }
 
     #[test]

@@ -580,7 +580,7 @@ impl AlephClient {
     /// `connected` on the way out only while `generation` still names it. See
     /// the field's doc — after a reconnect two loops can be alive, and the
     /// abandoned one must not report the live connection as dead.
-    // Eight arguments is the loop's full capability set, listed where the two
+    // These arguments are the loop's full capability set, listed where the two
     // spawn sites can be diffed against it; folding two senders into a struct
     // would trade this lint for a one-consumer type (R10 YAGNI).
     #[allow(clippy::too_many_arguments)]

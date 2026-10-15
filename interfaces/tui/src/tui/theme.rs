@@ -673,12 +673,9 @@ mod tests {
     /// the write was called (判据 §4).
     #[test]
     fn a_remembered_preset_survives_as_the_next_boots_answer() {
-        let dir = std::env::temp_dir().join(format!(
-            "aleph-tui-theme-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let path = dir.join("nested").join("tui-theme");
+        let owned = tempfile::TempDir::new().expect("owned theme preference root");
+        let path = owned.path().join("nested").join("tui-theme");
+        assert!(path.starts_with(owned.path()));
         write_preset(&path, Preset::Light).expect("write");
         let stored = std::fs::read_to_string(&path).expect("read back");
         assert_eq!(
@@ -693,7 +690,7 @@ mod tests {
             Preset::Terminal,
             "a second /theme must replace the first, not append to it"
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        // TempDir removes only its owned root on drop.
     }
 
     /// The remembered file hangs off the shared `aleph_home` derivation, which

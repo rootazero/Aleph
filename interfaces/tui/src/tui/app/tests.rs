@@ -695,14 +695,10 @@ fn handle_response_chunk_appends_content() {
 
     // Just the assistant message — there is no welcome entry any more.
     assert_eq!(state.messages.len(), 1);
-    match &state.messages[0] {
-        TranscriptEntry::AssistantText {
-            markdown: content, ..
-        } => {
-            assert_eq!(content, "Hello World");
-        }
-        other => panic!("Expected Assistant message, got: {other:?}"),
-    }
+    assert_eq!(assistant_text(&state), "Hello World");
+    assert!(
+        matches!(&state.messages[0], TranscriptEntry::Step(step) if step.text.as_deref() == Some("Hello World"))
+    );
 }
 
 #[test]
@@ -717,10 +713,14 @@ fn handle_agent_trace_text_events_populate_assistant_content_and_reasoning() {
 
     state.handle_gateway_event(StreamEvent::AgentTrace {
         run_id: "run-1".into(),
+        seq: 0,
+        event: AgentTraceEvent::TurnStarted { iteration: 1 },
+    });
+    state.handle_gateway_event(StreamEvent::AgentTrace {
+        run_id: "run-1".into(),
         seq: 1,
-        event: AgentTraceEvent::TextEmitted {
+        event: AgentTraceEvent::ReasoningEmitted {
             iteration: 1,
-            stream: AgentTraceTextKind::Intermediate,
             text: "Inspecting replay trace".into(),
         },
     });
@@ -777,16 +777,26 @@ fn handle_agent_trace_session_completed_updates_totals_and_closes_stream() {
         },
     });
 
+    assert_eq!(
+        state.current_run.as_deref(),
+        Some("run-1"),
+        "retain correlation for the final pricing frame"
+    );
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-1".into(),
+        seq: 3,
+        summary: RunSummary {
+            total_tokens: 321,
+            final_response: Some("Replay loaded".into()),
+            ..Default::default()
+        },
+        total_duration_ms: 10,
+    });
     assert_eq!(state.total_tokens, 321);
     assert!(state.current_run.is_none());
     assert!(!state.current_run_uses_agent_trace);
-    match &state.messages[0] {
-        TranscriptEntry::AssistantText {
-            streaming: is_streaming,
-            ..
-        } => assert!(!is_streaming),
-        other => panic!("Expected Assistant message, got: {other:?}"),
-    }
+    assert_eq!(assistant_text(&state), "Replay loaded");
+    assert!(state.messages.iter().all(|entry| !matches!(entry, TranscriptEntry::Step(step) if step.status == shared_ui_logic::transcript::StepStatus::Live)));
 }
 
 #[test]
@@ -828,11 +838,11 @@ fn handle_agent_trace_decision_events_append_shared_projection_reasoning() {
     });
 
     assert_eq!(
-        reasoning_text(&state).as_deref(),
-        Some(
-            "Turn started (iteration 1)\nThinking (iteration 1)\nTurn completed (continue) — tools: 1/1, tokens: 64"
-        )
+        reasoning_text(&state),
+        None,
+        "loop lifecycle is not provider thinking"
     );
+    assert!(matches!(&state.messages[0], TranscriptEntry::Step(step) if step.iteration == Some(1)));
 }
 
 #[test]
@@ -879,9 +889,11 @@ fn load_trace_replay_records_session_summary_in_reasoning() {
 
     assert_eq!(assistant_text(&state), "done");
     assert_eq!(
-        reasoning_text(&state).as_deref(),
-        Some("Turn started (iteration 1)\nSession completed (completed) — iterations: 1, tools: 0, tokens: 33 — done")
+        reasoning_text(&state),
+        None,
+        "session bookkeeping cannot invent provider thinking"
     );
+    assert!(state.messages.iter().all(|entry| !matches!(entry, TranscriptEntry::Step(step) if step.status == shared_ui_logic::transcript::StepStatus::Live)));
 }
 
 #[test]
@@ -988,10 +1000,8 @@ fn handle_agent_trace_tool_lifecycle_takes_precedence() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "t1");
     assert_eq!(rows[0].status, RowStatus::Ok { duration_ms: 120 });
-    assert_eq!(
-        reasoning_text(&state).as_deref(),
-        Some("Listed the current directory")
-    );
+    assert_eq!(reasoning_text(&state), None);
+    assert!(state.messages.iter().any(|entry| matches!(entry, TranscriptEntry::Step(step) if step.notes.iter().any(|note| note.text.contains("Listed the current directory")))));
 }
 
 #[test]
@@ -1045,7 +1055,7 @@ fn handle_run_complete_clears_run() {
     assert!(
         matches!(
             state.messages.last(),
-            Some(TranscriptEntry::SystemNotice { text, .. }) if text == "\u{273b} Worked for 5.0s"
+            Some(TranscriptEntry::SystemNotice { text, .. }) if text.starts_with("\u{273b} Worked for 5.0s ·")
         ),
         "got: {:?}",
         state.messages.last()
@@ -1173,6 +1183,7 @@ fn dismiss_pending_approval_is_noop_without_overlay() {
 fn handle_ask_user_shows_dialog() {
     let mut state = AppState::new("s".into(), "m".into());
     let event = StreamEvent::AskUser {
+        request_id: String::new(),
         run_id: "run-1".into(),
         seq: 3,
         session_key: "telegram:bot:1:u1".into(),
@@ -1203,6 +1214,7 @@ fn handle_ask_user_renders_the_structured_question() {
 
     let mut state = AppState::new("s".into(), "m".into());
     state.handle_gateway_event(StreamEvent::AskUser {
+        request_id: String::new(),
         run_id: "run-1".into(),
         seq: 3,
         session_key: "telegram:bot:1:u1".into(),
@@ -1239,7 +1251,7 @@ fn handle_ask_user_renders_the_structured_question() {
         "{}",
         dialog.question
     );
-    assert!(dialog.question.contains("(2/2)"), "{}", dialog.question);
+    assert!(dialog.question.contains("2/2"), "{}", dialog.question);
 }
 
 /// The description reaches this surface at all — the defect the structured
@@ -1251,6 +1263,7 @@ fn handle_ask_user_shows_option_descriptions() {
 
     let mut state = AppState::new("s".into(), "m".into());
     state.handle_gateway_event(StreamEvent::AskUser {
+        request_id: String::new(),
         run_id: "run-1".into(),
         seq: 1,
         session_key: "telegram:bot:1:u1".into(),
@@ -1703,10 +1716,20 @@ fn a_locally_recorded_knob_is_visible_before_the_next_attach() {
 #[test]
 fn a_clarification_that_ends_elsewhere_retires_the_card() {
     let mut state = AppState::new("s".into(), "m".into());
-    state.show_dialog("telegram:bot:1:u1".into(), menu_view("Approve?"));
+    state.handle_gateway_event(StreamEvent::AskUser {
+        run_id: "run".into(),
+        seq: 1,
+        request_id: "req".into(),
+        session_key: "telegram:bot:1:u1".into(),
+        question: "Approve?".into(),
+        options: vec![],
+        questions: vec![],
+        answered: 0,
+    });
     assert_eq!(state.focus, Focus::Dialog);
 
     state.handle_gateway_event(StreamEvent::ClarificationEnded {
+        request_id: "req".into(),
         session_key: "telegram:bot:1:u1".into(),
         outcome: "expired".into(),
     });
@@ -1732,6 +1755,7 @@ fn a_clarification_ending_in_another_session_leaves_this_card_alone() {
     state.show_dialog("telegram:bot:1:u1".into(), menu_view("Approve?"));
 
     state.handle_gateway_event(StreamEvent::ClarificationEnded {
+        request_id: String::new(),
         session_key: "telegram:bot:1:SOMEONE-ELSE".into(),
         outcome: "cancelled".into(),
     });
@@ -1982,6 +2006,7 @@ fn a_response_chunk_from_this_sessions_run_is_still_appended() {
         TranscriptEntry::AssistantText {
             markdown: content, ..
         } => assert_eq!(content, "hello"),
+        TranscriptEntry::Step(step) => assert_eq!(step.text.as_deref(), Some("hello")),
         other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
@@ -2037,6 +2062,7 @@ fn an_ask_user_from_another_sessions_run_is_still_shown() {
         accepted_at: "2026-03-04T00:00:00Z".into(),
     });
     state.handle_gateway_event(StreamEvent::AskUser {
+        request_id: String::new(),
         run_id: "run-elsewhere".into(),
         seq: 1,
         session_key: "agent:main:ephemeral:btw-abc".into(),
@@ -2109,6 +2135,7 @@ fn a_run_resumes_appearing_after_switching_back_to_its_own_session() {
         Some(TranscriptEntry::AssistantText {
             markdown: content, ..
         }) => assert_eq!(content, "still mine"),
+        Some(TranscriptEntry::Step(step)) => assert_eq!(step.text.as_deref(), Some("still mine")),
         other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
@@ -2195,7 +2222,7 @@ fn no_side_question_frame_reaches_the_main_transcript() {
         "a side question must add nothing to the main transcript, got: {:?}",
         &state.messages[before..]
     );
-    for message in &state.messages {
+    for message in state.messages.iter() {
         // Every entry that carries prose. A tool row's body is a leak path
         // too, so it is included rather than skipped — the answer this test
         // watches for could arrive as a tool result just as easily as text.
@@ -2478,6 +2505,7 @@ fn a_side_question_in_flight_does_not_swallow_the_main_run() {
         TranscriptEntry::AssistantText {
             markdown: content, ..
         } => assert_eq!(content, "the main answer"),
+        TranscriptEntry::Step(step) => assert_eq!(step.text.as_deref(), Some("the main answer")),
         other => panic!("expected the main run's assistant bubble, got: {other:?}"),
     }
     assert!(
@@ -2503,6 +2531,7 @@ fn the_overlay_does_not_swallow_a_run_less_frame() {
     state.btw.claim_pending_run("run-side".into());
 
     state.handle_gateway_event(StreamEvent::AskUser {
+        request_id: String::new(),
         run_id: String::new(),
         seq: 1,
         session_key: "agent:main:main".into(),
@@ -3366,7 +3395,7 @@ fn a_multi_tool_run_closes_with_a_summary_of_what_it_did() {
     assert!(
         matches!(
             state.messages.last(),
-            Some(TranscriptEntry::SystemNotice { text, .. }) if text == "\u{273b} Worked for 12s"
+            Some(TranscriptEntry::SystemNotice { text, .. }) if text.starts_with("\u{273b} Worked for 12s ·")
         ),
         "got: {:?}",
         state.messages.last()
@@ -3401,7 +3430,7 @@ fn a_single_tool_run_gets_no_summary_row_but_still_closes() {
     assert!(
         matches!(
             state.messages.last(),
-            Some(TranscriptEntry::SystemNotice { text, .. }) if text == "\u{273b} Worked for 0.8s"
+            Some(TranscriptEntry::SystemNotice { text, .. }) if text.starts_with("\u{273b} Worked for 0.8s ·")
         ),
         "got: {:?}",
         state.messages.last()

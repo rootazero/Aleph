@@ -120,9 +120,10 @@ pub fn build_completed_history(
                             .iter()
                             .any(|entry| match entry {
                                 TranscriptEntry::AssistantText { .. } => true,
-                                TranscriptEntry::Step(step) => {
-                                    step.text.as_deref() == Some(content)
-                                }
+                                TranscriptEntry::Step(step) => step
+                                    .text
+                                    .as_deref()
+                                    .is_some_and(|text| text.trim_end() == content.trim_end()),
                                 _ => false,
                             });
                     if !has_answer && !content.trim().is_empty() {

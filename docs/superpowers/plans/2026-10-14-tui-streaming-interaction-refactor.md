@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-14-tui-streaming-interaction-refactor-design.md` (approved by user 2026-10-14, including sticky visibility default).
 
+**Delivery status / 交付状态 (2026-10-15):** Tasks 1–5 implemented and integrated; Task 6 source cleanup, reference updates, scoped formatting/tests/Clippy and independent review completed. Live Gateway/real-terminal acceptance remains unrun. The original detailed checklists below are planning criteria, not a claim that unrun acceptance passed; see the [delivery record](2026-10-14-tui-streaming-interaction-refactor-delivery.md) for exact results, compatibility debt and exclusions.
+
 ## Global Constraints
 
 - Replies Chinese, code comments English; reference documentation bilingual.

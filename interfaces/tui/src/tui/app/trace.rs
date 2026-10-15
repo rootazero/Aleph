@@ -8,10 +8,12 @@ use super::{Action, AppState, Focus};
 impl AppState {
     pub(super) fn apply_agent_trace_event(&mut self, event: &AgentTraceEvent) -> Action {
         match event {
-            AgentTraceEvent::ToolCallCompleted { call, result, .. } => {
-                if let AgentTraceToolResult::Success { output } = result {
-                    self.maybe_apply_plan_from_tool(&call.tool_name, output);
-                }
+            AgentTraceEvent::ToolCallCompleted {
+                call,
+                result: AgentTraceToolResult::Success { output },
+                ..
+            } => {
+                self.maybe_apply_plan_from_tool(&call.tool_name, output);
             }
             AgentTraceEvent::SessionCompleted { total_tokens, .. } => {
                 if !self.current_run_trace_summary_applied && !self.replaying_trace {
@@ -20,7 +22,8 @@ impl AppState {
                         .saturating_add(u64::try_from(*total_tokens).unwrap_or(u64::MAX));
                     self.current_run_trace_summary_applied = true;
                 }
-                self.current_run = None;
+                // Keep correlation until RunComplete: that authoritative frame
+                // carries pricing and plan fields absent from this trace.
                 self.run_started_at = None;
                 if !self.replaying_trace {
                     self.dismiss_pending_approval();

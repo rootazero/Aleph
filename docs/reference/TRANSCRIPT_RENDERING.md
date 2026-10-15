@@ -575,7 +575,7 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 > `TextEmitted{Final}`, which `task_traces` persists and `trace.by_runs` replays unchanged; a subagent's
 > harness events stop at the subagent boundary. Shared core: `TranscriptEntry::Step` (one Think→Act
 > iteration), `step_headline` (thinking → text → tally), `DetailLevel`, and the pure `Transcript` reducer
-> whose live and replay legs meet in one `apply_trace`. **Nothing renders it yet** (dated debt, §7.3).
+> whose live and replay legs meet in one `apply_trace`. **The TUI now consumes it** (2026-10-15; §7.5); Panel chat migration remains separate.
 > Numbered after §6 on purpose, so section numbers stay monotonic.
 
 ### 7.1 交付了什么
@@ -595,7 +595,9 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 - **`iteration: None` 永不被追认**、**记录是权威的**（`ReasoningEmitted` 之于 thinking、`TextEmitted{Final}` 之于文字）、**没有记录覆盖的流式文字是临时的** → spec §4 · §5.2。
 - **`RunSummary.loops` 是终局闸**，`NeedsResync` 之后客户端怎么做 → spec §5.1 · §9。
 
-### 7.3 🛑 零消费者区间（有日期的债）
+### 7.3 历史测量：零消费者区间（2026-09-23）
+
+下列是 Phase S 交付时的历史状态，不能用作当前 TUI 的消费者普查；TUI 接线见 §7.5，Panel 聊天迁移仍未由本轮完成。
 
 **测量（2026-09-23，在 `4cdbee4d2` 上）**，三条命令即谓词：
 
@@ -619,5 +621,14 @@ grep -rn "ReasoningEmitted\|reasoning_emitted" interfaces --include=*.rs
 - **发送端寿命不变量**：drain 要等**每一个强 sender** 都消失才收到 `Closed`，emit sink 只持弱半边。守卫：`no_sender_outlives_dispatch`（`src/orchestrator/tests/dispatch.rs`）· `a_live_sink_does_not_keep_the_channel_open`（`agent_trace_emit_sink.rs`）。机制与重访条件的所有者是 `FlowRequest.event_tx` 的 doc、emit sink 模块 doc 的「Why it holds a `WeakSender`」与 `run_loop/inner.rs` 创建通道处的注释；判据全文 → [FEATURE_LOCATOR 附录 D.4.51](FEATURE_LOCATOR.md)。
 - **顺序守卫是两条**：G1a `on_trace_publishes_onto_the_flow_channel_before_returning`（`agent_trace_emit_sink.rs`）· G1b `trace_frames_keep_their_place_in_the_run_seq_order`（`src/orchestrator/harness_bridge/tests.rs`）。为什么缺一不可 → spec §5.3 的修订段；判据全文 → [FEATURE_LOCATOR 附录 D.0.196](FEATURE_LOCATOR.md)。
 - **老 run**（2026-09-23 之前录的）在 `task_traces` 里没有 reasoning——冷加载时那些 step 的标题退到 text 首句 / 工具计数，不回 session 日志去猜（spec §13）。
-- **`TranscriptEntry::Reasoning` 还在**：它的删除归 Phase T，因为它的 TUI 渲染器要活到 Step 能被画出来为止（spec §12）。
+- **`TranscriptEntry::Reasoning` 兼容形状仍在**：本轮 TUI 生产流转由 Step reducer 接管；旧历史/测试与其他界面尚可使用旧变体，不能仅因 TUI 迁移就删除共享协议形状。
 - **Phase S 交给 T / P 的清单**在 spec §7 末尾，不在这里重抄。
+
+### 7.5 TUI 消费共享 reducer（2026-10-15）
+
+English: The TUI now owns one shared `Transcript`, renders Step entries, and stages completed-session recovery before replacing the visible transcript. Active replay/live merging still requires a server watermark; missing data remains explicit.
+
+- **状态与渲染**：`interfaces/tui/src/tui/app/events.rs` 将属于当前会话的帧送入 `Transcript::apply_live`；`app/trace.rs` 保留 usage、context、plan 等旁路观测。`widgets/chat_area.rs` 渲染 Step，工具分组在 Step 内发生，末尾答复保持展开；`/detail brief|full` 与 `step_overrides` 控制显示。兼容旧命令的入口不拥有另一份转录。
+- **活动接入**：`Transcript::adopt_live_run` 幂等接纳已在执行的 run；向 live 状态直接 apply_replay/finish_replay 会返回 `NeedsResync`。`app/hydration.rs` 仅从完成历史构建替换稿。当前 `trace.by_runs` 没有与 live 帧共享的回放水位，因此不能按正文相似度去重拼接活动前缀；结束后刷新整份已加载会话。
+- **恢复与公平性**：`commands::acquire_session_snapshot` 获取会话和 traces，`apply_acquired_session` 检查会话/代次并应用；`rpc_jobs.rs` 承载有界背景请求，`shared/client::stream_continuity` 从独立计数器报告队列溢出或解码丢失。继续使用 `try_send`，不能让慢 TUI 堵住 WebSocket 的 RPC 响应路由。
+- **范围**：本轮不迁移 Panel 聊天，不改变 attended/unattended reasoning 的脱敏政策。共享 reducer fixture 等价测试与真实 drain→数据库→回放验收是两种证据；未执行后一种时不得声称已通过。

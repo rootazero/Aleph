@@ -36,7 +36,11 @@ use shared_ui_logic::transcript::{Change, DetailLevel, Modality, Transcript};
 
 use super::btw_overlay::BtwOverlay;
 use super::command_tree::{CommandEntry, DisplayEntry};
+use super::interaction::{InteractionController, ModalOwner};
+use super::regions::JumpTarget;
 use super::slash::{LocalCommand, SessionKnob, ToolProgressMode};
+use super::tool_output::ToolOutputView;
+use super::widgets::sticky_user::StickyUserState;
 
 // ---------------------------------------------------------------------------
 // Action
@@ -71,6 +75,7 @@ pub enum Action {
     ScrollDown(usize),
     /// Jump to the bottom of the chat
     ScrollToBottom,
+    JumpToUser(JumpTarget),
 
     // -- Folding --
     /// Fold or unfold one tool row, by tool call id.
@@ -106,12 +111,20 @@ pub enum Action {
     // -- Dialog response --
     /// Answer an `AskUser` dialog. Routed to `clarification.resolve` keyed by
     /// `session_key` (the reply routes by session, not by run).
-    RespondToDialog { session_key: String, reply: String },
+    RespondToDialog {
+        session_key: String,
+        reply: String,
+    },
 
     // -- Tool approval (Ask exec tier) --
     /// Resolve the pending tool-approval overlay by option index into
     /// `APPROVAL_DECISIONS` (0 = allow once, 1 = allow session, 2 = deny).
-    ResolveApproval { index: usize },
+    ResolveApproval {
+        index: usize,
+    },
+    LoadToolOutput {
+        tool_call_id: String,
+    },
 
     // -- Side question (`/btw`) --
     /// Esc in the side-question overlay: abort the side run when one is still
@@ -172,12 +185,15 @@ pub enum Focus {
     Agents,
     /// The `/context` overlay (measured prompt layout of the last turn).
     Context,
+    ToolOutput,
 }
 
 // ---------------------------------------------------------------------------
 // Transcript
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
+use shared_ui_logic::transcript::RowBody;
 /// The transcript is a flat, chronological list of
 /// [`shared_ui_logic::transcript::TranscriptEntry`].
 ///
@@ -208,7 +224,7 @@ pub enum Focus {
 /// names it through this module, and a facade that lists a type no caller
 /// reaches is the kind of always-true claim this repo pays for later. The
 /// tests import it from `shared_ui_logic` like every other consumer does.
-pub use shared_ui_logic::transcript::{RowBody, ToolRow, TranscriptEntry, TuiAttachment};
+pub use shared_ui_logic::transcript::{ToolRow, TranscriptEntry, TuiAttachment};
 
 /// Unix ms, for the entry timestamps the shared model carries as `Option<u64>`.
 fn as_ms(t: DateTime<Utc>) -> Option<u64> {
@@ -1006,6 +1022,9 @@ pub struct AppState {
     /// Surfaced by the `exec.approvals.pending` poll, resolved via
     /// `exec.approval.resolve`.
     pub approval: Option<ApprovalState>,
+    pub interaction: InteractionController,
+    pub tool_output: Option<ToolOutputView>,
+    pub sticky_user: StickyUserState,
     /// The `/btw` side-question overlay.
     ///
     /// Not an `Option` like its siblings: its history outlives any one
@@ -1099,6 +1118,9 @@ impl AppState {
             send_history: Vec::new(),
             history_index: None,
 
+            interaction: InteractionController::new(session_key.clone()),
+            tool_output: None,
+            sticky_user: StickyUserState::default(),
             session_key,
             default_model_name: model_name.clone(),
             model_name,
@@ -1293,8 +1315,12 @@ impl AppState {
         {
             return false;
         }
+        self.sticky_user.clear();
         self.messages = result.transcript;
-        self.transcript_needs_resync = result.recovery != RecoveryState::Complete;
+        self.transcript_needs_resync = false;
+        if result.recovery != RecoveryState::Complete {
+            self.add_system_message("Showing available history; some recorded steps are unavailable. Reconnect to refresh.".into());
+        }
         self.step_overrides.clear();
         self.invalidate_rendered_lines();
         true
@@ -1309,17 +1335,20 @@ impl AppState {
     /// `render_chat_area` clamps it against the real total every frame, so a
     /// `Home` (`usize::MAX / 2`) becomes a reachable offset before anything
     /// reads it again.
-    pub const fn scroll_up(&mut self, n: usize) {
+    pub fn scroll_up(&mut self, n: usize) {
+        self.sticky_user.clear();
         self.scroll_offset = self.scroll_offset.saturating_add(n);
     }
 
     /// Scroll down by `n` lines; reaching `0` resumes following the bottom.
-    pub const fn scroll_down(&mut self, n: usize) {
+    pub fn scroll_down(&mut self, n: usize) {
+        self.sticky_user.clear();
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
     }
 
     /// Jump to the bottom of the chat and resume following it.
-    pub const fn scroll_to_bottom(&mut self) {
+    pub fn scroll_to_bottom(&mut self) {
+        self.sticky_user.clear();
         self.scroll_offset = 0;
         self.unseen_below = false;
     }
@@ -1409,7 +1438,7 @@ impl AppState {
             TranscriptEntry::Step(step) => step.tools.iter().any(|row| !row.expanded),
             _ => false,
         });
-        for message in &mut self.messages {
+        for message in self.messages.iter_mut() {
             match message {
                 TranscriptEntry::Tool(row) => row.expanded = any_folded,
                 TranscriptEntry::Step(step) => {
@@ -1588,14 +1617,92 @@ impl AppState {
     /// picker, agents overlay, context overlay) and return focus to whatever
     /// is still on screen.
     pub fn close_overlay(&mut self) {
-        self.palette = None;
-        self.dialog = None;
-        self.session_picker = None;
-        self.provider_picker = None;
-        self.approval = None;
-        self.agents_overlay = None;
-        self.context_overlay = None;
+        match self.focus {
+            Focus::Dialog => {
+                self.interaction.hide_active();
+                self.dialog = None;
+            }
+            Focus::Approval => return,
+            Focus::ToolOutput => self.tool_output = None,
+            Focus::CommandPalette => self.palette = None,
+            Focus::SessionPicker => self.session_picker = None,
+            Focus::ProviderPicker => self.provider_picker = None,
+            Focus::Agents => self.agents_overlay = None,
+            Focus::Context => self.context_overlay = None,
+            _ => {}
+        }
+        self.interaction.pause_for_picker(false);
         self.focus = self.focus_after_modal();
+        self.sync_modal_focus();
+    }
+
+    pub fn displayed_interaction(&self) -> Option<ModalOwner> {
+        if matches!(
+            self.focus,
+            Focus::CommandPalette
+                | Focus::SessionPicker
+                | Focus::ProviderPicker
+                | Focus::Agents
+                | Focus::Context
+                | Focus::ToolOutput
+        ) {
+            return None;
+        }
+        self.interaction
+            .displayed_owner(self.approval.as_ref())
+            .cloned()
+    }
+
+    pub fn sync_modal_focus(&mut self) {
+        if matches!(
+            self.focus,
+            Focus::CommandPalette
+                | Focus::SessionPicker
+                | Focus::ProviderPicker
+                | Focus::Agents
+                | Focus::Context
+                | Focus::ToolOutput
+        ) {
+            return;
+        }
+        self.dialog = self.interaction.active_dialog().cloned();
+        match self.interaction.displayed_owner(self.approval.as_ref()) {
+            Some(ModalOwner::Clarification { .. }) => self.focus = Focus::Dialog,
+            Some(ModalOwner::Approval { .. }) => self.focus = Focus::Approval,
+            None if matches!(self.focus, Focus::Dialog | Focus::Approval) => {
+                self.focus = self.focus_after_modal()
+            }
+            None => {}
+        }
+    }
+
+    pub fn request_sticky_jump(&mut self, target: JumpTarget) {
+        if self
+            .messages
+            .iter()
+            .any(|e| matches!(e, TranscriptEntry::UserText { id, .. } if id == &target.entry_id))
+        {
+            self.sticky_user
+                .jump(&target, &self.session_key, self.transcript_generation);
+        }
+    }
+
+    pub fn jump_to_last_user(&mut self) {
+        if let Some(id) = self.messages.iter().rev().find_map(|e| match e {
+            TranscriptEntry::UserText { id, .. } => Some(id.clone()),
+            _ => None,
+        }) {
+            self.sticky_user.jump_to_entry(&self.session_key, id);
+        }
+    }
+
+    pub fn open_tool_output(&mut self, tool_call_id: String) {
+        self.tool_output = Some(ToolOutputView::new(
+            self.session_key.clone(),
+            tool_call_id,
+            self.transcript_generation,
+        ));
+        self.focus = Focus::ToolOutput;
     }
 
     // -- Tasks + agents -------------------------------------------------
@@ -1911,19 +2018,31 @@ impl AppState {
     /// so the first keystroke on a free-text (or multi-select) question already
     /// goes where the user means it to.
     pub fn show_dialog(&mut self, session_key: String, view: AskDialogView) {
-        let mut dialog = DialogState {
-            session_key,
-            question: view.question,
-            options: view.options,
-            selected: 0,
-            multi_select: view.multi_select,
-            secret: view.secret,
-            input: String::new(),
-            typing: false,
-        };
-        dialog.typing = !dialog.has_quick_pick();
-        self.dialog = Some(dialog);
-        self.focus = Focus::Dialog;
+        self.interaction
+            .offer_question(aleph_protocol::PendingClarification {
+                session_key,
+                request_id: String::new(),
+                run_id: String::new(),
+                question: view.question.clone(),
+                options: view.options.clone(),
+                answered: 0,
+                questions: vec![aleph_protocol::AskUserQuestion {
+                    id: "legacy".into(),
+                    header: None,
+                    prompt: view.question,
+                    options: view
+                        .options
+                        .into_iter()
+                        .map(|label| aleph_protocol::AskUserOption {
+                            label,
+                            description: None,
+                        })
+                        .collect(),
+                    multi_select: view.multi_select,
+                    secret: view.secret,
+                }],
+            });
+        self.sync_modal_focus();
     }
 
     /// Surface the tool-approval overlay for a pending, session-owned approval
@@ -1937,6 +2056,8 @@ impl AppState {
         reason: Option<String>,
         decisions: Vec<(&'static str, &'static str)>,
     ) {
+        self.interaction
+            .offer_approval(self.session_key.clone(), id.clone());
         self.approval = Some(ApprovalState {
             id,
             command,
@@ -1944,7 +2065,7 @@ impl AppState {
             selected: 0,
             decisions,
         });
-        self.focus = Focus::Approval;
+        self.sync_modal_focus();
     }
 
     /// Show the side-question overlay for a `/btw` just sent, and give it
@@ -1974,8 +2095,13 @@ impl AppState {
     /// Retract the approval overlay (resolved here, resolved elsewhere, or the
     /// server-side approval expired) and return focus to input.
     pub fn close_approval(&mut self) {
+        if let Some(card) = &self.approval {
+            self.interaction
+                .retire_approval(&self.session_key, &card.id);
+        }
         self.approval = None;
         self.focus = self.focus_after_modal();
+        self.sync_modal_focus();
     }
 
     /// Drop a showing approval overlay when its run ends by any path (complete,
@@ -2153,6 +2279,8 @@ impl AppState {
     /// The side thread belongs to the SAME conversation, which has not changed,
     /// and its derived key is still addressable server-side.
     pub fn begin_reattach(&mut self) {
+        self.sticky_user.clear();
+        self.tool_output = None;
         self.transcript_generation = self.transcript_generation.wrapping_add(1);
         self.transcript_needs_resync = true;
         self.current_run = None;
@@ -2167,7 +2295,13 @@ impl AppState {
     /// Switch to a different session and reset transient chat/run UI state.
     /// The caller then appends the fetched `chat.history` transcript.
     pub fn switch_session(&mut self, session_key: &str) {
+        self.sticky_user.clear();
+        self.tool_output = None;
         self.session_key = session_key.to_string();
+        self.interaction.set_context(
+            self.session_key.clone(),
+            self.transcript_generation.wrapping_add(1),
+        );
         // Per-conversation facts, and this component is a singleton: a counter
         // that survives the switch reports the previous conversation's spend
         // under the new one's name. The caller restores the real figures from

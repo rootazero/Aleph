@@ -12,5 +12,6 @@ pub mod input_area;
 pub mod provider_picker;
 pub mod session_picker;
 pub mod status_bar;
+pub mod sticky_user;
 pub mod tasks_panel;
 pub mod tool_row;
