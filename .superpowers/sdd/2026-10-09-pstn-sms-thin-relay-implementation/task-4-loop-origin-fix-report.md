@@ -44,8 +44,10 @@ and a census that `execute.rs` production code calls only the bound registry met
   (making the bound calls ignore `instance`) was performed to demonstrate RED.
 - No dedicated unit tests inside `src/looping/mod.rs` for the new registry methods (covered via the
   engine-level tests only).
-- `halt_on_refused_authority` still pauses the loop through the unbound `transition`: a stale tick can pause
-  a replacement loop. Its test uses `Loop{wake_ms:0,instance:0}`.
+- (Historical, as of this section) `halt_on_refused_authority` paused the loop through the unbound `transition`,
+  so a stale tick could pause a replacement loop; its test used `Loop{wake_ms:0,instance:0}`. **Fixed by
+  Follow-up commit 6a4927174** (now uses `transition_for`); see the "Follow-up" section below for the
+  verification and the remaining residuals.
 - The origin carried to the run is still read at claim time; origin captured after `confirm_fire`/execute is
   inherent (as in the goal side).
 - Loop registry is process-memory only; instance ids reset on restart (nothing persisted).

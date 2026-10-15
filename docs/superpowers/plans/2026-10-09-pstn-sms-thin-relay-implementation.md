@@ -18,12 +18,12 @@
 - 首版同一已验证手机号只绑定一个主 Core；手机号按 E.164 规范化；来电显示和 SMS 发件地址只是低保证来源标识。
 - SMS/电话默认只获得现有 `Chat`/guest 级别；敏感记忆、财务操作、密码/密钥和高风险工具必须走已认证控制面或其他可验证的可信审批通道。
 - **公共上下文上限（addendum §2，已批准）：** 弱来源回合仍是同一 Core、同一模型、同一运行循环，不是第二个 Agent。provider 输入只能包含显式公共的 Core 提示 + 当前来电/短信文本 + 隔离的已完成公共历史；默认不加载所有者 SOUL/USER/profile/identity 额外文件、工作区指令、skills、hooks、全局记忆/wiki、路由召回、goals、agent 私有角色，不暴露主机路径与密钥。私有读取必须在历史/hook/编排提示词组装**之前**被跳过，不是事后字符串过滤，也不是仅设 `memory_mode=off`。该白名单是确定性的安全边界，不替代 LLM 意图判断（R7）。
-- **来源 provenance fail-closed（addendum §3）：** 先过基线的已登记本人寻址、同意与绑定准入，再由 Core 依据实际注册的 SMS/PSTN 传输及已校验的绑定/租约盖章；未知/隐号/无法确定租户的输入不因公共模式获得默认路由；载荷中的手机号、配对记录、`role=config`、metadata、`approval_reference` 均不能提升权限。已知电信入口缺失或不支持来源/限制标记 = 拒绝执行，绝不退回 legacy owner 路径（`None` 恰是不受限 owner，不得当作隐私拒绝）。限制须沿 `RunRequest` → flow/envelope → 提示词/工具 → 会话持久化/重建全程携带，并在任务派生、会话复用处不丢失。不新增 `ScopeId` 变体、不伪造 Personal/Project scope、不改 `src/harness`（R10）。既有非电信渠道行为**不变**。
+- **来源 provenance fail-closed（addendum §3）：** 先过基线的已登记本人寻址、同意与绑定准入，再由 Core 依据实际注册的 SMS/PSTN 传输及已校验的绑定/租约盖章；未知/隐号/无法确定租户的输入不因公共模式获得默认路由；载荷中的手机号、配对记录、`role=config`、metadata、`approval_reference` 均不能提升权限。已知电信入口缺失或不支持来源/限制标记 = 拒绝执行，绝不退回 legacy owner 路径（`None` 恰是不受限 owner，不得当作隐私拒绝）。限制须沿 `RunRequest` → flow/envelope → 提示词/工具 → 会话持久化/重建全程携带，并在任务派生、会话复用处不丢失。允许为此新增 `TelecomPublicContext`/`Provenance` 等最小跨层载体；`ScopeId` 仍不作为隐私边界且不新增变体，不伪造 Personal/Project scope。优先不触碰核心 `src/harness`，但若真实路径证明 `inner.rs`、`runner_impl.rs`、`session_seed.rs` 等跨层接缝必须修改，则允许最小变更并必须由真实边界测试证明。既有非电信渠道行为**不变**。
 - **隔离历史与共享已完成快照（addendum §4.1–4.4，已批准数值）：** 会话键由权威绑定 + Core + 区域 + 严格 E.164 规范化来电方派生；SMS/语音地址仅为同一绑定的别名，二者共享**已完成**的公共历史；新短信运行/新电话开始时取得已完成历史快照，电话结束前不发布其回合、不刷新其他活跃运行的快照（活跃回合不互注）；绝不使用 `DmScope::Main/PerPeer` 所有者历史。公共历史加密存储：正文 TTL 24 小时（可降低，`0`=不持久化跨轮历史）、每会话 ≤ 32 个已完成回合 / 64 KiB、全 Core ≤ 8 MiB 加密载荷，先到者为准；只淘汰完整旧回合，不拆 tool-call/result；额度不足时拒绝持久化/新准入，不溢出到普通历史、不延长期限。撤销/重绑隔离旧历史（新绑定身份或 incarnation），`connection_generation` 不冒充绑定代次。公共运行禁用所有者记忆写入/抽取、compaction spill、全局缓存。
 - **两阶段私有审批（addendum §4.5–4.7、§5）：** 私有读取批准 A（绑定精确来源、查询/原始输入、当前回合）与最终披露批准 B（绑定读取后生成的完整有界最终正文/语音文本、接收绑定、通道、generation、回合）分开、各自一次性、不可互换；A 不授予 B。A/B 期限均**从各自请求创建起计，批准不续期，B 不延长 A**；SMS ≤ 300 秒，通话 ≤ 60 秒；披露必须同时落在 A 的数据使用期限与 B 的效果期限内，语音剩余部分播放同样受两者约束。到期/撤销/挂断/打断/generation 变更/Core 断线：停止尚未提交的短信与未播放的语音，丢弃草稿与私有上下文；已提交/已播放效果不假装撤回，重试需新 operation 与新审批。模型草稿在 B 通过前不得发送、不进入可播放队列、不写公共历史；发送/播放前正文必须与获批正文精确匹配。只使用运营者已认证控制面请求器（`operator_requester`），不复用通用授权缓存/`GrantStore`、guardian 自动审批或不透明引用；`resolved_by` 仅审计；渠道内 `/approve`/回调旁路必须被拒。无可信审批通道时，需审批的动作 fail-closed，普通公共问答与停止/挂断/撤销仍可达。其他渠道“有人值守无限等待”政策不变，电信 TTL 仅是范围限定的扩展。
 - **整回合脱敏（addendum §4.6–4.7）：** 私有数据一旦进入回合，该回合后续所有模型输出/工具内容均按私有来源处理；**整个回合（含用户原始问题）**在公共历史中只留固定不可展开的 opaque marker——不含操作名、目标、成功状态或私有细节；追问不自动回放原问题/回答，需重新提供并重新审批。精确效果账本只在受限控制面/执行层用于防重复与对账，不作为下轮公共 prompt 的入口；不做语义内容分类。
 - **通用等待/拒绝提示（addendum §6.4）：** 进入私有审批时仅向访客发一次固定公共提示（“需要在可信控制面确认，当前尚未发送私人信息”）；等待期间电话保持连接、可挂断、不播放私有内容、不周期性发送收费短信；拒绝/超时只发固定“本次请求未完成，可继续普通聊天”，不说明来源、审批阶段或私人执行状态；这些状态提示不等于披露批准，公共停止/控制状态输出不受私有草稿阻塞。运营者在已认证控制面看到完整有界的收件人/动作/来源/查询/最终正文，不泄露到访客通知；该渲染能力是否已存在**未验证**。
-- **不引入未证明的工具/来源（addendum §7）：** 后台任务/subagent/MCP/扩展/工具的私有来源在被审计并继承公共上限之前，弱回合不得走这些路径；公共安全工具初始集合可以为空，未知工具/私有来源默认拒绝；公共安全工具须有肯定的披露/数据访问契约，不按工具名或内容启发式选择。普通回复走既有输出路由，不靠启用主动发送工具。不添加第二个 Agent/访客 Agent/访客工作区，不修改 `src/harness`。
+- **不引入未证明的工具/来源（addendum §7）：** 后台任务/subagent/MCP/扩展/工具的私有来源在被审计并继承公共上限之前，弱回合不得走这些路径；公共安全工具初始集合可以为空，未知工具/私有来源默认拒绝；公共安全工具须有肯定的披露/数据访问契约，不按工具名或内容启发式选择。普通回复走既有输出路由，不靠启用主动发送工具。不添加第二个 Agent/访客 Agent/访客工作区。优先不触碰核心 `src/harness`；若真实路径证明必要，可对最小跨层接缝做变更，但必须有对应测试。
 - Relay/Core 使用一份 versioned wire schema；不得分别手写互相抵消的两份 JSON 形状。
 - Core 连接由 Core 主动建立并使用可轮换/可吊销凭据；旧 `connection_generation` 不得继续提交发送或播放。
 - SMS 使用持久化后 ACK、至少一次投递和接收端去重；去重键为供应商账号、事件类型和供应商事件 ID，不使用正文哈希。
@@ -83,9 +83,9 @@
 | `interfaces/webchat/src/platform/wide/views/settings/channels/definitions.rs` | Modify | 增加与协议集合相等的 SMS 配置卡片 |
 | `src/config/tests/channels.rs` | Test/Modify if required | 保持配置实例、factory table 和 Panel 集合一致 |
 | `src/gateway/inbound_router/permission.rs`、`src/gateway/pairing_store.rs`、`src/acp/manager/session_key.rs` | Modify after interface review | 绑定、低保证来源和 session key 的权限边界；不得把号码当强认证 |
-| 公共上下文限制载体（概念）：`RunRequest` → flow/envelope → 提示词/工具 → 会话持久化/重建；落点待 Task 4 source census 确认 | Investigate, then Modify only verified seams | 携带“公共上下文上限 + 已校验来源”的不可提升标记；现有可承载字段**未验证**；不新增 `ScopeId` 变体、不改 `src/harness`、不用 `None` 表达拒绝 |
-| prompt 组装/runner/history 重建/记忆与缓存/compaction/二级 prompt 写入点（概念，参考 addendum §9 引用的 `prompt_build.rs`、`runner_impl.rs`、`inner.rs`）；真实路径由 Task 4 census 记录 | Investigate, then Modify only verified seams | 在组装前跳过私有读取；公共提示模板；禁用公共运行的 owner 记忆写入/抽取、compaction spill、全局缓存；census 须覆盖 hooks、skills、routing recall、goals、wiki、后台/subagent/MCP/扩展 |
-| 公共历史存储与加密/留存（概念）：会话持久化 seam；落点待调研 | Investigate, then Create/Modify | 绑定+Core+区域+E.164 派生会话键、已完成回合快照、24h/32 回合/64 KiB/8 MiB 界限、绑定重建 incarnation；是否可复用现有加密存储**未验证** |
+| `TelecomPublicContext`/`Provenance`（新增最小契约）：`RunRequest`/`FlowRequest` → flow/envelope → 提示词/工具 → 会话持久化/重建；相关承载与派生接缝按已有 census 落实 | Investigate, then Modify only verified seams; allow the minimum cross-layer changes proven necessary | 携带不可提升的公共上下文上限与已校验来源；`ScopeId` 仍不作为隐私边界且不新增变体，不用 `None` 表达拒绝；优先不触碰核心 harness，必要时允许 `inner.rs`、`runner_impl.rs`、`session_seed.rs` 等真实路径的最小变更，并必须测试 |
+| 已确认真实 prompt/runner/history 路径：`inner.rs`、`runner_impl.rs`、`session_seed.rs`、`prompt_build.rs`；以及 `tools/scoped`、direct builtin/heartbeat、任务派生与存储 | Investigate, then Modify only verified seams | 在私有读取、history/hook/编排注入之前执行限制；公共提示模板；禁用公共运行的 owner 记忆写入/抽取、compaction spill、全局缓存；所有跨层变更均须在实际 provider 输入、存储或副作用边界测试；census 须覆盖 hooks、skills、routing recall、goals、wiki、后台/subagent/MCP/扩展 |
+| 公共历史存储与加密/留存：已有 census 确认的派生/存储接缝 | Investigate, then Create/Modify only the verified seam | 绑定+Core+区域+E.164 派生会话键、已完成回合快照、24h/32 回合/64 KiB/8 MiB 界限、绑定重建 incarnation；必须在实际存储边界验证加密、留存和不溢出普通历史 |
 | 审批 seam（概念）：`operator_requester`、`ExecApprovalManager`、`inbound_router` 的 `/approve` 路径（`resolve_for_session`）、完整正文渲染 | Investigate, then Modify only verified seams | 两阶段 A/B 审批、期限、一次性、拒绝渠道内旁路；现有渲染/schema 是否支持完整有界正文**未验证** |
 | `.superpowers/sdd/2026-10-09-pstn-sms-thin-relay-implementation/task-4-census.md` | Create | Task 4 的 source/rebuild/cache/background/subagent/MCP/extension 普查记录与每个来源的处置（denied/inherits-ceiling/proven-public） |
 | `src/gateway/interfaces/voice_call/{mod.rs,protocol.rs,transport.rs}` | Create | 电话通道/turn 生命周期和薄 transport，不实现另一 Agent |
@@ -198,7 +198,7 @@ Relay 服务、供应商 webhook、SIP/RTP/WebRTC 和真实线路脚本属于独
 
 **Files:**
 - Create: `.superpowers/sdd/2026-10-09-pstn-sms-thin-relay-implementation/task-4-census.md`（普查记录）
-- Investigate first, then Modify only verified seams: `RunRequest`/flow/envelope、prompt 组装、runner、history 重建、会话持久化、记忆/缓存/compaction、二级 prompt 写入点（路径由 census 记录；不得假设上述名称对应现有 API）
+- Investigate first, then Modify only verified seams: `RunRequest`/`FlowRequest`/flow/envelope、`inner.rs`、`runner_impl.rs`、`session_seed.rs`、`prompt_build.rs`、`tools/scoped`、direct builtin/heartbeat、任务派生、history 重建、会话持久化、记忆/缓存/compaction、二级 prompt 写入点；这些是已有 census 确认的责任边界，仍须按当前接口核对签名。允许最小跨层变更，优先不触碰核心 harness；真实路径证明必要时可修改并必须测试。
 - Modify: `src/gateway/inbound_router/permission.rs`
 - Modify: `src/gateway/pairing_store.rs`
 - Modify after verified seam: `src/acp/manager/session_key.rs`（仅在 census 证明需要；绝不复用 `DmScope::Main/PerPeer` 所有者历史）
@@ -207,12 +207,12 @@ Relay 服务、供应商 webhook、SIP/RTP/WebRTC 和真实线路脚本属于独
 - Create: `src/builtin_tools/telecom.rs` if tool census confirms a separate tool is required
 - Modify: `src/executor/builtin_registry/groups.rs`, `src/executor/builtin_registry/optional_tools.rs`
 - Test: `tests/telecom_approval_test.rs`, `tests/telecom_public_context_test.rs`
-- **Do not touch:** `src/harness/**`、`ScopeId` 定义、非电信渠道的路由/权限/历史/审批行为、基线 spec/addendum/报告。
+- **边界：** `ScopeId` 定义仍不新增变体，且不作为隐私边界；非电信渠道的路由/权限/历史/审批行为、基线 spec/addendum/报告不得改变。核心 `src/harness` 优先不触碰，但真实路径证明 `inner.rs`、`runner_impl.rs`、`session_seed.rs` 等最小跨层变更必要时允许修改，并必须有对应测试。
 
 **Interfaces（概念，非现有 API）：**
 
 - 绑定 key 必须至少区分 `region`、`service_address`、`verified_phone` 和主 Core；SMS 与 voice address 是同一 binding 的别名，不是两个身份。手机号严格 E.164，不猜默认国家；别名仅由权威绑定声明；撤销/重绑产生新的绑定身份或 incarnation，旧历史隔离；`connection_generation` 仍按 Core 连接租约递增，不冒充绑定代次。
-- 来源 provenance：已知电信入口 + 已校验准入 → Core 盖章“公共上下文上限”；缺失/不支持的标记 → 拒绝，无 legacy owner 回退；载荷字段不可提升；标记随 `RunRequest` → flow/envelope → 提示词/工具 → 持久化/重建、任务派生、会话复用全程携带。
+- 来源 provenance：已知电信入口 + 已校验准入 → Core 盖章“公共上下文上限”；缺失/不支持的标记 → 拒绝，无 legacy owner 回退；载荷字段不可提升；`TelecomPublicContext`/`Provenance` 随 `RunRequest`/`FlowRequest` → flow/envelope → 提示词/工具 → 持久化/重建、任务派生、会话复用全程携带。
 - 公共 prompt 输入只允许：Core 维护的显式公共模板 + 当前文本 + 同一绑定/规范化来电方的已完成公共历史快照。
 - 隔离公共历史：加密；24h TTL（可降、`0`=不持久化）、每会话 ≤ 32 完成回合 / 64 KiB、全 Core ≤ 8 MiB；淘汰整回合；额度不足拒绝持久化/新准入；SMS 与语音共享已完成历史；活跃回合开始时取快照，结束后才发布，不互相刷新。
 - 审批阶段 A（私有读取）与 B（最终披露）：各自一次性、各自从请求创建起计时、不续期、B 不延长 A；SMS ≤ 300 秒 / 通话 ≤ 60 秒；A 绑定精确来源 + 查询/原始输入 + 当前回合；B 绑定完整有界最终正文/语音文本 + 接收绑定 + 通道 + generation + 回合。只经 `operator_requester` 的已认证控制面。
@@ -221,7 +221,7 @@ Relay 服务、供应商 webhook、SIP/RTP/WebRTC 和真实线路脚本属于独
 - 主动 SMS/外呼授权分别建模；command 带 `operation_id`、`approval_reference`、`recipient_binding_id`、`expires_at`；`approval_reference` 仅为关联，不是权限。
 - 待审批动作绑定 `phone_call_id`/`turn_id`（电话）或 operation（SMS）；挂断、打断、Core disconnect、generation 变化、解绑、撤销和过期都立即取消并停止未发送/未播放内容。
 
-- [ ] **Step 1: 先做完整 source census，不写实现。** 在 `task-4-census.md` 中逐项记录（文件:行、读取时机、是否在历史/hook/编排组装之前、处置）：所有 prompt 来源（核心提示、SOUL/USER/profile/identity 额外文件、工作区指令、skills、hooks、全局记忆/wiki、routing recall、goals、agent 私有角色）、history 重建路径、会话复用/任务派生、缓存与二级 prompt 写入者（含 compaction spill、记忆抽取）、gate-chain 默认值/guardian、后台任务、subagent、MCP、扩展与全部已注册工具。每个来源分类为 `denied` / `inherits-ceiling` / `proven-public`；无法证明隔离 = `denied`。同时确认：现有哪些字段可承载限制标记、`operator_requester` 是否能展示完整有界正文、会话持久化是否可加密与留存界限、`ExecApprovalManager`（单次飞行 oneshot）与 `GrantStore`（无 once/TTL）为何不可复用。census 若发现需改 `src/harness` 或新增 `ScopeId` 变体，**停止并上报**，不要绕过。
+- [ ] **Step 1: 先冻结契约字段和测试闸门，再补齐 source census。** 先固定 `TelecomPublicContext`/`Provenance` 的不可提升字段、`RunRequest`/`FlowRequest`/flow/envelope 的传递位置，以及 provider 输入、公共存储、实际副作用三类断言；随后在 `task-4-census.md` 中逐项记录（文件:行、读取时机、是否在历史/hook/编排组装之前、处置）：所有 prompt 来源（核心提示、SOUL/USER/profile/identity 额外文件、工作区指令、skills、hooks、全局记忆/wiki、routing recall、goals、agent 私有角色）、history 重建路径、会话复用/任务派生、缓存与二级 prompt 写入者（含 compaction spill、记忆抽取）、gate-chain 默认值/guardian、后台任务、subagent、MCP、扩展与全部已注册工具。每个来源分类为 `denied` / `inherits-ceiling` / `proven-public`；无法证明隔离 = `denied`。同时确认：现有哪些字段可承载限制标记、`operator_requester` 是否能展示完整有界正文、会话持久化是否可加密与留存界限、`ExecApprovalManager`（单次飞行 oneshot）与 `GrantStore`（无 once/TTL）为何不可复用。优先不触碰核心 harness；若真实路径证明 `inner.rs`、`runner_impl.rs`、`session_seed.rs` 等最小跨层变更必要，则允许修改并必须以测试闸门证明，不得绕过。
 - [ ] **Step 2: 在真实边界写失败测试**（`tests/telecom_public_context_test.rs`、`tests/telecom_approval_test.rs`），断言实际 provider 输入、实际存储和实际副作用，而非标记/调用次数：
   - 私有 canary 注入 census 列出的每个来源（历史、memory、profile/identity、routing recall、hooks、skills、goals、wiki、缓存、重建路径），均不出现在 provider 输入；
   - 同一手机号跨 Core/绑定互不共享，且无所有者历史；撤销/重绑后旧历史不可见；
@@ -232,7 +232,7 @@ Relay 服务、供应商 webhook、SIP/RTP/WebRTC 和真实线路脚本属于独
   - 无可信审批通道 fail-closed，但普通公共问答与停止/挂断/撤销仍可达；渠道内 `/approve`/回调旁路被拒；非电信渠道无变化（含“有人值守无限等待”）；
   - 回归：普通渠道权限/历史/路由/审批行为与改动前一致。
 - [ ] **Step 3: 运行 `cargo test -p alephcore --test telecom_public_context_test` 与 `cargo test -p alephcore --test telecom_approval_test`，确认因功能缺失而失败**（不得因编译/夹具错误而“失败”）。
-- [ ] **Step 4: 实现 binding/source assurance/provenance 盖章与 session key 组合。** 权限与上限拦截发生在 memory/history/hook/编排注入**之前**；不新增 `ScopeId` 变体、不用 `None` 表达拒绝、不改 `src/harness`、无 legacy owner 回退路径。
+- [ ] **Step 4: 实现 binding/source assurance/provenance 盖章与 session key 组合。** 权限与上限拦截发生在 memory/history/hook/编排注入**之前**；实现 `TelecomPublicContext`/`Provenance` 的最小跨层传递，不新增 `ScopeId` 变体、不用 `None` 表达拒绝、无 legacy owner 回退路径。优先不触碰核心 harness；若真实路径证明必须修改 `inner.rs`、`runner_impl.rs`、`session_seed.rs` 等接缝，则只做最小变更并为每个变更增加实际边界测试。
 - [ ] **Step 5: 实现公共 prompt 组装与隔离历史。** 在组装前跳过私有读取（非事后过滤，非仅 `memory_mode=off`）；落地已完成快照共享、按界限淘汰整回合、加密存储、重绑 incarnation；禁用公共运行的 owner 记忆写入/抽取、compaction spill、全局缓存。若 Step 1 证明无法加密/限界/隔离，则拒绝该能力并上报，不退而求其次。
 - [ ] **Step 6: 把 SMS 回复与主动发送权限分开。** 已绑定本人同通道回复走既有输出路由、不提升权限；主动联系始终重新检查 scope、expiry、revocation 和预算。
 - [ ] **Step 7: 实现 A→读取→草稿→B→效果的端到端 seam。** 顺序：访客请求私有信息 → 一次性固定等待提示 → 运营者在已认证控制面看到精确来源+查询并批准 A → 仅限当轮内部读取与生成草稿（草稿不发送/不入可播放队列/不入公共历史）→ 运营者看到完整有界最终正文并批准 B → await 之后、生成完成后、发送/播放前重新校验（撤销、挂断、generation、Core 断线、预算、A/B 两个期限、正文与获批正文逐字匹配）→ 实际 SMS 提交或 TTS 播放。A、B 期限均从请求创建起计，批准不续期，B 不延长 A；A 到期丢弃草稿与私有上下文并取消尚未执行的 B；语音剩余播放同时受 A/B 约束；拒绝/超时发固定“本次请求未完成，可继续普通聊天”。已提交/已播放不伪造撤回，保留 accepted/submitted/unknown，重试需新 operation 与新审批。仅使用 `operator_requester`；不复用 `GrantStore`、guardian 自动审批或不透明引用。无可信审批通道 fail-closed。
@@ -244,7 +244,7 @@ Relay 服务、供应商 webhook、SIP/RTP/WebRTC 和真实线路脚本属于独
 
 - [ ] `task-4-census.md` 完整覆盖所有 prompt/history/rebuild/cache/secondary-writer/background/subagent/MCP/extension 来源，且每项有处置；未证明隔离者为 denied。
 - [ ] 私有 canary 在每个来源上均未到达实际 provider 输入、公共存储或访客可见效果。
-- [ ] 同 Core、同模型、无第二 Agent、无访客工作区；`src/harness` 与 `ScopeId` 无改动；无 legacy owner 回退；非电信渠道行为不变（含永久等待）。
+- [ ] 同 Core、同模型、无第二 Agent、无访客工作区；`ScopeId` 无新增变体且不承担隐私边界；核心 harness 仅在真实路径证明必要时做最小变更，并有实际边界测试；无 legacy owner 回退；非电信渠道行为不变（含永久等待）。
 - [ ] 公共历史满足 24h/32 回合/64 KiB/8 MiB 界限；SMS 与语音共享已完成快照、活跃回合不互注；绑定间互不共享，重绑隔离旧历史。
 - [ ] 整个私有回合（含原问题）仅 opaque marker，下轮不回放，不溢出到后台/compaction；受限账本不进入公共 prompt。
 - [ ] A/B 各自一次性、各自从创建计时不续期；A 不授予 B；B 不延长 A；披露正文与获批正文逐字一致；到期/撤销/挂断/generation 变更停止未发送短信与未播放语音。
@@ -331,7 +331,7 @@ Rust 测试和 clippy 的既存失败必须先按当前 merge-base 建立基线�
 - 设计 §1 的 SMS、电话、用户配置、托管边界和号码映射分别覆盖 Gate 0、Task 2–6；没有把用户自备 SIM 当产品路径。
 - 设计 §2 的 G1–G5 和“无静默降级”写入 Gate 0、Global Constraints 和 Task 6；未通过时有明确停止点。
 - 设计 §5 的低保证身份、Chat/guest、分离主动联系同意、审批取消和停止能力写入 Task 4。
-- Addendum（已批准）的公共上下文上限、provenance fail-closed、隔离历史与已完成快照共享、整回合脱敏、A/B 两阶段审批、通用等待/拒绝 UX、未知工具默认拒绝写入 Global Constraints 与 Task 4；完整 source census 与真实效果验收是 Task 6 的前置条件。所有承载字段/审批渲染/加密存储均标注为“待调研”，未假设现有 API。
+- Addendum（已批准）的公共上下文上限、provenance fail-closed、隔离历史与已完成快照共享、整回合脱敏、A/B 两阶段审批、通用等待/拒绝 UX、未知工具默认拒绝写入 Global Constraints 与 Task 4；完整 source census 与真实效果验收是 Task 6 的前置条件。`TelecomPublicContext`/`Provenance` 及其在 `RunRequest`/`FlowRequest`、`inner.rs`、`runner_impl.rs`、`session_seed.rs`、`prompt_build.rs`、tools/direct builtin/heartbeat、派生/存储中的接缝按 census 实际落实；优先不触碰核心 harness，必要时允许最小跨层变更且必须测试。审批渲染/加密存储仍须按现有接口核对，未假设未验证 API。
 - 设计 §6–§7 的 envelope、dedup、generation、unknown、committed turn、output epoch、playback feedback 写入 Task 1、3、5。
 - 设计 §8–§9 的离线、数据保留、地区隔离、凭据轮换和供应商验签由 Task 3–6 的接口/验收承担；Relay 端具体实现明确留在独立部署项目。
 - 设计 §10 的效果矩阵写入 Task 3 和 Task 6；未把 HTTP/函数调用当成效果证据。
