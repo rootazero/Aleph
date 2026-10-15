@@ -2,7 +2,7 @@
 // user messages, assistant messages (with reasoning, tool blocks, markdown),
 // system messages, and streaming cursors.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::{
     layout::{Margin, Rect},
@@ -14,7 +14,9 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use shared_ui_logic::transcript::{
-    turn_summary_text, Modality, RowBody, RowStatus, ToolRow, TranscriptEntry, TuiAttachment,
+    effective_open, fmt_duration_ms, group_tool_rows, step_headline, turn_summary_text,
+    DetailLevel, Locale, Modality, RowBody, RowStatus, StepEntry, StepStatus, StepTool, ToolRow,
+    TranscriptEntry, TuiAttachment,
 };
 
 use crate::tui::app::{AppState, Focus};
@@ -40,16 +42,13 @@ struct VisibleToggle {
     row_id: String,
 }
 
-/// Per-message rendered-line cache, owned by `AppState` across frames (see
-/// `render_chat_area`'s caller in `render.rs` for where it's threaded
-/// through). Keyed by the message's index in `state.messages` — safe because
-/// a cache entry also validates against the message's own variant kind and
-/// content length before being trusted (see `build_all_lines_cached`); a
-/// coincidental `(kind, len)` match at a shifted index is the only failure
-/// mode, and it self-heals the next frame once content actually diverges.
+/// Per-message rendered-line cache, owned by `AppState` across frames.
+/// Changes from the reducer explicitly evict affected Step rows; global
+/// changes to palette, detail and highlighting also invalidate rendered lines.
 #[derive(Debug, Default)]
 pub struct LineCache {
     entries: HashMap<usize, CachedEntry>,
+    preset: Option<crate::tui::theme::Preset>,
     /// Fine-grained incremental cache for the ONE currently-streaming
     /// message's markdown conversion (see `markdown_to_lines_incremental`).
     /// Distinct from `entries` above: that whole-message cache deliberately
@@ -88,7 +87,46 @@ struct CachedEntry {
     /// that emitted them. Cached beside the lines because they are only true
     /// of *these* lines: a cache hit that re-derived them would be re-deriving
     /// them from content that is no longer what was drawn.
-    toggles: Vec<usize>,
+    toggles: Vec<(usize, String)>,
+}
+
+impl LineCache {
+    pub fn invalidate_changes(
+        &mut self,
+        changes: &[shared_ui_logic::transcript::Change],
+        messages: &[TranscriptEntry],
+    ) {
+        use shared_ui_logic::transcript::Change;
+        for change in changes {
+            match change {
+                Change::NeedsResync => {}
+                Change::Inserted(id) | Change::Removed(id) | Change::Updated(id) => {
+                    let index = messages.iter().position(|m| match m {
+                        TranscriptEntry::Step(s) => {
+                            s.id == *id || s.tools.iter().any(|r| r.id == *id)
+                        }
+                        TranscriptEntry::Tool(r) => r.id == *id,
+                        TranscriptEntry::UserText { id: entry, .. }
+                        | TranscriptEntry::AssistantText { id: entry, .. }
+                        | TranscriptEntry::Reasoning { id: entry, .. }
+                        | TranscriptEntry::SystemNotice { id: entry, .. } => entry == id,
+                        _ => false,
+                    });
+                    if let Some(index) = index {
+                        if matches!(change, Change::Inserted(_) | Change::Removed(_)) {
+                            self.entries.retain(|&key, _| key < index);
+                        } else {
+                            self.entries.remove(&index);
+                        }
+                    } else {
+                        self.entries.clear();
+                    }
+                    self.streaming_markdown_cache = None;
+                    self.streaming_message_idx = None;
+                }
+            }
+        }
+    }
 }
 
 /// Cheap discriminant for a `TranscriptEntry`, used only to invalidate the
@@ -193,10 +231,18 @@ fn message_kind_and_fingerprint(message: &TranscriptEntry) -> (MessageKind, u64)
             }
             (MessageKind::ToolGroup, acc)
         }
-        // Phase S: the variant exists, no TUI path constructs it yet. Phase T
-        // replaces this with the step row; until then an entry that cannot
-        // exist renders nothing rather than a guessed shape.
-        TranscriptEntry::Step(s) => (MessageKind::Step, content_fingerprint(&s.id)),
+        TranscriptEntry::Step(s) => {
+            // Reducer Change ids evict changed entries as frames arrive;
+            // settled historical Steps never rehash their full bodies per frame.
+            let mut fingerprint = content_fingerprint(&s.id);
+            fingerprint ^= match s.status {
+                StepStatus::Live => 1,
+                StepStatus::Settled => 2,
+                StepStatus::Pending => 3,
+            };
+            fingerprint ^= s.ended_ms.unwrap_or(0).rotate_left(9);
+            (MessageKind::Step, fingerprint)
+        }
         TranscriptEntry::TurnSummary(s) => (
             MessageKind::TurnSummary,
             content_fingerprint(&turn_summary_text(s)),
@@ -260,7 +306,7 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
         state.project_root(),
         state.project_branch.as_deref(),
     )];
-    let (total_lines, visible, hits) = build_visible_lines(
+    let (total_lines, visible, hits) = build_visible_lines_detail(
         &header,
         &state.messages,
         verbose,
@@ -270,6 +316,8 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
         modality,
         scroll_offset,
         visible_height,
+        state.detail,
+        &state.step_overrides,
     );
     // Write the offset back clamped to what the transcript can actually
     // reach. `visible_window` already clamps for its own arithmetic, so the
@@ -558,11 +606,46 @@ fn build_visible_lines(
     scroll_offset: usize,
     visible_height: usize,
 ) -> (usize, Vec<Line<'static>>, Vec<VisibleToggle>) {
+    build_visible_lines_detail(
+        header,
+        messages,
+        verbose,
+        now_ms,
+        width,
+        cache,
+        modality,
+        scroll_offset,
+        visible_height,
+        DetailLevel::Brief,
+        &HashSet::new(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_visible_lines_detail(
+    header: &[Line<'static>],
+    messages: &[TranscriptEntry],
+    verbose: bool,
+    now_ms: u64,
+    width: u16,
+    cache: &mut LineCache,
+    modality: Modality,
+    scroll_offset: usize,
+    visible_height: usize,
+    detail: DetailLevel,
+    step_overrides: &HashSet<String>,
+) -> (usize, Vec<Line<'static>>, Vec<VisibleToggle>) {
     // The header is a transcript entry in every way that matters here — it
     // occupies rows at the top, it scrolls away, and everything below it is
     // offset by its height — but it is not IN `messages`: it is derived from
     // the state it describes on every frame, so a `/session` switch or a model
     // change moves it instead of leaving a stale first row (判据 §1).
+    let preset = crate::tui::theme::current_preset();
+    if cache.preset != Some(preset) {
+        cache.entries.clear();
+        cache.streaming_markdown_cache = None;
+        cache.preset = Some(preset);
+    }
     let header_height = if header.is_empty() {
         0
     } else {
@@ -615,10 +698,15 @@ fn build_visible_lines(
             if matches!(
                 message,
                 TranscriptEntry::Tool(row) if matches!(row.status, RowStatus::Running { .. })
-            ) {
+            ) || matches!(message, TranscriptEntry::Step(s) if s.status == StepStatus::Live)
+            {
                 cache.entries.remove(&idx);
             }
-            let (kind, fingerprint) = message_kind_and_fingerprint(message);
+            let (kind, mut fingerprint) = message_kind_and_fingerprint(message);
+            if let TranscriptEntry::Step(step) = message {
+                fingerprint ^= u64::from(detail == DetailLevel::Full).rotate_left(3);
+                fingerprint ^= u64::from(step_overrides.contains(&step.id)).rotate_left(5);
+            }
             let generation = crate::tui::highlight::generation();
             let hit = cache.entries.get(&idx).filter(|e| {
                 e.kind == kind
@@ -630,8 +718,16 @@ fn build_visible_lines(
                 Some(entry) => heights.push(entry.lines.len() + 1),
                 None => {
                     let mut buf = Vec::new();
-                    let toggles =
-                        render_settled_message(message, verbose, now_ms, width, modality, &mut buf);
+                    let toggles = render_settled_message_detail(
+                        message,
+                        verbose,
+                        now_ms,
+                        width,
+                        modality,
+                        detail,
+                        step_overrides,
+                        &mut buf,
+                    );
                     heights.push(buf.len() + 1);
                     cache.entries.insert(
                         idx,
@@ -693,14 +789,12 @@ fn build_visible_lines(
                 // Rows [lo, body_hi) of this message land at out-indices
                 // `mstart + i - start`; a toggle outside that slice is
                 // scrolled off and has no cell to be clicked in.
-                if let TranscriptEntry::Tool(row) = message {
-                    for &t in &entry.toggles {
-                        if t >= lo && t < body_hi {
-                            hits.push(VisibleToggle {
-                                out_row: mstart + t - start,
-                                row_id: row.id.clone(),
-                            });
-                        }
+                for (t, id) in &entry.toggles {
+                    if *t >= lo && *t < body_hi {
+                        hits.push(VisibleToggle {
+                            out_row: mstart + *t - start,
+                            row_id: id.clone(),
+                        });
                     }
                 }
             }
@@ -777,6 +871,7 @@ fn now_ms() -> u64 {
 /// Tool rows are NOT prefixed with the assistant `┃ ` bar: they are peers of
 /// the text now, not decoration inside a message, and indenting them under a
 /// bar would put back the visual nesting the model change removed.
+#[cfg(test)]
 fn render_settled_message(
     message: &TranscriptEntry,
     verbose: bool,
@@ -784,7 +879,30 @@ fn render_settled_message(
     width: u16,
     modality: Modality,
     out: &mut Vec<Line<'static>>,
-) -> Vec<usize> {
+) -> Vec<(usize, String)> {
+    render_settled_message_detail(
+        message,
+        verbose,
+        now_ms,
+        width,
+        modality,
+        DetailLevel::Brief,
+        &HashSet::new(),
+        out,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_settled_message_detail(
+    message: &TranscriptEntry,
+    verbose: bool,
+    now_ms: u64,
+    width: u16,
+    modality: Modality,
+    detail: DetailLevel,
+    step_overrides: &HashSet<String>,
+    out: &mut Vec<Line<'static>>,
+) -> Vec<(usize, String)> {
     let base = out.len();
     match message {
         TranscriptEntry::UserText {
@@ -809,15 +927,18 @@ fn render_settled_message(
         TranscriptEntry::Tool(row) => {
             let rendered = render_tool_row(row, now_ms, width, modality);
             out.extend(rendered.lines);
-            return rendered.toggles.into_iter().map(|t| base + t).collect();
+            return rendered
+                .toggles
+                .into_iter()
+                .map(|t| (base + t, row.id.clone()))
+                .collect();
         }
         TranscriptEntry::ToolGroup(group) => {
             out.extend(render_tool_group(group, now_ms, width, modality));
         }
-        // Phase S: the variant exists, no TUI path constructs it yet. Phase T
-        // replaces this with the step row; until then an entry that cannot
-        // exist renders nothing rather than a guessed shape.
-        TranscriptEntry::Step(_) => {}
+        TranscriptEntry::Step(step) => {
+            return render_step(step, now_ms, width, modality, detail, step_overrides, out);
+        }
         TranscriptEntry::TurnSummary(summary) => {
             out.push(Line::from(Span::styled(
                 turn_summary_text(summary),
@@ -829,6 +950,114 @@ fn render_settled_message(
         }
     }
     Vec::new()
+}
+
+/// Render one reducer iteration. Tool rows remain independently toggleable
+/// even when nested under an open step; grouping is a paint-time projection.
+fn render_step(
+    step: &StepEntry,
+    now_ms: u64,
+    width: u16,
+    modality: Modality,
+    detail: DetailLevel,
+    overrides: &HashSet<String>,
+    out: &mut Vec<Line<'static>>,
+) -> Vec<(usize, String)> {
+    if step.is_empty() {
+        return Vec::new();
+    }
+    let base = out.len();
+    let live = step.status == StepStatus::Live;
+    let open = live || effective_open(detail, overrides, &step.id);
+    let headline = step_headline(step, width.saturating_sub(14));
+    let title = headline.map_or_else(
+        || {
+            if live {
+                shared_ui_logic::transcript::verb(Locale::En, now_ms / 7_000).to_owned()
+            } else {
+                "Process notes".to_owned()
+            }
+        },
+        |h| h.text,
+    );
+    let ordinal = step
+        .iteration
+        .map_or_else(|| "?".to_owned(), |i| i.to_string());
+    let state = match step.status {
+        StepStatus::Live => shared_ui_logic::transcript::spinner_frame(now_ms).to_string(),
+        StepStatus::Settled => "◆".to_owned(),
+        StepStatus::Pending => "?".to_owned(),
+    };
+    let duration = step
+        .started_ms
+        .and_then(|start| {
+            step.ended_ms
+                .or(live.then_some(now_ms))
+                .map(|end| end.saturating_sub(start))
+        })
+        .map_or_else(String::new, |ms| format!(" · {}", fmt_duration_ms(ms)));
+    out.push(Line::from(Span::styled(
+        format!("{state} Step {ordinal}: {title}{duration}"),
+        Style::default().fg(theme().muted),
+    )));
+    let mut toggles = vec![(base, step.id.clone())];
+    if !open {
+        return toggles;
+    }
+    if let Some(thinking) = &step.thinking {
+        let lines = markdown_to_lines(&thinking.text, width.saturating_sub(4));
+        let start = if live {
+            lines.len().saturating_sub(2)
+        } else {
+            0
+        };
+        for line in lines.into_iter().skip(start) {
+            let mut spans = vec![Span::raw("  │ ")];
+            spans.extend(line.spans);
+            out.push(Line::from(spans));
+        }
+    }
+    if let Some(text) = &step.text {
+        for line in markdown_to_lines(text, width.saturating_sub(4)) {
+            let mut spans = vec![Span::raw("  │ ")];
+            spans.extend(line.spans);
+            out.push(Line::from(spans));
+        }
+    }
+    for tool in group_tool_rows(&step.tools) {
+        match tool {
+            StepTool::Row(row) => {
+                let start = out.len();
+                let rendered = render_tool_row(&row, now_ms, width.saturating_sub(2), modality);
+                for line in rendered.lines {
+                    let mut spans = vec![Span::raw("  ")];
+                    spans.extend(line.spans);
+                    out.push(Line::from(spans));
+                }
+                toggles.extend(
+                    rendered
+                        .toggles
+                        .into_iter()
+                        .map(|t| (start + t, row.id.clone())),
+                );
+            }
+            StepTool::Group(group) => {
+                out.extend(render_tool_group(
+                    &group,
+                    now_ms,
+                    width.saturating_sub(2),
+                    modality,
+                ));
+            }
+        }
+    }
+    for note in &step.notes {
+        out.push(Line::from(Span::styled(
+            format!("  │ {}", note.text),
+            Style::default().fg(theme().muted),
+        )));
+    }
+    toggles
 }
 
 /// Render a user message with blue prefix bar.

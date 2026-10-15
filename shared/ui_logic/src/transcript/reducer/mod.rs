@@ -106,7 +106,43 @@ pub struct Transcript {
     run: Option<RunState>,
 }
 
+impl std::ops::Deref for Transcript {
+    type Target = Vec<TranscriptEntry>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+// Compatibility for existing TUI consumers while their mutation sites move
+// to reducer methods. There is still only one owned entry store.
+impl std::ops::DerefMut for Transcript {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries
+    }
+}
+
 impl Transcript {
+    /// Replace all rows and run cursors together on a session switch.
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    /// Clear visible rows without detaching an active run.
+    pub fn clear_display(&mut self) {
+        self.entries.clear();
+        if let Some(run) = &mut self.run {
+            run.first_entry = 0;
+            run.open_step = None;
+            run.reset_step_state();
+        }
+    }
+
+    /// An id in the same namespace as reducer-generated rows.
+    pub fn local_id(&mut self) -> String {
+        self.next_id("local")
+    }
+
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -120,6 +156,40 @@ impl Transcript {
     fn next_id(&mut self, prefix: &str) -> String {
         self.next_id += 1;
         format!("{prefix}-{}", self.next_id)
+    }
+
+    /// Import a legacy history row, or a local notice, without making a
+    /// second projection of the run. These rows preserve history order.
+    pub fn import_legacy(&mut self, entry: TranscriptEntry) -> Change {
+        let id = match &entry {
+            TranscriptEntry::UserText { id, .. }
+            | TranscriptEntry::AssistantText { id, .. }
+            | TranscriptEntry::Reasoning { id, .. }
+            | TranscriptEntry::SystemNotice { id, .. } => id.clone(),
+            TranscriptEntry::Tool(row) => row.id.clone(),
+            TranscriptEntry::Step(step) => step.id.clone(),
+            TranscriptEntry::ToolGroup(_) | TranscriptEntry::TurnSummary(_) => {
+                self.next_id("import")
+            }
+        };
+        // An append-mode import can precede locally generated rows. Keep
+        // their shared numeric suffix out of the imported id range.
+        if let Some(suffix) = id.rsplit('-').next().and_then(|n| n.parse::<u64>().ok()) {
+            self.next_id = self.next_id.max(suffix);
+        }
+        self.entries.push(entry);
+        Change::Inserted(id)
+    }
+
+    /// Adopt an already-running session after attach. Repeated adoption of
+    /// the same run does not close its open step or reset its record cursors.
+    pub fn adopt_live_run(&mut self, run_id: &str, now_ms: u64) -> Vec<Change> {
+        if self.run.as_ref().is_some_and(|run| run.run_id == run_id) {
+            return Vec::new();
+        }
+        let changes = self.abandon_open_run(now_ms);
+        self.run = Some(RunState::starting_at(self.entries.len(), run_id.to_owned()));
+        changes
     }
 
     pub fn push_user(
@@ -142,9 +212,7 @@ impl Transcript {
 
     pub fn apply_live(&mut self, ev: &StreamEvent, now_ms: u64) -> Vec<Change> {
         if let StreamEvent::RunAccepted { run_id, .. } = ev {
-            let changes = self.abandon_open_run(now_ms);
-            self.run = Some(RunState::starting_at(self.entries.len(), run_id.clone()));
-            return changes;
+            return self.adopt_live_run(run_id, now_ms);
         }
         // Frames of a run this transcript was not told about (another run,
         // or a client that attached after `RunAccepted`) are not folded:
@@ -197,6 +265,9 @@ impl Transcript {
     /// the only difference is the absent clock. Call `finish_replay` after
     /// the run's last row.
     pub fn apply_replay(&mut self, ev: &AgentTraceEvent) -> Vec<Change> {
+        if self.run.as_ref().is_some_and(|r| !r.run_id.is_empty()) {
+            return vec![Change::NeedsResync];
+        }
         let first_entry = self.entries.len();
         let run = self
             .run
@@ -215,6 +286,12 @@ impl Transcript {
     /// the run's rows ARE the record — and a run whose log has no
     /// `SessionCompleted` ends `Pending` (unknown), with no answer hoisted.
     pub fn finish_replay(&mut self) -> Vec<Change> {
+        if self.run.as_ref().is_some_and(|r| !r.run_id.is_empty()) {
+            return vec![Change::NeedsResync];
+        }
+        if self.run.is_none() {
+            return Vec::new();
+        }
         let (completed, duration_ms) = self.run.as_ref().map_or((false, None), |r| {
             (r.session_completed, r.session_duration_ms)
         });

@@ -52,6 +52,8 @@ pub enum LocalCommand {
     Clear,
     /// Quit the application
     Quit,
+    /// Set the device-local Step detail level (None prints usage).
+    Detail { name: Option<String> },
     /// Toggle verbose/debug output
     Verbose,
     /// Show help text
@@ -194,6 +196,7 @@ impl SessionKnob {
 /// Local command catalog: (name, description) pairs.
 const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ("/clear", "Clear the screen"),
+    ("/detail", "Step detail level: brief|full"),
     ("/verbose", "Toggle verbose/debug output"),
     (
         "/usage",
@@ -285,6 +288,9 @@ pub fn parse_input(input: &str) -> ParsedInput {
 
     match cmd_lower.as_str() {
         "/clear" => ParsedInput::Local(LocalCommand::Clear),
+        "/detail" => ParsedInput::Local(LocalCommand::Detail {
+            name: (!args.is_empty()).then(|| args.to_ascii_lowercase()),
+        }),
         "/verbose" => ParsedInput::Local(LocalCommand::Verbose),
         "/usage" => ParsedInput::Local(LocalCommand::Usage),
         "/compress" | "/compact" => ParsedInput::Local(LocalCommand::Compress {

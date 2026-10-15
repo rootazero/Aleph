@@ -345,6 +345,27 @@ pub(super) async fn execute_local_command(
         LocalCommand::Clear => {
             state.clear_screen();
         }
+        LocalCommand::Detail { name } => {
+            use shared_ui_logic::transcript::DetailLevel;
+            match name.as_deref().and_then(DetailLevel::parse) {
+                Some(level) => {
+                    state.detail = level;
+                    state.step_overrides.clear();
+                    state.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
+                    match app::detail_setting::remember(level) {
+                        Ok(_) => state.add_system_message(format!("Detail: {}", level.as_str())),
+                        Err(e) => state.add_system_message(format!(
+                            "Detail: {} (not saved: {e})",
+                            level.as_str()
+                        )),
+                    }
+                }
+                None => state.add_system_message(format!(
+                    "Detail: {} (usage: /detail brief|full)",
+                    state.detail.as_str()
+                )),
+            }
+        }
         LocalCommand::Verbose => {
             state.toggle_verbose();
             let mode = if state.verbose { "on" } else { "off" };
@@ -1194,20 +1215,119 @@ pub(super) enum AttachMode {
 /// leaves the client on the key it was given with no settings, which the status
 /// bar renders as "unknown" rather than as the global defaults. `AttachMode`
 /// exists so that survivability holds for the reconnect path too — see its doc.
+pub(super) struct SessionAcquisition {
+    pub session_key: String,
+    pub generation: u64,
+    pub history: Value,
+    pub traces: Option<Value>,
+}
+
+/// RPC-only acquisition: safe to enqueue on a bounded background worker.
+/// No mutable AppState is held over either await. A trace failure degrades
+/// explicitly to history-only, never a fabricated complete replay.
+pub(super) async fn acquire_session_snapshot(
+    client: &AlephClient,
+    key: String,
+    generation: u64,
+) -> Result<SessionAcquisition, String> {
+    let history: Value = client
+        .call("chat.history", Some(json!({ "session_key": key })))
+        .await
+        .map_err(|e| e.to_string())?;
+    let active_run = active_run_from_history(&history)
+        .flatten()
+        .map(|active| active.run_id);
+    let run_ids: Vec<String> = history
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|v| v.get("role").and_then(Value::as_str) == Some("assistant"))
+        .filter_map(|v| v.get("run_id").and_then(Value::as_str))
+        .filter(|id| Some(*id) != active_run.as_deref())
+        .map(str::to_owned)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let traces = if run_ids.is_empty() {
+        Some(json!({ "runs": {} }))
+    } else {
+        client
+            .call::<_, Value>(
+                "trace.by_runs",
+                Some(json!({ "session_key": key, "run_ids": run_ids })),
+            )
+            .await
+            .ok()
+    };
+    Ok(SessionAcquisition {
+        session_key: key,
+        generation,
+        history,
+        traces,
+    })
+}
+
+/// UI-only application, guarded against a session switch or a newer load.
+/// Called by the main loop upon delivery of a tagged RPC job result.
+pub(super) fn apply_acquired_session(
+    state: &mut AppState,
+    acquired: SessionAcquisition,
+    mode: AttachMode,
+) -> bool {
+    if state.session_key != acquired.session_key
+        || state.transcript_generation != acquired.generation
+    {
+        return false;
+    }
+    let active = active_run_from_history(&acquired.history);
+    if state.current_run.is_some() {
+        // Frames may have arrived during the two RPC calls. Without a
+        // watermark the snapshot cannot be spliced into that live run.
+        return false;
+    }
+    let rows = acquired
+        .history
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let built = app::build_completed_history(
+        acquired.session_key,
+        acquired.generation,
+        &rows,
+        acquired.traces.as_ref(),
+        active
+            .as_ref()
+            .and_then(|a| a.as_ref())
+            .map(|a| a.run_id.as_str()),
+    );
+    if mode == AttachMode::Replace {
+        if !state.apply_completed_hydration(built) {
+            return false;
+        }
+    } else {
+        for row in built.transcript.entries() {
+            state.messages.import_legacy(row.clone());
+        }
+        state.invalidate_rendered_lines();
+    }
+    apply_history_settings(state, &acquired.history);
+    true
+}
+
 pub(super) async fn attach_session(
     state: &mut AppState,
     client: &AlephClient,
     key: &str,
     mode: AttachMode,
 ) {
-    let params = json!({ "session_key": key });
-    match client.call::<_, Value>("chat.history", Some(params)).await {
-        Ok(result) => {
-            apply_history(state, &result, mode);
-            // The sub-agent tree is per-session state the transcript does not
-            // carry; seed it from the tracker snapshot the same way the plan
-            // was seeded from the history response above.
-            refresh_agents(state, client).await;
+    let generation = state.transcript_generation;
+    match acquire_session_snapshot(client, key.to_owned(), generation).await {
+        Ok(acquired) => {
+            if apply_acquired_session(state, acquired, mode) {
+                refresh_agents(state, client).await;
+            }
         }
         Err(e) => state.add_system_message(format!("History error: {e}")),
     }
@@ -1220,6 +1340,7 @@ pub(super) async fn attach_session(
 /// drops the old transcript here, which is inside the caller's `Ok` arm by
 /// construction. A reattach whose fetch failed therefore cannot blank the
 /// screen, because this never runs.
+#[cfg(test)]
 fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
     let rows = result
         .get("messages")
@@ -1250,6 +1371,10 @@ fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
         state.messages.push(msg);
     }
 
+    apply_history_settings(state, result);
+}
+
+fn apply_history_settings(state: &mut AppState, result: &Value) {
     // Restore the conversation's durable settings. Absent on an older
     // gateway — read as "I was not told", so the caption falls back to
     // the install default rather than to a value this client made up.
@@ -1434,6 +1559,7 @@ fn active_run_from_history(result: &Value) -> Option<Option<app::ActiveRunJoin>>
 /// those, and it has no client yet (Phase A shipped it with none). A restored
 /// transcript is therefore text-only, which is what this client showed before
 /// as well.
+#[cfg(test)]
 fn history_message_from_json(idx: usize, v: &Value) -> Option<app::TranscriptEntry> {
     let role = v.get("role").and_then(Value::as_str).unwrap_or("");
     let content = v
@@ -3449,7 +3575,10 @@ mod tests {
                 .browser_resources
                 .get(&resource_id)
                 .ok_or("catalog did not store the real resource event")?;
-            check(stored.revision == first_revision, "stored revision matches event")?;
+            check(
+                stored.revision == first_revision,
+                "stored revision matches event",
+            )?;
             let (target, bound_run, bound_session) = match &stored.binding {
                 ResourceBinding::Browser { viewer } => (
                     viewer.target.clone(),
@@ -3465,7 +3594,10 @@ mod tests {
             // From here the bound tab must be closed no matter what happens.
             *target_slot.lock().unwrap() = Some(target);
             check(bound_run == run_id, "binding.run_id is this run")?;
-            check(bound_session == session_key, "binding.session_key is this run")?;
+            check(
+                bound_session == session_key,
+                "binding.session_key is this run",
+            )?;
             report.set("initial_revision", first_revision);
 
             // ---- decide(safe) with the REAL revision; feed the REAL response back ----
@@ -3484,7 +3616,10 @@ mod tests {
                 .browser_resources
                 .get(&resource_id)
                 .ok_or("resource vanished after decide")?;
-            check(after.revision > first_revision, "decide produced a newer revision")?;
+            check(
+                after.revision > first_revision,
+                "decide produced a newer revision",
+            )?;
             check(
                 after.redaction == RedactionStatus::Safe,
                 "catalog holds the safe revision",
@@ -3525,7 +3660,10 @@ mod tests {
                 "success notice is the launched text",
             )?;
             let ok_cmds = ok_commands.lock().unwrap().clone();
-            check(ok_cmds.len() == 1, "success: exactly one instrumented launch")?;
+            check(
+                ok_cmds.len() == 1,
+                "success: exactly one instrumented launch",
+            )?;
             check(
                 ok_cmds[0].program == "rundll32.exe",
                 "success: Windows default argv program",
@@ -3578,7 +3716,10 @@ mod tests {
             })
             .await;
             let after_notices = system_notices(state);
-            check(after_notices.len() == before + 1, "failure: exactly one notice")?;
+            check(
+                after_notices.len() == before + 1,
+                "failure: exactly one notice",
+            )?;
             let failure_text = after_notices.last().cloned().unwrap_or_default();
             check(
                 failure_text.starts_with("Browser viewer launch failed:"),
@@ -3589,7 +3730,10 @@ mod tests {
                 "failure: helper's revoke succeeded (no cleanup-failed suffix)",
             )?;
             let bad_cmds = bad_commands.lock().unwrap().clone();
-            check(bad_cmds.len() == 1, "failure: exactly one instrumented launch")?;
+            check(
+                bad_cmds.len() == 1,
+                "failure: exactly one instrumented launch",
+            )?;
             let bad_url = bad_cmds[0].args.get(1).cloned().unwrap_or_default();
             let bad_grant = grant_id_of(&bad_url).ok_or("failure: no grant_id in URL")?;
             check(bad_grant != ok_grant, "failure: a FRESH grant was issued")?;
@@ -3680,7 +3824,10 @@ mod tests {
             )
             .await?;
             let ok = find_success(&closed, 0);
-            report.set("tab_close_success", ok.map(Value::from).unwrap_or(Value::Null));
+            report.set(
+                "tab_close_success",
+                ok.map(Value::from).unwrap_or(Value::Null),
+            );
             check(ok != Some(false), "browser_tabs close reported failure")
         }
 
@@ -3889,6 +4036,43 @@ mod attach_mode_tests {
         })
     }
 
+    #[test]
+    fn acquired_completed_steps_replace_atomically_and_reject_stale_generation() {
+        use super::{apply_acquired_session, SessionAcquisition};
+        let key = "agent:main:main:s1";
+        let mut state = AppState::new(key.into(), "m".into());
+        let snapshot = |generation| SessionAcquisition {
+            session_key: key.into(),
+            generation,
+            history: json!({"messages": [
+                {"role":"user", "content":"question"},
+                {"role":"assistant", "content":"answer", "run_id":"r"}
+            ], "active_run":null}),
+            traces: Some(json!({"runs":{"r":[
+                {"kind":"turn_started", "iteration":1},
+                {"kind":"text_emitted", "iteration":1, "stream":"final", "text":"thinking"}
+            ]}})),
+        };
+        let stale = snapshot(state.transcript_generation);
+        state.transcript_generation += 1;
+        assert!(!apply_acquired_session(
+            &mut state,
+            stale,
+            AttachMode::Replace
+        ));
+        assert!(state.messages.is_empty());
+        let fresh = snapshot(state.transcript_generation);
+        assert!(apply_acquired_session(
+            &mut state,
+            fresh,
+            AttachMode::Replace
+        ));
+        assert!(state
+            .messages
+            .iter()
+            .any(|m| matches!(m, TranscriptEntry::Step(_))));
+    }
+
     /// Launch and `/session` prepare the list themselves — the first keeps the
     /// welcome banner and the startup notices, the second wipes it in
     /// `switch_session`. Both then append.
@@ -3949,14 +4133,14 @@ mod attach_mode_tests {
             .nth(1)
             .expect("attach_session must exist");
         let body = attach
-            .split("\nfn apply_history")
+            .split("\n#[cfg(test)]\nfn apply_history")
             .next()
             .unwrap_or_default();
         // Self-protection: a scanner that matched nothing would agree with
         // everything below. Pin that this really is the function's body.
         assert!(
-            body.contains("chat.history"),
-            "the scan found no attach_session body — the guard is blind, not clean"
+            body.contains("acquire_session_snapshot"),
+            "the scan found no snapshot acquisition — the guard is blind, not clean"
         );
         assert!(
             !body.contains("messages.clear()"),
@@ -3969,8 +4153,10 @@ mod attach_mode_tests {
         // was written on" defect, CRLF edition).
         let body = body.replace("\r\n", "\n");
         assert!(
-            body.contains("Ok(result) => {\n            apply_history(state, &result, mode);"),
-            "the applier must be reached only from the success arm"
+            body.contains(
+                "Ok(acquired) => {\n            if apply_acquired_session(state, acquired, mode)"
+            ),
+            "the staged applier must be reached only from the success arm"
         );
     }
 }

@@ -8,8 +8,12 @@
 mod browser_catalog;
 mod context_view;
 mod cost;
+pub(super) mod detail_setting;
 mod events;
+mod hydration;
 mod trace;
+
+pub use hydration::{build_completed_history, HydrationResult, RecoveryState};
 
 #[cfg(test)]
 mod tests;
@@ -18,6 +22,7 @@ pub use browser_catalog::BrowserResourceCatalog;
 pub use context_view::ContextView;
 pub use cost::{CostTally, CostView};
 
+use std::collections::HashSet;
 use std::time::Instant;
 
 use aleph_protocol::plan::PlanSnapshot;
@@ -27,7 +32,7 @@ use aleph_protocol::subagent_tree::{self, NodeLifecycle, SubagentNode};
 use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
 use shared_ui_logic::state::{scroll_action, ListCursor, ScrollAction};
-use shared_ui_logic::transcript::Modality;
+use shared_ui_logic::transcript::{Change, DetailLevel, Modality, Transcript};
 
 use super::btw_overlay::BtwOverlay;
 use super::command_tree::{CommandEntry, DisplayEntry};
@@ -742,9 +747,11 @@ pub(super) fn row_timestamp(raw: Option<&str>) -> DateTime<Utc> {
 #[derive(Debug)]
 pub struct AppState {
     // -- Chat --
-    pub messages: Vec<TranscriptEntry>,
-    /// Monotonic source of ids for text entries (tool rows use their call id).
-    entry_seq: u64,
+    pub messages: Transcript,
+    /// Recovery is deferred while a run has no replay/live watermark.
+    pub transcript_needs_resync: bool,
+    /// Incremented on a session replacement to reject late hydration.
+    pub transcript_generation: u64,
     /// Rows the viewport is above the bottom of the transcript. `0` is
     /// "parked at the bottom, following the stream".
     ///
@@ -959,6 +966,8 @@ pub struct AppState {
     pub run_rendered_assistant_text: bool,
 
     // -- Settings --
+    pub detail: DetailLevel,
+    pub step_overrides: HashSet<String>,
     pub verbose: bool,
     pub tool_progress_mode: ToolProgressMode,
 
@@ -1077,8 +1086,9 @@ impl AppState {
     /// snapshot arrives.
     pub fn new(session_key: String, model_name: String) -> Self {
         Self {
-            messages: Vec::new(),
-            entry_seq: 0,
+            messages: Transcript::new(),
+            transcript_needs_resync: false,
+            transcript_generation: 0,
             scroll_offset: 0,
             mouse: false,
             regions: crate::tui::regions::RegionTable::default(),
@@ -1113,6 +1123,8 @@ impl AppState {
             run_rendered_assistant_text: false,
             current_run_trace_summary_applied: false,
 
+            detail: detail_setting::boot(),
+            step_overrides: HashSet::new(),
             verbose: false,
             tool_progress_mode: ToolProgressMode::default(),
             gateway_commands: Vec::new(),
@@ -1161,8 +1173,7 @@ impl AppState {
     /// A fresh id for a text entry. Tool rows use their `tool_call_id`
     /// instead, which is what [`Self::find_tool_mut`] addresses them by.
     pub(super) fn next_entry_id(&mut self) -> String {
-        self.entry_seq += 1;
-        format!("e{}", self.entry_seq)
+        self.messages.local_id()
     }
 
     /// Add a message **this viewer** just sent to the chat history.
@@ -1177,13 +1188,9 @@ impl AppState {
     /// render is already correct on the moment a real attachment pipeline
     /// lands.
     pub fn add_user_message(&mut self, content: String, attachments: Vec<TuiAttachment>) {
-        let id = self.next_entry_id();
-        self.messages.push(TranscriptEntry::UserText {
-            id,
-            text: content,
-            at_ms: as_ms(Utc::now()),
-            attachments,
-        });
+        self.messages
+            .push_user(&content, as_ms(Utc::now()), attachments);
+        self.transcript_generation = self.transcript_generation.wrapping_add(1);
         self.sends = self.sends.saturating_add(1);
     }
 
@@ -1191,7 +1198,8 @@ impl AppState {
     pub fn add_system_message(&mut self, content: String) {
         let id = self.next_entry_id();
         self.messages
-            .push(TranscriptEntry::SystemNotice { id, text: content });
+            .import_legacy(TranscriptEntry::SystemNotice { id, text: content });
+        self.transcript_generation = self.transcript_generation.wrapping_add(1);
     }
 
     /// Ensure the **last** entry is assistant text, appending an empty one if
@@ -1201,6 +1209,7 @@ impl AppState {
     /// whole interleaving change. Text, then a tool, then more text has to
     /// become three entries in that order — resuming the pre-tool block would
     /// put the second half of the turn above the tool that produced it.
+    #[cfg(test)]
     pub fn ensure_assistant_message(&mut self) {
         if !matches!(
             self.messages.last(),
@@ -1217,10 +1226,25 @@ impl AppState {
 
     /// The trailing assistant-text entry, created if the tail is something
     /// else.
+    #[cfg(test)]
     pub fn current_assistant_mut(&mut self) -> &mut TranscriptEntry {
         self.ensure_assistant_message();
         let idx = self.messages.len().saturating_sub(1);
         &mut self.messages[idx]
+    }
+
+    #[cfg(test)]
+    pub fn append_assistant_content(&mut self, content: &str) {
+        if let TranscriptEntry::AssistantText { markdown, .. } = self.current_assistant_mut() {
+            markdown.push_str(content);
+        }
+    }
+
+    #[cfg(test)]
+    pub fn start_tool_execution(&mut self, id: String, tool: String, args: &serde_json::Value) {
+        let mut row = ToolRow::new(id, tool, args);
+        row.start(self.now_ms());
+        self.messages.import_legacy(TranscriptEntry::Tool(row));
     }
 
     /// The name a tool row learned at its start frame, when the row exists.
@@ -1229,6 +1253,11 @@ impl AppState {
     pub(super) fn tool_name_of(&self, tool_id: &str) -> Option<String> {
         self.messages.iter().rev().find_map(|m| match m {
             TranscriptEntry::Tool(row) if row.id == tool_id => Some(row.tool.clone()),
+            TranscriptEntry::Step(step) => step
+                .tools
+                .iter()
+                .find(|row| row.id == tool_id)
+                .map(|row| row.tool.clone()),
             _ => None,
         })
     }
@@ -1241,8 +1270,34 @@ impl AppState {
     pub fn find_tool_mut(&mut self, tool_id: &str) -> Option<&mut ToolRow> {
         self.messages.iter_mut().rev().find_map(|m| match m {
             TranscriptEntry::Tool(row) if row.id == tool_id => Some(row),
+            TranscriptEntry::Step(step) => step.find_tool_mut(tool_id),
             _ => None,
         })
+    }
+
+    /// Invalidate only changed reducer entries. A missing live frame is a
+    /// recovery request, not permission to splice persisted data into it.
+    pub(super) fn observe_transcript_changes(&mut self, changes: &[Change]) {
+        if changes.iter().any(|c| matches!(c, Change::NeedsResync)) {
+            self.transcript_needs_resync = true;
+        }
+        self.chat_line_cache
+            .invalidate_changes(changes, &self.messages);
+    }
+
+    /// Apply an off-screen completed-history build only to its originating
+    /// session and generation. Callers fetch history and trace in background.
+    pub fn apply_completed_hydration(&mut self, result: HydrationResult) -> bool {
+        if !result.matches(&self.session_key, self.transcript_generation)
+            || self.current_run.is_some()
+        {
+            return false;
+        }
+        self.messages = result.transcript;
+        self.transcript_needs_resync = result.recovery != RecoveryState::Complete;
+        self.step_overrides.clear();
+        self.invalidate_rendered_lines();
+        true
     }
 
     // -- Scrolling ------------------------------------------------------
@@ -1319,12 +1374,23 @@ impl AppState {
 
     /// Fold or unfold one tool row.
     ///
-    /// The cache notices on its own: `tool_fingerprint` already hashes
-    /// `expanded`, so the row's rendered lines are rebuilt on the next frame
-    /// without anything here knowing the cache exists.
+    /// Nested tool rows share a Step cache entry: invalidate it explicitly
+    /// after a toggle rather than waiting for a full-body fingerprint.
     pub fn toggle_tool_expanded(&mut self, tool_id: &str) {
+        if self
+            .messages
+            .iter()
+            .any(|m| matches!(m, TranscriptEntry::Step(s) if s.id == tool_id))
+        {
+            if !self.step_overrides.insert(tool_id.to_owned()) {
+                self.step_overrides.remove(tool_id);
+            }
+            self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
+            return;
+        }
         if let Some(row) = self.find_tool_mut(tool_id) {
             row.expanded = !row.expanded;
+            self.invalidate_rendered_lines();
         }
     }
 
@@ -1338,15 +1404,23 @@ impl AppState {
     /// keystroke arrives folded, wearing a hint that says `ctrl+o to expand`
     /// — which is true of it.
     pub fn toggle_expand_all(&mut self) {
-        let any_folded = self
-            .messages
-            .iter()
-            .any(|m| matches!(m, TranscriptEntry::Tool(row) if !row.expanded));
+        let any_folded = self.messages.iter().any(|m| match m {
+            TranscriptEntry::Tool(row) => !row.expanded,
+            TranscriptEntry::Step(step) => step.tools.iter().any(|row| !row.expanded),
+            _ => false,
+        });
         for message in &mut self.messages {
-            if let TranscriptEntry::Tool(row) = message {
-                row.expanded = any_folded;
+            match message {
+                TranscriptEntry::Tool(row) => row.expanded = any_folded,
+                TranscriptEntry::Step(step) => {
+                    for row in &mut step.tools {
+                        row.expanded = any_folded;
+                    }
+                }
+                _ => {}
             }
         }
+        self.invalidate_rendered_lines();
     }
 
     /// How a fold hint should word itself on this terminal.
@@ -2079,6 +2153,8 @@ impl AppState {
     /// The side thread belongs to the SAME conversation, which has not changed,
     /// and its derived key is still addressable server-side.
     pub fn begin_reattach(&mut self) {
+        self.transcript_generation = self.transcript_generation.wrapping_add(1);
+        self.transcript_needs_resync = true;
         self.current_run = None;
         self.run_started_at = None;
         self.current_run_uses_agent_trace = false;
@@ -2103,12 +2179,11 @@ impl AppState {
         self.cost.rebase(None);
         self.project_branch = None;
         self.model_name.clone_from(&self.default_model_name);
-        self.messages.clear();
-        // The cache is keyed by positional index into `messages`, which is
-        // about to be repopulated from scratch — a stale entry whose (kind,
-        // len, width) happens to match new content at the same index must
-        // not survive.
-        self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
+        self.messages.reset();
+        self.transcript_generation = self.transcript_generation.wrapping_add(1);
+        self.transcript_needs_resync = false;
+        self.step_overrides.clear();
+        self.invalidate_rendered_lines();
         // The run left behind (if any) still belongs to the OLD session, and
         // nothing extra needs to be recorded for that here: its own
         // `RunAccepted` already taught `run_sessions` which session it is
@@ -2219,7 +2294,8 @@ impl AppState {
     }
 
     pub fn clear_screen(&mut self) {
-        self.messages.clear();
+        self.messages.clear_display();
+        self.transcript_generation = self.transcript_generation.wrapping_add(1);
         // The cache is keyed by positional index into `messages`, which is
         // about to be repopulated from scratch — a stale entry whose (kind,
         // len, width) happens to match new content at the same index must
