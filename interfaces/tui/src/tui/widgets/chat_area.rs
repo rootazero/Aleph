@@ -5,10 +5,10 @@
 use std::collections::{HashMap, HashSet};
 
 use ratatui::{
-    layout::{Margin, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::Paragraph,
     Frame,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -26,7 +26,7 @@ use crate::tui::markdown::{
 use crate::tui::regions::RegionKind;
 use crate::tui::theme::theme;
 
-use super::header::{self, header_line};
+use super::header::{self, header_lines};
 #[cfg(test)]
 use super::tool_row::KEY_MODALITY;
 use super::tool_row::{render_tool_group, render_tool_row};
@@ -289,12 +289,18 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let scroll_offset = state.scroll_offset;
     // Built before the cache is borrowed mutably, and owned, so nothing of
     // `state` stays borrowed across the call.
-    let header = vec![header_line(
+    let header = header_lines(
         header::VERSION,
         &state.model_name,
         state.project_root(),
         state.project_branch.as_deref(),
-    )];
+        content_width,
+        !state
+            .messages
+            .iter()
+            .any(|entry| !matches!(entry, TranscriptEntry::SystemNotice { .. }))
+            && visible_height >= 10,
+    );
     let viewport = build_visible_lines_anchored(
         &header,
         &state.messages,
@@ -359,13 +365,6 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
         );
     }
 
-    render_scrollbar(
-        frame,
-        area,
-        total_lines,
-        visible_height,
-        state.scroll_offset,
-    );
     render_back_to_bottom(frame, state, inner);
     render_sticky_user(frame, state, inner, total_lines, &viewport.user_rows);
 }
@@ -497,35 +496,6 @@ fn clip_to_width(line: Line<'static>, width: u16) -> Line<'static> {
     let mut clipped = Line::from(spans).style(style);
     clipped.alignment = alignment;
     clipped
-}
-
-/// The vertical scrollbar, on the block's right border, only when there is
-/// something to scroll.
-fn render_scrollbar(
-    frame: &mut Frame,
-    area: Rect,
-    total_lines: usize,
-    visible_height: usize,
-    scroll_offset: usize,
-) {
-    if total_lines <= visible_height {
-        return;
-    }
-    // `position` counts from the TOP, `scroll_offset` from the bottom.
-    let max_offset = total_lines - visible_height;
-    let position = max_offset - scroll_offset.min(max_offset);
-    let mut scroll_state = ScrollbarState::new(max_offset).position(position);
-    frame.render_stateful_widget(
-        Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .end_symbol(None)
-            .style(Style::default().fg(theme().border)),
-        area.inner(Margin {
-            vertical: 1,
-            horizontal: 0,
-        }),
-        &mut scroll_state,
-    );
 }
 
 /// The docked `[ ↓ Back to bottom ]` control, shown only while the reader is
@@ -1201,18 +1171,12 @@ fn render_user_message(
     let time_str = at_ms
         .and_then(|ms| i64::try_from(ms).ok())
         .and_then(chrono::DateTime::from_timestamp_millis)
-        .map(|t| format!("  {}", t.format("%H:%M")))
+        .map(|t| t.format("%H:%M").to_string())
         .unwrap_or_default();
 
-    // Header: ┃ You  12:34
+    // The user-colored gutter identifies the speaker without a repeated label.
     lines.push(Line::from(vec![
         Span::styled("\u{2503} ", prefix_style),
-        Span::styled(
-            "You".to_string(),
-            Style::default()
-                .fg(theme().user)
-                .add_modifier(Modifier::BOLD),
-        ),
         Span::styled(time_str, Style::default().fg(theme().muted)),
     ]));
 
@@ -1360,7 +1324,7 @@ mod tests {
                 .iter()
                 .any(|s| s.content.as_ref().contains("You"))
         });
-        assert!(has_you, "Should contain 'You' header");
+        assert!(!has_you, "User messages should not repeat a 'You' label");
 
         let has_reply = lines.iter().any(|line| {
             line.spans

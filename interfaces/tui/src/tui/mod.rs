@@ -17,6 +17,7 @@ mod highlight;
 mod interaction;
 mod keys;
 mod markdown;
+mod native_selection;
 mod regions;
 mod render;
 mod rpc_jobs;
@@ -227,6 +228,7 @@ async fn subscribe_browser_live_topics(client: &AlephClient) -> CliResult<()> {
 ///
 /// Sets up the terminal, spawns the event collector, and runs the main loop
 /// until the user quits. Terminal is always restored on exit (including panics).
+/// F6 freezes the current frame for host-native drag/copy; F6/Esc resumes.
 ///
 /// # Errors
 ///
@@ -254,8 +256,9 @@ pub async fn run(
     // the branch `state.mouse` exists to carry (spec §8).
     //
     // The cost, which is why this is worth stating: with capture on, the
-    // terminal stops handling drag-select itself, so copying text needs the
-    // emulator's override (Shift+drag in most).
+    // terminal stops handling drag-select itself. F6 temporarily releases
+    // capture and freezes the last frame so the host terminal can provide its
+    // native selection/copy UI; F6 or Esc restores capture afterwards.
     let mouse = execute!(stdout, EnableMouseCapture).is_ok();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -555,6 +558,9 @@ async fn main_loop<'c>(
     let mut reconnecting: Option<ReconnectAttempt<'c>> = None;
     let mut backoff = Duration::ZERO;
     let mut reported_reconnect_failure = false;
+    // Host-native selection is intentionally a terminal mode, not a rendered
+    // overlay. It owns the last completed frame until F6/Esc restores us.
+    let mut native_selection = native_selection::NativeSelection::new(state.mouse);
     // Starts `true` so the first frame always draws — never delayed behind a
     // wait for the first event. Cleared right after each draw; only actions
     // that changed something visible set it back to `true` (see
@@ -604,7 +610,7 @@ async fn main_loop<'c>(
         // `reconnecting` is no longer borrowed.
         let mut reconnect_outcome: Option<CliResult<()>> = None;
         // Draw only when something visible changed since the last frame.
-        if needs_redraw {
+        if needs_redraw && !native_selection.active() {
             terminal.draw(|f| render::render(f, state, textarea))?;
             needs_redraw = false;
         }
@@ -612,15 +618,27 @@ async fn main_loop<'c>(
         // Wait for next event
         let action = tokio::select! {
             Some(te) = term_events.recv() => {
-                // A terminal event always represents something the user
-                // needs to see reflected on screen (a keystroke landing in
-                // the composer, a resize reflowing the layout, a paste)
-                // even when the handler's returned Action is None — Action
-                // describes what the loop should do NEXT, not whether
-                // visible state changed. Set here, at the source, rather
-                // than inferred from the returned Action's value.
-                needs_redraw = true;
-                keys::handle_terminal_event(state, textarea, &te)
+                // Gate before focus-specific routing: no input may mutate an
+                // overlay/composer or hit-test stale rows while selection owns
+                // the frame. Resume always redraws, including after a resize.
+                let was_selecting = native_selection.active();
+                let action = if native_selection.handle_event(&te, terminal.backend_mut())? {
+                    needs_redraw = !native_selection.active();
+                    Action::None
+                } else {
+                    needs_redraw = true;
+                    keys::handle_terminal_event(state, textarea, &te)
+                };
+                // Show the affordance on the entry frame only. Once this draw
+                // returns, gateway/tick mutations continue but the real draw
+                // gate below keeps the visible cells frozen until resume.
+                if !was_selecting && native_selection.active() {
+                    terminal.draw(|frame| {
+                        render::render(frame, state, textarea);
+                        widgets::hint_line::render_selection_hint(frame);
+                    })?;
+                }
+                action
             }
             Some(ge) = gateway_events.recv() => {
                 // Same reasoning as the terminal branch above: a gateway

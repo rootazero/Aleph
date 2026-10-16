@@ -2,15 +2,41 @@
 use super::*;
 use ratatui::{backend::TestBackend, Terminal};
 
-fn draw(state: &mut AppState, width: u16) -> Vec<String> {
-    let mut terminal = Terminal::new(TestBackend::new(width, 10)).unwrap();
+fn draw_height(state: &mut AppState, width: u16, height: u16) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal
         .draw(|frame| render_chat_area(frame, state, frame.area()))
         .unwrap();
     let buffer = terminal.backend().buffer();
-    (0..10)
+    (0..height)
         .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
         .collect()
+}
+
+fn draw(state: &mut AppState, width: u16) -> Vec<String> {
+    draw_height(state, width, 10)
+}
+
+#[test]
+fn startup_notice_keeps_welcome_until_real_transcript_history_exists() {
+    let mut state = AppState::new("s".into(), "model".into());
+    state.add_system_message("startup notice".into());
+    let rows = draw(&mut state, 80);
+    assert!(rows.iter().any(|row| row.contains("Welcome to Aleph")));
+    assert!(rows.iter().any(|row| row.contains("startup notice")));
+
+    state.add_user_message("hello".into(), vec![]);
+    let rows = draw(&mut state, 80);
+    assert!(!rows.iter().any(|row| row.contains("Welcome to Aleph")));
+}
+
+#[test]
+fn welcome_falls_back_to_compact_header_in_a_short_viewport() {
+    let mut state = AppState::new("s".into(), "model".into());
+    state.add_system_message("startup notice".into());
+    let rows = draw_height(&mut state, 80, 4);
+    assert!(!rows.iter().any(|row| row.contains("Welcome to Aleph")));
+    assert!(rows[0].contains("Aleph"));
 }
 
 #[test]
@@ -37,11 +63,11 @@ fn compact_chip_uses_current_layout_and_disappears_after_jump() {
     state.request_sticky_jump(jump);
     let rows = draw(&mut state, 80);
     assert!(!rows[0].contains("[click to jump]"));
-    assert!(rows[0].contains("You"));
+    assert!(!rows[0].contains("You"));
     assert!(rows[1].replace(' ', "").contains("请解释"), "{rows:?}");
     state.add_system_message("more output".into());
     let rows = draw(&mut state, 40);
-    assert!(rows[0].contains("You"));
+    assert!(!rows[0].contains("You"));
     assert!(rows[1].replace(' ', "").contains("请解释"), "{rows:?}");
     assert!(!rows[0].contains("[click to jump]"));
     state.scroll_to_bottom();

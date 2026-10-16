@@ -16,9 +16,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use shared_ui_logic::transcript::SemanticColor;
+use unicode_width::UnicodeWidthStr;
 
-use crate::tui::theme::palette;
+use super::compact::fit_line;
+use crate::tui::theme::theme;
 
 /// The version of the binary the user launched, from the workspace `VERSION`
 /// file via this crate's `build.rs` — not `CARGO_PKG_VERSION`, which is the
@@ -42,25 +43,23 @@ pub fn header_line(
     project_root: Option<&str>,
     branch: Option<&str>,
 ) -> Line<'static> {
-    let dim = Style::default().fg(palette().color(SemanticColor::Dim));
+    let colors = theme();
+    let dim = Style::default().fg(colors.muted);
     let mut spans = vec![
         Span::styled(
             "\u{2135} ".to_string(), // ℵ
             Style::default()
-                .fg(palette().color(SemanticColor::Prompt))
+                .fg(colors.user)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("Aleph {version}"),
             Style::default()
-                .fg(palette().color(SemanticColor::Fg))
+                .fg(colors.heading)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(SEP.to_string(), dim),
-        Span::styled(
-            model.to_string(),
-            Style::default().fg(palette().color(SemanticColor::Accent)),
-        ),
+        Span::styled(model.to_string(), Style::default().fg(colors.tool_name)),
     ];
     if let Some(root) = project_root {
         spans.push(Span::styled(SEP.to_string(), dim));
@@ -73,6 +72,90 @@ pub fn header_line(
         }
     }
     Line::from(spans)
+}
+
+/// Empty conversations get a welcome surface; history keeps the one-line identity.
+/// Widths are terminal cells, not font sizes. All facts still come from the caller.
+#[must_use]
+pub fn header_lines(
+    version: &str,
+    model: &str,
+    project_root: Option<&str>,
+    branch: Option<&str>,
+    width: u16,
+    welcome: bool,
+) -> Vec<Line<'static>> {
+    let width = usize::from(width);
+    let identity = header_line(version, model, project_root, branch);
+    if !welcome {
+        return vec![fit_line(identity, width)];
+    }
+    let colors = theme();
+    let title = Style::default()
+        .fg(colors.heading)
+        .add_modifier(Modifier::BOLD);
+    let accent = Style::default()
+        .fg(colors.user)
+        .add_modifier(Modifier::BOLD);
+    let muted = Style::default().fg(colors.muted);
+    let command = Style::default().fg(colors.tool_name);
+    let mut lines = vec![Line::default()];
+    if width >= 68 {
+        let left = [
+            "Welcome to Aleph".to_owned(),
+            "".to_owned(),
+            " ▄▀█ █   █▀▀ █▀█ █ █".to_owned(),
+            " █▀█ █▄▄ ██▄ █▀▀ █▀█".to_owned(),
+            format!(" v{version}"),
+        ];
+        let right = [
+            ("Get started", ""),
+            ("", "Ask a question to begin"),
+            ("/help", "Commands & shortcuts"),
+            ("/session", "Browse conversations"),
+            ("/agents", "Background agents"),
+        ];
+        for (idx, (left, (key, description))) in left.into_iter().zip(right).enumerate() {
+            let padding = 32usize.saturating_sub(left.width());
+            lines.push(Line::from(vec![
+                Span::styled(
+                    left,
+                    if idx == 0 {
+                        title
+                    } else if idx == 4 {
+                        muted
+                    } else {
+                        accent
+                    },
+                ),
+                Span::raw(" ".repeat(padding + 3)),
+                Span::styled(key.to_owned(), if idx == 0 { title } else { command }),
+                Span::raw(" ".repeat(10usize.saturating_sub(key.len()))),
+                Span::styled(description.to_owned(), muted),
+            ]));
+        }
+    } else {
+        lines.push(Line::from(Span::styled("ℵ Welcome to Aleph", title)));
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled("Ask a question to begin", muted)));
+        for (key, description) in [
+            ("/help", "Commands & shortcuts"),
+            ("/session", "Conversations"),
+            ("/agents", "Background agents"),
+        ] {
+            let mut spans = vec![Span::styled(key.to_owned(), command)];
+            if width >= 32 {
+                spans.push(Span::styled(format!("  {description}"), muted));
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+    lines.push(Line::default());
+    lines.push(identity);
+    lines
+        .into_iter()
+        .map(|line| fit_line(line, width))
+        .collect()
 }
 
 /// `C:\Users\me\proj` → `~\proj`. Cosmetic only: a path that does not start
@@ -164,6 +247,46 @@ mod tests {
 
     fn text(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn welcome_reflows_without_inventing_inventory_or_overflowing_cells() {
+        for width in [0, 1, 20, 31, 32, 67, 68, 80, 120] {
+            let lines = header_lines(
+                "26.9.1",
+                "model",
+                Some("/w/proj"),
+                Some("main"),
+                width,
+                true,
+            );
+            assert_eq!(lines.len(), if width >= 68 { 8 } else { 9 });
+            assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+            let rendered = lines.iter().map(text).collect::<Vec<_>>().join("\n");
+            assert!(!rendered.contains("skills"));
+            if width >= 20 {
+                assert!(rendered.contains("Welcome to Aleph"));
+                assert!(rendered.contains("/help"));
+                assert!(rendered.contains("/session"));
+                assert!(rendered.contains("/agents"));
+            }
+        }
+    }
+
+    #[test]
+    fn existing_conversations_keep_one_compact_identity_line() {
+        let lines = header_lines("26.9.1", "model", Some("/w/proj"), Some("main"), 80, false);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            text(&lines[0]),
+            text(&header_line(
+                "26.9.1",
+                "model",
+                Some("/w/proj"),
+                Some("main")
+            ))
+        );
+        assert!(!text(&lines[0]).contains("Welcome"));
     }
 
     /// The full shape, and the one thing about it that is easy to get
