@@ -41,6 +41,7 @@
     "title": "Aleph Cluster"
   },
   "common": {
+    "optional_placeholder": "Optional",
     "add": "Add",
     "agent_binding_title": "Agent Binding",
     "artifacts_deliverables": "Deliverables",

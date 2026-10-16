@@ -139,7 +139,7 @@ fn ModelDefsEditor(model_defs: RwSignal<Vec<ModelDefJson>>) -> impl IntoView {
                                             });
                                         }
                                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                        placeholder="Optional"
+                                        placeholder=t_string!(i18n, common.optional_placeholder)
                                     />
                                 </div>
 
@@ -160,7 +160,7 @@ fn ModelDefsEditor(model_defs: RwSignal<Vec<ModelDefJson>>) -> impl IntoView {
                                             });
                                         }
                                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                        placeholder="Optional"
+                                        placeholder=t_string!(i18n, common.optional_placeholder)
                                     />
                                 </div>
 
@@ -239,7 +239,7 @@ fn ModelDefsEditor(model_defs: RwSignal<Vec<ModelDefJson>>) -> impl IntoView {
                                             });
                                         }
                                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                        placeholder="Optional"
+                                        placeholder=t_string!(i18n, common.optional_placeholder)
                                     />
                                 </div>
 
@@ -261,7 +261,7 @@ fn ModelDefsEditor(model_defs: RwSignal<Vec<ModelDefJson>>) -> impl IntoView {
                                             });
                                         }
                                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                        placeholder="Optional"
+                                        placeholder=t_string!(i18n, common.optional_placeholder)
                                     />
                                 </div>
                             </div>
@@ -1159,7 +1159,7 @@ pub(super) fn ProviderDetailPanel(
                                                     prop:value=move || form_max_tokens.get()
                                                     on:input=move |ev| form_max_tokens.set(event_target_value(&ev))
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                    placeholder="Optional"
+                                                    placeholder=t_string!(i18n, common.optional_placeholder)
                                                 />
                                             </div>
                                             <div>
@@ -1180,7 +1180,7 @@ pub(super) fn ProviderDetailPanel(
                                                     prop:value=move || form_context_window.get()
                                                     on:input=move |ev| form_context_window.set(event_target_value(&ev))
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                    placeholder="Optional"
+                                                    placeholder=t_string!(i18n, common.optional_placeholder)
                                                 />
                                             </div>
                                             <div>
@@ -1191,7 +1191,7 @@ pub(super) fn ProviderDetailPanel(
                                                     prop:value=move || form_top_p.get()
                                                     on:input=move |ev| form_top_p.set(event_target_value(&ev))
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                    placeholder="Optional"
+                                                    placeholder=t_string!(i18n, common.optional_placeholder)
                                                 />
                                             </div>
                                             <div>
@@ -1201,7 +1201,7 @@ pub(super) fn ProviderDetailPanel(
                                                     prop:value=move || form_top_k.get()
                                                     on:input=move |ev| form_top_k.set(event_target_value(&ev))
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                    placeholder="Optional"
+                                                    placeholder=t_string!(i18n, common.optional_placeholder)
                                                 />
                                             </div>
                                         </div>

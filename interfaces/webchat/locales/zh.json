@@ -41,6 +41,7 @@
     "title": "Aleph 集群"
   },
   "common": {
+    "optional_placeholder": "可选",
     "add": "添加",
     "agent_binding_title": "代理绑定",
     "artifacts_deliverables": "最终结果",
