@@ -569,6 +569,10 @@ fn handle_input_key(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
             Action::None
         }
 
+        // Paging always moves the transcript; arrows/Home/End still edit the draft.
+        KeyCode::PageUp => Action::ScrollUp(20),
+        KeyCode::PageDown => Action::ScrollDown(20),
+
         // Tab: cycle focus
         KeyCode::Tab => Action::FocusChat,
 
@@ -1753,6 +1757,26 @@ mod mouse_tests {
         let mut k = KeyEvent::new(code, modifiers);
         k.kind = KeyEventKind::Press;
         event::TermEvent::Key(k)
+    }
+
+    #[test]
+    fn paging_from_composer_preserves_the_draft() {
+        let mut s = state();
+        s.focus = Focus::Input;
+        let mut textarea = TextArea::default();
+        textarea.insert_str("unfinished draft");
+        let cursor = textarea.cursor();
+        for (code, up) in [(KeyCode::PageUp, true), (KeyCode::PageDown, false)] {
+            let action =
+                handle_terminal_event(&mut s, &mut textarea, &key(code, KeyModifiers::NONE));
+            assert!(matches!(
+                (up, action),
+                (true, Action::ScrollUp(20)) | (false, Action::ScrollDown(20))
+            ));
+            assert_eq!(textarea.lines(), &["unfinished draft"]);
+            assert_eq!(textarea.cursor(), cursor);
+            assert_eq!(s.focus, Focus::Input);
+        }
     }
 
     #[test]

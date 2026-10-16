@@ -43,3 +43,23 @@ The earlier direct WebSocket probe explicitly subscribed to `stream.*` and there
 - Native Windows console acceptance drove the rebuilt executable with real keyboard events and read its active console buffer. Two consecutive prompts both produced their distinct reply markers on screen; neither marker appeared verbatim in its prompt. The owned acceptance process was stopped after verification.
 
 中文：启动、重连、后台刷新均保留聊天订阅。新增真实连接回归测试先复现零事件，修复后两次均在助手正文和渲染画面找到回复；常规测试 546 项通过，严格 Clippy 与构建通过。另用 Windows 控制台键盘事件驱动实际可执行文件，连续两条消息的回复均出现在屏幕，验收进程已结束。
+
+## Follow-up: terminal ownership and scrolling / 追加：终端日志与滚动
+
+The standalone TUI previously installed the shared file-and-console logger. Because its stdout is a terminal, asynchronous connection diagnostics wrote into the alternate screen while ratatui was drawing. The resulting terminal scrolling could place reply text below the composer. The TUI now uses the rotating, scrubbed file-only logger; initialization failure does not install a terminal writer. Other components retain their existing logging behavior.
+
+中文：独立 TUI 原先启用了文件及控制台双路日志，连接诊断会直接写入全屏界面，引发错位。现在保持文件轮转、脱敏与级别过滤，全屏期间不再向终端写诊断日志。
+
+The shared client also excludes the two exact Panel invalidation notifications (`stream.session_updated`, `stream.running_set_changed`) from transcript-loss detection, matching the Gateway frame census. Unknown stream methods and malformed supported frames still report continuity faults. PageUp/PageDown scroll the transcript while the composer has focus and preserve the unfinished draft; wheel events keep their existing transcript route.
+
+中文：客户端按 Gateway 的既有豁免列表识别两种 Panel 通知，避免误报聊天帧丢失；真正未知或损坏的流事件仍会报告。输入框聚焦时可用 PageUp/PageDown 翻阅转录，草稿保持不变，滚轮继续走聊天滚动逻辑。
+
+- TUI library: 547 passed, 2 opt-in live tests ignored; binary argument tests: 8 passed. Shared client: 48 passed, 1 ignored.
+- Logging: 22 passed with two unrelated existing PII assertions excluded. The full logging run still fails `test_generic_secret_redacts_json_shaped_value` and `test_scrub_generic_password_assignment`; their implementation and tests are unchanged by this fix.
+- Scoped all-target Clippy for TUI, client and logging with `-D warnings`, targeted rustfmt, and the TUI executable build passed. Cargo commands remained serialized through the memory guard.
+
+中文：TUI 常规测试与参数测试、共享客户端测试、严格 Clippy、格式与构建通过。日志模块全量测试仍有两项既存 PII 断言失败；限定验证中其余 22 项通过，本次未改动这些 PII 实现及测试。
+
+Native executable acceptance drove the rebuilt TUI with real Windows console keyboard and mouse-wheel events against the existing local Gateway. The assistant marker was above the composer separator and caret; no connection diagnostics appeared on screen. A fenced 65-line reply allowed wheel-up to hide its final row and wheel-down to restore the bottom. All four behavior assertions passed, and the owned acceptance process tree was stopped. Hidden legacy-console Unicode glyph appearance remains distinct from Windows Terminal visual acceptance.
+
+中文：原生控制台验收驱动真实可执行文件与本地 Gateway，确认回复位于输入分隔线及光标上方、诊断日志不写入画面、滚轮可上翻并回到底部，四项行为断言全部通过。测试进程树已结束。隐藏旧式控制台的 Unicode 字形效果不作为 Windows Terminal 外观验收结论。

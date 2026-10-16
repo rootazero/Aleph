@@ -4,7 +4,7 @@
 
 use clap::Parser;
 use tracing::info;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{prelude::*, EnvFilter};
 
 mod pairing;
 
@@ -79,19 +79,14 @@ struct Args {
 async fn main() -> CliResult<()> {
     let args = Args::parse();
 
-    // Initialize logging with unified file + console output
+    // Ratatui owns the terminal, including stderr, while the UI is active.
     let default_filter = if args.verbose { "debug" } else { "info" };
-    if let Err(e) = aleph_logging::init_component_logging("tui", 7, default_filter) {
+    if let Err(e) = aleph_logging::init_component_file_logging("tui", 7, default_filter) {
+        // Report before terminal setup; never install a console writer as fallback.
         eprintln!("Failed to init file logging: {e}");
-        // Fallback to console-only
-        tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(if args.verbose {
-                EnvFilter::new("debug")
-            } else {
-                EnvFilter::new("info")
-            })
-            .init();
+        let _ = tracing_subscriber::registry()
+            .with(EnvFilter::new(default_filter))
+            .try_init();
     }
 
     let config = CliConfig::load(args.config.as_deref())?;
@@ -158,7 +153,11 @@ mod tests {
     fn paired_is_a_value_less_flag_and_defaults_off() {
         use clap::Parser;
         assert!(!Args::try_parse_from(["aleph-tui"]).unwrap().paired);
-        assert!(Args::try_parse_from(["aleph-tui", "--paired"]).unwrap().paired);
+        assert!(
+            Args::try_parse_from(["aleph-tui", "--paired"])
+                .unwrap()
+                .paired
+        );
         // No value form: a secret cannot be passed through this flag.
         assert!(Args::try_parse_from(["aleph-tui", "--paired=secret"]).is_err());
         // And no flag takes a token / ticket / password / credential.

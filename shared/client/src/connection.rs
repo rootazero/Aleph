@@ -148,6 +148,14 @@ fn classify_frame(text: &str) -> Inbound {
                 id: id.clone(),
             };
         }
+        // These exact Panel notifications are exempt from StreamEvent in the
+        // gateway frame census. They are not lost transcript events.
+        if matches!(
+            method,
+            "stream.session_updated" | "stream.running_set_changed"
+        ) {
+            return Inbound::Unrecognized;
+        }
         let Some(params) = value.get("params") else {
             return Inbound::UnhandledNotification {
                 method: method.to_string(),
@@ -1604,6 +1612,33 @@ mod wire_contract {
             }
             other => panic!("expected a response: {other:?}"),
         }
+    }
+
+    /// Panel invalidation notifications do not contain transcript events.
+    #[test]
+    fn panel_notifications_do_not_request_stream_recovery() {
+        for (method, params) in [
+            (
+                "stream.session_updated",
+                json!({"type": "session_updated", "session_key": "s"}),
+            ),
+            (
+                "stream.session_updated",
+                json!({"session_key": "s", "topic": "title"}),
+            ),
+            (
+                "stream.running_set_changed",
+                json!({"type": "running_set_changed", "sessions": []}),
+            ),
+        ] {
+            let text = json!({"method": method, "params": params}).to_string();
+            assert!(matches!(classify_frame(&text), Inbound::Unrecognized));
+        }
+        let malformed = json!({"method": "stream.run_complete", "params": {}}).to_string();
+        assert!(matches!(
+            classify_frame(&malformed),
+            Inbound::UnhandledNotification { loud: true, .. }
+        ));
     }
 
     /// `stream.*` promises a `StreamEvent` — the server-side census
