@@ -35,8 +35,15 @@ pub(crate) fn append_attachment(
     list.push(file);
     true
 }
-fn remove_attachment(list: &mut Vec<PendingAttachment>, key: &str) {
-    if let Some(index) = list.iter().position(|file| attachment_key(file) == key) {
+fn remove_attachment(list: &mut Vec<PendingAttachment>, occurrence_key: &str) {
+    let mut occurrences = std::collections::HashMap::<String, usize>::new();
+    if let Some(index) = list.iter().position(|file| {
+        let identity = attachment_key(file);
+        let occurrence = occurrences.entry(identity.clone()).or_default();
+        let key = format!("{identity}:{occurrence}");
+        *occurrence += 1;
+        key == occurrence_key
+    }) {
         list.remove(index);
     }
 }
@@ -57,22 +64,7 @@ fn keyed_attachments(files: Vec<PendingAttachment>) -> Vec<(String, PendingAttac
         .collect()
 }
 
-pub(crate) fn read_file_list_into(
-    files: &web_sys::FileList,
-    attachments: RwSignal<Vec<PendingAttachment>>,
-) {
-    let available = attachments
-        .try_with_untracked(|list| MAX_ATTACHMENT_COUNT.saturating_sub(list.len()))
-        .unwrap_or_default();
-    for index in 0..files.length().min(available as u32) {
-        if let Some(file) = files.get(index) {
-            read_file_into(file, attachments);
-        }
-    }
-}
-
-/// No retained FileReader closures: the bundled promise clears handlers on settle.
-pub(crate) fn read_file_into(file: web_sys::File, attachments: RwSignal<Vec<PendingAttachment>>) {
+async fn read_and_append_file(file: web_sys::File, attachments: RwSignal<Vec<PendingAttachment>>) {
     let size = file.size() as u64;
     if size > MAX_ATTACHMENT_SIZE_BYTES
         || attachments
@@ -87,25 +79,51 @@ pub(crate) fn read_file_into(file: web_sys::File, attachments: RwSignal<Vec<Pend
     } else {
         file.type_()
     };
+    if let Ok(data_base64) = read_attachment(&file).await {
+        // try_update is also the lifetime gate if the composer was disposed.
+        let _ = attachments.try_update(|list| {
+            append_attachment(
+                list,
+                PendingAttachment {
+                    name,
+                    mime_type,
+                    data_base64,
+                    size,
+                },
+            )
+        });
+    }
+}
+
+pub(crate) fn read_file_list_into(
+    files: &web_sys::FileList,
+    attachments: RwSignal<Vec<PendingAttachment>>,
+) {
+    let files = files.clone();
     spawn_local(async move {
-        if let Ok(data_base64) = read_attachment(&file).await {
-            // try_update is also the lifetime gate if the composer was disposed.
-            let _ = attachments.try_update(|list| {
-                append_attachment(
-                    list,
-                    PendingAttachment {
-                        name,
-                        mime_type,
-                        data_base64,
-                        size,
-                    },
-                )
-            });
+        for index in 0..files.length() {
+            if attachments
+                .try_with_untracked(|list| list.len() >= MAX_ATTACHMENT_COUNT)
+                .unwrap_or(true)
+            {
+                break;
+            }
+            if let Some(file) = files.get(index) {
+                // Sequential reads preserve input order and let oversized or failed
+                // candidates leave the actual count available for later files.
+                read_and_append_file(file, attachments).await;
+            }
         }
     });
 }
 
-/// MIME first, extension fallback second; all eight spec families are distinct.
+/// No retained FileReader closures: the bundled promise clears handlers on settle.
+#[allow(dead_code)]
+pub(crate) fn read_file_into(file: web_sys::File, attachments: RwSignal<Vec<PendingAttachment>>) {
+    spawn_local(read_and_append_file(file, attachments));
+}
+
+/// MIME first, extension fallback second.
 #[must_use]
 pub fn file_icon(mime: &str, name: &str) -> &'static str {
     fn family(mime: &str) -> Option<&'static str> {
@@ -179,6 +197,7 @@ fn image_thumbnail(image: &web_sys::HtmlImageElement) -> Option<String> {
 #[component]
 fn AttachmentChip(
     attachments: RwSignal<Vec<PendingAttachment>>,
+    occurrence_key: String,
     file: PendingAttachment,
 ) -> impl IntoView {
     let i18n = use_i18n();
@@ -201,7 +220,7 @@ fn AttachmentChip(
         _ => "text-text-tertiary",
     };
     let size = format_size(file.size);
-    let key = attachment_key(&file);
+    let key = occurrence_key;
     view! {
         <div class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface-raised border border-border text-xs text-text-secondary">
             <span class=format!("relative w-9 h-9 shrink-0 flex items-center justify-center {icon_class}") aria-hidden="true">
@@ -237,8 +256,8 @@ pub(crate) fn AttachmentPreviewBar(attachments: RwSignal<Vec<PendingAttachment>>
     view! {
         <Show when=move || !attachments.get().is_empty()>
             <div class="flex flex-wrap gap-2 mb-2">
-                <For each=move || keyed_attachments(attachments.get()) key=|(key, _)| key.clone() children=move |(_, file)| {
-                    view! { <AttachmentChip attachments=attachments file=file /> }
+                <For each=move || keyed_attachments(attachments.get()) key=|(key, _)| key.clone() children=move |(occurrence_key, file)| {
+                    view! { <AttachmentChip attachments=attachments occurrence_key=occurrence_key file=file /> }
                 } />
             </div>
         </Show>
@@ -269,14 +288,26 @@ mod tests {
         b.data_base64 = "Yg==".into();
         let mut c = a.clone();
         c.data_base64 = "Yw==".into();
-        let b_key = attachment_key(&b);
-        let c_key = attachment_key(&c);
-        assert_ne!(b_key, c_key);
+        let original = keyed_attachments(vec![a.clone(), b.clone(), c.clone()]);
+        let b_key = original[1].0.clone();
+        let c_key = original[2].0.clone();
         let mut rows = vec![a.clone(), b, c];
         remove_attachment(&mut rows, &b_key);
         remove_attachment(&mut rows, &c_key);
         assert_eq!(rows, vec![a]);
     }
+    #[test]
+    fn identical_files_remove_the_selected_occurrence() {
+        let a = att("same", 1);
+        let b = att("other", 1);
+        let original = keyed_attachments(vec![a.clone(), a.clone(), b.clone()]);
+        let selected_key = original[1].0.clone();
+        let mut rows = vec![a.clone(), a.clone(), b.clone()];
+        remove_attachment(&mut rows, &selected_key);
+        assert_eq!(rows, vec![a.clone(), b.clone()]);
+        assert_eq!(keyed_attachments(rows)[1].0, original[2].0);
+    }
+
     #[test]
     fn identical_files_have_distinct_keys_and_other_files_keep_their_keys() {
         let a = att("same", 1);
@@ -284,11 +315,44 @@ mod tests {
         let original = keyed_attachments(vec![a.clone(), a.clone(), b.clone()]);
         assert_ne!(original[0].0, original[1].0);
         let mut rows = vec![a.clone(), a, b];
-        let key = attachment_key(&rows[0]);
+        let key = keyed_attachments(rows.clone())[0].0.clone();
         remove_attachment(&mut rows, &key);
         let surviving = keyed_attachments(rows);
         assert_eq!(original[2].0, surviving[1].0);
     }
+    #[test]
+    fn bounded_batch_skips_oversized_candidates_and_preserves_order() {
+        let mut rows = vec![att("existing", 1); MAX_ATTACHMENT_COUNT - 1];
+        assert!(!append_attachment(
+            &mut rows,
+            att("oversized", MAX_ATTACHMENT_SIZE_BYTES + 1)
+        ));
+        assert!(append_attachment(&mut rows, att("valid", 2)));
+        assert_eq!(rows.last().map(|file| file.name.as_str()), Some("valid"));
+        assert!(!append_attachment(&mut rows, att("late", 3)));
+
+        let mut all_oversized = Vec::new();
+        for index in 0..3 {
+            assert!(!append_attachment(
+                &mut all_oversized,
+                att(&format!("oversized-{index}"), MAX_ATTACHMENT_SIZE_BYTES + 1)
+            ));
+        }
+        assert!(all_oversized.is_empty());
+
+        let mut ordered = Vec::new();
+        for name in ["first", "second", "third"] {
+            assert!(append_attachment(&mut ordered, att(name, 1)));
+        }
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|file| file.name.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second", "third"]
+        );
+    }
+
     #[test]
     fn completion_order_cannot_exceed_limits() {
         let mut rows = vec![att("old", 1); MAX_ATTACHMENT_COUNT - 1];
