@@ -1,76 +1,56 @@
-//! Colour for the terminal surface.
+//! Theme loading and semantic terminal colours.
 //!
-//! # Two tables, and why the split is not arbitrary
-//!
-//! * **Transcript semantics** come from
-//!   [`shared_ui_logic::transcript::SemanticColor`] — the one roster the Panel
-//!   paints from as well, which is the whole point of it living in the shared
-//!   crate. [`Palette::color`] is an exhaustive `match`, so a role added over
-//!   there does not *compile* here until this surface paints it. That is the
-//!   real guard; the roster test below only covers what is already listed.
-//! * **Terminal chrome** — status-bar ground, pane borders, connection glyphs —
-//!   has no Panel counterpart, because the Panel's chrome is CSS that shares
-//!   nothing with a status bar. Those are the only colours this crate names on
-//!   its own, and they are marked as such in [`Theme`].
-//!
-//! [`Theme`] itself is **derived**: every field that corresponds to a semantic
-//! role is `Palette::color(that role)`, never a second literal. A palette and a
-//! theme const holding their own copies of "what colour is an error" is the
-//! shape that drifts (判据 §1), and it is what this file used to be.
-//!
-//! # Why the current theme is process-global rather than injected
-//!
-//! It replaces a global `const`, so this is not new globality — but it is a
-//! deliberate choice over threading a `&Theme` into ~20 widget signatures to
-//! express a value that is, by construction, the same everywhere in a
-//! single-surface TUI. What it makes harder: a future split pane that wants two
-//! themes at once would have to do that threading after all. Writers: `/theme`
-//! and boot. Readers: every widget, through [`theme()`].
+//! Built-in and community themes use the same versioned JSON loader. Community
+//! files may extend one built-in theme and override semantic roles and chrome;
+//! they contain no executable code and are bounded to 128 KiB.
 
-use std::sync::RwLock;
+use std::fs;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ratatui::style::Color;
-use shared_ui_logic::transcript::SemanticColor;
+use serde::Deserialize;
+use shared_ui_logic::transcript::{SemanticColor, ALL_SEMANTIC_COLORS};
 
-/// Braille spinner frames, re-exported so this crate has no second copy of
-/// them. They used to be spelled out here as `&[&str]` with the identical
-/// sequence — the same fact in two places, where only one of them can be the
-/// one a future change updates (判据 §1).
 pub use shared_ui_logic::transcript::SPINNER_FRAMES;
 
-/// Frame for a tick counter, for the call sites that count ticks rather than
-/// milliseconds.
-///
-/// The millisecond form (`shared_ui_logic::transcript::spinner_frame`) is the
-/// one to prefer: being a pure function of wall-clock time, every spinner on
-/// screen repaints in step without a shared counter. This exists so the
-/// tick-driven widgets keep working while they still count ticks.
+const MAX_THEME_BYTES: u64 = 128 * 1024;
+const BUILTIN_NAMES: &[&str] = &["amber", "tide", "jade", "iris", "paper"];
+const LEGACY_NAMES: &[&str] = &["dark", "light", "terminal"];
+
 #[must_use]
 pub fn spinner_at(tick: usize) -> char {
     SPINNER_FRAMES[tick % SPINNER_FRAMES.len()]
 }
 
-/// Which colour set the surface is painting with.
+/// The named built-in palettes and compatibility aliases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Preset {
     #[default]
+    Amber,
+    Tide,
+    Jade,
+    Iris,
+    Paper,
+    /// Compatibility alias for Amber.
     Dark,
+    /// Compatibility alias for Paper.
     Light,
-    /// Yield to whatever the terminal is already themed as: ANSI-16 plus
-    /// [`Color::Reset`] for plain foreground. Chosen by users who have
-    /// configured their terminal and want it respected — and the automatic
-    /// answer when the terminal cannot do 24-bit colour, because the
-    /// alternative is emitting RGB the terminal will approximate badly.
     Terminal,
+    /// A validated community theme.
+    Custom,
 }
 
 impl Preset {
-    /// Parse a `/theme` argument. `None` for an unknown name — the caller
-    /// reports the name back rather than silently picking a default, which
-    /// would leave the user believing a typo'd theme had been applied.
     #[must_use]
     pub fn parse(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
+            "amber" => Some(Self::Amber),
+            "tide" => Some(Self::Tide),
+            "jade" => Some(Self::Jade),
+            "iris" => Some(Self::Iris),
+            "paper" => Some(Self::Paper),
             "dark" => Some(Self::Dark),
             "light" => Some(Self::Light),
             "terminal" => Some(Self::Terminal),
@@ -81,304 +61,547 @@ impl Preset {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::Amber => "amber",
+            Self::Tide => "tide",
+            Self::Jade => "jade",
+            Self::Iris => "iris",
+            Self::Paper => "paper",
             Self::Dark => "dark",
             Self::Light => "light",
             Self::Terminal => "terminal",
+            Self::Custom => "custom",
         }
     }
 
-    /// Every preset a user may name, for `/theme` completion and its error
-    /// message. Derived from nothing — this IS the list, and [`Self::parse`]
-    /// is checked against it below.
-    pub const ALL: &'static [Self] = &[Self::Dark, Self::Light, Self::Terminal];
+    pub const ALL: &'static [Self] = &[
+        Self::Amber,
+        Self::Tide,
+        Self::Jade,
+        Self::Iris,
+        Self::Paper,
+        Self::Dark,
+        Self::Light,
+        Self::Terminal,
+    ];
 
-    /// The comma-separated choices, for a message that has to name them.
     #[must_use]
     pub fn choices() -> String {
-        Self::ALL
-            .iter()
-            .map(|p| p.name())
-            .collect::<Vec<_>>()
-            .join(" | ")
+        BUILTIN_NAMES.join(" | ")
     }
 
-    /// The preset the session starts in.
-    ///
-    /// # Where it is remembered, and why that is not an R4 violation
-    ///
-    /// A colour preference is a property of the terminal the user launched —
-    /// the same *kind* of fact as `COLORTERM` or `NO_COLOR` — so it belongs to
-    /// this machine, not to the conversation. Storing it in the session would
-    /// be wrong in the other direction: it would follow the conversation to the
-    /// Panel, which does not paint with these colours at all.
-    ///
-    /// This file used to argue that R4 ("an interface does not persist")
-    /// forbade remembering it at all, so `/theme` switched for one run and
-    /// `ALEPH_TUI_THEME` was the only way to make it stick. That reading was
-    /// too wide, and the twin surface is the evidence (判据 §16): the Panel —
-    /// an interface under the same redline — persists its six appearance axes
-    /// to `localStorage` (`interfaces/webchat/src/appearance.rs`). R4 forbids
-    /// an interface holding *business* state: sessions, memory, plans. A
-    /// per-device display preference is what `localStorage` is for, and
-    /// [`theme_file`] is this surface's `localStorage`.
-    ///
-    /// Precedence, highest first:
-    /// 1. `ALEPH_TUI_THEME` — this invocation, and the only form a script or a
-    ///    one-off `ALEPH_TUI_THEME=light aleph` can use.
-    /// 2. The remembered preset, written by `/theme <name>`.
-    /// 3. [`Preset::default`].
-    ///
-    /// An unset or unrecognised value at either level falls through to the
-    /// next rather than failing to start.
     #[must_use]
-    pub fn boot() -> Self {
-        Self::resolve(
-            std::env::var("ALEPH_TUI_THEME").ok().as_deref(),
-            stored_preset().as_deref(),
-        )
-    }
-
-    /// The precedence rule itself, with both sources lifted out so it can be
-    /// tested without mutating a process-global every other test in this
-    /// binary reads through [`palette`].
-    fn resolve(env: Option<&str>, stored: Option<&str>) -> Self {
-        env.and_then(Self::parse)
-            .or_else(|| stored.and_then(Self::parse))
-            .unwrap_or_default()
+    fn builtin_name(self) -> Option<&'static str> {
+        match self {
+            Self::Amber | Self::Dark => Some("amber"),
+            Self::Tide => Some("tide"),
+            Self::Jade => Some("jade"),
+            Self::Iris => Some("iris"),
+            Self::Paper | Self::Light => Some("paper"),
+            Self::Terminal | Self::Custom => None,
+        }
     }
 }
 
-/// Where the remembered preset lives: `<aleph_home>/tui-theme`, one line
-/// holding a preset name.
-///
-/// `aleph_home` comes from [`aleph_protocol::paths`] — the one derivation of
-/// that directory, which is also what makes `ALEPH_HOME` isolate a QA instance
-/// from the developer's own preference. A second hand-rolled `~/.aleph` here
-/// would agree byte for byte until someone set that variable.
-///
-/// A bare file rather than a `tui.toml`: one key does not need a format, and
-/// the crate has no TOML dependency to add for it. If a second preference ever
-/// wants remembering, that is the moment to grow a real file — not now (P6).
-#[must_use]
-pub fn theme_file() -> Option<std::path::PathBuf> {
-    aleph_protocol::paths::aleph_home().map(|h| h.join("tui-theme"))
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ColorSpec {
+    Rgb(u8, u8, u8),
+    Indexed(u8),
+    Terminal,
 }
 
-/// The remembered preset name, or `None` when nothing is remembered, the file
-/// is unreadable, or the home directory cannot be located. Every one of those
-/// is "no preference", never an error worth refusing to start over.
-///
-/// Not read in this crate's own test binary: it is an ambient read of the
-/// developer's machine, and a maintainer who once ran `/theme terminal` would
-/// otherwise run every colour-sensitive test in a different palette from CI
-/// (判据 §18). [`Preset::resolve`] carries the logic and is tested with both
-/// sources as parameters.
-#[cfg(not(test))]
-fn stored_preset() -> Option<String> {
-    std::fs::read_to_string(theme_file()?).ok()
-}
-
-#[cfg(test)]
-fn stored_preset() -> Option<String> {
-    None
-}
-
-/// Remember `preset` for the next run, returning the file it was written to.
-///
-/// Creates the Aleph home directory if it does not exist yet — a TUI may be
-/// the first thing a user runs. The caller must report a failure rather than
-/// swallowing it: a `/theme` that says it stuck when the write did not is a
-/// label for something that never happened (判据 §17).
-pub fn remember_preset(preset: Preset) -> std::io::Result<std::path::PathBuf> {
-    let path = theme_file().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no home directory to remember it in",
-        )
-    })?;
-    write_preset(&path, preset)?;
-    Ok(path)
-}
-
-/// The write itself, with the destination as a parameter so a test can
-/// exercise it without setting `ALEPH_HOME` — a process-global that
-/// [`palette`] also reads, on any thread, at any time.
-fn write_preset(path: &std::path::Path, preset: Preset) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+impl ColorSpec {
+    fn parse_json(value: JsonColor) -> Result<Self, String> {
+        match value {
+            JsonColor::Number(index) => Ok(Self::Indexed(index)),
+            JsonColor::String(value) if value == "terminal" => Ok(Self::Terminal),
+            JsonColor::String(value) => {
+                let bytes = value.as_bytes();
+                if bytes.len() != 7 || bytes[0] != b'#' {
+                    return Err(format!(
+                        "invalid color {value:?}; use #rrggbb, terminal, or 0..255"
+                    ));
+                }
+                let parse = |part: &[u8]| {
+                    std::str::from_utf8(part)
+                        .ok()
+                        .and_then(|s| u8::from_str_radix(s, 16).ok())
+                };
+                match (
+                    parse(&bytes[1..3]),
+                    parse(&bytes[3..5]),
+                    parse(&bytes[5..7]),
+                ) {
+                    (Some(r), Some(g), Some(b)) => Ok(Self::Rgb(r, g, b)),
+                    _ => Err(format!(
+                        "invalid color {value:?}; use #rrggbb, terminal, or 0..255"
+                    )),
+                }
+            }
+        }
     }
-    std::fs::write(path, preset.name())
+
+    fn rgb(&self) -> Option<(u8, u8, u8)> {
+        match self {
+            Self::Rgb(r, g, b) => Some((*r, *g, *b)),
+            Self::Indexed(_) | Self::Terminal => None,
+        }
+    }
 }
 
-/// Whether the terminal advertises 24-bit colour.
-///
-/// `COLORTERM` is the only portable signal, and its absence is not proof of
-/// absence — plenty of capable terminals do not set it. Treating "unknown" as
-/// "no" is the fail-closed direction here: an indexed palette renders
-/// acceptably everywhere, while RGB on a 16-colour terminal is approximated
-/// per-terminal and can come out unreadable.
-#[must_use]
-pub fn supports_truecolor() -> bool {
-    std::env::var("COLORTERM").is_ok_and(|v| {
-        let v = v.to_ascii_lowercase();
-        v.contains("truecolor") || v.contains("24bit")
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum JsonColor {
+    String(String),
+    Number(u8),
+}
+
+// Missing optional fields inherit; an explicitly present null is a malformed value.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ColorOverrides {
+    #[serde(default, deserialize_with = "present")]
+    fg: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    dim: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    accent: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    prompt: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    user_bar: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    tool_pending: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    tool_running: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    tool_ok: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    tool_err: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    tool_rail: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    diff_add: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    diff_del: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    diff_ctx: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    diff_gutter: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    admonition_note: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    admonition_tip: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    admonition_important: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    admonition_warning: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    admonition_caution: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    code_border: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    link: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    context_ok: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    context_warn: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    context_danger: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    cost: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    spinner: Option<JsonColor>,
+}
+
+impl ColorOverrides {
+    fn get(&self, role: SemanticColor) -> Option<&JsonColor> {
+        match role {
+            SemanticColor::Fg => self.fg.as_ref(),
+            SemanticColor::Dim => self.dim.as_ref(),
+            SemanticColor::Accent => self.accent.as_ref(),
+            SemanticColor::Prompt => self.prompt.as_ref(),
+            SemanticColor::UserBar => self.user_bar.as_ref(),
+            SemanticColor::ToolPending => self.tool_pending.as_ref(),
+            SemanticColor::ToolRunning => self.tool_running.as_ref(),
+            SemanticColor::ToolOk => self.tool_ok.as_ref(),
+            SemanticColor::ToolErr => self.tool_err.as_ref(),
+            SemanticColor::ToolRail => self.tool_rail.as_ref(),
+            SemanticColor::DiffAdd => self.diff_add.as_ref(),
+            SemanticColor::DiffDel => self.diff_del.as_ref(),
+            SemanticColor::DiffCtx => self.diff_ctx.as_ref(),
+            SemanticColor::DiffGutter => self.diff_gutter.as_ref(),
+            SemanticColor::AdmonitionNote => self.admonition_note.as_ref(),
+            SemanticColor::AdmonitionTip => self.admonition_tip.as_ref(),
+            SemanticColor::AdmonitionImportant => self.admonition_important.as_ref(),
+            SemanticColor::AdmonitionWarning => self.admonition_warning.as_ref(),
+            SemanticColor::AdmonitionCaution => self.admonition_caution.as_ref(),
+            SemanticColor::CodeBorder => self.code_border.as_ref(),
+            SemanticColor::Link => self.link.as_ref(),
+            SemanticColor::ContextOk => self.context_ok.as_ref(),
+            SemanticColor::ContextWarn => self.context_warn.as_ref(),
+            SemanticColor::ContextDanger => self.context_danger.as_ref(),
+            SemanticColor::Cost => self.cost.as_ref(),
+            SemanticColor::Spinner => self.spinner.as_ref(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ChromeOverrides {
+    #[serde(default, deserialize_with = "present")]
+    background: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    surface: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    selection_bg: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    user_bg: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    border: Option<JsonColor>,
+    #[serde(default, deserialize_with = "present")]
+    border_focused: Option<JsonColor>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeDocument {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u8,
+    name: String,
+    #[serde(default, deserialize_with = "present")]
+    light: Option<bool>,
+    #[serde(default, deserialize_with = "present")]
+    extends: Option<String>,
+    #[serde(default)]
+    colors: ColorOverrides,
+    #[serde(default)]
+    chrome: ChromeOverrides,
+}
+
+#[derive(Debug, Clone)]
+struct ChromeData {
+    background: ColorSpec,
+    surface: ColorSpec,
+    selection_bg: ColorSpec,
+    user_bg: ColorSpec,
+    border: ColorSpec,
+    border_focused: ColorSpec,
+}
+
+#[derive(Debug, Clone)]
+struct PaletteData {
+    name: String,
+    colors: Vec<ColorSpec>,
+    chrome: ChromeData,
+    light: bool,
+}
+
+impl PaletteData {
+    fn role(&self, role: SemanticColor) -> &ColorSpec {
+        &self.colors[role_index(role)]
+    }
+}
+
+fn role_index(role: SemanticColor) -> usize {
+    ALL_SEMANTIC_COLORS
+        .iter()
+        .position(|candidate| *candidate == role)
+        .expect("semantic roster must contain every role")
+}
+
+fn parse_color(value: Option<JsonColor>, field: &str) -> Result<Option<ColorSpec>, String> {
+    value
+        .map(|value| ColorSpec::parse_json(value).map_err(|error| format!("{field}: {error}")))
+        .transpose()
+}
+
+fn parse_document(text: &str, requested_name: &str) -> Result<ThemeDocument, String> {
+    let document: ThemeDocument =
+        serde_json::from_str(text).map_err(|error| format!("invalid theme JSON: {error}"))?;
+    if document.schema_version != 1 {
+        return Err(format!(
+            "unsupported schemaVersion {}; expected 1",
+            document.schema_version
+        ));
+    }
+    if document.name != requested_name {
+        return Err(format!(
+            "theme name {:?} does not match requested name {:?}",
+            document.name, requested_name
+        ));
+    }
+    Ok(document)
+}
+
+fn resolve_document(
+    document: ThemeDocument,
+    base: Option<&PaletteData>,
+) -> Result<PaletteData, String> {
+    let mut colors = base.map(|data| data.colors.clone()).unwrap_or_default();
+    if colors.is_empty() {
+        colors = vec![ColorSpec::Terminal; ALL_SEMANTIC_COLORS.len()];
+    }
+    for role in ALL_SEMANTIC_COLORS {
+        if let Some(value) = document.colors.get(*role) {
+            colors[role_index(*role)] = ColorSpec::parse_json(value.clone())?;
+        } else if base.is_none() {
+            return Err(format!("missing semantic color {role:?}"));
+        }
+    }
+
+    let base_chrome = base
+        .map(|data| data.chrome.clone())
+        .unwrap_or_else(|| ChromeData {
+            background: ColorSpec::Terminal,
+            surface: ColorSpec::Terminal,
+            selection_bg: ColorSpec::Terminal,
+            user_bg: ColorSpec::Terminal,
+            border: ColorSpec::Terminal,
+            border_focused: ColorSpec::Terminal,
+        });
+    let mut chrome = base_chrome;
+    {
+        let overrides = document.chrome;
+        chrome.background =
+            parse_color(overrides.background, "chrome.background")?.unwrap_or(chrome.background);
+        chrome.surface =
+            parse_color(overrides.surface, "chrome.surface")?.unwrap_or(chrome.surface);
+        chrome.selection_bg = parse_color(overrides.selection_bg, "chrome.selectionBg")?
+            .unwrap_or(chrome.selection_bg);
+        chrome.user_bg = parse_color(overrides.user_bg, "chrome.userBg")?.unwrap_or(chrome.user_bg);
+        chrome.border = parse_color(overrides.border, "chrome.border")?.unwrap_or(chrome.border);
+        chrome.border_focused = parse_color(overrides.border_focused, "chrome.borderFocused")?
+            .unwrap_or(chrome.border_focused);
+    }
+    let light = document.light.unwrap_or_else(|| {
+        chrome
+            .background
+            .rgb()
+            .map(|(r, g, b)| {
+                u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114 >= 150_000
+            })
+            .unwrap_or_else(|| base.is_some_and(|data| data.light))
+    });
+    Ok(PaletteData {
+        name: document.name,
+        colors,
+        chrome,
+        light,
     })
 }
 
-/// A preset plus what the terminal can actually show.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+fn builtin_text(name: &str) -> Option<&'static str> {
+    match name {
+        "amber" => Some(include_str!("../../themes/amber.json")),
+        "tide" => Some(include_str!("../../themes/tide.json")),
+        "jade" => Some(include_str!("../../themes/jade.json")),
+        "iris" => Some(include_str!("../../themes/iris.json")),
+        "paper" => Some(include_str!("../../themes/paper.json")),
+        _ => None,
+    }
+}
+
+fn builtin_data(name: &str) -> Result<PaletteData, String> {
+    let text = builtin_text(name).ok_or_else(|| format!("unknown built-in theme {name:?}"))?;
+    let document = parse_document(text, name)?;
+    resolve_document(document, None)
+}
+
+fn validate_name(name: &str) -> Result<(), String> {
+    if matches!(name, "list" | "reload") {
+        return Err(format!("reserved theme command name {name:?}"));
+    }
+    let bytes = name.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 || !bytes[0].is_ascii_lowercase() {
+        return Err("theme names must match [a-z][a-z0-9-]{0,63}".to_owned());
+    }
+    if !bytes
+        .iter()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+    {
+        return Err("theme names must match [a-z][a-z0-9-]{0,63}".to_owned());
+    }
+    Ok(())
+}
+
+fn read_bounded(path: &Path) -> Result<String, String> {
+    let size = fs::metadata(path)
+        .map_err(|error| format!("cannot read theme file: {error}"))?
+        .len();
+    if size > MAX_THEME_BYTES {
+        return Err("theme file exceeds 128 KiB".to_owned());
+    }
+    let file = fs::File::open(path).map_err(|error| format!("cannot read theme file: {error}"))?;
+    if !file
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .is_file()
+    {
+        return Err("theme path must be a regular file".to_owned());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_THEME_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read theme file: {error}"))?;
+    if bytes.len() as u64 > MAX_THEME_BYTES {
+        return Err("theme file exceeds 128 KiB".to_owned());
+    }
+    String::from_utf8(bytes).map_err(|error| format!("theme must be UTF-8: {error}"))
+}
+
+/// Load a named built-in or community theme from an Aleph home directory.
+/// Built-ins cannot be shadowed by a community file.
+pub fn load_named(root: &Path, name: &str, truecolor: bool) -> Result<Palette, String> {
+    validate_name(name)?;
+    if let Some(preset) = Preset::parse(name) {
+        if preset == Preset::Terminal {
+            return Ok(Palette::for_preset(Preset::Terminal, truecolor));
+        }
+        if let Some(builtin) = preset.builtin_name() {
+            let data = builtin_data(builtin)?;
+            return Ok(Palette::from_data(data, preset, truecolor));
+        }
+    }
+    if LEGACY_NAMES.contains(&name) || BUILTIN_NAMES.contains(&name) {
+        return Err(format!("reserved built-in theme name {name:?}"));
+    }
+    let path = root.join("themes").join(format!("{name}.json"));
+    let text = read_bounded(&path)?;
+    let document = parse_document(&text, name)?;
+    let extends = document
+        .extends
+        .clone()
+        .unwrap_or_else(|| "amber".to_owned());
+    validate_name(&extends)?;
+    let base_name = Preset::parse(&extends)
+        .and_then(Preset::builtin_name)
+        .ok_or_else(|| format!("theme {name:?} may extend only a built-in theme"))?;
+    let base = builtin_data(base_name)?;
+    let data = resolve_document(document, Some(&base))?;
+    Ok(Palette::from_data(data, Preset::Custom, truecolor))
+}
+
+#[derive(Debug, Clone)]
 pub struct Palette {
     pub preset: Preset,
     pub truecolor: bool,
+    data: Arc<PaletteData>,
 }
 
 impl Palette {
-    /// The palette for `preset` on this terminal.
+    #[must_use]
+    pub fn for_preset(preset: Preset, truecolor: bool) -> Self {
+        if preset == Preset::Terminal {
+            return Self {
+                preset,
+                truecolor,
+                data: Arc::new(terminal_data()),
+            };
+        }
+        let name = preset.builtin_name().unwrap_or("amber");
+        let data = builtin_data(name).expect("checked-in built-in theme must validate");
+        Self::from_data(data, preset, truecolor)
+    }
+
     #[must_use]
     pub fn detect(preset: Preset) -> Self {
+        Self::for_preset(preset, supports_truecolor())
+    }
+
+    fn from_data(data: PaletteData, preset: Preset, truecolor: bool) -> Self {
         Self {
             preset,
-            truecolor: supports_truecolor(),
+            truecolor,
+            data: Arc::new(data),
         }
     }
 
-    /// Whether this palette paints in RGB. `false` means [`Self::rgb`] answers
-    /// `None` for every role and derived backgrounds must degrade rather than
-    /// invent an approximation.
     #[must_use]
-    pub const fn is_rgb(self) -> bool {
-        self.truecolor && !matches!(self.preset, Preset::Terminal)
+    pub fn name(&self) -> &str {
+        &self.data.name
     }
 
-    /// The RGB triple for a role, or `None` when this palette is not painting
-    /// in RGB.
-    ///
-    /// Callers that mix (diff row and word-emphasis backgrounds, through
-    /// `shared_ui_logic::transcript::mix_rgb`) need the components, and there
-    /// is nothing honest to mix on an indexed palette: `None` is "I cannot
-    /// give you a background", not "black" (判据 §8).
     #[must_use]
-    pub fn rgb(self, role: SemanticColor) -> Option<(u8, u8, u8)> {
-        self.is_rgb().then(|| match self.preset {
-            Preset::Light => light_rgb(role),
-            // `is_rgb()` already excluded `Terminal`.
-            Preset::Dark | Preset::Terminal => dark_rgb(role),
-        })
+    pub fn is_rgb(&self) -> bool {
+        self.truecolor && self.preset != Preset::Terminal
     }
 
-    /// The colour for a role.
     #[must_use]
-    pub fn color(self, role: SemanticColor) -> Color {
-        match self.rgb(role) {
-            Some((r, g, b)) => Color::Rgb(r, g, b),
-            None => indexed(role, self.preset),
+    pub fn is_light(&self) -> bool {
+        self.data.light
+    }
+
+    #[must_use]
+    pub fn rgb(&self, role: SemanticColor) -> Option<(u8, u8, u8)> {
+        self.is_rgb().then(|| self.data.role(role).rgb()).flatten()
+    }
+
+    #[must_use]
+    pub fn color(&self, role: SemanticColor) -> Color {
+        if self.preset == Preset::Terminal {
+            return Color::Reset;
         }
+        paint(self.data.role(role), self.is_rgb())
+    }
+
+    fn chrome(&self, which: ChromeField) -> Color {
+        if self.preset == Preset::Terminal {
+            return Color::Reset;
+        }
+        let spec = match which {
+            ChromeField::Background => &self.data.chrome.background,
+            ChromeField::Surface => &self.data.chrome.surface,
+            ChromeField::Selection => &self.data.chrome.selection_bg,
+            ChromeField::User => &self.data.chrome.user_bg,
+            ChromeField::Border => &self.data.chrome.border,
+            ChromeField::BorderFocused => &self.data.chrome.border_focused,
+        };
+        paint(spec, self.is_rgb())
     }
 }
 
-/// Dark-preset RGB. One arm per role: adding a [`SemanticColor`] fails to
-/// compile here until it is given a value.
-const fn dark_rgb(role: SemanticColor) -> (u8, u8, u8) {
-    match role {
-        SemanticColor::Fg => (220, 220, 220),
-        SemanticColor::Dim => (128, 128, 128),
-        SemanticColor::Accent => (215, 119, 87),
-        SemanticColor::Prompt => (212, 175, 55),
-        SemanticColor::UserBar => (97, 175, 239),
-        SemanticColor::ToolPending => (110, 110, 110),
-        SemanticColor::ToolRunning => (229, 192, 123),
-        SemanticColor::ToolOk => (152, 195, 121),
-        SemanticColor::ToolErr => (224, 108, 117),
-        SemanticColor::ToolRail => (90, 90, 90),
-        SemanticColor::DiffAdd => (152, 195, 121),
-        SemanticColor::DiffDel => (224, 108, 117),
-        SemanticColor::DiffCtx => (150, 150, 150),
-        SemanticColor::DiffGutter => (110, 110, 110),
-        SemanticColor::AdmonitionNote => (97, 175, 239),
-        SemanticColor::AdmonitionTip => (152, 195, 121),
-        SemanticColor::AdmonitionImportant => (198, 120, 221),
-        SemanticColor::AdmonitionWarning => (229, 192, 123),
-        SemanticColor::AdmonitionCaution => (224, 108, 117),
-        SemanticColor::CodeBorder => (80, 80, 80),
-        SemanticColor::Link => (97, 175, 239),
-        SemanticColor::ContextOk => (152, 195, 121),
-        SemanticColor::ContextWarn => (229, 192, 123),
-        SemanticColor::ContextDanger => (224, 108, 117),
-        SemanticColor::Cost => (152, 195, 121),
-        SemanticColor::Spinner => (229, 192, 123),
+fn paint(spec: &ColorSpec, rgb: bool) -> Color {
+    match spec {
+        ColorSpec::Rgb(r, g, b) if rgb => Color::Rgb(*r, *g, *b),
+        ColorSpec::Rgb(r, g, b) => Color::Indexed(rgb_to_index(*r, *g, *b)),
+        ColorSpec::Indexed(index) => Color::Indexed(*index),
+        ColorSpec::Terminal => Color::Reset,
     }
 }
 
-/// Light-preset RGB: the same roles darkened enough to sit on a light ground.
-const fn light_rgb(role: SemanticColor) -> (u8, u8, u8) {
-    match role {
-        SemanticColor::Fg => (40, 40, 40),
-        SemanticColor::Dim => (120, 120, 120),
-        SemanticColor::Accent => (175, 80, 50),
-        SemanticColor::Prompt => (160, 120, 20),
-        SemanticColor::UserBar => (30, 110, 190),
-        SemanticColor::ToolPending => (140, 140, 140),
-        SemanticColor::ToolRunning => (170, 120, 20),
-        SemanticColor::ToolOk => (40, 130, 60),
-        SemanticColor::ToolErr => (190, 45, 55),
-        SemanticColor::ToolRail => (175, 175, 175),
-        SemanticColor::DiffAdd => (40, 130, 60),
-        SemanticColor::DiffDel => (190, 45, 55),
-        SemanticColor::DiffCtx => (95, 95, 95),
-        SemanticColor::DiffGutter => (140, 140, 140),
-        SemanticColor::AdmonitionNote => (30, 110, 190),
-        SemanticColor::AdmonitionTip => (40, 130, 60),
-        SemanticColor::AdmonitionImportant => (130, 70, 165),
-        SemanticColor::AdmonitionWarning => (170, 120, 20),
-        SemanticColor::AdmonitionCaution => (190, 45, 55),
-        SemanticColor::CodeBorder => (190, 190, 190),
-        SemanticColor::Link => (30, 110, 190),
-        SemanticColor::ContextOk => (40, 130, 60),
-        SemanticColor::ContextWarn => (170, 120, 20),
-        SemanticColor::ContextDanger => (190, 45, 55),
-        SemanticColor::Cost => (40, 130, 60),
-        SemanticColor::Spinner => (170, 120, 20),
-    }
+fn rgb_to_index(r: u8, g: u8, b: u8) -> u8 {
+    let r = u16::from(r) * 5 / 255;
+    let g = u16::from(g) * 5 / 255;
+    let b = u16::from(b) * 5 / 255;
+    (16 + 36 * r + 6 * g + b) as u8
 }
 
-/// ANSI-16 for the `terminal` preset and for any terminal that cannot do
-/// 24-bit colour. `Color::Reset` where "the terminal's own foreground" is the
-/// honest answer.
-fn indexed(role: SemanticColor, preset: Preset) -> Color {
-    match role {
-        SemanticColor::Fg => match preset {
-            Preset::Terminal => Color::Reset,
-            Preset::Dark => Color::White,
-            Preset::Light => Color::Black,
+fn terminal_data() -> PaletteData {
+    PaletteData {
+        name: "terminal".to_owned(),
+        colors: vec![ColorSpec::Terminal; ALL_SEMANTIC_COLORS.len()],
+        chrome: ChromeData {
+            background: ColorSpec::Terminal,
+            surface: ColorSpec::Terminal,
+            selection_bg: ColorSpec::Terminal,
+            user_bg: ColorSpec::Terminal,
+            border: ColorSpec::Terminal,
+            border_focused: ColorSpec::Terminal,
         },
-        SemanticColor::Dim | SemanticColor::ToolPending | SemanticColor::DiffGutter => {
-            Color::DarkGray
-        }
-        SemanticColor::Accent | SemanticColor::Prompt => Color::Yellow,
-        SemanticColor::UserBar | SemanticColor::AdmonitionNote | SemanticColor::Link => Color::Blue,
-        SemanticColor::ToolRunning
-        | SemanticColor::AdmonitionWarning
-        | SemanticColor::ContextWarn
-        | SemanticColor::Spinner => Color::Yellow,
-        SemanticColor::ToolOk
-        | SemanticColor::DiffAdd
-        | SemanticColor::AdmonitionTip
-        | SemanticColor::ContextOk
-        | SemanticColor::Cost => Color::Green,
-        SemanticColor::ToolErr
-        | SemanticColor::DiffDel
-        | SemanticColor::AdmonitionCaution
-        | SemanticColor::ContextDanger => Color::Red,
-        SemanticColor::ToolRail | SemanticColor::CodeBorder | SemanticColor::DiffCtx => Color::Gray,
-        SemanticColor::AdmonitionImportant => Color::Magenta,
+        light: false,
     }
 }
 
-/// The painted palette, flattened into the field names the widgets use.
-///
-/// Everything above the `// --- terminal chrome ---` line is
-/// [`Palette::color`] of a semantic role and holds no colour of its own; a
-/// test below asserts that, so "derived" stays a fact rather than a comment.
+/// Terminal chrome and semantic fields flattened for widget consumers.
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
     pub user: Color,
@@ -394,8 +617,10 @@ pub struct Theme {
     pub reasoning: Color,
     pub error: Color,
     pub warning: Color,
-
-    // --- terminal chrome: no Panel counterpart, no semantic role ---
+    pub background: Color,
+    pub surface: Color,
+    pub selection_bg: Color,
+    pub user_bg: Color,
     pub border: Color,
     pub border_focused: Color,
     pub status_bg: Color,
@@ -404,10 +629,20 @@ pub struct Theme {
     pub disconnected: Color,
 }
 
+#[derive(Clone, Copy)]
+enum ChromeField {
+    Background,
+    Surface,
+    Selection,
+    User,
+    Border,
+    BorderFocused,
+}
+
 impl Theme {
     #[must_use]
-    pub fn from_palette(p: Palette) -> Self {
-        let c = |role| p.color(role);
+    pub fn from_palette(palette: Palette) -> Self {
+        let c = |role| palette.color(role);
         Self {
             user: c(SemanticColor::UserBar),
             assistant: c(SemanticColor::Fg),
@@ -416,307 +651,318 @@ impl Theme {
             tool_success: c(SemanticColor::ToolOk),
             tool_failed: c(SemanticColor::ToolErr),
             tool_name: c(SemanticColor::Accent),
-            heading: c(SemanticColor::Fg),
+            heading: c(SemanticColor::Accent),
             primary: c(SemanticColor::Fg),
             muted: c(SemanticColor::Dim),
             reasoning: c(SemanticColor::Dim),
             error: c(SemanticColor::ToolErr),
             warning: c(SemanticColor::AdmonitionWarning),
-
-            border: Color::DarkGray,
-            border_focused: match p.preset {
-                Preset::Terminal => Color::Reset,
-                Preset::Dark => Color::White,
-                Preset::Light => Color::Black,
-            },
-            status_bg: match p.preset {
-                Preset::Terminal => Color::Reset,
-                Preset::Dark => Color::DarkGray,
-                Preset::Light => Color::Gray,
-            },
-            status_fg: match p.preset {
-                Preset::Terminal => Color::Reset,
-                Preset::Dark => Color::White,
-                Preset::Light => Color::Black,
-            },
+            background: palette.chrome(ChromeField::Background),
+            surface: palette.chrome(ChromeField::Surface),
+            selection_bg: palette.chrome(ChromeField::Selection),
+            user_bg: palette.chrome(ChromeField::User),
+            border: palette.chrome(ChromeField::Border),
+            border_focused: palette.chrome(ChromeField::BorderFocused),
+            status_bg: palette.chrome(ChromeField::Background),
+            status_fg: c(SemanticColor::Dim),
             connected: c(SemanticColor::ToolOk),
             disconnected: c(SemanticColor::ToolErr),
         }
     }
+}
 
-    /// The role each derived field is painted from. Exists so the test that
-    /// proves the derivation cannot go stale independently of
-    /// [`Self::from_palette`] — the two are read side by side.
-    #[cfg(test)]
-    const DERIVED: &'static [(&'static str, SemanticColor)] = &[
-        ("user", SemanticColor::UserBar),
-        ("assistant", SemanticColor::Fg),
-        ("system", SemanticColor::AdmonitionNote),
-        ("tool_running", SemanticColor::ToolRunning),
-        ("tool_success", SemanticColor::ToolOk),
-        ("tool_failed", SemanticColor::ToolErr),
-        ("tool_name", SemanticColor::Accent),
-        ("heading", SemanticColor::Fg),
-        ("primary", SemanticColor::Fg),
-        ("muted", SemanticColor::Dim),
-        ("reasoning", SemanticColor::Dim),
-        ("error", SemanticColor::ToolErr),
-        ("warning", SemanticColor::AdmonitionWarning),
-        ("connected", SemanticColor::ToolOk),
-        ("disconnected", SemanticColor::ToolErr),
-    ];
+fn env_value(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
 
+/// Pure capability selection for tests and callers with explicit environment values.
+#[must_use]
+pub fn detect_truecolor(
+    color_override: Option<&str>,
+    colorterm: Option<&str>,
+    wt_session: Option<&str>,
+    term: Option<&str>,
+) -> bool {
+    match color_override.map(str::to_ascii_lowercase).as_deref() {
+        Some("truecolor") => return true,
+        Some("ansi" | "256") => return false,
+        _ => {}
+    }
+    if colorterm.is_some_and(|value| {
+        let value = value.to_ascii_lowercase();
+        value.contains("truecolor") || value.contains("24bit")
+    }) || wt_session.is_some_and(|value| !value.is_empty())
+    {
+        return true;
+    }
+    term.is_some_and(|value| {
+        let value = value.to_ascii_lowercase();
+        value.ends_with("-direct")
+            || matches!(
+                value.as_str(),
+                "xterm-kitty" | "alacritty" | "wezterm" | "foot"
+            )
+    })
+}
+
+#[must_use]
+pub fn supports_truecolor() -> bool {
+    detect_truecolor(
+        env_value("ALEPH_TUI_COLOR").as_deref(),
+        env_value("COLORTERM").as_deref(),
+        env_value("WT_SESSION").as_deref(),
+        env_value("TERM").as_deref(),
+    )
+}
+
+#[cfg(not(test))]
+fn aleph_home() -> Option<PathBuf> {
+    aleph_protocol::paths::aleph_home()
+}
+
+#[must_use]
+pub fn theme_file() -> Option<PathBuf> {
     #[cfg(test)]
-    fn field(&self, name: &str) -> Color {
-        match name {
-            "user" => self.user,
-            "assistant" => self.assistant,
-            "system" => self.system,
-            "tool_running" => self.tool_running,
-            "tool_success" => self.tool_success,
-            "tool_failed" => self.tool_failed,
-            "tool_name" => self.tool_name,
-            "heading" => self.heading,
-            "primary" => self.primary,
-            "muted" => self.muted,
-            "reasoning" => self.reasoning,
-            "error" => self.error,
-            "warning" => self.warning,
-            "connected" => self.connected,
-            "disconnected" => self.disconnected,
-            other => panic!("Theme::DERIVED names a field that does not exist: {other}"),
+    {
+        None
+    }
+    #[cfg(not(test))]
+    {
+        aleph_home().map(|home| home.join("tui-theme"))
+    }
+}
+
+fn theme_root() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        None
+    }
+    #[cfg(not(test))]
+    {
+        aleph_home()
+    }
+}
+
+#[derive(Debug)]
+struct BootState {
+    palette: Palette,
+    warnings: Vec<String>,
+}
+
+fn boot_at(root: &Path, env: Option<&str>, stored: Option<&str>, truecolor: bool) -> BootState {
+    let mut warnings = Vec::new();
+    for (source, candidate) in [("ALEPH_TUI_THEME", env), ("stored preference", stored)] {
+        let Some(candidate) = candidate.map(str::trim).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        match load_named(root, candidate, truecolor) {
+            Ok(palette) => return BootState { palette, warnings },
+            Err(error) => warnings.push(format!("{source} {candidate:?} ignored: {error}")),
         }
     }
+    let palette = load_named(root, "amber", truecolor).expect("amber is a checked-in built-in");
+    BootState { palette, warnings }
 }
 
-/// The palette in force. One writer (`/theme`, and boot), many readers.
-static CURRENT: RwLock<Option<Palette>> = RwLock::new(None);
-
-/// Install `preset` as the surface's palette. Called at boot and by `/theme`.
-pub fn set_preset(preset: Preset) {
-    let p = Palette::detect(preset);
-    // 判据 P7: a poisoned lock is a panic elsewhere, not a reason to lose the
-    // theme — take the guard and carry on.
-    *CURRENT
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(p);
+#[derive(Debug)]
+struct SessionTheme {
+    palette: Palette,
+    warnings: Vec<String>,
 }
 
-/// The palette in force, detecting the default on first read.
+impl SessionTheme {
+    fn new(palette: Palette) -> Self {
+        Self {
+            palette,
+            warnings: Vec::new(),
+        }
+    }
+
+    fn select(&mut self, root: &Path, name: &str, truecolor: bool) -> Result<(), String> {
+        let loaded = load_named(root, name, truecolor)?;
+        self.palette = loaded;
+        Ok(())
+    }
+}
+
+static CURRENT: OnceLock<Mutex<SessionTheme>> = OnceLock::new();
+
+fn current() -> &'static Mutex<SessionTheme> {
+    CURRENT.get_or_init(|| {
+        #[cfg(test)]
+        let state = SessionTheme::new(Palette::for_preset(Preset::Amber, false));
+        #[cfg(not(test))]
+        let state = {
+            let root = theme_root().unwrap_or_default();
+            let mut read_warnings = Vec::new();
+            let stored = theme_file().and_then(|path| match read_bounded(&path) {
+                Ok(text) => Some(text),
+                Err(_) if !path.exists() => None,
+                Err(error) => {
+                    read_warnings.push(format!("stored preference ignored: {error}"));
+                    None
+                }
+            });
+            let boot = boot_at(
+                &root,
+                env_value("ALEPH_TUI_THEME").as_deref(),
+                stored.as_deref(),
+                supports_truecolor(),
+            );
+            let mut state = SessionTheme::new(boot.palette);
+            state.warnings = read_warnings;
+            state.warnings.extend(boot.warnings);
+            state
+        };
+        Mutex::new(state)
+    })
+}
+
+/// Initialize the lazy process-wide TUI theme.
+pub fn initialize() {
+    let _ = current();
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PALETTE: std::cell::RefCell<Option<Palette>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Scope renderer tests to a thread-local palette, restoring it even on panic.
+#[cfg(test)]
+pub(crate) fn with_test_palette<T>(palette: Palette, run: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Palette>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_PALETTE.with(|slot| {
+                slot.replace(self.0.take());
+            });
+        }
+    }
+    let _restore = Restore(TEST_PALETTE.with(|slot| slot.replace(Some(palette))));
+    run()
+}
+
 #[must_use]
 pub fn palette() -> Palette {
-    if let Some(p) = *CURRENT
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-    {
-        return p;
+    #[cfg(test)]
+    if let Some(palette) = TEST_PALETTE.with(|slot| slot.borrow().clone()) {
+        return palette;
     }
-    let p = Palette::detect(Preset::boot());
-    *CURRENT
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(p);
-    p
+    current()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .palette
+        .clone()
 }
 
-/// The preset in force, for a command that has to report it.
-#[must_use]
-pub fn current_preset() -> Preset {
-    palette().preset
-}
-
-/// The theme in force. `Theme` is `Copy`, so widgets take it by value.
 #[must_use]
 pub fn theme() -> Theme {
     Theme::from_palette(palette())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use shared_ui_logic::transcript::ALL_SEMANTIC_COLORS;
-
-    /// Every role resolves in every preset, in both colour depths.
-    ///
-    /// # When this goes red
-    ///
-    /// It cannot go red by a role being *added* — `Palette::color` is an
-    /// exhaustive `match`, so that is a compile error, which is the stronger
-    /// guard and the reason the mapping is written as a `match` rather than a
-    /// table lookup with a default. What this catches is a role resolving to
-    /// the same colour as [`Color::Reset`] outside the `terminal` preset,
-    /// i.e. a role that was added to the `match` with a placeholder arm and
-    /// never given a value.
-    #[test]
-    fn every_role_resolves_in_every_preset() {
-        for preset in Preset::ALL {
-            for truecolor in [false, true] {
-                let p = Palette {
-                    preset: *preset,
-                    truecolor,
-                };
-                for role in ALL_SEMANTIC_COLORS {
-                    let c = p.color(*role);
-                    if *preset != Preset::Terminal {
-                        assert_ne!(
-                            c,
-                            Color::Reset,
-                            "{role:?} is unpainted in {:?}/{truecolor}",
-                            preset
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// The `terminal` preset must not emit RGB whatever the terminal claims:
-    /// its whole purpose is to defer to colours the user already chose.
-    #[test]
-    fn the_terminal_preset_never_emits_rgb() {
-        let p = Palette {
-            preset: Preset::Terminal,
-            truecolor: true,
-        };
-        assert!(!p.is_rgb());
-        for role in ALL_SEMANTIC_COLORS {
-            assert!(
-                !matches!(p.color(*role), Color::Rgb(..)),
-                "{role:?} emitted RGB under the terminal preset"
-            );
-            assert!(p.rgb(*role).is_none(), "{role:?} offered RGB components");
-        }
-    }
-
-    /// A 16-colour terminal gets indexed colours, and `rgb()` says so rather
-    /// than handing back a triple nothing will paint (判据 §8).
-    #[test]
-    fn an_indexed_terminal_is_told_it_has_no_components() {
-        let p = Palette {
-            preset: Preset::Dark,
-            truecolor: false,
-        };
-        for role in ALL_SEMANTIC_COLORS {
-            assert!(p.rgb(*role).is_none(), "{role:?} offered RGB components");
-            assert!(!matches!(p.color(*role), Color::Rgb(..)));
-        }
-    }
-
-    /// `Theme`'s semantic fields hold no colour of their own.
-    ///
-    /// This is what makes the module doc's "derived" claim true. Give
-    /// `Theme::from_palette` a literal for one of these fields and this goes
-    /// red for that field, in every preset.
-    #[test]
-    fn the_semantic_theme_fields_are_derived_not_restated() {
-        for preset in Preset::ALL {
-            for truecolor in [false, true] {
-                let p = Palette {
-                    preset: *preset,
-                    truecolor,
-                };
-                let t = Theme::from_palette(p);
-                for (name, role) in Theme::DERIVED {
-                    assert_eq!(
-                        t.field(name),
-                        p.color(*role),
-                        "Theme::{name} is not {role:?} under {:?}/{truecolor}",
-                        preset
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn every_preset_round_trips_through_its_name() {
-        for preset in Preset::ALL {
-            assert_eq!(Preset::parse(preset.name()), Some(*preset));
-        }
-        assert_eq!(Preset::parse("  DARK  "), Some(Preset::Dark));
-        assert_eq!(
-            Preset::parse("solarized"),
-            None,
-            "an unknown name must not silently become the default"
-        );
-    }
-
-    /// The env var wins over the remembered file, which wins over the
-    /// default — and an unparseable value at either level falls through
-    /// instead of becoming one.
-    ///
-    /// Reddens if the two sources are swapped (a `ALEPH_TUI_THEME=dark` run
-    /// would then paint whatever was last remembered), or if a typo at either
-    /// level is allowed to resolve to `Dark` by way of `unwrap_or_default`
-    /// applied too early.
-    #[test]
-    fn the_environment_outranks_what_was_remembered() {
-        assert_eq!(
-            Preset::resolve(Some("light"), Some("terminal")),
-            Preset::Light
-        );
-        assert_eq!(Preset::resolve(None, Some("terminal")), Preset::Terminal);
-        assert_eq!(Preset::resolve(None, None), Preset::default());
-        // A typo in the environment must not shadow a good remembered value.
-        assert_eq!(
-            Preset::resolve(Some("solarized"), Some("light")),
-            Preset::Light
-        );
-        // …and a corrupt file must not stop the surface from starting.
-        assert_eq!(Preset::resolve(None, Some("\u{0}\u{0}")), Preset::default());
-    }
-
-    /// What `/theme` writes is what the next boot reads back, through the same
-    /// pair of functions the real path uses — including the newline-free,
-    /// whitespace-tolerant round trip and the directory being created.
-    ///
-    /// Asserts the effect (the bytes on disk resolve to the preset), not that
-    /// the write was called (判据 §4).
-    #[test]
-    fn a_remembered_preset_survives_as_the_next_boots_answer() {
-        let owned = tempfile::TempDir::new().expect("owned theme preference root");
-        let path = owned.path().join("nested").join("tui-theme");
-        assert!(path.starts_with(owned.path()));
-        write_preset(&path, Preset::Light).expect("write");
-        let stored = std::fs::read_to_string(&path).expect("read back");
-        assert_eq!(
-            Preset::resolve(None, Some(&stored)),
-            Preset::Light,
-            "the remembered file must parse back to what /theme wrote"
-        );
-        write_preset(&path, Preset::Terminal).expect("overwrite");
-        let stored = std::fs::read_to_string(&path).expect("read back");
-        assert_eq!(
-            Preset::resolve(None, Some(&stored)),
-            Preset::Terminal,
-            "a second /theme must replace the first, not append to it"
-        );
-        // TempDir removes only its owned root on drop.
-    }
-
-    /// The remembered file hangs off the shared `aleph_home` derivation, which
-    /// is what makes `ALEPH_HOME` isolate it. A hand-rolled `~/.aleph` here
-    /// would pass every test on a machine that never sets the variable.
-    #[test]
-    fn the_theme_file_lives_under_the_shared_aleph_home() {
-        let (Some(file), Some(home)) = (theme_file(), aleph_protocol::paths::aleph_home()) else {
-            // No home directory on this machine: absence, not failure.
-            return;
-        };
-        assert_eq!(file.parent(), Some(home.as_path()));
-        assert_eq!(file.file_name().and_then(|n| n.to_str()), Some("tui-theme"));
-    }
-
-    /// The tick-indexed helper and the shared millisecond form walk the same
-    /// table — the thing a second local copy of the frames used to make
-    /// unprovable.
-    #[test]
-    fn the_spinner_table_has_one_source() {
-        for tick in 0..SPINNER_FRAMES.len() * 3 {
-            let by_tick = spinner_at(tick);
-            let by_ms = shared_ui_logic::transcript::spinner_frame(
-                tick as u64 * shared_ui_logic::transcript::SPINNER_PERIOD_MS,
-            );
-            assert_eq!(by_tick, by_ms, "tick {tick}");
-        }
-    }
+#[must_use]
+pub fn current_preset() -> Preset {
+    palette().preset
 }
+
+#[must_use]
+pub fn current_theme_name() -> String {
+    palette().name().to_owned()
+}
+
+/// Validate and install a theme atomically. The active theme is untouched on error.
+pub fn select_theme(name: &str) -> Result<(), String> {
+    let root = theme_root().unwrap_or_else(|| PathBuf::from("."));
+    current()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .select(&root, name, supports_truecolor())
+}
+
+fn remember_theme_at(root: &Path, name: &str, truecolor: bool) -> io::Result<PathBuf> {
+    load_named(root, name, truecolor)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let path = root.join("tui-theme");
+    fs::create_dir_all(root)
+        .and_then(|_| fs::write(&path, name))
+        .map(|_| path)
+}
+
+pub fn remember_theme(name: &str) -> io::Result<PathBuf> {
+    let root = theme_root()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no Aleph home directory"))?;
+    remember_theme_at(&root, name, supports_truecolor())
+}
+
+/// Return valid built-in and community names, plus diagnostics for skipped files.
+#[must_use]
+pub fn available_themes() -> (Vec<String>, Vec<String>) {
+    let root = theme_root().unwrap_or_else(|| PathBuf::from("."));
+    available_themes_at(&root, supports_truecolor())
+}
+
+fn available_themes_at(root: &Path, truecolor: bool) -> (Vec<String>, Vec<String>) {
+    let mut names = BUILTIN_NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    let mut diagnostics = Vec::new();
+    let directory = root.join("themes");
+    let Ok(entries) = fs::read_dir(&directory) else {
+        return (names, diagnostics);
+    };
+    let mut community = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.extension().and_then(|value| value.to_str()) == Some("json"))
+                .then(|| {
+                    path.file_stem()
+                        .and_then(|value| value.to_str())
+                        .map(str::to_owned)
+                })
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    community.sort();
+    for name in community {
+        if BUILTIN_NAMES.contains(&name.as_str()) || LEGACY_NAMES.contains(&name.as_str()) {
+            diagnostics.push(format!(
+                "{name:?} skipped: reserved built-in name cannot be overridden"
+            ));
+            continue;
+        }
+        match load_named(root, &name, truecolor) {
+            Ok(_) => names.push(name),
+            Err(error) => diagnostics.push(format!("{name:?} skipped: {error}")),
+        }
+    }
+    (names, diagnostics)
+}
+
+#[must_use]
+pub fn take_boot_warnings() -> Vec<String> {
+    std::mem::take(
+        &mut current()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .warnings,
+    )
+}
+
+// Compatibility with the old preset-only caller surface.
+pub fn set_preset(preset: Preset) {
+    current()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .palette = Palette::detect(preset);
+}
+
+pub fn remember_preset(preset: Preset) -> io::Result<PathBuf> {
+    remember_theme(preset.name())
+}
+
+#[cfg(test)]
+#[path = "theme/tests.rs"]
+mod tests;

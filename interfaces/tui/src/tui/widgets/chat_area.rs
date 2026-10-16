@@ -48,7 +48,7 @@ struct VisibleToggle {
 #[derive(Debug, Default)]
 pub struct LineCache {
     entries: HashMap<usize, CachedEntry>,
-    preset: Option<crate::tui::theme::Preset>,
+    theme_name: Option<String>,
     /// Fine-grained incremental cache for the ONE currently-streaming
     /// message's markdown conversion (see `markdown_to_lines_incremental`).
     /// Distinct from `entries` above: that whole-message cache deliberately
@@ -400,12 +400,9 @@ fn render_sticky_user(
         height: 1,
         ..inner
     };
-    // Reset background inherits the terminal's own opacity. Terminals do not
-    // expose portable per-cell alpha; do not paint an opaque full-width slab.
-    let style = Style::default()
-        .fg(theme().muted)
-        .bg(ratatui::style::Color::Reset)
-        .add_modifier(Modifier::DIM);
+    // Only the compact chip is painted. Dark themes inherit terminal opacity;
+    // a light theme supplies its own readable background.
+    let style = Style::default().fg(theme().muted).bg(theme().user_bg);
     frame.render_widget(Paragraph::new(text).style(style), bar);
     let label_width = UnicodeWidthStr::width(super::sticky_user::JUMP_LABEL) as u16;
     let action = Rect {
@@ -465,6 +462,8 @@ fn clip_to_width(line: Line<'static>, width: u16) -> Line<'static> {
     // One column goes to the ellipsis that says a cut happened: a reader who
     // cannot see the cut reads a truncated path as the whole path.
     let keep = budget - 1;
+    let style = line.style;
+    let alignment = line.alignment;
     let mut used = 0usize;
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len() + 1);
     for span in line.spans {
@@ -495,7 +494,9 @@ fn clip_to_width(line: Line<'static>, width: u16) -> Line<'static> {
         "\u{2026}".to_string(),
         Style::default().fg(theme().muted),
     ));
-    Line::from(spans)
+    let mut clipped = Line::from(spans).style(style);
+    clipped.alignment = alignment;
+    clipped
 }
 
 /// The vertical scrollbar, on the block's right border, only when there is
@@ -737,11 +738,11 @@ fn build_visible_lines_anchored(
     // offset by its height — but it is not IN `messages`: it is derived from
     // the state it describes on every frame, so a `/session` switch or a model
     // change moves it instead of leaving a stale first row (判据 §1).
-    let preset = crate::tui::theme::current_preset();
-    if cache.preset != Some(preset) {
+    let theme_name = crate::tui::theme::current_theme_name();
+    if cache.theme_name.as_ref() != Some(&theme_name) {
         cache.entries.clear();
         cache.streaming_markdown_cache = None;
-        cache.preset = Some(preset);
+        cache.theme_name = Some(theme_name);
     }
     let header_height = if header.is_empty() {
         0
@@ -1153,9 +1154,10 @@ fn render_step(
                 let start = out.len();
                 let rendered = render_tool_row(&row, now_ms, width.saturating_sub(2), modality);
                 for line in rendered.lines {
+                    let line_style = line.style;
                     let mut spans = vec![Span::raw("  ")];
                     spans.extend(line.spans);
-                    out.push(Line::from(spans));
+                    out.push(Line::from(spans).style(line_style));
                 }
                 toggles.extend(
                     rendered
@@ -1183,7 +1185,7 @@ fn render_step(
     toggles
 }
 
-/// Render a user message with blue prefix bar.
+/// Render a user message with the theme's prefix bar.
 fn render_user_message(
     content: &str,
     attachments: &[TuiAttachment],
@@ -1191,6 +1193,7 @@ fn render_user_message(
     width: u16,
     lines: &mut Vec<Line<'static>>,
 ) {
+    let start = lines.len();
     let prefix_style = Style::default().fg(theme().user);
     // No clock for a message this client was never told a time for. Falling
     // back to `now` would date a restored message to the moment it was
@@ -1238,6 +1241,9 @@ fn render_user_message(
                 Style::default().fg(theme().muted),
             ),
         ]));
+    }
+    for line in &mut lines[start..] {
+        line.style = line.style.bg(theme().user_bg);
     }
 }
 
@@ -2308,5 +2314,23 @@ mod header_tests {
             "scrolled to the top it is the first row again: {:?}",
             &rows[..3]
         );
+    }
+}
+
+#[cfg(test)]
+mod theme_clipping_tests {
+    use super::*;
+
+    #[test]
+    fn clipped_surface_keeps_line_background_and_alignment() {
+        let surface = ratatui::style::Color::Rgb(45, 43, 34);
+        let row = Line::from("long/path/to/a/tool/result")
+            .style(Style::default().bg(surface))
+            .alignment(ratatui::layout::Alignment::Right);
+        let clipped = clip_to_width(row, 10);
+        assert_eq!(clipped.style.bg, Some(surface));
+        assert_eq!(clipped.alignment, Some(ratatui::layout::Alignment::Right));
+        assert_eq!(clipped.width(), 10);
+        assert!(clipped.spans.last().unwrap().content.ends_with('…'));
     }
 }

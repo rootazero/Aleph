@@ -445,62 +445,63 @@ pub(super) async fn execute_local_command(
             };
             state.add_system_message(notice.to_string());
         }
-        LocalCommand::Theme { name } => {
-            use crate::tui::theme::{
-                current_preset, palette, remember_preset, set_preset, theme_file, Preset,
-            };
-            let notice = match name {
-                None => {
-                    let depth = if palette().is_rgb() {
-                        "24-bit"
-                    } else {
-                        "16-colour (set COLORTERM=truecolor if your terminal supports it)"
-                    };
-                    let remembered = theme_file()
-                        .map(|p| format!("Remembered in {}", p.display()))
-                        .unwrap_or_else(|| "No home directory, so this run only".to_string());
-                    format!(
-                        "Theme: {} \u{00b7} {depth}\nChoices: {}\n{remembered} \u{00b7} ALEPH_TUI_THEME=<name> overrides it for one run.",
-                        current_preset().name(),
-                        Preset::choices(),
-                    )
-                }
-                Some(requested) => match Preset::parse(&requested) {
-                    Some(preset) => {
-                        set_preset(preset);
-                        state.invalidate_rendered_lines();
-                        // Report what actually happened on disk. A `/theme`
-                        // that says "remembered" when the write failed is a
-                        // label for something that did not occur (判据 §17),
-                        // and the switch itself is still real either way.
-                        match remember_preset(preset) {
-                            Ok(path) => format!(
-                                "Theme: {} \u{00b7} remembered in {}",
-                                preset.name(),
-                                path.display()
-                            ),
-                            Err(e) => format!(
-                                "Theme: {} for this run \u{2014} could not remember it: {e}",
-                                preset.name()
-                            ),
-                        }
-                    }
-                    // Naming what was asked for, not just the choices: the
-                    // failure this guards against is a typo that silently
-                    // leaves the old theme up and reads as "it did nothing".
-                    None => format!(
-                        "No theme called {requested:?}. Choices: {}",
-                        Preset::choices()
-                    ),
-                },
-            };
-            state.add_system_message(notice);
-        }
+        LocalCommand::Theme { name } => execute_theme(state, name.as_deref()),
         LocalCommand::Browser { resource_id } => {
             execute_browser(state, client, &resource_id).await;
         }
     }
     None
+}
+
+/// Apply local display preferences without contacting the gateway.
+fn execute_theme(state: &mut AppState, requested: Option<&str>) {
+    use crate::tui::theme::{
+        available_themes, current_theme_name, palette, remember_theme, select_theme, theme_file,
+    };
+    let requested = requested.map(str::trim);
+    if requested.is_none() || requested == Some("list") {
+        let (names, diagnostics) = available_themes();
+        let depth = if palette().is_rgb() { "24-bit" } else { "ANSI" };
+        let location = theme_file()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "unavailable (no Aleph home)".to_string());
+        let mut notice = format!(
+            "Theme: {} · {depth}\nThemes: {}\n/theme <name> switches and remembers; /theme reload reloads the current file.\nPreference: {location}\nALEPH_TUI_THEME overrides the remembered choice at startup.",
+            current_theme_name(), names.join(", ")
+        );
+        for diagnostic in diagnostics {
+            notice.push_str(&format!("\nTheme skipped: {diagnostic}"));
+        }
+        state.add_system_message(notice);
+        return;
+    }
+    let Some(requested) = requested else { return };
+    let reload = requested == "reload";
+    let name = if reload {
+        current_theme_name()
+    } else {
+        requested.to_string()
+    };
+    match select_theme(&name) {
+        Ok(()) => {
+            // Styled markdown is cached; keep text and viewport identity while repainting.
+            state.invalidate_rendered_lines();
+            let current = current_theme_name();
+            let notice = if reload {
+                format!("Theme: {current} · reloaded")
+            } else {
+                match remember_theme(&current) {
+                    Ok(path) => format!("Theme: {current} · remembered in {}", path.display()),
+                    Err(e) => format!("Theme: {current} for this run · could not remember it: {e}"),
+                }
+            };
+            state.add_system_message(notice);
+        }
+        Err(error) => state.add_system_message(format!(
+            "Could not load theme {name:?}: {error}. Theme remains {}.",
+            current_theme_name()
+        )),
+    }
 }
 
 /// Usage text for a blank `/browser` argument.

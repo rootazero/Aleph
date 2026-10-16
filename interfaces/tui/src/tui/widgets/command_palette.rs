@@ -6,7 +6,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
 
@@ -36,7 +36,7 @@ pub fn render_command_palette(frame: &mut Frame, palette: &PaletteState, area: R
     let overlay_rect = Rect::new(overlay_x, overlay_y, overlay_width, overlay_height);
 
     // Clear the area behind the overlay
-    frame.render_widget(Clear, overlay_rect);
+    crate::tui::widgets::clear_overlay(frame, overlay_rect);
 
     // Build title showing namespace breadcrumb
     let title = if palette.namespace_stack.is_empty() {

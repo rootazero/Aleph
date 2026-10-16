@@ -15,7 +15,7 @@
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -62,7 +62,7 @@ impl InputWidget<'_> {
         // same reason the border used to — it is the only thing left that can
         // say where the keyboard is.
         let rule_color = if self.focused {
-            palette().color(SemanticColor::Dim)
+            crate::tui::theme::theme().border_focused
         } else {
             crate::tui::theme::theme().border
         };
@@ -110,9 +110,17 @@ impl InputWidget<'_> {
         let mut ta = self.textarea.clone();
         ta.set_placeholder_text(PLACEHOLDER);
         ta.set_placeholder_style(Style::default().fg(palette().color(SemanticColor::Dim)));
+        let colors = crate::tui::theme::theme();
+        ta.set_style(Style::default().fg(colors.primary).bg(colors.background));
+        ta.set_selection_style(Style::default().bg(colors.selection_bg));
         ta.set_cursor_line_style(Style::default());
         if self.focused {
-            ta.set_cursor_style(Style::default().bg(Color::White).fg(Color::Black));
+            ta.set_cursor_style(
+                Style::default()
+                    .fg(colors.primary)
+                    .bg(colors.background)
+                    .add_modifier(Modifier::REVERSED),
+            );
         } else {
             ta.set_cursor_style(Style::default());
         }

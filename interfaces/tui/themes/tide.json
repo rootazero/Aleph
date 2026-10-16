@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "name": "tide",
+  "light": false,
+  "colors": {
+    "fg": "#dfe8f1",
+    "dim": "#9cacc0",
+    "accent": "#87c5ef",
+    "prompt": "#87c5ef",
+    "userBar": "#87c5ef",
+    "toolPending": "#72839b",
+    "toolRunning": "#e6c68c",
+    "toolOk": "#93cdb0",
+    "toolErr": "#eea1ad",
+    "toolRail": "#405d78",
+    "diffAdd": "#93cdb0",
+    "diffDel": "#eea1ad",
+    "diffCtx": "#9cacc0",
+    "diffGutter": "#72839b",
+    "admonitionNote": "#a8b5f3",
+    "admonitionTip": "#93cdb0",
+    "admonitionImportant": "#87c5ef",
+    "admonitionWarning": "#e6c68c",
+    "admonitionCaution": "#eea1ad",
+    "codeBorder": "#405d78",
+    "link": "#a8b5f3",
+    "contextOk": "#93cdb0",
+    "contextWarn": "#e6c68c",
+    "contextDanger": "#eea1ad",
+    "cost": "#93cdb0",
+    "spinner": "#e6c68c"
+  },
+  "chrome": {
+    "background": "terminal",
+    "surface": "#1e2a39",
+    "selectionBg": "#405d78",
+    "userBg": "#1e2a39",
+    "border": "#405d78",
+    "borderFocused": "#87c5ef"
+  }
+}

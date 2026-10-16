@@ -13,7 +13,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 use shared_ui_logic::transcript::ContextRow;
@@ -204,7 +204,7 @@ pub fn render_context_overlay(frame: &mut Frame, state: &AppState, area: Rect) {
         area.width.saturating_sub(margin_x * 2).max(20),
         height,
     );
-    frame.render_widget(Clear, rect);
+    crate::tui::widgets::clear_overlay(frame, rect);
 
     let block = Block::default()
         .borders(Borders::ALL)

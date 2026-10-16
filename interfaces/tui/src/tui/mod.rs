@@ -21,7 +21,7 @@ mod regions;
 mod render;
 mod rpc_jobs;
 mod slash;
-mod theme;
+pub mod theme;
 mod tool_output;
 mod widgets;
 
@@ -300,6 +300,10 @@ pub async fn run(
     // reports back. Inventing a key here is what used to strand every keyed RPC
     // this client made.
     let mut state = AppState::new(session_key.clone().unwrap_or_default(), model_name);
+    crate::tui::theme::initialize();
+    for warning in crate::tui::theme::take_boot_warnings() {
+        state.add_system_message(format!("Theme: {warning}"));
+    }
     // Before the first draw, and never again: the rendered-line cache bakes
     // the hint wording in (see `AppState::mouse`).
     state.mouse = mouse;
@@ -1373,6 +1377,9 @@ async fn main_loop<'c>(
 
 #[cfg(test)]
 mod live_acceptance_tests;
+
+#[cfg(test)]
+mod theme_render_tests;
 
 #[cfg(test)]
 mod tests {

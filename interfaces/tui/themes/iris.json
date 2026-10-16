@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "name": "iris",
+  "light": false,
+  "colors": {
+    "fg": "#ebe5f0",
+    "dim": "#b7a9c7",
+    "accent": "#c6acf0",
+    "prompt": "#c6acf0",
+    "userBar": "#c6acf0",
+    "toolPending": "#8d809d",
+    "toolRunning": "#e8ca91",
+    "toolOk": "#acd6b1",
+    "toolErr": "#efa5b2",
+    "toolRail": "#67537e",
+    "diffAdd": "#acd6b1",
+    "diffDel": "#efa5b2",
+    "diffCtx": "#b7a9c7",
+    "diffGutter": "#8d809d",
+    "admonitionNote": "#a6c7ed",
+    "admonitionTip": "#acd6b1",
+    "admonitionImportant": "#c6acf0",
+    "admonitionWarning": "#e8ca91",
+    "admonitionCaution": "#efa5b2",
+    "codeBorder": "#67537e",
+    "link": "#a6c7ed",
+    "contextOk": "#acd6b1",
+    "contextWarn": "#e8ca91",
+    "contextDanger": "#efa5b2",
+    "cost": "#acd6b1",
+    "spinner": "#e8ca91"
+  },
+  "chrome": {
+    "background": "terminal",
+    "surface": "#2e2939",
+    "selectionBg": "#67537e",
+    "userBg": "#2e2939",
+    "border": "#67537e",
+    "borderFocused": "#c6acf0"
+  }
+}

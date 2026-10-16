@@ -39,6 +39,13 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     // One draft row between two thin rules; long drafts remain capped.
     let input_h = input_height(textarea, 3, 8);
     let full_area = frame.area();
+    let colors = crate::tui::theme::theme();
+    frame.buffer_mut().set_style(
+        full_area,
+        ratatui::style::Style::default()
+            .fg(colors.primary)
+            .bg(colors.background),
+    );
 
     let main_area = if state.agent_panel_visible {
         let cols = Layout::horizontal([Constraint::Length(AGENT_PANEL_WIDTH), Constraint::Min(0)])

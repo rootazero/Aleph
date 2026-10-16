@@ -75,6 +75,7 @@
 | Panel | core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 刷新页面才好 | Reconnect Baseline Rebase | `context.rs::connection_epoch` + `sessions.rs::{reset_running_baseline,settle_runs_absent_from}` + `state/reattach.rs`（app root，两个形态共用） | ✅ (§6.9, 2026-08-10 · root 化 round-2 2026-08-23) |
 | Panel | 手机上发了消息什么都不出来 / iOS Panel 只有我自己的气泡 / 退出去再进来才看到回答 | Phone Conversation Registration | `platform/phone/chat/mod.rs`（mount 时 `ensure_active`）+ `history.rs::adopt_session` + `composer.rs::bind_run` | ✅ (§6.9 round-2, 2026-08-23) |
 | Panel | 重连之后那一轮再也不动了 / 红点亮着但正文不更新 / core 重启后自动续跑的那轮看不见 | Rejoin A Live Turn On Reconnect | `sessions.rs::rejoin_target` + `state/reattach.rs` | ✅ (§6.9 round-2, 2026-08-23) |
+| TUI | 想换琥珀/素笺 / 社区主题怎么装 / 主题记不住 / Windows Terminal 颜色太少 | Five Semantic Themes + Community JSON API / 五套语义主题与社区 JSON 接口 | `interfaces/tui/src/tui/theme.rs` + `interfaces/tui/themes/schema.json` + [TUI_THEMES.md](TUI_THEMES.md) | ✅ (2026-10-16) |
 | TUI | TUI 里蹦出别的会话的输出 / 一启动就串台 | Cross-Session Frame Guard (reconciled) | `tui/app/events.rs::frame_belongs_here` + `app/mod.rs::session_reconciled` | ✅ (§6.9 round-2, 2026-08-23) |
 | TUI | TUI attach 上去停不掉正在跑的那一轮 / 状态栏说 idle 但它在跑 | Join A Live Turn (TUI) | `commands.rs::{active_run_from_history,attach_session}` + `events.rs::adopt_active_run` | ✅ (§6.9 round-2, 2026-08-23) |
 | TUI | 网断了红点就红到退出为止 / core 重启后 TUI 再也收不到东西 / 得关掉重开 | Reconnect With Reconciliation | `AlephClient::reconnect` + `tui/mod.rs::{reconnect_after,awaiting_reconnect,next_backoff}` + `app/mod.rs::{on_disconnected,begin_reattach}` | ✅ (§6.9 round-3, 2026-08-23) |

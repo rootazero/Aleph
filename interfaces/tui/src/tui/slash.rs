@@ -259,7 +259,10 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
         "/tool-output",
         "Inspect tool output (/tool-output <tool_call_id>)",
     ),
-    ("/theme", "Switch the colour preset: dark|light|terminal"),
+    (
+        "/theme",
+        "Themes: amber|tide|jade|iris|paper; list, reload, or a community name",
+    ),
     (
         "/browser",
         "List browser resource IDs (/browser), or open one in the viewer (/browser <resource_id>)",

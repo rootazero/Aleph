@@ -27,7 +27,9 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
 
-use super::theme::{Palette, Preset};
+use super::theme::Palette;
+#[cfg(test)]
+use super::theme::Preset;
 
 /// Everything the highlighter needs, once.
 struct Loaded {
@@ -139,7 +141,7 @@ fn highlight_with(
         .syntaxes
         .find_syntax_by_token(lang)
         .or_else(|| loaded.syntaxes.find_syntax_by_extension(lang))?;
-    let theme = if p.preset == Preset::Light {
+    let theme = if p.is_light() {
         &loaded.light
     } else {
         &loaded.dark
@@ -198,11 +200,8 @@ pub fn highlight_block_blocking(
 
 /// A palette that does highlight, for tests that need the coloured path.
 #[cfg(test)]
-pub const fn rgb_palette() -> Palette {
-    Palette {
-        preset: Preset::Dark,
-        truecolor: true,
-    }
+pub fn rgb_palette() -> Palette {
+    Palette::for_preset(Preset::Amber, true)
 }
 
 #[cfg(test)]
@@ -287,19 +286,13 @@ mod tests {
     #[test]
     fn a_palette_that_cannot_paint_rgb_is_never_highlighted() {
         for preset in Preset::ALL {
-            let no_truecolor = Palette {
-                preset: *preset,
-                truecolor: false,
-            };
+            let no_truecolor = Palette::for_preset(*preset, false);
             assert!(
                 highlight_block(no_truecolor, "rust", &["let x = 1;".to_string()]).is_none(),
                 "{preset:?} highlighted without truecolor"
             );
         }
-        let terminal = Palette {
-            preset: Preset::Terminal,
-            truecolor: true,
-        };
+        let terminal = Palette::for_preset(Preset::Terminal, true);
         assert!(
             highlight_block(terminal, "rust", &["let x = 1;".to_string()]).is_none(),
             "the terminal preset was highlighted"

@@ -9,7 +9,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -43,7 +43,7 @@ fn render_list(frame: &mut Frame, state: &AppState, overlay: &AgentsOverlayState
     let overlay_width = area.width.min(100);
     let overlay_rect = Rect::new(area.x, overlay_y, overlay_width, overlay_height);
 
-    frame.render_widget(Clear, overlay_rect);
+    crate::tui::widgets::clear_overlay(frame, overlay_rect);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().border_focused))
@@ -113,7 +113,7 @@ fn render_detail(frame: &mut Frame, detail: &crate::tui::app::AgentDetailState, 
         area.width.saturating_sub(margin_x * 2).max(20),
         area.height.saturating_sub(margin_y * 2).max(6),
     );
-    frame.render_widget(Clear, rect);
+    crate::tui::widgets::clear_overlay(frame, rect);
 
     let title = format!(" Agent \u{00b7} {} ", clamp_chars(&detail.title, 60));
     let block = Block::default()

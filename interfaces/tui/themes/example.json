@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "name": "example",
+  "extends": "paper",
+  "light": true,
+  "colors": {
+    "accent": "#75452a",
+    "prompt": "#75452a",
+    "userBar": "#75452a",
+    "link": "#315d7a",
+    "toolOk": 65
+  },
+  "chrome": {
+    "background": "#f3f0e8",
+    "borderFocused": "#75452a",
+    "userBg": "terminal"
+  }
+}

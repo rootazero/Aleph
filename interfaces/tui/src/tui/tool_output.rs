@@ -5,7 +5,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
@@ -142,7 +142,7 @@ pub(super) fn render(frame: &mut Frame, view: &mut ToolOutputView, area: Rect) {
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
     };
-    frame.render_widget(Clear, popup);
+    crate::tui::widgets::clear_overlay(frame, popup);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().border_focused))

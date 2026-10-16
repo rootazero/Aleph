@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -115,7 +115,7 @@ fn render_dialog_with_status(
     let dialog_rect = centered_rect(dialog_width, dialog_height, area);
 
     // Clear background behind the dialog
-    frame.render_widget(Clear, dialog_rect);
+    crate::tui::widgets::clear_overlay(frame, dialog_rect);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -230,7 +230,7 @@ pub fn render_approval(frame: &mut Frame, approval: &ApprovalState, area: Rect) 
     let height = (option_count.saturating_add(7)).min(area.height);
     let rect = centered_rect(width, height, area);
 
-    frame.render_widget(Clear, rect);
+    crate::tui::widgets::clear_overlay(frame, rect);
 
     let block = Block::default()
         .borders(Borders::ALL)
