@@ -21,4 +21,12 @@ Date: 2026-10-16. Branch: `feat/tui-streaming-refactor`.
 
 ## Runtime acceptance / 运行验收
 
-Pending deployment and real reply check. Manual appearance, mouse and opacity inspection remain the user's terminal acceptance.
+- Deployed code commit `b5fce8ca3` to `C:/Users/zou/AppData/Local/Aleph/tui-refactor`; both executable SHA256 hashes match the completed dev build. `/health` and `/ready` returned HTTP 200 with ready=true.
+- Read-only comparison with the pre-recovery backup confirmed the persisted master key is unchanged; SQLite `user_version` advanced from 13 to 19.
+- A real `agent.run` request returned `OK` via `stream.response_chunk`, followed by successful completion: 8 stream frames, 0 error frames. No replacement MiniMax key was required.
+
+中文：已部署修复版并核对二进制哈希；健康与就绪检查通过。原主密钥保留，安全数据库从版本 13 升至 19；真实模型请求返回 `OK`，8 个流事件、0 个错误事件。无需更换 MiniMax key。
+
+Manual appearance, mouse and opacity inspection remain the user's terminal acceptance. The independent read-only review timed out without findings; a direct review of the committed acceptance diff was completed. No full-workspace test rerun or merge to main was performed.
+
+中文：外观、鼠标和透明度仍需用户在真实终端中验收。独立只读审查超时，未产生结论；已直接复查验收修复的提交差异。本轮未重跑全工作区测试，未合入 main。
