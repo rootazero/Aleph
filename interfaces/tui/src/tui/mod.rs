@@ -571,6 +571,7 @@ async fn main_loop<'c>(
     // `should_redraw_after_tick` for the one arm, `Action::Tick`, that
     // decides for itself instead of redrawing unconditionally).
     let mut needs_redraw = true;
+    let mut last_welcome_layout = None;
     let mut rpc_jobs = rpc_jobs::RpcJobs::default();
     let mut runtime_refresh_after = std::time::Instant::now();
     let mut continuity = client.stream_continuity();
@@ -615,7 +616,24 @@ async fn main_loop<'c>(
         let mut reconnect_outcome: Option<CliResult<()>> = None;
         // Draw only when something visible changed since the last frame.
         if needs_redraw && !native_selection.active() {
+            // Re-sync on the empty/history boundary, not on every streamed
+            // frame. Actual hero geometry remains owned by the renderer; this
+            // conservative invalidation also covers terminals too short for it.
+            let welcome_layout = !state
+                .messages
+                .iter()
+                .any(|entry| !matches!(entry, app::TranscriptEntry::SystemNotice { .. }));
+            if cfg!(windows)
+                && last_welcome_layout.is_some_and(|previous| previous != welcome_layout)
+            {
+                // Native consoles can retain physical cells across this layout
+                // change even after widget Clear. Re-sync both sides of the diff
+                // once, as on overlay close; never clear ordinary streaming ticks.
+                terminal.clear()?;
+                terminal.swap_buffers();
+            }
             terminal.draw(|f| render::render(f, state, textarea))?;
+            last_welcome_layout = Some(welcome_layout);
             needs_redraw = false;
         }
 

@@ -329,10 +329,47 @@ pub(super) async fn btw_abort_or_close(state: &mut AppState, client: &AlephClien
     state.btw.abort_active();
 }
 
+/// Reset both composer entry paths without a client or any Gateway effect.
+fn execute_clear(state: &mut AppState, textarea: &mut TextArea<'_>) {
+    // Palette execution bypasses Enter's composer clearing.
+    textarea.select_all();
+    textarea.delete_char();
+    state.clear_screen();
+}
+
+/// The topic labels the closing session, not the new epoch.
+fn new_session_params(session_key: &str, topic: Option<&str>) -> Value {
+    json!({ "session_key": session_key, "topic": topic })
+}
+
+/// Apply only a confirmed session rollover; failures leave the transcript and draft intact.
+fn apply_new_session_result(
+    state: &mut AppState,
+    textarea: &mut TextArea<'_>,
+    result: CliResult<Value>,
+) {
+    let new_key = result.map_err(|e| e.to_string()).and_then(|reply| {
+        reply
+            .get("new_session_key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.trim().is_empty() && *key != state.session_key)
+            .map(str::to_string)
+            .ok_or_else(|| "Missing or invalid new_session_key in response".to_string())
+    });
+    match new_key {
+        Ok(key) => {
+            state.switch_session(&key);
+            // Reuse the startup-view reset, including removing the switch receipt.
+            execute_clear(state, textarea);
+        }
+        Err(e) => state.add_system_message(format!("New session error: {e}")),
+    }
+}
+
 /// Apply a local command; return read-only replay RPCs for the bounded UI queue.
 pub(super) async fn execute_local_command(
     state: &mut AppState,
-    _textarea: &TextArea<'_>,
+    textarea: &mut TextArea<'_>,
     client: &AlephClient,
     cmd: LocalCommand,
 ) -> Option<(&'static str, Value)> {
@@ -366,9 +403,15 @@ pub(super) async fn execute_local_command(
                 state.open_tool_output(tool_call_id);
             }
         }
-        LocalCommand::Clear => {
-            state.clear_screen();
+        LocalCommand::Clear => execute_clear(state, textarea),
+        LocalCommand::New { topic } => {
+            let params = new_session_params(&state.session_key, topic.as_deref());
+            let result = client.call::<_, Value>("sessions.new", Some(params)).await;
+            apply_new_session_result(state, textarea, result);
         }
+        LocalCommand::NewHelp => state.add_system_message(
+            "Usage: /new [topic]\nClose the current session (optionally storing its topic) and start a new session. /clear only clears the screen and keeps server history.".into(),
+        ),
         LocalCommand::Detail { name } => {
             use shared_ui_logic::transcript::DetailLevel;
             match name.as_deref().and_then(DetailLevel::parse) {
@@ -2200,6 +2243,132 @@ pub(super) async fn fetch_my_user_id(client: &AlephClient) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clear_resets_locally_without_a_gateway_reply() {
+        for input in ["/clear", "/CLEAR"] {
+            let mut state = AppState::new("adopted-session".into(), "model".into());
+            state.add_user_message("old transcript".into(), vec![]);
+            state.current_run = Some("still-running".into());
+            state.open_theme_picker(vec!["amber".into()], vec![]);
+            let mut textarea = TextArea::from(["unfinished", "draft"]);
+            let super::super::slash::ParsedInput::Local(cmd) =
+                super::super::slash::parse_input(input)
+            else {
+                panic!("{input} must not be forwarded to the Gateway");
+            };
+            assert_eq!(cmd, LocalCommand::Clear);
+            execute_clear(&mut state, &mut textarea);
+            assert!(
+                state.messages.is_empty(),
+                "no reset receipt should be stored"
+            );
+            assert_eq!(textarea.lines(), &[String::new()]);
+            assert_eq!(state.session_key, "adopted-session");
+            assert_eq!(state.current_run.as_deref(), Some("still-running"));
+            assert!(state.theme_picker.is_none());
+            assert_eq!(state.focus, app::Focus::Input);
+        }
+    }
+
+    #[test]
+    fn new_session_request_matches_the_rpc_contract() {
+        assert_eq!(
+            new_session_params("agent:main:main", None),
+            json!({
+                "session_key": "agent:main:main", "topic": null
+            })
+        );
+        assert_eq!(
+            new_session_params("agent:main:main", Some("closing topic")),
+            json!({
+                "session_key": "agent:main:main", "topic": "closing topic"
+            })
+        );
+    }
+
+    #[test]
+    fn new_session_success_switches_and_restores_welcome_without_receipt() {
+        let mut state = AppState::new("agent:main:main".into(), "model".into());
+        state.add_user_message("old transcript".into(), vec![]);
+        state.current_run = Some("old-run".into());
+        state.send_history.push("old prompt".into());
+        state.open_theme_picker(vec!["amber".into()], vec![]);
+        let generation = state.transcript_generation;
+        let mut textarea = TextArea::from(["unfinished", "draft"]);
+        apply_new_session_result(
+            &mut state,
+            &mut textarea,
+            Ok(json!({
+                "old_session_key": "agent:main:main",
+                "new_session_key": "agent:main:main:1",
+                "topic": "closing topic"
+            })),
+        );
+        assert_eq!(state.session_key, "agent:main:main:1");
+        assert!(
+            state.messages.is_empty(),
+            "welcome must not become a success receipt"
+        );
+        assert_eq!(textarea.lines(), &[String::new()]);
+        assert!(state.current_run.is_none());
+        assert!(state.send_history.is_empty());
+        assert_ne!(state.transcript_generation, generation);
+        assert!(state.theme_picker.is_none());
+        assert_eq!(state.focus, app::Focus::Input);
+    }
+
+    #[test]
+    fn new_session_failure_preserves_the_screen_run_and_draft() {
+        let mut state = AppState::new("agent:main:main".into(), "model".into());
+        state.add_user_message("old transcript".into(), vec![]);
+        state.current_run = Some("old-run".into());
+        let generation = state.transcript_generation;
+        let mut textarea = TextArea::from(["unfinished", "draft"]);
+        let error = CliError::Rpc {
+            code: -32602,
+            message: "Original gateway refusal".into(),
+        };
+        let expected = format!("New session error: {error}");
+        apply_new_session_result(&mut state, &mut textarea, Err(error));
+        assert_eq!(state.session_key, "agent:main:main");
+        assert_eq!(state.current_run.as_deref(), Some("old-run"));
+        // The error receipt invalidates the view without replacing old content.
+        assert_eq!(state.transcript_generation, generation + 1);
+        assert_eq!(state.messages.len(), 2);
+        assert_eq!(
+            textarea.lines(),
+            &["unfinished".to_string(), "draft".to_string()]
+        );
+        assert!(
+            matches!(state.messages.first(), Some(app::TranscriptEntry::UserText { text, .. }) if text == "old transcript")
+        );
+        assert!(
+            matches!(state.messages.last(), Some(app::TranscriptEntry::SystemNotice { text, .. }) if text == &expected)
+        );
+    }
+
+    #[test]
+    fn new_session_malformed_success_cannot_clear_or_reuse_the_old_session() {
+        for reply in [
+            json!({}),
+            json!({"new_session_key": 5}),
+            json!({"new_session_key": ""}),
+            json!({"new_session_key": "  "}),
+            json!({"new_session_key": "agent:main:main"}),
+        ] {
+            let mut state = AppState::new("agent:main:main".into(), "model".into());
+            state.add_user_message("keep".into(), vec![]);
+            let mut textarea = TextArea::from(["draft"]);
+            apply_new_session_result(&mut state, &mut textarea, Ok(reply));
+            assert_eq!(state.session_key, "agent:main:main");
+            assert_eq!(textarea.lines(), &["draft".to_string()]);
+            assert_eq!(state.messages.len(), 2);
+            assert!(
+                matches!(state.messages.last(), Some(app::TranscriptEntry::SystemNotice { text, .. }) if text.contains("Missing or invalid new_session_key"))
+            );
+        }
+    }
 
     #[test]
     fn browser_resource_status_classifies_blank_and_missing() {

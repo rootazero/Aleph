@@ -636,19 +636,111 @@ fn provider_usage_cache_stat_matches_canonical_formula() {
 }
 
 #[test]
-fn clear_screen_keeps_session() {
+fn clear_screen_restores_startup_view_but_keeps_session_facts() {
+    use ratatui::{backend::TestBackend, Terminal};
+    use tui_textarea::TextArea;
+
     let mut state = AppState::new("s1".into(), "m".into());
-    state.add_user_message("hello".into(), vec![]);
+    state.add_user_message("OLD_TRANSCRIPT".into(), vec![]);
+    state.add_system_message("New conversation started".into());
     state.total_tokens = 500;
+    state.push_send_history("old prompt".into());
+    state.history_index = Some(0);
+    state.scroll_up(20);
+    state.unseen_below = true;
+    state.sticky_user.jump_to_entry("s1", "old-entry".into());
+    state.open_tool_output("old-tool".into());
+    state.open_theme_picker(vec!["amber".into()], vec![]);
+    state.btw.composer = "side draft".into();
+    state.agent_panel_visible = true;
+    state.ctrl_c_count = 1;
+    let generation = state.transcript_generation;
 
     state.clear_screen();
     assert_eq!(state.session_key, "s1");
     assert_eq!(state.total_tokens, 500);
-    assert_eq!(state.messages.len(), 1);
-    match &state.messages[0] {
-        TranscriptEntry::SystemNotice { text: content, .. } => assert!(content.contains("cleared")),
-        other => panic!("Expected System message, got: {other:?}"),
+    assert_eq!(state.model_name, "m");
+    assert!(state.messages.is_empty());
+    assert_eq!(state.transcript_generation, generation.wrapping_add(1));
+    assert!(state.stuck_to_bottom());
+    assert!(!state.unseen_below);
+    assert!(state.sticky_user.anchor.is_none());
+    assert!(state.send_history.is_empty());
+    assert!(state.history_index.is_none());
+    assert!(state.theme_picker.is_none());
+    assert!(state.tool_output.is_none());
+    assert!(state.btw.composer.is_empty());
+    assert!(!state.btw.open);
+    assert!(!state.agent_panel_visible);
+    assert_eq!(state.ctrl_c_count, 0);
+    assert_eq!(state.focus, Focus::Input);
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|frame| crate::tui::render::render(frame, &mut state, &TextArea::default()))
+        .unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Welcome to Aleph"), "{text}");
+    assert!(text.contains("Ask a question to begin"), "{text}");
+    for stale in [
+        "OLD_TRANSCRIPT",
+        "New conversation started",
+        "新对话已开始",
+        "Screen cleared",
+    ] {
+        assert!(!text.contains(stale), "{text}");
     }
+}
+
+#[test]
+fn clear_screen_does_not_complete_runs_or_retire_pending_approvals() {
+    let mut state = AppState::new("s1".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "main-run".into(),
+        session_key: "s1".into(),
+        accepted_at: "2026-10-16T00:00:00Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "main-run".into(),
+        seq: 1,
+        content: "before reset".into(),
+        chunk_index: 0,
+        is_final: false,
+        is_intermediate: false,
+    });
+    state.open_btw("side question".into());
+    state.btw.claim_pending_run("side-run".into());
+    state.open_approval("approval".into(), "command".into(), None, vec![]);
+    let started = state.run_started_at;
+    let streamed = state.turn_streamed_len;
+
+    state.clear_screen();
+    assert!(state.messages.is_empty());
+    assert_eq!(state.current_run.as_deref(), Some("main-run"));
+    assert_eq!(state.run_started_at, started);
+    assert_eq!(state.turn_streamed_len, streamed);
+    assert_eq!(state.btw.active_run_id(), Some("side-run"));
+    assert!(state.btw.accepts_frame(Some("side-run")));
+    assert!(!state.btw.open);
+    assert_eq!(state.approval.as_ref().unwrap().id, "approval");
+    assert_eq!(state.focus, Focus::Approval);
+
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "main-run".into(),
+        seq: 2,
+        content: "after reset".into(),
+        chunk_index: 1,
+        is_final: false,
+        is_intermediate: false,
+    });
+    assert_eq!(assistant_text(&state), "after reset");
+    assert_eq!(state.current_run.as_deref(), Some("main-run"));
 }
 
 #[test]

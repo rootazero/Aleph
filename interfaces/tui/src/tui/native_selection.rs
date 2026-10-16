@@ -1,21 +1,21 @@
 //! Host-terminal text selection, without a synthetic selection or clipboard.
 //!
-//! F6 releases crossterm mouse capture and freezes drawing; drag and copy using
-//! the host terminal's own bindings (Windows Terminal normally uses
-//! Ctrl+Shift+C). F6 or Esc resumes the TUI. Gateway events may continue
-//! updating app state; only the visible frame is frozen. The caller must gate
-//! every draw on `active`.
+//! F6 releases crossterm mouse capture and restores raw keyboard mode while
+//! freezing drawing; drag and copy using the host terminal's own bindings
+//! (Windows Terminal normally uses Ctrl+Shift+C). F6 or Esc resumes the TUI.
+//! Gateway events may continue updating app state; only the visible frame is
+//! frozen. The caller must gate every draw on `active`.
 //!
 //! Platform limits: this selects visible terminal cells, not off-screen chat
 //! history, and may include UI chrome and visual line wraps. Copy bindings,
 //! selection persistence and resize/reflow while frozen belong to the emulator.
 //! Some hosts consume the first Esc to clear their selection: press Esc again
 //! or F6 to resume. Releasing capture depends on crossterm having saved the
-//! host's pre-raw console mode during initialization; F6 does not actively
-//! enable QuickEdit. Legacy Windows console QuickEdit may still swallow Esc or
-//! suspend input, so clear its selection first. Crossterm 0.28 uses console APIs
-//! for capture on Windows (even with an in-memory writer), so tests inject the
-//! capture operation instead of touching a console.
+//! host's pre-raw console mode during initialization; each successful capture
+//! transition restores raw keyboard mode. Legacy Windows console QuickEdit may
+//! still swallow Esc or suspend input, so clear its selection first. Crossterm
+//! 0.28 uses console APIs for capture on Windows (even with an in-memory writer),
+//! so tests inject the capture-plus-raw transition instead of touching a console.
 
 use std::io::{self, Write};
 
@@ -55,19 +55,13 @@ impl NativeSelection {
         event: &TermEvent,
         writer: &mut W,
     ) -> io::Result<bool> {
-        self.handle_event_with(event, |capture| {
-            if capture {
-                execute!(writer, EnableMouseCapture)
-            } else {
-                execute!(writer, DisableMouseCapture)
-            }
-        })
+        self.handle_event_with(event, |capture| transition_capture(writer, capture))
     }
 
     fn handle_event_with(
         &mut self,
         event: &TermEvent,
-        mut set_capture: impl FnMut(bool) -> io::Result<()>,
+        mut transition: impl FnMut(bool) -> io::Result<()>,
     ) -> io::Result<bool> {
         let next = match event {
             TermEvent::Key(key) if unmodified(key, KeyCode::F(6)) => !self.active,
@@ -86,12 +80,32 @@ impl NativeSelection {
             _ => return Ok(self.active),
         };
         if self.restore_mouse_capture {
-            set_capture(!next)?;
+            transition(!next)?;
         }
-        // Do not claim a successful transition when the terminal write failed.
+        // Commit only after capture and raw keyboard mode both succeed.
         self.active = next;
         Ok(true)
     }
+}
+
+fn transition_capture<W: Write>(writer: &mut W, capture: bool) -> io::Result<()> {
+    if capture {
+        execute!(writer, EnableMouseCapture)?;
+    } else {
+        execute!(writer, DisableMouseCapture)?;
+    }
+
+    if let Err(error) = crossterm::terminal::enable_raw_mode() {
+        // DisableMouseCapture can restore the pre-raw Windows console mode.
+        // Roll back the capture change before reporting the raw-mode failure.
+        let _ = if capture {
+            execute!(writer, DisableMouseCapture)
+        } else {
+            execute!(writer, EnableMouseCapture)
+        };
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn unmodified(key: &KeyEvent, code: KeyCode) -> bool {
@@ -221,17 +235,22 @@ mod tests {
     }
 
     #[test]
-    fn failed_capture_is_not_reported_as_a_successful_transition() {
+    fn failed_transition_is_not_reported_as_a_successful_transition() {
         let mut selection = NativeSelection::new(true);
-        for active in [false, true] {
-            selection.active = active;
-            let error = selection
-                .handle_event_with(&key(KeyCode::F(6)), |_| {
-                    Err(io::Error::new(io::ErrorKind::BrokenPipe, "capture failed"))
-                })
-                .unwrap_err();
-            assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
-            assert_eq!(selection.active(), active);
+        for failure in ["capture failed", "raw mode restore failed"] {
+            for active in [false, true] {
+                selection.active = active;
+                let error = selection
+                    .handle_event_with(&key(KeyCode::F(6)), |capture| {
+                        // The callback represents the entire capture-plus-raw transition.
+                        assert_eq!(capture, active);
+                        Err(io::Error::new(io::ErrorKind::BrokenPipe, failure))
+                    })
+                    .unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+                assert_eq!(error.to_string(), failure);
+                assert_eq!(selection.active(), active);
+            }
         }
     }
 
@@ -275,9 +294,23 @@ mod tests {
             .join("\n");
         let main_loop = code.split("async fn main_loop").nth(1).unwrap();
         assert_eq!(main_loop.matches("terminal.draw(").count(), 2);
-        assert!(main_loop.contains(
-            "if needs_redraw && !native_selection.active() {\n            terminal.draw("
-        ));
+        let guarded = main_loop
+            .split("if needs_redraw && !native_selection.active() {")
+            .nth(1)
+            .unwrap();
+        let mut depth = 1;
+        let end = guarded
+            .char_indices()
+            .find_map(|(index, ch)| {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(index)
+            })
+            .unwrap();
+        assert_eq!(guarded[..end].matches("terminal.draw(").count(), 1);
         assert!(main_loop.contains(
             "let action = if native_selection.handle_event(&te, terminal.backend_mut())? {\n                    needs_redraw = !native_selection.active();\n                    Action::None\n                } else {\n                    needs_redraw = true;\n                    keys::handle_terminal_event(state, textarea, &te)"
         ));

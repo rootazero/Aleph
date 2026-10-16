@@ -2444,7 +2444,6 @@ impl AppState {
         self.agent_panel_visible = !self.agent_panel_visible;
     }
 
-    /// Clear the chat screen (keep session state).
     /// Throw away every rendered line, keeping the messages.
     ///
     /// Rendered `Line`s carry their `Style` — the colour is baked in at build
@@ -2458,16 +2457,49 @@ impl AppState {
         self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
     }
 
+    /// Restore the startup view without replacing the session or ending work.
     pub fn clear_screen(&mut self) {
+        // Keep the reducer's active run and de-duplication cursors: a display
+        // reset is neither a cancellation nor proof that a run has finished.
         self.messages.clear_display();
         self.transcript_generation = self.transcript_generation.wrapping_add(1);
-        // The cache is keyed by positional index into `messages`, which is
-        // about to be repopulated from scratch — a stale entry whose (kind,
-        // len, width) happens to match new content at the same index must
-        // not survive.
-        self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
+        self.invalidate_rendered_lines();
+        self.step_overrides.clear();
         self.scroll_to_bottom();
-        self.add_system_message("Screen cleared.".to_string());
+        self.prev_cursor = ListCursor::default();
+        self.sends = 0;
+        self.regions = crate::tui::regions::RegionTable::default();
+        self.send_history.clear();
+        self.history_index = None;
+        self.ctrl_c_count = 0;
+        self.palette = None;
+        self.session_picker = None;
+        self.provider_picker = None;
+        self.theme_picker = None;
+        self.agents_overlay = None;
+        self.context_overlay = None;
+        self.tool_output = None;
+        self.agent_panel_visible = false;
+        if self.current_run.is_none() {
+            self.plan = None;
+            self.agents.clear();
+        }
+        if self.btw.active.is_none() {
+            // Retain side-run claims so late frames cannot leak into chat.
+            self.btw.clear_for_session_switch();
+        } else {
+            // Keep a live side question addressable, including its abort path.
+            self.btw.close();
+            self.btw.composer.clear();
+            self.btw.scroll = 0;
+        }
+        // Pending questions/approvals belong to real waiters. Do not retire
+        // them to make the screen look idle; restore their existing focus.
+        self.interaction.pause_for_picker(false);
+        self.dialog = None;
+        self.focus = Focus::Input;
+        self.sync_modal_focus();
+        // Welcome/header is derived from the empty transcript, not a notice.
     }
 
     /// Update token usage from a `RunSummary`.

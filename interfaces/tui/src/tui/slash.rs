@@ -1,7 +1,7 @@
 // Local slash command parser
 //
 // Parses user input beginning with "/" into LocalCommand variants for commands
-// that are handled entirely within the TUI (no Gateway RPC needed).
+// that are handled by the TUI (some call Gateway RPCs directly).
 // All other slash commands are sent to the Gateway as regular messages.
 
 use std::fmt;
@@ -44,12 +44,16 @@ impl ToolProgressMode {
     }
 }
 
-/// Local-only slash commands handled entirely within the TUI.
+/// Slash commands handled by the TUI, including direct Gateway RPCs.
 /// All other slash commands are forwarded to Gateway as chat messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalCommand {
-    /// Clear the chat screen
+    /// Clear the chat screen without replacing the server session.
     Clear,
+    /// Close the current session with an optional topic and start a new epoch.
+    New { topic: Option<String> },
+    /// Explain /new without changing the session.
+    NewHelp,
     /// Quit the application
     Quit,
     /// Set the device-local Step detail level (None prints usage).
@@ -202,7 +206,11 @@ impl SessionKnob {
 
 /// Local command catalog: (name, description) pairs.
 const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
-    ("/clear", "Clear the screen"),
+    ("/clear", "Restore the startup view (keeps server history)"),
+    (
+        "/new",
+        "Start a new session (/new [closing topic]; --help for usage)",
+    ),
     ("/detail", "Step detail level: brief|full"),
     ("/verbose", "Toggle verbose/debug output"),
     (
@@ -310,6 +318,10 @@ pub fn parse_input(input: &str) -> ParsedInput {
 
     match cmd_lower.as_str() {
         "/clear" => ParsedInput::Local(LocalCommand::Clear),
+        "/new" if matches!(args, "--help" | "-h") => ParsedInput::Local(LocalCommand::NewHelp),
+        "/new" => ParsedInput::Local(LocalCommand::New {
+            topic: (!args.is_empty()).then(|| args.to_string()),
+        }),
         "/detail" => ParsedInput::Local(LocalCommand::Detail {
             name: (!args.is_empty()).then(|| args.to_ascii_lowercase()),
         }),
@@ -446,6 +458,30 @@ mod tests {
     }
 
     #[test]
+    fn new_preserves_topics_and_help_instead_of_clearing() {
+        for input in ["/new", "/NEW", " /new\t "] {
+            assert_eq!(
+                parse_input(input),
+                ParsedInput::Local(LocalCommand::New { topic: None })
+            );
+        }
+        for topic in ["a closing topic", "--help is my topic", "主题  保留空格"] {
+            assert_eq!(
+                parse_input(&format!("/new {topic}")),
+                ParsedInput::Local(LocalCommand::New {
+                    topic: Some(topic.into())
+                })
+            );
+        }
+        for input in ["/new --help", "/NEW -h"] {
+            assert_eq!(
+                parse_input(input),
+                ParsedInput::Local(LocalCommand::NewHelp)
+            );
+        }
+    }
+
+    #[test]
     fn parse_local_case_insensitive() {
         assert_eq!(parse_input("/HELP"), ParsedInput::Local(LocalCommand::Help));
         assert_eq!(
@@ -550,7 +586,9 @@ mod tests {
         ));
         assert_eq!(
             parse_input("/new my-session"),
-            ParsedInput::Gateway("/new my-session".to_string())
+            ParsedInput::Local(LocalCommand::New {
+                topic: Some("my-session".into()),
+            })
         );
         assert_eq!(
             parse_input("/model claude-3-opus"),

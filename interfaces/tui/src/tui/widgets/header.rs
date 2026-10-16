@@ -28,6 +28,15 @@ pub const VERSION: &str = env!("ALEPH_VERSION");
 
 const SEP: &str = " \u{b7} "; // ·
 
+// Five scanlines, using half-block strokes instead of the old two-row banner.
+const ALEPH_LOGO: [&str; 5] = [
+    "▄▀▀▄  █     █▀▀▀  █▀▀▄  █  █",
+    "█  █  █     █     █  █  █  █",
+    "█▀▀█  █     █▀▀   █▀▀   █▀▀█",
+    "█  █  █     █     █     █  █",
+    "▀  ▀  ▀▀▀▀  ▀▀▀▀  ▀     ▀  ▀",
+];
+
 /// Build the header line.
 ///
 /// Every argument after the model is optional and *absent* rather than
@@ -99,63 +108,84 @@ pub fn header_lines(
         .add_modifier(Modifier::BOLD);
     let muted = Style::default().fg(colors.muted);
     let command = Style::default().fg(colors.tool_name);
-    let mut lines = vec![Line::default()];
+    let mut lines = vec![hero_frame_line(
+        Line::from(Span::styled(format!("─ Aleph {version} "), title)),
+        width,
+        "╭",
+        "╮",
+        "─",
+    )];
+    let mut body = Vec::with_capacity(6);
     if width >= 68 {
-        let left = [
-            "Welcome to Aleph".to_owned(),
-            "".to_owned(),
-            " ▄▀█ █   █▀▀ █▀█ █ █".to_owned(),
-            " █▀█ █▄▄ ██▄ █▀▀ █▀█".to_owned(),
-            format!(" v{version}"),
-        ];
         let right = [
-            ("Get started", ""),
+            ("Welcome to Aleph", ""),
             ("", "Ask a question to begin"),
             ("/help", "Commands & shortcuts"),
             ("/session", "Browse conversations"),
             ("/agents", "Background agents"),
         ];
-        for (idx, (left, (key, description))) in left.into_iter().zip(right).enumerate() {
-            let padding = 32usize.saturating_sub(left.width());
-            lines.push(Line::from(vec![
-                Span::styled(
-                    left,
-                    if idx == 0 {
-                        title
-                    } else if idx == 4 {
-                        muted
-                    } else {
-                        accent
-                    },
-                ),
-                Span::raw(" ".repeat(padding + 3)),
-                Span::styled(key.to_owned(), if idx == 0 { title } else { command }),
-                Span::raw(" ".repeat(10usize.saturating_sub(key.len()))),
-                Span::styled(description.to_owned(), muted),
+        for (idx, (logo, (key, description))) in ALEPH_LOGO.into_iter().zip(right).enumerate() {
+            body.push(Line::from(vec![
+                Span::styled(logo, accent),
+                Span::raw(" ".repeat(32usize.saturating_sub(logo.width()))),
+                Span::styled(key, if idx == 0 { title } else { command }),
+                Span::raw(" ".repeat(if key.is_empty() {
+                    0
+                } else {
+                    10usize.saturating_sub(key.width())
+                })),
+                Span::styled(description, muted),
             ]));
         }
     } else {
-        lines.push(Line::from(Span::styled("ℵ Welcome to Aleph", title)));
-        lines.push(Line::default());
-        lines.push(Line::from(Span::styled("Ask a question to begin", muted)));
+        body.push(Line::from(Span::styled("ℵ Welcome to Aleph", title)));
+        body.push(Line::from(Span::styled("Ask a question to begin", muted)));
         for (key, description) in [
             ("/help", "Commands & shortcuts"),
             ("/session", "Conversations"),
             ("/agents", "Background agents"),
         ] {
-            let mut spans = vec![Span::styled(key.to_owned(), command)];
+            let mut spans = vec![Span::styled(key, command)];
             if width >= 32 {
                 spans.push(Span::styled(format!("  {description}"), muted));
             }
-            lines.push(Line::from(spans));
+            body.push(Line::from(spans));
         }
     }
-    lines.push(Line::default());
-    lines.push(identity);
+    // Eight rows including the identity and borders; chat_area adds a separator.
+    // This stays inside its existing ten-row welcome viewport threshold.
+    body.push(identity);
+    for mut line in body {
+        line.spans.insert(0, Span::raw(" "));
+        lines.push(hero_frame_line(line, width, "│", "│", " "));
+    }
+    lines.push(hero_frame_line(Line::default(), width, "╰", "╯", "─"));
     lines
-        .into_iter()
-        .map(|line| fit_line(line, width))
-        .collect()
+}
+
+/// Fit the contents before adding edges, so truncation never eats the right edge.
+/// All frame glyphs occupy one terminal cell; even widths zero and one are safe.
+fn hero_frame_line(
+    content: Line<'static>,
+    width: usize,
+    left: &'static str,
+    right: &'static str,
+    fill: &'static str,
+) -> Line<'static> {
+    let border = Style::default().fg(theme().muted);
+    if width == 0 {
+        return Line::default();
+    }
+    let mut spans = vec![Span::styled(left, border)];
+    if width > 1 {
+        let inner_width = width - 2;
+        let content = fit_line(content, inner_width);
+        let padding = inner_width.saturating_sub(content.width());
+        spans.extend(content.spans);
+        spans.push(Span::styled(fill.repeat(padding), border));
+        spans.push(Span::styled(right, border));
+    }
+    Line::from(spans)
 }
 
 /// `C:\Users\me\proj` → `~\proj`. Cosmetic only: a path that does not start
@@ -250,8 +280,8 @@ mod tests {
     }
 
     #[test]
-    fn welcome_reflows_without_inventing_inventory_or_overflowing_cells() {
-        for width in [0, 1, 20, 31, 32, 67, 68, 80, 120] {
+    fn wide_hero_fills_every_cell_with_borders_logo_and_real_commands() {
+        for width in [68, 69, 80, 120, 240] {
             let lines = header_lines(
                 "26.9.1",
                 "model",
@@ -260,15 +290,70 @@ mod tests {
                 width,
                 true,
             );
-            assert_eq!(lines.len(), if width >= 68 { 8 } else { 9 });
-            assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
-            let rendered = lines.iter().map(text).collect::<Vec<_>>().join("\n");
+            assert_eq!(lines.len(), 8);
+            for line in &lines {
+                assert_eq!(line.width(), usize::from(width), "{}", text(line));
+                assert_eq!(text(line).width(), usize::from(width));
+            }
+            let rows = lines.iter().map(text).collect::<Vec<_>>();
+            assert_eq!(
+                rows[0],
+                format!("╭─ Aleph 26.9.1 {}╮", "─".repeat(usize::from(width) - 17))
+            );
+            assert_eq!(rows[7], format!("╰{}╯", "─".repeat(usize::from(width) - 2)));
+            for (row, logo) in rows[1..6].iter().zip(ALEPH_LOGO) {
+                assert!(row.starts_with(&format!("│ {logo}")));
+                assert!(row.ends_with('│'));
+            }
+            assert!(rows[6].starts_with("│ ℵ Aleph 26.9.1 · model · /w/proj (main)"));
+            assert!(rows[6].ends_with('│'));
+            let rendered = rows.join("\n");
+            for expected in [
+                "Welcome to Aleph",
+                "Ask a question to begin",
+                "/help     Commands & shortcuts",
+                "/session  Browse conversations",
+                "/agents   Background agents",
+            ] {
+                assert!(
+                    rendered.contains(expected),
+                    "missing {expected}: {rendered}"
+                );
+            }
             assert!(!rendered.contains("skills"));
-            if width >= 20 {
-                assert!(rendered.contains("Welcome to Aleph"));
-                assert!(rendered.contains("/help"));
-                assert!(rendered.contains("/session"));
-                assert!(rendered.contains("/agents"));
+        }
+    }
+
+    #[test]
+    fn narrow_hero_is_cell_safe_for_every_width_and_unicode_identity() {
+        for width in 0..68 {
+            let lines = header_lines(
+                "版本26.9.1🦀",
+                "模型e\u{301}🦀",
+                Some("/项目/界面"),
+                Some("分支"),
+                width,
+                true,
+            );
+            assert_eq!(lines.len(), 8);
+            for (index, line) in lines.iter().enumerate() {
+                let row = text(line);
+                assert_eq!(line.width(), usize::from(width), "width {width}: {row}");
+                assert_eq!(row.width(), usize::from(width), "width {width}: {row}");
+                if width >= 2 {
+                    let (left, right) = match index {
+                        0 => ('╭', '╮'),
+                        7 => ('╰', '╯'),
+                        _ => ('│', '│'),
+                    };
+                    assert!(row.starts_with(left) && row.ends_with(right), "{row}");
+                }
+            }
+            if width >= 21 {
+                let rendered = lines.iter().map(text).collect::<Vec<_>>().join("\n");
+                for expected in ["Welcome to Aleph", "/help", "/session", "/agents"] {
+                    assert!(rendered.contains(expected), "width {width}: {rendered}");
+                }
             }
         }
     }

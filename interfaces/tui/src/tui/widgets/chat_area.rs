@@ -8,7 +8,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Clear, Paragraph},
     Frame,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -258,6 +258,15 @@ const BACK_TO_BOTTOM_UNSEEN: &str = " \u{2193} New output \u{b7} ctrl+end ";
 
 /// Render the chat area with all messages, handling scrolling.
 pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
+    // The welcome hero can shrink to one identity row. Clear the whole pane,
+    // including its gutters, before painting the shorter transcript.
+    frame.render_widget(Clear, area);
+    let colors = theme();
+    frame.buffer_mut().set_style(
+        area,
+        Style::default().fg(colors.primary).bg(colors.background),
+    );
+
     // The transcript is an open reading surface. Keep a single-column gutter
     // without spending rows or columns on a titled rectangle.
     let inner = area.inner(ratatui::layout::Margin {
@@ -748,7 +757,7 @@ fn build_visible_lines_anchored(
                 if !markdown.is_empty() {
                     streaming_content = Some(markdown_to_lines_incremental(
                         markdown,
-                        width.saturating_sub(2),
+                        width,
                         &mut cache.streaming_markdown_cache,
                     ));
                 }
@@ -920,9 +929,8 @@ fn visible_window(
     (end.saturating_sub(visible_height), end)
 }
 
-/// Copy the `[lo, hi)` slice of the streaming entry's rows into `out`,
-/// applying the assistant prefix bar to content rows (deferred to here so
-/// off-window rows never pay for it). Row layout: content | cursor.
+/// Copy the `[lo, hi)` slice of the streaming entry's rows into `out`.
+/// Row layout: content | cursor.
 ///
 /// There is no "head" any more: reasoning and tool rows used to be rendered
 /// above the streaming message because they lived inside it, and they are
@@ -938,13 +946,9 @@ fn copy_streaming_slice(
     let c_lo = lo.min(content_len);
     let c_hi = hi.min(content_len);
     if let Some(sl) = content {
-        let prefix_style = Style::default().fg(theme().assistant);
         for i in c_lo..c_hi {
             if let Some(line) = sl.get(i) {
-                let mut spans = Vec::with_capacity(line.spans.len() + 1);
-                spans.push(Span::styled("\u{2503} ", prefix_style));
-                spans.extend(line.spans.iter().cloned());
-                out.push(Line::from(spans));
+                out.push(line.clone());
             }
         }
     }
@@ -962,9 +966,9 @@ fn now_ms() -> u64 {
 
 /// Render a settled (non-streaming) entry into `out`.
 ///
-/// Tool rows are NOT prefixed with the assistant `┃ ` bar: they are peers of
-/// the text now, not decoration inside a message, and indenting them under a
-/// bar would put back the visual nesting the model change removed.
+/// Tool rows are NOT prefixed with an assistant speaker rail: they are peers
+/// of the text now, not decoration inside a message, and indenting them under
+/// a bar would put back the visual nesting the model change removed.
 #[cfg(test)]
 fn render_settled_message(
     message: &TranscriptEntry,
@@ -1006,8 +1010,7 @@ fn render_settled_message_detail(
         }
         TranscriptEntry::AssistantText { markdown, .. } => {
             if !markdown.is_empty() {
-                let md_lines = markdown_to_lines(markdown, width.saturating_sub(2));
-                push_prefixed_content(out, md_lines);
+                out.extend(markdown_to_lines(markdown, width));
             }
         }
         TranscriptEntry::Reasoning { text, .. } => {
@@ -1234,27 +1237,12 @@ fn render_reasoning(text: &str, width: u16, lines: &mut Vec<Line<'static>>) {
     }
 }
 
-/// Append markdown-rendered content lines, each prefixed with the assistant
-/// `┃ ` bar.
-fn push_prefixed_content(lines: &mut Vec<Line<'static>>, md_lines: Vec<Line<'static>>) {
-    let prefix_style = Style::default().fg(theme().assistant);
-    for md_line in md_lines {
-        let mut spans = vec![Span::styled("\u{2503} ", prefix_style)];
-        spans.extend(md_line.spans);
-        lines.push(Line::from(spans));
-    }
-}
-
-/// The `┃ ▍` line shown under a still-streaming assistant message.
+/// The `▍` line shown under a still-streaming assistant message.
 fn streaming_cursor_line() -> Line<'static> {
-    let prefix_style = Style::default().fg(theme().assistant);
-    Line::from(vec![
-        Span::styled("\u{2503} ", prefix_style),
-        Span::styled(
-            "\u{258d}".to_string(), // ▍
-            Style::default().fg(theme().assistant),
-        ),
-    ])
+    Line::from(Span::styled(
+        "\u{258d}".to_string(), // ▍
+        Style::default().fg(theme().assistant),
+    ))
 }
 
 /// Render a system message with yellow text and indentation.
@@ -1287,6 +1275,69 @@ fn render_system_message(content: &str, width: u16, lines: &mut Vec<Line<'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn welcome_to_first_message_clears_hero_without_a_scrollbar() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut state = AppState::new("test".into(), "claude".into());
+        state.messages.clear();
+        let mut terminal = Terminal::new(TestBackend::new(84, 24)).unwrap();
+        let area = Rect::new(2, 1, 80, 20);
+        terminal
+            .draw(|frame| render_chat_area(frame, &mut state, area))
+            .unwrap();
+        let welcome = terminal.backend().buffer().clone();
+        let hero_right = area.right() - 2;
+        assert_eq!(welcome[(hero_right, area.y + 5)].symbol(), "│");
+
+        state.add_user_message("Hello".into(), vec![]);
+        state.append_assistant_content("First reply");
+        terminal
+            .draw(|frame| {
+                // Terminal normally resets its next buffer. Retain the welcome
+                // explicitly so this catches a Paragraph-only repaint, rather
+                // than passing because Terminal already erased the old cells.
+                *frame.buffer_mut() = welcome.clone();
+                frame.buffer_mut()[(area.x, area.y + 5)].set_symbol("│");
+                render_chat_area(frame, &mut state, area);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (area.y..area.bottom())
+            .map(|y| {
+                (area.x..area.right())
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect();
+        let text = rows.join("\n");
+        assert!(
+            text.contains("Hello") && text.contains("First reply"),
+            "{text}"
+        );
+        assert!(!text.contains("Welcome to Aleph"), "{text}");
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                let cell = &buffer[(x, y)];
+                assert!(
+                    !matches!(
+                        cell.symbol(),
+                        "│" | "┃" | "║" | "╭" | "╮" | "╰" | "╯" | "█" | "░"
+                    ),
+                    "hero border or transcript scrollbar at ({x}, {y}): {text}"
+                );
+            }
+            for x in [area.x, hero_right, area.right() - 1] {
+                assert_eq!(buffer[(x, y)].symbol(), " ", "stale pane edge: {text}");
+            }
+            for x in [area.x, area.right() - 1] {
+                assert_eq!(buffer[(x, y)].bg, theme().background);
+            }
+        }
+        assert_eq!(buffer[(0, 0)], welcome[(0, 0)], "outside the pane changed");
+        assert_eq!(state.scroll_offset, 0);
+    }
 
     #[test]
     fn build_lines_with_system_message() {
@@ -1402,18 +1453,74 @@ mod tests {
     }
 
     #[test]
-    fn streaming_message_shows_cursor() {
+    fn assistant_rows_have_no_speaker_rail_and_keep_text() {
+        let message = TranscriptEntry::AssistantText {
+            id: "a1".into(),
+            markdown: "The answer is still here".into(),
+            streaming: false,
+        };
+        let mut lines = Vec::new();
+        render_settled_message(&message, false, 0, 80, KEY_MODALITY, &mut lines);
+
+        let rendered: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(rendered.contains("The answer is still here"));
+        assert!(
+            lines.iter().all(|line| {
+                !line
+                    .spans
+                    .iter()
+                    .any(|span| span.content.as_ref().contains('\u{2503}'))
+            }),
+            "assistant markdown must not paint the speaker rail: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn streaming_message_keeps_text_and_cursor_without_a_speaker_rail() {
         let mut state = AppState::new("test".into(), "claude".into());
         state.ensure_assistant_message();
+        state.append_assistant_content("partial answer");
 
         let lines = build_all_lines(&state, 80);
-        // Should contain the streaming cursor character ▍
-        let has_cursor = lines.iter().any(|line| {
-            line.spans
-                .iter()
-                .any(|s| s.content.as_ref().contains('\u{258d}'))
-        });
-        assert!(has_cursor, "Streaming message should show cursor");
+        let cursor_rows: Vec<&Line<'static>> = lines
+            .iter()
+            .filter(|line| {
+                line.spans
+                    .iter()
+                    .any(|s| s.content.as_ref().contains('\u{258d}'))
+            })
+            .collect();
+        assert_eq!(
+            cursor_rows.len(),
+            1,
+            "streaming message should have one cursor"
+        );
+        let cursor_text: String = cursor_rows[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(cursor_text, "\u{258d}");
+
+        let rendered: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(rendered.contains("partial answer"));
+        assert!(
+            lines.iter().all(|line| {
+                !line
+                    .spans
+                    .iter()
+                    .any(|span| span.content.as_ref().contains('\u{2503}'))
+            }),
+            "streaming assistant content and cursor must not paint the speaker rail: {lines:?}"
+        );
     }
 
     #[test]
