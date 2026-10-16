@@ -79,7 +79,15 @@ impl TrayState {
         };
         match load_metadata() {
             Ok(rows) => state.items.set(rows),
-            Err(error) => state.error.set(Some(error)),
+            Err(error) => {
+                state
+                    .error
+                    .set(Some(crate::components::admin_refusal::settings_load_error(
+                        crate::i18n::use_i18n(),
+                        &error,
+                        str::to_string,
+                    )))
+            }
         }
         state
     }
@@ -350,7 +358,7 @@ pub(crate) fn folded_items(items: &[TrayItem], now: i64) -> FoldedTray {
         .filter(|item| item.last_accessed_at >= cutoff)
         .cloned()
         .collect();
-    visible.sort_by(|a, b| b.last_accessed_at.cmp(&a.last_accessed_at));
+    visible.sort_by_key(|item| std::cmp::Reverse(item.last_accessed_at));
     visible.truncate(TRAY_MAX_ITEMS);
     FoldedTray {
         hidden_count: items.len().saturating_sub(visible.len()),
