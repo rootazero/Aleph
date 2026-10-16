@@ -1,11 +1,11 @@
 //! Exercise actual cell styles, independently of terminal capability/global preferences.
-use super::{app::AppState, render::render, theme};
+use super::{app::AppState, render::render, theme, widgets::chat_area::render_chat_area};
 use ratatui::{
     backend::TestBackend,
     buffer::{Buffer, Cell},
     Terminal,
 };
-use shared_ui_logic::transcript::SemanticColor;
+use shared_ui_logic::transcript::{SemanticColor, TranscriptEntry};
 use tui_textarea::TextArea;
 
 fn find_text<'a>(buf: &'a Buffer, text: &str) -> &'a Cell {
@@ -72,6 +72,47 @@ fn all_five_themes_reach_transcript_tool_composer_and_base_cells() {
             assert_eq!(buf[(79, 29)].bg, colors.background, "{name}: status ground");
         });
     }
+}
+
+#[test]
+fn user_message_highlights_the_full_row_without_gutter_or_timestamp() {
+    let palette = theme::Palette::for_preset(theme::Preset::Amber, true);
+    let colors = theme::Theme::from_palette(palette.clone());
+    theme::with_test_palette(palette, || {
+        let mut state = AppState::new("user-row".into(), "model".into());
+        state.messages.push(TranscriptEntry::UserText {
+            id: "u1".into(),
+            text: "USER_MARKER".into(),
+            at_ms: Some(1_767_225_600_000), // 2026-01-01 00:00 UTC
+            attachments: vec![],
+        });
+        let mut term = Terminal::new(TestBackend::new(32, 4)).unwrap();
+        term.draw(|frame| render_chat_area(frame, &mut state, frame.area()))
+            .unwrap();
+        let buf = term.backend().buffer();
+        let y = (0..4)
+            .find(|y| {
+                (0..32)
+                    .map(|x| buf[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("USER_MARKER")
+            })
+            .expect("user row was painted");
+        let row: String = (0..32).map(|x| buf[(x, y)].symbol()).collect();
+
+        assert!(row.contains("USER_MARKER"));
+        assert!(!row.contains('\u{2503}'), "user row must not have a gutter");
+        assert!(!row.contains("00:00"), "user timestamp must not be painted");
+        // Chat content is inset by one column on each side. Every cell in the
+        // content row, including trailing cells, carries the user surface.
+        for x in 1..31 {
+            assert_eq!(
+                buf[(x, y)].bg,
+                colors.user_bg,
+                "user background stopped at column {x}"
+            );
+        }
+    });
 }
 
 #[test]

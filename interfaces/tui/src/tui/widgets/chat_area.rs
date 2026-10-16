@@ -1000,12 +1000,9 @@ fn render_settled_message_detail(
     let base = out.len();
     match message {
         TranscriptEntry::UserText {
-            text,
-            at_ms,
-            attachments,
-            ..
+            text, attachments, ..
         } => {
-            render_user_message(text, attachments, *at_ms, width, out);
+            render_user_message(text, attachments, width, out);
         }
         TranscriptEntry::AssistantText { markdown, .. } => {
             if !markdown.is_empty() {
@@ -1155,49 +1152,27 @@ fn render_step(
     toggles
 }
 
-/// Render a user message with the theme's prefix bar.
+/// Render a user message as a full-width highlighted block.
 fn render_user_message(
     content: &str,
     attachments: &[TuiAttachment],
-    at_ms: Option<u64>,
     width: u16,
     lines: &mut Vec<Line<'static>>,
 ) {
     let start = lines.len();
-    let prefix_style = Style::default().fg(theme().user);
-    // No clock for a message this client was never told a time for. Falling
-    // back to `now` would date a restored message to the moment it was
-    // restored, which is a fact the header would be stating and getting wrong.
-    let time_str = at_ms
-        .and_then(|ms| i64::try_from(ms).ok())
-        .and_then(chrono::DateTime::from_timestamp_millis)
-        .map(|t| t.format("%H:%M").to_string())
-        .unwrap_or_default();
+    let user_bg = theme().user_bg;
 
-    // The user-colored gutter identifies the speaker without a repeated label.
-    lines.push(Line::from(vec![
-        Span::styled("\u{2503} ", prefix_style),
-        Span::styled(time_str, Style::default().fg(theme().muted)),
-    ]));
+    // User rows use the line background as the only speaker affordance. The
+    // timestamp remains in the transcript model for history and sorting, but
+    // is deliberately not painted here.
+    let md_lines = markdown_to_lines(content, width);
+    lines.extend(md_lines);
 
-    // Content lines with prefix
-    let content_width = width.saturating_sub(2); // account for "┃ " prefix
-    let md_lines = markdown_to_lines(content, content_width);
-    for md_line in md_lines {
-        let mut spans = vec![Span::styled("\u{2503} ", prefix_style)];
-        spans.extend(md_line.spans);
-        lines.push(Line::from(spans));
-    }
-
-    // Attachment chips: one line per attachment, indented under the message
-    // text. The same `┃ ` prefix as the content so the chip block reads as
-    // part of the same message rather than a separate row. The
-    // paperclip glyph + name + MIME keeps the format scannable in a 4-row
-    // transcript at the default width — long MIME strings clip at the
-    // edge naturally because `format!` does not wrap.
+    // Attachment chips occupy the same highlighted block as the text. They
+    // are intentionally unindented: the background, rather than a colored
+    // rail, is the boundary of the user message.
     for att in attachments {
         lines.push(Line::from(vec![
-            Span::styled("\u{2503} ", prefix_style),
             Span::styled("\u{1F4CE} ".to_string(), Style::default().fg(theme().muted)),
             Span::styled(att.name.clone(), Style::default().fg(theme().muted)),
             Span::styled(
@@ -1206,8 +1181,28 @@ fn render_user_message(
             ),
         ]));
     }
+
+    // Keep an empty user turn addressable and visible without reintroducing a
+    // metadata-only timestamp row.
+    if lines.len() == start {
+        lines.push(Line::default());
+    }
     for line in &mut lines[start..] {
-        line.style = line.style.bg(theme().user_bg);
+        // Keep the line style for Paragraph and put the same background on
+        // every emitted span, so markdown foregrounds cannot erase the user
+        // surface. Explicitly fill trailing cells because a line's style is
+        // not a substitute for materialized width on every terminal backend.
+        line.style = line.style.bg(user_bg);
+        for span in &mut line.spans {
+            span.style = span.style.bg(user_bg);
+        }
+        let used = line.width();
+        if used < usize::from(width) {
+            line.spans.push(Span::styled(
+                " ".repeat(usize::from(width) - used),
+                Style::default().bg(user_bg),
+            ));
+        }
     }
 }
 
@@ -1317,7 +1312,8 @@ mod tests {
         }
 
         let lines = build_all_lines(&state, 80);
-        assert!(lines.len() >= 6);
+        // The user block no longer spends a row on timestamp metadata.
+        assert!(lines.len() >= 5);
 
         let has_you = lines.iter().any(|line| {
             line.spans
@@ -1332,6 +1328,39 @@ mod tests {
                 .any(|s| s.content.as_ref().contains("Hi there!"))
         });
         assert!(has_reply, "the assistant's text must be rendered");
+    }
+
+    #[test]
+    fn user_rows_have_no_gutter_or_timestamp_and_keep_their_background() {
+        let message = TranscriptEntry::UserText {
+            id: "u1".into(),
+            text: "Hello".into(),
+            // This timestamp is intentionally supplied to prove rendering does
+            // not leak history metadata back into the user row.
+            at_ms: Some(1_767_225_600_000), // 2026-01-01 00:00 UTC
+            attachments: vec![],
+        };
+        let mut lines = Vec::new();
+        render_settled_message(&message, false, 0, 20, KEY_MODALITY, &mut lines);
+
+        assert_eq!(lines.len(), 1, "metadata must not consume a display row");
+        let text: String = lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(text.trim_end(), "Hello");
+        assert!(
+            !text.contains('\u{2503}'),
+            "user rows must not have a gutter"
+        );
+        assert!(!text.contains("00:00"), "user timestamps are not painted");
+        assert_eq!(lines[0].style.bg, Some(theme().user_bg));
+        assert_eq!(lines[0].width(), 20, "the user surface fills the row");
+        assert!(
+            lines.iter().all(|line| line.width() <= 20),
+            "user rendering must not emit an over-wide logical row: {lines:?}"
+        );
     }
 
     /// The whole point of the model change: a tool row sits where it ran.
