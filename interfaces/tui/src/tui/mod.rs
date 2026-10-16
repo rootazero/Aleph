@@ -169,10 +169,7 @@ async fn subscribe_runtime_agents(state: &mut AppState, client: &AlephClient) ->
     // warns AND still arms the re-fetch flag, so the next `main_loop` tick
     // picks it up the same way a `runtime.agents.changed` topic event does.
     let result = client
-        .call::<_, Value>(
-            "events.subscribe",
-            Some(json!({ "topics": [RUNTIME_AGENTS_CHANGED_TOPIC] })),
-        )
+        .call::<_, Value>("events.subscribe", Some(tui_event_subscribe_params()))
         .await;
     if let Err(e) = &result {
         tracing::warn!(
@@ -193,10 +190,16 @@ async fn subscribe_runtime_agents(state: &mut AppState, client: &AlephClient) ->
     result.map(|_| ())
 }
 
-/// `events.subscribe` params for the browser live-resource topics.
-/// Pure so the exact topic list and call shape are unit-testable.
-fn browser_live_subscribe_params() -> Value {
-    json!({ "topics": [BROWSER_LIVE_RESOURCE_TOPIC, BROWSER_LIVE_CLOSED_TOPIC] })
+/// Every subscription preserves the chat stream as well as both topic planes.
+/// The first explicit filter replaces the Gateway's receive-all default, so
+/// even a runtime-only retry must retain `stream.*` on a fresh connection.
+fn tui_event_subscribe_params() -> Value {
+    json!({ "topics": [
+        "stream.*",
+        RUNTIME_AGENTS_CHANGED_TOPIC,
+        BROWSER_LIVE_RESOURCE_TOPIC,
+        BROWSER_LIVE_CLOSED_TOPIC,
+    ] })
 }
 
 /// Subscribe this connection to `browser.live.resource` / `browser.live.closed`
@@ -209,7 +212,7 @@ fn browser_live_subscribe_params() -> Value {
 /// payload, which could carry secrets) and is returned for the caller to drop.
 async fn subscribe_browser_live_topics(client: &AlephClient) -> CliResult<()> {
     let result = client
-        .call::<_, Value>("events.subscribe", Some(browser_live_subscribe_params()))
+        .call::<_, Value>("events.subscribe", Some(tui_event_subscribe_params()))
         .await;
     if result.is_err() {
         tracing::warn!(
@@ -864,7 +867,7 @@ async fn main_loop<'c>(
                     method: "events.subscribe",
                     identity: "runtime-agents".into(),
                 },
-                Some(json!({ "topics": [RUNTIME_AGENTS_CHANGED_TOPIC] })),
+                Some(tui_event_subscribe_params()),
             );
             if fetch && subscribe {
                 state.runtime_agents_refetch_due = false;
@@ -1369,9 +1372,12 @@ async fn main_loop<'c>(
 }
 
 #[cfg(test)]
+mod live_acceptance_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
-        agent_panel_data, browser_live_subscribe_params, model_caption, should_redraw_after_tick,
+        agent_panel_data, model_caption, should_redraw_after_tick, tui_event_subscribe_params,
         AgentPanelData, AppState, ModelCaption, RUNTIME_AGENTS_CHANGED_TOPIC,
     };
     use aleph_client::CliError;
@@ -1546,14 +1552,13 @@ mod tests {
         }
     }
 
-    /// The browser live subscribe uses exactly the protocol constants, and is
-    /// called only at startup and reconnect success — not from the refetch tick.
+    /// Every subscription entry point keeps chat frames and both topic planes.
     #[test]
-    fn browser_live_topics_subscribe_shape_and_call_sites() {
+    fn subscriptions_keep_chat_stream_and_browser_runtime_topics() {
         use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
         assert_eq!(
-            browser_live_subscribe_params(),
-            json!({ "topics": [RESOURCE_TOPIC, CLOSED_TOPIC] })
+            tui_event_subscribe_params(),
+            json!({ "topics": ["stream.*", RUNTIME_AGENTS_CHANGED_TOPIC, RESOURCE_TOPIC, CLOSED_TOPIC] })
         );
         assert_eq!(RESOURCE_TOPIC, "browser.live.resource");
         assert_eq!(CLOSED_TOPIC, "browser.live.closed");

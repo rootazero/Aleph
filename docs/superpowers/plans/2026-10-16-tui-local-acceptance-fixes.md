@@ -30,3 +30,16 @@ Date: 2026-10-16. Branch: `feat/tui-streaming-refactor`.
 Manual appearance, mouse and opacity inspection remain the user's terminal acceptance. The independent read-only review timed out without findings; a direct review of the committed acceptance diff was completed. No full-workspace test rerun or merge to main was performed.
 
 中文：外观、鼠标和透明度仍需用户在真实终端中验收。独立只读审查超时，未产生结论；已直接复查验收修复的提交差异。本轮未重跑全工作区测试，未合入 main。
+
+## Follow-up: chat subscriptions / 追加：聊天订阅修复
+
+The earlier direct WebSocket probe explicitly subscribed to `stream.*` and therefore established provider recovery only. The TUI instead first subscribed to runtime-agent and browser topics; that first explicit subscription replaced the Gateway's receive-all default with a filter that excluded every chat stream event. A sent message could finish at the provider without any response reaching the TUI.
+
+中文：此前探针自行订阅了 `stream.*`，只能证明凭据与模型服务恢复。TUI 首次仅订阅侧栏与浏览器主题，Gateway 随即启用过滤，聊天事件全部被挡住，所以消息发送成功仍不显示回复。
+
+- All TUI subscription paths (startup, reconnect, background refresh) now use the same complete topic set, including `stream.*`.
+- Opt-in live regression `subscribed_reply_reaches_screen_after_startup_and_reconnect` failed before the change: zero frames in 20 seconds. After the change, both initial connection and reconnect produced assistant text and visible rendered replies (8 and 9 events respectively).
+- TUI library suite: 546 passed, 2 ignored, including the new explicitly opt-in live test. Scoped all-target Clippy with `-D warnings` and the executable build passed. Cargo remained serialized through the memory guard.
+- Native Windows console acceptance drove the rebuilt executable with real keyboard events and read its active console buffer. Two consecutive prompts both produced their distinct reply markers on screen; neither marker appeared verbatim in its prompt. The owned acceptance process was stopped after verification.
+
+中文：启动、重连、后台刷新均保留聊天订阅。新增真实连接回归测试先复现零事件，修复后两次均在助手正文和渲染画面找到回复；常规测试 546 项通过，严格 Clippy 与构建通过。另用 Windows 控制台键盘事件驱动实际可执行文件，连续两条消息的回复均出现在屏幕，验收进程已结束。
