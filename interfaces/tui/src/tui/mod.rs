@@ -248,9 +248,8 @@ pub async fn run(
     // input handling. Capture is optional: a refused capture only removes
     // mouse affordances, whose keyboard equivalents remain available.
     let mouse = execute!(stdout, EnableMouseCapture).is_ok();
-    enable_raw_mode().map_err(|error| {
+    enable_raw_mode().inspect_err(|_| {
         let _ = execute!(stdout, DisableMouseCapture);
-        error
     })?;
     // Bracketed paste lets the terminal deliver a multi-line paste as one
     // `Event::Paste` instead of a stream of key events (each newline a bare
