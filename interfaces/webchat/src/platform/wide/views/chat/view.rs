@@ -22,10 +22,8 @@ use super::team_events::subscribe_team_events;
 use crate::components::team_participants::TeamParticipants;
 use crate::components::team_task_strip::TaskDrawerOpen;
 use crate::components::team_task_strip::TeamTaskDrawer;
-use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
-use crate::state::layout::{LayoutMode, WorkspaceState};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
@@ -39,12 +37,6 @@ pub fn ChatView() -> impl IntoView {
     // ChatState is provided once at the app root so the chat sidebar
     // (left column) and this view share one session / agent selection.
     let chat = expect_context::<ChatState>();
-    // WorkspaceState is optional during early boot races; when present, the
-    // chat surface reserves the workspace pane's width on the right in Split
-    // mode so message/composer max-width centers inside the *visible* chat
-    // area instead of drifting under the floating workspace pane.
-    let workspace = use_context::<WorkspaceState>();
-
     // Team chat: subscribe to team.<id>.* events alongside the single-agent stream.
     // Harmless when not in team mode (the handler short-circuits on topic prefix).
     let team_sub_id = subscribe_team_events(&dashboard, chat);
@@ -174,34 +166,18 @@ pub fn ChatView() -> impl IntoView {
     };
 
     view! {
-        // Transparent — the shell's light-field shows through. `relative` is
-        // the positioning ancestor for the workspace pane, which now FLOATS
-        // over the chat surface as a right-anchored overlay (see
-        // `WorkspacePanel`); `overflow-hidden` clips it while it's slid
-        // off-screen-right when collapsed, so `<main>` grows no horizontal
-        // scrollbar.
+        // Transparent — the shell's light-field shows through. The right pane
+        // now lives beside `<main>` as a normal flex sibling, so this chat
+        // root only clips its own drag overlay and content.
         <div
             class="relative flex h-full overflow-hidden"
             on:dragover=on_dragover
             on:dragleave=on_dragleave
             on:drop=on_drop
         >
-            // Chat surface — yields ~40% to the workspace pane when it's open.
-            // `relative` anchors the workspace toggle (top-right corner
-            // affordance) so it follows the chat-surface boundary: in
-            // ChatOnly mode the toggle sits to the LEFT of the
-            // window-fixed NotificationCenter bell, in Split mode the
-            // chat-surface shrinks and the toggle naturally shifts left
-            // toward the workspace pane edge.
-            <div class=move || {
-                let base = "relative flex flex-col flex-1 min-w-0 h-full";
-                let split = workspace.map(|w| w.mode.get() == LayoutMode::Split).unwrap_or(false);
-                if split {
-                    format!("{base} pr-[var(--aleph-workspace-w)]")
-                } else {
-                    base.to_string()
-                }
-            }>
+            // Chat surface — the shell-owned right pane is a normal flex
+            // sibling, so this column keeps all available chat width.
+            <div class="relative flex flex-col flex-1 min-w-0 h-full">
                 // No chat-local drag strip or LayoutToggle here: the
                 // global `aleph-main-drag-band` at the top of `<main>`
                 // (see `app.rs` → `ChatBandChrome`) hosts the workspace
@@ -253,8 +229,6 @@ pub fn ChatView() -> impl IntoView {
                     </Show>
                 </div>
             </div>
-            // Workspace pane — always mounted; eases open/closed on Split.
-            <WorkspacePanel />
             // Drop overlay — only visible while a file is hovering.
             <Show when=move || chat.is_dragging_files.get()>
                 <div class="absolute inset-0 z-30 pointer-events-none

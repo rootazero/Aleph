@@ -65,11 +65,12 @@ fn body_testid(body: WorkspaceBody) -> &'static str {
     }
 }
 
-/// Workspace pane root — always mounted, CSS-collapsed outside
-/// [`LayoutMode::Split`].
+/// Workspace pane host. `legacy=true` keeps the rollback overlay path; the
+/// app-shell flex host passes `legacy=false` and owns the pane as a third
+/// sibling beside `<main>`.
 #[component]
 #[must_use]
-pub fn WorkspacePanel() -> impl IntoView {
+pub fn WorkspacePanel(legacy: bool) -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
@@ -114,8 +115,7 @@ pub fn WorkspacePanel() -> impl IntoView {
                 let viewport_w = web_sys::window()
                     .and_then(|w| w.inner_width().ok())
                     .and_then(|v| v.as_f64())
-                    .map(|f| f as u32)
-                    .unwrap_or(0);
+                    .unwrap_or(0.0);
                 let clamped = clamp_width(px, viewport_w);
                 let _ = root
                     .style()
@@ -171,23 +171,28 @@ pub fn WorkspacePanel() -> impl IntoView {
     };
 
     view! {
-        // Always mounted so collapse/expand can EASE via a CSS transition.
-        // FLOATS over the chat surface as an opaque overlay (same idiom as
-        // the composer's project / model-picker popovers: `glass` +
-        // `bg-surface-overlay` + `shadow-xl`) instead of being a flex sibling
-        // column — so opening/closing it no longer reflows the chat detail.
-        // `absolute inset-y-0 right-0` anchors it to the right edge of the
-        // ChatView's `relative` root; the `workspace-collapsed` modifier
-        // slides it off-screen right + fades over 200ms when not in Split.
-        // Width still reads `--aleph-workspace-w` so the band chrome
-        // (label + LayoutToggle in app.rs) stays glued to its leading edge.
+        // The flex host is a normal third shell column. The legacy branch is
+        // kept for visual comparison and rollback, but both branches share
+        // this body, width writer, pointer capture and keep-alive canvas.
         <aside
             node_ref=pane_ref
             data-testid="workspace-panel"
-            class="aleph-workspace-pane absolute inset-y-0 right-0 z-20 flex flex-col
-                   glass border-l border-border bg-surface-overlay/95 shadow-xl
-                   min-w-[280px] w-[var(--aleph-workspace-w)] overflow-hidden"
-            class:workspace-collapsed=move || workspace.mode.get() != LayoutMode::Split
+            class=move || {
+                if legacy {
+                    "aleph-workspace-pane absolute inset-y-0 right-0 z-20 flex flex-col glass border-l border-border bg-surface-overlay/95 shadow-xl min-w-[280px] w-[var(--aleph-workspace-w)] overflow-hidden".to_string()
+                } else {
+                    "aleph-workspace-pane shrink-0 flex flex-col border-l border-border bg-surface-base w-[var(--aleph-workspace-w)] min-w-0 overflow-hidden transition-[width] duration-200".to_string()
+                }
+            }
+            class:legacy-workspace-pane=move || legacy
+            class:workspace-collapsed=move || legacy && workspace.mode.get() != LayoutMode::Split
+            style:display=move || {
+                if legacy || workspace.mode.get() == LayoutMode::Split {
+                    "flex"
+                } else {
+                    "none"
+                }
+            }
         >
             // Left-edge resize handle. Absolutely positioned so it costs the
             // flex column no space; pointer capture is what keeps the drag
@@ -299,9 +304,9 @@ fn width_from_pointer(pane: NodeRef<leptos::html::Aside>, client_x: i32) -> Opti
     let viewport = web_sys::window()
         .and_then(|w| w.inner_width().ok())
         .and_then(|v| v.as_f64())
-        .unwrap_or(right);
+        .unwrap_or(0.0);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    Some(clamp_width(raw.max(0.0) as u32, viewport.max(0.0) as u32))
+    Some(clamp_width(raw.max(0.0) as u32, viewport))
 }
 
 /// Deliverables tab — artifacts produced by the team, via teams.chat.thread.

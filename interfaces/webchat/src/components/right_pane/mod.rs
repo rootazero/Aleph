@@ -1,10 +1,12 @@
 //! Right-pane slot contracts. The app-shell host is introduced separately.
 #![deny(unreachable_pub)]
 
+pub mod pane;
 mod registry;
 mod slot;
 mod slots;
 
+pub use pane::RightPane;
 pub use registry::{RegistryError, RightPaneRegistry};
 pub use slot::{
     EmptyServiceHub, RightPaneSlot, ServiceHub, SlotCtx, SlotRenderCtx, StageOneTopicBus, TopicBus,
