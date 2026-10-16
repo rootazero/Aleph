@@ -221,12 +221,23 @@ pub fn StandaloneBrowserViewer(
     origin: String,
     #[prop(optional)] compact: bool,
     #[prop(optional)] on_notice: Option<Callback<StandaloneNotice>>,
+    #[prop(optional)] on_transport_ready: Option<Callback<Owner>>,
 ) -> impl IntoView {
-    // The transport writes to this signal (`close` / `accept_*`) and the
-    // notice follows the phase; its failure flag overrides the phase notice.
     let session = RwSignal::new(session);
     let ui = TransportUi::new();
-    transport::start(session, ui, origin);
+    // Keep transport cleanup separate from the render owner. InlineBrowser may
+    // stop the transport synchronously on a terminal notice while Show still
+    // retains this component's OwnedView; the render owner must remain alive
+    // until that branch is removed naturally.
+    let transport_owner = Owner::new();
+    transport_owner.with(|| {
+        // The transport writes to this signal (`close` / `accept_*`) and the
+        // notice follows the phase; its failure flag overrides the phase notice.
+        transport::start(session, ui, origin);
+    });
+    if let Some(on_transport_ready) = on_transport_ready {
+        on_transport_ready.run(transport_owner.clone());
+    }
     // Sticky: true once the session has authenticated at least once.
     let was_live = Memo::new(move |prev: Option<&bool>| {
         prev.copied().unwrap_or(false) || session.with(|s| s.phase()) == SessionPhase::Authenticated

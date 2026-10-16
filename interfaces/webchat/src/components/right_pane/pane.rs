@@ -127,7 +127,9 @@ pub(crate) fn RegistryPane() -> impl IntoView {
                         style:display=move || {
                             if rendered_active.get() == Some(id) { "flex" } else { "none" }
                         }>
-                        {slot.render(SlotRenderCtx { snapshot: snapshot() })}
+                        {slot.render(SlotRenderCtx {
+                            snapshot: untrack(snapshot),
+                        })}
                     </div>
                 }.into_any()
             } else {
@@ -135,7 +137,9 @@ pub(crate) fn RegistryPane() -> impl IntoView {
                 view! {
                     <Show when=move || rendered_active.get() == Some(id)>
                         <div class="flex-1 min-h-0 flex flex-col overflow-y-auto" data-slot-body=id role="tabpanel">
-                            {slot.render(SlotRenderCtx { snapshot: snapshot() })}
+                            {slot.render(SlotRenderCtx {
+                                snapshot: untrack(snapshot),
+                            })}
                         </div>
                     </Show>
                 }.into_any()

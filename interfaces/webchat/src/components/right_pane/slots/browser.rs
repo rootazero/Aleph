@@ -207,8 +207,21 @@ fn InlineBrowser(
             {move || {
                 let Some((session, origin)) = pending.try_update_value(Option::take).flatten() else { return ().into_any(); };
                 let owner = Owner::new();
-                let view = owner.with(|| view! { <StandaloneBrowserViewer session=session origin=origin compact=true on_notice=on_notice /> }.into_any());
-                viewer_owner.set_value(Some(owner.clone()));
+                let on_transport_ready = Callback::new(move |transport_owner| {
+                    viewer_owner.set_value(Some(transport_owner));
+                });
+                let view = owner.with(|| {
+                    view! {
+                        <StandaloneBrowserViewer
+                            session=session
+                            origin=origin
+                            compact=true
+                            on_notice=on_notice
+                            on_transport_ready=on_transport_ready
+                        />
+                    }
+                    .into_any()
+                });
                 OwnedView::new_with_owner(view, owner).into_any()
             }}
         </Show>
@@ -352,6 +365,45 @@ mod tests {
         });
         parent.cleanup();
         assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn explicit_tab_stops_transport_owner_before_render_owner_disposal() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        let parent = Owner::new();
+        let transport_stopped = Arc::new(AtomicUsize::new(0));
+        let render_disposed = Arc::new(AtomicUsize::new(0));
+        parent.with(|| {
+            let render_owner = Owner::new();
+            let render_counter = render_disposed.clone();
+            render_owner.with(|| {
+                on_cleanup(move || {
+                    render_counter.fetch_add(1, Ordering::SeqCst);
+                });
+            });
+            let transport_owner = render_owner.with(Owner::new);
+            let transport_counter = transport_stopped.clone();
+            transport_owner.with(|| {
+                on_cleanup(move || {
+                    transport_counter.fetch_add(1, Ordering::SeqCst);
+                });
+            });
+            let held = StoredValue::new(Some(transport_owner));
+            stop_viewer(held);
+            stop_viewer(held);
+            assert_eq!(transport_stopped.load(Ordering::SeqCst), 1);
+            assert_eq!(render_disposed.load(Ordering::SeqCst), 0);
+
+            render_owner.cleanup();
+            assert_eq!(transport_stopped.load(Ordering::SeqCst), 1);
+            assert_eq!(render_disposed.load(Ordering::SeqCst), 1);
+        });
+        parent.cleanup();
+        assert_eq!(transport_stopped.load(Ordering::SeqCst), 1);
+        assert_eq!(render_disposed.load(Ordering::SeqCst), 1);
     }
 
     #[test]
