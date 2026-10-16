@@ -31,6 +31,7 @@
 //! *removes* the property to go back to that default rather than writing a
 //! second copy of the number.
 
+use crate::components::mode_sidebar::is_subagent_tree_route;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::{
@@ -40,6 +41,7 @@ use crate::views::browser::{BrowserViewer, BrowserWorkspace};
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::hooks::use_location;
 use wasm_bindgen::JsCast;
 
 /// Localized label for a body tab.
@@ -73,6 +75,9 @@ fn body_testid(body: WorkspaceBody) -> &'static str {
 pub fn WorkspacePanel(legacy: bool) -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
     let i18n = use_i18n();
+    let location = use_location();
+    let full_screen_subagents =
+        Memo::new(move |_| is_subagent_tree_route(&location.pathname.get()));
 
     let pane_ref = NodeRef::<leptos::html::Aside>::new();
     let dragging = RwSignal::new(false);
@@ -170,7 +175,9 @@ pub fn WorkspacePanel(legacy: bool) -> impl IntoView {
             class:legacy-workspace-pane=move || legacy
             class:workspace-collapsed=move || legacy && workspace.mode.get() != LayoutMode::Split
             style:display=move || {
-                if legacy || workspace.mode.get() == LayoutMode::Split {
+                if full_screen_subagents.get() {
+                    "none"
+                } else if legacy || workspace.mode.get() == LayoutMode::Split {
                     "flex"
                 } else {
                     "none"

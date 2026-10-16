@@ -295,6 +295,9 @@ pub struct WorkspaceState {
     /// Slot preferences belong to the workspace, never to the catalog.
     /// `None` selects the first visible default-open descriptor.
     pub selected_slot: RwSignal<Option<&'static str>>,
+    /// Selected background sub-agent node, shared by the slot and its
+    /// full-screen deep-link. Runtime-only: it is never persisted.
+    pub selected_subagent_node: RwSignal<Option<String>>,
     pub user_opened_slots: RwSignal<BTreeSet<&'static str>>,
     pub user_closed_slots: RwSignal<BTreeSet<&'static str>>,
     /// User-dragged pane width in CSS pixels; `None` = the CSS default.
@@ -341,6 +344,7 @@ impl WorkspaceState {
             mode: RwSignal::new(hydrated),
             body: RwSignal::new(WorkspaceBody::default()),
             selected_slot: RwSignal::new(None),
+            selected_subagent_node: RwSignal::new(None),
             user_opened_slots: RwSignal::new(BTreeSet::new()),
             user_closed_slots: RwSignal::new(BTreeSet::new()),
             width_px: RwSignal::new(read_persisted_workspace_width()),
@@ -467,6 +471,7 @@ impl WorkspaceState {
         self.expanded_events
             .update(std::collections::HashSet::clear);
         self.unseen_artifacts.set(0);
+        self.selected_subagent_node.set(None);
         self.auto_reveal_muted_run.set(None);
     }
 
@@ -578,6 +583,7 @@ mod tests {
             mode: RwSignal::new(mode),
             body: RwSignal::new(WorkspaceBody::default()),
             selected_slot: RwSignal::new(None),
+            selected_subagent_node: RwSignal::new(None),
             user_opened_slots: RwSignal::new(BTreeSet::new()),
             user_closed_slots: RwSignal::new(BTreeSet::new()),
             width_px: RwSignal::new(None),
@@ -853,6 +859,7 @@ mod tests {
         owner.set();
         let ws = test_ws(LayoutMode::Split);
         ws.body.set(WorkspaceBody::Canvas);
+        ws.selected_subagent_node.set(Some("node-1".to_string()));
         ws.set_width(640);
         ws.collapse_by_user(Some("run-1".to_string()));
         ws.set_layout(LayoutMode::Split);
@@ -860,6 +867,7 @@ mod tests {
         ws.reset();
 
         assert_eq!(ws.auto_reveal_muted_run.get_untracked(), None);
+        assert_eq!(ws.selected_subagent_node.get_untracked(), None);
         assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
         assert_eq!(ws.body.get_untracked(), WorkspaceBody::Canvas);
         assert_eq!(ws.width_px.get_untracked(), Some(640));

@@ -7,6 +7,7 @@ use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n, I18nCtx};
 use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
+use leptos_router::hooks::use_location;
 
 use super::{stage_one_registry, RightPaneRegistry, SlotCtx, SlotRenderCtx};
 
@@ -72,6 +73,20 @@ pub(crate) fn RegistryPane() -> impl IntoView {
     let active = Memo::new(move |_| {
         registry.with_value(|r| selected_slot(r, &snapshot(), workspace.selected_slot.get()))
     });
+    // The full-screen deep-link owns the tree presenter. Keep the artifacts
+    // owner mounted behind the hidden shell, but suppress the selected tree
+    // slot so two live tree owners can never coexist.
+    let location = use_location();
+    let full_screen_subagents = Memo::new(move |_| {
+        crate::components::mode_sidebar::is_subagent_tree_route(&location.pathname.get())
+    });
+    let rendered_active = Memo::new(move |_| {
+        if full_screen_subagents.get() {
+            Some("rps.artifacts")
+        } else {
+            active.get()
+        }
+    });
     // Existing canvas/tool producers also write `body` directly while Split.
     // Skip the initial read so the registry's default remains the entry tab.
     Effect::new(move |previous: Option<()>| {
@@ -105,14 +120,16 @@ pub(crate) fn RegistryPane() -> impl IntoView {
             if id == "rps.artifacts" {
                 view! {
                     <div class="flex-1 min-h-0 flex flex-col" data-slot-body=id role="tabpanel"
-                        style:display=move || if active.get() == Some(id) { "flex" } else { "none" }>
+                        style:display=move || {
+                            if rendered_active.get() == Some(id) { "flex" } else { "none" }
+                        }>
                         {slot.render(SlotRenderCtx { snapshot: snapshot() })}
                     </div>
                 }.into_any()
             } else {
                 let slot: Arc<dyn super::RightPaneSlot> = slot;
                 view! {
-                    <Show when=move || active.get() == Some(id)>
+                    <Show when=move || rendered_active.get() == Some(id)>
                         <div class="flex-1 min-h-0 flex flex-col overflow-y-auto" data-slot-body=id role="tabpanel">
                             {slot.render(SlotRenderCtx { snapshot: snapshot() })}
                         </div>

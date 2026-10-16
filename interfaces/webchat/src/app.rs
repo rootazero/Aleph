@@ -34,7 +34,7 @@ use crate::views::usage::UsageView;
 use crate::api::BehaviorConfigApi;
 use crate::components::boot_check_gate::BootCheckGate;
 use crate::components::command_palette::CommandPalette;
-use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
+use crate::components::mode_sidebar::{is_subagent_tree_route, ModeSidebar, PanelMode};
 use crate::components::notification_center::NotificationCenter;
 use crate::components::right_pane::RightPane;
 use crate::components::service_blocking_gate::ServiceBlockingGate;
@@ -727,18 +727,21 @@ fn DashboardRouter() -> impl IntoView {
 
     move || {
         let path = location.pathname.get();
-        match path.as_str() {
-            "/dashboard" => view! { <Home /> }.into_any(),
-            "/dashboard/memory" => view! { <MemoryVaultRedirect /> }.into_any(),
-            "/dashboard/cron" => view! { <CronView /> }.into_any(),
-            "/dashboard/tasks" => view! { <TasksView /> }.into_any(),
-            "/dashboard/logs" => view! { <Logs /> }.into_any(),
-            "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
-            "/dashboard/subagents" => view! { <SubagentTreeDeepLink /> }.into_any(),
-            "/dashboard/runtimes" => view! { <RuntimesView /> }.into_any(),
-            "/dashboard/usage" => view! { <UsageView /> }.into_any(),
-            // Not in dashboard mode — render nothing (div is hidden)
-            _ => ().into_any(),
+        if is_subagent_tree_route(&path) {
+            view! { <SubagentTreeDeepLink /> }.into_any()
+        } else {
+            match path.as_str() {
+                "/dashboard" => view! { <Home /> }.into_any(),
+                "/dashboard/memory" => view! { <MemoryVaultRedirect /> }.into_any(),
+                "/dashboard/cron" => view! { <CronView /> }.into_any(),
+                "/dashboard/tasks" => view! { <TasksView /> }.into_any(),
+                "/dashboard/logs" => view! { <Logs /> }.into_any(),
+                "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
+                "/dashboard/runtimes" => view! { <RuntimesView /> }.into_any(),
+                "/dashboard/usage" => view! { <UsageView /> }.into_any(),
+                // Not in dashboard mode — render nothing (div is hidden)
+                _ => ().into_any(),
+            }
         }
     }
 }

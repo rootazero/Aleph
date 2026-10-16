@@ -34,8 +34,9 @@ use leptos_router::hooks::use_navigate;
 
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n, I18nCtx};
+use crate::state::layout::WorkspaceState;
 use aleph_protocol::subagent_tree::{build_tree, SubagentNode, SubagentTreeEvent, TreeNode};
-use state::{apply_event, arrange, summarize, FilterMode, SortMode};
+use state::{apply_event, arrange, selected_child_address, summarize, FilterMode, SortMode};
 use visuals::{fmt_duration, fmt_tokens, heat_color, lifecycle_color, lifecycle_glyph, sparkline};
 
 /// Topic the gateway relay publishes live tree deltas on — the shared
@@ -151,6 +152,7 @@ fn describe_activity(n: &SubagentNode, i18n: I18nCtx) -> String {
 #[must_use]
 pub fn SubagentTree() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let workspace = expect_context::<WorkspaceState>();
     let i18n = use_i18n();
     let navigate = StoredValue::new(use_navigate());
 
@@ -162,7 +164,7 @@ pub fn SubagentTree() -> impl IntoView {
     // Selected node (detail drawer) + its lazily-fetched child transcript.
     // The transcript signal holds (node_id, outcome) so a slow response for a
     // previously-selected node cannot label the currently-selected one.
-    let selected = RwSignal::new(Option::<String>::None);
+    let selected = workspace.selected_subagent_node;
     let transcript = RwSignal::new(Option::<(String, Result<Vec<TranscriptRow>, String>)>::None);
 
     // Cold-start: fetch the current flat snapshot once connected. Merges (not
@@ -178,7 +180,7 @@ pub fn SubagentTree() -> impl IntoView {
                         .iter()
                         .filter_map(|v| serde_json::from_value(v.clone()).ok())
                         .collect();
-                    nodes.update(|list| {
+                    let _ = nodes.try_update(|list| {
                         for node in fetched {
                             apply_event(list, SubagentTreeEvent::Spawned { node });
                         }
@@ -212,36 +214,25 @@ pub fn SubagentTree() -> impl IntoView {
     });
     on_cleanup(move || state.unsubscribe_events(sub_id));
 
-    // Detail drawer: fetch the selected node's child transcript when it has
-    // an address. Keyed by node_id so a stale response cannot mislabel.
+    // Detail drawer: derive the selected node's immutable child address. The
+    // memo tracks snapshots so a selection made before cold-start can recover,
+    // but its equality prevents progress ticks from refetching history.
+    let selected_child =
+        Memo::new(move |_| selected_child_address(&nodes.get(), selected.get().as_deref()));
     Effect::new(move || {
-        let Some(id) = selected.get() else {
-            transcript.set(None);
+        let Some((id, child_key)) = selected_child.get() else {
+            let _ = transcript.try_set(None);
             return;
         };
-        // Untracked on purpose: tracking `nodes` here would re-fetch the
-        // transcript on EVERY live tree event (each Progress tick) while a
-        // node is selected. The address is immutable per node, so reading it
-        // once per selection is the whole requirement.
-        let child = nodes.with_untracked(|list| {
-            list.iter()
-                .find(|n| n.node_id == id)
-                .and_then(|n| n.child_session.clone())
-        });
-        let Some(child_key) = child else {
-            transcript.set(None);
-            return;
-        };
+        let _ = transcript.try_set(None);
         spawn_local(async move {
             let params = serde_json::json!({ "session_key": child_key });
             let outcome = match state.rpc_call("chat.history", params).await {
                 Ok(val) => Ok(transcript_rows(&val)),
                 Err(e) => Err(e.to_string()),
             };
-            // Apply only if this node is still the selected one. `try_` +
-            // `flatten`: past the `.await` the owning component may already
-            // be disposed, and a plain read there panics the whole panel
-            // (`disposed_reads` census).
+            // Apply only if this node is still the selected one. `try_` fences
+            // both the read and write after await when the owner was disposed.
             if selected.try_get_untracked().flatten().as_deref() == Some(id.as_str()) {
                 let _ = transcript.try_set(Some((id, outcome)));
             }
