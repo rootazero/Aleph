@@ -241,41 +241,43 @@ pub async fn run(
     verbose: bool,
 ) -> CliResult<()> {
     // 1. Setup terminal
-    enable_raw_mode()?;
     let mut stdout = io::stdout();
+    // Mouse capture must be enabled before raw mode. On Windows, crossterm
+    // saves the console-mode snapshot when capture is enabled; F6 can then
+    // release capture without restoring a raw-mode snapshot over the host's
+    // input handling. Capture is optional: a refused capture only removes
+    // mouse affordances, whose keyboard equivalents remain available.
+    let mouse = execute!(stdout, EnableMouseCapture).is_ok();
+    enable_raw_mode().map_err(|error| {
+        let _ = execute!(stdout, DisableMouseCapture);
+        error
+    })?;
     // Bracketed paste lets the terminal deliver a multi-line paste as one
     // `Event::Paste` instead of a stream of key events (each newline a bare
     // Enter), which would otherwise auto-send the first pasted line. Unix/macOS
     // only — crossterm's Windows console source does not emit paste events, so
     // this is inert (but harmless) there.
-    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
-    // Mouse capture is asked for SEPARATELY and its failure is not fatal.
-    // Every affordance a click reaches has a key that reaches it too, so a
-    // terminal that refuses capture loses nothing but the shortcut — and the
-    // fold hints then word themselves `ctrl+o` instead of `click`, which is
-    // the branch `state.mouse` exists to carry (spec §8).
-    //
+    if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableBracketedPaste) {
+        let _ = execute!(stdout, DisableMouseCapture);
+        let _ = disable_raw_mode();
+        return Err(error.into());
+    }
     // The cost, which is why this is worth stating: with capture on, the
     // terminal stops handling drag-select itself. F6 temporarily releases
     // capture and freezes the last frame so the host terminal can provide its
     // native selection/copy UI; F6 or Esc restores capture afterwards.
-    let mouse = execute!(stdout, EnableMouseCapture).is_ok();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     // 2. Set panic hook to restore terminal on panic
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // Disable capture while crossterm's pre-raw console-mode snapshot is
+        // still valid; disabling raw mode first can restore the wrong mode on
+        // Windows. Disabling capture that was never enabled is harmless.
+        let _ = execute!(io::stdout(), DisableMouseCapture);
         let _ = disable_raw_mode();
-        // Disabling capture that was never enabled is a no-op the terminal
-        // ignores; a panic is the wrong place to consult a flag, and leaving
-        // it on would make the user's shell unusable.
-        let _ = execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            DisableBracketedPaste,
-            DisableMouseCapture
-        );
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste);
         let _ = execute!(io::stdout(), crossterm::cursor::Show);
         original_hook(info);
     }));
@@ -392,14 +394,17 @@ pub async fn run(
     )
     .await;
 
-    // 6. Restore terminal (always, even on error)
-    disable_raw_mode()?;
-    execute!(
+    // 6. Restore terminal (always, even on error). Release capture before
+    // raw mode so Windows crossterm can restore its pre-raw console snapshot.
+    let capture_and_screen_cleanup = execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
         DisableBracketedPaste,
         DisableMouseCapture
-    )?;
+    );
+    let raw_mode_cleanup = disable_raw_mode();
+    capture_and_screen_cleanup?;
+    raw_mode_cleanup?;
     terminal.show_cursor()?;
 
     result

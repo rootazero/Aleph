@@ -1,18 +1,21 @@
 //! Host-terminal text selection, without a synthetic selection or clipboard.
 //!
-//! F6 releases mouse capture and freezes drawing; drag and copy using the host
-//! terminal's own bindings (Windows Terminal normally uses Ctrl+Shift+C).
-//! F6 or Esc resumes the TUI. Gateway events may continue updating app state;
-//! only the visible frame is frozen. The caller must gate every draw on `active`.
+//! F6 releases crossterm mouse capture and freezes drawing; drag and copy using
+//! the host terminal's own bindings (Windows Terminal normally uses
+//! Ctrl+Shift+C). F6 or Esc resumes the TUI. Gateway events may continue
+//! updating app state; only the visible frame is frozen. The caller must gate
+//! every draw on `active`.
 //!
 //! Platform limits: this selects visible terminal cells, not off-screen chat
 //! history, and may include UI chrome and visual line wraps. Copy bindings,
 //! selection persistence and resize/reflow while frozen belong to the emulator.
 //! Some hosts consume the first Esc to clear their selection: press Esc again
-//! or F6 to resume. Legacy Windows console QuickEdit can also suspend input;
-//! clear its selection first. Raw mode stays enabled so exit keys still work.
-//! Crossterm 0.28 uses console APIs for capture on Windows (even with an in-memory
-//! writer), so tests inject the capture operation instead of touching a console.
+//! or F6 to resume. Releasing capture depends on crossterm having saved the
+//! host's pre-raw console mode during initialization; F6 does not actively
+//! enable QuickEdit. Legacy Windows console QuickEdit may still swallow Esc or
+//! suspend input, so clear its selection first. Crossterm 0.28 uses console APIs
+//! for capture on Windows (even with an in-memory writer), so tests inject the
+//! capture operation instead of touching a console.
 
 use std::io::{self, Write};
 
@@ -241,6 +244,24 @@ mod tests {
                 .unwrap());
         }
         assert!(!selection.active());
+    }
+
+    #[test]
+    fn initialization_enables_capture_before_raw_mode() {
+        let source = include_str!("mod.rs").replace('\r', "");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let capture = production
+            .find("let mouse = execute!(stdout, EnableMouseCapture)")
+            .unwrap();
+        let raw = production.find("enable_raw_mode().map_err").unwrap();
+        let alternate = production
+            .find("execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)")
+            .unwrap();
+        assert!(capture < raw, "capture must save the pre-raw mode");
+        assert!(
+            raw < alternate,
+            "raw mode must precede alternate screen setup"
+        );
     }
 
     #[test]
