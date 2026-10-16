@@ -102,7 +102,7 @@ fn TrayRow(
                 spawn_local(async move { if let Err(error) = tray.download(item).await { let _ = tray.fail(error); } });
             }>{crate::i18n::t!(i18n, tray.download)}</button>
             <button type="button" class="text-[11px] text-text-secondary hover:text-primary"
-                disabled=item.size > crate::platform::wide::views::chat::composer::attachments::MAX_ATTACHMENT_SIZE_BYTES
+                disabled={item.size > crate::platform::wide::views::chat::composer::attachments::MAX_ATTACHMENT_SIZE_BYTES}
                 title=move || crate::i18n::t_string!(i18n, tray.reuse_hint).to_string()
                 on:click=move |_| {
                 let item = reuse_item.clone(); let tray = tray; let chat = chat;
