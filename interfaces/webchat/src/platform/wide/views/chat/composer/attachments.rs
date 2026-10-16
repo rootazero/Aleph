@@ -99,20 +99,22 @@ pub(crate) fn read_file_list_into(
     files: &web_sys::FileList,
     attachments: RwSignal<Vec<PendingAttachment>>,
 ) {
-    let files = files.clone();
+    // FileList is live and input/drop/paste owners may clear it as soon as this
+    // handler returns. Retain File handles synchronously before yielding.
+    let files: Vec<web_sys::File> = (0..files.length())
+        .filter_map(|index| files.get(index))
+        .collect();
     spawn_local(async move {
-        for index in 0..files.length() {
+        for file in files {
             if attachments
                 .try_with_untracked(|list| list.len() >= MAX_ATTACHMENT_COUNT)
                 .unwrap_or(true)
             {
                 break;
             }
-            if let Some(file) = files.get(index) {
-                // Sequential reads preserve input order and let oversized or failed
-                // candidates leave the actual count available for later files.
-                read_and_append_file(file, attachments).await;
-            }
+            // Sequential reads preserve input order and let oversized or failed
+            // candidates leave the actual count available for later files.
+            read_and_append_file(file, attachments).await;
         }
     });
 }
