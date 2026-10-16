@@ -1371,6 +1371,14 @@ pub(crate) fn InputArea() -> impl IntoView {
                             );
                             mention_at.set(at);
                         }
+                        on:paste=move |event: web_sys::ClipboardEvent| {
+                            if let Some(files) = event.clipboard_data().and_then(|data| data.files()) {
+                                if files.length() > 0 {
+                                    event.prevent_default();
+                                    read_file_list_into(&files, attachments);
+                                }
+                            }
+                        }
                         on:keydown=on_keydown
                         // IME composition listeners (T1.2) — same pattern as
                         // every browser that ships a textarea. We use the

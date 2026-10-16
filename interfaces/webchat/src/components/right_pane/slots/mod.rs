@@ -3,6 +3,7 @@
 mod artifacts;
 mod runtime_agents;
 mod subagent_tree;
+mod tray;
 
 use std::sync::Arc;
 
@@ -68,6 +69,14 @@ pub(super) fn register_stage_one_slots(registry: &mut RightPaneRegistry) {
             default_open: true,
             visible: |_| true,
             render: artifacts::render,
+        },
+        SlotDescriptor {
+            id: "rps.tray",
+            label: "slot.rps.tray",
+            order: 250,
+            default_open: false,
+            visible: |_| true,
+            render: tray::render,
         },
         SlotDescriptor {
             id: "rps.capabilities",
@@ -145,6 +154,7 @@ mod tests {
                     None
                 ),
                 ("rps.artifacts", "slot.rps.artifacts", 200, true, None),
+                ("rps.tray", "slot.rps.tray", 250, false, None),
                 (
                     "rps.capabilities",
                     "slot.rps.capabilities",

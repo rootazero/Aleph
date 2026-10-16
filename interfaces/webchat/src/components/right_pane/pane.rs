@@ -41,6 +41,7 @@ fn slot_label(key: &str, i18n: I18nCtx) -> String {
         "slot.rps.subagent_tree" => t_string!(i18n, slot.rps.subagent_tree).to_string(),
         "slot.rps.runtime_agents" => t_string!(i18n, slot.rps.runtime_agents).to_string(),
         "slot.rps.artifacts" => t_string!(i18n, slot.rps.artifacts).to_string(),
+        "slot.rps.tray" => t_string!(i18n, slot.rps.tray).to_string(),
         "slot.rps.capabilities" => t_string!(i18n, slot.rps.capabilities).to_string(),
         "slot.rps.browser" => t_string!(i18n, slot.rps.browser).to_string(),
         "slot.rps.approvals" => t_string!(i18n, slot.rps.approvals).to_string(),

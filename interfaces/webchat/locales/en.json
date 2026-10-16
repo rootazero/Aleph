@@ -294,10 +294,26 @@
       "subagent_tree": "Sub-agents",
       "runtime_agents": "Runtime agents",
       "artifacts": "Artifacts",
+      "tray": "Pinned files",
       "capabilities": "Capabilities",
       "browser": "Browser",
       "approvals": "Approvals"
     }
+  },
+  "tray": {
+    "title": "Pinned files",
+    "empty": "No pinned files",
+    "pin": "Pin",
+    "pinned": "Pinned",
+    "download": "Download",
+    "reuse": "Reuse",
+    "upload": "Upload and pin",
+    "failed": "File operation failed. Check browser storage and try again.",
+    "reuse_hint": "Reuse in draft (up to 10 files, 10 MiB each)",
+    "source_draft": "Draft",
+    "source_artifact": "Artifact",
+    "source_upload": "Upload",
+    "reveal": "Reveal {{ count }} files hidden by the 50-file / 7-day view"
   },
   "chat": {
     "new": "+ New",

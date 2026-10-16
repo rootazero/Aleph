@@ -105,6 +105,7 @@ fn AppContent() -> impl IntoView {
     // for the `f` repair hotkey — `ChatState` is `Copy`, so this is free.
     let chat_state = ChatState::new();
     provide_context(chat_state);
+    provide_context(crate::components::right_pane::TrayState::new());
 
     // Shared `tool_id → status` index over the foreground transcript. Provided
     // here (not inside the message list) because the right-pane tool inspector

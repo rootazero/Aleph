@@ -5,6 +5,7 @@ pub mod pane;
 mod registry;
 mod slot;
 mod slots;
+pub(crate) mod tray;
 
 pub use pane::RightPane;
 pub use registry::{RegistryError, RightPaneRegistry};
@@ -12,6 +13,7 @@ pub use slot::{
     EmptyServiceHub, RightPaneSlot, ServiceHub, SlotCtx, SlotRenderCtx, StageOneTopicBus, TopicBus,
     TopicError, TopicSubscription, ValidatingTopicBus, STAGE_ONE_TOPICS,
 };
+pub(crate) use tray::TrayState;
 
 use std::sync::Arc;
 

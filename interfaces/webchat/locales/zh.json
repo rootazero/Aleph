@@ -294,10 +294,26 @@
       "subagent_tree": "子代理",
       "runtime_agents": "运行时代理",
       "artifacts": "产物",
+      "tray": "已固定文件",
       "capabilities": "能力",
       "browser": "浏览器",
       "approvals": "审批"
     }
+  },
+  "tray": {
+    "title": "已固定文件",
+    "empty": "暂无已固定文件",
+    "pin": "固定",
+    "pinned": "已固定",
+    "download": "下载",
+    "reuse": "复用",
+    "upload": "上传并固定",
+    "failed": "文件操作失败，请检查浏览器存储后重试。",
+    "reuse_hint": "复用到草稿（最多 10 个文件，每个不超过 10 MiB）",
+    "source_draft": "草稿",
+    "source_artifact": "产物",
+    "source_upload": "上传",
+    "reveal": "显示因 50 个文件 / 7 天视图规则折叠的 {{ count }} 个文件"
   },
   "chat": {
     "new": "+ 新建",

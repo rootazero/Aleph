@@ -17,7 +17,7 @@
 
 use super::composer::InputArea;
 use super::messages::MessageList;
-use super::state::{ChatState, PendingAttachment};
+use super::state::ChatState;
 use super::team_events::subscribe_team_events;
 use crate::components::team_participants::TeamParticipants;
 use crate::components::team_task_strip::TaskDrawerOpen;
@@ -26,7 +26,6 @@ use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use wasm_bindgen::prelude::*;
 
 /// Top-level Chat view component.
 #[component]
@@ -158,11 +157,7 @@ pub fn ChatView() -> impl IntoView {
         chat.is_dragging_files.set(false);
         let Some(dt) = ev.data_transfer() else { return };
         let Some(files) = dt.files() else { return };
-        let attachments = chat.pending_attachments;
-        for i in 0..files.length() {
-            let Some(file) = files.get(i) else { continue };
-            ingest_dropped_file(file, attachments);
-        }
+        super::composer::attachments::read_file_list_into(&files, chat.pending_attachments);
     };
 
     view! {
@@ -248,64 +243,6 @@ pub fn ChatView() -> impl IntoView {
             </Show>
         </div>
     }
-}
-
-/// Read a single dropped `web_sys::File` into base64 and append it to the
-/// shared pending-attachments list. Mirrors the per-file logic used by the
-/// paperclip input — kept as a free fn so the drop handler stays tight.
-fn ingest_dropped_file(file: web_sys::File, attachments: RwSignal<Vec<PendingAttachment>>) {
-    use super::composer::attachments::{MAX_ATTACHMENT_COUNT, MAX_ATTACHMENT_SIZE_BYTES};
-
-    let name = file.name();
-    let mime_type = file.type_();
-    let size = file.size() as u64;
-    if size > MAX_ATTACHMENT_SIZE_BYTES {
-        web_sys::console::warn_1(
-            &format!(
-                "skipping dropped file '{name}': {size} bytes exceeds the {} MB limit",
-                MAX_ATTACHMENT_SIZE_BYTES / (1024 * 1024)
-            )
-            .into(),
-        );
-        return;
-    }
-    let accepted = attachments.with_untracked(|list| list.len());
-    if accepted >= MAX_ATTACHMENT_COUNT {
-        web_sys::console::warn_1(
-            &format!(
-                "skipping dropped file '{name}': already at the {MAX_ATTACHMENT_COUNT}-file limit"
-            )
-            .into(),
-        );
-        return;
-    }
-    let Ok(reader) = web_sys::FileReader::new() else {
-        return;
-    };
-    let reader_clone = reader.clone();
-    let file_name = name;
-    let file_mime = if mime_type.is_empty() {
-        "application/octet-stream".to_string()
-    } else {
-        mime_type
-    };
-    let onload = Closure::wrap(Box::new(move || {
-        if let Ok(result) = reader_clone.result() {
-            if let Some(data_url) = result.as_string() {
-                let base64_data = data_url.split(',').nth(1).unwrap_or("").to_string();
-                let attachment = PendingAttachment {
-                    name: file_name.clone(),
-                    mime_type: file_mime.clone(),
-                    data_base64: base64_data,
-                    size,
-                };
-                attachments.update(|list| list.push(attachment));
-            }
-        }
-    }) as Box<dyn Fn()>);
-    reader.set_onload(Some(onload.as_ref().unchecked_ref()));
-    onload.forget();
-    let _ = reader.read_as_data_url(&file);
 }
 
 /// Sticky banner for pending approvals addressed to the CURRENT conversation.

@@ -97,6 +97,18 @@ pub fn filtered(items: &[ArtifactItem], filter: ArtifactFilter) -> Vec<ArtifactI
         .collect()
 }
 
+/// Fold the presentation only; every server row remains in the authoritative listing.
+fn folded_artifacts(items: &[ArtifactItem], now: i64) -> Vec<ArtifactItem> {
+    use crate::components::right_pane::tray::{TRAY_MAX_ITEMS, TRAY_RETENTION_MS};
+    let cutoff = now.saturating_sub(TRAY_RETENTION_MS);
+    items
+        .iter()
+        .filter(|row| row.created_at >= cutoff)
+        .take(TRAY_MAX_ITEMS)
+        .cloned()
+        .collect()
+}
+
 /// How many rows in this listing the pane has not accounted for yet.
 ///
 /// Drives the toggle badge, which is the only signal a collapsed pane has. Note
@@ -149,6 +161,15 @@ pub fn ArtifactsSurface() -> impl IntoView {
     let i18n = use_i18n();
 
     let items = RwSignal::new(Vec::<ArtifactItem>::new());
+    let reveal_older = RwSignal::new(false);
+    let visible_items = move || {
+        let rows = items.get();
+        if reveal_older.get() {
+            rows
+        } else {
+            folded_artifacts(&rows, crate::components::right_pane::tray::now_millis())
+        }
+    };
     let filter = RwSignal::new(ArtifactFilter::All);
     let exporting = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
@@ -229,6 +250,7 @@ pub fn ArtifactsSurface() -> impl IntoView {
     Effect::new(move |_| {
         let _ = chat.session_key.get();
         preview.set(None);
+        reveal_older.set(false);
         blocked.set(None);
         known.update(HashSet::clear);
         seeded.set(false);
@@ -374,7 +396,7 @@ pub fn ArtifactsSurface() -> impl IntoView {
                 // one more row to sift for. The filter chips below govern the
                 // supporting material only.
                 {move || {
-                    let (deliverables, _) = partition_deliverables(&items.get());
+                    let (deliverables, _) = partition_deliverables(&visible_items());
                     (!deliverables.is_empty()).then(|| view! {
                         <div class="pb-2 mb-1 border-b border-border/40">
                             <div class="text-[11px] font-semibold text-text-secondary pb-1.5">
@@ -392,14 +414,14 @@ pub fn ArtifactsSurface() -> impl IntoView {
                     })
                 }}
                 {move || {
-                    let all = items.get();
+                    let all = visible_items();
                     let (_, material) = partition_deliverables(&all);
                     let rows = filtered(&material, filter.get());
                     if rows.is_empty() {
                         // "Nothing produced yet" is only true when the session
                         // really has nothing. A published report with no
                         // supporting files must not be captioned as emptiness.
-                        if all.is_empty() {
+                        if items.with(Vec::is_empty) {
                             view! {
                                 <div class="text-xs text-text-tertiary py-2">
                                     {t!(i18n, common.artifacts_empty)}
@@ -417,6 +439,15 @@ pub fn ArtifactsSurface() -> impl IntoView {
                 }}
             </div>
 
+            {move || {
+                let all = items.get();
+                let hidden = all.len().saturating_sub(folded_artifacts(&all, crate::components::right_pane::tray::now_millis()).len());
+                (hidden > 0 && !reveal_older.get()).then(|| view! {
+                    <button type="button" class="text-[11px] text-primary py-2" on:click=move |_| reveal_older.set(true)>
+                        {crate::i18n::t_string!(i18n, tray.reveal, count=hidden).to_string()}
+                    </button>
+                })
+            }}
             <WorkspaceFiles />
             <Preview target=preview />
         </div>
@@ -484,6 +515,26 @@ mod tests {
             created_at: 0,
             url: "/artifact/c/id/f".into(),
         }
+    }
+
+    #[test]
+    fn artifact_folding_preserves_the_full_listing_and_inclusive_time_boundary() {
+        use crate::components::right_pane::tray::{TRAY_MAX_ITEMS, TRAY_RETENTION_MS};
+        let now = TRAY_RETENTION_MS + 10;
+        let mut fresh = item("image/png", "outbound");
+        fresh.created_at = now;
+        let mut boundary = fresh.clone();
+        boundary.id = "boundary".into();
+        boundary.created_at = 10;
+        let mut old = boundary.clone();
+        old.id = "old".into();
+        old.created_at = 9;
+        let rows = vec![fresh.clone(), boundary.clone(), old];
+        assert_eq!(folded_artifacts(&rows, now), vec![fresh.clone(), boundary]);
+        assert_eq!(rows.len(), 3);
+        let many = vec![fresh; TRAY_MAX_ITEMS + 1];
+        assert_eq!(folded_artifacts(&many, now).len(), TRAY_MAX_ITEMS);
+        assert_eq!(many.len(), TRAY_MAX_ITEMS + 1);
     }
 
     #[test]
