@@ -1,6 +1,7 @@
 //! One immutable catalog; mounted bodies own their live subscriptions.
 
 mod artifacts;
+mod browser;
 mod runtime_agents;
 mod subagent_tree;
 mod tray;
@@ -94,7 +95,7 @@ pub(super) fn register_stage_one_slots(registry: &mut RightPaneRegistry) {
             order: 400,
             default_open: false,
             visible: |ctx| ctx.has_browser_binding,
-            render: |_| ().into_any(),
+            render: browser::render,
         },
         SlotDescriptor {
             id: "rps.approvals",

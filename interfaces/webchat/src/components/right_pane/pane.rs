@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n, I18nCtx};
+use crate::platform::wide::views::browser::BrowserWorkspace;
 use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
@@ -54,12 +55,14 @@ fn slot_label(key: &str, i18n: I18nCtx) -> String {
 pub(crate) fn RegistryPane() -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
     let dash = expect_context::<DashboardState>();
+    let browser = use_context::<BrowserWorkspace>();
     let i18n = use_i18n();
     let registry = StoredValue::new(stage_one_registry());
     let snapshot = move || SlotCtx {
         locale: i18n.get_locale(),
         mode: workspace.mode.get(),
         is_connected: dash.is_connected.get(),
+        has_browser_binding: browser.is_some_and(|browser| browser.has_browser()),
         user_opened: workspace.user_opened_slots.get(),
         user_closed: workspace.user_closed_slots.get(),
         ..SlotCtx::default()

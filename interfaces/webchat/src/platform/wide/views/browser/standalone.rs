@@ -216,7 +216,12 @@ pub fn StandaloneBrowserViewerRoute() -> impl IntoView {
 /// context. `origin` is the page origin the transport derives its endpoints
 /// from; the transport's lifetime is bound to this component.
 #[component]
-pub fn StandaloneBrowserViewer(session: ViewerSession, origin: String) -> impl IntoView {
+pub fn StandaloneBrowserViewer(
+    session: ViewerSession,
+    origin: String,
+    #[prop(optional)] compact: bool,
+    #[prop(optional)] on_notice: Option<Callback<StandaloneNotice>>,
+) -> impl IntoView {
     // The transport writes to this signal (`close` / `accept_*`) and the
     // notice follows the phase; its failure flag overrides the phase notice.
     let session = RwSignal::new(session);
@@ -230,19 +235,27 @@ pub fn StandaloneBrowserViewer(session: ViewerSession, origin: String) -> impl I
         notice_with_history(session.with(|s| s.phase()), ui.failed.get(), was_live.get())
     });
     let frame_url = Signal::derive(move || ui.frame_url.get());
-    view! { <StandaloneShell notice=notice frame_url=frame_url /> }
+    if let Some(on_notice) = on_notice {
+        Effect::new(move |_| {
+            if let Some(notice) = notice.try_get() {
+                let _ = on_notice.try_run(notice);
+            }
+        });
+    }
+    view! { <StandaloneShell notice=notice frame_url=frame_url compact=compact /> }
 }
 
 #[component]
 fn StandaloneShell(
     notice: Signal<StandaloneNotice>,
     frame_url: Signal<Option<String>>,
+    #[prop(optional)] compact: bool,
 ) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <section
             data-testid="browser-live-viewer"
-            class="flex flex-col gap-3 p-4 min-h-screen"
+            class=if compact { "flex flex-col flex-1 min-h-0 gap-2" } else { "flex flex-col gap-3 p-4 min-h-screen" }
             aria-label=t_string!(i18n, browser_viewer.region_label).to_string()
         >
             <h2 class="text-base font-semibold text-text-primary">
@@ -256,7 +269,7 @@ fn StandaloneShell(
                             data-testid="browser-live-frame"
                             src=url
                             alt=t_string!(i18n, browser_viewer.title).to_string()
-                            class="max-w-full h-auto"
+                            class=if compact { "w-full min-h-0 object-contain" } else { "max-w-full h-auto" }
                         />
                     }
                     .into_any(),
