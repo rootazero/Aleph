@@ -61,7 +61,7 @@
 - [x] Audit selected tests for home/vault/keyring side effects, then run TUI lib suite and strict scoped Clippy serially.
 - [x] Build TUI binary, review complete diff independently and address material findings.
 - [x] Exercise built executable with owned console; verify theme switching and persistence in temporary ALEPH_HOME without touching credentials.
-- [ ] Commit code/docs, deploy TUI to existing local acceptance directory and open updated acceptance terminal.
+- [x] Commit code/docs, deploy TUI to existing local acceptance directory and open updated acceptance terminal.
 - [x] Record exact commands, results and remaining visual acceptance limits.
 
 ## Verification record / 验证记录
@@ -72,3 +72,9 @@
 - Owned native Windows console drove the built executable with a temporary `ALEPH_HOME`: Amber default, six consecutive built-in/community switches, invalid reload retaining the active palette, community preference restoration after restart, no console diagnostics, and process cleanup all passed. No credential or real-home preference file was modified by the probe. / 自有原生控制台驱动重建程序，临时目录验证默认琥珀、六次连续切换、无效重载保留配色、重启恢复社区主题、无日志污染及进程清理；探针未修改真实偏好或凭据。
 - Read-only independent review identified overlay background, clipped line style, cursor contrast and command-name conflicts; all four findings were addressed with regression coverage. / 独立只读审查提出浮层底色、裁剪样式、光标对比度与命令名称冲突，四项均已修复并覆盖回归。
 - Native console automation verifies behavior and cell styles; exact font rendering and terminal transparency remain dependent on Windows Terminal settings and manual visual acceptance. / 自动化验证行为与单元格样式，实际字形与透明效果仍由 Windows Terminal 设置及人工视觉验收决定。
+
+## Local delivery / 本地交付
+
+- Code commit: `644a46b47d092fb3cf51dc3fc77ba7e025979dc6` on `feat/tui-streaming-refactor`; no merge into main. / 代码位于隔离分支，未合并 main。
+- Executable: `C:/Users/zou/AppData/Local/Aleph/tui-refactor/aleph-tui.exe`; deployed SHA256 `48A8F2989AC5956781A13ECAEDCC307458F7D509D7D6A4770C57F1431F11E011`. / 已部署程序路径与哈希如上。
+- Visible Windows Terminal window titled `Aleph TUI - five themes` opened successfully. The deployed TUI process connected to localhost port 18790; Gateway `/health` and `/ready` both returned HTTP 200. No saved theme or environment override existed, so the normal startup choice is Amber. / 已确认主题验收窗口可见、部署程序连接本地 Gateway、健康与就绪检查均返回 200；本机没有已存偏好或主题环境覆盖，因此正常启动使用琥珀。
