@@ -169,7 +169,7 @@ pub fn WorkspacePanel(legacy: bool) -> impl IntoView {
                 if legacy {
                     "aleph-workspace-pane absolute inset-y-0 right-0 z-20 flex flex-col glass border-l border-border bg-surface-overlay/95 shadow-xl min-w-[280px] w-[var(--aleph-workspace-w)] overflow-hidden".to_string()
                 } else {
-                    "aleph-workspace-pane shrink-0 flex flex-col border-l border-border bg-surface-base w-[var(--aleph-workspace-w)] min-w-0 overflow-hidden transition-[width] duration-200".to_string()
+                    "aleph-workspace-pane relative shrink-0 flex flex-col border-l border-border bg-surface-base w-[var(--aleph-workspace-w)] min-w-0 overflow-hidden transition-[width] duration-200".to_string()
                 }
             }
             class:legacy-workspace-pane=move || legacy
