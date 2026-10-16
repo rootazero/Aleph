@@ -56,13 +56,26 @@ impl TopicSubscription {
     }
 }
 
-/// Read-only, object-safe subscription boundary; no publish or mutation API.
-///
-/// Implementations must immediately reject topics outside `STAGE_ONE_TOPICS`.
-/// Slot consumers use `SlotCtx::subscribe`, which also enforces that boundary
-/// before dispatching to an injected adapter.
+/// Read-only adapter contract. Contexts expose only [`ValidatingTopicBus`],
+/// which validates before dispatch even when an injected adapter is permissive.
 pub trait TopicBus: Send + Sync {
     fn subscribe(&self, topic: &str) -> Result<TopicSubscription, TopicError>;
+}
+
+/// Shared validating facade; the injected adapter is never publicly accessible.
+pub struct ValidatingTopicBus {
+    adapter: Arc<dyn TopicBus>,
+}
+
+impl ValidatingTopicBus {
+    pub fn new(adapter: Arc<dyn TopicBus>) -> Self {
+        Self { adapter }
+    }
+
+    pub fn subscribe(&self, topic: &str) -> Result<TopicSubscription, TopicError> {
+        validate_topic(topic)?;
+        self.adapter.subscribe(topic)
+    }
 }
 
 /// Stage-one validation only; no DashboardState, stream.chat or event receiver.
@@ -103,8 +116,8 @@ pub struct SlotCtx {
     pub capability_fetch_attempted: bool,
     pub has_browser_binding: bool,
     pub has_pending_approvals: bool,
-    /// Shared read-only adapter. Use `subscribe` to enforce the context boundary.
-    pub topic_bus: Arc<dyn TopicBus>,
+    /// Shared validating boundary; its underlying adapter is private.
+    pub topic_bus: Arc<ValidatingTopicBus>,
     pub services: Arc<dyn ServiceHub>,
 }
 
@@ -122,7 +135,7 @@ impl Default for SlotCtx {
             capability_fetch_attempted: false,
             has_browser_binding: false,
             has_pending_approvals: false,
-            topic_bus: Arc::new(StageOneTopicBus),
+            topic_bus: Arc::new(ValidatingTopicBus::new(Arc::new(StageOneTopicBus))),
             services: Arc::new(EmptyServiceHub),
         }
     }
@@ -131,7 +144,6 @@ impl Default for SlotCtx {
 impl SlotCtx {
     /// Reject unknown topics synchronously, before invoking the read-only adapter.
     pub fn subscribe(&self, topic: &str) -> Result<TopicSubscription, TopicError> {
-        validate_topic(topic)?;
         self.topic_bus.subscribe(topic)
     }
 
@@ -265,7 +277,7 @@ mod tests {
         }
         let render = SlotRenderCtx {
             snapshot: SlotCtx {
-                topic_bus: Arc::new(UndispatchedBus),
+                topic_bus: Arc::new(ValidatingTopicBus::new(Arc::new(UndispatchedBus))),
                 ..SlotCtx::default()
             },
         };
@@ -273,6 +285,44 @@ mod tests {
             render.subscribe("stream.chat.delta"),
             Err(TopicError::UnknownTopic("stream.chat.delta".to_owned()))
         );
+    }
+
+    #[test]
+    fn every_public_context_path_rejects_before_injected_adapter() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct CountingBus(Arc<AtomicUsize>);
+        impl TopicBus for CountingBus {
+            fn subscribe(&self, _topic: &str) -> Result<TopicSubscription, TopicError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                // A malicious adapter accepts any input.
+                Ok(TopicSubscription {
+                    topic: "subagent.tree",
+                })
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let ctx = SlotCtx {
+            topic_bus: Arc::new(ValidatingTopicBus::new(Arc::new(CountingBus(Arc::clone(
+                &calls,
+            ))))),
+            ..SlotCtx::default()
+        };
+        let render = SlotRenderCtx {
+            snapshot: ctx.clone(),
+        };
+        for topic in ["unknown", "stream.chat.*", "stream.chat.delta"] {
+            let expected = Err(TopicError::UnknownTopic(topic.to_owned()));
+            for result in [
+                ctx.subscribe(topic),
+                ctx.topic_bus.subscribe(topic),
+                render.subscribe(topic),
+                render.snapshot.subscribe(topic),
+                render.snapshot.topic_bus.subscribe(topic),
+            ] {
+                assert_eq!(result, expected);
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -312,15 +362,9 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_render_accepts_empty_context_even_when_hidden() {
+    fn deferred_slot_render_accepts_empty_context_even_when_hidden() {
         let registry = stage_one_registry();
-        for id in [
-            "rps.subagent_tree",
-            "rps.artifacts",
-            "rps.capabilities",
-            "rps.browser",
-            "rps.approvals",
-        ] {
+        for id in ["rps.capabilities", "rps.browser", "rps.approvals"] {
             let slot = registry.get(id).unwrap();
             let _view = slot.render(SlotRenderCtx::default());
         }

@@ -10,7 +10,7 @@ pub use pane::RightPane;
 pub use registry::{RegistryError, RightPaneRegistry};
 pub use slot::{
     EmptyServiceHub, RightPaneSlot, ServiceHub, SlotCtx, SlotRenderCtx, StageOneTopicBus, TopicBus,
-    TopicError, TopicSubscription, STAGE_ONE_TOPICS,
+    TopicError, TopicSubscription, ValidatingTopicBus, STAGE_ONE_TOPICS,
 };
 
 use std::sync::Arc;

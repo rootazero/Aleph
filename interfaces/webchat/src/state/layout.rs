@@ -27,7 +27,7 @@
 
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// `localStorage` key for the chat/workspace split toggle.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -292,6 +292,11 @@ pub struct WorkspaceState {
     /// value survives a switch to a session that does not offer it, so the
     /// user gets their tab back when they switch to one that does.
     pub body: RwSignal<WorkspaceBody>,
+    /// Slot preferences belong to the workspace, never to the catalog.
+    /// `None` selects the first visible default-open descriptor.
+    pub selected_slot: RwSignal<Option<&'static str>>,
+    pub user_opened_slots: RwSignal<BTreeSet<&'static str>>,
+    pub user_closed_slots: RwSignal<BTreeSet<&'static str>>,
     /// User-dragged pane width in CSS pixels; `None` = the CSS default.
     /// Published to `--aleph-workspace-w` by `WorkspacePanel`, which is the
     /// single writer of that custom property.
@@ -335,6 +340,9 @@ impl WorkspaceState {
         Self {
             mode: RwSignal::new(hydrated),
             body: RwSignal::new(WorkspaceBody::default()),
+            selected_slot: RwSignal::new(None),
+            user_opened_slots: RwSignal::new(BTreeSet::new()),
+            user_closed_slots: RwSignal::new(BTreeSet::new()),
             width_px: RwSignal::new(read_persisted_workspace_width()),
             auto_reveal_muted_run: RwSignal::new(None),
             tool_payloads: RwSignal::new(HashMap::new()),
@@ -343,11 +351,29 @@ impl WorkspaceState {
         }
     }
 
+    /// Select/open a descriptor without changing its immutable defaults.
+    pub fn select_slot(&self, id: &'static str) {
+        self.user_closed_slots.update(|slots| {
+            slots.remove(id);
+        });
+        self.user_opened_slots.update(|slots| {
+            slots.insert(id);
+        });
+        self.selected_slot.set(Some(id));
+    }
+
+    /// Expand the pane for a slot deep-link.
+    pub fn reveal_slot(&self, id: &'static str) {
+        self.select_slot(id);
+        self.set_layout(LayoutMode::Split);
+    }
+
     /// Open the pane on `body`. The one path every "show me this" affordance
     /// goes through — the auto-reveal, the transcript tool card's "open in
     /// canvas", and the body tabs' own clicks.
     pub fn reveal(&self, body: WorkspaceBody) {
         self.body.set(body);
+        self.select_slot("rps.artifacts");
         self.set_layout(LayoutMode::Split);
     }
 
@@ -551,6 +577,9 @@ mod tests {
         WorkspaceState {
             mode: RwSignal::new(mode),
             body: RwSignal::new(WorkspaceBody::default()),
+            selected_slot: RwSignal::new(None),
+            user_opened_slots: RwSignal::new(BTreeSet::new()),
+            user_closed_slots: RwSignal::new(BTreeSet::new()),
             width_px: RwSignal::new(None),
             auto_reveal_muted_run: RwSignal::new(None),
             tool_payloads: RwSignal::new(HashMap::new()),

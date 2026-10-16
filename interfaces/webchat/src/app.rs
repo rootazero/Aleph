@@ -25,7 +25,7 @@ use crate::views::settings::{
     RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView, Settings,
     SkillsView, WorkspacesView,
 };
-use crate::views::subagent_tree::SubagentTree;
+use crate::views::subagent_tree::SubagentTreeDeepLink;
 use crate::views::tasks::TasksView;
 use crate::views::teams::{TeamsTabState, TeamsView};
 use crate::views::terminal::TerminalView;
@@ -734,7 +734,7 @@ fn DashboardRouter() -> impl IntoView {
             "/dashboard/tasks" => view! { <TasksView /> }.into_any(),
             "/dashboard/logs" => view! { <Logs /> }.into_any(),
             "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
-            "/dashboard/subagents" => view! { <SubagentTree /> }.into_any(),
+            "/dashboard/subagents" => view! { <SubagentTreeDeepLink /> }.into_any(),
             "/dashboard/runtimes" => view! { <RuntimesView /> }.into_any(),
             "/dashboard/usage" => view! { <UsageView /> }.into_any(),
             // Not in dashboard mode — render nothing (div is hidden)

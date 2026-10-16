@@ -30,6 +30,8 @@ mod visuals;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+use leptos_router::hooks::use_navigate;
+
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n, I18nCtx};
 use aleph_protocol::subagent_tree::{build_tree, SubagentNode, SubagentTreeEvent, TreeNode};
@@ -150,6 +152,7 @@ fn describe_activity(n: &SubagentNode, i18n: I18nCtx) -> String {
 pub fn SubagentTree() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
+    let navigate = StoredValue::new(use_navigate());
 
     // Flat node list (keyed by node_id via apply_event upsert). The tree is
     // rebuilt from this on every render via the shared build_tree.
@@ -246,8 +249,13 @@ pub fn SubagentTree() -> impl IntoView {
     });
 
     view! {
-        <div class="px-6 pb-6 aleph-content-top max-w-4xl mx-auto space-y-4">
-            <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, subagent_tree.title)}</h1>
+        <div class="px-6 pb-6 aleph-content-top space-y-4">
+            <div class="flex items-center justify-between gap-3">
+                <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, subagent_tree.title)}</h1>
+                <button type="button" class="px-2 py-1 rounded border border-border text-xs text-text-secondary hover:text-text-primary"
+                    on:click=move |_| navigate.with_value(|nav| nav("/dashboard/subagents", Default::default()))
+                >{t!(i18n, subagent_tree.open_full_view)}</button>
+            </div>
 
             // Rollup summary line + depth sparkline.
             {move || {
@@ -331,6 +339,15 @@ pub fn SubagentTree() -> impl IntoView {
             }}
         </div>
     }
+}
+
+/// Full-screen deep-link. The route retains its existing page while making
+/// the flex host ready for returning to the pane.
+#[component]
+pub fn SubagentTreeDeepLink() -> impl IntoView {
+    let workspace = expect_context::<crate::state::layout::WorkspaceState>();
+    Effect::new(move |_| workspace.reveal_slot("rps.subagent_tree"));
+    view! { <SubagentTree /> }
 }
 
 /// The detail drawer body: full metadata + result preview + child transcript.

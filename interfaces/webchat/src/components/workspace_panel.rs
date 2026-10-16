@@ -72,24 +72,7 @@ fn body_testid(body: WorkspaceBody) -> &'static str {
 #[must_use]
 pub fn WorkspacePanel(legacy: bool) -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
-    let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
-
-    let is_team = Memo::new(move |_| chat.team_id.get().is_some());
-    // The body actually shown. Derived, not written back: leaving the stored
-    // body alone means a user who was on `Tasks`, visited a single-agent
-    // conversation and came back finds `Tasks` again — and nothing has to
-    // race a team_id that arrives one frame after the session switch.
-    // The Browser body exists only while a `BrowserWorkspace` context holds an
-    // authorized browser resource. The context is optional on purpose: nothing
-    // provides it at the app root yet (TODO(Task6): the producer/issuer wiring
-    // provides it and feeds its model), so until then there is no Browser tab
-    // rather than an empty one.
-    let browser = use_context::<BrowserWorkspace>();
-    let has_browser = Memo::new(move |_| browser.is_some_and(|b| b.has_browser()));
-    let active = Memo::new(move |_| {
-        coerce_body_with(workspace.body.get(), is_team.get(), has_browser.get())
-    });
 
     let pane_ref = NodeRef::<leptos::html::Aside>::new();
     let dragging = RwSignal::new(false);
@@ -208,10 +191,31 @@ pub fn WorkspacePanel(legacy: bool) -> impl IntoView {
                 on:dblclick=move |_| workspace.clear_width()
             />
 
-            // Body tab strip. `aleph-pane-top` (not `aleph-content-top`):
-            // these are real buttons, and on web the smaller content inset
-            // would park them under the NotificationCenter bell — the same
-            // reason `ArtifactsSurface` used to carry it.
+            {if legacy {
+                view! { <WorkspaceBodyView /> }.into_any()
+            } else {
+                view! { <crate::components::right_pane::pane::RegistryPane /> }.into_any()
+            }}
+        </aside>
+    }
+}
+
+/// Shared workspace content for the legacy host and the artifacts slot.
+/// Its Canvas stays mounted even when the enclosing slot is hidden.
+#[component]
+pub(crate) fn WorkspaceBodyView() -> impl IntoView {
+    let workspace = expect_context::<WorkspaceState>();
+    let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
+    let is_team = Memo::new(move |_| chat.team_id.get().is_some());
+    // Browser remains absent until the authorized Task6 producer supplies it.
+    let browser = use_context::<BrowserWorkspace>();
+    let has_browser = Memo::new(move |_| browser.is_some_and(|b| b.has_browser()));
+    let active = Memo::new(move |_| {
+        coerce_body_with(workspace.body.get(), is_team.get(), has_browser.get())
+    });
+    view! {
+            // Body tab strip.
             <div class="aleph-pane-top flex gap-1 px-3 py-2 border-b border-border text-xs shrink-0">
                 // A plain map, not a keyed `<For>`: the slice is two or three
                 // static variants and only changes when team-ness does, so
@@ -282,7 +286,7 @@ pub fn WorkspacePanel(legacy: bool) -> impl IntoView {
             >
                 <crate::views::canvas::CanvasView />
             </div>
-        </aside>
+        // Fragment: the parent owns the flex column and pane chrome.
     }
 }
 

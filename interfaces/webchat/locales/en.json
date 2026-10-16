@@ -272,6 +272,7 @@
   },
   "subagent_tree": {
     "title": "Background Sub-agents",
+    "open_full_view": "Open full view",
     "empty": "No background sub-agents yet. They appear here the moment one is spawned.",
     "no_match": "No sub-agents match this filter.",
     "sort": "sort:",
@@ -287,6 +288,16 @@
     "transcript_loading": "Loading transcript…",
     "transcript_unavailable": "Transcript unavailable:",
     "no_child_session": "No child transcript address (spawned before this build, or a sync child whose result was returned inline)."
+  },
+  "slot": {
+    "rps": {
+      "subagent_tree": "Sub-agents",
+      "runtime_agents": "Runtime agents",
+      "artifacts": "Artifacts",
+      "capabilities": "Capabilities",
+      "browser": "Browser",
+      "approvals": "Approvals"
+    }
   },
   "chat": {
     "new": "+ New",
