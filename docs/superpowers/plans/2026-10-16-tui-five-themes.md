@@ -73,6 +73,12 @@
 - Read-only independent review identified overlay background, clipped line style, cursor contrast and command-name conflicts; all four findings were addressed with regression coverage. / 独立只读审查提出浮层底色、裁剪样式、光标对比度与命令名称冲突，四项均已修复并覆盖回归。
 - Native console automation verifies behavior and cell styles; exact font rendering and terminal transparency remain dependent on Windows Terminal settings and manual visual acceptance. / 自动化验证行为与单元格样式，实际字形与透明效果仍由 Windows Terminal 设置及人工视觉验收决定。
 
+## Follow-up acceptance correction / 后续验收更正
+
+The original acceptance record above is historical, not proof that every terminal honors the palette. A user screenshot subsequently showed monochrome output: inherited `NO_COLOR=1` disabled crossterm ANSI styling even though Ratatui buffers contained RGB colors. The follow-up explicitly enables interactive color output and adds native console color checks under `NO_COLOR=1`. / 上述验收记录属于历史记录，不能证明每种终端都能显示配色。用户后续截图暴露单色输出：继承的 `NO_COLOR=1` 关闭了 crossterm ANSI 样式，而 Ratatui 缓冲区仍含 RGB 值。后续修复显式启用交互颜色输出，并在 `NO_COLOR=1` 下增加原生控制台颜色检查。
+
+The approved follow-up also moves `/theme` list/apply/reload feedback into a local picker instead of chat history, with independent TUI and Panel catalogs/preferences. Fresh verification passes 558 library tests (2 ignored), 8 binary tests, strict Clippy and build; the Panel appearance suite passes 1 test with 1556 filtered, the focused production keyboard-routing test passes, and the Panel wasm check passes. The owned native-console probe also verifies Escape close, color output under `NO_COLOR=1`, feedback staying out of chat, five built-ins plus a community theme, invalid reload preserving the active palette, and restart persistence. / 经批准的后续修改将主题列举、应用、重载反馈移入本地选择器，不再写入聊天记录，TUI 与 Panel 使用独立目录和偏好。新鲜验证通过 TUI 库 558 项（忽略 2 项）、程序测试 8 项、严格 Clippy 与构建；Panel 外观测试 1 项通过（过滤 1556 项），生产键盘路由聚焦测试通过，Panel wasm 检查通过。自有原生控制台探针还验证了 Esc 关闭、`NO_COLOR=1` 下的颜色输出、反馈不进入聊天、五套内置主题加社区主题、无效重载保留活动配色及重启持久化。
+
 ## Local delivery / 本地交付
 
 - Code commit: `644a46b47d092fb3cf51dc3fc77ba7e025979dc6` on `feat/tui-streaming-refactor`; no merge into main. / 代码位于隔离分支，未合并 main。

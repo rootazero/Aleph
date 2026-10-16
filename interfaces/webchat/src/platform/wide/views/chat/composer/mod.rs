@@ -11,6 +11,7 @@
 // rather than growing a second attachment pipeline (`PendingAttachment` and the
 // tray on `ChatState` are already shared, so a second reader would only be a
 // second place for the base64 dance to drift).
+pub(crate) mod appearance_command;
 pub(crate) mod attachments;
 mod palette;
 mod voice;
@@ -99,8 +100,14 @@ pub(crate) fn InputArea() -> impl IntoView {
     let ime_gate = RwSignal::new(ImeGate::new());
 
     // Palette state — populated lazily on first `/`.
-    let all_commands: RwSignal<Vec<CommandInfo>> = RwSignal::new(Vec::new());
+    let all_commands: RwSignal<Vec<CommandInfo>> =
+        RwSignal::new(vec![appearance_command::theme_command_info(
+            t_string!(i18n, appearance.popover_title).to_string(),
+        )]);
     let show_palette = RwSignal::new(false);
+    let theme_command_open = RwSignal::new(false);
+    let theme_command_invalid = RwSignal::new(false);
+    let theme_command_selected = RwSignal::new(0usize);
     let palette_entries: RwSignal<Vec<PaletteEntry>> = RwSignal::new(Vec::new());
     let selected_index = RwSignal::new(0usize);
     let commands_loaded = RwSignal::new(false);
@@ -203,7 +210,32 @@ pub(crate) fn InputArea() -> impl IntoView {
         back_desc: t_string!(i18n, chat.back_desc).to_string(),
     };
 
+    let intercept_theme = move |raw: &str| -> bool {
+        use appearance_command::{parse_theme_request, ThemeRequest};
+        let Some(request) = parse_theme_request(raw) else {
+            return false;
+        };
+        if let ThemeRequest::Apply(mode) = request {
+            crate::appearance::apply_mode(mode);
+        }
+        theme_command_invalid.set(request == ThemeRequest::Invalid);
+        theme_command_open.set(true);
+        theme_command_selected.set(
+            crate::appearance::ThemeMode::ALL
+                .iter()
+                .position(|mode| *mode == crate::appearance::read_mode())
+                .unwrap_or(0),
+        );
+        input_text.set(String::new());
+        show_palette.set(false);
+        current_namespace.set(None);
+        true
+    };
+
     let send_message = move || {
+        if intercept_theme(&input_text.get_untracked()) {
+            return;
+        }
         if is_sending.get_untracked() {
             return;
         }
@@ -405,6 +437,9 @@ pub(crate) fn InputArea() -> impl IntoView {
     // blocked prompt never enters the queue, then stashes the draft on
     // `ChatState` and clears the composer for the next line of input.
     let enqueue_message = move || {
+        if intercept_theme(&input_text.get_untracked()) {
+            return;
+        }
         let raw = input_text.get_untracked().trim().to_string();
         let text = if is_doctor_command(&raw) {
             t_string!(i18n, chat.doctor_detect_prompt).to_string()
@@ -451,6 +486,9 @@ pub(crate) fn InputArea() -> impl IntoView {
     // still an unsent chat message — restore the draft and route it through the
     // normal path instead of swallowing it.
     let answer_pending_ask = move || -> bool {
+        if intercept_theme(&input_text.get_untracked()) {
+            return true;
+        }
         let Some(ask) = pending_ask.get_untracked() else {
             return false;
         };
@@ -656,6 +694,9 @@ pub(crate) fn InputArea() -> impl IntoView {
     // normal auto-drain (Task 3), flushing the whole queue as a fresh run. With
     // no active run it degrades to a normal send (B10).
     let force_insert = move || {
+        if intercept_theme(&input_text.get_untracked()) {
+            return;
+        }
         if chat.active_run_id.get_untracked().is_none() {
             send_message();
             return;
@@ -821,6 +862,10 @@ pub(crate) fn InputArea() -> impl IntoView {
                     if !cmds.iter().any(|c| c.key == "doctor") {
                         cmds.push(doctor_command_info(doctor_desc.clone()));
                     }
+                    cmds.retain(|command| command.key != "theme");
+                    cmds.push(appearance_command::theme_command_info(
+                        t_string!(i18n, appearance.popover_title).to_string(),
+                    ));
                     all_commands.set(cmds.clone());
                     commands_loaded.set(true);
                     // Refresh palette in case the user already typed `/`
@@ -926,6 +971,9 @@ pub(crate) fn InputArea() -> impl IntoView {
             palette_entries.set(entries);
             selected_index.set(0);
         } else {
+            if intercept_theme(&entry.full_command) {
+                return;
+            }
             input_text.set(entry.full_command);
             show_palette.set(false);
             current_namespace.set(None);
@@ -974,6 +1022,14 @@ pub(crate) fn InputArea() -> impl IntoView {
                 ev.prevent_default();
                 return;
             }
+            if appearance_command::handle_picker_key(
+                &ev.key(),
+                theme_command_open,
+                theme_command_selected,
+            ) {
+                ev.prevent_default();
+                return;
+            }
             // @-mention palette takes priority over slash palette.
             if show_mention.get_untracked() {
                 let count = mention_members.get_untracked().len() + 1; // +1 for "@all"
@@ -1016,6 +1072,19 @@ pub(crate) fn InputArea() -> impl IntoView {
             }
 
             if show_palette.get_untracked() {
+                // A complete local theme command must bypass palette filtering.
+                // `/theme dark` and `/theme list` have no matching catalogue
+                // entry, but Enter still belongs to the appearance picker.
+                // Shift+Enter deliberately falls through so the textarea keeps
+                // its normal newline behavior.
+                if ev.key() == "Enter"
+                    && !ev.shift_key()
+                    && intercept_theme(&input_text.get_untracked())
+                {
+                    ev.prevent_default();
+                    return;
+                }
+
                 let entries = palette_entries.get_untracked();
                 let count = entries.len();
                 match ev.key().as_str() {
@@ -1032,7 +1101,14 @@ pub(crate) fn InputArea() -> impl IntoView {
                             selected_index.set(if cur == 0 { count - 1 } else { cur - 1 });
                         }
                     }
-                    "Tab" | "Enter" => {
+                    "Tab" => {
+                        ev.prevent_default();
+                        let idx = selected_index.get_untracked();
+                        if idx < count {
+                            select_palette_entry(entries[idx].clone());
+                        }
+                    }
+                    "Enter" if !ev.shift_key() => {
                         ev.prevent_default();
                         let idx = selected_index.get_untracked();
                         if idx < count {
@@ -1248,6 +1324,7 @@ pub(crate) fn InputArea() -> impl IntoView {
                 // ResizeObserver-tracked `stack_ref`, inflate
                 // `--composer-clearance`, and push chat content up.
                 <div class="relative">
+                <appearance_command::ThemeCommandPicker open=theme_command_open invalid=theme_command_invalid selected=theme_command_selected />
                 <SlashPaletteView
                     show=show_palette
                     palette_entries=palette_entries
@@ -1916,6 +1993,61 @@ mod tests {
              — IME trailing Enter will dispatch send_message (regression \
              of T1.2)"
         );
+    }
+
+    // --- Theme command bypasses empty palette results ------------------
+    //
+    // `/theme dark` and `/theme list` are complete local commands, but the
+    // filtered slash catalogue has no row for their full argument text. Pin
+    // the production keyboard path, not just `parse_theme_request`, so a
+    // future palette edit cannot swallow Enter before `intercept_theme`.
+    fn palette_enter_intercepts_theme_before_selection(src: &str) -> bool {
+        let body = production_half(src);
+        let Some(palette) = body
+            .split_once("if show_palette.get_untracked() {")
+            .map(|(_, r)| r)
+        else {
+            return false;
+        };
+        let Some(enter) = palette
+            .split_once("if ev.key() == \"Enter\"")
+            .map(|(_, r)| r)
+        else {
+            return false;
+        };
+        let Some(selection) = enter.find("select_palette_entry(") else {
+            return false;
+        };
+        let Some(intercept) = enter.find("intercept_theme(") else {
+            return false;
+        };
+        intercept < selection
+            && enter[..intercept].contains("!ev.shift_key()")
+            && enter[..selection].contains("ev.prevent_default()")
+    }
+
+    #[test]
+    fn palette_enter_routes_complete_theme_commands_to_picker_first() {
+        assert!(
+            palette_enter_intercepts_theme_before_selection(include_str!("mod.rs")),
+            "palette Enter no longer routes complete /theme commands through \
+             intercept_theme before selecting an empty filtered entry list"
+        );
+    }
+
+    #[test]
+    fn palette_theme_guard_keeps_shift_enter_as_newline() {
+        let src = production_half(include_str!("mod.rs"));
+        let palette = src
+            .split_once("if show_palette.get_untracked() {")
+            .map(|(_, rest)| rest)
+            .expect("could not locate slash palette branch");
+        let guard = palette
+            .split_once("if ev.key() == \"Enter\"")
+            .and_then(|(_, rest)| rest.split_once("let entries = palette_entries"))
+            .map(|(guard, _)| guard)
+            .expect("could not locate palette theme Enter guard");
+        assert!(guard.contains("!ev.shift_key()"));
     }
 }
 

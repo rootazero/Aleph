@@ -6,7 +6,7 @@ This crate intentionally does not depend on `alephcore`; it is a pure client bui
 
 ## Themes / 主题
 
-Amber is the default; Tide, Jade, Iris and Paper are also built in. `/theme` lists the available themes, `/theme jade` switches and remembers the choice, and `/theme reload` reloads the active theme file. / 默认琥珀，另有潮汐、竹影、鸢尾、素笺。命令支持列举、切换并记忆、重载当前主题文件。
+Amber is the default; Tide, Jade, Iris and Paper are also built in. `/theme` or `/theme list` opens a local picker; `/theme jade` selects and remembers the choice, and `/theme reload` reloads the active theme file. Picker feedback stays local and never enters chat history. / 默认琥珀，另有潮汐、竹影、鸢尾、素笺。`/theme` 或 `/theme list` 打开本地选择器；`/theme jade` 选择并记忆主题，`/theme reload` 重载当前主题文件。选择器反馈仅保留在本地，不写入聊天记录。
 
 `ALEPH_TUI_THEME` overrides the startup preference. Dark themes inherit the terminal background; Paper supplies an ivory background. Terminal transparency remains a terminal setting. / 环境变量覆盖启动偏好；深色主题继承终端背景，素笺使用象牙白背景，透明度仍由终端控制。
 

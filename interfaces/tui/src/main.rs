@@ -79,6 +79,10 @@ struct Args {
 async fn main() -> CliResult<()> {
     let args = Args::parse();
 
+    // This interactive interface requires semantic colors even when its launcher
+    // inherits NO_COLOR from a non-interactive parent process.
+    crossterm::style::force_color_output(true);
+
     // Ratatui owns the terminal, including stderr, while the UI is active.
     let default_filter = if args.verbose { "debug" } else { "info" };
     if let Err(e) = aleph_logging::init_component_file_logging("tui", 7, default_filter) {

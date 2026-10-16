@@ -23,7 +23,13 @@ pub(super) fn handle_terminal_event(
     event: &event::TermEvent,
 ) -> Action {
     match event {
-        event::TermEvent::Key(key) => handle_key_event(state, textarea, *key),
+        event::TermEvent::Key(key) => {
+            let mut key = *key;
+            if key.code == KeyCode::Char('\x1b') {
+                key.code = KeyCode::Esc;
+            }
+            handle_key_event(state, textarea, key)
+        }
         event::TermEvent::Resize => {
             // Terminal resize is handled automatically by ratatui
             Action::None
@@ -120,6 +126,7 @@ fn handle_key_event(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
         },
         Focus::SessionPicker => handle_session_picker_key(state, key),
         Focus::ProviderPicker => handle_provider_picker_key(state, key),
+        Focus::ThemePicker => handle_theme_picker_key(state, key),
         Focus::Btw => handle_btw_key(state, key),
         Focus::Agents => handle_agents_key(state, key),
         Focus::Context => handle_context_key(state, key),
@@ -397,6 +404,7 @@ fn handle_global_key(
         if state.palette.is_some()
             || state.session_picker.is_some()
             || state.provider_picker.is_some()
+            || state.theme_picker.is_some()
             || state.context_overlay.is_some()
         {
             return Some(Action::CloseOverlay);
@@ -757,6 +765,16 @@ fn recompute_palette_filter(state: &mut AppState) {
 /// (the run is parked on a oneshot), so the TUI was held by a modal nothing
 /// could dismiss.
 fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
+    if key.code == KeyCode::Enter {
+        if let Some(dialog) = state.interaction.active_dialog_mut() {
+            if let ParsedInput::Local(command @ LocalCommand::Theme { .. }) =
+                slash::parse_input(&dialog.input)
+            {
+                dialog.input.clear();
+                return Action::LocalCommand(command);
+            }
+        }
+    }
     if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
         if let Some(owner) = state.interaction.active_owner().cloned() {
             state.interaction.confirm_legacy(&owner);
@@ -916,6 +934,27 @@ fn handle_session_picker_key(state: &mut AppState, key: KeyEvent) -> Action {
         }
         _ => Action::None,
     }
+}
+
+/// Navigate local themes and keep application feedback in the overlay.
+fn handle_theme_picker_key(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Up | KeyCode::Down => {
+            if let Some(picker) = &mut state.theme_picker {
+                let count = picker.names.len();
+                if count > 0 {
+                    picker.selected = if key.code == KeyCode::Up {
+                        (picker.selected + count - 1) % count
+                    } else {
+                        (picker.selected + 1) % count
+                    };
+                }
+            }
+        }
+        KeyCode::Enter => crate::tui::commands::confirm_theme_pick(state),
+        _ => {}
+    }
+    Action::None
 }
 
 /// Handle key events when the provider/model picker is focused.
@@ -1854,6 +1893,7 @@ mod mouse_tests {
             Focus::Agents,
             Focus::SessionPicker,
             Focus::ProviderPicker,
+            Focus::ThemePicker,
         ] {
             s.focus = focus;
             assert!(
@@ -1990,6 +2030,18 @@ mod mouse_tests {
 
         assert!(matches!(
             route(&mut s, &key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::CloseOverlay
+        ));
+    }
+
+    #[test]
+    fn char_escape_closes_the_theme_picker_through_the_real_router() {
+        let mut s = state();
+        s.open_theme_picker(vec!["amber".into()], Vec::new());
+        assert_eq!(s.focus, Focus::ThemePicker);
+
+        assert!(matches!(
+            route(&mut s, &key(KeyCode::Char('\x1b'), KeyModifiers::NONE)),
             Action::CloseOverlay
         ));
     }

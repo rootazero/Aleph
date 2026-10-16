@@ -23,6 +23,7 @@ use crate::tui::widgets::{
     session_picker::render_session_picker,
     status_bar::StatusBar,
     tasks_panel::{render_tasks_panel, tasks_panel_height},
+    theme_picker::render_theme_picker,
 };
 
 /// Render the full TUI layout: chat area, docked tasks/agents panels, input
@@ -154,6 +155,9 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     }
     if let Some(picker) = &state.provider_picker {
         render_provider_picker(frame, picker, input_area);
+    }
+    if let Some(picker) = &state.theme_picker {
+        render_theme_picker(frame, picker, input_area);
     }
     // Agents overlay (list floats above the input like the pickers; the
     // per-agent run view centers over the transcript).

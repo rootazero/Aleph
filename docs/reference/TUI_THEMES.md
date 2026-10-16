@@ -4,13 +4,17 @@ Amber (琥珀) is the default. Tide (潮汐), Jade (竹影), Iris (鸢尾) and P
 
 ## Use / 使用
 
-- `/theme` or `/theme list`: show the current name, available themes and color depth. / 查看当前名称、可用主题和色深。
-- `/theme jade`: switch immediately and remember the choice. / 立即切换并记忆选择。
-- `/theme reload`: validate and reload the current file after editing. On failure, the active palette remains in use. / 编辑后校验并重载当前文件；失败时保留现有配色。
+- `/theme` or `/theme list`: open the local picker with the current name, available themes and diagnostics. Arrow keys select, Enter applies, and Esc closes; no picker feedback is written to chat history. / 打开本地选择器，显示当前名称、可用主题和诊断信息。方向键选择、Enter 应用、Esc 关闭；选择器反馈不会写入聊天记录。
+- `/theme jade`: select and remember the choice through the same local picker. / 通过同一本地选择器选择并记忆主题。
+- `/theme reload`: validate and reload the current file after editing. On failure, the active palette remains in use and the error stays in the picker. / 编辑后校验并重载当前文件；失败时保留现有配色，错误仅显示在选择器中。
 
 Startup precedence is `ALEPH_TUI_THEME`, then `<ALEPH_HOME>/tui-theme`, then `amber`. If a candidate is invalid, startup reports it in the transcript and tries the next candidate. A failed preference write does not undo a successful switch; the notice explains that the change applies to this invocation. / 启动顺序为环境变量、偏好文件、琥珀；无效候选会在正文提示并尝试下一项。保存失败不撤销已完成的切换，提示会说明仅本次生效。
 
 Legacy names `dark`, `light`, and `terminal` remain accepted. `dark` maps to Amber and `light` to Paper; `terminal` leaves colors to the terminal. / 保留旧名称兼容：深色映射琥珀、浅色映射素笺，terminal 交由终端配色。
+
+## Interface boundary / 界面边界
+
+`/theme` belongs to the interface where it is entered, not the Gateway command catalog. TUI uses the five palettes and JSON files described here; Panel (wide and phone layouts) uses its existing System / Light / Dark modes and browser-local preference. Selecting a theme in one interface does not change another interface. Pending questions, queued messages and force-insert actions must not turn an appearance command into a conversation message, answer or run cancellation. / `/theme` 归输入它的界面所有，不属于 Gateway 命令目录。TUI 使用本文的五套配色与 JSON 文件；Panel 的宽屏和手机布局使用已有的跟随系统 / 浅色 / 深色模式及浏览器本地偏好。一个界面选主题不会修改另一个界面。待回答问题、排队消息和强制插入操作均不得把外观命令变成对话消息、问题答案或运行取消。
 
 ## Install a community theme / 安装社区主题
 
@@ -60,5 +64,7 @@ Status foreground derives from `dim` and status background from `background`. Se
 The four dark themes inherit the terminal background so transparency remains available. Paper paints an ivory background for readability on dark terminals. Tool and selection surfaces can paint solid cell colors. Per-cell opacity is not portable; use terminal settings for transparency. / 四套深色主题继承终端背景以保留透明度；素笺显式绘制象牙白以兼容深色终端。工具和选择区域可绘制实色，逐单元格透明度不可移植，透明度仍由终端设置。
 
 Windows Terminal (`WT_SESSION`), `COLORTERM=truecolor/24bit` and known direct-color terminal types enable RGB. `ALEPH_TUI_COLOR=truecolor` forces RGB; `ansi` or `256` forces indexed fallback. Indexed fallback preserves distinct palette accents. / 识别 Windows Terminal、COLORTERM 和已知直彩终端；可通过环境变量强制 RGB 或索引降级，索引模式仍保留主题强调色区别。
+
+The interactive TUI explicitly enables color output even when an inherited `NO_COLOR` variable would otherwise suppress crossterm ANSI styling. Color depth remains controlled by `ALEPH_TUI_COLOR`; the `terminal` theme is available for terminal-defined colors. / 交互式 TUI 会显式启用颜色输出，避免继承的 `NO_COLOR` 变量抑制 crossterm 的 ANSI 样式；色深仍由 `ALEPH_TUI_COLOR` 控制，`terminal` 主题可使用终端自身的配色。
 
 A theme switch refreshes cached styled transcript lines while preserving conversation content, draft, cursor and viewport identity. The borderless transcript and compact sticky user prompt (maximum 48 columns, `[click to jump]`) retain their existing geometry. / 切换会刷新正文样式缓存，同时保留会话内容、草稿、光标及视口锚点；保持无边框正文和最多 48 列的紧凑吸顶提示及其跳转文字。

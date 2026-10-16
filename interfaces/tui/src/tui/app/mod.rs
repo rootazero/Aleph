@@ -178,6 +178,7 @@ pub enum Focus {
     Dialog,
     SessionPicker,
     ProviderPicker,
+    ThemePicker,
     Approval,
     /// The `/btw` side-question overlay.
     Btw,
@@ -533,6 +534,15 @@ pub enum ProviderPick {
     Provider(usize),
     /// Pin this model id.
     Model(String),
+}
+
+/// Local theme choices and feedback kept outside the transcript.
+#[derive(Debug, Clone)]
+pub struct ThemePickerState {
+    pub names: Vec<String>,
+    pub selected: usize,
+    pub diagnostics: Vec<String>,
+    pub feedback: Option<String>,
 }
 
 /// State for the provider/model picker overlay (`/providers`).
@@ -1018,6 +1028,7 @@ pub struct AppState {
     /// Provider/model picker overlay (`/providers`), populated from
     /// `providers.catalog`.
     pub provider_picker: Option<ProviderPickerState>,
+    pub theme_picker: Option<ThemePickerState>,
     /// Pending tool-approval overlay (Ask exec tier), if one is being shown.
     /// Surfaced by the `exec.approvals.pending` poll, resolved via
     /// `exec.approval.resolve`.
@@ -1162,6 +1173,7 @@ impl AppState {
             palette: None,
             session_picker: None,
             provider_picker: None,
+            theme_picker: None,
             approval: None,
             btw: BtwOverlay::default(),
 
@@ -1627,6 +1639,7 @@ impl AppState {
             Focus::CommandPalette => self.palette = None,
             Focus::SessionPicker => self.session_picker = None,
             Focus::ProviderPicker => self.provider_picker = None,
+            Focus::ThemePicker => self.theme_picker = None,
             Focus::Agents => self.agents_overlay = None,
             Focus::Context => self.context_overlay = None,
             _ => {}
@@ -1642,6 +1655,7 @@ impl AppState {
             Focus::CommandPalette
                 | Focus::SessionPicker
                 | Focus::ProviderPicker
+                | Focus::ThemePicker
                 | Focus::Agents
                 | Focus::Context
                 | Focus::ToolOutput
@@ -1659,6 +1673,7 @@ impl AppState {
             Focus::CommandPalette
                 | Focus::SessionPicker
                 | Focus::ProviderPicker
+                | Focus::ThemePicker
                 | Focus::Agents
                 | Focus::Context
                 | Focus::ToolOutput
@@ -1898,6 +1913,20 @@ impl AppState {
 
     /// Open the provider picker over the rows `providers.catalog` returned,
     /// pre-filtered by `query` (`/providers <query>`).
+    /// Theme choices and feedback are local UI state, never transcript entries.
+    pub fn open_theme_picker(&mut self, names: Vec<String>, diagnostics: Vec<String>) {
+        let current = crate::tui::theme::current_theme_name();
+        let selected = names.iter().position(|name| name == &current).unwrap_or(0);
+        self.theme_picker = Some(ThemePickerState {
+            names,
+            selected,
+            diagnostics,
+            feedback: None,
+        });
+        self.interaction.pause_for_picker(true);
+        self.focus = Focus::ThemePicker;
+    }
+
     pub fn open_provider_picker(&mut self, entries: Vec<CatalogEntry>, query: String) {
         self.provider_picker = Some(ProviderPickerState {
             input: query,
@@ -2080,6 +2109,7 @@ impl AppState {
         self.palette = None;
         self.session_picker = None;
         self.provider_picker = None;
+        self.theme_picker = None;
         self.btw.begin(question);
         self.focus = Focus::Btw;
     }
@@ -2394,6 +2424,7 @@ impl AppState {
         // The picker's rows describe the install, not the conversation, but the
         // pick it is mid-way through would land on the session we just left.
         self.provider_picker = None;
+        self.theme_picker = None;
         // Any approval prompt belonged to the old session's run; drop it.
         self.approval = None;
         self.focus = Focus::Input;

@@ -1149,6 +1149,13 @@ async fn main_loop<'c>(
             }
             Action::CloseOverlay => {
                 state.close_overlay();
+                // A Windows native console can retain cells from a Unicode overlay
+                // when the incremental diff crosses wide-character boundaries. A
+                // close is the one transition where stale physical cells are
+                // unacceptable, so reset the backend and force the next full frame.
+                terminal.clear()?;
+                terminal.swap_buffers();
+                needs_redraw = true;
             }
             Action::PaletteUp => {
                 if let Some(palette) = &mut state.palette {
@@ -1378,6 +1385,8 @@ async fn main_loop<'c>(
 #[cfg(test)]
 mod live_acceptance_tests;
 
+#[cfg(test)]
+mod theme_picker_tests;
 #[cfg(test)]
 mod theme_render_tests;
 

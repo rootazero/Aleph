@@ -14,6 +14,7 @@ pub mod session_picker;
 pub mod status_bar;
 pub mod sticky_user;
 pub mod tasks_panel;
+pub mod theme_picker;
 pub mod tool_row;
 
 /// Clear previous content and restore the active theme beneath an overlay.

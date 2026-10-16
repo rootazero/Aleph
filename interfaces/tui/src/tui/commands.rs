@@ -453,54 +453,93 @@ pub(super) async fn execute_local_command(
     None
 }
 
-/// Apply local display preferences without contacting the gateway.
+/// Open the local picker and optionally apply a theme or reload it.
 fn execute_theme(state: &mut AppState, requested: Option<&str>) {
-    use crate::tui::theme::{
-        available_themes, current_theme_name, palette, remember_theme, select_theme, theme_file,
-    };
-    let requested = requested.map(str::trim);
-    if requested.is_none() || requested == Some("list") {
-        let (names, diagnostics) = available_themes();
-        let depth = if palette().is_rgb() { "24-bit" } else { "ANSI" };
-        let location = theme_file()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "unavailable (no Aleph home)".to_string());
-        let mut notice = format!(
-            "Theme: {} · {depth}\nThemes: {}\n/theme <name> switches and remembers; /theme reload reloads the current file.\nPreference: {location}\nALEPH_TUI_THEME overrides the remembered choice at startup.",
-            current_theme_name(), names.join(", ")
-        );
-        for diagnostic in diagnostics {
-            notice.push_str(&format!("\nTheme skipped: {diagnostic}"));
+    let (names, diagnostics) = crate::tui::theme::available_themes();
+    state.open_theme_picker(names, diagnostics);
+    match requested.map(str::trim) {
+        None | Some("list") => {}
+        Some("reload") => {
+            let name = crate::tui::theme::current_theme_name();
+            apply_theme_pick(state, &name, true);
         }
-        state.add_system_message(notice);
-        return;
+        Some(name) => apply_theme_pick(state, name, false),
     }
-    let Some(requested) = requested else { return };
-    let reload = requested == "reload";
-    let name = if reload {
-        current_theme_name()
-    } else {
-        requested.to_string()
-    };
-    match select_theme(&name) {
+}
+
+/// Confirm synchronously because loading and persistence use local files.
+pub fn confirm_theme_pick(state: &mut AppState) {
+    let name = state
+        .theme_picker
+        .as_ref()
+        .and_then(|picker| picker.names.get(picker.selected))
+        .cloned();
+    if let Some(name) = name {
+        apply_theme_pick(state, &name, false);
+    }
+}
+
+fn apply_theme_pick(state: &mut AppState, name: &str, reload: bool) {
+    use crate::tui::theme::{current_theme_name, remember_theme, select_theme};
+    let feedback = match select_theme(name) {
         Ok(()) => {
-            // Styled markdown is cached; keep text and viewport identity while repainting.
+            // Cached markdown styles must be rebuilt with the new palette.
             state.invalidate_rendered_lines();
             let current = current_theme_name();
-            let notice = if reload {
+            if reload {
                 format!("Theme: {current} · reloaded")
             } else {
                 match remember_theme(&current) {
                     Ok(path) => format!("Theme: {current} · remembered in {}", path.display()),
-                    Err(e) => format!("Theme: {current} for this run · could not remember it: {e}"),
+                    Err(error) => {
+                        format!("Theme: {current} for this run · could not remember it: {error}")
+                    }
                 }
-            };
-            state.add_system_message(notice);
+            }
         }
-        Err(error) => state.add_system_message(format!(
+        Err(error) => format!(
             "Could not load theme {name:?}: {error}. Theme remains {}.",
             current_theme_name()
-        )),
+        ),
+    };
+    if let Some(picker) = &mut state.theme_picker {
+        let current = current_theme_name();
+        if let Some(index) = picker.names.iter().position(|name| name == &current) {
+            picker.selected = index;
+        }
+        picker.feedback = Some(feedback);
+    }
+}
+
+#[cfg(test)]
+mod local_theme_command_tests {
+    use super::*;
+
+    #[test]
+    fn theme_list_and_invalid_selection_stay_out_of_chat() {
+        let mut state = AppState::new("theme-local".into(), "model".into());
+        state.current_run = Some("still-running".into());
+        let before = state.messages.len();
+        execute_theme(&mut state, Some("list"));
+        assert_eq!(state.focus, app::Focus::ThemePicker);
+        assert!(state
+            .theme_picker
+            .as_ref()
+            .unwrap()
+            .names
+            .iter()
+            .any(|name| name == "amber"));
+        execute_theme(&mut state, Some("../invalid-theme"));
+        assert!(state
+            .theme_picker
+            .as_ref()
+            .unwrap()
+            .feedback
+            .as_ref()
+            .unwrap()
+            .contains("Could not load theme"));
+        assert_eq!(state.messages.len(), before);
+        assert_eq!(state.current_run.as_deref(), Some("still-running"));
     }
 }
 
