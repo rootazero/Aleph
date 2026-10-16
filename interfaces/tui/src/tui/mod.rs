@@ -34,7 +34,10 @@ use std::time::Duration;
 use crossterm::{
     event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, DisableLineWrap, EnableLineWrap, EnterAlternateScreen,
+        LeaveAlternateScreen,
+    },
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use serde_json::{json, Value};
@@ -256,17 +259,32 @@ pub async fn run(
     // Enter), which would otherwise auto-send the first pasted line. Unix/macOS
     // only — crossterm's Windows console source does not emit paste events, so
     // this is inert (but harmless) there.
-    if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableBracketedPaste) {
+    if let Err(error) = execute!(stdout, EnterAlternateScreen) {
         let _ = execute!(stdout, DisableMouseCapture);
         let _ = disable_raw_mode();
         return Err(error.into());
     }
-    // The cost, which is why this is worth stating: with capture on, the
-    // terminal stops handling drag-select itself. F6 temporarily releases
-    // capture and freezes the last frame so the host terminal can provide its
-    // native selection/copy UI; F6 or Esc restores capture afterwards.
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    // Full-width drawing must not wrap at the bottom-right cell and scroll
+    // the physical screen. Change output mode only after entering alternate
+    // screen: Windows' native fallback then targets its separate buffer.
+    // ANSI hosts may share wrap state across buffers; this restores enabled
+    // wrap on exit, not an arbitrary pre-existing disabled-wrap setting.
+    let terminal_setup = (|| {
+        execute!(stdout, DisableLineWrap, EnableBracketedPaste)?;
+        // The cost, which is why this is worth stating: with capture on, the
+        // terminal stops handling drag-select itself. F6 temporarily releases
+        // capture and freezes the last frame so the host terminal can provide its
+        // native selection/copy UI; F6 or Esc restores capture afterwards.
+        let backend = CrosstermBackend::new(stdout);
+        Terminal::new(backend)
+    })();
+    let mut terminal = terminal_setup.inspect_err(|_| {
+        // Attempt each restoration even if a preceding output command fails.
+        let _ = execute!(io::stdout(), EnableLineWrap);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste);
+        let _ = execute!(io::stdout(), DisableMouseCapture);
+        let _ = disable_raw_mode();
+    })?;
 
     // 2. Set panic hook to restore terminal on panic
     let original_hook = std::panic::take_hook();
@@ -276,6 +294,7 @@ pub async fn run(
         // Windows. Disabling capture that was never enabled is harmless.
         let _ = execute!(io::stdout(), DisableMouseCapture);
         let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), EnableLineWrap);
         let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste);
         let _ = execute!(io::stdout(), crossterm::cursor::Show);
         original_hook(info);
@@ -395,6 +414,8 @@ pub async fn run(
 
     // 6. Restore terminal (always, even on error). Release capture before
     // raw mode so Windows crossterm can restore its pre-raw console snapshot.
+    // Restore wrap while still on the alternate buffer, not the host buffer.
+    let line_wrap_cleanup = execute!(terminal.backend_mut(), EnableLineWrap);
     let capture_and_screen_cleanup = execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
@@ -402,6 +423,7 @@ pub async fn run(
         DisableMouseCapture
     );
     let raw_mode_cleanup = disable_raw_mode();
+    line_wrap_cleanup?;
     capture_and_screen_cleanup?;
     raw_mode_cleanup?;
     terminal.show_cursor()?;
@@ -1443,6 +1465,46 @@ mod tests {
         RuntimeAgentEntry, RuntimeAgentState, RuntimeAgentsListResponse,
     };
     use serde_json::json;
+
+    /// Keep output-mode changes inside the alternate-screen lifetime, including
+    /// setup failures and panics. This contract needs no live terminal.
+    #[test]
+    fn line_wrap_is_scoped_to_the_alternate_screen() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        let code: String = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let run = code.split("pub async fn run(").nth(1).unwrap();
+        let run = run.split("type ReconnectAttempt").next().unwrap();
+        let (setup, rest) = run.split_once("let original_hook").unwrap();
+        let (panic_hook, rest) = rest.split_once("original_hook(info);").unwrap();
+        let cleanup = rest.split("let line_wrap_cleanup").nth(1).unwrap();
+
+        let enter = setup.find("EnterAlternateScreen").unwrap();
+        let disable = setup.find("DisableLineWrap").unwrap();
+        let terminal = setup.find("Terminal::new(backend)").unwrap();
+        assert!(enter < disable && disable < terminal);
+        assert!(!setup[..enter].contains("EnableLineWrap"));
+        assert!(setup[enter..disable].contains("return Err(error.into());"));
+
+        let failure = setup.split("terminal_setup.inspect_err").nth(1).unwrap();
+        for path in [failure, panic_hook, cleanup] {
+            assert!(
+                path.find("EnableLineWrap").unwrap() < path.find("LeaveAlternateScreen").unwrap(),
+                "restore wrap before returning to the host buffer: {path}",
+            );
+        }
+        assert!(failure.contains("DisableMouseCapture"));
+        assert!(failure.contains("disable_raw_mode()"));
+        // The same failure handler must cover both mode setup and Terminal::new.
+        let terminal_setup = setup.split("let terminal_setup =").nth(1).unwrap();
+        assert!(terminal_setup.contains("DisableLineWrap"));
+        assert!(terminal_setup.contains("EnableBracketedPaste)?;"));
+        assert!(terminal_setup.contains("Terminal::new(backend)"));
+    }
 
     /// Build a `providers.list` reply the way the server does — from
     /// `ProviderInfo`, not from a JSON literal written here. A literal would

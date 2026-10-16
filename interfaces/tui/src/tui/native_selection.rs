@@ -274,7 +274,7 @@ mod tests {
             .unwrap();
         let raw = production.find("enable_raw_mode().inspect_err").unwrap();
         let alternate = production
-            .find("execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)")
+            .find("execute!(stdout, EnterAlternateScreen)")
             .unwrap();
         assert!(capture < raw, "capture must save the pre-raw mode");
         assert!(
