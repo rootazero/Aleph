@@ -253,7 +253,7 @@ mod tests {
         let capture = production
             .find("let mouse = execute!(stdout, EnableMouseCapture)")
             .unwrap();
-        let raw = production.find("enable_raw_mode().map_err").unwrap();
+        let raw = production.find("enable_raw_mode().inspect_err").unwrap();
         let alternate = production
             .find("execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)")
             .unwrap();
