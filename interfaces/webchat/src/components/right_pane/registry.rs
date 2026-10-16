@@ -196,10 +196,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::arc_with_non_send_sync,
-        reason = "Exercise the required immutable Arc sharing without cross-thread use."
-    )]
     fn shared_lookups_keep_identity_without_mutating_the_catalog() {
         let mut registry = RightPaneRegistry::new();
         let original = slot("rps.test", 100, false);
