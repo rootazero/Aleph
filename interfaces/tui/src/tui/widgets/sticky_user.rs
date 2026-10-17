@@ -1,4 +1,4 @@
-//! Pure viewport decisions for the latest loaded user entry.
+//! Pure viewport decisions for loaded user entries.
 //! The transcript remains the only source of text; an anchor retains identity,
 //! never a cached physical row or a second copy of the message.
 
@@ -78,8 +78,24 @@ impl StickyUserState {
     }
 }
 
-pub(super) fn is_above(placement: UserPlacement, viewport_start: usize) -> bool {
-    placement.end <= viewport_start
+/// Select the user message whose sticky chip represents this viewport.
+///
+/// User rows are ordered as they appear in the transcript. The viewport is a
+/// half-open `[start, viewport_end)` range, so a message whose start equals
+/// `viewport_end` is not in the range and the preceding message remains
+/// selected. The latest eligible row wins, selecting the latest user at the
+/// bottom and walking backward one message at a time while scrolling up. Above
+/// the first user row, the oldest row remains as context so the chip is always
+/// present for a non-empty transcript.
+pub(super) fn select_user_id(
+    rows: &[(String, UserPlacement)],
+    viewport_end: usize,
+) -> Option<&str> {
+    rows.iter()
+        .rev()
+        .find(|(_, placement)| placement.start < viewport_end)
+        .or_else(|| rows.first())
+        .map(|(id, _)| id.as_str())
 }
 
 /// Fits a one-line excerpt and the *complete* literal action label. Widths
@@ -129,11 +145,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn visibility_uses_full_physical_range_not_first_line() {
-        let p = UserPlacement { start: 7, end: 11 };
-        assert!(!is_above(p, 10));
-        assert!(is_above(p, 11));
-        assert!(!is_above(p, 6));
+    fn selection_is_empty_without_user_rows_and_uses_latest_at_bottom() {
+        assert_eq!(select_user_id(&[], 100), None);
+        let rows = vec![
+            ("first".into(), UserPlacement { start: 2, end: 5 }),
+            ("second".into(), UserPlacement { start: 10, end: 14 }),
+            ("third".into(), UserPlacement { start: 20, end: 24 }),
+        ];
+        assert_eq!(select_user_id(&rows, 25), Some("third"));
+        // A short transcript still has a bottom viewport starting at row 0.
+        let short_rows = vec![("only".into(), UserPlacement { start: 0, end: 1 })];
+        assert_eq!(select_user_id(&short_rows, 1), Some("only"));
+    }
+
+    #[test]
+    fn selection_switches_on_half_open_viewport_end_in_both_directions() {
+        let rows = vec![
+            ("first".into(), UserPlacement { start: 2, end: 5 }),
+            ("second".into(), UserPlacement { start: 10, end: 14 }),
+            ("third".into(), UserPlacement { start: 20, end: 24 }),
+        ];
+        // The end exactly at a message start has crossed that message.
+        assert_eq!(select_user_id(&rows, 20), Some("second"));
+        // Any intersection/reach into the message selects it.
+        assert_eq!(select_user_id(&rows, 21), Some("third"));
+        assert_eq!(select_user_id(&rows, 11), Some("second"));
+        // Moving upward and then downward restores the same sequence.
+        assert_eq!(select_user_id(&rows, 10), Some("first"));
+        assert_eq!(select_user_id(&rows, 11), Some("second"));
+        assert_eq!(select_user_id(&rows, 21), Some("third"));
+        // Above the first message, the oldest user remains the visible context.
+        assert_eq!(select_user_id(&rows, 2), Some("first"));
     }
 
     #[test]

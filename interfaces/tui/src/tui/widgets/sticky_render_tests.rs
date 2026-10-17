@@ -40,7 +40,7 @@ fn welcome_falls_back_to_compact_header_in_a_short_viewport() {
 }
 
 #[test]
-fn compact_chip_uses_current_layout_and_disappears_after_jump() {
+fn compact_chip_uses_current_layout_and_stays_visible_after_jump() {
     let mut state = AppState::new("s".into(), "model".into());
     state.add_user_message(
         "请解释这一段很长的消息，它必须只占很小的单行空间。".repeat(4),
@@ -62,14 +62,14 @@ fn compact_chip_uses_current_layout_and_disappears_after_jump() {
         .expect("painted actionable region");
     state.request_sticky_jump(jump);
     let rows = draw(&mut state, 80);
-    assert!(!rows[0].contains("[click to jump]"));
+    assert!(rows[0].contains("[click to jump]"));
     assert!(!rows[0].contains("You"));
     assert!(rows[1].replace(' ', "").contains("请解释"), "{rows:?}");
     state.add_system_message("more output".into());
     let rows = draw(&mut state, 40);
     assert!(!rows[0].contains("You"));
     assert!(rows[1].replace(' ', "").contains("请解释"), "{rows:?}");
-    assert!(!rows[0].contains("[click to jump]"));
+    assert!(rows[0].contains("[click to jump]"));
     state.scroll_to_bottom();
     assert!(draw(&mut state, 80)[0].contains("[click to jump]"));
 }

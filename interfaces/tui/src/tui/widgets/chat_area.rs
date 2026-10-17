@@ -385,38 +385,44 @@ fn render_sticky_user(
     total: usize,
     user_rows: &[(String, super::sticky_user::UserPlacement)],
 ) {
-    let Some((id, text)) = state.messages.iter().rev().find_map(|entry| match entry {
-        TranscriptEntry::UserText { id, text, .. } => Some((id, text)),
+    let (_, viewport_end) = visible_window(total, usize::from(inner.height), state.scroll_offset);
+    let Some(id) = super::sticky_user::select_user_id(user_rows, viewport_end) else {
+        return;
+    };
+    let Some(message_text) = state.messages.iter().find_map(|entry| match entry {
+        TranscriptEntry::UserText {
+            id: entry_id, text, ..
+        } if entry_id == id => Some(text.as_str()),
         _ => None,
     }) else {
         return;
     };
-    let Some((_, placement)) = user_rows.iter().find(|(key, _)| key == id) else {
-        return;
-    };
-    let (start, _) = visible_window(total, usize::from(inner.height), state.scroll_offset);
-    if !super::sticky_user::is_above(*placement, start) {
-        return;
-    }
-    // A compact floating chip, never a full-width replacement for a chat row.
-    let Some(text) = super::sticky_user::label(text, inner.width.min(48), inner.height) else {
+    // A compact floating chip, always painted at the top of the chat area.
+    let Some(text) = super::sticky_user::label(message_text, inner.width.min(48), inner.height)
+    else {
         return;
     };
     let text_width = UnicodeWidthStr::width(text.as_str()) as u16;
-    let bar = Rect {
+    let chip = Rect {
         width: text_width,
         height: 1,
         ..inner
     };
-    // Only the compact chip is painted. Dark themes inherit terminal opacity;
-    // a light theme supplies its own readable background.
+    // Paint the whole top row with the user surface so the sticky context does
+    // not leave a stale/reset strip over the transcript row beneath it. The
+    // visible text remains compact (capped by `label`), while only the chip
+    // itself is registered as the clickable shield.
     let style = Style::default().fg(theme().muted).bg(theme().user_bg);
-    frame.render_widget(Paragraph::new(text).style(style), bar);
+    let paint = Rect {
+        width: inner.width,
+        ..chip
+    };
+    frame.render_widget(Paragraph::new(text).style(style), paint);
     let label_width = UnicodeWidthStr::width(super::sticky_user::JUMP_LABEL) as u16;
     let action = Rect {
         x: inner.x + text_width.saturating_sub(label_width),
         width: label_width,
-        ..bar
+        ..chip
     };
     frame.render_widget(
         Paragraph::new(super::sticky_user::JUMP_LABEL).style(style.fg(theme().primary)),
@@ -424,13 +430,13 @@ fn render_sticky_user(
     );
     state
         .regions
-        .push(bar, RegionKind::StickyUserShield, String::new());
+        .push(chip, RegionKind::StickyUserShield, String::new());
     state.regions.push_jump(
         action,
         crate::tui::regions::JumpTarget {
             session_key: state.session_key.clone(),
             generation: state.transcript_generation,
-            entry_id: id.clone(),
+            entry_id: id.to_owned(),
         },
     );
 }
@@ -1058,9 +1064,6 @@ fn render_step(
         },
         |h| h.text,
     );
-    let ordinal = step
-        .iteration
-        .map_or_else(|| "?".to_owned(), |i| i.to_string());
     let state = match step.status {
         StepStatus::Live => shared_ui_logic::transcript::spinner_frame(now_ms).to_string(),
         StepStatus::Settled => "◆".to_owned(),
@@ -1075,7 +1078,7 @@ fn render_step(
         })
         .map_or_else(String::new, |ms| format!(" · {}", fmt_duration_ms(ms)));
     out.push(Line::from(Span::styled(
-        format!("{state} Step {ordinal}: {title}{duration}"),
+        format!("{state} {title}{duration}"),
         Style::default().fg(theme().muted),
     )));
     let mut toggles = vec![(base, step.id.clone())];
@@ -1351,6 +1354,39 @@ mod tests {
                 .any(|s| s.content.as_ref().contains("Hi there!"))
         });
         assert!(has_reply, "the assistant's text must be rendered");
+    }
+
+    #[test]
+    fn step_headline_keeps_title_and_toggle_without_numeric_step_label() {
+        let step = StepEntry {
+            id: "step-1".into(),
+            iteration: Some(0),
+            thinking: None,
+            text: Some("Inspect the repository".into()),
+            tools: vec![],
+            notes: vec![],
+            status: StepStatus::Settled,
+            started_ms: None,
+            ended_ms: None,
+        };
+        let mut lines = Vec::new();
+        let toggles = render_step(
+            &step,
+            0,
+            80,
+            KEY_MODALITY,
+            DetailLevel::Brief,
+            &HashSet::new(),
+            &mut lines,
+        );
+        let rendered: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(rendered.contains("Inspect the repository"), "{rendered}");
+        assert!(!rendered.contains("Step 0:"), "{rendered}");
+        assert_eq!(toggles, vec![(0, "step-1".into())]);
     }
 
     #[test]
