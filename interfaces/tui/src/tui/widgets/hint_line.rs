@@ -32,21 +32,19 @@ pub const MARKER: &str = "\u{23f5}\u{23f5} ";
 /// While a run is in flight: the interrupt comes first, because it is the one
 /// thing a reader may urgently want and cannot guess.
 pub const RUNNING: &str =
-    "ctrl+c interrupt \u{b7} ctrl+o expand \u{b7} ctrl+end bottom \u{b7} F6 select";
+    "ctrl+c interrupt \u{b7} ctrl+o expand \u{b7} ctrl+end bottom \u{b7} drag select \u{b7} ctrl+c copy";
 
 /// While the composer holds text: the two keys that send it, and what Ctrl+C
 /// means *here* (clear the draft — there is no run to cancel).
 ///
 /// These words used to be the input box's title, which B6 removed along with
 /// the box.
-pub const TYPING: &str = "enter send \u{b7} \\+enter newline \u{b7} ctrl+c clear \u{b7} F6 select";
+pub const TYPING: &str =
+    "enter send \u{b7} \\+enter newline \u{b7} ctrl+c clear \u{b7} drag select \u{b7} ctrl+c copy";
 
 /// Idle.
 pub const IDLE: &str =
-    "ctrl+o expand \u{b7} ctrl+end bottom \u{b7} /help commands \u{b7} F6 select";
-
-/// The one frame shown after F6 releases mouse capture, before drawing freezes.
-pub const SELECTION: &str = "SELECT TEXT \u{b7} drag/copy \u{b7} F6/Esc resume";
+    "ctrl+o expand \u{b7} ctrl+end bottom \u{b7} /help commands \u{b7} drag select \u{b7} ctrl+c copy";
 
 /// Which of the three forms the current state calls for.
 ///
@@ -79,26 +77,6 @@ pub fn render_hint_line(frame: &mut Frame, area: Rect, running: bool, typing: bo
         ),
     ]);
     frame.render_widget(Paragraph::new(line), area);
-}
-
-/// Paint the temporary selection affordance over the normal hint row.
-///
-/// The layout always reserves the final row for status and the preceding row
-/// for hints, so deriving this rectangle here avoids sharing render layout
-/// state with the event loop. This is drawn exactly once on F6 entry.
-pub fn render_selection_hint(frame: &mut Frame) {
-    let area = frame.area();
-    let hint_area = Rect::new(
-        area.x,
-        area.y.saturating_add(area.height.saturating_sub(2)),
-        area.width,
-        1,
-    );
-    let dim = Style::default().fg(palette().color(SemanticColor::Dim));
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(SELECTION, dim))),
-        hint_area,
-    );
 }
 
 #[cfg(test)]

@@ -19,11 +19,11 @@ pub enum TermEvent {
     /// through the Enter/send path). Unix/macOS only — crossterm's Windows
     /// console source does not synthesize `Event::Paste`.
     Paste(String),
-    /// A wheel turn or left-button click. High-rate drag/move/release records
-    /// are discarded before this layer; only these events are consumed by the
-    /// TUI. Only arrives while mouse capture is on; a terminal that refused
-    /// capture simply never produces one, which is why every affordance a
-    /// click reaches also has a key (spec §8).
+    /// A wheel turn or selection lifecycle event. Pure motion is discarded
+    /// before this layer; the left-button lifecycle and right-button copy
+    /// gesture are reliable, bounded input. Only arrives while mouse capture
+    /// is on; a terminal that refused capture simply never produces one, which
+    /// is why every affordance a click reaches also has a key (spec §8).
     Mouse(MouseEvent),
 }
 
@@ -123,6 +123,9 @@ fn map_event(ev: Event) -> Option<TermEvent> {
                 crossterm::event::MouseEventKind::ScrollUp
                     | crossterm::event::MouseEventKind::ScrollDown
                     | crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                    | crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left)
+                    | crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left)
+                    | crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Right)
             ) =>
         {
             Some(TermEvent::Mouse(m))
@@ -136,10 +139,11 @@ fn map_event(ev: Event) -> Option<TermEvent> {
 /// through an mpsc channel. Returns the receiving end.
 ///
 /// The task polls every 50ms. Key presses, resizes, pastes and consumable mouse
-/// events are forwarded; high-rate mouse movement/drag/release records and
-/// everything else crossterm reports (focus gained/lost, key releases) are
-/// dropped by [`map_event`]. Mouse events also use a non-blocking queue send so
-/// a burst cannot stall keyboard or paste delivery.
+/// events are forwarded; pure mouse movement and everything else crossterm
+/// reports (focus gained/lost, key releases) are dropped by [`map_event`].
+/// Drag samples are disposable intermediate positions: a full queue drops only
+/// those samples, while Down/Up and wheel events remain reliable and cannot
+/// leave a selection armed or stall scrolling.
 ///
 /// The task runs until the receiver is dropped (send returns Err).
 pub fn spawn_event_collector() -> mpsc::Receiver<TermEvent> {
@@ -153,26 +157,21 @@ pub fn spawn_event_collector() -> mpsc::Receiver<TermEvent> {
                 Ok(true) => {
                     if let Ok(ev) = event::read() {
                         if let Some(te) = map_event(ev) {
-                            match te {
-                                TermEvent::Mouse(_) => {
-                                    // map_event filters non-consumable mouse input; this
-                                    // non-blocking send is the second guard. Mouse events
-                                    // are disposable transients, so a full queue must not
-                                    // stall the collector and delay keyboard input.
-                                    match tx.try_send(te) {
-                                        Ok(()) => {}
-                                        Err(mpsc::error::TrySendError::Full(_)) => {}
-                                        Err(mpsc::error::TrySendError::Closed(_)) => break,
-                                    }
+                            let is_drag = matches!(
+                                &te,
+                                TermEvent::Mouse(mouse)
+                                    if matches!(mouse.kind, crossterm::event::MouseEventKind::Drag(_))
+                            );
+                            if is_drag {
+                                // Intermediate positions are disposable; the final Up
+                                // carries the authoritative endpoint. Never let a drag
+                                // flood delay keyboard, paste, resize, or wheel delivery.
+                                match tx.try_send(te) {
+                                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                                    Err(mpsc::error::TrySendError::Closed(_)) => break,
                                 }
-                                te => {
-                                    // Keyboard, paste and resize events are not disposable:
-                                    // preserve their ordering and reliability with a
-                                    // blocking send. A closed receiver still ends collection.
-                                    if tx.blocking_send(te).is_err() {
-                                        break;
-                                    }
-                                }
+                            } else if tx.blocking_send(te).is_err() {
+                                break;
                             }
                         }
                     }
@@ -228,6 +227,9 @@ mod tests {
             MouseEventKind::ScrollUp,
             MouseEventKind::ScrollDown,
             MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
         ] {
             let ev = MouseEvent {
                 kind,
@@ -248,9 +250,7 @@ mod tests {
 
         for kind in [
             MouseEventKind::Moved,
-            MouseEventKind::Drag(MouseButton::Left),
             MouseEventKind::Drag(MouseButton::Right),
-            MouseEventKind::Up(MouseButton::Left),
             MouseEventKind::Up(MouseButton::Right),
         ] {
             let ev = MouseEvent {

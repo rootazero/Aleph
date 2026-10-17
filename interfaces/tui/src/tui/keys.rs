@@ -77,12 +77,88 @@ const WHEEL_LINES: usize = 3;
 /// is not what the user is aiming at, so clicks are ignored rather than
 /// reaching rows the overlay is covering.
 fn handle_mouse_event(state: &mut AppState, m: MouseEvent) -> Action {
-    if !matches!(state.focus, Focus::Input | Focus::Chat) {
-        return Action::None;
-    }
     match m.kind {
-        MouseEventKind::ScrollUp => Action::ScrollUp(WHEEL_LINES),
-        MouseEventKind::ScrollDown => Action::ScrollDown(WHEEL_LINES),
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            let up = matches!(m.kind, MouseEventKind::ScrollUp);
+            let wheel_key = KeyEvent::new(
+                if up { KeyCode::Up } else { KeyCode::Down },
+                KeyModifiers::NONE,
+            );
+            match state.focus {
+                Focus::Input | Focus::Chat => {
+                    if up {
+                        Action::ScrollUp(WHEEL_LINES)
+                    } else {
+                        Action::ScrollDown(WHEEL_LINES)
+                    }
+                }
+                Focus::Context => handle_context_key(state, wheel_key),
+                Focus::ToolOutput => {
+                    if let Some(view) = &mut state.tool_output {
+                        view.scroll_by(if up {
+                            -(WHEEL_LINES as i16)
+                        } else {
+                            WHEEL_LINES as i16
+                        });
+                    }
+                    Action::None
+                }
+                Focus::Btw => {
+                    if up {
+                        state.btw.scroll_up(WHEEL_LINES as u16)
+                    } else {
+                        state.btw.scroll_down(WHEEL_LINES as u16)
+                    }
+                    Action::None
+                }
+                Focus::Agents => {
+                    for _ in 0..WHEEL_LINES {
+                        handle_agents_key(state, wheel_key);
+                    }
+                    Action::None
+                }
+                Focus::SessionPicker => {
+                    for _ in 0..WHEEL_LINES {
+                        handle_session_picker_key(state, wheel_key);
+                    }
+                    Action::None
+                }
+                Focus::ProviderPicker => {
+                    for _ in 0..WHEEL_LINES {
+                        handle_provider_picker_key(state, wheel_key);
+                    }
+                    Action::None
+                }
+                Focus::ThemePicker => {
+                    for _ in 0..WHEEL_LINES {
+                        handle_theme_picker_key(state, wheel_key);
+                    }
+                    Action::None
+                }
+                Focus::Dialog | Focus::Approval => {
+                    // Dialog/approval wheel uses the same Up/Down selection
+                    // route as keys; it never answers or aborts by itself.
+                    for _ in 0..WHEEL_LINES {
+                        match state.displayed_interaction() {
+                            Some(ModalOwner::Clarification { .. }) => {
+                                handle_dialog_key(state, wheel_key);
+                            }
+                            Some(ModalOwner::Approval { .. }) => {
+                                handle_approval_key(state, wheel_key);
+                            }
+                            None => break,
+                        }
+                    }
+                    Action::None
+                }
+                Focus::CommandPalette => {
+                    for _ in 0..WHEEL_LINES {
+                        handle_palette_key(state, wheel_key);
+                    }
+                    Action::None
+                }
+            }
+        }
         MouseEventKind::Down(MouseButton::Left) => {
             if !matches!(state.focus, Focus::Input | Focus::Chat) {
                 return Action::None;
@@ -2032,6 +2108,36 @@ mod mouse_tests {
             route(&mut s, &key(KeyCode::Esc, KeyModifiers::NONE)),
             Action::CloseOverlay
         ));
+    }
+
+    #[test]
+    fn the_wheel_routes_to_the_focused_context_overlay() {
+        let mut s = state();
+        s.open_context_overlay(&aleph_protocol::ContextBreakdown {
+            session_key: "agent:main".into(),
+            turn: 1,
+            layers: (0..8)
+                .map(|i| aleph_protocol::context_breakdown::LayerSizeView {
+                    name: format!("layer{i}"),
+                    bytes: 100,
+                    tokens: 10,
+                    zone: "stable".into(),
+                })
+                .collect(),
+            tools: Vec::new(),
+            messages: None,
+            tool_output: None,
+            provider_reported: None,
+            context_window: None,
+            dynamic_bytes_sent: None,
+        });
+        assert_eq!(s.focus, Focus::Context);
+
+        assert!(matches!(
+            route(&mut s, &mouse(MouseEventKind::ScrollDown, 2, 2)),
+            Action::None
+        ));
+        assert_eq!(s.context_overlay.as_ref().map(|v| v.scroll), Some(1));
     }
 
     #[test]

@@ -31,6 +31,7 @@ use aleph_protocol::runtime::RuntimeAgentEntry;
 use aleph_protocol::subagent_tree::{self, NodeLifecycle, SubagentNode};
 use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
+use ratatui::layout::Rect;
 use shared_ui_logic::state::{scroll_action, ListCursor, ScrollAction};
 use shared_ui_logic::transcript::{Change, DetailLevel, Modality, Transcript};
 
@@ -1022,6 +1023,9 @@ pub struct AppState {
 
     // -- UI state --
     pub focus: Focus,
+    /// Live transcript pane geometry, written by render.rs as the single
+    /// source of selection coordinates.
+    pub text_selection_area: Rect,
     pub dialog: Option<DialogState>,
     pub palette: Option<PaletteState>,
     pub session_picker: Option<SessionPickerState>,
@@ -1169,6 +1173,7 @@ impl AppState {
             context_overlay: None,
 
             focus: Focus::Input,
+            text_selection_area: Rect::default(),
             dialog: None,
             palette: None,
             session_picker: None,

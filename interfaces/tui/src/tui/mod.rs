@@ -9,6 +9,7 @@
 mod app;
 mod approval;
 mod btw_overlay;
+mod clipboard;
 mod command_tree;
 mod commands;
 mod event;
@@ -17,17 +18,17 @@ mod highlight;
 mod interaction;
 mod keys;
 mod markdown;
-mod native_selection;
 mod regions;
 mod render;
 mod rpc_jobs;
 mod slash;
+mod text_selection;
 pub mod theme;
 mod tool_output;
 mod widgets;
 
 use std::future::Future;
-use std::io;
+use std::io::{self, Write};
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -42,6 +43,7 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tui_textarea::TextArea;
 
 use aleph_protocol::browser_live::{
@@ -231,7 +233,6 @@ async fn subscribe_browser_live_topics(client: &AlephClient) -> CliResult<()> {
 ///
 /// Sets up the terminal, spawns the event collector, and runs the main loop
 /// until the user quits. Terminal is always restored on exit (including panics).
-/// F6 freezes the current frame for host-native drag/copy; F6/Esc resumes.
 ///
 /// # Errors
 ///
@@ -246,11 +247,16 @@ pub async fn run(
     // 1. Setup terminal
     let mut stdout = io::stdout();
     // Mouse capture must be enabled before raw mode. On Windows, crossterm
-    // saves the console-mode snapshot when capture is enabled; F6 can then
-    // release capture without restoring a raw-mode snapshot over the host's
-    // input handling. Capture is optional: a refused capture only removes
+    // saves the console-mode snapshot when capture is enabled. Capture is
+    // optional: a refused capture only removes
     // mouse affordances, whose keyboard equivalents remain available.
-    let mouse = execute!(stdout, EnableMouseCapture).is_ok();
+    let mouse = match execute!(stdout, EnableMouseCapture) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!("Terminal mouse capture unavailable: {error}");
+            false
+        }
+    };
     enable_raw_mode().inspect_err(|_| {
         let _ = execute!(stdout, DisableMouseCapture);
     })?;
@@ -271,15 +277,23 @@ pub async fn run(
     // wrap on exit, not an arbitrary pre-existing disabled-wrap setting.
     let terminal_setup = (|| {
         execute!(stdout, DisableLineWrap, EnableBracketedPaste)?;
-        // The cost, which is why this is worth stating: with capture on, the
-        // terminal stops handling drag-select itself. F6 temporarily releases
-        // capture and freezes the last frame so the host terminal can provide its
-        // native selection/copy UI; F6 or Esc restores capture afterwards.
+        #[cfg(windows)]
+        {
+            // ConPTY translates SGR mouse reports to MouseRecords.
+            stdout.write_all(b"\x1b[?1006h")?;
+            stdout.flush()?;
+        }
         let backend = CrosstermBackend::new(stdout);
         Terminal::new(backend)
     })();
     let mut terminal = terminal_setup.inspect_err(|_| {
         // Attempt each restoration even if a preceding output command fails.
+        #[cfg(windows)]
+        {
+            let mut stdout = io::stdout();
+            let _ = stdout.write_all(b"\x1b[?1006l");
+            let _ = stdout.flush();
+        }
         let _ = execute!(io::stdout(), EnableLineWrap);
         let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste);
         let _ = execute!(io::stdout(), DisableMouseCapture);
@@ -294,6 +308,12 @@ pub async fn run(
         // Windows. Disabling capture that was never enabled is harmless.
         let _ = execute!(io::stdout(), DisableMouseCapture);
         let _ = disable_raw_mode();
+        #[cfg(windows)]
+        {
+            let mut stdout = io::stdout();
+            let _ = stdout.write_all(b"\x1b[?1006l");
+            let _ = stdout.flush();
+        }
         let _ = execute!(io::stdout(), EnableLineWrap);
         let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste);
         let _ = execute!(io::stdout(), crossterm::cursor::Show);
@@ -584,9 +604,9 @@ async fn main_loop<'c>(
     let mut reconnecting: Option<ReconnectAttempt<'c>> = None;
     let mut backoff = Duration::ZERO;
     let mut reported_reconnect_failure = false;
-    // Host-native selection is intentionally a terminal mode, not a rendered
-    // overlay. It owns the last completed frame until F6/Esc restores us.
-    let mut native_selection = native_selection::NativeSelection::new(state.mouse);
+    let mut selection = text_selection::TextSelection::default();
+    let mut selection_scope: Option<(String, u64, Focus, ratatui::layout::Rect)> = None;
+    let mut copy_task: Option<JoinHandle<Result<(), String>>> = None;
     // Starts `true` so the first frame always draws — never delayed behind a
     // wait for the first event. Cleared right after each draw; only actions
     // that changed something visible set it back to `true` (see
@@ -632,12 +652,22 @@ async fn main_loop<'c>(
             modal_scope = Some(rpc_scope.clone());
         }
         state.sync_modal_focus();
+        let current_scope = (
+            state.session_key.clone(),
+            state.transcript_generation,
+            state.focus,
+            ratatui::layout::Rect::new(0, 0, terminal.size()?.width, terminal.size()?.height),
+        );
+        if selection_scope.as_ref() != Some(&current_scope) {
+            selection.clear();
+            selection_scope = Some(current_scope);
+        }
         submissions.retain(|_, ticket| ticket.generation == rpc_scope.generation);
         // Settled by the reconnect branch below; read after the select, where
         // `reconnecting` is no longer borrowed.
         let mut reconnect_outcome: Option<CliResult<()>> = None;
         // Draw only when something visible changed since the last frame.
-        if needs_redraw && !native_selection.active() {
+        if needs_redraw {
             // Re-sync on the empty/history boundary, not on every streamed
             // frame. Actual hero geometry remains owned by the renderer; this
             // conservative invalidation also covers terminals too short for it.
@@ -654,7 +684,11 @@ async fn main_loop<'c>(
                 terminal.clear()?;
                 terminal.swap_buffers();
             }
-            terminal.draw(|f| render::render(f, state, textarea))?;
+            terminal.draw(|f| {
+                render::render(f, state, textarea);
+                selection.observe(f.buffer_mut(), state.text_selection_area);
+                selection.paint(f.buffer_mut());
+            })?;
             last_welcome_layout = Some(welcome_layout);
             needs_redraw = false;
         }
@@ -662,26 +696,62 @@ async fn main_loop<'c>(
         // Wait for next event
         let action = tokio::select! {
             Some(te) = term_events.recv() => {
-                // Gate before focus-specific routing: no input may mutate an
-                // overlay/composer or hit-test stale rows while selection owns
-                // the frame. Resume always redraws, including after a resize.
-                let was_selecting = native_selection.active();
-                let action = if native_selection.handle_event(&te, terminal.backend_mut())? {
-                    needs_redraw = !native_selection.active();
-                    Action::None
-                } else {
-                    needs_redraw = true;
-                    keys::handle_terminal_event(state, textarea, &te)
+                let action = match &te {
+                    event::TermEvent::Mouse(mouse) => {
+                        use crossterm::event::{MouseButton, MouseEventKind};
+                        if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+                            selection.clear();
+                            keys::handle_terminal_event(state, textarea, &te)
+                        } else {
+                            match selection.mouse(*mouse) {
+                                text_selection::MouseOutcome::Ignored => keys::handle_terminal_event(state, textarea, &te),
+                                text_selection::MouseOutcome::Consumed => Action::None,
+                                text_selection::MouseOutcome::Click { column, row } => keys::handle_terminal_event(
+                                    state,
+                                    textarea,
+                                    &event::TermEvent::Mouse(crossterm::event::MouseEvent {
+                                        kind: MouseEventKind::Down(MouseButton::Left),
+                                        column,
+                                        row,
+                                        modifiers: mouse.modifiers,
+                                    }),
+                                ),
+                                text_selection::MouseOutcome::Copy(text) => {
+                                    if copy_task.is_none() {
+                                        copy_task = Some(tokio::spawn(clipboard::copy_text(text)));
+                                    }
+                                    Action::None
+                                }
+                            }
+                        }
+                    }
+                    event::TermEvent::Key(key) => {
+                        let copy_key = (key.code == crossterm::event::KeyCode::Insert
+                            && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL))
+                            || (key.code == crossterm::event::KeyCode::Char('c')
+                                && (key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                                    || key.modifiers.contains(crossterm::event::KeyModifiers::SUPER)));
+                        if copy_key && selection.is_selected() {
+                            if copy_task.is_none() {
+                                if let Some(text) = selection.text() {
+                                    copy_task = Some(tokio::spawn(clipboard::copy_text(text)));
+                                }
+                            }
+                            Action::None
+                        } else if key.code == crossterm::event::KeyCode::Esc && selection.is_selected() {
+                            selection.clear();
+                            Action::None
+                        } else {
+                            selection.clear();
+                            keys::handle_terminal_event(state, textarea, &te)
+                        }
+                    }
+                    event::TermEvent::Paste(_) | event::TermEvent::Resize => {
+                        selection.clear();
+                        keys::handle_terminal_event(state, textarea, &te)
+                    }
                 };
-                // Show the affordance on the entry frame only. Once this draw
-                // returns, gateway/tick mutations continue but the real draw
-                // gate below keeps the visible cells frozen until resume.
-                if !was_selecting && native_selection.active() {
-                    terminal.draw(|frame| {
-                        render::render(frame, state, textarea);
-                        widgets::hint_line::render_selection_hint(frame);
-                    })?;
-                }
+                needs_redraw = true;
                 action
             }
             Some(ge) = gateway_events.recv() => {
@@ -730,6 +800,19 @@ async fn main_loop<'c>(
             }
             _ = tick_interval.tick() => {
                 Action::Tick
+            }
+            copy_result = async {
+                match copy_task.as_mut() {
+                    Some(task) => Some(task.await),
+                    None => std::future::pending().await,
+                }
+            } => {
+                copy_task = None;
+                if matches!(copy_result, Some(Err(_)) | Some(Ok(Err(_)))) {
+                    state.add_system_message("Clipboard copy failed; no text was reported as copied.".into());
+                    needs_redraw = true;
+                }
+                Action::None
             }
             completed = rpc_jobs.next() => {
                 if completed.tag.scope == rpc_scope {

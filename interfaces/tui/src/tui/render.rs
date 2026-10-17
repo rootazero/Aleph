@@ -80,6 +80,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     .split(main_area);
 
     let chat_area = chunks.first().copied().unwrap_or_default();
+    // The renderer is the single geometry source for the live transcript.
     let tasks_area = chunks.get(1).copied().unwrap_or_default();
     let agents_area = chunks.get(2).copied().unwrap_or_default();
     let input_area = chunks.get(3).copied().unwrap_or_default();
@@ -185,6 +186,17 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
             crate::tui::tool_output::render(frame, view, frame.area());
         }
     }
+
+    // Overlays own the visible screen while focused. Keeping the full frame
+    // here is deliberate: it captures the already-painted overlay without
+    // duplicating each overlay's private geometry. Keyboard input clears the
+    // selection before it reaches the focused overlay, so the composer remains
+    // usable rather than becoming a second input mode.
+    state.text_selection_area = if matches!(state.focus, Focus::Input | Focus::Chat) {
+        chat_area
+    } else {
+        frame.area()
+    };
 }
 
 #[cfg(test)]
