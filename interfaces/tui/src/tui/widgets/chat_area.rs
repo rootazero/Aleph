@@ -1,6 +1,6 @@
 // Chat area widget: renders the scrollable message list with support for
 // user messages, assistant messages (with reasoning, tool blocks, markdown),
-// system messages, and streaming cursors.
+// system messages, and streaming assistant content.
 
 use std::collections::{HashMap, HashSet};
 
@@ -572,18 +572,6 @@ fn build_all_lines_at(state: &AppState, width: u16, now_ms: u64) -> Vec<Line<'st
             KEY_MODALITY,
             &mut lines,
         );
-        // The streaming cursor is the one thing the settled path does not
-        // draw, because the cached path never renders a streaming entry
-        // through it.
-        if matches!(
-            message,
-            TranscriptEntry::AssistantText {
-                streaming: true,
-                ..
-            }
-        ) {
-            lines.push(streaming_cursor_line());
-        }
         // Add a blank line between messages
         lines.push(Line::default());
     }
@@ -764,8 +752,9 @@ fn build_visible_lines_anchored(
                 let content_rows = streaming_content
                     .as_ref()
                     .map_or(0, StreamLines::line_count);
-                // +1 streaming cursor, +1 blank separator.
-                heights.push(content_rows + 2);
+                // +1 blank separator; streaming content has no transient rail
+                // or cursor glyph.
+                heights.push(content_rows + 1);
             }
         } else {
             // A running row's glyph is a function of the clock, so its cached
@@ -930,7 +919,6 @@ fn visible_window(
 }
 
 /// Copy the `[lo, hi)` slice of the streaming entry's rows into `out`.
-/// Row layout: content | cursor.
 ///
 /// There is no "head" any more: reasoning and tool rows used to be rendered
 /// above the streaming message because they lived inside it, and they are
@@ -951,10 +939,6 @@ fn copy_streaming_slice(
                 out.push(line.clone());
             }
         }
-    }
-
-    if lo <= content_len && content_len < hi {
-        out.push(streaming_cursor_line());
     }
 }
 
@@ -1237,14 +1221,6 @@ fn render_reasoning(text: &str, width: u16, lines: &mut Vec<Line<'static>>) {
     }
 }
 
-/// The `▍` line shown under a still-streaming assistant message.
-fn streaming_cursor_line() -> Line<'static> {
-    Line::from(Span::styled(
-        "\u{258d}".to_string(), // ▍
-        Style::default().fg(theme().assistant),
-    ))
-}
-
 /// Render a system message with yellow text and indentation.
 ///
 /// System content is frequently multi-line (e.g. `/help`, `/usage`, `/replay`
@@ -1363,8 +1339,9 @@ mod tests {
         }
 
         let lines = build_all_lines(&state, 80);
-        // The user block no longer spends a row on timestamp metadata.
-        assert!(lines.len() >= 5);
+        // The user block has no metadata row and streaming has no transient
+        // cursor row: user + separator + assistant + separator.
+        assert!(lines.len() >= 4);
 
         let has_you = lines.iter().any(|line| {
             line.spans
@@ -1480,32 +1457,12 @@ mod tests {
     }
 
     #[test]
-    fn streaming_message_keeps_text_and_cursor_without_a_speaker_rail() {
+    fn streaming_message_keeps_text_without_any_vertical_rail() {
         let mut state = AppState::new("test".into(), "claude".into());
         state.ensure_assistant_message();
         state.append_assistant_content("partial answer");
 
         let lines = build_all_lines(&state, 80);
-        let cursor_rows: Vec<&Line<'static>> = lines
-            .iter()
-            .filter(|line| {
-                line.spans
-                    .iter()
-                    .any(|s| s.content.as_ref().contains('\u{258d}'))
-            })
-            .collect();
-        assert_eq!(
-            cursor_rows.len(),
-            1,
-            "streaming message should have one cursor"
-        );
-        let cursor_text: String = cursor_rows[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(cursor_text, "\u{258d}");
-
         let rendered: String = lines
             .iter()
             .flat_map(|line| line.spans.iter())
@@ -1514,12 +1471,14 @@ mod tests {
         assert!(rendered.contains("partial answer"));
         assert!(
             lines.iter().all(|line| {
-                !line
-                    .spans
-                    .iter()
-                    .any(|span| span.content.as_ref().contains('\u{2503}'))
+                !line.spans.iter().any(|span| {
+                    span.content
+                        .as_ref()
+                        .chars()
+                        .any(|c| matches!(c, '\u{2503}' | '\u{258d}' | '\u{2502}'))
+                })
             }),
-            "streaming assistant content and cursor must not paint the speaker rail: {lines:?}"
+            "streaming assistant content must not paint any vertical rail: {lines:?}"
         );
     }
 
@@ -1767,7 +1726,7 @@ mod tests {
         // The windowed production path must be byte-identical to slicing the
         // full reference build — for both scroll modes and for a window that
         // cuts through the middle of a message (the blank-separator and
-        // streaming-cursor boundary cases live in that cut).
+        // streaming-content boundary cases live in that cut).
         let mut state = AppState::new("test".into(), "claude".into());
         for i in 0..6 {
             state.add_user_message(format!("question {i}"), vec![]);
