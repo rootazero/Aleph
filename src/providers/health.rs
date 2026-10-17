@@ -51,13 +51,27 @@ pub enum ProviderError {
 }
 
 // --- AlephError → ProviderError conversion ---
+//
+// Post-migration to `aleph_slot_api`, `AlephError` is a foreign type.
+// The pre-migration `impl From<&AlephError> for Option<ProviderError>`
+// now violates the orphan rule because `Option` (std) wraps a local
+// type but itself is the outer constructor. We replace it with a
+// crate-local extension trait on `AlephError`. `AlephErrorExt` is a
+// local trait, so the orphan rule is trivially satisfied for any
+// type parameter (including the foreign `AlephError`).
 
-impl From<&AlephError> for Option<ProviderError> {
-    /// Convert an `AlephError` to a `ProviderError` for health tracking.
+/// Extension trait classifying an `AlephError` for provider health.
+pub trait AlephErrorExt {
+    /// Map the error to a provider-level health signal.
     ///
-    /// Returns None for errors that are request-specific (not provider-level).
-    fn from(error: &AlephError) -> Self {
-        match error {
+    /// Returns `None` for errors that are request-specific
+    /// (not provider-level).
+    fn to_provider_error(&self) -> Option<ProviderError>;
+}
+
+impl AlephErrorExt for AlephError {
+    fn to_provider_error(&self) -> Option<ProviderError> {
+        match self {
             AlephError::RateLimitError { .. } => {
                 Some(ProviderError::Transient(TransientError::RateLimited))
             }
@@ -127,7 +141,7 @@ mod tests {
     #[test]
     fn aleph_rate_limit_converts() {
         let err = AlephError::rate_limit("429 Too Many Requests");
-        let provider_err: Option<ProviderError> = (&err).into();
+        let provider_err: Option<ProviderError> = err.to_provider_error();
         assert_eq!(
             provider_err,
             Some(ProviderError::Transient(TransientError::RateLimited))
@@ -137,7 +151,7 @@ mod tests {
     #[test]
     fn aleph_timeout_converts() {
         let err = AlephError::Timeout { suggestion: None };
-        let provider_err: Option<ProviderError> = (&err).into();
+        let provider_err: Option<ProviderError> = err.to_provider_error();
         assert_eq!(
             provider_err,
             Some(ProviderError::Transient(TransientError::Timeout))
@@ -147,7 +161,7 @@ mod tests {
     #[test]
     fn aleph_execution_timeout_converts() {
         let err = AlephError::ExecutionTimeout { timeout_secs: 30 };
-        let provider_err: Option<ProviderError> = (&err).into();
+        let provider_err: Option<ProviderError> = err.to_provider_error();
         assert_eq!(
             provider_err,
             Some(ProviderError::Transient(TransientError::Timeout))
@@ -157,7 +171,7 @@ mod tests {
     #[test]
     fn aleph_network_error_converts() {
         let err = AlephError::network("connection refused");
-        let provider_err: Option<ProviderError> = (&err).into();
+        let provider_err: Option<ProviderError> = err.to_provider_error();
         assert_eq!(
             provider_err,
             Some(ProviderError::Transient(TransientError::ConnectionFailed))
@@ -167,7 +181,7 @@ mod tests {
     #[test]
     fn aleph_auth_error_converts() {
         let err = AlephError::authentication("openai", "401 Unauthorized");
-        let provider_err: Option<ProviderError> = (&err).into();
+        let provider_err: Option<ProviderError> = err.to_provider_error();
         assert_eq!(
             provider_err,
             Some(ProviderError::Permanent(PermanentError::AuthFailed))
@@ -177,7 +191,7 @@ mod tests {
     #[test]
     fn aleph_provider_error_5xx_converts() {
         let err = AlephError::provider("HTTP 502 Bad Gateway");
-        let provider_err: Option<ProviderError> = (&err).into();
+        let provider_err: Option<ProviderError> = err.to_provider_error();
         assert_eq!(
             provider_err,
             Some(ProviderError::Transient(TransientError::ServerError {
@@ -189,7 +203,7 @@ mod tests {
     #[test]
     fn aleph_provider_error_404_model_converts() {
         let err = AlephError::provider("404: model 'gpt-5' not found");
-        let provider_err: Option<ProviderError> = (&err).into();
+        let provider_err: Option<ProviderError> = err.to_provider_error();
         assert_eq!(
             provider_err,
             Some(ProviderError::Permanent(PermanentError::ModelNotFound))
@@ -199,7 +213,7 @@ mod tests {
     #[test]
     fn aleph_unrelated_error_returns_none() {
         let err = AlephError::other("something unrelated");
-        let provider_err: Option<ProviderError> = (&err).into();
+        let provider_err: Option<ProviderError> = err.to_provider_error();
         assert_eq!(provider_err, None);
     }
 
@@ -209,12 +223,12 @@ mod tests {
         // happens to quote a token count used to classify as a 5xx server
         // error and degrade a healthy provider.
         let err = AlephError::provider("400 invalid request: 1500 tokens exceeds per-message cap");
-        let provider_err: Option<ProviderError> = (&err).into();
+        let provider_err: Option<ProviderError> = err.to_provider_error();
         assert_eq!(provider_err, None);
 
         // And a request id carrying "404" is not a missing model.
         let err = AlephError::provider("model call failed, request id req_40450");
-        let provider_err: Option<ProviderError> = (&err).into();
+        let provider_err: Option<ProviderError> = err.to_provider_error();
         assert_eq!(provider_err, None);
     }
 }

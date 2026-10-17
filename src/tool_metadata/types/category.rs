@@ -1,57 +1,10 @@
-//! Tool Category
+//! Re-export shim — `ToolCategory` lives in `aleph-slot-api`.
 //!
-//! Tool classification for UI grouping and filtering.
+//! The four-variant enum (`Builtin` / `Skills` / `Mcp` / `Custom`),
+//! the `serde(rename_all = "lowercase")` tag, the `display_name()`
+//! / `icon()` inherent methods, and the `Display` impl all moved to
+//! `aleph_slot_api::metadata::ToolCategory` as of P0 Task 2. This
+//! file re-exports it so any `crate::tool_metadata::types::category::ToolCategory`
+//! path still compiles.
 
-use serde::{Deserialize, Serialize};
-use std::fmt;
-
-/// Tool category for UI grouping and filtering
-///
-/// Tools are classified into 5 categories based on their source:
-/// - **Builtin**: Built-in rig-core tools (search, `web_fetch`, `file_ops`)
-/// - **Skills**: User-configured skills (instruction injection)
-/// - **Mcp**: MCP server tools (dynamically loaded)
-/// - **Custom**: User-defined custom tools
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[non_exhaustive]
-#[serde(rename_all = "lowercase")]
-pub enum ToolCategory {
-    /// Built-in rig-core tools
-    Builtin,
-    /// User-configured skills (via UI settings)
-    Skills,
-    /// MCP server tools (via UI settings)
-    Mcp,
-    /// User-defined custom tools (via UI settings)
-    Custom,
-}
-
-impl ToolCategory {
-    /// Get display name for UI
-    #[must_use]
-    pub const fn display_name(&self) -> &'static str {
-        match self {
-            Self::Builtin => "Builtin",
-            Self::Skills => "Skills",
-            Self::Mcp => "MCP",
-            Self::Custom => "Custom",
-        }
-    }
-
-    /// Get SF Symbol icon name
-    #[must_use]
-    pub const fn icon(&self) -> &'static str {
-        match self {
-            Self::Builtin => "command.square.fill",
-            Self::Skills => "sparkles",
-            Self::Mcp => "server.rack",
-            Self::Custom => "slider.horizontal.3",
-        }
-    }
-}
-
-impl fmt::Display for ToolCategory {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.display_name())
-    }
-}
+pub use aleph_slot_api::metadata::ToolCategory;

@@ -167,6 +167,7 @@ _bmad/
 # Examples — track curated subdirs only
 examples/*
 !examples/plugins/
+!examples/modularization/
 !examples/protocols/
 !examples/protocols/**
 

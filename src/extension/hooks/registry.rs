@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tokio::sync::{broadcast, Notify, RwLock, RwLockReadGuard, TryLockError};
+#[cfg(test)]
+use tokio::sync::{broadcast, Notify, TryLockError};
+use tokio::sync::{RwLock, RwLockReadGuard};
 
 use super::{HookExecutor, HookInventoryEntry};
 use crate::capability::descriptor::CapabilityId;
@@ -394,9 +396,17 @@ impl HookState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct HookRegistryChange {
     pub(crate) revision: u64,
+}
+
+impl std::fmt::Debug for HookRegistryChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HookRegistryChange")
+            .field("revision", &self.revision)
+            .finish()
+    }
 }
 
 pub(crate) struct HookRegistry {
@@ -420,6 +430,7 @@ impl Deref for HookReadGuard<'_> {
 }
 
 impl HookRegistry {
+    #[cfg(test)]
     pub(crate) fn new(template: HookExecutor) -> Self {
         Self::new_with_ownership_tree(template, Arc::new(OwnershipTree::new()))
     }
@@ -448,6 +459,7 @@ impl HookRegistry {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn try_read(&self) -> Result<HookReadGuard<'_>, TryLockError> {
         let gate = self.gate.try_read()?;
         Ok(HookReadGuard {
@@ -459,18 +471,23 @@ impl HookRegistry {
     pub(crate) fn snapshot(&self) -> Arc<VersionedSnapshot<HookState>> {
         self.registry.snapshot()
     }
+    #[cfg(test)]
     pub(crate) fn revision(&self) -> u64 {
         self.registry.revision()
     }
+    #[cfg(test)]
     pub(crate) fn is_closed(&self) -> bool {
         self.registry.is_closed()
     }
+    #[cfg(test)]
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<HookRegistryChange> {
         self.registry.subscribe()
     }
+    #[cfg(test)]
     pub(crate) fn close_signal(&self) -> Arc<Notify> {
         self.registry.close_signal()
     }
+    #[cfg(test)]
     pub(crate) fn close(&self) {
         self.registry.close();
     }

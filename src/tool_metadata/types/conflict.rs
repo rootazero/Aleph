@@ -4,45 +4,15 @@
 //! have the same name from different sources.
 //!
 //! Contains:
-//! - `ToolPriority`: Priority ordering for conflict resolution
 //! - `ConflictInfo`: Information about existing conflicting tool
 //! - `ConflictResolution`: Resolution strategy enum
-//! - `ToolSource`: Tool origin source enum
+//!
+//! `ToolSource` and `ToolPriority` were moved to `aleph_slot_api::metadata`
+//! as part of the P0 Task 2 tool-contract closure and are re-exported here
+//! so callers using `crate::tool_metadata::types::conflict::{ToolSource,
+//! ToolPriority}` continue to compile.
 
-use serde::{Deserialize, Serialize};
-
-// =============================================================================
-// Tool Priority
-// =============================================================================
-
-/// Tool priority for conflict resolution
-///
-/// When multiple tools have the same name, the higher priority tool wins
-/// and the lower priority tool is renamed with a suffix.
-///
-/// Priority order (highest to lowest):
-/// 1. Builtin (6) - System commands like /search, /webfetch
-/// 2. Native (5) - System capabilities implementations
-/// 3. Custom (4) - User-defined rules from config.toml
-/// 4. Mcp (3) - External MCP server tools
-/// 5. Plugin (2) - Plugin tools from manifests
-/// 6. Skill (1) - Claude Agent skills
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum ToolPriority {
-    /// Lowest priority - Claude Agent skills
-    Skill = 1,
-    /// Plugin tools from manifests
-    Plugin = 2,
-    /// External MCP server tools
-    Mcp = 3,
-    /// User-defined custom rules
-    Custom = 4,
-    /// System native capabilities
-    Native = 5,
-    /// Highest priority - System builtin commands
-    Builtin = 6,
-}
+pub use aleph_slot_api::metadata::{ToolPriority, ToolSource};
 
 // =============================================================================
 // Conflict Info
@@ -86,159 +56,6 @@ pub enum ConflictResolution {
 }
 
 // =============================================================================
-// Tool Source
-// =============================================================================
-
-/// Tool source origin
-///
-/// Identifies where a tool comes from, enabling proper routing
-/// and UI grouping (badges, icons).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[non_exhaustive]
-#[serde(tag = "type", content = "payload")]
-pub enum ToolSource {
-    /// Built-in native capabilities (Search, Video)
-    /// These are always available without any configuration.
-    Native,
-
-    /// System builtin commands (/search, /webfetch)
-    /// These are always-available slash commands that may or may not have
-    /// special capability execution logic.
-    Builtin,
-
-    /// MCP (Model Context Protocol) server
-    /// External or builtin MCP servers providing tools.
-    Mcp {
-        /// Server identifier (e.g., "github", "filesystem")
-        server: String,
-    },
-
-    /// Claude Agent Skill
-    /// Instruction-injection skills from ~/.aleph/skills/
-    Skill {
-        /// Skill directory ID (e.g., "refine-text")
-        id: String,
-        /// Owning plugin, when a plugin registered this entry. See
-        /// `skill::SkillInfo::plugin_id`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        plugin_id: Option<String>,
-    },
-
-    /// User-defined custom command from config.toml
-    /// These are [[rules]] entries with ^/ prefix patterns.
-    Custom {
-        /// Index in the rules array for reference
-        rule_index: usize,
-    },
-
-    /// Plugin tool from ~/.aleph/plugins/
-    /// These are tools declared in plugin manifests (aleph.plugin.toml).
-    Plugin {
-        /// Plugin identifier (e.g., "diagnostics")
-        plugin_id: String,
-    },
-}
-
-impl ToolSource {
-    /// Get a short type label for UI display
-    #[must_use]
-    pub const fn label(&self) -> &'static str {
-        match self {
-            Self::Native => "Native",
-            Self::Builtin => "Builtin",
-            Self::Mcp { .. } => "MCP",
-            Self::Skill { .. } => "Skill",
-            Self::Custom { .. } => "Custom",
-            Self::Plugin { .. } => "Plugin",
-        }
-    }
-
-    /// Get the priority level for conflict resolution
-    ///
-    /// Higher priority tools win name conflicts and lower priority tools
-    /// are renamed with a suffix.
-    #[must_use]
-    pub const fn priority(&self) -> ToolPriority {
-        match self {
-            Self::Builtin => ToolPriority::Builtin,
-            Self::Native => ToolPriority::Native,
-            Self::Custom { .. } => ToolPriority::Custom,
-            Self::Mcp { .. } => ToolPriority::Mcp,
-            Self::Plugin { .. } => ToolPriority::Plugin,
-            Self::Skill { .. } => ToolPriority::Skill,
-        }
-    }
-
-    /// Get the suffix used when renaming a conflicting tool
-    ///
-    /// When a tool loses a name conflict, it's renamed to `{name}-{suffix}`.
-    /// For example, an MCP tool named "search" becomes "search-mcp".
-    #[must_use]
-    pub const fn suffix(&self) -> &'static str {
-        match self {
-            Self::Builtin => "system",
-            Self::Native => "native",
-            Self::Custom { .. } => "custom",
-            Self::Mcp { .. } => "mcp",
-            Self::Plugin { .. } => "plugin",
-            Self::Skill { .. } => "skill",
-        }
-    }
-
-    /// Check if this source is a builtin command
-    #[must_use]
-    pub const fn is_builtin(&self) -> bool {
-        matches!(self, Self::Builtin)
-    }
-
-    /// Check if this source is an MCP tool
-    #[must_use]
-    pub const fn is_mcp(&self) -> bool {
-        matches!(self, Self::Mcp { .. })
-    }
-
-    /// Check if this source is a skill
-    #[must_use]
-    pub const fn is_skill(&self) -> bool {
-        matches!(self, Self::Skill { .. })
-    }
-
-    /// Display priority for UI sorting (lower = first).
-    ///
-    /// Order: Builtin (0) > Native (1) > Custom (2) > Mcp (3) > Plugin (4) > Skill (5).
-    #[must_use]
-    pub const fn display_priority(&self) -> u8 {
-        match self {
-            Self::Builtin => 0,
-            Self::Native => 1,
-            Self::Custom { .. } => 2,
-            Self::Mcp { .. } => 3,
-            Self::Plugin { .. } => 4,
-            Self::Skill { .. } => 5,
-        }
-    }
-
-    /// Format a tool ID for this source type.
-    ///
-    /// E.g. `ToolSource::Mcp { server: "fs" }.format_tool_id("read_file")` → `"mcp:fs:read_file"`.
-    #[must_use]
-    pub fn format_tool_id(&self, name: &str) -> String {
-        match self {
-            Self::Native => format!("native:{name}"),
-            Self::Builtin => format!("builtin:{name}"),
-            Self::Mcp { server } => format!("mcp:{server}:{name}"),
-            Self::Skill { id, .. } => {
-                // Skills are identified by their internal id only — the tool
-                // name is a display label and not part of the identity.
-                format!("skill:{id}")
-            }
-            Self::Custom { rule_index } => format!("custom:{rule_index}:{name}"),
-            Self::Plugin { plugin_id } => format!("plugin:{plugin_id}:{name}"),
-        }
-    }
-}
-
-// =============================================================================
 // Tests
 // =============================================================================
 
@@ -246,117 +63,11 @@ impl ToolSource {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_tool_priority_ordering() {
-        // Verify priority ordering: Builtin > Native > Custom > Mcp > Skill
-        assert!(ToolPriority::Builtin > ToolPriority::Native);
-        assert!(ToolPriority::Native > ToolPriority::Custom);
-        assert!(ToolPriority::Custom > ToolPriority::Mcp);
-        assert!(ToolPriority::Mcp > ToolPriority::Skill);
-    }
-
-    #[test]
-    fn test_tool_source_label() {
-        assert_eq!(ToolSource::Native.label(), "Native");
-        assert_eq!(ToolSource::Builtin.label(), "Builtin");
-        assert_eq!(
-            ToolSource::Mcp {
-                server: "test".into()
-            }
-            .label(),
-            "MCP"
-        );
-        assert_eq!(
-            ToolSource::Skill {
-                id: "test".into(),
-                plugin_id: None
-            }
-            .label(),
-            "Skill"
-        );
-        assert_eq!(ToolSource::Custom { rule_index: 0 }.label(), "Custom");
-    }
-
-    #[test]
-    fn test_tool_source_priority() {
-        assert_eq!(ToolSource::Builtin.priority(), ToolPriority::Builtin);
-        assert_eq!(ToolSource::Native.priority(), ToolPriority::Native);
-        assert_eq!(
-            ToolSource::Custom { rule_index: 0 }.priority(),
-            ToolPriority::Custom
-        );
-        assert_eq!(
-            ToolSource::Mcp {
-                server: "test".into()
-            }
-            .priority(),
-            ToolPriority::Mcp
-        );
-        assert_eq!(
-            ToolSource::Skill {
-                id: "test".into(),
-                plugin_id: None
-            }
-            .priority(),
-            ToolPriority::Skill
-        );
-    }
-
-    #[test]
-    fn test_tool_source_suffix() {
-        assert_eq!(ToolSource::Builtin.suffix(), "system");
-        assert_eq!(ToolSource::Native.suffix(), "native");
-        assert_eq!(ToolSource::Custom { rule_index: 0 }.suffix(), "custom");
-        assert_eq!(
-            ToolSource::Mcp {
-                server: "test".into()
-            }
-            .suffix(),
-            "mcp"
-        );
-        assert_eq!(
-            ToolSource::Skill {
-                id: "test".into(),
-                plugin_id: None
-            }
-            .suffix(),
-            "skill"
-        );
-    }
-
-    #[test]
-    fn test_tool_source_type_checks() {
-        assert!(ToolSource::Builtin.is_builtin());
-        assert!(!ToolSource::Native.is_builtin());
-
-        assert!(ToolSource::Mcp {
-            server: "test".into()
-        }
-        .is_mcp());
-        assert!(!ToolSource::Builtin.is_mcp());
-
-        assert!(ToolSource::Skill {
-            id: "test".into(),
-            plugin_id: None
-        }
-        .is_skill());
-        assert!(!ToolSource::Builtin.is_skill());
-    }
-
-    #[test]
-    fn test_tool_source_serialization() {
-        let native = ToolSource::Native;
-        let json = serde_json::to_string(&native).unwrap();
-        assert!(json.contains("Native"));
-
-        let mcp = ToolSource::Mcp {
-            server: "test".into(),
-        };
-        let json = serde_json::to_string(&mcp).unwrap();
-        assert!(json.contains("Mcp"));
-        assert!(json.contains("test"));
-    }
-
+    /// Restored verbatim from the pre-migration Core `conflict.rs` test
+    /// module (S1 repair): the migration moved this file's `ToolSource` /
+    /// `ToolPriority` tests into `aleph_slot_api::metadata` but silently
+    /// dropped this one. `ConflictResolution` stayed in Core, so its test
+    /// belongs here beside it.
     #[test]
     fn test_conflict_resolution_variants() {
         let rename_existing = ConflictResolution::RenameExisting {

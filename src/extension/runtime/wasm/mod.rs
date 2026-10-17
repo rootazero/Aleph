@@ -53,7 +53,7 @@ pub struct WasmToolOutput {
 /// WASM plugin runtime manager
 #[derive(Default)]
 pub struct WasmRuntime {
-    plugins: HashMap<String, LoadedWasmPlugin>,
+    plugins: HashMap<String, Arc<LoadedWasmPlugin>>,
 }
 
 #[derive(Debug)]
@@ -62,10 +62,33 @@ struct LoadedWasmPlugin {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // Task59 infrastructure, will be used in future tasks
 pub(crate) struct WasmBinding {
     plugin_id: String,
     export: String,
+    instance: Arc<LoadedWasmPlugin>,
+}
+
+impl WasmBinding {
+    pub(crate) fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+
+    pub(crate) fn export(&self) -> &str {
+        &self.export
+    }
+}
+
+/// Opaque identity of one actually mounted WASM plugin instance.
+///
+/// The only way to obtain one is [`WasmRuntime::mounted_instance`], which
+/// clones the `Arc` the runtime's own map holds; the field is private, so no
+/// caller can construct an identity that names an instance the runtime did
+/// not mount, and no export needs to exist for a module to have one — a
+/// service-only module has a lifetime too. Holding the identity keeps that
+/// instance's VM allocation alive until the holder releases it (the same
+/// trade-off [`WasmBinding`] already makes), but grants no execution after
+/// unmount and promises no immediate deallocation.
+pub(crate) struct WasmMountIdentity {
     instance: Arc<LoadedWasmPlugin>,
 }
 
@@ -254,9 +277,9 @@ impl WasmRuntime {
             .build()
             .map_err(|e| ExtensionError::Runtime(format!("Failed to load WASM: {e}")))?;
 
-        let loaded = LoadedWasmPlugin {
+        let loaded = Arc::new(LoadedWasmPlugin {
             plugin: Mutex::new(plugin),
-        };
+        });
 
         self.plugins.insert(manifest.id.clone(), loaded);
 
@@ -268,10 +291,92 @@ impl WasmRuntime {
         self.plugins.remove(plugin_id).is_some()
     }
 
+    /// Capture the identity of the instance currently mounted under
+    /// `plugin_id`, reading only the actual map — never names, exports, or
+    /// metadata. `None` when nothing is mounted under that id.
+    pub(crate) fn mounted_instance(&self, plugin_id: &str) -> Option<WasmMountIdentity> {
+        self.plugins
+            .get(plugin_id)
+            .map(|instance| WasmMountIdentity {
+                instance: Arc::clone(instance),
+            })
+    }
+
+    /// Remove the entry for `plugin_id` only while the map still holds the
+    /// exact instance `identity` was captured from. Returns `true` when this
+    /// call performed the removal; a stale or absent identity removes
+    /// nothing, so a late disposer can never evict a same-id replacement.
+    pub(crate) fn remove_if_current(
+        &mut self,
+        plugin_id: &str,
+        identity: &WasmMountIdentity,
+    ) -> bool {
+        let is_current = self
+            .plugins
+            .get(plugin_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &identity.instance));
+        if is_current {
+            self.plugins.remove(plugin_id);
+        }
+        is_current
+    }
+
     /// Check if a plugin is loaded
     #[must_use]
     pub fn is_loaded(&self, plugin_id: &str) -> bool {
         self.plugins.contains_key(plugin_id)
+    }
+
+    pub(crate) fn bind(
+        &self,
+        plugin_id: &str,
+        export: &str,
+    ) -> Result<WasmBinding, ExtensionError> {
+        let instance = self
+            .plugins
+            .get(plugin_id)
+            .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
+
+        let plugin = instance
+            .plugin
+            .lock()
+            .map_err(|e| ExtensionError::Runtime(format!("Failed to lock plugin: {e}")))?;
+        if !plugin.function_exists(export) {
+            return Err(ExtensionError::Runtime(format!(
+                "WASM export not found: {export}"
+            )));
+        }
+        drop(plugin);
+
+        Ok(WasmBinding {
+            plugin_id: plugin_id.to_string(),
+            export: export.to_string(),
+            instance: Arc::clone(instance),
+        })
+    }
+
+    pub(crate) fn call_bound(
+        &self,
+        binding: &WasmBinding,
+        input: WasmToolInput,
+    ) -> Result<WasmToolOutput, ExtensionError> {
+        let current = self
+            .plugins
+            .get(&binding.plugin_id)
+            .ok_or_else(|| ExtensionError::PluginNotFound(binding.plugin_id.clone()))?;
+        if !Arc::ptr_eq(current, &binding.instance) {
+            return Err(ExtensionError::Runtime(format!(
+                "WASM binding no longer mounted: {}",
+                binding.plugin_id
+            )));
+        }
+
+        Self::call_loaded(
+            &binding.instance,
+            &binding.plugin_id,
+            &binding.export,
+            input,
+        )
     }
 
     /// Call a tool handler in a WASM plugin
@@ -286,6 +391,15 @@ impl WasmRuntime {
             .get(plugin_id)
             .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
 
+        Self::call_loaded(loaded, plugin_id, handler, input)
+    }
+
+    fn call_loaded(
+        loaded: &LoadedWasmPlugin,
+        plugin_id: &str,
+        handler: &str,
+        input: WasmToolInput,
+    ) -> Result<WasmToolOutput, ExtensionError> {
         let input_json = serde_json::to_string(&input)
             .map_err(|e| ExtensionError::Runtime(format!("Failed to serialize input: {e}")))?;
 
@@ -314,7 +428,9 @@ impl WasmRuntime {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    pub(crate) mod guest_fixture;
+
     use super::*;
     use crate::extension::types::PluginKind;
     use std::path::PathBuf;

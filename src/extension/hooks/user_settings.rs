@@ -123,15 +123,37 @@ struct UserHooksFile {
 /// surfaced in logs / consent flows.
 #[must_use]
 pub fn load_user_hooks(cwd: Option<&Path>, project_roots: &[PathBuf]) -> Vec<HookConfig> {
-    let mut out = Vec::new();
+    load_registered_user_hooks(cwd, project_roots)
+        .into_iter()
+        .map(super::registry::HookInput::into_config)
+        .collect()
+}
 
+/// Same traversal/parser as the public loader, with origin captured at the file
+/// read boundary. No label parsing and no second file read per declaration.
+pub(crate) fn load_registered_user_hooks(
+    cwd: Option<&Path>,
+    project_roots: &[PathBuf],
+) -> Vec<super::registry::HookInput> {
+    let mut out = Vec::new();
+    visit_user_hooks(cwd, project_roots, &mut |path, scope, config| {
+        out.push(super::registry::HookInput::user(config, path, scope));
+    });
+    out
+}
+
+fn visit_user_hooks(
+    cwd: Option<&Path>,
+    project_roots: &[PathBuf],
+    emit: &mut impl FnMut(&Path, &ScopeKey, HookConfig),
+) {
     // `ALEPH_HOME`-aware, like every other reader of Aleph state — and like the
     // sibling `ShellHookConsent::default_path` that gates these same hooks.
     // A user-global layer that reads the real home under a relocated one is a
     // silently empty layer.
     if let Ok(home) = crate::utils::paths::get_config_dir() {
         let p = home.join("hooks.json");
-        load_into(&p, "user:global", &ScopeKey::Global, &mut out);
+        load_into_with(&p, "user:global", &ScopeKey::Global, emit);
     }
 
     // Track project roots already loaded (by canonical path) so a folder that
@@ -141,16 +163,14 @@ pub fn load_user_hooks(cwd: Option<&Path>, project_roots: &[PathBuf]) -> Vec<Hoo
 
     if let Some(cwd) = cwd {
         seen.insert(canonical(cwd));
-        load_project_layer(cwd, &mut out);
+        load_project_layer_with(cwd, emit);
     }
 
     for root in project_roots {
         if seen.insert(canonical(root)) {
-            load_project_layer(root, &mut out);
+            load_project_layer_with(root, emit);
         }
     }
-
-    out
 }
 
 /// Best-effort canonicalisation for path-equality bookkeeping. A thin alias
@@ -170,14 +190,31 @@ pub(crate) const PROJECT_LABELS: [&str; 2] = ["user:project", "user:project-loca
 /// tagged `user:project*` for logs and stamped `Project(root)` so the
 /// executor's fire-time gate (`visible_to`) and the consent key bind them to
 /// this project.
+#[cfg(test)]
 fn load_project_layer(root: &Path, out: &mut Vec<HookConfig>) {
-    let key = ScopeKey::project(root);
-    let [checked_in, local] = PROJECT_LABELS;
-    load_into(&root.join(".aleph/hooks.json"), checked_in, &key, out);
-    load_into(&root.join(".aleph/hooks.local.json"), local, &key, out);
+    load_project_layer_with(root, &mut |_, _, config| out.push(config));
 }
 
+fn load_project_layer_with(root: &Path, emit: &mut impl FnMut(&Path, &ScopeKey, HookConfig)) {
+    let key = ScopeKey::project(root);
+    let [checked_in, local] = PROJECT_LABELS;
+    load_into_with(&root.join(".aleph/hooks.json"), checked_in, &key, emit);
+    load_into_with(&root.join(".aleph/hooks.local.json"), local, &key, emit);
+}
+
+#[cfg(test)]
 fn load_into(path: &Path, source_label: &str, scope: &ScopeKey, out: &mut Vec<HookConfig>) {
+    load_into_with(path, source_label, scope, &mut |_, _, config| {
+        out.push(config)
+    });
+}
+
+fn load_into_with(
+    path: &Path,
+    source_label: &str,
+    scope: &ScopeKey,
+    emit: &mut impl FnMut(&Path, &ScopeKey, HookConfig),
+) {
     let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
@@ -288,19 +325,23 @@ fn load_into(path: &Path, source_label: &str, scope: &ScopeKey, out: &mut Vec<Ho
                     ),
                 };
 
-                out.push(HookConfig {
-                    event,
-                    kind,
-                    priority,
-                    matcher: matcher.clone(),
-                    actions: vec![action],
-                    plugin_name: source_label.to_string(),
-                    plugin_root: plugin_root.clone(),
-                    handler: None,
-                    timeout_secs,
-                    declared_event: Some(event_str.clone()),
-                    scope_key: scope.clone(),
-                });
+                emit(
+                    path,
+                    scope,
+                    HookConfig {
+                        event,
+                        kind,
+                        priority,
+                        matcher: matcher.clone(),
+                        actions: vec![action],
+                        plugin_name: source_label.to_string(),
+                        plugin_root: plugin_root.clone(),
+                        handler: None,
+                        timeout_secs,
+                        declared_event: Some(event_str.clone()),
+                        scope_key: scope.clone(),
+                    },
+                );
             }
         }
     }

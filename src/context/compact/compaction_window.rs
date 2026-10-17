@@ -12,7 +12,7 @@
 
 use super::preserve::is_summary_text;
 use super::summary_utils::cap_transcript_text;
-use crate::providers::message::UnifiedMessage;
+use crate::providers::message::{dispatch_unified_message, UnifiedMessage};
 
 /// Advance a proposed cut index forward past any contiguous run of `ToolResult`
 /// messages so the cut never falls *between* a `ToolCall` and the result that
@@ -125,15 +125,15 @@ pub(super) fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
     for msg in messages {
         let text = msg.transcript_text();
         let capped = cap_transcript_text(&text);
-        let role = match msg {
-            UnifiedMessage::User { .. } => "user",
-            UnifiedMessage::Assistant { .. } => "assistant",
-            UnifiedMessage::ToolResult { tool_name, .. } => {
+        dispatch_unified_message(
+            msg,
+            &mut lines,
+            |lines, _| lines.push(format!("user: {capped}")),
+            |lines, _| lines.push(format!("assistant: {capped}")),
+            |lines, _, tool_name, _, _| {
                 lines.push(format!("tool_result({tool_name}): {capped}"));
-                continue;
-            }
-        };
-        lines.push(format!("{role}: {capped}"));
+            },
+        );
     }
     lines.join("\n")
 }

@@ -146,6 +146,20 @@ impl CapabilityChangeStream {
         true
     }
 
+    /// Append one whole transaction cohort atomically.
+    ///
+    /// The cursor is checked once before any member is appended. An empty
+    /// visible cohort still advances progress, while a stale or equal cohort
+    /// leaves both cursor and history unchanged.
+    pub fn append_cohort(&mut self, cursor: Cursor, changes: Vec<CapabilityChange>) -> bool {
+        if cursor <= self.committed_cursor {
+            return false;
+        }
+        self.changes.extend(changes);
+        self.committed_cursor = cursor;
+        true
+    }
+
     /// Resync after an [`Invalidated`] event using a fresh snapshot + delta.
     ///
     /// This is a pure value state machine; it never reads or writes a store.
@@ -381,6 +395,24 @@ mod tests {
             CapabilityChange::Registered { ref id, revision: CapabilityRevision(1) }
                 if id == &cap_id("ns", "y")
         ));
+    }
+
+    #[test]
+    fn append_cohort_is_atomic_for_stale_empty_and_multi_member_inputs() {
+        let mut stream = CapabilityChangeStream::from_snapshot(empty_snapshot(3));
+        let first = CapabilityChange::Invalidated;
+        let second = CapabilityChange::Invalidated;
+        assert!(stream.append_cohort(Cursor(4), vec![first, second]));
+        assert_eq!(stream.committed_cursor, Cursor(4));
+        assert_eq!(stream.changes.len(), 2);
+
+        assert!(!stream.append_cohort(Cursor(4), vec![CapabilityChange::Invalidated]));
+        assert_eq!(stream.changes.len(), 2);
+        assert!(stream.append_cohort(Cursor(5), Vec::new()));
+        assert_eq!(stream.committed_cursor, Cursor(5));
+        assert_eq!(stream.changes.len(), 2);
+        assert!(!stream.append_cohort(Cursor(2), vec![CapabilityChange::Invalidated]));
+        assert_eq!(stream.committed_cursor, Cursor(5));
     }
 
     #[test]

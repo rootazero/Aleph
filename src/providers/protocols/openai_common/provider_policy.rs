@@ -9,36 +9,7 @@ use crate::config::types::provider::ModelCompat;
 // EndpointClass
 // =============================================================================
 
-/// Detected provider endpoint class.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EndpointClass {
-    /// Official `OpenAI` API (api.openai.com)
-    OpenAiPublic,
-    /// `OpenAI` Codex (chatgpt.com)
-    OpenAiCodex,
-    /// Azure `OpenAI` Service (*.openai.azure.com)
-    AzureOpenAi,
-    /// Anthropic public API (api.anthropic.com)
-    AnthropicPublic,
-    /// `DeepSeek` native API (api.deepseek.com)
-    DeepSeekNative,
-    /// Groq native API (api.groq.com)
-    GroqNative,
-    /// Mistral public API (api.mistral.ai)
-    MistralPublic,
-    /// Moonshot native API (api.moonshot.ai / api.moonshot.cn)
-    MoonshotNative,
-    /// Cerebras native API (api.cerebras.ai)
-    CerebrasNative,
-    /// X.AI / Grok native API (api.x.ai / api.grok.x.ai)
-    XAiNative,
-    /// `OpenRouter` (openrouter.ai)
-    OpenRouter,
-    /// Local endpoint (localhost / 127.0.0.1 / *.local)
-    Local,
-    /// Unknown / custom endpoint
-    Custom,
-}
+pub use aleph_slot_api::ai_reasoning::{detect_endpoint_class, EndpointClass};
 
 // =============================================================================
 // ProviderCapabilities
@@ -200,65 +171,6 @@ impl PayloadPolicy {
 // =============================================================================
 // Endpoint Detection
 // =============================================================================
-
-/// Detect endpoint class from base URL.
-#[must_use]
-pub fn detect_endpoint_class(base_url: Option<&str>) -> EndpointClass {
-    let url = match base_url {
-        None | Some("") => return EndpointClass::OpenAiPublic,
-        Some(u) => u,
-    };
-
-    let host = match extract_hostname(url) {
-        Some(h) => h.to_lowercase(),
-        None => return EndpointClass::Custom,
-    };
-
-    match host.as_str() {
-        "api.openai.com" => EndpointClass::OpenAiPublic,
-        "chatgpt.com" => EndpointClass::OpenAiCodex,
-        "api.anthropic.com" => EndpointClass::AnthropicPublic,
-        "api.deepseek.com" => EndpointClass::DeepSeekNative,
-        "api.groq.com" => EndpointClass::GroqNative,
-        "api.mistral.ai" => EndpointClass::MistralPublic,
-        "api.moonshot.ai" | "api.moonshot.cn" | "api.kimi.com" => EndpointClass::MoonshotNative,
-        "api.cerebras.ai" => EndpointClass::CerebrasNative,
-        "api.x.ai" | "api.grok.x.ai" => EndpointClass::XAiNative,
-        _ => {
-            if host.ends_with(".openai.azure.com") {
-                EndpointClass::AzureOpenAi
-            } else if host.ends_with("openrouter.ai") {
-                EndpointClass::OpenRouter
-            } else if is_local_host(&host) {
-                EndpointClass::Local
-            } else {
-                EndpointClass::Custom
-            }
-        }
-    }
-}
-
-fn extract_hostname(url: &str) -> Option<String> {
-    let with_scheme = if url.contains("://") {
-        url.to_string()
-    } else {
-        format!("https://{url}")
-    };
-
-    with_scheme
-        .parse::<url::Url>()
-        .ok()
-        .map(|u| u.host_str().unwrap_or("").to_string())
-}
-
-fn is_local_host(host: &str) -> bool {
-    const LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "::1", "[::1]"];
-    if LOOPBACK.iter().any(|l| l.eq_ignore_ascii_case(host)) {
-        return true;
-    }
-    let lower = host.to_ascii_lowercase();
-    lower.ends_with(".localhost") || lower.ends_with(".local")
-}
 
 // =============================================================================
 // Capability Resolution

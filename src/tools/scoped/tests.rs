@@ -6227,4 +6227,966 @@ mod a3 {
         );
         assert_eq!(requester.seen.lock().unwrap().len(), 1);
     }
+
+    // Task53/R0: the result budget is a fact of the captured canonical entry.
+    // These tests drive the public `execute` and observe the real Layer 2
+    // output (offload marker / inline completeness), never a budget getter.
+    mod r0_budget {
+        use super::*;
+
+        const NAME: &str = "budget_terminal";
+        const SMALL: usize = 128;
+        const LARGE: usize = 6_000;
+
+        struct BudgetHandler {
+            definition: ToolDefinition,
+            tag: &'static str,
+            own_identity: ToolCallIdentity,
+            invoked: StdArc<StdMutex<Vec<(&'static str, Option<String>, VerdictAudit)>>>,
+            structured: bool,
+        }
+
+        // Varied, non-repeating rows so ingress compression cannot erase the
+        // evidence; HEAD/MID/TAIL markers name the producing handler.
+        fn body(tag: &str) -> String {
+            let mut text = format!("BUDGET-HEAD-{tag}\n");
+            for i in 0..80u64 {
+                let mix = (i + 17).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (i << 7);
+                text.push_str(&format!("{tag}-row-{i:04} {mix:016x} {}\n", i * i + 3));
+            }
+            text.push_str(&format!("BUDGET-TAIL-{tag}"));
+            text
+        }
+
+        #[async_trait::async_trait]
+        impl ToolHandler for BudgetHandler {
+            fn definition(&self) -> ToolDefinition {
+                self.definition.clone()
+            }
+
+            async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
+                // The sealed admission proof must be present and exact.
+                let audit = audit_verdict(&self.definition.name, &self.own_identity, &input);
+                assert_bound_verdict(&audit);
+                self.invoked.lock().unwrap().push((
+                    self.tag,
+                    crate::approval::current_tool_call_id(),
+                    audit,
+                ));
+                let value = if self.structured {
+                    json!({"handler": self.tag, "blob": body(self.tag)})
+                } else {
+                    Value::String(body(self.tag))
+                };
+                Ok(ToolOutput {
+                    value,
+                    metadata: Default::default(),
+                })
+            }
+        }
+
+        type Calls = StdArc<StdMutex<Vec<(&'static str, Option<String>, VerdictAudit)>>>;
+
+        fn handler(tag: &'static str, revision: u64, calls: &Calls) -> BudgetHandler {
+            BudgetHandler {
+                definition: definition(NAME, false),
+                tag,
+                own_identity: unsafe_identity(revision),
+                invoked: calls.clone(),
+                structured: false,
+            }
+        }
+
+        fn descriptor(h: &BudgetHandler) -> ToolCapabilityDescriptor {
+            ToolCapabilityDescriptor::from_definition(&h.definition(), 0)
+        }
+
+        fn all_visible() -> crate::tools::handlers::McpServerFilter {
+            StdArc::new(|_: &str| true)
+        }
+
+        /// Discovery projection built from the CURRENT entry via the real
+        /// entry-based adapter, then frozen: a later replace makes it stale.
+        /// `file_read` is callable so an over-budget result is offloaded.
+        fn budget_service(
+            registry: &StdArc<ToolHandlerRegistry>,
+            expected_projection_budget: Option<usize>,
+            store: StdArc<crate::tools::result_store::ToolResultStore>,
+        ) -> ScopedToolService {
+            let visible = all_visible();
+            let mut inner = LoopToolRegistry::new();
+            inner.bind_canonical_registry(StdArc::clone(registry), visible.clone());
+            let entry = registry.resolve_entry(NAME).expect("entry published");
+            inner.register(Box::new(
+                crate::tools::adapters::McpRegistryTool::from_canonical_entry(&entry, &visible),
+            ));
+            inner.register(Box::new(StubTool {
+                tool_name: "file_read",
+            }));
+            assert_eq!(
+                inner.max_result_tokens_for(NAME),
+                expected_projection_budget,
+                "precondition: the discovery projection carries the old budget"
+            );
+            let svc = ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
+                .with_result_store(store);
+            assert!(StdArc::ptr_eq(
+                svc.canonical_registry.as_ref().expect("link retained"),
+                registry
+            ));
+            svc
+        }
+
+        /// The produced size must sit strictly between the two budgets the
+        /// real resolver would enforce, or the test proves nothing.
+        fn assert_discriminating_size() -> usize {
+            let produced = crate::context::budget::pressure::estimate_tokens_smart(&body("x"));
+            let resolve = crate::tools::result_processing::resolve_result_budget;
+            assert_eq!(resolve(NAME, Some(SMALL)), Some(SMALL));
+            assert_eq!(resolve(NAME, Some(LARGE)), Some(LARGE));
+            let default = resolve(NAME, None).unwrap();
+            assert!(
+                produced > SMALL * 2 && produced < LARGE.min(default),
+                "fixture size {produced} must discriminate {SMALL} from {LARGE}/{default}"
+            );
+            produced
+        }
+
+        fn assert_offloaded(text: &str, tag: &str, produced: usize) {
+            assert!(
+                text.contains("[Full output persisted: "),
+                "small budget must offload {tag}'s result:\n{text}"
+            );
+            let inline = crate::context::budget::pressure::estimate_tokens_smart(text);
+            assert!(
+                inline < produced,
+                "offloaded result must be smaller inline ({inline} >= {produced})"
+            );
+        }
+
+        fn assert_inline_whole(text: &str, tag: &str) {
+            assert!(
+                !text.contains("[Full output persisted: "),
+                "large/default budget must not offload {tag}'s result:\n{text}"
+            );
+            for marker in [
+                format!("BUDGET-HEAD-{tag}"),
+                format!("{tag}-row-0040 "),
+                format!("BUDGET-TAIL-{tag}"),
+            ] {
+                assert!(text.contains(&marker), "missing {marker}:\n{text}");
+            }
+        }
+
+        // Break caught: Scoped consumes the stale discovery projection's
+        // budget (or a second live lookup) instead of the entry it captured.
+        #[tokio::test]
+        async fn replacement_before_execute_uses_replacement_entry_budget() {
+            let produced = assert_discriminating_size();
+            let registry = StdArc::new(ToolHandlerRegistry::new());
+            let calls: Calls = StdArc::new(StdMutex::new(Vec::new()));
+            let a = handler("budgetA", 1, &calls);
+            registry
+                .register_with_result_budget(descriptor(&a), StdArc::new(a), Some(SMALL))
+                .unwrap();
+            let (_scratch, store) = hygiene_store("r0_replace_before");
+            let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
+            let svc = budget_service(&registry, Some(SMALL), store)
+                .with_turn_context(turn_ctx("r0-replace-before-execute"))
+                .with_confirmation(requester.clone());
+
+            let b = handler("budgetB", 2, &calls);
+            registry
+                .replace_with_result_budget(descriptor(&b), StdArc::new(b), Some(LARGE))
+                .unwrap();
+            let current = registry.resolve_entry(NAME).unwrap();
+            assert_eq!(current.max_result_tokens, Some(LARGE));
+            assert_eq!(current.descriptor.revision, 2);
+
+            let out = with_call_identity(
+                Some(identity("r0-before")),
+                svc.execute(NAME, json!({"action": "write"})),
+            )
+            .await
+            .expect("approved call succeeds");
+            let text = out.value.as_str().expect("layer 2 flattens to text");
+            assert_inline_whole(text, "budgetB");
+            assert!(!text.contains("budgetA"), "stale handler must not run");
+            let calls = calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, "budgetB");
+            assert_eq!(calls[0].1.as_deref(), Some("r0-before"));
+            let seen = requester.seen.lock().unwrap();
+            assert_eq!(seen.len(), 1, "exactly one real approval");
+            let _ = produced;
+        }
+
+        // Break caught: a call captured at rev1 adopts rev2's budget after the
+        // gate suspends, or the next call keeps the stale rev1 budget.
+        #[tokio::test]
+        async fn gate_held_capture_keeps_old_budget_and_next_call_uses_new() {
+            let produced = assert_discriminating_size();
+            let registry = StdArc::new(ToolHandlerRegistry::new());
+            let calls: Calls = StdArc::new(StdMutex::new(Vec::new()));
+            let a = handler("budgetA", 1, &calls);
+            registry
+                .register_with_result_budget(descriptor(&a), StdArc::new(a), Some(SMALL))
+                .unwrap();
+            let arrived = StdArc::new(Barrier::new(2));
+            let release = StdArc::new(Barrier::new(2));
+            let requester = StdArc::new(BoundaryRequester {
+                registry: registry.clone(),
+                arrived: arrived.clone(),
+                release: release.clone(),
+                seen: StdMutex::new(Vec::new()),
+            });
+            let (_scratch, store) = hygiene_store("r0_gate_held");
+            let svc = StdArc::new(
+                budget_service(&registry, Some(SMALL), store.clone())
+                    .with_turn_context(turn_ctx("r0-gate-held-capture"))
+                    .with_confirmation(requester.clone()),
+            );
+            let first_svc = svc.clone();
+            let first = tokio::spawn(with_call_identity(
+                Some(identity("r0-held-a")),
+                async move { first_svc.execute(NAME, json!({"action": "write"})).await },
+            ));
+            tokio::time::timeout(std::time::Duration::from_secs(5), arrived.wait())
+                .await
+                .expect("rev1 must reach the approval barrier");
+            let b = handler("budgetB", 2, &calls);
+            registry
+                .replace_with_result_budget(descriptor(&b), StdArc::new(b), Some(LARGE))
+                .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(5), release.wait())
+                .await
+                .expect("replacement must release the in-flight gate");
+            let first_out = tokio::time::timeout(std::time::Duration::from_secs(5), first)
+                .await
+                .expect("captured rev1 dispatch completes")
+                .unwrap()
+                .expect("in-flight approval was granted");
+            let first_text = first_out.value.as_str().expect("flattened");
+            assert_offloaded(first_text, "budgetA", produced);
+            let persisted_path = crate::tools::result_store::extract_persisted_path(first_text)
+                .expect("offload must name an actual recovery file");
+            let persisted = store
+                .read_call_blob(std::path::Path::new(persisted_path), "r0-held-a")
+                .expect("the captured call must own a readable persisted result");
+            assert_eq!(persisted, body("budgetA"));
+            assert!(!first_text.contains("budgetB"), "{first_text}");
+
+            // Same service, no rebuild: projection still says SMALL.
+            let next_out = with_call_identity(
+                Some(identity("r0-held-b")),
+                svc.execute(NAME, json!({"action": "write"})),
+            )
+            .await
+            .expect("next call separately approved");
+            let next_text = next_out.value.as_str().expect("flattened");
+            assert_inline_whole(next_text, "budgetB");
+
+            let boundary = requester.seen.lock().unwrap();
+            assert_eq!(
+                boundary
+                    .iter()
+                    .map(|(id, i)| (id.as_str(), i.revision))
+                    .collect::<Vec<_>>(),
+                vec![("r0-held-a", 1), ("r0-held-b", 2)]
+            );
+            let calls = calls.lock().unwrap();
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|(tag, id, _)| (*tag, id.as_deref()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    ("budgetA", Some("r0-held-a")),
+                    ("budgetB", Some("r0-held-b"))
+                ]
+            );
+        }
+
+        // Break caught: `.or_else` turns the canonical authoritative None into
+        // the stale projection's Some(SMALL).
+        #[tokio::test]
+        async fn canonical_none_ignores_stale_projection_budget() {
+            assert_discriminating_size();
+            let registry = StdArc::new(ToolHandlerRegistry::new());
+            let calls: Calls = StdArc::new(StdMutex::new(Vec::new()));
+            let a = handler("budgetA", 1, &calls);
+            registry
+                .register_with_result_budget(descriptor(&a), StdArc::new(a), Some(SMALL))
+                .unwrap();
+            let (_scratch, store) = hygiene_store("r0_none");
+            let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
+            let svc = budget_service(&registry, Some(SMALL), store)
+                .with_turn_context(turn_ctx("r0-canonical-none"))
+                .with_confirmation(requester);
+            let b = handler("budgetB", 2, &calls);
+            registry
+                .replace_with_result_budget(descriptor(&b), StdArc::new(b), None)
+                .unwrap();
+            assert_eq!(
+                registry.resolve_entry(NAME).unwrap().max_result_tokens,
+                None
+            );
+
+            let out = with_call_identity(
+                Some(identity("r0-none")),
+                svc.execute(NAME, json!({"action": "write"})),
+            )
+            .await
+            .expect("approved call succeeds");
+            let text = out.value.as_str().expect("flattened");
+            // None resolves to the default budget, which fits the fixture.
+            assert_inline_whole(text, "budgetB");
+            assert_eq!(calls.lock().unwrap()[0].0, "budgetB");
+        }
+
+        // StructuredRpc stays an early return even when the captured entry
+        // carries a small budget: no flatten, no offload.
+        #[tokio::test]
+        async fn structured_rpc_ignores_captured_small_budget() {
+            assert_discriminating_size();
+            let registry = StdArc::new(ToolHandlerRegistry::new());
+            let calls: Calls = StdArc::new(StdMutex::new(Vec::new()));
+            let mut a = handler("budgetA", 1, &calls);
+            a.structured = true;
+            registry
+                .register_with_result_budget(descriptor(&a), StdArc::new(a), Some(SMALL))
+                .unwrap();
+            let (_scratch, store) = hygiene_store("r0_rpc");
+            let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
+            let svc = budget_service(&registry, Some(SMALL), store)
+                .with_structured_rpc_transport()
+                .with_turn_context(turn_ctx("r0-structured-rpc"))
+                .with_confirmation(requester);
+            let out = with_call_identity(
+                Some(identity("r0-rpc")),
+                svc.execute(NAME, json!({"action": "write"})),
+            )
+            .await
+            .expect("approved call succeeds");
+            let blob = out
+                .value
+                .get("blob")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("structured value preserved: {:?}", out.value));
+            assert_eq!(blob, body("budgetA"));
+            assert_eq!(out.value.get("handler"), Some(&json!("budgetA")));
+        }
+    }
 }
+
+// -------------------------------------------------------------------------
+// Task55 / R1-A — bounded source-authorized consumer effects.
+// -------------------------------------------------------------------------
+mod r1a {
+    use super::*;
+    use crate::approval::{with_call_identity, CallIdentity};
+    use crate::session::events::ToolOutput;
+    use crate::sync_primitives::Arc as StdArc;
+    use crate::tools::descriptor::ToolCapabilityDescriptor;
+    use crate::tools::handlers::ToolHandler;
+    use crate::tools::registry::ToolHandlerRegistry;
+    use crate::tools::runtime::{LoopTool, ToolResult as LoopToolResult};
+    use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
+    use crate::tools::usage::UsageOrigin;
+    use serde_json::{json, Value};
+    use std::collections::{BTreeSet, HashMap};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio_util::sync::CancellationToken;
+
+    struct CountingHandler {
+        definition: ToolDefinition,
+        calls: StdArc<AtomicUsize>,
+        fails: bool,
+        shared: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl ToolHandler for CountingHandler {
+        async fn invoke(&self, _input: Value) -> Result<ToolOutput, ToolError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.fails {
+                Err(ToolError::Execution {
+                    name: self.definition.name.clone(),
+                    cause: "handler failed".into(),
+                })
+            } else {
+                Ok(ToolOutput {
+                    value: json!({"handler": self.definition.name}),
+                    metadata: Default::default(),
+                })
+            }
+        }
+
+        fn definition(&self) -> ToolDefinition {
+            self.definition.clone()
+        }
+
+        fn concurrency_claim(&self, _input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+            if self.shared {
+                crate::tools::concurrency::ConcurrencyClaim::Shared
+            } else {
+                crate::tools::concurrency::ConcurrencyClaim::global()
+            }
+        }
+    }
+
+    struct Projection {
+        name: String,
+        descriptor: Option<StdArc<ToolCapabilityDescriptor>>,
+        owner: String,
+        calls: StdArc<AtomicUsize>,
+        shared: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl LoopTool for Projection {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "R1-A discovery projection"
+        }
+        fn schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        fn is_concurrent_safe(&self, _input: &Value) -> bool {
+            self.shared
+        }
+        fn capability_descriptor(&self) -> Option<&ToolCapabilityDescriptor> {
+            self.descriptor.as_deref()
+        }
+        fn usage_origin(&self) -> Option<UsageOrigin<'_>> {
+            Some(UsageOrigin::Plugin(&self.owner))
+        }
+        async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            LoopToolResult::Success {
+                output: json!({"projection": self.name}),
+            }
+        }
+    }
+
+    fn definition(name: &str, source: ToolSource, shared: bool) -> ToolDefinition {
+        ToolDefinition {
+            name: name.into(),
+            description: "R1-A canonical fixture".into(),
+            input_schema: json!({"type": "object"}),
+            source,
+            metadata: ToolDefinitionMetadata {
+                concurrent_safe: shared,
+                idempotent: true,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn register(
+        registry: &ToolHandlerRegistry,
+        definition: ToolDefinition,
+        calls: StdArc<AtomicUsize>,
+        fails: bool,
+        shared: bool,
+    ) -> crate::tools::registry::RegistryEntry {
+        let name = definition.name.clone();
+        let descriptor = ToolCapabilityDescriptor::from_definition(&definition, 0);
+        registry
+            .register(
+                descriptor,
+                StdArc::new(CountingHandler {
+                    definition,
+                    calls,
+                    fails,
+                    shared,
+                }),
+            )
+            .expect("actual registry admission");
+        registry
+            .resolve_entry(&name)
+            .expect("actual admitted entry")
+    }
+
+    fn service(
+        registry: &StdArc<ToolHandlerRegistry>,
+        projection: Projection,
+    ) -> ScopedToolService {
+        let mut inner = LoopToolRegistry::new();
+        let visible: crate::tools::handlers::McpServerFilter = StdArc::new(|_| true);
+        inner.bind_canonical_registry(StdArc::clone(registry), visible);
+        inner.register(Box::new(projection));
+        ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
+    }
+
+    fn identity(id: &str) -> CallIdentity {
+        CallIdentity {
+            turn_id: crate::session::events::TurnId::nil(),
+            call_id: id.into(),
+        }
+    }
+
+    fn snapshot() -> HashMap<String, crate::tools::usage::OriginUsage> {
+        crate::tools::usage::ToolUsageStore::default_path()
+            .map(|store| store.snapshot())
+            .unwrap_or_default()
+    }
+
+    fn projection(
+        name: &str,
+        entry: Option<&crate::tools::registry::RegistryEntry>,
+        owner: &str,
+        calls: StdArc<AtomicUsize>,
+        shared: bool,
+    ) -> Projection {
+        Projection {
+            name: name.into(),
+            descriptor: entry.map(|entry| StdArc::clone(&entry.descriptor)),
+            owner: owner.into(),
+            calls,
+            shared,
+        }
+    }
+
+    #[tokio::test]
+    async fn adapter_origins_follow_actual_descriptor_sources() {
+        let registry = ToolHandlerRegistry::new();
+        let cases = [
+            (
+                "r1a_ext",
+                ToolSource::Extension {
+                    plugin_id: "REAL".into(),
+                },
+                Some(UsageOrigin::Plugin("REAL")),
+            ),
+            (
+                "r1a_mcp",
+                ToolSource::Mcp {
+                    server_id: "server".into(),
+                },
+                Some(UsageOrigin::Mcp("server")),
+            ),
+            (
+                "r1a_empty",
+                ToolSource::Mcp {
+                    server_id: String::new(),
+                },
+                None,
+            ),
+            ("r1a_builtin", ToolSource::Builtin, None),
+        ];
+        for (name, source, expected) in cases {
+            let calls = StdArc::new(AtomicUsize::new(0));
+            let def = definition(name, source, true);
+            let descriptor = ToolCapabilityDescriptor::from_definition(&def, 0);
+            registry
+                .register(
+                    descriptor,
+                    StdArc::new(CountingHandler {
+                        definition: def,
+                        calls: StdArc::clone(&calls),
+                        fails: false,
+                        shared: true,
+                    }),
+                )
+                .unwrap();
+            let entry = registry.resolve_entry(name).unwrap();
+            let adapter = crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                StdArc::clone(&entry.handler),
+                &entry.descriptor,
+            );
+            assert_eq!(adapter.usage_origin(), expected);
+            let result = adapter.execute(json!({}), CancellationToken::new()).await;
+            assert!(matches!(
+                result,
+                crate::tools::runtime::ToolResult::Error { error, .. }
+                    if error.contains(
+                        "canonical invocation requires exact dispatch or sealed Safe replay admission"
+                    )
+            ));
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "direct adapter invoke is not admitted"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn captured_plugin_owner_beats_spoofed_projection_usage() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let canonical_calls = StdArc::new(AtomicUsize::new(0));
+        let def = definition(
+            "r1a_tool",
+            ToolSource::Extension {
+                plugin_id: "REAL".into(),
+            },
+            true,
+        );
+        let entry = register(&registry, def, StdArc::clone(&canonical_calls), false, true);
+        let projection_calls = StdArc::new(AtomicUsize::new(0));
+        let svc = service(
+            &registry,
+            projection(
+                "r1a_tool",
+                Some(&entry),
+                "SPOOF",
+                StdArc::clone(&projection_calls),
+                true,
+            ),
+        );
+        let result = with_call_identity(
+            Some(identity("r1a-spoof")),
+            svc.execute("r1a_tool", json!({})),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "actual canonical handler must execute: {result:?}"
+        );
+        assert_eq!(canonical_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(projection_calls.load(Ordering::SeqCst), 0);
+        let rows = snapshot();
+        assert_eq!(rows.get("plugin:REAL").map(|r| r.call_count), Some(1));
+        assert_eq!(rows.get("plugin:SPOOF").map(|r| r.call_count), None);
+        assert_eq!(rows.get("mcp:SPOOF").map(|r| r.call_count), None);
+    }
+
+    #[tokio::test]
+    async fn canonical_builtin_none_never_inherits_spoofed_projection_usage() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let canonical_calls = StdArc::new(AtomicUsize::new(0));
+        let entry = register(
+            &registry,
+            definition("r1a_tool", ToolSource::Builtin, true),
+            StdArc::clone(&canonical_calls),
+            false,
+            true,
+        );
+        let projection_calls = StdArc::new(AtomicUsize::new(0));
+        let svc = service(
+            &registry,
+            projection(
+                "r1a_tool",
+                Some(&entry),
+                "SPOOF",
+                StdArc::clone(&projection_calls),
+                true,
+            ),
+        );
+        let result = with_call_identity(
+            Some(identity("r1a-builtin")),
+            svc.execute("r1a_tool", json!({})),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "actual builtin handler must execute: {result:?}"
+        );
+        assert_eq!(canonical_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(projection_calls.load(Ordering::SeqCst), 0);
+        assert!(snapshot().is_empty());
+        assert!(crate::utils::paths::tool_usage_path().is_some_and(|path| !path.exists()));
+    }
+
+    #[tokio::test]
+    async fn captured_plugin_execution_error_counts_real_owner_error() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let calls = StdArc::new(AtomicUsize::new(0));
+        let entry = register(
+            &registry,
+            definition(
+                "r1a_tool",
+                ToolSource::Extension {
+                    plugin_id: "REAL".into(),
+                },
+                true,
+            ),
+            StdArc::clone(&calls),
+            true,
+            true,
+        );
+        let projection_calls = StdArc::new(AtomicUsize::new(0));
+        let svc = service(
+            &registry,
+            projection("r1a_tool", Some(&entry), "SPOOF", projection_calls, true),
+        );
+        let result = with_call_identity(
+            Some(identity("r1a-error")),
+            svc.execute("r1a_tool", json!({})),
+        )
+        .await;
+        assert!(matches!(result, Err(ToolError::Execution { .. })));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let row = snapshot()
+            .remove("plugin:REAL")
+            .expect("real error usage row");
+        assert_eq!(row.call_count, 1);
+        assert_eq!(row.error_count, 1);
+    }
+
+    #[tokio::test]
+    async fn admitted_extension_permission_deny_has_no_usage_effect() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let calls = StdArc::new(AtomicUsize::new(0));
+        let entry = register(
+            &registry,
+            definition(
+                "r1a_tool",
+                ToolSource::Extension {
+                    plugin_id: "REAL".into(),
+                },
+                true,
+            ),
+            StdArc::clone(&calls),
+            false,
+            true,
+        );
+        let svc = service(
+            &registry,
+            projection(
+                "r1a_tool",
+                Some(&entry),
+                "SPOOF",
+                StdArc::new(AtomicUsize::new(0)),
+                true,
+            ),
+        )
+        .with_tool_permissions(perms(
+            crate::extension::PermissionAction::Allow,
+            &[("r1a_tool", crate::extension::PermissionAction::Deny)],
+        ));
+        let result = with_call_identity(
+            Some(identity("r1a-deny")),
+            svc.execute("r1a_tool", json!({})),
+        )
+        .await;
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn removed_descriptor_backed_projection_has_no_legacy_fallback() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let calls = StdArc::new(AtomicUsize::new(0));
+        let entry = register(
+            &registry,
+            definition(
+                "r1a_tool",
+                ToolSource::Extension {
+                    plugin_id: "REAL".into(),
+                },
+                true,
+            ),
+            StdArc::clone(&calls),
+            false,
+            true,
+        );
+        let projection_calls = StdArc::new(AtomicUsize::new(0));
+        let svc = service(
+            &registry,
+            projection(
+                "r1a_tool",
+                Some(&entry),
+                "SPOOF",
+                StdArc::clone(&projection_calls),
+                true,
+            ),
+        );
+        registry.unregister("r1a_tool").unwrap();
+        let result = with_call_identity(
+            Some(identity("r1a-removed")),
+            svc.execute("r1a_tool", json!({})),
+        )
+        .await;
+        assert!(matches!(result, Err(ToolError::NotFound { .. })));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(projection_calls.load(Ordering::SeqCst), 0);
+        assert!(snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn same_source_replacement_captures_new_generation() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let calls_a = StdArc::new(AtomicUsize::new(0));
+        let source = ToolSource::Extension {
+            plugin_id: "REAL".into(),
+        };
+        let entry_a = register(
+            &registry,
+            definition("r1a_tool", source.clone(), true),
+            StdArc::clone(&calls_a),
+            false,
+            true,
+        );
+        let projection_calls = StdArc::new(AtomicUsize::new(0));
+        let svc = service(
+            &registry,
+            projection(
+                "r1a_tool",
+                Some(&entry_a),
+                "SPOOF",
+                StdArc::clone(&projection_calls),
+                true,
+            ),
+        );
+        let calls_b = StdArc::new(AtomicUsize::new(0));
+        let def_b = definition("r1a_tool", source, true);
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&def_b, 0),
+                StdArc::new(CountingHandler {
+                    definition: def_b,
+                    calls: StdArc::clone(&calls_b),
+                    fails: false,
+                    shared: true,
+                }),
+            )
+            .unwrap();
+        let result = with_call_identity(
+            Some(identity("r1a-same")),
+            svc.execute("r1a_tool", json!({})),
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(calls_a.load(Ordering::SeqCst), 0);
+        assert_eq!(calls_b.load(Ordering::SeqCst), 1);
+        assert_eq!(projection_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(snapshot().get("plugin:REAL").map(|r| r.call_count), Some(1));
+    }
+
+    #[tokio::test]
+    async fn changed_source_replacement_refuses_without_usage() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let calls_old = StdArc::new(AtomicUsize::new(0));
+        let entry = register(
+            &registry,
+            definition(
+                "r1a_tool",
+                ToolSource::Extension {
+                    plugin_id: "REAL".into(),
+                },
+                true,
+            ),
+            StdArc::clone(&calls_old),
+            false,
+            true,
+        );
+        let projection_calls = StdArc::new(AtomicUsize::new(0));
+        let svc = service(
+            &registry,
+            projection(
+                "r1a_tool",
+                Some(&entry),
+                "SPOOF",
+                StdArc::clone(&projection_calls),
+                true,
+            ),
+        );
+        let changed = definition(
+            "r1a_tool",
+            ToolSource::Extension {
+                plugin_id: "OTHER".into(),
+            },
+            true,
+        );
+        let calls_changed = StdArc::new(AtomicUsize::new(0));
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&changed, 0),
+                StdArc::new(CountingHandler {
+                    definition: changed,
+                    calls: StdArc::clone(&calls_changed),
+                    fails: false,
+                    shared: true,
+                }),
+            )
+            .unwrap();
+        let result = with_call_identity(
+            Some(identity("r1a-owner-change")),
+            svc.execute("r1a_tool", json!({})),
+        )
+        .await;
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert_eq!(calls_old.load(Ordering::SeqCst), 0);
+        assert_eq!(calls_changed.load(Ordering::SeqCst), 0);
+        assert_eq!(projection_calls.load(Ordering::SeqCst), 0);
+        assert!(snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn public_scheduler_keeps_global_canonical_and_shared_compatibility_claims() {
+        use crate::tools::concurrency::ConcurrencyClaim;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let calls = StdArc::new(AtomicUsize::new(0));
+        let entry = register(
+            &registry,
+            definition(
+                "r1a_tool",
+                ToolSource::Extension {
+                    plugin_id: "REAL".into(),
+                },
+                true,
+            ),
+            StdArc::clone(&calls),
+            false,
+            true,
+        );
+        let canonical = service(
+            &registry,
+            projection(
+                "r1a_tool",
+                Some(&entry),
+                "SPOOF",
+                StdArc::new(AtomicUsize::new(0)),
+                true,
+            ),
+        );
+        assert_eq!(
+            canonical
+                .call_concurrency_claim("r1a_tool", &json!({}))
+                .await,
+            ConcurrencyClaim::global()
+        );
+
+        let compat_calls = StdArc::new(AtomicUsize::new(0));
+        let compat = service(
+            &registry,
+            projection(
+                "r1a_compat",
+                None,
+                "COMPAT",
+                StdArc::clone(&compat_calls),
+                true,
+            ),
+        );
+        assert_eq!(
+            compat
+                .call_concurrency_claim("r1a_compat", &json!({}))
+                .await,
+            ConcurrencyClaim::Shared
+        );
+        let result = with_call_identity(
+            Some(identity("r1a-compat")),
+            compat.execute("r1a_compat", json!({})),
+        )
+        .await;
+        // Task59: descriptorless bypass removed, compatibility tools must fail
+        assert!(result.is_err());
+        assert_eq!(compat_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(snapshot().get("plugin:COMPAT").map(|r| r.call_count), None);
+    }
+}
+
+mod task11_rewrite_tests;

@@ -208,50 +208,54 @@ impl SessionEvent {
             },
         ]
     }
+
+    /// Build the durable request marker at the dispatch boundary.
+    #[must_use]
+    pub fn tool_call_requested(
+        turn_id: TurnId,
+        call_id: String,
+        name: String,
+        input: serde_json::Value,
+        identity: Option<ToolCallIdentity>,
+    ) -> Self {
+        Self::ToolCallRequested {
+            turn_id,
+            call_id,
+            name,
+            input,
+            identity,
+            at: now_ms(),
+        }
+    }
+
+    /// Build the durable post-guardrail input marker.
+    #[must_use]
+    pub fn tool_call_effective_input(
+        turn_id: TurnId,
+        call_id: String,
+        input: serde_json::Value,
+    ) -> Self {
+        Self::ToolCallEffectiveInput {
+            turn_id,
+            call_id,
+            input,
+            at: now_ms(),
+        }
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ToolOutput {
-    pub value: serde_json::Value,
-    #[serde(default)]
-    pub metadata: ToolOutputMetadata,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ToolOutputMetadata {
-    #[serde(default)]
-    pub latency_ms: u64,
-    #[serde(default)]
-    pub cost_cents: Option<u64>,
-    /// Out-of-band image payloads carried alongside the (text) `value`.
-    ///
-    /// Some tools — desktop screenshots above all — produce an image the
-    /// vision-capable model must actually *see*. The text result budget
-    /// (`apply_layer_two`) would otherwise flatten and truncate the base64
-    /// into oblivion, so the image is hoisted here BEFORE truncation and
-    /// re-emitted as a `ContentBlock::Image` when the tool result is rendered
-    /// into the prompt. Empty for the overwhelming majority of tool calls.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub images: Vec<ToolImage>,
-    /// Structured UI presentation (file diffs) hoisted out of the tool's
-    /// JSON by `apply_layer_two` BEFORE the value is flattened to model text.
-    /// Rides `session_events` for replay and the callback for the live frame.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub presentation: Option<aleph_protocol::Presentation>,
-}
-
-/// A single out-of-band image attached to a tool result (base64 + MIME).
-///
-/// Mirrors UI-TARS-desktop's "screenshot re-injection as a post-tool side
-/// effect": the screen the model acted on is fed back as a viewable image on
-/// the next turn, closing the perceive→act loop.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ToolImage {
-    /// Base64-encoded image bytes (no `data:` URL prefix).
-    pub data: String,
-    /// MIME type, e.g. `image/png` or `image/jpeg`.
-    pub mime_type: String,
-}
+// =============================================================================
+// P0 Task 2: `ToolOutput` / `ToolOutputMetadata` / `ToolImage` moved to
+// `aleph-slot-api`. Single source of truth for the wire shape. The
+// `presentation: Option<aleph_protocol::Presentation>` field is the only
+// home for that type in the crate graph — no second definition, no
+// parallel field. Every existing
+// `crate::session::events::ToolOutput` /
+// `crate::session::events::ToolOutputMetadata` /
+// `crate::session::events::ToolImage` path keeps compiling
+// unchanged.
+// =============================================================================
+pub use aleph_slot_api::tool::{ToolImage, ToolOutput, ToolOutputMetadata};
 
 /// Terminal disposition of a harness run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

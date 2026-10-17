@@ -1,0 +1,29 @@
+/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-10-14-modularization-p0-implementation/guarded-cargo.py: c8a4ff2f4f10d3867080e9239539008eeecab5a7a365aae3514e3cc20ab47cc6 (expected=c8a4ff2f4f10d3867080e9239539008eeecab5a7a365aae3514e3cc20ab47cc6, match=True)
+/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-10-14-modularization-p0-implementation/task59_verify_freeze.py: 863d2a37f04d4bd0aac154d7282f61f44245aeef8cc70ac9b7300394f1643b8f (expected=85434b7c552efa28df22837156d0f5365ec09659f7f4a827d2623aaa8f160025, match=False)
+/tmp/aleph-task41-r4-metadata.json: d81932b54c567dc49fad4c26a9804a441c5d69ccb716d80a04c2d8a3344a6e66 (expected=d81932b54c567dc49fad4c26a9804a441c5d69ccb716d80a04c2d8a3344a6e66, match=True)
+memory_available_bytes:
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     8183.
+Pages active:                                 363859.
+Pages inactive:                               366101.
+Pages speculative:                              1932.
+Pages throttled:                                   0.
+Pages wired down:                             177871.
+Pages purgeable:                               20655.
+"Translation faults":                    16929991367.
+Pages copy-on-write:                       418619874.
+Pages zero filled:                        5457071285.
+Pages reactivated:                        5329837088.
+Pages purged:                               56479113.
+File-backed pages:                            293930.
+Anonymous pages:                              437962.
+Pages stored in compressor:                   192602.
+Pages occupied by compressor:                  84378.
+Decompressions:                           6419993676.
+Compressions:                             7146502631.
+Pageins:                                   550416645.
+Pageouts:                                    1061114.
+Swapins:                                   433931953.
+Swapouts:                                  472120663.
+active_build_processes:
+45405 /bin/bash -c set -o pipefail\012python3 -B - <<'PY' 2>&1 | tee repair-logs/task59-preflight.log\012import hashlib\012import os\012import subprocess\012from pathlib import Path\012\012root = Path('/Volumes/TBU4/Workspace/Aleph')\012expected = {\012    '.superpowers/sdd/2026-10-14-modularization-p0-implementation/guarded-cargo.py': 'c8a4ff2f4f10d3867080e9239539008eeecab5a7a365aae3514e3cc20ab47cc6',\012    '.superpowers/sdd/2026-10-14-modularization-p0-implementation/task59_verify_freeze.py': '85434b7c552efa28df22837156d0f5365ec09659f7f4a827d2623aaa8f160025',\012    '/tmp/aleph-task41-r4-metadata.json': 'd81932b54c567dc49fad4c26a9804a441c5d69ccb716d80a04c2d8a3344a6e66',\012}\012for raw, wanted in expected.items():\012    path = Path(raw) if raw.startswith('/') else root / raw\012    digest = hashlib.sha256(path.read_bytes()).hexdigest()\012    print(f'{path}: {digest} (expected={wanted}, match={digest == wanted})')\012print('memory_available_bytes:')\012print(subprocess.check_output(['vm_stat'], text=True).strip())\012print('active_build_processes:')\012ps = subprocess.check_output(['ps', 'ax', '-o', 'pid=,command='], text=True)\012rows = [line.strip() for line in ps.splitlines() if any(token in line for token in ('cargo', 'rustc', 'guarded-cargo.py'))]\012print('\n'.join(rows) if rows else '(none)')\012PY\012status=${PIPESTATUS[0]}\012exit "$status"

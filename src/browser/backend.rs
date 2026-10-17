@@ -381,53 +381,41 @@ pub trait BrowserBackend: Send + Sync {
     }
 }
 
-/// The effect-arrival verdict of one probed verb (click / type / fill),
-/// stamped onto `browser_exec` step results as `effect_verification`.
+/// The effect-arrival verdict of one probed verb (click / type / fill).
 ///
-/// The three states are three DIFFERENT facts, and collapsing any two of
-/// them is a lie the model acts on (判据 §8):
-///
-/// * `Verified` — the one-shot listener installed before dispatch observed
-///   the expected event at the target element. Earned by the read-back,
-///   never asserted by a table.
-/// * `Skipped(engine)` — no verdict exists and the label says so: the
-///   engine's capability row holds the probe off, the action named a point
-///   rather than a node, or the probe's own machinery failed. An honest
-///   "I do not know", never a quiet success (「活性≠能干活」).
-/// * `Failed` — the probe ran and the effect did not arrive. The action
-///   itself already failed as [`BrowserError::EffectNotDelivered`]; the
-///   latch records the same verdict as data so a caller that caught the
-///   error can still read it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EffectVerification {
-    Verified,
-    Skipped(Engine),
-    Failed,
-}
+/// Canonical definition lives in `aleph_slot_api::browser::effect`; Core
+/// re-exports the same type so existing call sites
+/// (`crate::browser::backend::EffectVerification`) keep resolving. The
+/// engine-aware derivation `for_engine` is provided here as the public Core
+/// extension trait `EffectVerificationExt` because the measured capability
+/// table it consults is native authority.
+pub use aleph_slot_api::browser::effect::EffectVerification;
 
-impl EffectVerification {
+/// Engine-aware derivation for the canonical [`EffectVerification`] verdict.
+///
+/// `for_engine` consults Core's measured capability table, which does NOT
+/// move into the API crate — the table is the runtime authority for what the
+/// engine's effect probe actually does. A bare associated call
+/// (`EffectVerification::for_engine(...)`) therefore needs this trait in
+/// scope (an explicit, user-approved compatibility cost — see
+/// `task-8-main-decisions.md`); the API enum intentionally does not own this
+/// method.
+pub trait EffectVerificationExt {
     /// The verdict a verb reports WITHOUT running the probe: `Some(Skipped)`
     /// when the engine's capability row holds the probe off, `None` when the
     /// probe will run and the read-back decides. Never `Some(Verified)` — a
     /// verification is earned by observing the event, never by looking up a
     /// table (判据 §8: 「外部引擎可以把编造的值当作成功应答」).
     #[must_use]
-    pub fn for_engine(engine: Engine) -> Option<Self> {
+    fn for_engine(engine: Engine) -> Option<EffectVerification>;
+}
+
+impl EffectVerificationExt for EffectVerification {
+    fn for_engine(engine: Engine) -> Option<Self> {
         match super::engine::capabilities(engine).effect_probe {
             super::engine::Cap::Supported => None,
             // `Partial` is not `Supported`: a caveat row does not run a probe.
             _ => Some(Self::Skipped(engine)),
-        }
-    }
-
-    /// The wire token carried in `browser_exec` step results:
-    /// `"verified"` / `"skipped(<engine>)"` / `"failed"`.
-    #[must_use]
-    pub fn as_wire(&self) -> String {
-        match self {
-            Self::Verified => "verified".into(),
-            Self::Skipped(engine) => format!("skipped({})", engine.as_str()),
-            Self::Failed => "failed".into(),
         }
     }
 }

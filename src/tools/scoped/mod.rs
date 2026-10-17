@@ -79,6 +79,16 @@ pub(crate) enum ResultTransport {
     StructuredRpc,
 }
 
+/// Identify the narrow legacy compatibility shape that has no canonical
+/// descriptor but still carries an explicit plugin usage owner.
+fn is_descriptorless_plugin_compat(tool: &dyn LoopTool) -> bool {
+    tool.capability_descriptor().is_none()
+        && matches!(
+            tool.usage_origin(),
+            Some(crate::tools::usage::UsageOrigin::Plugin(_))
+        )
+}
+
 // =============================================================================
 // ScopedToolService
 // =============================================================================
@@ -570,12 +580,7 @@ impl ToolService for ScopedToolService {
         }
         if self.canonical_registry.is_some()
             && !self.inner.is_request_local(name)
-            && !resolved.is_some_and(|tool| {
-                matches!(
-                    tool.usage_origin(),
-                    Some(crate::tools::usage::UsageOrigin::Plugin(_))
-                )
-            })
+            && !resolved.is_some_and(is_descriptorless_plugin_compat)
         {
             // Scheduling precedes dispatch's live generation capture. Neither a
             // stale request projection nor a fresh lookup can pin that future

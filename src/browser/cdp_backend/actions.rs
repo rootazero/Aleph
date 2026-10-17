@@ -1684,7 +1684,7 @@ mod tests {
     use aleph_cdp::testkit::{FakeCdpServer, Responder};
     use serde_json::json;
 
-    use crate::browser::backend::{BrowserBackend, EffectVerification};
+    use crate::browser::backend::{BrowserBackend, EffectVerification, EffectVerificationExt};
     use crate::browser::cdp_backend::test_support::*;
     use crate::browser::engine::{capabilities, Cap, Engine};
     use crate::browser::error::BrowserError;

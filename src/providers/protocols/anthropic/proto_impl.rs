@@ -2,12 +2,12 @@
 
 use std::collections::HashMap;
 
-use crate::agents::thinking::ThinkLevel;
+use crate::agents::thinking::{dispatch_think_level, select_think_level_copy, ThinkLevel};
 use crate::config::ProviderConfig;
 use crate::providers::anthropic::{
     ContentBlock, ImageSource, Message, MessageContent, SystemBlock, ThinkingBlock,
 };
-use crate::providers::message::UnifiedMessage;
+use crate::providers::message::{dispatch_unified_message, UnifiedMessage};
 use crate::providers::model_catalog::binds_thinking_to_prefix;
 use crate::providers::protocols::anthropic::provider_policy::AnthropicCapabilities;
 use crate::sync_primitives::{Arc, RwLock};
@@ -81,11 +81,13 @@ impl AnthropicProtocol {
         messages: &[UnifiedMessage],
         caps: &AnthropicCapabilities,
     ) -> Vec<Message> {
-        let mut result = Vec::new();
-        let mut i = 0;
-        while i < messages.len() {
-            match &messages[i] {
-                UnifiedMessage::User { content } => {
+        // Keep the accumulated messages and next input index in one dispatch context.
+        let mut context = (Vec::new(), 0);
+        while context.1 < messages.len() {
+            dispatch_unified_message(
+                &messages[context.1],
+                &mut context,
+                |(result, i), content| {
                     // rust-doctor-disable-next-line unnecessary-allocation
                     let mut blocks = Vec::new();
                     for block in content {
@@ -151,17 +153,17 @@ impl AnthropicProtocol {
                                     content: text.clone(),
                                 },
                             });
-                            i += 1;
-                            continue;
+                            *i += 1;
+                            return;
                         }
                     }
                     result.push(Message {
                         role: "user".to_string(),
                         content: MessageContent::Multimodal { content: blocks },
                     });
-                    i += 1;
-                }
-                UnifiedMessage::Assistant { content } => {
+                    *i += 1;
+                },
+                |(result, i), content| {
                     // rust-doctor-disable-next-line unnecessary-allocation
                     let mut blocks = Vec::new();
                     // Most recent signed thinking text, copied into the following
@@ -269,9 +271,9 @@ impl AnthropicProtocol {
                         role: "assistant".to_string(),
                         content: MessageContent::Multimodal { content: blocks },
                     });
-                    i += 1;
-                }
-                UnifiedMessage::ToolResult { .. } => {
+                    *i += 1;
+                },
+                |(result, i), _tool_call_id, _tool_name, _content, _is_error| {
                     // Collect consecutive ToolResults into one user message.
                     // Any image blocks they carry (e.g. a `desktop` screenshot)
                     // are emitted as sibling image blocks AFTER the tool_result
@@ -282,13 +284,13 @@ impl AnthropicProtocol {
                     let mut tool_blocks = Vec::new();
                     // rust-doctor-disable-next-line unnecessary-allocation
                     let mut image_blocks = Vec::new();
-                    while i < messages.len() {
+                    while *i < messages.len() {
                         if let UnifiedMessage::ToolResult {
                             tool_call_id,
                             content,
                             is_error,
                             ..
-                        } = &messages[i]
+                        } = &messages[*i]
                         {
                             // rust-doctor-disable-next-line unnecessary-allocation
                             let mut parts = Vec::new();
@@ -331,7 +333,7 @@ impl AnthropicProtocol {
                                 content: output,
                                 is_error: *is_error,
                             });
-                            i += 1;
+                            *i += 1;
                         } else {
                             break;
                         }
@@ -345,10 +347,10 @@ impl AnthropicProtocol {
                             content: tool_blocks,
                         },
                     });
-                }
-            }
+                },
+            );
         }
-        result
+        context.0
     }
 
     /// Build the comma-separated anthropic-beta header value for a given model.
@@ -471,14 +473,15 @@ impl AnthropicProtocol {
 
     /// Map `ThinkLevel` to `budget_tokens`
     pub(super) const fn map_think_level(level: &ThinkLevel) -> Option<u32> {
-        match level {
-            ThinkLevel::Off => None,
-            ThinkLevel::Minimal => Some(1024),
-            ThinkLevel::Low => Some(4096),
-            ThinkLevel::Medium => Some(10000),
-            ThinkLevel::High => Some(20000),
-            ThinkLevel::XHigh => Some(50000),
-        }
+        select_think_level_copy(
+            level,
+            None,
+            Some(1024),
+            Some(4096),
+            Some(10000),
+            Some(20000),
+            Some(50000),
+        )
     }
 
     /// Extract a model's version as `(major, minor)` from its ID segments.
@@ -591,19 +594,22 @@ impl AnthropicProtocol {
         level: &ThinkLevel,
         model: &str,
     ) -> Option<&'static str> {
-        match level {
-            ThinkLevel::Off => None,
-            ThinkLevel::Minimal | ThinkLevel::Low => Some("low"),
-            ThinkLevel::Medium => Some("medium"),
-            ThinkLevel::High => Some("high"),
-            ThinkLevel::XHigh => {
+        dispatch_think_level(
+            level,
+            &mut (),
+            |_| None,
+            |_| Some("low"),
+            |_| Some("low"),
+            |_| Some("medium"),
+            |_| Some("high"),
+            |_| {
                 if Self::supports_xhigh_effort(model) {
                     Some("xhigh")
                 } else {
                     Some("max")
                 }
-            }
-        }
+            },
+        )
     }
 
     /// Prepend the mandatory Claude Code identity block to an OAuth request's

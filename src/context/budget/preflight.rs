@@ -589,10 +589,7 @@ mod tests {
 
     /// Flatten a message's text blocks — the bytes a provider would hash.
     fn rendered(msg: &UnifiedMessage) -> String {
-        let content = match msg {
-            UnifiedMessage::User { content } | UnifiedMessage::Assistant { content } => content,
-            UnifiedMessage::ToolResult { content, .. } => content,
-        };
+        let content = msg.content_blocks();
         content
             .iter()
             .filter_map(|b| match b {

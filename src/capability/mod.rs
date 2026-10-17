@@ -51,6 +51,7 @@ pub mod effect_claim;
 pub mod facade;
 pub mod ownership;
 pub mod projection_host;
+pub(crate) mod versioned_registry;
 pub mod zahir_facade;
 
 /// The membership rule that decides what belongs in this module's roster.

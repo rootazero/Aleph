@@ -764,7 +764,7 @@ async fn seed_carrier_binds_the_last_user_message_for_every_input_shape() {
         ];
         for (name, input) in inputs {
             let service = fresh_service();
-            let sid = SessionKey::ephemeral(&format!("carrier-{name}-{public}"));
+            let sid = SessionKey::ephemeral(format!("carrier-{name}-{public}"));
             super::session_seed::seed_session(service.as_ref(), &sid, input, origin())
                 .await
                 .expect(name);
@@ -781,7 +781,7 @@ async fn resume_and_empty_inputs_write_no_carrier() {
         ("multimodal", FlowInput::Multimodal(Vec::new())),
     ] {
         let service = fresh_service();
-        let sid = SessionKey::ephemeral(&format!("nocarrier-{name}"));
+        let sid = SessionKey::ephemeral(format!("nocarrier-{name}"));
         super::session_seed::seed_session(
             service.as_ref(),
             &sid,

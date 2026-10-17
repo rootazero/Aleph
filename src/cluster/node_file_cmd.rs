@@ -353,17 +353,40 @@ mod tests {
 
     #[tokio::test]
     async fn file_read_rejects_missing() {
+        // Derive the expected error text from a REAL `File::open` on the same
+        // path. Two assertions, both load-bearing: the platform `io::Error`
+        // kind must be `NotFound` (not `Other` or some post-hoc string), and
+        // the command's formatted error must match `file.read: {io_error}`
+        // byte-for-byte — English-only `contains("not found")` would pass on
+        // Windows where the Display text is "The system cannot find the file
+        // specified.", and a loose `is_err()` would hide a real regression
+        // that produced a different code path (e.g. an "escapes jail" error
+        // from a wrong path).
         let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("nope.bin");
+        let io_err = std::fs::File::open(&target).expect_err("precondition: the file is absent");
+        assert_eq!(io_err.kind(), std::io::ErrorKind::NotFound);
+
         let reader = FileReadCommand::new(dir.path().to_path_buf());
         let err = reader
             .run(json!({ "path": "nope.bin" }))
             .await
             .expect_err("missing rejected");
-        assert!(err.contains("not found"), "{err}");
+        assert_eq!(
+            err,
+            format!("file.read: {io_err}"),
+            "err must wrap the real io::Error verbatim"
+        );
     }
 
     #[tokio::test]
     async fn file_read_rejects_oversize() {
+        // Cap message is exact: anything looser (`contains("exceeds")`,
+        // `is_err()`, a regex against "cap") would silently green a future
+        // regression that quietly lost the "cap enforced at read" line. The
+        // file is one byte over the cap, so `File::take(MAX + 1)` returns
+        // exactly that — the rejection arm of the production code, not a
+        // permission-denied arm from a misconfigured workspace.
         let dir = tempfile::tempdir().unwrap();
         let big_path = dir.path().join("big.bin");
         tokio::fs::write(&big_path, vec![0u8; MAX_FILE_BYTES + 1])
@@ -374,6 +397,41 @@ mod tests {
             .run(json!({ "path": "big.bin" }))
             .await
             .expect_err("oversize read rejected");
-        assert!(err.contains("exceeds"), "{err}");
+        assert_eq!(
+            err,
+            format!("file.read: >{MAX_FILE_BYTES} bytes (cap enforced at read)")
+        );
+    }
+
+    /// The MAX boundary is the bug magnet. `File::take(MAX + 1)` admits any
+    /// buffer of length <= MAX, so a file of exactly MAX bytes must read
+    /// through and return its full contents — the existing oversize test
+    /// only covers MAX + 1. Without this test, an off-by-one in the take
+    /// bound (e.g. `take(MAX)` or `take(MAX - 1)`) would shrink the cap to
+    /// 8 MiB - 1 and never be noticed; every producer/consumer side that
+    /// also derives from `MAX_FILE_BYTES` would still agree, and the
+    /// mismatch would only surface at the next protocol bump.
+    #[tokio::test]
+    async fn file_read_accepts_exact_cap_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let exact_path = dir.path().join("exact.bin");
+        let content = vec![0u8; MAX_FILE_BYTES];
+        tokio::fs::write(&exact_path, &content).await.unwrap();
+
+        let reader = FileReadCommand::new(dir.path().to_path_buf());
+        let got = reader
+            .run(json!({ "path": "exact.bin" }))
+            .await
+            .expect("MAX-byte file is at the cap, not over it");
+        assert_eq!(
+            got["size"], MAX_FILE_BYTES,
+            "size is the byte count, not a saturating or capping cast"
+        );
+        assert_eq!(got["sha256"], sha256_hex(&content));
+        use base64::Engine as _;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(got["content_b64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(decoded, content, "boundary file round-trips byte-for-byte");
     }
 }

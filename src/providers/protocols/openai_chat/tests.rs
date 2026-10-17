@@ -1,6 +1,6 @@
 use super::*;
-use crate::config::ProviderConfig;
 use crate::config::types::provider::ResponseFormat;
+use crate::config::ProviderConfig;
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason};
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
@@ -11,7 +11,7 @@ use reqwest::Client;
 use std::collections::VecDeque;
 
 use crate::providers::protocols::openai_chat::sse::{
-    DeferOutcome, defer_done_until_usage, parse_chat_sse_event,
+    defer_done_until_usage, parse_chat_sse_event, DeferOutcome,
 };
 
 #[test]
@@ -416,8 +416,8 @@ fn test_parse_malformed_function_arguments() {
 
 #[test]
 fn test_build_request_includes_tools() {
-    use crate::ToolCategory;
     use crate::tool_metadata::ToolDefinition;
+    use crate::ToolCategory;
 
     let protocol = OpenAiProtocol::new(Client::new());
     let tools = vec![ToolDefinition::new(
@@ -453,8 +453,8 @@ fn test_build_request_includes_tools() {
 
 #[test]
 fn test_build_request_derefs_refs_for_moonshot() {
-    use crate::ToolCategory;
     use crate::tool_metadata::ToolDefinition;
+    use crate::ToolCategory;
 
     let protocol = OpenAiProtocol::new(Client::new());
     // Schema mirrors what schemars emits for an internally-tagged enum arg
@@ -705,8 +705,8 @@ fn test_build_request_strips_prompt_cache_key_on_custom_endpoint() {
 
 #[test]
 fn test_build_request_with_multiple_tools() {
-    use crate::ToolCategory;
     use crate::tool_metadata::ToolDefinition;
+    use crate::ToolCategory;
 
     let protocol = OpenAiProtocol::new(Client::new());
     let tools = vec![

@@ -132,8 +132,8 @@ pub(crate) fn workspace_directive() -> &'static str {
 /// Claude Code, where project skills are surfaced as available capabilities.
 ///
 /// The listed set is exactly the **project** subset of
-/// [`crate::utils::paths::get_all_skills_dirs`] (global `~/.aleph` / `~/.claude`
-/// skills are excluded — those are already covered by the global skill
+/// [`crate::utils::paths::get_all_skills_dirs`] (global `~/.aleph` / `~/.claude` /
+/// `~/.agents` skills are excluded — those are already covered by the global skill
 /// snapshot), so anything advertised here is guaranteed loadable via
 /// `skill_read`. Returns `None` when the project ships no skills.
 pub(crate) fn collect_project_skill_block(workspace: &std::path::Path) -> Option<String> {

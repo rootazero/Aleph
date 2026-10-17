@@ -668,9 +668,9 @@ mod tests {
     /// edit of an unrelated field of the same provider.
     #[tokio::test]
     async fn server_context_editing_round_trips_through_the_config_patcher() {
-        use crate::config::Config;
         use crate::config::backup::ConfigBackup;
         use crate::config::patcher::{ConfigPatcher, PatchRequest};
+        use crate::config::Config;
 
         let (_scratch, dir) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&dir).expect("scratch dir");

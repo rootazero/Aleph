@@ -107,8 +107,8 @@ impl ToolState {
         let mut changed = false;
         let name_lower = name.to_lowercase();
         for (_id, tool) in tools.iter_mut() {
-            if tool.name.to_lowercase() == name_lower && tool.is_active != active {
-                tool.is_active = active;
+            if tool.name.to_lowercase() == name_lower && tool.is_active() != active {
+                tool.set_active(active);
                 changed = true;
             }
         }

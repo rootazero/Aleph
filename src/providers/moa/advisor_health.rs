@@ -31,7 +31,7 @@
 //! tells an auth failure (never going to work) apart from a 503 (might).
 
 use crate::error::AlephError;
-use crate::providers::health::{PermanentError, ProviderError, TransientError};
+use crate::providers::health::{AlephErrorExt, PermanentError, ProviderError, TransientError};
 
 /// Consecutive failures after which a slot is retired for the rest of the run.
 ///
@@ -57,14 +57,17 @@ pub(crate) enum CallOutcome {
 impl CallOutcome {
     /// Classify a provider error for breaker bookkeeping.
     ///
-    /// `From<&AlephError> for Option<ProviderError>` returns `None` for
-    /// request-specific errors (a 400 is not a provider *health* problem).
-    /// Here that just means "transient by default": an advisor that 400s
-    /// every iteration is as useless as one that times out, and both should
-    /// stop being hammered — but only a recognised PERMANENT error is
-    /// allowed to retire a slot on the first strike.
+    /// `AlephErrorExt::to_provider_error` (crate-local extension trait;
+    /// replaces the pre-migration `From<&AlephError> for Option<ProviderError>`
+    /// impl that violated the orphan rule once `AlephError` moved to
+    /// `aleph_slot_api`) returns `None` for request-specific errors
+    /// (a 400 is not a provider *health* problem). Here that just means
+    /// "transient by default": an advisor that 400s every iteration is
+    /// as useless as one that times out, and both should stop being
+    /// hammered — but only a recognised PERMANENT error is allowed to
+    /// retire a slot on the first strike.
     pub(crate) fn failed(error: &AlephError) -> Self {
-        Self::Failed(error.into())
+        Self::Failed(error.to_provider_error())
     }
 
     /// A wall-clock timeout, which never surfaces as an `AlephError`.

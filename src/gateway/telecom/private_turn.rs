@@ -546,7 +546,7 @@ async fn drive(input: &PrivateTurnInput<'_>, caller_saw_turn: &mut bool) -> Step
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::channel::{Channel, ChannelError, OutboundMessage};
+    use crate::gateway::channel::{Channel, ChannelError, CoreSmsChannelExt, OutboundMessage};
     use crate::gateway::interfaces::sms::transport::test_private_context;
     use crate::gateway::interfaces::sms::{
         test_private_channel, InMemorySmsPeer, SmsChannel, SmsRelayTransport,
@@ -700,7 +700,7 @@ mod tests {
                 return Err(ChannelError::SendFailed("unknown transport outcome".into()));
             }
             if let Some(channel) = &self.channel {
-                let result = channel
+                let result = (channel as &dyn Channel)
                     .send_private_sms(
                         OutboundMessage::text("+15550000001", &text),
                         lease,

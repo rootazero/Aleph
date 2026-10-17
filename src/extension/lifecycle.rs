@@ -31,7 +31,6 @@ use std::path::PathBuf;
 
 use super::effects::{async_disposer, DisposeReport, Disposer, EffectScope};
 use super::error::ExtensionResult;
-use super::hooks::{HookExecutor, ShellHookConsent};
 use super::manifest::adapter::{AdapterOutput, AdapterRegistry};
 use super::manifest::PluginManifest;
 use super::plugin_state::Activation;
@@ -930,6 +929,10 @@ impl ExtensionManager {
         reason: String,
     ) -> MountError {
         let id = shell.id.clone();
+        {
+            let mut registry = self.plugin_registry.write().await;
+            registry.disable_plugin(&id);
+        }
         let report = scope.dispose().await;
         if !report.all_ok() {
             tracing::warn!(plugin_id = %id, ?report, "partial scope did not dispose cleanly after a failed mount");
@@ -1097,7 +1100,14 @@ impl ExtensionManager {
                 },
             );
         };
-        let shell = self.plugin_registry.read().await.get_plugin(id).cloned();
+        let shell = {
+            let mut registry = self.plugin_registry.write().await;
+            let shell = registry.get_plugin(id).cloned();
+            if shell.is_some() {
+                registry.disable_plugin(id);
+            }
+            shell
+        };
         let report = scope.dispose().await;
         if let Some(mut row) = shell {
             // The registry_row disposer removed the row and every capability
@@ -1120,6 +1130,12 @@ impl ExtensionManager {
             .drain()
             .map(|(_, s)| s)
             .collect();
+        {
+            let mut registry = self.plugin_registry.write().await;
+            for scope in &scopes {
+                registry.disable_plugin(scope.plugin_id());
+            }
+        }
         for scope in scopes {
             let report = scope.dispose().await;
             if !report.all_ok() {
@@ -1160,22 +1176,22 @@ impl Views {
     /// `load_guard`, which serialises writers of this method against each
     /// other; it says nothing about readers.
     ///
-    /// The next executor is built OFF-lock in a local value — plugin hooks
-    /// (`sync_hooks_from_registry`) first, then `user:` hooks
-    /// (`Views::user_hook_configs`), same order and stamping as always — and
-    /// installed with exactly ONE write to `hook_executor`. A reader that
-    /// takes the lock at any point during this call therefore observes
-    /// either the complete previous executor or the complete next one, never
-    /// a partially-rebuilt one (a run that snapshots mid-rebuild used to be
-    /// able to see zero or plugin-only hooks and execute its whole turn
-    /// without the user's blocking hooks — fail-open).
+    /// Capture the user cursor before off-lock registry/disk loading. One
+    /// publication then replaces plugins and uses fresh users only if no user
+    /// commit intervened. The derived executor comes from the latest layers
+    /// inside the generic transaction, preserving complete generations for
+    /// both snapshot readers and the fair read/try_read compatibility gate.
     pub(super) async fn after_transition(&self) {
-        let mut next_hook_executor = HookExecutor::empty().with_consent(ShellHookConsent::shared());
-        self.sync_hooks_from_registry(&mut next_hook_executor).await;
-        for hook in Self::user_hook_configs() {
-            next_hook_executor.add_hook(hook);
+        let observed_user_cursor = self.hook_executor.begin_transition();
+        let plugin_inputs = self.sync_hooks_from_registry().await;
+        let user_inputs = Self::user_hook_configs();
+        if let Err(error) = self
+            .hook_executor
+            .publish_transition(observed_user_cursor, plugin_inputs, user_inputs)
+            .await
+        {
+            tracing::warn!(%error, "Transition hook publication refused");
         }
-        *self.hook_executor.write().await = next_hook_executor;
         let projection = self.republish_plugin_projections().await;
         tracing::debug!(
             plugin_skill_dirs = projection.plugin_skill_dirs.len(),
@@ -1278,6 +1294,406 @@ mod tests {
         .await
         .unwrap();
         (manager, cfg_path)
+    }
+
+    async fn real_guest_row_and_disposer(
+        manager: &ExtensionManager,
+        dir: &Path,
+        id: &str,
+        status: PluginStatus,
+    ) -> (PluginRecord, Disposer) {
+        use crate::extension::runtime::wasm::tests::guest_fixture::{
+            manifest_with_guest, PAYLOAD_A,
+        };
+
+        let manifest = manifest_with_guest(dir, id, PAYLOAD_A);
+        let loader = manager.get_plugin_loader_for_test();
+        let disposer = loader::load_wasm_effect(Arc::clone(&loader), &manifest)
+            .await
+            .unwrap();
+        let mut row = PluginRecord::new(
+            id.to_string(),
+            id.to_string(),
+            PluginKind::Wasm,
+            PluginOrigin::Global,
+        );
+        row.root_dir = dir.to_path_buf();
+        row.status = status;
+        manager
+            .get_plugin_registry_mut()
+            .await
+            .register_plugin(row.clone());
+        (row, disposer)
+    }
+
+    #[tokio::test]
+    async fn c2s_unmount_closes_row_before_gated_guest_disposal() {
+        use crate::extension::runtime::wasm::tests::guest_fixture::HANDLER;
+        use tokio::sync::oneshot;
+
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let (row, module_disposer) =
+            real_guest_row_and_disposer(&manager, tmp.path(), "c2s-unmount", PluginStatus::Loaded)
+                .await;
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let mut scope = EffectScope::new(row.id.clone());
+        let registry = manager.plugin_registry_handle();
+        let id = row.id.clone();
+        scope.effect(
+            "registry_row",
+            async_disposer(move || async move {
+                registry.write().await.unregister_plugin(&id);
+                Ok(())
+            }),
+        );
+        scope.effect(
+            "wasm_module",
+            async_disposer(move || async move {
+                let _ = entered_tx.send(());
+                let _ = release_rx.await;
+                module_disposer().await
+            }),
+        );
+        manager.scopes.lock().unwrap().insert(row.id.clone(), scope);
+
+        let mut unmount = Box::pin(manager.unmount("c2s-unmount"));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                result = &mut unmount => panic!("unmount finished early: {result:?}"),
+                entered = entered_rx => entered.unwrap(),
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            manager.get_plugin_record(&row.id).await.unwrap().status,
+            PluginStatus::Disabled
+        );
+        assert!(manager
+            .call_plugin_tool(&row.id, HANDLER, serde_json::json!({}))
+            .await
+            .is_err());
+        assert!(manager
+            .execute_plugin_hook(&row.id, HANDLER, serde_json::json!({}))
+            .await
+            .is_err());
+        assert_eq!(
+            manager
+                .get_plugin_loader()
+                .await
+                .call_tool(&row.id, HANDLER, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("A")
+        );
+        let _ = release_tx.send(());
+        let report = tokio::time::timeout(std::time::Duration::from_secs(5), &mut unmount)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(report.all_ok(), "{report:?}");
+        assert_eq!(
+            manager.get_plugin_record(&row.id).await.unwrap().status,
+            PluginStatus::Disabled
+        );
+        assert!(!manager.get_plugin_loader().await.is_loaded(&row.id));
+    }
+
+    #[tokio::test]
+    async fn c2s_fail_mount_closes_existing_row_before_cleanup_and_records_error() {
+        use tokio::sync::oneshot;
+
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let (row, module_disposer) = real_guest_row_and_disposer(
+            &manager,
+            tmp.path(),
+            "c2s-fail-mount",
+            PluginStatus::Loaded,
+        )
+        .await;
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let mut scope = EffectScope::new(row.id.clone());
+        let registry = manager.plugin_registry_handle();
+        let id = row.id.clone();
+        scope.effect(
+            "registry_row",
+            async_disposer(move || async move {
+                registry.write().await.unregister_plugin(&id);
+                Ok(())
+            }),
+        );
+        scope.effect(
+            "wasm_module",
+            async_disposer(move || async move {
+                let _ = entered_tx.send(());
+                let _ = release_rx.await;
+                module_disposer().await
+            }),
+        );
+        let shell = row.clone();
+        let mut failure =
+            Box::pin(manager.fail_mount(scope, shell, "wasm_module", "gated failure".to_string()));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                result = &mut failure => panic!("fail_mount finished early: {result:?}"),
+                entered = entered_rx => entered.unwrap(),
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            manager.get_plugin_record(&row.id).await.unwrap().status,
+            PluginStatus::Disabled
+        );
+        let _ = release_tx.send(());
+        let error = tokio::time::timeout(std::time::Duration::from_secs(5), &mut failure)
+            .await
+            .unwrap();
+        assert!(matches!(error, MountError::Step { .. }));
+        let final_row = manager.get_plugin_record(&row.id).await.unwrap();
+        assert!(
+            matches!(final_row.status, PluginStatus::Error(ref detail) if detail.contains("gated failure"))
+        );
+        assert!(!manager.get_plugin_loader().await.is_loaded(&row.id));
+    }
+
+    #[tokio::test]
+    async fn c2s_unmount_all_closes_all_rows_before_first_disposer() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let (row_a, disposer_a) =
+            real_guest_row_and_disposer(&manager, tmp.path(), "c2s-all-a", PluginStatus::Loaded)
+                .await;
+        let (row_b, disposer_b) =
+            real_guest_row_and_disposer(&manager, tmp.path(), "c2s-all-b", PluginStatus::Loaded)
+                .await;
+        let mut unrelated = PluginRecord::new(
+            "c2s-all-unrelated".to_string(),
+            "unrelated".to_string(),
+            PluginKind::Static,
+            PluginOrigin::Global,
+        );
+        unrelated.status = PluginStatus::Loaded;
+        manager
+            .get_plugin_registry_mut()
+            .await
+            .register_plugin(unrelated.clone());
+        let (entered_tx, mut entered_rx) = tokio::sync::mpsc::unbounded_channel();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut scopes = Vec::new();
+        for (row, disposer) in [(row_a, disposer_a), (row_b, disposer_b)] {
+            let mut scope = EffectScope::new(row.id.clone());
+            let registry = manager.plugin_registry_handle();
+            let id = row.id.clone();
+            scope.effect(
+                "registry_row",
+                async_disposer(move || async move {
+                    registry.write().await.unregister_plugin(&id);
+                    Ok(())
+                }),
+            );
+            let entered_tx = entered_tx.clone();
+            let release = Arc::clone(&release);
+            let id = row.id.clone();
+            scope.effect(
+                "wasm_module",
+                async_disposer(move || async move {
+                    let _ = entered_tx.send(id);
+                    release.notified().await;
+                    disposer().await
+                }),
+            );
+            scopes.push(scope);
+        }
+        for scope in scopes {
+            let id = scope.plugin_id().to_string();
+            manager.scopes.lock().unwrap().insert(id, scope);
+        }
+        let mut task = Box::pin(manager.unmount_all());
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                result = &mut task => panic!("unmount_all finished early: {result:?}"),
+                entered = entered_rx.recv() => entered.unwrap(),
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            manager.get_plugin_record("c2s-all-a").await.unwrap().status,
+            PluginStatus::Disabled
+        );
+        assert_eq!(
+            manager.get_plugin_record("c2s-all-b").await.unwrap().status,
+            PluginStatus::Disabled
+        );
+        assert_eq!(
+            manager
+                .get_plugin_record("c2s-all-unrelated")
+                .await
+                .unwrap()
+                .status,
+            PluginStatus::Loaded
+        );
+        release.notify_one();
+        let second = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                _ = &mut task => panic!("unmount_all finished before the second gate"),
+                entered = entered_rx.recv() => entered.unwrap(),
+            }
+        })
+        .await
+        .unwrap();
+        assert_ne!(first, second);
+        release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), &mut task)
+            .await
+            .unwrap();
+        assert!(manager.get_plugin_record(&first).await.is_none());
+        assert!(manager.get_plugin_record(&second).await.is_none());
+        assert!(!manager.get_plugin_loader().await.is_loaded(&first));
+        assert!(!manager.get_plugin_loader().await.is_loaded(&second));
+    }
+
+    #[tokio::test]
+    async fn c2s_queued_tool_rechecks_status_after_loader_admission() {
+        use crate::extension::runtime::wasm::tests::guest_fixture::{HANDLER, PAYLOAD_A};
+        use std::future::Future;
+        use std::task::{Context, Poll};
+
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let (row, _) = real_guest_row_and_disposer(
+            &manager,
+            tmp.path(),
+            "c2s-queued-tool",
+            PluginStatus::Loaded,
+        )
+        .await;
+        assert_eq!(
+            manager
+                .get_plugin_loader()
+                .await
+                .call_tool(&row.id, HANDLER, serde_json::json!({}))
+                .unwrap(),
+            serde_json::from_str::<serde_json::Value>(PAYLOAD_A).unwrap()["result"].clone()
+        );
+        let guard = manager.get_plugin_loader_for_test().write_owned().await;
+        let mut call = Box::pin(manager.call_plugin_tool(&row.id, HANDLER, serde_json::json!({})));
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert!(matches!(call.as_mut().poll(&mut cx), Poll::Pending));
+        manager
+            .get_plugin_registry_mut()
+            .await
+            .disable_plugin(&row.id);
+        drop(guard);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), &mut call)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, Err(crate::extension::error::ExtensionError::Runtime(message)) if message.contains("disabled"))
+        );
+        assert_eq!(
+            manager
+                .get_plugin_loader()
+                .await
+                .call_tool(&row.id, HANDLER, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("A")
+        );
+    }
+
+    #[tokio::test]
+    async fn c2s_queued_hook_rechecks_status_after_loader_admission() {
+        use crate::extension::runtime::wasm::tests::guest_fixture::HANDLER;
+        use std::future::Future;
+        use std::task::{Context, Poll};
+
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let (row, _) = real_guest_row_and_disposer(
+            &manager,
+            tmp.path(),
+            "c2s-queued-hook",
+            PluginStatus::Loaded,
+        )
+        .await;
+        assert_eq!(
+            manager
+                .get_plugin_loader()
+                .await
+                .execute_hook(&row.id, HANDLER, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("A")
+        );
+        // A write guard blocks both the early runtime read and the hook's
+        // owned read admission; another read guard would not block either.
+        let guard = manager.get_plugin_loader_for_test().write_owned().await;
+        let mut call =
+            Box::pin(manager.execute_plugin_hook(&row.id, HANDLER, serde_json::json!({})));
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert!(matches!(call.as_mut().poll(&mut cx), Poll::Pending));
+        manager
+            .get_plugin_registry_mut()
+            .await
+            .disable_plugin(&row.id);
+        drop(guard);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), &mut call)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, Err(crate::extension::error::ExtensionError::Runtime(message)) if message.contains("disabled"))
+        );
+        assert_eq!(
+            manager
+                .get_plugin_loader()
+                .await
+                .execute_hook(&row.id, HANDLER, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("A")
+        );
+    }
+
+    #[tokio::test]
+    async fn c2s_pending_row_remains_active_for_guest_tool_and_hook() {
+        use crate::extension::runtime::wasm::tests::guest_fixture::HANDLER;
+
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let (row, _) = real_guest_row_and_disposer(
+            &manager,
+            tmp.path(),
+            "c2s-pending",
+            PluginStatus::Pending {
+                waiting_on: vec!["runtime".to_string()],
+            },
+        )
+        .await;
+        assert!(row.status.is_active());
+        assert_eq!(
+            manager
+                .call_plugin_tool(&row.id, HANDLER, serde_json::json!({}))
+                .await
+                .unwrap(),
+            serde_json::json!("A")
+        );
+        assert_eq!(
+            manager
+                .execute_plugin_hook(&row.id, HANDLER, serde_json::json!({}))
+                .await
+                .unwrap(),
+            serde_json::json!("A")
+        );
     }
 
     /// A Static plugin with one command, one sub-agent and one command hook:

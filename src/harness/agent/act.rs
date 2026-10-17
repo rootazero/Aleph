@@ -236,10 +236,8 @@ impl AgentHarness {
             // and defer everything still pending. R7/R10: mechanical.
             if self.has_unanswered_user_message(session_id).await {
                 let deferred: Vec<NativeToolCall> = remaining.by_ref().collect();
-                if !deferred.is_empty() {
-                    self.emit_deferred_tool_results(session_id, turn_id, &deferred)
-                        .await?;
-                }
+                self.emit_deferred_tool_results(session_id, turn_id, &deferred)
+                    .await?;
                 if let Some(ref tracker) = self.stall_tracker {
                     tracker.record_activity().await;
                 }
@@ -268,15 +266,13 @@ impl AgentHarness {
                     // pairing and the prompt builder does not drop the whole
                     // assistant turn as orphaned on the next build.
                     let pending_ids: Vec<String> = remaining.by_ref().map(|c| c.id).collect();
-                    if !pending_ids.is_empty() {
-                        self.close_unexecuted_tool_uses(
-                            session_id,
-                            turn_id,
-                            &pending_ids,
-                            "the run aborted during an earlier tool group in this batch",
-                        )
-                        .await;
-                    }
+                    self.close_unexecuted_tool_uses(
+                        session_id,
+                        turn_id,
+                        &pending_ids,
+                        "the run aborted during an earlier tool group in this batch",
+                    )
+                    .await;
                     return Err(e);
                 }
             }
@@ -481,18 +477,16 @@ impl AgentHarness {
                     input: call.arguments.clone(),
                 },
             });
-            let requested = SessionEvent::ToolCallRequested {
+            let requested = SessionEvent::tool_call_requested(
                 turn_id,
-                call_id: call.id.clone(),
-                name: call.name.clone(),
-                input: call.arguments.clone(),
-                identity: self
-                    .deps
+                call.id.clone(),
+                call.name.clone(),
+                call.arguments.clone(),
+                self.deps
                     .tool_descriptor_lookup
                     .as_ref()
                     .and_then(|lookup| lookup.tool_call_identity(&call.name)),
-                at: now_ms(),
-            };
+            );
             self.deps.session.emit_event(session_id, requested).await?;
 
             // Stage 5b (#9): Tool-call guardrail (Block skips THIS call).
@@ -603,28 +597,14 @@ impl AgentHarness {
                 .in_flight_tool_calls
                 .as_ref()
                 .map(|reg| reg.register(&call.id, &call.name, call_cancel.clone()));
-            // The Act-period wall clock is NOT here. It lives in the tool layer
-            // (`ScopedToolService::execute_inner`), below the human approval gate
-            // — charging an operator's reading time to the tool's budget could
-            // kill a command they had just approved. An overrun arrives as
-            // `ToolError::Timeout`, recoverable like any other tool failure; a
-            // genuinely hung *run* is still caught by the stall tracker.
-            // Ambient call identity: every approval gate / record built beneath
-            // this dispatch reads the exact (turn, call.id) instead of scanning
-            // the session log by tool name (see `crate::approval::tool_call`).
-            // The scoped future is fully owned (clones, like the parallel
-            // path) — a borrowed inner future inside a task-local scope trips
-            // rustc's "Send is not general enough" HRTB limitation once this
-            // future crosses a `tokio::spawn` chain.
+            // The tool layer owns the wall clock below approval; the task-local
+            // identity keeps approval records exact, and owned futures satisfy
+            // the spawned-runtime `Send` boundary.
             let inner = {
                 let tools = self.deps.tools.clone();
                 let name = call.name.clone();
                 let args = call.arguments.clone();
-                // Boxed: the task-local scope future is structural, and left
-                // bare it trips rustc's "Send is not general enough" HRTB
-                // limitation once this async fn crosses a `tokio::spawn`
-                // chain (subagent runtimes). Erasing to a BoxFuture is the
-                // standard workaround.
+                // BoxFuture erases the task-local future's spawned-runtime HRTB.
                 let fut: BoxFuture<'static, (ExecOutcome, Option<serde_json::Value>)> =
                     Box::pin(crate::approval::with_call_identity(
                         Some(crate::approval::CallIdentity {
@@ -645,7 +625,12 @@ impl AgentHarness {
             // batch dedup, and cross-batch dedup all `continue` above and
             // never reach this, so they produce no marker.
             if let Some(eff) = effective_input {
-                self.emit_tool_call_effective_input(session_id, turn_id, &call, eff)
+                self.deps
+                    .session
+                    .emit_event(
+                        session_id,
+                        SessionEvent::tool_call_effective_input(turn_id, call.id.clone(), eff),
+                    )
                     .await?;
             }
             match outcome {
@@ -777,42 +762,22 @@ impl AgentHarness {
     ) -> Result<usize, HarnessError> {
         let mut executed_count: usize = 0;
 
-        // Cross-batch dedup preflight: index calls whose (tool, args) already
-        // failed earlier in this run. Skipped calls receive a synthetic
-        // ToolError below alongside the normal request-event emission so the
-        // session timeline stays linear. PASS 1 then dispatches ONLY the
-        // surviving calls in parallel, preserving original input order.
-        //
-        // The `is_recent_failure` probe is deferred into PASS 0 (filled below)
-        // so it runs AFTER the tool-call guardrail may have rewritten the args.
-        // The serial path checks `is_recent_failure` against the *sanitised*
-        // `cache_key`, and `record_failure` likewise records the sanitised
-        // form, so the parallel path must dedup on the same post-sanitise
-        // signature. Probing the pre-guardrail args here would diverge from the
-        // serial path: a guardrail-rewritten call whose original matched a past
-        // failure would be wrongly skipped, and one whose sanitised form
-        // matches a past failure would be wrongly run.
+        // Cross-batch failures are probed in PASS 0 after guardrail
+        // sanitisation, matching the serial path's canonical signature.
+        // Skips emit the normal request plus synthetic error and never build a
+        // PASS 1 future.
         let mut canonical_args: Vec<String> = canonical.to_vec();
         let mut skip: Vec<bool> = vec![false; tool_calls.len()];
 
-        // Per-index guardrail outcome, populated in PASS 0 (mirrors the serial
-        // path's Stage 5b). `blocked[idx]` => the tool-call guardrail returned
-        // Block (which already emitted a `ToolError` + trace internally), so
-        // PASS 1 builds no future and PASS 2 skips it — reusing the same
-        // None-future plumbing as cross-batch dedup. `sanitized[idx]` carries
-        // rewritten arguments the guardrail wants executed in place of the
-        // model's original (the original args still appear in the already-
-        // emitted `ToolCallRequested` event, matching serial semantics where
-        // the request is logged before sanitisation mutates the call).
+        // PASS 0 records guardrail Block/Sanitize outcomes. Blocked calls
+        // reuse the no-future path; sanitized args replace execution input,
+        // while the request event retains the model's original input.
         let mut blocked: Vec<bool> = vec![false; tool_calls.len()];
         let mut sanitized: Vec<Option<serde_json::Value>> = vec![None; tool_calls.len()];
 
-        // PASS 0 — serial: notify callback, emit ToolCallStarted trace,
-        // emit ToolCallRequested SessionEvent. The Instant captured here times
-        // only the synthetic-error paths that resolve inside this pass; a
-        // dispatched call is timed by its own future, which may not be polled
-        // for a while yet. Skipped calls take the synthetic-error fast path
-        // here and are omitted from PASS 1 dispatch.
+        // PASS 0 emits request/trace events and applies guardrails; its clock
+        // only times synthetic-error paths, while dispatched calls are timed
+        // by their own futures.
         let mut started_at: Vec<Instant> = Vec::with_capacity(tool_calls.len());
         for (idx, call) in tool_calls.iter().enumerate() {
             // Structured tool-start event (parallel path parity with serial).
@@ -826,18 +791,16 @@ impl AgentHarness {
                     input: call.arguments.clone(),
                 },
             });
-            let requested = SessionEvent::ToolCallRequested {
+            let requested = SessionEvent::tool_call_requested(
                 turn_id,
-                call_id: call.id.clone(),
-                name: call.name.clone(),
-                input: call.arguments.clone(),
-                identity: self
-                    .deps
+                call.id.clone(),
+                call.name.clone(),
+                call.arguments.clone(),
+                self.deps
                     .tool_descriptor_lookup
                     .as_ref()
                     .and_then(|lookup| lookup.tool_call_identity(&call.name)),
-                at: now_ms(),
-            };
+            );
             self.deps.session.emit_event(session_id, requested).await?;
 
             // Stage 5b (#9): tool-call guardrail — applied here in the serial
@@ -906,13 +869,8 @@ impl AgentHarness {
             }
         }
 
-        // PASS 1 — parallel: dispatch up to `parallelism` execute futures via
-        // `stream::iter(...).buffer_unordered(n)`, which polls at most `n` at a
-        // time and yields completions AS THEY RESOLVE. Each call's wall clock
-        // is owned by the tool layer, below the approval gate — never by this
-        // batch. A guardrail rewrite changes the path set the claim was derived
-        // from, so the pre-admission disjointness proof is void: any rewrite
-        // serializes the batch.
+        // PASS 1 dispatches live futures with bounded concurrency. A guardrail
+        // rewrite invalidates the pre-admission claim, so it serializes.
         let cap = self.deps.parallel_tool_concurrency.unwrap_or(0).max(2);
         let rewritten = sanitized.iter().any(Option::is_some);
         let parallelism = if rewritten { 1 } else { cap };
@@ -924,10 +882,7 @@ impl AgentHarness {
         let mut live_futs: Vec<
             BoxFuture<'static, (usize, ExecOutcome, Option<serde_json::Value>, u64)>,
         > = Vec::with_capacity(tool_calls.len());
-        // Gap B follow-up — keep one InFlightGuard per call alive for the
-        // duration of the whole parallel dispatch. Each guard drops when this
-        // Vec goes out of scope after PASS 2 finishes, which is strictly
-        // later than every future resolves.
+        // Keep each in-flight guard alive through PASS 2.
         let mut in_flight_guards: Vec<crate::tools::in_flight::InFlightGuard> = Vec::new();
         for (idx, call) in tool_calls.iter().enumerate() {
             if skip[idx] || blocked[idx] {
@@ -956,10 +911,7 @@ impl AgentHarness {
                 call_id: call.id.clone(),
             };
             live_futs.push(Box::pin(async move {
-                // Clock starts on FIRST POLL, not at admission:
-                // `buffer_unordered` runs at most `parallelism` at a time, so
-                // anything past the cap queues first, and timing from PASS 0
-                // bills a fast tool for the wait it spent not running.
+                // Start the wall clock on first poll, not admission.
                 let started = Instant::now();
                 let (exec, effective_input) =
                     crate::approval::with_call_identity(Some(identity), async move {
@@ -1019,13 +971,8 @@ impl AgentHarness {
         // tokens or the registry.
         drop(in_flight_guards);
 
-        // PASS 2 — serial in INPUT order (the transcript order): apply Layer 3
-        // budget, emit ToolResult/ToolError session events, trace, push the
-        // timeline entry. The live callback already fired per completion
-        // above, so PASS 2 passes `live: None` — persistence and live
-        // streaming are deliberately split (emission-order transcript,
-        // completion-order live events). Skipped indices (cross-batch dedup
-        // hits, already errored in PASS 0) pass through with no further action.
+        // PASS 2 persists outcomes in input order, after live callbacks fired
+        // in completion order; skipped indices need no further action.
         for (idx, slot) in settled.into_iter().enumerate() {
             let Some((dur_ms, effective_input, outcome)) = slot else {
                 continue; // PASS-0 dedup-rejected; already emitted synthetic error.
@@ -1036,7 +983,12 @@ impl AgentHarness {
             // indices never built a future, so `effective_input` is `None`
             // and no marker is emitted.
             if let Some(eff) = effective_input {
-                self.emit_tool_call_effective_input(session_id, turn_id, call, eff)
+                self.deps
+                    .session
+                    .emit_event(
+                        session_id,
+                        SessionEvent::tool_call_effective_input(turn_id, call.id.clone(), eff),
+                    )
                     .await?;
             }
             match outcome {
@@ -1114,37 +1066,6 @@ impl AgentHarness {
                 &spill.original_text,
                 self.deps.tools.recovery_tools(),
             ));
-    }
-
-    /// Emit the durable post-guardrail `effective_input` marker for a call
-    /// that actually ran (§4.3). Called ONLY when the tool service reports
-    /// `Some(effective_input)` — i.e. the call crossed the dispatch line
-    /// (every gate passed, handler invoked). A blocked / guardrailed /
-    /// dedup-skipped call never reaches `execute_with_cancel_effective`'s
-    /// dispatch line, so it never produces a replay-eligible marker. The
-    /// marker rides the SAME `effective_input` the handler ran with — not the
-    /// pre-guardrail `call.arguments` — so a future resume proves exactly the
-    /// input that reached the tool.
-    async fn emit_tool_call_effective_input(
-        &self,
-        session_id: &SessionId,
-        turn_id: TurnId,
-        call: &NativeToolCall,
-        effective_input: serde_json::Value,
-    ) -> Result<(), HarnessError> {
-        self.deps
-            .session
-            .emit_event(
-                session_id,
-                SessionEvent::ToolCallEffectiveInput {
-                    turn_id,
-                    call_id: call.id.clone(),
-                    input: effective_input,
-                    at: now_ms(),
-                },
-            )
-            .await?;
-        Ok(())
     }
 
     /// Persist a successful tool call to the transcript: emit

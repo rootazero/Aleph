@@ -1,0 +1,66 @@
+[package]
+name = "aleph-slot-api"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+description = "Pure error, text, tool-contract, search/embedding-contract, channel/approval/cancellation/webhook-contract, and pure AI-contract authority for the Aleph slot API. No I/O, no platform, no LLM."
+
+# Pure migration target. The whole point of this crate is to be importable
+# from contexts that cannot reach for alephcore (panel/wasm, ffi, public SDK
+# stubs). Therefore:
+#   * no `alephcore` — directional: alephcore depends on us, never the reverse
+#   * no platform `cfg` — pure std
+#   * no tokio RUNTIME — Task 4 moved the channel contract here, and the
+#     channel contract's shared state is tokio `broadcast` + tokio `RwLock`,
+#     so `tokio` is enabled with the `sync` feature ONLY (no rt, no net, no
+#     fs, no time, no io). The async test macros live in dev-dependencies.
+# Deps below are the minimum the migrated code needs:
+#   * `thiserror` for `#[derive(Error)]` on AlephError / AlephException /
+#     DescriptorError / ToolError / ChannelError
+#   * `serde`, `serde_json` for the JSON-line tool contract (InputSchema,
+#     ToolSource wire form, ToolOutput, ToolCallIdentity, ReplayContractFingerprint)
+#     and the channel/approval wire types (InboundMessage, ApprovalRequest, …)
+#   * `async-trait` for the `ToolHandler` / `SearchProvider` /
+#     `EmbeddingProvider` / `Channel` / `ChannelApprovalCapability` /
+#     `WebhookHandler` async_trait surface (R7 keeps the decision in
+#     the handler body, not in the contract)
+#   * `schemars` for the descriptor's `JsonSchema`-style input_schema wire
+#     form and the `Recency` tool-boundary schema
+#   * `sha2` + `hex` for the ReplayContractFingerprint SHA-256 preimage
+#   * `aleph-protocol` for the existing `Presentation` side-channel that
+#     `ToolOutputMetadata.presentation` already carries — we use it once and
+#     only once
+#   * `chrono` for the timestamp fields the channel/approval contract already
+#     carried (same version + `serde` feature as the workspace pin)
+#   * `tokio` (sync only) for `broadcast` + `RwLock` in `ChannelState` /
+#     `CancellationToken` — moved byte-for-byte from Core, which used the
+#     same types
+#   * `http` + `bytes` for the `WebhookHandler` signature — pinned to the
+#     SAME major versions Core's axum 0.8 stack uses so `HeaderMap` / `Bytes`
+#     are one type across the workspace (identity pinned in
+#     `tests/modularization_contracts.rs`)
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+schemars = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+aleph-protocol = { path = "../../shared/protocol" }
+chrono = { workspace = true }
+tokio = { version = "1.35", default-features = false, features = ["sync"] }
+http = "1"
+bytes = "1"
+# Task 7: preserve the pure URL classifier and existing response warnings.
+url = "2.5"
+tracing = "0.1"
+
+[dev-dependencies]
+# Test-only AST census of the native browser trait and local operation declaration.
+syn = { version = "=2.0.117", features = ["full"] }
+serde_json = { workspace = true }
+# `#[tokio::test]` for the broadcast/cancellation round-trip tests — the only
+# async execution the API test suite needs (current-thread runtime).
+tokio = { version = "1.35", default-features = false, features = ["macros", "rt"] }

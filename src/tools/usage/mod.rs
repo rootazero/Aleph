@@ -54,3 +54,23 @@ pub use report::{build_report, ExtensionUsageReport, UsageEntry, UsageInventory}
 pub use store::{
     forget_mcp, forget_plugin, record_call_detached, OriginUsage, ToolUsageStore, UsageOrigin,
 };
+
+/// Derive usage provenance from the canonical descriptor source.
+///
+/// Builtins intentionally have no uninstallable owner, so they map to `None`
+/// rather than inheriting any projection-side label.
+#[must_use]
+pub(crate) fn origin_from_source(
+    source: &crate::tools::service::ToolSource,
+) -> Option<UsageOrigin<'_>> {
+    match source {
+        crate::tools::service::ToolSource::Builtin => None,
+        crate::tools::service::ToolSource::Mcp { server_id } if !server_id.is_empty() => {
+            Some(UsageOrigin::Mcp(server_id))
+        }
+        crate::tools::service::ToolSource::Mcp { .. } => None,
+        crate::tools::service::ToolSource::Extension { plugin_id } => {
+            Some(UsageOrigin::Plugin(plugin_id))
+        }
+    }
+}

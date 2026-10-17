@@ -1043,6 +1043,83 @@ pub(crate) fn rust_sources_under(root: &std::path::Path) -> Vec<(String, String)
         .collect()
 }
 
+/// Strict, per-root source input for test/helper censuses. Paths are normalized
+/// relative to `project_root`, independently of Core's manifest directory.
+/// Unlike the historical census walker above, every discovery/read error is red.
+#[cfg(any(test, feature = "test-helpers"))]
+pub fn rust_sources_under_root(
+    project_root: &std::path::Path,
+    subtree: &std::path::Path,
+) -> Result<Vec<(String, String)>, String> {
+    use std::path::{Component, Path, PathBuf};
+    fn walk(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+        for entry in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+            let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+            let path = entry.path();
+            let kind = entry
+                .file_type()
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            if kind.is_symlink() {
+                return Err(format!(
+                    "{}: symlink source under {}",
+                    path.display(),
+                    root.display()
+                ));
+            }
+            if kind.is_dir() {
+                walk(root, &path, files)?;
+            } else if kind.is_file() && path.extension().is_some_and(|e| e == "rs") {
+                files.push(path);
+            }
+        }
+        Ok(())
+    }
+    if subtree.as_os_str().is_empty()
+        || subtree
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err(format!(
+            "{}: invalid source subtree {}",
+            project_root.display(),
+            subtree.display()
+        ));
+    }
+    let root = project_root
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", project_root.display()))?;
+    let under = root.join(subtree);
+    let actual = under
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", under.display()))?;
+    if !actual.starts_with(&root) || actual != under {
+        return Err(format!(
+            "{}: source subtree escapes or aliases root {}",
+            under.display(),
+            root.display()
+        ));
+    }
+    let mut files = Vec::new();
+    walk(&root, &actual, &mut files)?;
+    files.sort();
+    if files.is_empty() {
+        return Err(format!("{}: empty Rust source corpus", under.display()));
+    }
+    files
+        .into_iter()
+        .map(|file| {
+            let rel = file
+                .strip_prefix(&root)
+                .map_err(|e| format!("{}: {e}", file.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let text =
+                std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            Ok((rel, text))
+        })
+        .collect()
+}
+
 /// Every file under `root` whose production code READS the identifier
 /// `ident` — the walk the two capability-handle reader censuses share
 /// (`session::service::SESSION_SERVICE_READERS`,

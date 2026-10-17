@@ -32,6 +32,7 @@ pub mod dreaming;
 pub mod events;
 pub mod extension_usage;
 pub mod file_change;
+pub mod hook;
 mod ids;
 pub mod json_canvas;
 pub mod jsonrpc;

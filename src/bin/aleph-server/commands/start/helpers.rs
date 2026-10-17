@@ -373,7 +373,10 @@ pub(super) fn build_sqlite_session_service(
 }
 
 /// Initialize the `ExtensionManager` for the plugin system.
-pub(super) async fn initialize_extension_manager(daemon: bool) {
+pub(super) async fn initialize_extension_manager(
+    daemon: bool,
+    ownership_tree: Arc<alephcore::capability::ownership::OwnershipTree>,
+) {
     // Migrate old single-dir layout and update official skills. Resolve via the
     // authoritative resolver (ALEPH_HOME / $HOME) so bundled content is
     // extracted into the SAME ~/.aleph as the rest of the daemon's state.
@@ -387,7 +390,9 @@ pub(super) async fn initialize_extension_manager(daemon: bool) {
     })
     .await;
 
-    match alephcore::extension::ExtensionManager::with_defaults().await {
+    match alephcore::extension::ExtensionManager::with_defaults_with_ownership_tree(ownership_tree)
+        .await
+    {
         Ok(extension_manager) => {
             // SkillSystem is now always initialized; load_all() will init it
             // with discovered skill directories automatically.
@@ -407,7 +412,7 @@ pub(super) async fn initialize_extension_manager(daemon: bool) {
             // reader of the manager sees the same `None` a boot that died
             // earlier would leave.
             alephcore::gateway::decline_extension_manager(
-                "`ExtensionManager::with_defaults()` failed, so no plugin, skill \
+                "`ExtensionManager::with_defaults_with_ownership_tree()` failed, so no plugin, skill \
                  or hook is loaded this boot — the accompanying \"Failed to \
                  initialize extension manager\" message names the cause. Check \
                  that the extension tree under `$ALEPH_HOME` (else `~/.aleph`) \

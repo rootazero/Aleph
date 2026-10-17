@@ -523,7 +523,7 @@ mod tests {
         let in_catalog = catalog.list_by_mcp_server("srv").await;
         assert_eq!(in_catalog.len(), 1, "MCP tool must appear in ToolCatalog");
         assert_eq!(in_catalog[0].name, names[0]);
-        assert!(in_catalog[0].requires_confirmation);
+        assert!(in_catalog[0].requires_confirmation());
         assert_eq!(
             in_catalog[0].parameters_schema,
             Some(json!({"type": "object"}))

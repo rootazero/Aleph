@@ -72,7 +72,7 @@ pub mod context;
 pub mod diagnostics;
 pub mod discovery;
 pub mod domain;
-mod error;
+pub mod error;
 pub mod event;
 mod event_handler;
 pub mod exec;
@@ -165,7 +165,7 @@ pub(crate) use yaml_serde as yaml;
 // =============================================================================
 
 // Error types (always needed)
-pub use crate::error::{AlephError, AlephException, Result};
+pub use crate::error::{AlephError, AlephException, ErrorClass, Result};
 
 // Configuration (main entry points and commonly used types)
 pub use crate::config::{

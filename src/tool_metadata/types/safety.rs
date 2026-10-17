@@ -1,31 +1,11 @@
-//! Tool Safety Level
+//! Re-export shim — `ToolSafetyLevel` lives in `aleph-slot-api`.
 //!
-//! Safety level classification for tool confirmation and rollback behavior.
+//! The four-variant enum (`ReadOnly` / `Reversible` /
+//! `IrreversibleLowRisk` / `IrreversibleHighRisk`) with
+//! `Default = ReadOnly` moved to
+//! `aleph_slot_api::metadata::ToolSafetyLevel` as of P0 Task 2.
+//! This file re-exports it so any
+//! `crate::tool_metadata::types::safety::ToolSafetyLevel` path
+//! still compiles.
 
-use serde::{Deserialize, Serialize};
-
-/// Tool safety level for confirmation and rollback behavior
-///
-/// Determines whether user confirmation is required before execution
-/// and whether the operation can be rolled back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
-pub enum ToolSafetyLevel {
-    /// Read-only operations that don't modify anything
-    /// No confirmation required, instant execution
-    #[default]
-    ReadOnly,
-
-    /// Operations that can be undone/reversed
-    /// May require confirmation based on config
-    Reversible,
-
-    /// Operations that cannot be undone but have low impact
-    /// (e.g., sending a message, posting a comment)
-    /// Usually requires confirmation
-    IrreversibleLowRisk,
-
-    /// Operations that cannot be undone and have high impact
-    /// (e.g., deleting files, dropping tables)
-    /// Always requires confirmation
-    IrreversibleHighRisk,
-}
+pub use aleph_slot_api::metadata::ToolSafetyLevel;

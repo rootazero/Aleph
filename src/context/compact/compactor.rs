@@ -25,7 +25,7 @@ use super::summary_utils::{
 use crate::memory::session_compactor::summary_source::SessionSummarySource;
 use crate::memory::store::MemoryBackend;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
-use crate::providers::message::UnifiedMessage;
+use crate::providers::message::{dispatch_unified_message, UnifiedMessage};
 use crate::providers::AiProvider;
 use crate::sync_primitives::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -1314,17 +1314,17 @@ pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
 
     let mut lines = Vec::with_capacity(messages.len());
     for msg in messages {
-        let role = match msg {
-            UnifiedMessage::User { .. } => "user",
-            UnifiedMessage::Assistant { .. } => "assistant",
-            UnifiedMessage::ToolResult { tool_name, .. } => {
-                let text = msg.transcript_text();
-                lines.push(format!("tool_result({tool_name}): {}", head(&text)));
-                continue;
-            }
-        };
         let text = msg.transcript_text();
-        lines.push(format!("{role}: {}", head(&text)));
+        let capped = head(&text);
+        dispatch_unified_message(
+            msg,
+            &mut lines,
+            |lines, _| lines.push(format!("user: {capped}")),
+            |lines, _| lines.push(format!("assistant: {capped}")),
+            |lines, _, tool_name, _, _| {
+                lines.push(format!("tool_result({tool_name}): {capped}"));
+            },
+        );
     }
     lines.join("\n")
 }

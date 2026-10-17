@@ -16,6 +16,7 @@
 //!   current deliberate behaviour.
 
 use super::super::*;
+use crate::sync_primitives::Arc;
 
 /// Valid baseline: a single `openai` provider, selected as the default.
 fn config_with_openai() -> Config {
@@ -112,16 +113,6 @@ fn test_ollama_without_api_key_passes() {
 // ═══ Routing rules ═══
 
 #[test]
-fn test_rule_referencing_unknown_provider_fails() {
-    let mut config = Config::default();
-    config
-        .rules
-        .push(RoutingRuleConfig::command(".*", "nonexistent", None));
-
-    expect_invalid(&config, "unknown provider");
-}
-
-#[test]
 fn test_valid_regex_patterns_pass() {
     for pattern in [".*", "^/code", r"\d+", "[a-zA-Z]+", "^test$", "hello|world"] {
         assert!(
@@ -178,11 +169,145 @@ fn a_rule_labelled_command_without_the_prefix_is_still_retired() {
     assert_eq!(config.retired_keyword_rules(), vec![(1, "translate")]);
 }
 
-#[test]
-fn test_invalid_regex_patterns_fail() {
-    for pattern in ["[invalid(", "(unclosed", "**", "[z-a]"] {
-        expect_invalid(&config_with_rule(pattern), "invalid regex");
+/// Bounded `tracing_subscriber` layer that captures the formatted message
+/// of every event passing through. Local to this test module so it cannot
+/// leak into other test modules or production code; uses `set_default` (a
+/// thread-local subscriber), not `init` (a process-global one), so the
+/// guard returned by `set_default` scopes capture to this test only.
+#[derive(Clone, Default)]
+struct CapturedWarnMessages(Arc<std::sync::Mutex<Vec<String>>>);
+
+struct WarnMessageVisitor(String);
+
+impl tracing::field::Visit for WarnMessageVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.0 = format!("{value:?}");
+        }
     }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedWarnMessages {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut visitor = WarnMessageVisitor(String::new());
+        event.record(&mut visitor);
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(visitor.0);
+    }
+}
+
+/// Retired rule boots: the previous `test_rule_referencing_unknown_provider_fails`
+/// asserted a hard rejection on the unknown-provider path. The brief requires
+/// preserving that original fixture — `command(".*", "nonexistent", None)` —
+/// while changing only the test semantics from reject to retired warning +
+/// boot, so the provider is left as `"nonexistent"` and the regex as `".*"`.
+/// The rule's regex `.*` does not start with `^/`, so the retired-detection
+/// arm classifies it as a **keyword rule** and fires BEFORE the
+/// unknown-provider arm in `validate_rules`; the daemon therefore still
+/// boots, the rule is listed in `retired_keyword_rules()` at position 1, and
+/// a captured `tracing` warn matches the exact retired-rule text. The
+/// baseline `config_with_openai()` keeps `default_provider = "openai"` so
+/// the surrounding config stays valid and the retired arm is reached.
+#[test]
+fn a_retired_keyword_rule_with_unknown_provider_boots_and_warns_exact_text() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+
+    let mut config = config_with_openai();
+    config
+        .rules
+        .push(RoutingRuleConfig::command(".*", "nonexistent", None));
+
+    let retired = config.retired_keyword_rules();
+    assert_eq!(
+        retired,
+        vec![(1, ".*")],
+        "rule at position 1 is a keyword rule (no `^/` prefix) and must be listed"
+    );
+
+    let captured = CapturedWarnMessages::default();
+    let subscriber = tracing_subscriber::registry().with(captured.clone());
+    let _guard = subscriber.set_default();
+
+    assert!(
+        config.validate().is_ok(),
+        "a retired keyword rule must not stop the daemon booting"
+    );
+
+    drop(_guard);
+    let messages = captured.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+
+    let expected = "Keyword routing rules are retired and reach no code; this rule does nothing. \
+                    Give it a `^/`-prefixed regex to make it a slash command, or delete it.";
+    assert!(
+        messages.iter().any(|m| m == expected),
+        "exact retired-rule warning missing; got: {messages:?}"
+    );
+}
+
+/// Retired rule boots: the previous `test_invalid_regex_patterns_fail` asserted
+/// a hard `"invalid regex"` rejection that `Config::validate` never produced
+/// — the regex bytes are not compiled during `validate`, so the four patterns
+/// below are all classified as retired keyword rules (none starts with `^/`)
+/// and they all BOOT. The test is renamed to describe what the fixture
+/// actually is, asserts each pattern's position and regex appear in
+/// `retired_keyword_rules()`, asserts the daemon still boots, and captures
+/// the exact warning text via a scoped `tracing_subscriber` layer so a
+/// regression that quietly drops the warn — or rewrites the message — is
+/// visible.
+#[test]
+fn malformed_keyword_rules_boot_and_are_listed_as_retired() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+
+    let patterns = ["[invalid(", "(unclosed", "**", "[z-a]"];
+    let mut config = config_with_openai();
+    for p in patterns {
+        config
+            .rules
+            .push(RoutingRuleConfig::command(p, "openai", None));
+    }
+
+    let retired = config.retired_keyword_rules();
+    let expected: Vec<(usize, &str)> = patterns
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (i + 1, *p))
+        .collect();
+    assert_eq!(
+        retired, expected,
+        "every malformed pattern is a keyword rule (no `^/` prefix) and must be listed at its 1-based position"
+    );
+
+    let captured = CapturedWarnMessages::default();
+    let subscriber = tracing_subscriber::registry().with(captured.clone());
+    let _guard = subscriber.set_default();
+
+    assert!(
+        config.validate().is_ok(),
+        "a retired keyword rule must not stop the daemon booting"
+    );
+
+    drop(_guard);
+    let messages = captured.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+
+    let expected_text =
+        "Keyword routing rules are retired and reach no code; this rule does nothing. \
+                          Give it a `^/`-prefixed regex to make it a slash command, or delete it.";
+    let matching = messages.iter().filter(|m| *m == expected_text).count();
+    assert_eq!(
+        matching,
+        patterns.len(),
+        "expected one exact retired-rule warning per retired rule ({}); got {} matches in {messages:?}",
+        patterns.len(),
+        matching
+    );
 }
 
 // ═══ Memory ═══

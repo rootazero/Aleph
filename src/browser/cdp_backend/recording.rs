@@ -53,23 +53,9 @@ pub enum RecordStartError {
     Io(#[from] std::io::Error),
 }
 
-/// The container a managed default path is generated for. When the caller
-/// supplies an explicit path, the PATH's extension decides instead
-/// (spec §3: 格式按扩展名).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RecordingFormat {
-    Webm,
-    Mp4,
-}
-
-impl RecordingFormat {
-    pub fn extension(self) -> &'static str {
-        match self {
-            Self::Webm => "webm",
-            Self::Mp4 => "mp4",
-        }
-    }
-}
+pub use aleph_slot_api::browser::recording::{
+    RecordStartOptions, RecordingReceipt, RecordingStatus,
+};
 
 /// The ffmpeg candidate list, in priority order, each with the label the
 /// `NoFfmpeg` error reports. `None` means "this source does not have one".
@@ -358,77 +344,6 @@ use crate::browser::live::stream_hub::LiveFrame;
 use crate::browser::live::LiveProfileOwner;
 
 use crate::browser::error::BrowserError;
-
-/// What a finished recording reports. `complete` is a DERIVED verdict (see the
-/// module doc), never a claim the encoder made about itself.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct RecordingReceipt {
-    pub recording_id: String,
-    /// Absolute — the model never guesses where its file is (spec §3).
-    pub path: PathBuf,
-    pub duration_ms: u64,
-    pub captured_frames: u64,
-    pub encoded_frames: u64,
-    pub dropped_frames: u64,
-    /// The encoder's exit state, verbatim: `"0"`, `"1"`, `"signal 9"`,
-    /// `"killed"` (we killed it), or `"wait error: …"`.
-    pub encoder_exit: String,
-    pub size_bytes: u64,
-    pub complete: bool,
-    pub truncation_reason: Option<String>,
-}
-
-/// A still-running recording, for `status`.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct RecordingStatus {
-    pub recording_id: String,
-    /// The resolved absolute output path (post-uniquify for managed
-    /// defaults) — spec §4's `resolved_path`: the model never guesses where
-    /// its file is going.
-    pub path: PathBuf,
-    pub elapsed_ms: u64,
-    pub captured_frames: u64,
-    pub dropped_frames: u64,
-    /// Where the encoder binary came from (spec §4's `ffmpeg_source`) — the
-    /// resolution chain's label (`ALEPH_FFMPEG env`, `ffmpeg on PATH`, the
-    /// playwright bundle) or the explicit-injection seam's.
-    pub ffmpeg_source: String,
-}
-
-/// Everything `start` needs beyond who/where to record. A struct rather than
-/// a long positional list because `fps_cap` and `quality` are both bare
-/// integers — adjacent, swappable, and invisible at the call site.
-#[derive(Clone, Debug)]
-pub struct RecordStartOptions {
-    /// Explicit output path. `None` → the managed default
-    /// ([`default_recording_path`]).
-    pub path: Option<PathBuf>,
-    /// Shapes the container timestamps (`-framerate`); the screencast stream
-    /// itself is repaint-driven, so this is an upper label, not a promise
-    /// (spec §2). The receipt's `captured_frames / duration` is the truth.
-    pub fps_cap: u32,
-    /// Container for the MANAGED default path's extension. Ignored when
-    /// `path` is given — then the path's own extension rules (spec §3).
-    pub format: RecordingFormat,
-    /// JPEG quality of the wire frames.
-    pub quality: u8,
-    /// Explicit encoder binary, skipping [`resolve_ffmpeg`]. The seam the
-    /// pipeline tests inject stub encoders through — process-global env would
-    /// race parallel tests.
-    pub ffmpeg: Option<PathBuf>,
-}
-
-impl Default for RecordStartOptions {
-    fn default() -> Self {
-        Self {
-            path: None,
-            fps_cap: 10,
-            format: RecordingFormat::Webm,
-            quality: 80,
-            ffmpeg: None,
-        }
-    }
-}
 
 /// `captured` and `dropped` are the owner's counters (shared with the tap: the
 /// owner counts a frame at the moment it routes it, and counts a drop when the
@@ -2017,19 +1932,21 @@ mod tests {
             )
             .await
             .expect("start");
-        for n in 1..=10 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut n = 1;
+        while Instant::now() < deadline && registry.status("p", "T1").is_some() {
             server.push_event(frame_event(n, JPEG_B64));
+            n += 1;
             tokio::time::sleep(Duration::from_millis(80)).await;
-            if registry.status("p", "T1").is_none() {
-                break;
-            }
         }
-        wait_until(
-            || registry.status("p", "T1").is_none(),
-            Duration::from_secs(10),
-            "the write failure to retire the recording",
-        )
-        .await;
+        if registry.status("p", "T1").is_some() {
+            wait_until(
+                || registry.status("p", "T1").is_none(),
+                deadline.saturating_duration_since(Instant::now()),
+                "the write failure to retire the recording",
+            )
+            .await;
+        }
 
         let receipt = registry.stop("p", "T1").await.expect("the filed receipt");
         assert!(!receipt.complete, "{receipt:?}");

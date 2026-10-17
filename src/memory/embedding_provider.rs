@@ -1,6 +1,15 @@
-//! Embedding provider abstraction
+//! Embedding provider implementation
 //!
 //! All embeddings go through remote OpenAI-compatible APIs.
+//!
+//! The [`EmbeddingProvider`] *trait* moved to
+//! [`aleph_slot_api::embedding`] in Task 3 of the P0 modularization and is
+//! re-exported here — this is a `pub use`, not a second definition (both
+//! paths share one `TypeId`, pinned by `tests/modularization_contracts.rs`).
+//! Everything with a dependency the API crate may not take stays here:
+//! `RemoteEmbeddingProvider` (reqwest client, `validate_api_base` SSRF
+//! policy, the `create_provider` factory), the `truncate_and_normalize`
+//! helper, and the test-only `MockEmbeddingProvider`.
 
 use crate::config::types::memory::{EmbeddingPreset, EmbeddingProviderConfig};
 use crate::error::AlephError;
@@ -8,24 +17,7 @@ use crate::sync_primitives::Arc;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
-/// Abstract embedding provider
-#[async_trait::async_trait]
-pub trait EmbeddingProvider: Send + Sync {
-    /// Generate embedding for a single text
-    async fn embed(&self, text: &str) -> Result<Vec<f32>, AlephError>;
-
-    /// Generate embeddings for multiple texts (batch)
-    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError>;
-
-    /// Get the output dimension of this provider
-    fn dimensions(&self) -> usize;
-
-    /// Get the model name (e.g., "BAAI/bge-m3")
-    fn model_name(&self) -> &str;
-
-    /// Get the provider id (e.g., "siliconflow")
-    fn provider_id(&self) -> &str;
-}
+pub use aleph_slot_api::embedding::EmbeddingProvider;
 
 /// Validate `api_base` against SSRF and cleartext-HTTPS policy before any
 /// outbound traffic is constructed.

@@ -157,10 +157,7 @@ fn apply_cap_override(
 
 /// `ModelInput` is non-optional inside, but the outer `Option<ModelInput>` is.
 /// When the operator omits the whole block, leave the catalog's view alone.
-const fn apply_input_override(
-    _current: &bool,
-    input: Option<&ModelInput>,
-) -> Option<bool> {
+const fn apply_input_override(_current: &bool, input: Option<&ModelInput>) -> Option<bool> {
     match input {
         None => None,
         // `ModelInput`'s only capability flag is `image`; `text` is always
@@ -478,8 +475,14 @@ mod tests {
         let caps = r.capabilities.expect("def named caps, row must exist");
         assert_eq!(caps.context_window, 512_000);
         assert_eq!(caps.max_output_tokens, 64_000);
-        assert!(!caps.supports_vision, "ModelInput::image=false must clear vision");
-        assert!(!caps.supports_reasoning, "def.reasoning=false must clear reasoning");
+        assert!(
+            !caps.supports_vision,
+            "ModelInput::image=false must clear vision"
+        );
+        assert!(
+            !caps.supports_reasoning,
+            "def.reasoning=false must clear reasoning"
+        );
         // Catalog's own `supports_tools` must survive — the operator has no
         // field for it and the override layer does not zero it out.
         let bare = ModelRecord::resolve(
@@ -489,7 +492,10 @@ mod tests {
             ModelSource::PresetDefault,
             None,
         );
-        assert_eq!(caps.supports_tools, bare.capabilities.unwrap().supports_tools);
+        assert_eq!(
+            caps.supports_tools,
+            bare.capabilities.unwrap().supports_tools
+        );
 
         let cost = r.cost.expect("def named rates, card must exist");
         assert_eq!(cost.input_per_mtok, Some(99.0));

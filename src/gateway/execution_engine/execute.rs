@@ -1310,7 +1310,7 @@ pub(super) async fn loop_post_run(
             // still apply inside the claim).
             let tokens_total = if state.token_budget.is_some() {
                 match session_manager.as_ref() {
-                    Some(sm) => match sm.get_total_tokens(&session_key).await {
+                    Some(sm) => match sm.get_total_tokens(session_key).await {
                         Ok(total) => total,
                         Err(e) => {
                             warn!(error = %e, session = %session_key_str,
@@ -1388,7 +1388,7 @@ pub(super) async fn loop_post_run(
                         let origin =
                             match crate::gateway::event_emitter::origin_fanout::channel_registry() {
                                 Some(reg) => agent
-                                    .origin_route(&session_key)
+                                    .origin_route(session_key)
                                     .await
                                     .map(|(ch, conv)| (reg, ch, conv)),
                                 None => None,

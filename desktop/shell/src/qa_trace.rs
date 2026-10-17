@@ -86,7 +86,12 @@ fn format_record(auth: &str, pid: u32, seq: u64, command: Command, outcome: Outc
             "null".to_owned(),
             credential_present.map_or_else(|| "null".to_owned(), |b| b.to_string()),
         ),
-        Outcome::Err(code) => (false, "null".to_owned(), format!("\"{code}\""), "null".to_owned()),
+        Outcome::Err(code) => (
+            false,
+            "null".to_owned(),
+            format!("\"{code}\""),
+            "null".to_owned(),
+        ),
     };
     format!(
         "{{\"v\":{VERSION},\"auth\":\"{auth}\",\"pid\":{pid},\"seq\":{seq},\"command\":\"{}\",\"ok\":{ok},\"resultShape\":{shape},\"errorCode\":{code},\"credentialPresent\":{present}}}",

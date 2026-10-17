@@ -34,6 +34,7 @@ pub(super) struct FastPathJournal {
 }
 
 impl FastPathJournal {
+    #[cfg(test)]
     pub(super) fn new(svc: Arc<dyn SessionService>, session: SessionId, tool: &str) -> Self {
         Self::new_with_telecom_public(svc, session, tool, None)
     }

@@ -172,7 +172,9 @@ where
             }
         } else if arg == "--qa-nonce" {
             let value = it.next().ok_or(QaRootError::MissingArg("--qa-nonce"))?;
-            let value = value.into_string().map_err(|_| QaRootError::MalformedNonce)?;
+            let value = value
+                .into_string()
+                .map_err(|_| QaRootError::MalformedNonce)?;
             if nonce.replace(value).is_some() {
                 return Err(QaRootError::DuplicateArg("--qa-nonce"));
             }
@@ -206,7 +208,10 @@ where
     while let Some(arg) = it.next() {
         // `--flag=value` is not accepted; refuse it rather than silently fall
         // back to memory when the harness meant `os`.
-        if arg.to_string_lossy().starts_with("--qa-credential-backend=") {
+        if arg
+            .to_string_lossy()
+            .starts_with("--qa-credential-backend=")
+        {
             return Err(QaRootError::MissingArg(CREDENTIAL_BACKEND_FLAG));
         }
         if arg == CREDENTIAL_BACKEND_FLAG {
@@ -305,10 +310,12 @@ where
     let (root, nonce) = parse_args(args.iter().cloned())?;
     let backend = parse_credential_backend(args.iter().cloned(), &nonce)?;
     let monitor = parse_monitor_port(args.iter().cloned())?;
-    let temp = fs::canonicalize(std::env::temp_dir()).map_err(|_| QaRootError::TempDirUnavailable)?;
+    let temp =
+        fs::canonicalize(std::env::temp_dir()).map_err(|_| QaRootError::TempDirUnavailable)?;
     let temp = strip_verbatim(&temp);
     let proven = validate_with(&root, &nonce, &temp, &forbidden_roots())?;
-    ROOT.set(proven).map_err(|_| QaRootError::AlreadyInitialized)?;
+    ROOT.set(proven)
+        .map_err(|_| QaRootError::AlreadyInitialized)?;
     // Published only after the root (and thus the nonce) is proven.
     if let Some(port) = monitor {
         MONITOR_PORT
@@ -579,7 +586,9 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let temp = fs::canonicalize(std::env::temp_dir()).map(|t| strip_verbatim(&t));
-            let ok = temp.map(|t| self.0.parent() == Some(t.as_path())).unwrap_or(false)
+            let ok = temp
+                .map(|t| self.0.parent() == Some(t.as_path()))
+                .unwrap_or(false)
                 && self
                     .0
                     .file_name()
@@ -627,7 +636,12 @@ mod tests {
         );
         // `=` form is not accepted.
         assert!(parse_args(argv(&["--qa-root=/x", "--qa-nonce", NONCE])).is_err());
-        for bad in ["", "abc", "zz23456789abcdef0123456789abcdef", &"a".repeat(129)] {
+        for bad in [
+            "",
+            "abc",
+            "zz23456789abcdef0123456789abcdef",
+            &"a".repeat(129),
+        ] {
             assert_eq!(
                 parse_args(argv(&["--qa-root", "/x", "--qa-nonce", bad])),
                 Err(QaRootError::MalformedNonce),
@@ -636,7 +650,12 @@ mod tests {
         }
         assert_eq!(
             parse_args(argv(&[
-                "--qa-root", "/x", "--qa-root", "/y", "--qa-nonce", NONCE
+                "--qa-root",
+                "/x",
+                "--qa-root",
+                "/y",
+                "--qa-nonce",
+                NONCE
             ])),
             Err(QaRootError::DuplicateArg("--qa-root"))
         );
@@ -645,10 +664,17 @@ mod tests {
     #[test]
     fn parse_ignores_argv0_and_unknown_args() {
         // argv[0] that looks like a flag must not be parsed as one.
-        let a = ["--qa-root", "--qa-root", "/x", "--qa-nonce", NONCE, "--other"]
-            .iter()
-            .map(OsString::from)
-            .collect::<Vec<_>>();
+        let a = [
+            "--qa-root",
+            "--qa-root",
+            "/x",
+            "--qa-nonce",
+            NONCE,
+            "--other",
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
         let (root, _) = parse_args(a).unwrap();
         assert_eq!(root, PathBuf::from("/x"));
     }
@@ -722,7 +748,12 @@ mod tests {
         }
         assert_eq!(
             backend(
-                &["--qa-credential-backend", "memory", "--qa-credential-backend", "memory"],
+                &[
+                    "--qa-credential-backend",
+                    "memory",
+                    "--qa-credential-backend",
+                    "memory"
+                ],
                 STRONG
             ),
             Err(QaRootError::DuplicateArg("--qa-credential-backend"))
@@ -763,8 +794,22 @@ mod tests {
     #[test]
     fn monitor_port_rejects_out_of_range_and_non_plain_decimal() {
         for bad in [
-            "0", "1", "1023", "65536", "99999", "100000", "-1", "+8080", "08080", " 8080",
-            "8080 ", "80.80", "0x1f90", "abcd", "\u{0668}\u{0660}\u{0668}\u{0660}", "1e4",
+            "0",
+            "1",
+            "1023",
+            "65536",
+            "99999",
+            "100000",
+            "-1",
+            "+8080",
+            "08080",
+            " 8080",
+            "8080 ",
+            "80.80",
+            "0x1f90",
+            "abcd",
+            "\u{0668}\u{0660}\u{0668}\u{0660}",
+            "1e4",
         ] {
             assert_eq!(
                 monitor(&["--qa-monitor-port", bad]),

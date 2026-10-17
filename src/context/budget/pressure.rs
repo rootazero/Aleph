@@ -1,6 +1,6 @@
 //! Content-aware token-ratio detection for context-pressure estimation.
 
-use crate::providers::message::{value_as_model_text, ContentBlock, UnifiedMessage};
+use crate::providers::message::{dispatch_content_block, value_as_model_text, UnifiedMessage};
 
 // =============================================================================
 // Content-aware ratio detection
@@ -358,36 +358,51 @@ impl std::ops::AddAssign for MessageTokenSplit {
 /// between code and prose and saturate the reasoning to zero).
 #[must_use]
 pub fn estimate_message_tokens_split(msg: &UnifiedMessage, prose_ratio: f64) -> MessageTokenSplit {
-    let mut prose = String::new();
-    let mut text_only = String::new();
-    let mut has_thinking = false;
-    let mut structured = String::new();
-    let mut result_text_tokens = 0usize;
-    let mut image_count = 0usize;
+    #[derive(Default)]
+    struct TokenContext {
+        prose: String,
+        text_only: String,
+        has_thinking: bool,
+        structured: String,
+        result_text_tokens: usize,
+        image_count: usize,
+    }
+
+    let mut context = TokenContext::default();
     for block in msg.content_blocks() {
-        match block {
-            ContentBlock::Text { text, .. } => {
-                push_part(&mut prose, text);
-                push_part(&mut text_only, text);
-            }
-            ContentBlock::Thinking { thinking, .. } => {
-                push_part(&mut prose, thinking);
-                has_thinking = true;
-            }
-            ContentBlock::Json { value } => {
+        dispatch_content_block(
+            block,
+            &mut context,
+            |context, text, _| {
+                push_part(&mut context.prose, text);
+                push_part(&mut context.text_only, text);
+            },
+            |context, value| {
                 let text = value_as_model_text(value);
                 if value.is_string() {
-                    result_text_tokens += estimate_tokens_aware(&text, prose_ratio);
+                    context.result_text_tokens += estimate_tokens_aware(&text, prose_ratio);
                 } else {
-                    push_part(&mut structured, &text);
+                    push_part(&mut context.structured, &text);
                 }
-            }
-            ContentBlock::ToolCall {
-                name, arguments, ..
-            } => push_part(&mut structured, &format!("{name} {arguments}")),
-            ContentBlock::Image { .. } => image_count += 1,
-        }
+            },
+            |context, thinking, _, _| {
+                push_part(&mut context.prose, thinking);
+                context.has_thinking = true;
+            },
+            |context, _, name, arguments, _| {
+                push_part(&mut context.structured, &format!("{name} {arguments}"));
+            },
+            |context, _, _| context.image_count += 1,
+        );
     }
+    let TokenContext {
+        prose,
+        text_only,
+        has_thinking,
+        structured,
+        result_text_tokens,
+        image_count,
+    } = context;
     let prose_tokens = estimate_tokens_aware(&prose, prose_ratio);
     let reasoning = if has_thinking {
         let ratio = content_ratio_with_baseline(&prose, prose_ratio);
@@ -425,6 +440,7 @@ pub fn estimate_message_tokens_split(msg: &UnifiedMessage, prose_ratio: f64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::message::ContentBlock;
 
     #[test]
     fn detect_ratio_pure_english() {

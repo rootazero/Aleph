@@ -16,15 +16,20 @@
 //! that enumerates its own inputs is structurally blind to whatever it did
 //! not enumerate). Both sides are derived from source instead:
 //!
-//! * the accessor names are derived from `options.rs` — any `pub fn`/`pub
-//!   const fn` whose body reads `self.recency` is a recency accessor, by
-//!   construction;
+//! * the accessor names are derived from the moved `SearchOptions` source
+//!   (`crates/aleph-slot-api/src/search.rs` since Task 3, via `OPTIONS_SRC`)
+//!   — any `pub fn`/`pub const fn` whose body reads `self.recency` is a
+//!   recency accessor, by construction;
 //! * each provider's declaration is parsed out of its own `capabilities()`.
 
 use crate::utils::source_scan::{code_text, production_prefix};
 use std::collections::{BTreeMap, BTreeSet};
 
-const OPTIONS_SRC: &str = include_str!("../options.rs");
+/// The moved `SearchOptions` source — the API crate owns the mappers
+/// since Task 3; this must point at the real owner, never at the
+/// `src/search/options.rs` re-export shim (a shim scans as zero accessors
+/// and the census would go silently blind, not red).
+const OPTIONS_SRC: &str = include_str!("../../../crates/aleph-slot-api/src/search.rs");
 
 /// Which `SearchOptions` member a dimension is expressed through.
 const DIMENSIONS: &[(&str, &[&str])] = &[
@@ -70,7 +75,7 @@ pub(super) fn production_view(src: &str) -> String {
     code_text(&production_prefix(src))
 }
 
-/// Accessor fn names in `options.rs` whose body reads one of `members`.
+/// Accessor fn names in `OPTIONS_SRC` whose body reads one of `members`.
 fn accessors_reading(members: &[&str]) -> BTreeSet<String> {
     let src = production_view(OPTIONS_SRC);
     let mut current: Option<String> = None;

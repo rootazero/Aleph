@@ -375,18 +375,18 @@ mod tests {
     /// loaded the non-zero pointer before the clear) can never observe a
     /// dangling `ListenerState`. Without dc6ea4042's `yield_now` between
     /// the clear and the drop, an in-flight callback could win the race
-    /// and dereference freed memory. The body is gated on `start()` being
-    /// `Ok` so the test compiles on non-Windows hosts (where the cfg
-    /// path returns `Err`) and the assertion core is exercised on CI's
-    /// windows-latest job.
+    /// and dereference freed memory.
+    ///
+    /// Windows-only: the assertions inspect the native hook's static pointer.
+    /// A native Windows test run must exercise this body; the lifecycle test
+    /// above covers the non-Windows start path.
+    #[cfg(windows)]
     #[test]
     fn listener_ptr_is_zeroed_after_stop_and_between_cycles() {
         let esc = WindowsEscapeListener::new();
         if esc.start().is_err() {
-            // No Win32 (non-Windows host) — start() invocations on the
-            // cfg(not(windows)) branch return NotImplemented, so the
-            // pointer invariant is non-applicable. CI's windows-latest
-            // job exercises the body.
+            // A Windows session without an available native hook cannot
+            // exercise the pointer invariant.
             return;
         }
         #[cfg(windows)]

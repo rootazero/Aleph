@@ -66,8 +66,6 @@ enum Replace {
     Restart(Option<TelecomPublicContext>),
     /// `stop`.
     Stop,
-    /// `pause`.
-    Pause,
     /// `pause` then `resume`: the SAME loop incarnation (same creator origin).
     PauseResume,
     /// `loop(action='update')`: the SAME incarnation, a field changed.
@@ -83,9 +81,6 @@ impl Replace {
             Replace::Restart(origin) => reg.put(loop_for(session, origin.as_ref())),
             Replace::Stop => {
                 let _ = reg.transition(session, LoopStatus::Stopped, Some("stopped".into()));
-            }
-            Replace::Pause => {
-                let _ = reg.transition(session, LoopStatus::Paused, None);
             }
             Replace::PauseResume => {
                 let _ = reg.transition(session, LoopStatus::Paused, None);

@@ -10,7 +10,7 @@
 use std::hash::{Hash, Hasher};
 
 use crate::context::budget::pressure::chars_for_token_budget;
-use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::providers::message::{dispatch_unified_message, ContentBlock, UnifiedMessage};
 
 /// Per-tool-result character budget for the advisory copy. The acting
 /// aggregator always gets the untrimmed transcript; this only shapes the
@@ -207,8 +207,10 @@ pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMes
     let mut parts: Vec<String> = Vec::new();
 
     for msg in messages {
-        match msg {
-            UnifiedMessage::User { content } => {
+        dispatch_unified_message(
+            msg,
+            &mut (&mut rendered, &mut parts),
+            |(rendered, _), content| {
                 let text = text_of(content);
                 // Round-6 G4: skip blank user turns, mirroring the assistant
                 // arm below. An empty text block survives
@@ -218,11 +220,11 @@ pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMes
                 // which the API rejects with 400 — failing EVERY advisor at
                 // once, not just the one turn.
                 if text.trim().is_empty() {
-                    continue;
+                    return;
                 }
                 rendered.push(UnifiedMessage::user(text));
-            }
-            UnifiedMessage::Assistant { content } => {
+            },
+            |(rendered, parts), content| {
                 parts.clear();
                 let text = text_of(content);
                 if !text.trim().is_empty() {
@@ -232,20 +234,17 @@ pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMes
                 if !parts.is_empty() {
                     rendered.push(UnifiedMessage::assistant(parts.join("\n")));
                 }
-            }
-            UnifiedMessage::ToolResult {
-                content, is_error, ..
-            } => {
+            },
+            |(rendered, _), _, _, content, is_error| {
                 let result_text = truncate_tool_result(&text_of(content), TOOL_RESULT_BUDGET);
-                let tag = if *is_error {
+                let tag = if is_error {
                     "tool result (error)"
                 } else {
                     "tool result"
                 };
-                append_to_last_assistant(&mut rendered, format!("[{tag}: {result_text}]"));
-            } // #[non_exhaustive]: future variants carry no advisory meaning
-              // until explicitly handled.
-        }
+                append_to_last_assistant(rendered, format!("[{tag}: {result_text}]"));
+            },
+        );
     }
 
     match rendered.last() {
@@ -265,10 +264,7 @@ pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMes
 
 /// The content blocks of any view message, whatever its role.
 fn content_mut(msg: &mut UnifiedMessage) -> &mut Vec<ContentBlock> {
-    match msg {
-        UnifiedMessage::User { content } | UnifiedMessage::Assistant { content } => content,
-        UnifiedMessage::ToolResult { content, .. } => content,
-    }
+    msg.content_blocks_mut()
 }
 
 /// Total characters of text carried by one view message.
@@ -358,11 +354,13 @@ pub(crate) fn apply_view_budget(view: &mut [UnifiedMessage], budget: usize) {
 pub(crate) fn view_signature(view: &[UnifiedMessage]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for msg in view {
-        let (role, content) = match msg {
-            UnifiedMessage::User { content } => ("user", content),
-            UnifiedMessage::Assistant { content } => ("assistant", content),
-            UnifiedMessage::ToolResult { content, .. } => ("tool", content),
-        };
+        let (role, content) = dispatch_unified_message(
+            msg,
+            &mut (),
+            |_, content| ("user", content),
+            |_, content| ("assistant", content),
+            |_, _, _, content, _| ("tool", content),
+        );
         role.hash(&mut hasher);
         for block in content {
             match block {
@@ -549,25 +547,21 @@ mod tests {
             UnifiedMessage::user("five"),
         ];
         mark_cache_breakpoints(&mut view);
-        let marked: Vec<bool> =
-            view.iter()
-                .map(|m| {
-                    let content = match m {
-                        UnifiedMessage::User { content }
-                        | UnifiedMessage::Assistant { content } => content,
-                        UnifiedMessage::ToolResult { content, .. } => content,
-                    };
-                    content.iter().any(|b| {
-                        matches!(
-                            b,
-                            ContentBlock::Text {
-                                cache_control: Some(_),
-                                ..
-                            }
-                        )
-                    })
+        let marked: Vec<bool> = view
+            .iter()
+            .map(|m| {
+                let content = m.content_blocks();
+                content.iter().any(|b| {
+                    matches!(
+                        b,
+                        ContentBlock::Text {
+                            cache_control: Some(_),
+                            ..
+                        }
+                    )
                 })
-                .collect();
+            })
+            .collect();
         assert_eq!(marked, vec![false, false, true, true, true]);
     }
 
