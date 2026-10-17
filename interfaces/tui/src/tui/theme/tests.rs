@@ -35,9 +35,9 @@ fn approved_builtins_reach_semantic_and_chrome_colors() {
     for (name, fg, accent, surface, light) in [
         (
             "amber",
-            (235, 232, 223),
-            (231, 199, 119),
-            (45, 43, 34),
+            (255, 240, 199),
+            (255, 194, 71),
+            (48, 32, 20),
             false,
         ),
         (
@@ -83,6 +83,36 @@ fn approved_builtins_reach_semantic_and_chrome_colors() {
             assert_ne!(p.color(*role), Color::Reset, "{name}: {role:?}");
         }
     }
+}
+
+#[test]
+fn amber_uses_vivid_readable_roles_and_surfaces() {
+    let palette = Palette::for_preset(Preset::Amber, true);
+    for (role, rgb) in [
+        (SemanticColor::Fg, (255, 240, 199)),
+        (SemanticColor::Dim, (215, 172, 98)),
+        (SemanticColor::Accent, (255, 194, 71)),
+        (SemanticColor::UserBar, (255, 173, 47)),
+        (SemanticColor::ToolRunning, (255, 179, 71)),
+        (SemanticColor::ToolOk, (99, 209, 138)),
+        (SemanticColor::ToolErr, (255, 116, 110)),
+    ] {
+        assert_eq!(palette.rgb(role), Some(rgb), "{role:?}");
+    }
+
+    let theme = Theme::from_palette(palette.clone());
+    assert_eq!(theme.surface, Color::Rgb(48, 32, 20));
+    assert_eq!(theme.user_bg, Color::Rgb(69, 42, 14));
+    assert_eq!(theme.assistant, palette.color(SemanticColor::Fg));
+    assert_eq!(theme.primary, palette.color(SemanticColor::Fg));
+    assert_eq!(theme.reasoning, palette.color(SemanticColor::Dim));
+    assert_eq!(theme.status_fg, palette.color(SemanticColor::Dim));
+    assert_eq!(
+        theme.tool_running,
+        palette.color(SemanticColor::ToolRunning)
+    );
+    assert_eq!(theme.tool_success, palette.color(SemanticColor::ToolOk));
+    assert_eq!(theme.tool_failed, palette.color(SemanticColor::ToolErr));
 }
 
 #[test]
@@ -155,7 +185,7 @@ fn names_and_size_limit_are_enforced_before_reading() {
         load_named(root.path(), "amber", true)
             .unwrap()
             .rgb(SemanticColor::Fg),
-        Some((235, 232, 223))
+        Some((255, 240, 199))
     );
     let (names, warnings) = available_themes_at(root.path(), true);
     assert!(names.contains(&"amber".to_owned()));
@@ -283,7 +313,7 @@ fn default_and_compatibility_names_are_stable() {
     }
     assert_eq!(
         Palette::for_preset(Preset::Dark, true).rgb(SemanticColor::Fg),
-        Some((235, 232, 223))
+        Some((255, 240, 199))
     );
     assert!(Palette::for_preset(Preset::Light, true).is_light());
 }
