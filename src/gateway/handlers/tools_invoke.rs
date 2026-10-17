@@ -36,7 +36,7 @@ use super::super::protocol::{
     JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, INTERNAL_ERROR, INVALID_PARAMS,
 };
 use super::parse_params;
-use crate::agents::{AgentDef, AgentRegistry};
+use crate::agents::AgentRegistry;
 use crate::builtin_tools::terminal::capabilities::{
     is_observation_capability, is_tool_allowed_with_legacy_terminal_alias,
     normalize_terminal_compat_call,

@@ -297,61 +297,44 @@ impl ScopedToolService {
             if is_subagent || self.inner.is_request_local(name) {
                 None
             } else if let Some(projection) = resolved {
-                if matches!(
-                    projection.usage_origin(),
-                    Some(crate::tools::usage::UsageOrigin::Plugin(_))
-                ) {
-                    // Only unrelated Plugin compatibility bypasses canonical
-                    // proof. A collision/source replacement must not resurrect it.
-                    if let Some(entry) = registry.resolve_entry(name) {
-                        if !matches!((&entry.descriptor.source, projection.usage_origin()),
-                            (crate::tools::service::ToolSource::Extension { plugin_id }, Some(crate::tools::usage::UsageOrigin::Plugin(id))) if plugin_id == id)
-                        {
-                            return Err(ToolError::PermissionDenied {
-                                name: name.into(),
-                                reason:
-                                    "Plugin projection collides with a different canonical source"
-                                        .into(),
-                            });
-                        }
+                let mut entry = registry
+                    .resolve_entry(name)
+                    .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
+                let projected = projection.capability_descriptor().ok_or_else(|| {
+                    ToolError::PermissionDenied {
+                        name: name.into(),
+                        reason: "noncanonical production projection cannot dispatch".into(),
                     }
-                    None
-                } else {
-                    let mut entry = registry
-                        .resolve_entry(name)
-                        .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
-                    let projected = projection.capability_descriptor().ok_or_else(|| {
-                        ToolError::PermissionDenied {
-                            name: name.into(),
-                            reason: "noncanonical production projection cannot dispatch".into(),
-                        }
-                    })?;
-                    if projected.source != entry.descriptor.source {
-                        return Err(ToolError::PermissionDenied { name: name.into(), reason: "canonical source changed; rebuild the request visibility projection".into() });
-                    }
-                    if let Some(visible) = &self.visible_mcp_servers {
-                        if matches!(&entry.descriptor.source, crate::tools::service::ToolSource::Mcp { server_id } if !visible(server_id))
-                        {
-                            return Err(ToolError::PermissionDenied {
-                                name: name.into(),
-                                reason: "canonical MCP server is not visible to this request"
-                                    .into(),
-                            });
-                        }
-                        if let Some(bound) = entry.handler.bind_visible_servers(visible) {
-                            entry.handler = bound;
-                        }
-                    } else if matches!(
-                        &entry.descriptor.source,
-                        crate::tools::service::ToolSource::Mcp { .. }
-                    ) {
+                })?;
+                if projected.source != entry.descriptor.source {
+                    return Err(ToolError::PermissionDenied {
+                        name: name.into(),
+                        reason:
+                            "canonical source changed; rebuild the request visibility projection"
+                                .into(),
+                    });
+                }
+                if let Some(visible) = &self.visible_mcp_servers {
+                    if matches!(&entry.descriptor.source, crate::tools::service::ToolSource::Mcp { server_id } if !visible(server_id))
+                    {
                         return Err(ToolError::PermissionDenied {
                             name: name.into(),
-                            reason: "canonical MCP visibility is not bound".into(),
+                            reason: "canonical MCP server is not visible to this request".into(),
                         });
                     }
-                    Some(entry)
+                    if let Some(bound) = entry.handler.bind_visible_servers(visible) {
+                        entry.handler = bound;
+                    }
+                } else if matches!(
+                    &entry.descriptor.source,
+                    crate::tools::service::ToolSource::Mcp { .. }
+                ) {
+                    return Err(ToolError::PermissionDenied {
+                        name: name.into(),
+                        reason: "canonical MCP visibility is not bound".into(),
+                    });
                 }
+                Some(entry)
             } else {
                 return Err(ToolError::NotFound { name: name.into() });
             }

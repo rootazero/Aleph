@@ -210,7 +210,7 @@ impl ToolCallIdentity {
 
 /// Where a tool capability originates. Kept here (rather than in `service`) as
 /// the single definition; `tools::service` re-exports it for existing callers.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolSource {
     Builtin,

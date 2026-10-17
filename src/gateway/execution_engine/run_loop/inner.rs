@@ -803,16 +803,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // (usage origin and result budget) is not represented by this
             // registry entry.
             let mut loop_registry_inner = crate::tools::runtime::LoopToolRegistry::new();
-            let plugin_tools: Vec<_> = allowed_tools
-                .iter()
-                .filter(|tool| {
-                    matches!(
-                        &tool.source,
-                        crate::tool_metadata::ToolSource::Plugin { .. }
-                    )
-                })
-                .cloned()
-                .collect();
             let mut allowed_names: std::collections::BTreeSet<String> =
                 allowed_tools.iter().map(|tool| tool.name.clone()).collect();
 
@@ -894,19 +884,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     ));
                 }
             };
-
-            // Plugins intentionally remain on the executor-backed adapter path;
-            // they are not re-created as canonical handlers and therefore keep
-            // their existing usage origin, result budget, and dispatch policy.
-            for adapter in crate::tools::adapters::build_tool_adapters_from_tools(
-                self.tool_registry.clone(),
-                &plugin_tools,
-            ) {
-                let name = adapter.name().to_string();
-                if loop_registry_inner.get(&name).is_none() {
-                    loop_registry_inner.register(adapter);
-                }
-            }
 
             // `allowed_names` is already complete for the canonical snapshot
             // and plugin compatibility path. An empty set retains the existing
@@ -1870,14 +1847,6 @@ pub(super) fn join_canonical_tools(
     let mut mcp_names = std::collections::BTreeSet::new();
     for (name, entry) in snapshot {
         if !is_allowed(name) || registry.get(name).is_some() {
-            continue;
-        }
-        // Plugin handlers retain their executor-backed compatibility projection
-        // so usage origin and result-budget semantics are not silently lost.
-        if matches!(
-            &entry.descriptor.source,
-            crate::tools::service::ToolSource::Extension { .. }
-        ) {
             continue;
         }
         if !mcp_handler_admitted(entry.handler.as_ref(), visible) {

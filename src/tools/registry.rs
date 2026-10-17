@@ -300,6 +300,121 @@ impl RegistrationHandle {
     }
 }
 
+// ============================================================================
+// Task59: Plugin Declaration Model
+// ============================================================================
+
+use crate::extension::registry::ToolRegistration;
+use crate::extension::runtime::wasm::WasmBinding;
+use crate::extension::visibility::ScopeKey;
+
+/// A genuine Plugin tool declaration, including those not admitted as callable.
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // Task59 infrastructure, used in Task60 reconciliation
+pub struct PluginToolDeclaration {
+    /// Actual ToolRegistration from manifest
+    pub registration: ToolRegistration,
+    /// Trusted owner from actual PluginRecord
+    pub plugin_id: String,
+    /// Actual ScopeKey from manager registry read
+    pub scope_key: Option<ScopeKey>,
+    /// For supported WASM with export: actual opaque binding
+    pub(crate) binding: Option<WasmBinding>,
+    /// Why this declaration cannot be called (if applicable)
+    pub unavailable: Option<DeclarationUnavailable>,
+    /// Registry revision when admitted
+    pub revision: u64,
+}
+
+/// Why a Plugin declaration is not callable.
+#[derive(Clone, Debug)]
+pub enum DeclarationUnavailable {
+    /// Non-WASM, unsupported runtime
+    NoBackend,
+    /// WASM module exists but export absent
+    MissingExport,
+    /// Status not active
+    PluginDisabled,
+    /// Another Plugin won short-name selection
+    CollisionLoser,
+    /// Builtin/MCP with same provider_name
+    SuppressedByBuiltin,
+}
+
+/// Key for plugin_declarations map: (plugin_id, exact registration name).
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct PluginDeclarationKey {
+    pub plugin_id: String,
+    pub name: String,
+}
+
+/// Canonical tool state: callable records + plugin declarations, published atomically.
+#[derive(Clone, Default)]
+pub struct CanonicalToolState {
+    /// Admitted callable tools (unique provider_name)
+    pub records: HashMap<CallableRecordKey, RegistryEntry>,
+    /// Plugin declarations (including losers and unavailable)
+    pub plugin_declarations: HashMap<PluginDeclarationKey, PluginToolDeclaration>,
+    /// Derived unique callable projection (provider_name → entry)
+    pub callable_projection: Arc<HashMap<String, RegistryEntry>>,
+}
+
+/// Key for callable records: (source, provider_name).
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct CallableRecordKey {
+    pub source: ToolSource,
+    pub provider_name: String,
+}
+
+impl CanonicalToolState {
+    /// Construct from records only, asserting B2 uniqueness.
+    pub fn from_records(
+        records: HashMap<CallableRecordKey, RegistryEntry>,
+    ) -> Result<Self, String> {
+        let mut projection = HashMap::new();
+        for (key, entry) in &records {
+            if projection.contains_key(&key.provider_name) {
+                return Err(format!(
+                    "duplicate canonical provider name: {}",
+                    key.provider_name
+                ));
+            }
+            projection.insert(key.provider_name.clone(), entry.clone());
+        }
+        Ok(Self {
+            records,
+            plugin_declarations: HashMap::new(),
+            callable_projection: Arc::new(projection),
+        })
+    }
+
+    /// Construct from records + declarations, asserting B2 uniqueness.
+    pub fn from_records_with_declarations(
+        records: HashMap<CallableRecordKey, RegistryEntry>,
+        plugin_declarations: HashMap<PluginDeclarationKey, PluginToolDeclaration>,
+    ) -> Result<Self, String> {
+        let mut projection = HashMap::new();
+        for (key, entry) in &records {
+            if projection.contains_key(&key.provider_name) {
+                return Err(format!(
+                    "duplicate canonical provider name: {}",
+                    key.provider_name
+                ));
+            }
+            projection.insert(key.provider_name.clone(), entry.clone());
+        }
+        Ok(Self {
+            records,
+            plugin_declarations,
+            callable_projection: Arc::new(projection),
+        })
+    }
+}
+
+// ============================================================================
+// End Task59 declarations
+// ============================================================================
+
 #[derive(Clone)]
 pub struct ToolHandlerRegistry {
     shared: Arc<RegistryShared>,
@@ -646,6 +761,45 @@ impl ToolHandlerRegistry {
     pub fn subscribe(&self) -> broadcast::Receiver<RegistryChange> {
         self.shared.change_tx.subscribe()
     }
+
+    // ========================================================================
+    // Task59: Plugin Declaration Methods
+    // ========================================================================
+
+    /// Snapshot of plugin declarations from one generation.
+    #[must_use]
+    pub fn plugin_declarations_snapshot(
+        &self,
+    ) -> Arc<HashMap<PluginDeclarationKey, PluginToolDeclaration>> {
+        // Placeholder: real implementation wired in Task60
+        Arc::new(HashMap::new())
+    }
+
+    /// Access plugin declarations (mutable, for testing/internal use).
+    #[must_use]
+    pub fn plugin_declarations(&self) -> HashMap<PluginDeclarationKey, PluginToolDeclaration> {
+        // Placeholder: real implementation wired in Task60
+        HashMap::new()
+    }
+
+    /// Atomic publication of plugin declarations + callable records.
+    ///
+    /// Publishes declarations and callable maps in one transaction. Refuses
+    /// publication after registry close. Added in Task59; wired in Task60.
+    #[allow(dead_code)]
+    pub fn reconcile_plugin_tools(&self, _state: CanonicalToolState) -> Result<(), ToolError> {
+        // Placeholder stub for Task59; full implementation in Task60
+        if self.is_closed() {
+            return Err(ToolError::RegistryClosed {
+                name: "reconcile_plugin_tools".into(),
+            });
+        }
+        Ok(())
+    }
+
+    // ========================================================================
+    // End Task59 methods
+    // ========================================================================
 }
 
 impl Default for ToolHandlerRegistry {

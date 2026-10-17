@@ -56,8 +56,17 @@ pub struct WasmRuntime {
     plugins: HashMap<String, LoadedWasmPlugin>,
 }
 
+#[derive(Debug)]
 struct LoadedWasmPlugin {
     plugin: Mutex<extism::Plugin>,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // Task59 infrastructure, will be used in future tasks
+pub(crate) struct WasmBinding {
+    plugin_id: String,
+    export: String,
+    instance: Arc<LoadedWasmPlugin>,
 }
 
 impl WasmRuntime {

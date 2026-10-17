@@ -157,6 +157,7 @@ impl ExtensionManager {
         let _guard = self.load_guard.lock().await;
         let status = self.mount_inner(id).await?;
         self.views().after_transition().await;
+        self.sync_runtime_snapshots().await;
         Ok(status)
     }
 
@@ -166,6 +167,7 @@ impl ExtensionManager {
         let _guard = self.load_guard.lock().await;
         let report = self.unmount_inner(id).await?;
         self.views().after_transition().await;
+        self.sync_runtime_snapshots().await;
         Ok(report)
     }
 
@@ -179,6 +181,7 @@ impl ExtensionManager {
         }
         let result = self.mount_inner(id).await;
         self.views().after_transition().await;
+        self.sync_runtime_snapshots().await;
         result
     }
 

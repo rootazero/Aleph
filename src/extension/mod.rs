@@ -32,6 +32,7 @@ pub mod runtime;
 pub mod validation;
 pub mod visibility;
 
+mod canonical_handler;
 pub mod capability;
 #[cfg(test)]
 mod claude_cache_tests;
