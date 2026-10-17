@@ -1083,21 +1083,21 @@ fn render_step(
         return toggles;
     }
     if let Some(thinking) = &step.thinking {
-        let lines = markdown_to_lines(&thinking.text, width.saturating_sub(4));
+        let lines = markdown_to_lines(&thinking.text, width.saturating_sub(2));
         let start = if live {
             lines.len().saturating_sub(2)
         } else {
             0
         };
         for line in lines.into_iter().skip(start) {
-            let mut spans = vec![Span::raw("  │ ")];
+            let mut spans = vec![Span::raw("  ")];
             spans.extend(line.spans);
             out.push(Line::from(spans));
         }
     }
     if let Some(text) = &step.text {
-        for line in markdown_to_lines(text, width.saturating_sub(4)) {
-            let mut spans = vec![Span::raw("  │ ")];
+        for line in markdown_to_lines(text, width.saturating_sub(2)) {
+            let mut spans = vec![Span::raw("  ")];
             spans.extend(line.spans);
             out.push(Line::from(spans));
         }
@@ -1132,7 +1132,7 @@ fn render_step(
     }
     for note in &step.notes {
         out.push(Line::from(Span::styled(
-            format!("  │ {}", note.text),
+            format!("  {}", note.text),
             Style::default().fg(theme().muted),
         )));
     }
@@ -1198,23 +1198,18 @@ fn render_user_message(
 /// Its own entry now rather than a field on the assistant message, so it
 /// renders where it happened instead of always above the whole turn.
 fn render_reasoning(text: &str, width: u16, lines: &mut Vec<Line<'static>>) {
-    let prefix_style = Style::default().fg(theme().assistant);
     let reasoning_style = Style::default().fg(theme().reasoning);
     let reasoning_prefix = Style::default().fg(theme().muted);
-    let content_width = width.saturating_sub(4); // account for "┃ ┊ " prefix
+    let content_width = width.saturating_sub(2); // account for the indentation
 
     for reason_line in text.lines() {
         if reason_line.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("\u{2503} ", prefix_style),
-                Span::styled("\u{250a} ", reasoning_prefix),
-            ]));
+            lines.push(Line::from(Span::styled("  ", reasoning_prefix)));
             continue;
         }
         for wrapped_line in textwrap::wrap(reason_line, content_width as usize) {
             lines.push(Line::from(vec![
-                Span::styled("\u{2503} ", prefix_style),
-                Span::styled("\u{250a} ", reasoning_prefix),
+                Span::styled("  ", reasoning_prefix),
                 Span::styled(wrapped_line.into_owned(), reasoning_style),
             ]));
         }
