@@ -373,7 +373,7 @@ pub fn parse_input(input: &str) -> ParsedInput {
             query: args.to_string(),
         }),
         // Singular gateway namespaces (`agent_*` → `/agent …`, `task_*` →
-        // `/task …`) leave both plural words free; the startup shadow report
+        // `/task …`) leave both plural words free; the startup shadow log line
         // (`shadowed_gateway_commands`) is the guard if that ever changes.
         "/agents" => ParsedInput::Local(LocalCommand::Agents),
         "/todo" => ParsedInput::Local(LocalCommand::Todo),

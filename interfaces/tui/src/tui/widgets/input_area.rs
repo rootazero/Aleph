@@ -109,7 +109,15 @@ impl InputWidget<'_> {
         // Clone the textarea so styling it does not mutate the caller's.
         let mut ta = self.textarea.clone();
         ta.set_placeholder_text(PLACEHOLDER);
-        ta.set_placeholder_style(Style::default().fg(palette().color(SemanticColor::Dim)));
+        // The hint must never read as typed text: a dark, background-blended
+        // grey where the palette is RGB, the DIM attribute elsewhere.
+        let palette = palette();
+        ta.set_placeholder_style(match palette.faint(SemanticColor::Dim) {
+            Some(grey) => Style::default().fg(grey),
+            None => Style::default()
+                .fg(palette.color(SemanticColor::Dim))
+                .add_modifier(Modifier::DIM),
+        });
         let colors = crate::tui::theme::theme();
         ta.set_style(Style::default().fg(colors.primary).bg(colors.background));
         ta.set_selection_style(Style::default().bg(colors.selection_bg));
@@ -125,7 +133,35 @@ impl InputWidget<'_> {
             ta.set_cursor_style(Style::default());
         }
         frame.render_widget(&ta, ta_area);
+
+        // Park the terminal's REAL cursor on the painted one. The block above
+        // is only a styled cell; the IME composition window (Chinese/Japanese
+        // pinyin, dead keys) is anchored at the real cursor, which otherwise
+        // sits wherever the last frame write ended — bottom-right — and the
+        // pre-edit text shows up there instead of at the caret. The painted
+        // cell is located in the buffer rather than recomputed, so textarea
+        // scrolling and wide (CJK) glyphs cannot make the two disagree.
+        if self.focused {
+            if let Some(pos) = painted_cursor(frame.buffer_mut(), ta_area) {
+                frame.set_cursor_position(pos);
+            }
+        }
     }
+}
+
+/// The cell tui-textarea painted with the (REVERSED) cursor style, if any.
+fn painted_cursor(buf: &ratatui::buffer::Buffer, area: Rect) -> Option<ratatui::layout::Position> {
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if buf
+                .cell((x, y))
+                .is_some_and(|c| c.modifier.contains(Modifier::REVERSED))
+            {
+                return Some(ratatui::layout::Position { x, y });
+            }
+        }
+    }
+    None
 }
 
 /// Height of the composer chunk: two thin rules plus the draft, clamped.
@@ -241,5 +277,46 @@ mod tests {
         let buf = draw(&TextArea::from(vec!["x".to_string()]), 60, 2);
         let line = row(&buf, 1);
         assert!(!line.contains("Try \""), "{line}");
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, layout::Position, Terminal};
+
+    fn real_cursor(textarea: &TextArea<'_>, focused: bool) -> Option<Position> {
+        let mut term = Terminal::new(TestBackend::new(40, 5)).expect("backend");
+        let mut at = None;
+        term.draw(|f| {
+            InputWidget { textarea, focused }.render(f, f.area());
+        })
+        .expect("draw");
+        if focused {
+            at = Some(term.get_cursor_position().expect("cursor"));
+        }
+        at
+    }
+
+    /// The IME pre-edit window follows the real cursor, so it must sit on
+    /// the caret from the very first keystroke — the empty, placeholder
+    /// frame included — not wherever the previous write ended.
+    #[test]
+    fn real_cursor_tracks_the_caret_from_the_empty_frame_on() {
+        let empty = TextArea::default();
+        assert_eq!(
+            real_cursor(&empty, true),
+            Some(Position { x: GUTTER, y: 1 })
+        );
+        let mut typed = TextArea::default();
+        typed.insert_str("你好ab");
+        // Two wide glyphs (4 cells) + two ASCII cells after the gutter.
+        assert_eq!(
+            real_cursor(&typed, true),
+            Some(Position {
+                x: GUTTER + 6,
+                y: 1
+            })
+        );
     }
 }

@@ -308,7 +308,7 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
             .messages
             .iter()
             .any(|entry| !matches!(entry, TranscriptEntry::SystemNotice { .. }))
-            && visible_height >= 10,
+            && visible_height >= 12,
     );
     let viewport = build_visible_lines_anchored(
         &header,

@@ -69,14 +69,9 @@ fn approved_builtins_reach_semantic_and_chrome_colors() {
         assert_eq!(p.is_light(), light);
         let t = Theme::from_palette(p.clone());
         assert_eq!(t.surface, Color::Rgb(surface.0, surface.1, surface.2));
-        assert_eq!(
-            t.background,
-            if light {
-                Color::Rgb(243, 240, 232)
-            } else {
-                Color::Reset
-            }
-        );
+        // Every theme leaves the screen background to the terminal so its
+        // configured opacity applies — paper included.
+        assert_eq!(t.background, Color::Reset);
         assert_eq!(t.heading, p.color(SemanticColor::Accent));
         assert_eq!(t.status_bg, t.background);
         for role in ALL_SEMANTIC_COLORS {

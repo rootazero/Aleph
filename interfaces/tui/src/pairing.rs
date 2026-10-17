@@ -103,17 +103,19 @@ mod tests {
     #[test]
     fn blank_and_eof_input_give_a_fixed_error() {
         for input in ["", "   ", "\t \n"] {
-            let err = collect_bootstrap_credential(
-                true,
-                move || Ok(input.to_string()),
-                "tui-x".into(),
-            )
-            .unwrap_err();
+            let err =
+                collect_bootstrap_credential(true, move || Ok(input.to_string()), "tui-x".into())
+                    .unwrap_err();
             assert_eq!(err.to_string(), ERR_EMPTY);
         }
         let eof = collect_bootstrap_credential(
             true,
-            || Err(io::Error::new(io::ErrorKind::UnexpectedEof, "leaky-detail-ticket-123")),
+            || {
+                Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "leaky-detail-ticket-123",
+                ))
+            },
             "tui-x".into(),
         )
         .unwrap_err();
@@ -124,19 +126,16 @@ mod tests {
     #[test]
     fn oversize_input_is_rejected_without_echo() {
         let big = "a".repeat(MAX_TICKET_LEN + 1);
-        let err = collect_bootstrap_credential(
-            true,
-            || Ok(big.clone()),
-            "tui-x".into(),
-        )
-        .unwrap_err();
+        let err =
+            collect_bootstrap_credential(true, || Ok(big.clone()), "tui-x".into()).unwrap_err();
         assert_eq!(err.to_string(), ERR_TOO_LONG);
     }
 
     #[test]
     fn valid_ticket_is_trimmed_wrapped_and_redacted() {
-        let c = collect_bootstrap_credential(true, ok_prompt("  s3cret-ticket \n"), "tui-abc".into())
-            .unwrap();
+        let c =
+            collect_bootstrap_credential(true, ok_prompt("  s3cret-ticket \n"), "tui-abc".into())
+                .unwrap();
         assert!(c.is_bootstrap_ticket());
         assert_eq!(c.device_id(), "tui-abc");
         let dbg = format!("{c:?}");

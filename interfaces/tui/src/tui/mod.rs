@@ -368,19 +368,15 @@ pub async fn run(
     }
     // A local command that matches a gateway one makes the gateway one
     // unreachable — this client resolves local first and never falls through.
-    // Say so once at startup rather than letting a whole namespace vanish
-    // quietly (see `shadowed_gateway_commands`).
+    // Recorded in the log, not the transcript: the clash is a developer-facing
+    // fact and a startup banner about it read as noise to users
+    // (see `shadowed_gateway_commands`).
     let shadowed = shadowed_gateway_commands(&state.gateway_commands);
     if !shadowed.is_empty() {
-        state.add_system_message(format!(
-            "Note: local commands shadow these gateway commands, which are now unreachable \
-             from this client: {}.",
-            shadowed
-                .iter()
-                .map(|c| format!("/{c}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+        tracing::info!(
+            commands = %shadowed.join(", "),
+            "local commands shadow gateway commands"
+        );
     }
 
     // 3b-iii. Agent panel (Task 8a): subscribe once for the life of this

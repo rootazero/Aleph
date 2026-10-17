@@ -152,7 +152,23 @@ async fn run() -> CliResult<()> {
 /// Each arm is intentionally short: convert clap variants into the
 /// JSON-RPC-shaped argv each module expects and forward. No branching policy
 /// lives here.
-async fn dispatch(
+fn dispatch<'a>(
+    cmd: Commands,
+    server_url: &'a str,
+    config: &'a CliConfig,
+    json: bool,
+    verbose: bool,
+) -> impl std::future::Future<Output = CliResult<()>> + 'a {
+    // Clap's debug command builders and the async dispatcher's poll frame can
+    // together exceed the default Windows main-thread stack. Generate completion
+    // before entering that poll frame, without changing config/logging setup.
+    if let Commands::Completion { shell } = &cmd {
+        commands::completion::run(*shell);
+    }
+    dispatch_async(cmd, server_url, config, json, verbose)
+}
+
+async fn dispatch_async(
     cmd: Commands,
     server_url: &str,
     config: &CliConfig,
@@ -261,10 +277,8 @@ async fn dispatch(
             dispatch_chat_control(server_url, action, config, json).await
         }
         Commands::Doctor { fix } => commands::doctor::run(server_url, json, fix, config).await,
-        Commands::Completion { shell } => {
-            commands::completion::run(shell);
-            Ok(())
-        }
+        // The synchronous dispatch entry has already generated the script.
+        Commands::Completion { .. } => Ok(()),
         Commands::Secret { action } => dispatch_secret(server_url, config, action, json).await,
         Commands::Hooks { action } => dispatch_hooks(server_url, config, action, json).await,
         Commands::Webhook { action } => dispatch_webhook(action, json).await,

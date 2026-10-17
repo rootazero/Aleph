@@ -553,12 +553,57 @@ impl Palette {
         paint(self.data.role(role), self.is_rgb())
     }
 
+    /// A fixed brand colour (the hero logo), downsampled exactly like palette
+    /// roles. The `terminal` preset defers to the user's own ANSI palette via
+    /// `fallback`, so the logo never overrides a deliberately colourless theme
+    /// with hard-coded RGB.
+    #[must_use]
+    pub fn brand(&self, rgb: (u8, u8, u8), fallback: Color) -> Color {
+        if self.preset == Preset::Terminal {
+            return fallback;
+        }
+        paint(&ColorSpec::Rgb(rgb.0, rgb.1, rgb.2), self.is_rgb())
+    }
+
+    /// A "translucent" neutral grey for hint text: the grey level of `role`
+    /// mixed halfway into the chrome background. Terminals have no alpha, so
+    /// this is the alpha blend done ahead of time. `None` when either side is
+    /// not a known RGB (terminal preset / 256-colour fallback) — callers then
+    /// fall back to the `DIM` attribute.
+    #[must_use]
+    pub fn faint(&self, role: SemanticColor) -> Option<Color> {
+        let (r, g, b) = self.rgb(role)?;
+        // An unknown (terminal) background is assumed near-black or
+        // paper-white by the theme's light flag; the real one is never
+        // painted, so this only has to land on the right side of grey.
+        let (br, bg, bb) = self
+            .data
+            .chrome
+            .background
+            .rgb()
+            .unwrap_or(if self.data.light {
+                (243, 240, 232)
+            } else {
+                (16, 16, 16)
+            });
+        let grey = ((u16::from(r) + u16::from(g) + u16::from(b)) / 3) as u8;
+        let mix = |c: u8| ((u16::from(grey) * 45 + u16::from(c) * 55) / 100) as u8;
+        Some(Color::Rgb(mix(br), mix(bg), mix(bb)))
+    }
+
     fn chrome(&self, which: ChromeField) -> Color {
         if self.preset == Preset::Terminal {
             return Color::Reset;
         }
         let spec = match which {
-            ChromeField::Background => &self.data.chrome.background,
+            // The screen background is always the terminal's own default, for
+            // every theme: only default-background cells get the terminal's
+            // configured opacity / acrylic / blur (Windows Terminal, macOS
+            // Terminal/iTerm2, Linux emulators alike) — like font face and
+            // size, it is the terminal's setting, not ours. The theme's
+            // declared background survives as the blend reference for
+            // `faint` and the light/dark decision.
+            ChromeField::Background => return Color::Reset,
             ChromeField::Surface => &self.data.chrome.surface,
             ChromeField::Selection => &self.data.chrome.selection_bg,
             ChromeField::User => &self.data.chrome.user_bg,

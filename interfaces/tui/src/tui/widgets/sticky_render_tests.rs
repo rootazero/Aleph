@@ -21,7 +21,8 @@ fn draw(state: &mut AppState, width: u16) -> Vec<String> {
 fn startup_notice_keeps_welcome_until_real_transcript_history_exists() {
     let mut state = AppState::new("s".into(), "model".into());
     state.add_system_message("startup notice".into());
-    let rows = draw(&mut state, 80);
+    // The wide hero needs a twelve-row viewport (ten rows plus separator).
+    let rows = draw_height(&mut state, 80, 14);
     assert!(rows.iter().any(|row| row.contains("Welcome to Aleph")));
     assert!(rows.iter().any(|row| row.contains("startup notice")));
 
