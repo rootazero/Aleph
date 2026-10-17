@@ -410,6 +410,10 @@ pub fn render_tool_row(row: &ToolRow, now_ms: u64, width: u16, modality: Modalit
     } else {
         Vec::new()
     };
+    let colors = crate::tui::theme::theme();
+    for line in &mut out {
+        line.style = line.style.bg(colors.surface);
+    }
     RowRender {
         lines: out,
         toggles,

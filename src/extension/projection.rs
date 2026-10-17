@@ -222,7 +222,6 @@ impl Views {
             .collect();
 
         let projection = self.derive_plugin_projection().await;
-
         // The plugin roots are published as one process-global with two
         // readers: `get_all_skills_dirs` (the `skill_read` / `skill_list`
         // search set) and `SkillSystem::scan_roots` (the scan that feeds the

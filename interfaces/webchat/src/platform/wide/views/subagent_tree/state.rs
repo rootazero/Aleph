@@ -5,11 +5,27 @@
 //! server, this WASM panel, and the TUI. Only the sort/filter presentation
 //! choices below are panel-specific.
 
-use aleph_protocol::subagent_tree::{NodeLifecycle, TreeNode};
+use aleph_protocol::subagent_tree::{NodeLifecycle, SubagentNode, TreeNode};
 
 pub use aleph_protocol::subagent_tree::{apply_event, summarize};
 
-/// How to order the top-level roots.
+/// Return the selected node and its immutable child-session address.
+///
+/// Keeping this projection pure lets the UI memo re-run when a cold snapshot
+/// arrives, while equality suppresses repeats for unrelated progress ticks.
+#[must_use]
+pub(crate) fn selected_child_address(
+    nodes: &[SubagentNode],
+    selected: Option<&str>,
+) -> Option<(String, String)> {
+    let selected = selected?;
+    nodes
+        .iter()
+        .find(|node| node.node_id == selected)
+        .and_then(|node| node.child_session.clone())
+        .map(|child| (selected.to_owned(), child))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SortMode {
     Status,
@@ -133,6 +149,20 @@ mod tests {
             child_session: None,
             total_tokens: None,
         }
+    }
+
+    #[test]
+    fn selected_child_address_is_missing_until_the_target_snapshot_arrives() {
+        let mut target = node("target", NodeLifecycle::Running);
+        target.child_session = Some("child:target".to_string());
+        let nodes = vec![target, node("other", NodeLifecycle::Completed)];
+
+        assert_eq!(
+            selected_child_address(&nodes, Some("target")),
+            Some(("target".to_string(), "child:target".to_string()))
+        );
+        assert_eq!(selected_child_address(&[], Some("target")), None);
+        assert_eq!(selected_child_address(&nodes, Some("stale")), None);
     }
 
     #[test]

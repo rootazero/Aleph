@@ -1554,6 +1554,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let app_config_run = app_config_arc.clone();
         let wm_run = workspace_manager.clone();
         let sm_run = session_store.clone();
+        let telecom_context_run = gateway_context_cell.clone();
         server.handlers_mut().register("agent.run", move |req| {
             let engine = engine_clone.clone();
             let event_bus = event_bus_clone.clone();
@@ -1562,9 +1563,23 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let cfg = app_config_run.clone();
             let wm = wm_run.clone();
             let sm = sm_run.clone();
+            let telecom_service = telecom_context_run
+                .get()
+                .and_then(|ctx| ctx.telecom_lifecycle())
+                .cloned();
             async move {
-                handle_run_with_engine(req, engine, event_bus, router, agent_registry, cfg, wm, sm)
-                    .await
+                handle_run_with_engine(
+                    req,
+                    engine,
+                    event_bus,
+                    router,
+                    agent_registry,
+                    cfg,
+                    wm,
+                    sm,
+                    telecom_service,
+                )
+                .await
             }
         });
 
@@ -1577,6 +1592,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let wm_chat = workspace_manager.clone();
         let pr_chat = topic_provider_registry.clone();
         let sm_chat = session_store.clone();
+        let telecom_context_chat = gateway_context_cell.clone();
         server.handlers_mut().register("chat.send", move |req| {
             let engine = engine_chat.clone();
             let event_bus = event_bus_chat.clone();
@@ -1586,6 +1602,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let wm = wm_chat.clone();
             let pr = pr_chat.clone();
             let sm = sm_chat.clone();
+            let telecom_service = telecom_context_chat
+                .get()
+                .and_then(|ctx| ctx.telecom_lifecycle())
+                .cloned();
             async move {
                 handle_chat_send_with_engine(
                     req,
@@ -1597,6 +1617,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     wm,
                     pr,
                     sm,
+                    telecom_service,
                 )
                 .await
             }

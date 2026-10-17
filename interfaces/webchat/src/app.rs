@@ -25,7 +25,7 @@ use crate::views::settings::{
     RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView, Settings,
     SkillsView, WorkspacesView,
 };
-use crate::views::subagent_tree::SubagentTree;
+use crate::views::subagent_tree::SubagentTreeDeepLink;
 use crate::views::tasks::TasksView;
 use crate::views::teams::{TeamsTabState, TeamsView};
 use crate::views::terminal::TerminalView;
@@ -34,10 +34,12 @@ use crate::views::usage::UsageView;
 use crate::api::BehaviorConfigApi;
 use crate::components::boot_check_gate::BootCheckGate;
 use crate::components::command_palette::CommandPalette;
-use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
+use crate::components::mode_sidebar::{is_subagent_tree_route, ModeSidebar, PanelMode};
 use crate::components::notification_center::NotificationCenter;
+use crate::components::right_pane::RightPane;
 use crate::components::service_blocking_gate::ServiceBlockingGate;
 use crate::components::token_wall::TokenWall;
+use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::{DashboardContext, DashboardState};
 use crate::platform::phone::agents::PhoneAgents;
 use crate::platform::phone::chat::PhoneChat;
@@ -57,7 +59,7 @@ use crate::platform::phone::settings::{
 use crate::platform::phone::shell::PhoneShell;
 use crate::platform::phone::teams::PhoneTeams;
 use crate::state::hotkey::{self as hotkey, HotkeyState};
-use crate::state::layout::{LayoutMode, WorkspaceState};
+use crate::state::layout::{flex_path_enabled, LayoutMode, WorkspaceState};
 use crate::state::notifications::NotificationsState;
 use crate::state::sessions::SessionMap;
 use crate::state::typewriter::TypewriterClock;
@@ -103,6 +105,7 @@ fn AppContent() -> impl IntoView {
     // for the `f` repair hotkey — `ChatState` is `Copy`, so this is free.
     let chat_state = ChatState::new();
     provide_context(chat_state);
+    provide_context(crate::components::right_pane::TrayState::new());
 
     // Shared `tool_id → status` index over the foreground transcript. Provided
     // here (not inside the message list) because the right-pane tool inspector
@@ -420,6 +423,7 @@ fn AppContent() -> impl IntoView {
     // Gating them here removes the whole class by construction rather than
     // relying on the overlay staying opaque and on top.
     let not_phone = move || ff_for_shell.form_factor.get() != FormFactor::Phone;
+    let flex_right_pane = flex_path_enabled();
 
     view! {
         // Two-column shell (Codex) floating on the drifting light-field.
@@ -514,6 +518,18 @@ fn AppContent() -> impl IntoView {
                     <MainContent />
                 </main>
 
+                // The right pane is a shell sibling of `<main>`, so the flex
+                // path changes the host without duplicating WorkspaceState,
+                // width persistence, or pane body behavior. The legacy branch
+                // remains available for rollback and visual comparison.
+                <Show when=not_phone>
+                    {move || if flex_right_pane {
+                        view! { <RightPane /> }.into_any()
+                    } else {
+                        view! { <WorkspacePanel legacy=true /> }.into_any()
+                    }}
+                </Show>
+
                 // ⌘K / Ctrl+K command palette overlay. Mounted inside <Router>
                 // so it can call `use_navigate()`; the overlay itself sits
                 // above all shell chrome via z-index.
@@ -564,17 +580,9 @@ fn AppContent() -> impl IntoView {
 /// One affordance, chat-tab-only: `LayoutToggle` sits at the chat-surface
 /// top-right. Right offset is `right-[44px]` in `ChatOnly` (4 px left of
 /// the `NotificationCenter` bell) and
-/// `right-[calc(var(--aleph-workspace-w)+8px)]` in `Split` so it tracks
-/// the chat / workspace boundary: the pane is `--aleph-workspace-w` of
-/// main, so the toggle parks 8 px inside the chat surface, glued to the
-/// pane's leading edge at any window width. (The band's "WORKSPACE" label
-/// was deleted — see the body comment below.)
-///
-/// That offset is one of the three readers of `--aleph-workspace-w` (the
-/// pane's own width and the chat column's right padding are the other
-/// two); the token's default lives in `tailwind.css` `:root` and the
-/// resizer in `workspace_panel.rs` is its only runtime writer, on the
-/// document root, so all three readers follow one value.
+/// `right-[8px]` keeps the chat toggle at the shell edge now that the pane
+/// is an in-flow sibling rather than an overlay whose width must be subtracted.
+/// The width token remains owned by the pane and consumed by its own width.
 ///
 /// The child opts out of the drag region (`aleph-no-drag` +
 /// `data-tauri-drag-region="false"`); the surrounding band space still
@@ -611,7 +619,7 @@ fn ChatBandChrome() -> impl IntoView {
                     let base = "absolute aleph-chrome-top z-[45] \
                                 pointer-events-auto aleph-no-drag aleph-ws-toggle";
                     if workspace.mode.get() == LayoutMode::Split {
-                        format!("{base} right-[calc(var(--aleph-workspace-w)_+_8px)]")
+                        format!("{base} right-[8px]")
                     } else {
                         format!("{base} right-[44px]")
                     }
@@ -720,18 +728,21 @@ fn DashboardRouter() -> impl IntoView {
 
     move || {
         let path = location.pathname.get();
-        match path.as_str() {
-            "/dashboard" => view! { <Home /> }.into_any(),
-            "/dashboard/memory" => view! { <MemoryVaultRedirect /> }.into_any(),
-            "/dashboard/cron" => view! { <CronView /> }.into_any(),
-            "/dashboard/tasks" => view! { <TasksView /> }.into_any(),
-            "/dashboard/logs" => view! { <Logs /> }.into_any(),
-            "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
-            "/dashboard/subagents" => view! { <SubagentTree /> }.into_any(),
-            "/dashboard/runtimes" => view! { <RuntimesView /> }.into_any(),
-            "/dashboard/usage" => view! { <UsageView /> }.into_any(),
-            // Not in dashboard mode — render nothing (div is hidden)
-            _ => ().into_any(),
+        if is_subagent_tree_route(&path) {
+            view! { <SubagentTreeDeepLink /> }.into_any()
+        } else {
+            match path.as_str() {
+                "/dashboard" => view! { <Home /> }.into_any(),
+                "/dashboard/memory" => view! { <MemoryVaultRedirect /> }.into_any(),
+                "/dashboard/cron" => view! { <CronView /> }.into_any(),
+                "/dashboard/tasks" => view! { <TasksView /> }.into_any(),
+                "/dashboard/logs" => view! { <Logs /> }.into_any(),
+                "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
+                "/dashboard/runtimes" => view! { <RuntimesView /> }.into_any(),
+                "/dashboard/usage" => view! { <UsageView /> }.into_any(),
+                // Not in dashboard mode — render nothing (div is hidden)
+                _ => ().into_any(),
+            }
         }
     }
 }

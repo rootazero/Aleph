@@ -85,6 +85,18 @@ pub enum ChannelError {
     Busy(String),
 }
 
+/// How the generic outbound machinery may treat a channel's sends. See
+/// [`Channel::outbound_delivery_policy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutboundDeliveryPolicy {
+    /// In-memory `RateLimited` retry and durable queue replay are allowed.
+    #[default]
+    Automatic,
+    /// One caller-requested send is one attempt: no generic retry, no durable
+    /// persistence of the message, no replay of stored rows.
+    ExplicitOnly,
+}
+
 /// Channel identifier
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ChannelId(pub String);
@@ -273,6 +285,9 @@ pub enum MessageMeta {
     /// Slack `bot_id`, Discord `author.bot`, …) push this variant so the
     /// gateway-level pair-loop guard can short-circuit bot↔bot reply storms.
     BotAuthored,
+    /// SMS transport facts (provider identity, encoding, segments, binding).
+    /// Typed so SMS consumers never depend on `InboundMessage::raw`.
+    Sms(Box<crate::gateway::telecom::SmsInboundMeta>),
 }
 
 /// Message received from a channel
@@ -863,6 +878,25 @@ pub trait Channel: Send + Sync {
         None
     }
 
+    /// Whether the generic outbound machinery may re-attempt or persist a send
+    /// to this channel on the caller's behalf.
+    ///
+    /// [`Automatic`](OutboundDeliveryPolicy::Automatic) (the default) is every
+    /// pre-existing channel's behaviour: [`ChannelRegistry`](super::channel_registry::ChannelRegistry)
+    /// retries `RateLimited` in memory and parks duplicate-safe failures in the
+    /// durable queue for later replay.
+    ///
+    /// [`ExplicitOnly`](OutboundDeliveryPolicy::ExplicitOnly) is for channels
+    /// whose every send is an individually authorised, possibly paid, external
+    /// effect (SMS): a replay would mint a fresh operation identity and
+    /// expiry, re-extending an approval that has already lapsed, and the
+    /// durable queue would retain the plaintext body. The channel itself is the
+    /// authority on this — consumers ask it, they never match on a channel
+    /// type string.
+    fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
+        OutboundDeliveryPolicy::Automatic
+    }
+
     /// Webhook ingestion handler for channels that receive over HTTP POST.
     ///
     /// A channel returning `Some` gets its `path()` mounted on the gateway's
@@ -905,6 +939,26 @@ pub trait Channel: Send + Sync {
 
     /// Send a message through this channel
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult>;
+
+    /// Obtain authority only from a concrete attached SMS transport. A channel
+    /// type string, metadata, or a synthetic scope never grants authority.
+    async fn private_sms_lease(
+        &self,
+        _ctx: &crate::gateway::telecom::TelecomPublicContext,
+        _recipient: &str,
+    ) -> Option<crate::gateway::interfaces::sms::PrivateSmsLease> {
+        None
+    }
+
+    async fn send_private_sms(
+        &self,
+        _message: OutboundMessage,
+        _lease: &crate::gateway::interfaces::sms::PrivateSmsLease,
+        _cancel: &tokio_util::sync::CancellationToken,
+        _validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+    ) -> ChannelResult<crate::gateway::telecom::public_run::ApprovedReplyOutcome> {
+        Ok(crate::gateway::telecom::public_run::ApprovedReplyOutcome::Invalid)
+    }
 
     /// Returns a subscriber receiver for incoming messages. Multiple subscribers
     /// can call this simultaneously — each gets their own broadcast receiver.

@@ -134,11 +134,7 @@ pub async fn run_with_stored_device_credential(
     let url = server_url.to_string();
     let loaded = tokio::task::spawn_blocking(move || load_stored_device_credential(&url))
         .await
-        .unwrap_or_else(|e| {
-            Err(CliError::Other(format!(
-                "credential load task failed: {e}"
-            )))
-        });
+        .unwrap_or_else(|e| Err(CliError::Other(format!("credential load task failed: {e}"))));
     let credential = require_stored_credential(loaded)?;
     run_with_device_credential(
         server_url,

@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use crate::clarification::{AskUserOption, AskUserQuestion};
+
 /// Streaming event types for real-time agent feedback
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -109,6 +111,9 @@ pub enum StreamEvent {
         /// `GatewayEventFrame::AskUser` the wire carries.
         #[serde(default)]
         session_key: String,
+        /// Stable registration identity; empty only on legacy frames.
+        #[serde(default)]
+        request_id: String,
         /// Legacy single-question projection: the prompt of the question at the
         /// cursor. A client that reads only this and `options` still answers a
         /// multi-question request to completion, one reply at a time.
@@ -142,6 +147,9 @@ pub enum StreamEvent {
     ClarificationEnded {
         #[serde(default)]
         session_key: String,
+        /// Identity of the ended request, so a late terminal cannot close its successor.
+        #[serde(default)]
+        request_id: String,
         /// How it ended, verbatim from core (`resolved` / `cancelled` /
         /// `expired`). Opaque on purpose: it is displayed, never branched on,
         /// so core's outcome vocabulary does not acquire a second definition
@@ -839,48 +847,6 @@ pub struct ToolErrorItem {
     pub tool_name: String,
     pub error: String,
     pub tool_id: String,
-}
-
-/// One option offered inside an [`StreamEvent::AskUser`] question.
-///
-/// Mirrors the option view inside `alephcore::clarification`. The option's
-/// internal `value` is deliberately absent from the wire: a client answers by
-/// 1-based index or free text, so the core's `interpret_reply` stays the only
-/// place a reply becomes a value.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AskUserOption {
-    /// What the user reads.
-    pub label: String,
-    /// Why they might pick it — rendered beside the label. **A client reading
-    /// only the flat `options: Vec<String>` array shows a bare label where a
-    /// channel shows `label — description`; this field is what closes that.**
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
-
-/// One question of an [`StreamEvent::AskUser`] request.
-///
-/// Mirrors `alephcore::clarification::ClarificationQuestionView`. Every field
-/// past `prompt` carries a `#[serde(default)]` so a core that predates it (or
-/// simply has nothing to say) deserializes cleanly.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AskUserQuestion {
-    /// Stable id, echoed back with the answer.
-    pub id: String,
-    /// Short chip shown beside the prompt where there is room for one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub header: Option<String>,
-    /// The prompt shown to the user.
-    pub prompt: String,
-    /// Offered choices; empty means free text.
-    #[serde(default)]
-    pub options: Vec<AskUserOption>,
-    /// Several picks are accepted (comma-separated when typed).
-    #[serde(default)]
-    pub multi_select: bool,
-    /// The answer is a credential: mask the input, never echo it.
-    #[serde(default)]
-    pub secret: bool,
 }
 
 /// Should a client render [`StreamEvent::SessionUserMessage`] as a bubble?

@@ -11,7 +11,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
 
@@ -38,7 +38,7 @@ pub fn render_provider_picker(frame: &mut Frame, picker: &ProviderPickerState, a
     let overlay_width = area.width.min(78);
     let overlay_rect = Rect::new(area.x, overlay_y, overlay_width, overlay_height);
 
-    frame.render_widget(Clear, overlay_rect);
+    crate::tui::widgets::clear_overlay(frame, overlay_rect);
 
     let open = picker.provider.and_then(|i| picker.entries.get(i));
     let title = open.map_or_else(

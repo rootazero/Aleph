@@ -1,3 +1,0 @@
-ENV: jobs=1 dbg=0 tdbg=0 cgu=256 rf=-C debuginfo=0 -C codegen-units=256
-available_bytes=13700747264 required_bytes=4294967296 ALLOW
-step1 exit 0

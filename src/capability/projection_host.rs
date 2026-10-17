@@ -2732,7 +2732,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn already_running_invocation_is_not_cut() {
+    async fn revoked_snapshot_invocation_is_denied() {
         let reg = ToolHandlerRegistry::new();
         reg.register(desc("a"), fake("a")).unwrap();
         let tree = Arc::new(OwnershipTree::new());
@@ -2745,8 +2745,8 @@ mod tests {
         let captured = snapshot.entries.get("a").unwrap().handler.clone();
         assert!(tree.revoke(&tool_id("a")));
 
-        let output = captured.invoke(serde_json::json!({})).await.unwrap();
-        assert_eq!(output.value["tool"], "a");
+        let error = captured.invoke(serde_json::json!({})).await.unwrap_err();
+        assert!(matches!(error, ToolError::PermissionDenied { .. }));
     }
 
     // ---- Diagnostic hold / close (Task1 fix round) ----

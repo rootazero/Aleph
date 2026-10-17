@@ -27,11 +27,15 @@
 
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// `localStorage` key for the chat/workspace split toggle.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 const LAYOUT_MODE_KEY: &str = "aleph.panel.layout_mode";
+
+/// `localStorage` key for the flex right-pane host switch.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+const RIGHT_PANE_FLEX_KEY: &str = "aleph.right_pane.flex";
 
 /// `localStorage` key for the user-dragged workspace width, in CSS pixels.
 ///
@@ -123,25 +127,77 @@ pub fn coerce_body_with(body: WorkspaceBody, is_team: bool, has_browser: bool) -
     }
 }
 
-/// Clamp a dragged pane width to `[280px, 80% of the viewport]`.
+/// Clamp a dragged pane width to `[280px, max(280px, 80% of the viewport)]`.
 ///
-/// The maximum is floored at the minimum so a viewport narrower than 280px
-/// still yields a usable number instead of an inverted range (`u32::clamp`
-/// panics when `min > max`).
+/// Non-positive and non-finite viewport values are invalid measurements. They
+/// deliberately fall back to the minimum rather than allowing an invalid
+/// viewport to produce an inverted or unbounded width range.
 #[must_use]
-pub const fn clamp_width(px: u32, viewport_w: u32) -> u32 {
-    let max = viewport_w * MAX_WORKSPACE_WIDTH_PCT / 100;
-    let max = if max < MIN_WORKSPACE_WIDTH_PX {
-        MIN_WORKSPACE_WIDTH_PX
+pub fn clamp_width(px: u32, viewport_w: f64) -> u32 {
+    let max = if viewport_w.is_finite() && viewport_w > 0.0 {
+        let scaled = viewport_w * f64::from(MAX_WORKSPACE_WIDTH_PCT) / 100.0;
+        if scaled >= f64::from(u32::MAX) {
+            u32::MAX
+        } else {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                scaled as u32
+            }
+        }
     } else {
-        max
+        0
     };
-    if px < MIN_WORKSPACE_WIDTH_PX {
-        MIN_WORKSPACE_WIDTH_PX
-    } else if px > max {
-        max
+    let max = max.max(MIN_WORKSPACE_WIDTH_PX);
+    px.max(MIN_WORKSPACE_WIDTH_PX).min(max)
+}
+
+/// Whether the app-shell flex host is enabled for this page load.
+///
+/// Query parameters are one-shot overrides for visual comparison and rollback:
+/// `legacy_pane=1` and `flex_pane=0` select the legacy host, while
+/// `flex_pane=1` selects flex. Only the exact local-storage value `"0"`
+/// disables flex when no valid query override is present.
+#[must_use]
+pub fn flex_path_enabled() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let window = web_sys::window();
+        let storage_value = window
+            .as_ref()
+            .and_then(|window| window.local_storage().ok().flatten())
+            .and_then(|storage| storage.get_item(RIGHT_PANE_FLEX_KEY).ok().flatten());
+        let query = window
+            .and_then(|window| window.location().search().ok())
+            .unwrap_or_default();
+        flex_path_enabled_for(storage_value.as_deref(), &query)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        true
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn flex_path_enabled_for(storage_value: Option<&str>, query: &str) -> bool {
+    let mut legacy_override = false;
+    let mut flex_override = None;
+    for pair in query.trim_start_matches('?').split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        match (key, value) {
+            ("legacy_pane", "1") => legacy_override = true,
+            ("flex_pane", "0" | "1") => flex_override = Some(value),
+            _ => {}
+        }
+    }
+
+    if legacy_override || flex_override == Some("0") {
+        false
+    } else if flex_override == Some("1") {
+        true
     } else {
-        px
+        storage_value != Some("0")
     }
 }
 
@@ -236,6 +292,14 @@ pub struct WorkspaceState {
     /// value survives a switch to a session that does not offer it, so the
     /// user gets their tab back when they switch to one that does.
     pub body: RwSignal<WorkspaceBody>,
+    /// Slot preferences belong to the workspace, never to the catalog.
+    /// `None` selects the first visible default-open descriptor.
+    pub selected_slot: RwSignal<Option<&'static str>>,
+    /// Selected background sub-agent node, shared by the slot and its
+    /// full-screen deep-link. Runtime-only: it is never persisted.
+    pub selected_subagent_node: RwSignal<Option<String>>,
+    pub user_opened_slots: RwSignal<BTreeSet<&'static str>>,
+    pub user_closed_slots: RwSignal<BTreeSet<&'static str>>,
     /// User-dragged pane width in CSS pixels; `None` = the CSS default.
     /// Published to `--aleph-workspace-w` by `WorkspacePanel`, which is the
     /// single writer of that custom property.
@@ -279,6 +343,10 @@ impl WorkspaceState {
         Self {
             mode: RwSignal::new(hydrated),
             body: RwSignal::new(WorkspaceBody::default()),
+            selected_slot: RwSignal::new(None),
+            selected_subagent_node: RwSignal::new(None),
+            user_opened_slots: RwSignal::new(BTreeSet::new()),
+            user_closed_slots: RwSignal::new(BTreeSet::new()),
             width_px: RwSignal::new(read_persisted_workspace_width()),
             auto_reveal_muted_run: RwSignal::new(None),
             tool_payloads: RwSignal::new(HashMap::new()),
@@ -287,11 +355,29 @@ impl WorkspaceState {
         }
     }
 
+    /// Select/open a descriptor without changing its immutable defaults.
+    pub fn select_slot(&self, id: &'static str) {
+        self.user_closed_slots.update(|slots| {
+            slots.remove(id);
+        });
+        self.user_opened_slots.update(|slots| {
+            slots.insert(id);
+        });
+        self.selected_slot.set(Some(id));
+    }
+
+    /// Expand the pane for a slot deep-link.
+    pub fn reveal_slot(&self, id: &'static str) {
+        self.select_slot(id);
+        self.set_layout(LayoutMode::Split);
+    }
+
     /// Open the pane on `body`. The one path every "show me this" affordance
     /// goes through — the auto-reveal, the transcript tool card's "open in
     /// canvas", and the body tabs' own clicks.
     pub fn reveal(&self, body: WorkspaceBody) {
         self.body.set(body);
+        self.select_slot("rps.artifacts");
         self.set_layout(LayoutMode::Split);
     }
 
@@ -385,6 +471,7 @@ impl WorkspaceState {
         self.expanded_events
             .update(std::collections::HashSet::clear);
         self.unseen_artifacts.set(0);
+        self.selected_subagent_node.set(None);
         self.auto_reveal_muted_run.set(None);
     }
 
@@ -495,6 +582,10 @@ mod tests {
         WorkspaceState {
             mode: RwSignal::new(mode),
             body: RwSignal::new(WorkspaceBody::default()),
+            selected_slot: RwSignal::new(None),
+            selected_subagent_node: RwSignal::new(None),
+            user_opened_slots: RwSignal::new(BTreeSet::new()),
+            user_closed_slots: RwSignal::new(BTreeSet::new()),
             width_px: RwSignal::new(None),
             auto_reveal_muted_run: RwSignal::new(None),
             tool_payloads: RwSignal::new(HashMap::new()),
@@ -633,19 +724,54 @@ mod tests {
         );
     }
 
-    /// The resizer's bounds, including the degenerate window: on a viewport
-    /// narrower than the minimum the maximum would invert, and an inverted
-    /// range is a panic in `clamp`, not a clamp.
+    /// The resizer's bounds are parameterized over normal, narrow, zero and
+    /// invalid viewport measurements. The maximum is floored at 280px, and
+    /// oversized input is capped at 80% when that percentage is usable.
     #[test]
-    fn a_dragged_width_is_held_between_280px_and_80_percent_of_the_viewport() {
-        assert_eq!(clamp_width(600, 1600), 600, "inside the range, untouched");
-        assert_eq!(clamp_width(100, 1600), MIN_WORKSPACE_WIDTH_PX);
-        assert_eq!(clamp_width(1500, 1600), 1280, "80% of 1600");
-        assert_eq!(clamp_width(0, 1600), MIN_WORKSPACE_WIDTH_PX);
-        // 80% of 300 is 240 — below the minimum. The minimum wins rather than
-        // producing an empty (min > max) range.
-        assert_eq!(clamp_width(400, 300), MIN_WORKSPACE_WIDTH_PX);
-        assert_eq!(clamp_width(0, 0), MIN_WORKSPACE_WIDTH_PX);
+    fn dragged_width_uses_minimum_and_80_percent_bounds() {
+        let cases = [
+            ("inside", 600, 1600.0, 600),
+            ("below minimum", 100, 1600.0, MIN_WORKSPACE_WIDTH_PX),
+            ("oversized", 1500, 1600.0, 1280),
+            ("zero input", 0, 1600.0, MIN_WORKSPACE_WIDTH_PX),
+            ("narrow viewport", 400, 300.0, MIN_WORKSPACE_WIDTH_PX),
+            ("zero viewport", 600, 0.0, MIN_WORKSPACE_WIDTH_PX),
+            ("negative viewport", 600, -1.0, MIN_WORKSPACE_WIDTH_PX),
+            ("NaN viewport", 600, f64::NAN, MIN_WORKSPACE_WIDTH_PX),
+            (
+                "infinite viewport",
+                600,
+                f64::INFINITY,
+                MIN_WORKSPACE_WIDTH_PX,
+            ),
+        ];
+        for (name, px, viewport, expected) in cases {
+            assert_eq!(clamp_width(px, viewport), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn flex_path_defaults_on_and_accepts_only_explicit_overrides() {
+        let cases = [
+            ("absent storage", None, "", true),
+            ("storage enables", Some("1"), "", true),
+            ("storage disables", Some("0"), "", false),
+            ("malformed storage fails safe", Some("false"), "", true),
+            ("legacy query", None, "?legacy_pane=1", false),
+            ("flex zero query", Some("1"), "?flex_pane=0", false),
+            ("flex one query", Some("0"), "?flex_pane=1", true),
+            ("malformed query", Some("0"), "?flex_pane=yes", false),
+            ("unknown query", Some("1"), "?other=1", true),
+            (
+                "legacy wins over flex",
+                Some("1"),
+                "?flex_pane=1&legacy_pane=1",
+                false,
+            ),
+        ];
+        for (name, storage, query, expected) in cases {
+            assert_eq!(flex_path_enabled_for(storage, query), expected, "{name}");
+        }
     }
 
     /// A result with no `canvas_id` is not a canvas edit — every canvas tool
@@ -733,6 +859,7 @@ mod tests {
         owner.set();
         let ws = test_ws(LayoutMode::Split);
         ws.body.set(WorkspaceBody::Canvas);
+        ws.selected_subagent_node.set(Some("node-1".to_string()));
         ws.set_width(640);
         ws.collapse_by_user(Some("run-1".to_string()));
         ws.set_layout(LayoutMode::Split);
@@ -740,6 +867,7 @@ mod tests {
         ws.reset();
 
         assert_eq!(ws.auto_reveal_muted_run.get_untracked(), None);
+        assert_eq!(ws.selected_subagent_node.get_untracked(), None);
         assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
         assert_eq!(ws.body.get_untracked(), WorkspaceBody::Canvas);
         assert_eq!(ws.width_px.get_untracked(), Some(640));

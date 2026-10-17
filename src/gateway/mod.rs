@@ -121,6 +121,7 @@ pub mod restart_backoff;
 pub mod resume_coordinator;
 pub mod state_version;
 pub mod streaming;
+pub mod telecom;
 pub mod tools_invalidation;
 pub mod trace_context;
 pub mod trace_protocol;

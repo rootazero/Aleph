@@ -17,13 +17,13 @@ use crate::tui::widgets::{
     chat_area::render_chat_area,
     command_palette::render_command_palette,
     context_overlay::render_context_overlay,
-    dialog::{render_approval, render_dialog},
     hint_line::render_hint_line,
     input_area::{input_height, InputWidget},
     provider_picker::render_provider_picker,
     session_picker::render_session_picker,
     status_bar::StatusBar,
     tasks_panel::{render_tasks_panel, tasks_panel_height},
+    theme_picker::render_theme_picker,
 };
 
 /// Render the full TUI layout: chat area, docked tasks/agents panels, input
@@ -37,11 +37,16 @@ use crate::tui::widgets::{
 /// agent panel existed (R8-9: not even a nominally zero-width chunk, which
 /// 判据 §2 calls a different bug class from an absent split).
 pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
-    // 2 = the flat rule plus one line of draft; 8 caps how much of the screen
-    // a long paste may take. The box that used to need two of these rows for
-    // its borders is gone — see `widgets::input_area`.
-    let input_h = input_height(textarea, 2, 8);
+    // One draft row between two thin rules; long drafts remain capped.
+    let input_h = input_height(textarea, 3, 8);
     let full_area = frame.area();
+    let colors = crate::tui::theme::theme();
+    frame.buffer_mut().set_style(
+        full_area,
+        ratatui::style::Style::default()
+            .fg(colors.primary)
+            .bg(colors.background),
+    );
 
     let main_area = if state.agent_panel_visible {
         let cols = Layout::horizontal([Constraint::Length(AGENT_PANEL_WIDTH), Constraint::Min(0)])
@@ -75,6 +80,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     .split(main_area);
 
     let chat_area = chunks.first().copied().unwrap_or_default();
+    // The renderer is the single geometry source for the live transcript.
     let tasks_area = chunks.get(1).copied().unwrap_or_default();
     let agents_area = chunks.get(2).copied().unwrap_or_default();
     let input_area = chunks.get(3).copied().unwrap_or_default();
@@ -113,6 +119,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
         hint_area,
         state.current_run.is_some(),
         textarea.lines().iter().any(|l| !l.is_empty()),
+        state.interaction.hidden_count() > 0,
     );
 
     // Status bar
@@ -150,25 +157,46 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     if let Some(picker) = &state.provider_picker {
         render_provider_picker(frame, picker, input_area);
     }
+    if let Some(picker) = &state.theme_picker {
+        render_theme_picker(frame, picker, input_area);
+    }
     // Agents overlay (list floats above the input like the pickers; the
     // per-agent run view centers over the transcript).
     render_agents_overlay(frame, state, input_area);
     // The `/context` report centers over the transcript for the same reason
     // the agent detail view does: it is read, not picked from.
     render_context_overlay(frame, state, frame.area());
-    if let Some(dialog) = &state.dialog {
-        render_dialog(frame, dialog, frame.area());
+    if state.displayed_interaction().is_some() {
+        crate::tui::widgets::dialog::render_active_interaction(
+            frame,
+            &state.interaction,
+            state.approval.as_ref(),
+            frame.area(),
+        );
     }
     // The side-question overlay renders over the transcript it is deliberately
     // not part of. Below the approval overlay: a parked run is waiting on that
     // one, and nothing is waiting on this.
-    if state.btw.open {
+    if state.btw.open && state.displayed_interaction().is_none() {
         render_btw_panel(frame, &state.btw, state.spinner_frame, frame.area());
     }
     // Approval overlay renders above everything — a parked run is waiting on it.
-    if let Some(approval) = &state.approval {
-        render_approval(frame, approval, frame.area());
+    if state.focus == Focus::ToolOutput {
+        if let Some(view) = &mut state.tool_output {
+            crate::tui::tool_output::render(frame, view, frame.area());
+        }
     }
+
+    // Overlays own the visible screen while focused. Keeping the full frame
+    // here is deliberate: it captures the already-painted overlay without
+    // duplicating each overlay's private geometry. Keyboard input clears the
+    // selection before it reaches the focused overlay, so the composer remains
+    // usable rather than becoming a second input mode.
+    state.text_selection_area = if matches!(state.focus, Focus::Input | Focus::Chat) {
+        chat_area
+    } else {
+        frame.area()
+    };
 }
 
 #[cfg(test)]
@@ -186,7 +214,7 @@ mod tests {
     /// (single-line) textarea, `input_height` is 2, the hint and status rows
     /// take one each, so the chat area gets `Min(5)` = 6 rows and the rule
     /// lands on y=6.
-    const RULE_Y: u16 = 6;
+    const RULE_Y: u16 = 5;
 
     /// R8-9: when the panel is hidden, `render()` must take the exact path
     /// it took before the agent-panel column existed — observed through the

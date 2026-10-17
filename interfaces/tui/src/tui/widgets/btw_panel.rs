@@ -10,7 +10,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -99,7 +99,7 @@ pub fn render_btw_panel(frame: &mut Frame, overlay: &BtwOverlay, spinner_frame: 
     let height = area.height.saturating_sub(4).clamp(9, 30);
     let rect = centered_rect(width, height, area);
 
-    frame.render_widget(Clear, rect);
+    crate::tui::widgets::clear_overlay(frame, rect);
 
     let block = Block::default()
         .borders(Borders::ALL)

@@ -67,4 +67,3 @@ test gateway::security::device_token_manager::tests::list_panel_devices_excludes
 test gateway::security::device_token_manager::tests::revoked_device_token_invalidated ... ok
 
 test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 20660 filtered out; finished in 0.15s
-

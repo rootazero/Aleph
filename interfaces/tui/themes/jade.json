@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "name": "jade",
+  "light": false,
+  "colors": {
+    "fg": "#e0e9e2",
+    "dim": "#a0b6a8",
+    "accent": "#97d2b8",
+    "prompt": "#97d2b8",
+    "userBar": "#97d2b8",
+    "toolPending": "#778f80",
+    "toolRunning": "#dfc28b",
+    "toolOk": "#c2d891",
+    "toolErr": "#e7a39a",
+    "toolRail": "#426452",
+    "diffAdd": "#c2d891",
+    "diffDel": "#e7a39a",
+    "diffCtx": "#a0b6a8",
+    "diffGutter": "#778f80",
+    "admonitionNote": "#a4cbd8",
+    "admonitionTip": "#c2d891",
+    "admonitionImportant": "#97d2b8",
+    "admonitionWarning": "#dfc28b",
+    "admonitionCaution": "#e7a39a",
+    "codeBorder": "#426452",
+    "link": "#a4cbd8",
+    "contextOk": "#c2d891",
+    "contextWarn": "#dfc28b",
+    "contextDanger": "#e7a39a",
+    "cost": "#c2d891",
+    "spinner": "#dfc28b"
+  },
+  "chrome": {
+    "background": "terminal",
+    "surface": "#22302a",
+    "selectionBg": "#426452",
+    "userBg": "#22302a",
+    "border": "#426452",
+    "borderFocused": "#97d2b8"
+  }
+}

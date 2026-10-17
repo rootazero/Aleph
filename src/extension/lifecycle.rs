@@ -2818,6 +2818,7 @@ priority = 60
     /// the assertion below meaningless, not merely fail it).
     #[tokio::test]
     async fn after_transition_broadcasts_tools_list_changed_to_the_installed_face() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         use crate::gateway::mcp_face::{install_mcp_face, test_support, try_mcp_face};
 
         let face = Arc::new(test_support::face(&["echo"], true));

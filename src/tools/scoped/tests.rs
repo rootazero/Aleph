@@ -722,6 +722,7 @@ fn guest_turn(session: &str) -> crate::tools::turn_context::TurnContext {
         unattended: false,
         plan_gate: None,
         side_question: false,
+        telecom_authority: None,
     }
 }
 
@@ -1871,6 +1872,7 @@ fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
         unattended: false,
         plan_gate: None,
         side_question: false,
+        telecom_authority: None,
     }
 }
 
@@ -2149,6 +2151,7 @@ async fn execute_scopes_session_id_from_turn_context() {
         unattended: false,
         plan_gate: None,
         side_question: false,
+        telecom_authority: None,
     };
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(turn);
 
@@ -2213,6 +2216,7 @@ async fn chat_tier_blocked_from_config_tool() {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         },
     );
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
@@ -2237,6 +2241,7 @@ async fn operator_tier_allowed_config_tool() {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         },
     );
     assert!(svc.execute("cron_manage", json!({})).await.is_ok());
@@ -2297,6 +2302,7 @@ async fn chat_tier_config_tool_approved_executes() {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         })
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Approved)));
     assert!(
@@ -2324,6 +2330,7 @@ async fn chat_tier_config_tool_denied_rejected() {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         })
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Denied)));
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
@@ -2423,6 +2430,7 @@ async fn operator_approval_is_not_double_prompted_by_the_confirm_gate() {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         })
         .with_config_approval(StdArc::clone(&operator) as _)
         .with_confirmation(StdArc::clone(&own_channel) as _);
@@ -2464,6 +2472,7 @@ async fn operator_tier_caller_still_hits_the_confirm_gate() {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         })
         .with_confirmation(StdArc::clone(&own_channel) as _);
 
@@ -2944,6 +2953,7 @@ async fn approval_gates_no_longer_force_global_claims() {
         unattended: false,
         plan_gate: None,
         side_question: false,
+        telecom_authority: None,
     };
 
     for role in [Some("guest"), Some("operator")] {
@@ -3069,6 +3079,7 @@ async fn every_card_names_the_rule_that_raised_it() {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         })
         .with_config_approval(StdArc::clone(&operator) as _);
     guest.execute("cron_manage", json!({})).await.unwrap();

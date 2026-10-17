@@ -78,6 +78,12 @@ Headless cores mint a ticket with `aleph-server pair` (opens the 0600
 `security.db` directly, WAL — the daemon need not be running).
 `aleph-server bootstrap-token` prints the shared token for recovery.
 
+### Vault key-store migration recovery（2026-10-16）
+
+`store/mod.rs::migrate` 的 v14 升级分别探测 `devices.user_id` 与 `bootstrap_tickets.user_id`，允许历史升级中断后安全重入。真实旧库可能已完成 ALTER，但 `schema_version` 记录尚未推进；重复添加字段会让启动退回内存安全库，从而丢失当前进程对持久化保险库主密钥的访问，provider 随后报告缺少 API key。此修复保留原 `shared_token` 和加密保险库内容；回归测试 `v14_retry_preserves_master_token_when_identity_columns_already_exist` 使用内存 SQLite 和合成密钥，验证重复升级保留主密钥，不接触真实用户凭据。
+
+English: Probe each identity column before ALTER. A partially completed migration must reopen the persisted key store rather than fall back to an unrelated in-memory master key. Recovery preserves existing encrypted secrets and does not rotate credentials.
+
 ### Enforcement
 
 - **Login wall** (`server/connection/auth.rs::wall_admits`, applied in

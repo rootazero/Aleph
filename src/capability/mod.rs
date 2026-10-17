@@ -374,6 +374,8 @@ pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
     crate::gateway::session_projector::message_projector_slot(),
     crate::session::service::global_session_service_slot(),
     crate::gateway::security::store::slot::users_store_slot(),
+    crate::gateway::telecom::public_history::installed_slot(),
+    crate::gateway::telecom::public_approval::installed_slot(),
     crate::capability::projection_host::projection_host_slot(),
 ];
 

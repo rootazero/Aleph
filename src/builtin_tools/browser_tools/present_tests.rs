@@ -51,6 +51,7 @@ fn turn() -> TurnContext {
         channel_id: "".into(),
         conversation_id: "".into(),
         caller_role: None,
+        telecom_authority: None,
         channel_tool_permissions: None,
         unattended: false,
         plan_gate: None,

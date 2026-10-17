@@ -36,6 +36,12 @@ where
         Self::cancel(self, run_id).await
     }
 
+    fn public_harness(
+        &self,
+    ) -> Option<crate::sync_primitives::Arc<dyn crate::orchestrator::dispatch::HarnessRunner>> {
+        self.orchestrator.get().map(|o| o.harness.clone())
+    }
+
     async fn cancel_session(
         &self,
         session_key: &crate::routing::session_key::SessionKey,

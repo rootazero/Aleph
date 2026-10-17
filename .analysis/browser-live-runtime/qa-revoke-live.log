@@ -1,6 +1,0 @@
-
-Running 1 test using 1 worker
-
-  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:161:5 › revoke-live: revoking a streaming grant removes the frame (1.2s)
-
-  1 passed (1.9s)

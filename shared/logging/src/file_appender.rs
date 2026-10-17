@@ -46,7 +46,27 @@ pub fn init_component_logging(
     retention_days: u32,
     default_filter: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let result = GUARD.get_or_init(|| setup_logging(component, retention_days, default_filter));
+    init_logging(component, retention_days, default_filter, true)
+}
+
+/// Initialize rotating, PII-scrubbed file logging without writing to the terminal.
+/// Interactive full-screen clients must keep the terminal owned by their renderer.
+pub fn init_component_file_logging(
+    component: &str,
+    retention_days: u32,
+    default_filter: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    init_logging(component, retention_days, default_filter, false)
+}
+
+fn init_logging(
+    component: &str,
+    retention_days: u32,
+    default_filter: &str,
+    console: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let result =
+        GUARD.get_or_init(|| setup_logging(component, retention_days, default_filter, console));
 
     match result {
         Ok(_) => Ok(()),
@@ -70,6 +90,7 @@ fn setup_logging(
     component: &str,
     retention_days: u32,
     default_filter: &str,
+    console: bool,
 ) -> Result<tracing_appender::non_blocking::WorkerGuard, String> {
     let log_dir = get_log_directory()?;
 
@@ -92,7 +113,7 @@ fn setup_logging(
     // gateway.log from accumulating a duplicate of the rotating file_layer.
     // `Option<L>` implements `Layer`, so `None` contributes nothing to the
     // subscriber and the registry chain below is unchanged.
-    let console_layer = std::io::stdout().is_terminal().then(|| {
+    let console_layer = (console && std::io::stdout().is_terminal()).then(|| {
         fmt::layer()
             .with_target(true)
             .with_level(true)

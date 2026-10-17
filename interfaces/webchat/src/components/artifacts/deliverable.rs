@@ -15,6 +15,7 @@ use leptos::prelude::*;
 use std::collections::HashSet;
 
 use crate::api::artifacts::ArtifactItem;
+use crate::components::right_pane::tray::TrayPinArtifactButton;
 
 /// Split a listing into (deliverables, everything else), preserving the
 /// server's newest-first order within each.
@@ -52,32 +53,26 @@ pub fn first_unseen_deliverable(
 ///
 /// A plain anchor, not a scripted click: in the desktop shell the `/artifact/`
 /// path is classified external, so the OS browser opens it instead of replacing
-/// the shell's single webview.
+/// the shell's single webview. The explicit pin action is a sibling of the link.
 #[component]
 pub(super) fn DeliverableCard<L>(item: ArtifactItem, open_label: L) -> impl IntoView
 where
     L: Fn() -> String + Send + Sync + 'static,
 {
     let size = item.human_size();
+    let pin_item = item.clone();
     view! {
-        <a
-            href=item.url
-            target="_blank"
-            rel="noreferrer"
-            class="flex items-center gap-2 px-2.5 py-2 mb-1.5 rounded-lg border border-primary/30
-                   bg-primary/5 hover:bg-primary/10 group"
-        >
-            <span class="text-primary text-sm shrink-0" aria-hidden="true">"◆"</span>
-            <span class="min-w-0 flex-1">
-                <span class="block text-xs font-medium truncate group-hover:text-primary">
-                    {item.filename}
+        <div class="flex items-center gap-2 px-2.5 py-2 mb-1.5 rounded-lg border border-primary/30 bg-primary/5 hover:bg-primary/10 group">
+            <a href=item.url target="_blank" rel="noreferrer" class="flex items-center gap-2 min-w-0 flex-1">
+                <span class="text-primary text-sm shrink-0" aria-hidden="true">"◆"</span>
+                <span class="min-w-0 flex-1">
+                    <span class="block text-xs font-medium truncate group-hover:text-primary">{item.filename}</span>
+                    <span class="block text-[11px] text-text-tertiary">{size}</span>
                 </span>
-                <span class="block text-[11px] text-text-tertiary">{size}</span>
-            </span>
-            <span class="px-2 py-0.5 rounded text-[11px] bg-primary text-white shrink-0">
-                {move || open_label()}
-            </span>
-        </a>
+                <span class="px-2 py-0.5 rounded text-[11px] bg-primary text-white shrink-0">{move || open_label()}</span>
+            </a>
+            <TrayPinArtifactButton item=pin_item />
+        </div>
     }
 }
 

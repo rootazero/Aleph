@@ -1,1 +1,0 @@
-http://127.0.0.1:18790/viewer/browser#grant_id=8dVLsVeuzZs-Jocndb0yN7lpIDNGTH7AVNAeJA5K4yc&nonce=JxSKtMID8KGWbBMWopbZmVnbmqdOUrgvoq755d0pD1A

@@ -592,6 +592,7 @@ mod lift_tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         }
     }
 

@@ -1,21 +1,12 @@
-//! Attachment helpers — size formatter, file-list reader, preview bar.
-//!
-//! The preview chips above the textarea live here so the composer
-//! orchestrator only has to wire a signal and a callback. The reader
-//! helper centralises the `FileReader` → data-URL → base64 dance so the
-//! same logic is reachable from both the paperclip click and the
-//! chat-surface drop zone (the latter not yet wired through here, but
-//! the API is shaped for it).
-
+//! Draft limits, shared ingestion, type icons and lazy thumbnail chips.
 use leptos::prelude::*;
-use wasm_bindgen::prelude::*;
+use leptos::task::spawn_local;
+use wasm_bindgen::JsCast;
 
+use crate::components::right_pane::tray::{read_attachment, TrayPinDraftButton};
 use crate::i18n::{t_string, use_i18n};
 use crate::views::chat::state::PendingAttachment;
 
-/// Format a byte count as a human-readable label (`B` / `KB` / `MB`).
-///
-/// Pure — handy for unit tests; the preview bar reads this for each chip.
 pub(super) fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes} B")
@@ -25,165 +16,251 @@ pub(super) fn format_size(bytes: u64) -> String {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
-
-/// Push every entry of `file_list` onto `attachments` as a base64
-/// `PendingAttachment`. Browser `FileReader` is async, so each entry is
-/// appended independently when its `load` event fires.
-///
-/// Errors are silent (the chip simply never appears) — the previous
-/// implementation behaved the same way and the alternative is a noisy
-/// Maximum size per attachment in bytes. Sized to be friendly to multimodal
-/// providers (Anthropic / OpenAI cap image uploads around 5 MB; PDFs/doc
-/// containers typically accepted up to ~10 MB) while still preventing the
-/// browser tab from being killed by a user dragging in a video. Past the
-/// cap we skip the file rather than read-and-discard — the data is in
-/// memory the moment `read_as_data_url` lands, and the whole point of the
-/// gate is to never let the bytes near the heap.
 pub(crate) const MAX_ATTACHMENT_SIZE_BYTES: u64 = 10 * 1024 * 1024;
-/// Maximum number of attachments in a single send. Keeps the encoded
-/// payload's base64 expansion (~33 % over raw) from blowing past the
-/// gateway's per-request budget and keeps the UI chip strip legible.
 pub(crate) const MAX_ATTACHMENT_COUNT: usize = 10;
+pub(crate) const THUMBNAIL_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
-/// Stable per-attachment key for the preview-chip `<For>`.
-///
-/// Deliberately excludes the attachment's index in the parent list so
-/// removing a middle attachment does NOT shift every subsequent chip's
-/// key. With an index-aware key, leptos sees a new key for the shifted
-/// chip and reuses the wrong DOM node — the wrong chip disappears. A
-/// content-based hash keeps every chip's key stable across inserts,
-/// removals, and reorders.
 fn attachment_key(att: &PendingAttachment) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    att.name.hash(&mut h);
-    att.size.hash(&mut h);
-    format!("{:x}", h.finish())
+    crate::components::right_pane::tray::stable_attachment_key(att)
 }
 
-/// banner for permissions that the browser already surfaces.
-pub(crate) fn read_file_list_into(
-    file_list: &web_sys::FileList,
-    attachments: RwSignal<Vec<PendingAttachment>>,
-) {
-    let mut accepted: usize = attachments.with_untracked(|list| list.len());
-    for i in 0..file_list.length() {
-        let Some(file) = file_list.get(i) else {
-            continue;
-        };
-        let name = file.name();
-        let mime_type = file.type_();
-        let size = file.size() as u64;
-
-        if size > MAX_ATTACHMENT_SIZE_BYTES {
-            web_sys::console::warn_1(
-                &format!(
-                    "skipping attachment '{name}': {size} bytes exceeds the {} MB limit",
-                    MAX_ATTACHMENT_SIZE_BYTES / (1024 * 1024)
-                )
-                .into(),
-            );
-            continue;
-        }
-        if accepted >= MAX_ATTACHMENT_COUNT {
-            web_sys::console::warn_1(
-                &format!(
-                    "skipping attachment '{name}': already at the {MAX_ATTACHMENT_COUNT}-file limit"
-                )
-                .into(),
-            );
-            continue;
-        }
-        accepted += 1;
-
-        let reader = match web_sys::FileReader::new() {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-
-        let reader_clone = reader.clone();
-        let file_mime = if mime_type.is_empty() {
-            "application/octet-stream".to_string()
-        } else {
-            mime_type
-        };
-        let file_name = name.clone();
-
-        let onload = Closure::wrap(Box::new(move || {
-            if let Ok(result) = reader_clone.result() {
-                if let Some(data_url) = result.as_string() {
-                    // data URL: "data:<mime>;base64,<data>"
-                    let base64_data = data_url.split(',').nth(1).unwrap_or("").to_string();
-                    let attachment = PendingAttachment {
-                        name: file_name.clone(),
-                        mime_type: file_mime.clone(),
-                        data_base64: base64_data,
-                        size,
-                    };
-                    attachments.update(|list| list.push(attachment));
-                }
-            }
-        }) as Box<dyn Fn()>);
-
-        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
-        onload.forget();
-
-        let _ = reader.read_as_data_url(&file);
+/// Used by input, clipboard, drop and tray reuse, including after every await.
+pub(crate) fn append_attachment(
+    list: &mut Vec<PendingAttachment>,
+    file: PendingAttachment,
+) -> bool {
+    if file.size > MAX_ATTACHMENT_SIZE_BYTES || list.len() >= MAX_ATTACHMENT_COUNT {
+        return false;
+    }
+    list.push(file);
+    true
+}
+fn remove_attachment(list: &mut Vec<PendingAttachment>, occurrence_key: &str) {
+    let mut occurrences = std::collections::HashMap::<String, usize>::new();
+    if let Some(index) = list.iter().position(|file| {
+        let identity = attachment_key(file);
+        let occurrence = occurrences.entry(identity.clone()).or_default();
+        let key = format!("{identity}:{occurrence}");
+        *occurrence += 1;
+        key == occurrence_key
+    }) {
+        list.remove(index);
     }
 }
 
-/// Horizontal chip strip rendered above the textarea, one chip per
-/// pending attachment. Each chip carries its own ✕ — clearing the
-/// draft text does NOT drop chips (composer-level decision).
+/// Identical files may be attached twice. Their occurrence number disambiguates
+/// render keys without making another file's key depend on its current index.
+fn keyed_attachments(files: Vec<PendingAttachment>) -> Vec<(String, PendingAttachment)> {
+    let mut occurrences = std::collections::HashMap::<String, usize>::new();
+    files
+        .into_iter()
+        .map(|file| {
+            let identity = attachment_key(&file);
+            let occurrence = occurrences.entry(identity.clone()).or_default();
+            let key = format!("{identity}:{occurrence}");
+            *occurrence += 1;
+            (key, file)
+        })
+        .collect()
+}
+
+async fn read_and_append_file(file: web_sys::File, attachments: RwSignal<Vec<PendingAttachment>>) {
+    let size = file.size() as u64;
+    if size > MAX_ATTACHMENT_SIZE_BYTES
+        || attachments
+            .try_with_untracked(|list| list.len() >= MAX_ATTACHMENT_COUNT)
+            .unwrap_or(true)
+    {
+        return;
+    }
+    let name = file.name();
+    let mime_type = if file.type_().is_empty() {
+        "application/octet-stream".into()
+    } else {
+        file.type_()
+    };
+    if let Ok(data_base64) = read_attachment(&file).await {
+        // try_update is also the lifetime gate if the composer was disposed.
+        let _ = attachments.try_update(|list| {
+            append_attachment(
+                list,
+                PendingAttachment {
+                    name,
+                    mime_type,
+                    data_base64,
+                    size,
+                },
+            )
+        });
+    }
+}
+
+pub(crate) fn read_file_list_into(
+    files: &web_sys::FileList,
+    attachments: RwSignal<Vec<PendingAttachment>>,
+) {
+    // FileList is live and input/drop/paste owners may clear it as soon as this
+    // handler returns. Retain File handles synchronously before yielding.
+    let files: Vec<web_sys::File> = (0..files.length())
+        .filter_map(|index| files.get(index))
+        .collect();
+    spawn_local(async move {
+        for file in files {
+            if attachments
+                .try_with_untracked(|list| list.len() >= MAX_ATTACHMENT_COUNT)
+                .unwrap_or(true)
+            {
+                break;
+            }
+            // Sequential reads preserve input order and let oversized or failed
+            // candidates leave the actual count available for later files.
+            read_and_append_file(file, attachments).await;
+        }
+    });
+}
+
+/// No retained FileReader closures: the bundled promise clears handlers on settle.
+#[allow(dead_code)]
+pub(crate) fn read_file_into(file: web_sys::File, attachments: RwSignal<Vec<PendingAttachment>>) {
+    spawn_local(read_and_append_file(file, attachments));
+}
+
+/// MIME first, extension fallback second.
+#[must_use]
+pub fn file_icon(mime: &str, name: &str) -> &'static str {
+    fn family(mime: &str) -> Option<&'static str> {
+        if mime.starts_with("image/") {
+            Some("▧")
+        } else if [
+            "javascript",
+            "typescript",
+            "python",
+            "rust",
+            "x-c",
+            "x-java",
+            "x-go",
+        ]
+        .iter()
+        .any(|code| mime.contains(code))
+        {
+            Some("</>")
+        } else if mime == "application/pdf" {
+            Some("▤")
+        } else if mime == "application/json" || mime.ends_with("+json") {
+            Some("{ }")
+        } else if mime.starts_with("text/") || mime.ends_with("/xml") || mime.ends_with("+xml") {
+            Some("≡")
+        } else if mime.contains("zip") || mime.contains("tar") || mime.contains("gzip") {
+            Some("▥")
+        } else {
+            None
+        }
+    }
+    if let Some(icon) = family(mime) {
+        return icon;
+    }
+    let lower = name.to_ascii_lowercase();
+    match lower.rsplit('.').next().unwrap_or_default() {
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" => "▧",
+        "rs" | "js" | "jsx" | "ts" | "tsx" | "py" | "go" | "java" | "c" | "cpp" | "h" => "</>",
+        "pdf" => "▤",
+        "json" => "{ }",
+        "txt" | "md" | "csv" | "xml" | "html" => "≡",
+        "zip" | "tar" | "gz" | "tgz" => "▥",
+        "bin" | "dat" if mime == "application/octet-stream" => "⊘",
+        _ => "◇",
+    }
+}
+#[must_use]
+pub fn thumbnail_eligible(file: &PendingAttachment) -> bool {
+    file.mime_type.starts_with("image/") && file.size < THUMBNAIL_MAX_BYTES
+}
+
+fn image_thumbnail(image: &web_sys::HtmlImageElement) -> Option<String> {
+    let canvas = web_sys::window()?
+        .document()?
+        .create_element("canvas")
+        .ok()?
+        .dyn_into::<web_sys::HtmlCanvasElement>()
+        .ok()?;
+    canvas.set_width(36);
+    canvas.set_height(36);
+    let context = canvas
+        .get_context("2d")
+        .ok()??
+        .dyn_into::<web_sys::CanvasRenderingContext2d>()
+        .ok()?;
+    context
+        .draw_image_with_html_image_element_and_dw_and_dh(image, 0., 0., 36., 36.)
+        .ok()?;
+    canvas.to_data_url_with_type("image/png").ok()
+}
+
+#[component]
+fn AttachmentChip(
+    attachments: RwSignal<Vec<PendingAttachment>>,
+    occurrence_key: String,
+    file: PendingAttachment,
+) -> impl IntoView {
+    let i18n = use_i18n();
+    let thumbnail = RwSignal::new(None::<String>);
+    let failed = RwSignal::new(false);
+    let eligible = thumbnail_eligible(&file);
+    let source = if eligible {
+        format!("data:{};base64,{}", file.mime_type, file.data_base64)
+    } else {
+        String::new()
+    };
+    let name = file.name.clone();
+    let icon = file_icon(&file.mime_type, &name);
+    let icon_class = match icon {
+        "▧" => "text-info",
+        "≡" => "text-text-secondary",
+        "▤" | "⊘" => "text-danger",
+        "{ }" => "text-warning",
+        "</>" => "text-primary",
+        _ => "text-text-tertiary",
+    };
+    let size = format_size(file.size);
+    let key = occurrence_key;
+    view! {
+        <div class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface-raised border border-border text-xs text-text-secondary">
+            <span class=format!("relative w-9 h-9 shrink-0 flex items-center justify-center {icon_class}") aria-hidden="true">
+                {icon}
+                // The browser's lazy image load is the decode trigger. No effect decodes hidden chips.
+                <Show when=move || eligible && !failed.get()>
+                    <img src={let source = source.clone(); move || thumbnail.get().unwrap_or_else(|| source.clone())}
+                        alt="" loading="lazy" width="36" height="36"
+                        class="absolute inset-0 w-9 h-9 rounded object-cover bg-surface-muted"
+                        on:load=move |event| {
+                            if thumbnail.get_untracked().is_some() { return; }
+                            let value = event.target().and_then(|target| target.dyn_into::<web_sys::HtmlImageElement>().ok()).and_then(|image| image_thumbnail(&image));
+                            match value { Some(url) => { let _ = thumbnail.try_set(Some(url)); }, None => { let _ = failed.try_set(true); } }
+                        }
+                        on:error=move |_| { let _ = failed.try_set(true); }
+                    />
+                </Show>
+            </span>
+            <span class="max-w-[120px] truncate">{name}</span>
+            <span class="text-text-tertiary">{size}</span>
+            <TrayPinDraftButton attachment=file />
+            <button type="button" class="ml-0.5 p-0.5 rounded hover:bg-danger/10 hover:text-danger transition-colors"
+                title=move || t_string!(i18n, chat.remove).to_string()
+                on:click=move |_| { let _ = attachments.try_update(|list| remove_attachment(list, &key)); }>
+                <span aria-hidden="true">"×"</span>
+            </button>
+        </div>
+    }
+}
+
 #[component]
 pub(crate) fn AttachmentPreviewBar(attachments: RwSignal<Vec<PendingAttachment>>) -> impl IntoView {
-    let i18n = use_i18n();
-    let on_remove = move |idx: usize| {
-        attachments.update(|list| {
-            if idx < list.len() {
-                list.remove(idx);
-            }
-        });
-    };
-
     view! {
         <Show when=move || !attachments.get().is_empty()>
             <div class="flex flex-wrap gap-2 mb-2">
-                <For
-                    each=move || {
-                        attachments.get().into_iter().enumerate().collect::<Vec<_>>()
-                    }
-                    key=|(_idx, f): &(usize, PendingAttachment)| attachment_key(f)
-                    children=move |(idx, file)| {
-                        let file_name = file.name.clone();
-                        let file_size = format_size(file.size);
-                        view! {
-                            <div class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg
-                                        bg-surface-raised border border-border text-xs text-text-secondary">
-                                <svg xmlns="http://www.w3.org/2000/svg"
-                                     class="w-3.5 h-3.5 text-text-tertiary shrink-0"
-                                     viewBox="0 0 20 20" fill="currentColor">
-                                    <path fill-rule="evenodd"
-                                          d="M4 4a2 2 0 0 1 2-2h4.586A2 2 0 0 1 12 2.586L15.414 6A2 2 0 0 1 16 7.414V16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4Z"
-                                          clip-rule="evenodd" />
-                                </svg>
-                                <span class="max-w-[120px] truncate">{file_name}</span>
-                                <span class="text-text-tertiary">{file_size}</span>
-                                <button
-                                    class="ml-0.5 p-0.5 rounded hover:bg-danger/10 hover:text-danger transition-colors"
-                                    title=move || t_string!(i18n, chat.remove).to_string()
-                                    on:click=move |_| on_remove(idx)
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3"
-                                         viewBox="0 0 20 20" fill="currentColor">
-                                        <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
-                                    </svg>
-                                </button>
-                            </div>
-                        }
-                    }
-                />
+                <For each=move || keyed_attachments(attachments.get()) key=|(key, _)| key.clone() children=move |(occurrence_key, file)| {
+                    view! { <AttachmentChip attachments=attachments occurrence_key=occurrence_key file=file /> }
+                } />
             </div>
         </Show>
     }
@@ -192,26 +269,6 @@ pub(crate) fn AttachmentPreviewBar(attachments: RwSignal<Vec<PendingAttachment>>
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn format_size_picks_smallest_unit() {
-        assert_eq!(format_size(0), "0 B");
-        assert_eq!(format_size(512), "512 B");
-        assert_eq!(format_size(1023), "1023 B");
-    }
-
-    #[test]
-    fn format_size_uses_kb_in_range() {
-        assert_eq!(format_size(1024), "1.0 KB");
-        assert_eq!(format_size(1536), "1.5 KB");
-    }
-
-    #[test]
-    fn format_size_uses_mb_at_threshold() {
-        assert_eq!(format_size(1024 * 1024), "1.0 MB");
-        assert_eq!(format_size(3 * 1024 * 1024 + 1024 * 512), "3.5 MB");
-    }
-
     fn att(name: &str, size: u64) -> PendingAttachment {
         PendingAttachment {
             name: name.into(),
@@ -220,26 +277,136 @@ mod tests {
             data_base64: String::new(),
         }
     }
-
     #[test]
-    fn attachment_for_key_uses_stable_hash_not_index() {
-        // c.txt sits at idx 2 in `with_b`; after removing b, c.txt shifts to
-        // idx 1 in `without_b`. The <For> key for c.txt MUST be stable across
-        // that shift — otherwise leptos reuses the wrong DOM node when a
-        // middle attachment is removed.
-        let with_b = vec![att("a.txt", 100), att("b.txt", 200), att("c.txt", 300)];
-        let without_b = vec![att("a.txt", 100), att("c.txt", 300)];
-        let key_c_at_idx_2 = attachment_key(&with_b[2]);
-        let key_c_at_idx_1 = attachment_key(&without_b[1]);
-        assert_eq!(key_c_at_idx_2, key_c_at_idx_1);
+    fn format_size_units() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(1536), "1.5 KB");
+        assert_eq!(format_size(3 * 1024 * 1024), "3.0 MB");
+    }
+    #[test]
+    fn surviving_chip_deletes_itself_after_middle_removal() {
+        let a = att("same", 1);
+        let mut b = a.clone();
+        b.data_base64 = "Yg==".into();
+        let mut c = a.clone();
+        c.data_base64 = "Yw==".into();
+        let original = keyed_attachments(vec![a.clone(), b.clone(), c.clone()]);
+        let b_key = original[1].0.clone();
+        let c_key = original[2].0.clone();
+        let mut rows = vec![a.clone(), b, c];
+        remove_attachment(&mut rows, &b_key);
+        remove_attachment(&mut rows, &c_key);
+        assert_eq!(rows, vec![a]);
+    }
+    #[test]
+    fn identical_files_remove_the_selected_occurrence() {
+        let a = att("same", 1);
+        let b = att("other", 1);
+        let original = keyed_attachments(vec![a.clone(), a.clone(), b.clone()]);
+        let selected_key = original[1].0.clone();
+        let mut rows = vec![a.clone(), a.clone(), b.clone()];
+        remove_attachment(&mut rows, &selected_key);
+        assert_eq!(rows, vec![a.clone(), b.clone()]);
+        assert_eq!(keyed_attachments(rows)[1].0, original[2].0);
     }
 
     #[test]
-    fn attachment_key_is_deterministic() {
-        let a = att("x.png", 999);
-        assert_eq!(attachment_key(&a), attachment_key(&a));
-        // Two distinct attachments with the same identity should still match.
-        let a2 = att("x.png", 999);
-        assert_eq!(attachment_key(&a), attachment_key(&a2));
+    fn identical_files_have_distinct_keys_and_other_files_keep_their_keys() {
+        let a = att("same", 1);
+        let b = att("other", 1);
+        let original = keyed_attachments(vec![a.clone(), a.clone(), b.clone()]);
+        assert_ne!(original[0].0, original[1].0);
+        let mut rows = vec![a.clone(), a, b];
+        let key = keyed_attachments(rows.clone())[0].0.clone();
+        remove_attachment(&mut rows, &key);
+        let surviving = keyed_attachments(rows);
+        assert_eq!(original[2].0, surviving[1].0);
+    }
+    #[test]
+    fn bounded_batch_skips_oversized_candidates_and_preserves_order() {
+        let mut rows = vec![att("existing", 1); MAX_ATTACHMENT_COUNT - 1];
+        assert!(!append_attachment(
+            &mut rows,
+            att("oversized", MAX_ATTACHMENT_SIZE_BYTES + 1)
+        ));
+        assert!(append_attachment(&mut rows, att("valid", 2)));
+        assert_eq!(rows.last().map(|file| file.name.as_str()), Some("valid"));
+        assert!(!append_attachment(&mut rows, att("late", 3)));
+
+        let mut all_oversized = Vec::new();
+        for index in 0..3 {
+            assert!(!append_attachment(
+                &mut all_oversized,
+                att(&format!("oversized-{index}"), MAX_ATTACHMENT_SIZE_BYTES + 1)
+            ));
+        }
+        assert!(all_oversized.is_empty());
+
+        let mut ordered = Vec::new();
+        for name in ["first", "second", "third"] {
+            assert!(append_attachment(&mut ordered, att(name, 1)));
+        }
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|file| file.name.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second", "third"]
+        );
+    }
+
+    #[test]
+    fn completion_order_cannot_exceed_limits() {
+        let mut rows = vec![att("old", 1); MAX_ATTACHMENT_COUNT - 1];
+        assert!(append_attachment(
+            &mut rows,
+            att("first completion", MAX_ATTACHMENT_SIZE_BYTES)
+        ));
+        assert!(!append_attachment(&mut rows, att("late completion", 1)));
+        rows.clear();
+        assert!(!append_attachment(
+            &mut rows,
+            att("oversize", MAX_ATTACHMENT_SIZE_BYTES + 1)
+        ));
+    }
+    #[test]
+    fn thumbnail_boundary_and_nonimage() {
+        let mut a = att("x.png", THUMBNAIL_MAX_BYTES - 1);
+        assert!(!thumbnail_eligible(&a));
+        a.mime_type = "image/png".into();
+        assert!(thumbnail_eligible(&a));
+        a.size += 1;
+        assert!(!thumbnail_eligible(&a));
+    }
+    #[test]
+    fn all_eight_icon_families_and_extensions() {
+        let cases = [
+            ("image/png", "x", "▧"),
+            ("text/plain", "x", "≡"),
+            ("application/pdf", "x", "▤"),
+            ("application/json", "x", "{ }"),
+            ("text/javascript", "x", "</>"),
+            ("application/zip", "x", "▥"),
+            ("application/octet-stream", "x.bin", "⊘"),
+            ("unknown/type", "x", "◇"),
+        ];
+        for (mime, name, expected) in cases {
+            assert_eq!(file_icon(mime, name), expected);
+        }
+        for (name, expected) in [
+            ("x.JPG", "▧"),
+            ("x.rs", "</>"),
+            ("x.pdf", "▤"),
+            ("x.json", "{ }"),
+            ("x.md", "≡"),
+            ("x.tar", "▥"),
+        ] {
+            assert_eq!(file_icon("application/octet-stream", name), expected);
+        }
+        assert_eq!(
+            file_icon("text/plain", "x.rs"),
+            "≡",
+            "a known MIME takes precedence"
+        );
     }
 }

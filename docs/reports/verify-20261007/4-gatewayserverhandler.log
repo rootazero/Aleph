@@ -101,4 +101,3 @@ test gateway::server::handler::tests::scope_keyed_on_role_matches_holds_authorit
 test gateway::server::handler::tests::cron_create_through_dispatch_persists_the_caller_as_owner ... ok
 
 test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 20620 filtered out; finished in 0.21s
-

@@ -1952,15 +1952,14 @@ html[data-shell="aleph-tauri"][data-platform="macos"] .aleph-sidebar-head { padd
     overflow: hidden;
 }
 
-/* ── Collapsible workspace pane (chat right overlay) ───────────────
-   The pane FLOATS over the chat surface (absolute, right-anchored) so
-   opening/closing it never reflows the chat detail. Collapse eases by
-   sliding it off the right edge + fading over 200ms, instead of the
-   old flex-basis shrink it used as a sibling column. */
-.aleph-workspace-pane {
+/* ── Workspace pane hosts ───────────────────────────────────────────
+   The legacy host keeps the old overlay collapse animation for rollback.
+   The flex host owns its width transition through the utility classes on the
+   aside and remains an in-flow shell sibling. */
+.aleph-workspace-pane.legacy-workspace-pane {
     transition: transform 200ms ease-out, opacity 200ms ease-out;
 }
-.aleph-workspace-pane.workspace-collapsed {
+.aleph-workspace-pane.legacy-workspace-pane.workspace-collapsed {
     transform: translateX(100%);
     opacity: 0;
     pointer-events: none;
@@ -2028,13 +2027,9 @@ html[data-shell="aleph-tauri"][data-platform="macos"] .aleph-sidebar-head { padd
     /* Mirrors `.aleph-sidebar-head` top padding so every right-pane page's
        content top edge lines up with the sidebar brand-logo top edge. */
     --aleph-content-top: 0.85rem;
-    /* Workspace pane width — single source of truth. The pane's flex-basis
-       AND the chrome that tracks its edge (the LayoutToggle's right offset
-       and the "WORKSPACE · …" label's left offset, both in `app.rs`) all
-       read this, so they stay glued to the real boundary at any window
-       width and a width tweak only happens here. Pane is 40% of `<main>`;
-       the band chrome is positioned absolutely inside `<main>`, so the same
-       `%` resolves to the same pixel column. */
+    /* Workspace pane width — single source of truth for the flex pane and
+       legacy rollback host. The resizer writes this value; both hosts read
+       it, so a width tweak remains shared across the two visual paths. */
     --aleph-workspace-w: 40%;
 }
 html[data-shell="aleph-tauri"][data-platform="macos"] {

@@ -186,20 +186,39 @@ pub(super) async fn post_run(
     // same project instead of falling back to the agent workspace.
     let workspace_str = workspace.map(|p| p.to_string_lossy().into_owned());
 
-    let decision = match store.try_claim_continuation(
-        &session,
+    // The claim is BOUND to the goal peeked above: `peek` fed the policy and
+    // the gate decision, and the live token read was awaited since, so the user
+    // may have replaced the goal. The store checks identity and resolves the
+    // goal CREATOR's telecom origin (never the completing run's: a later
+    // ordinary turn must not launder a public goal, nor a public turn widen an
+    // ordinary one) in the same critical section as the claim, and hands that
+    // origin back. A replaced goal is dropped without a run (its own post-run
+    // hook continues it); an untrustworthy origin fails closed.
+    let (decision, origin) = match store.try_claim_continuation_bound(
+        &peek,
         tokens,
         now,
         gate_configured,
         workspace_str.as_deref(),
     ) {
-        Ok(d) => d,
+        Ok(crate::goal::BoundClaim::Claimed { decision, origin }) => (decision, origin),
+        Ok(crate::goal::BoundClaim::Replaced) => {
+            info!(session = %session,
+                "goal pursuit: goal was replaced or cleared before the claim; dropping this round");
+            return;
+        }
+        Ok(crate::goal::BoundClaim::Refused(reason)) => {
+            warn!(session = %session, %reason,
+                "goal pursuit: refusing to continue a goal with an untrustworthy telecom origin");
+            return;
+        }
         Err(e) => {
             warn!(error = %e, session = %session,
                 "goal pursuit: continuation claim failed; skipping this round");
             return;
         }
     };
+    let telecom_public = origin.as_ref();
 
     match decision {
         ContinuationDecision::Idle => {
@@ -256,6 +275,7 @@ pub(super) async fn post_run(
                 session_manager.clone(),
                 Some(delay_ms),
                 ContinuationKind::Goal { wake_ms },
+                telecom_public.cloned(),
             );
             info!(session = %session, "goal pursuit: enqueued autonomous continuation");
         }
@@ -289,6 +309,7 @@ pub(super) async fn post_run(
                 now,
                 &policy_meta,
                 workspace,
+                telecom_public,
             )
             .await;
         }
@@ -376,6 +397,7 @@ async fn arbitrate_gate(
     claim_now_ms: u64,
     policy_meta: &HashMap<String, String>,
     workspace: Option<&Path>,
+    telecom_public: Option<&crate::gateway::telecom::TelecomPublicContext>,
 ) {
     let Some(store) = crate::goal::global() else {
         return;
@@ -461,7 +483,7 @@ async fn arbitrate_gate(
     // Reopened with runway left → claim one more continuation carrying the gate's
     // objective failure signal (R9: the evidence goes into the prompt).
     let prompt = crate::goal::pursuit::gate_failure_prompt(goal, &reason);
-    match store.claim_after_gate_veto(goal, &reopened, now) {
+    match store.claim_after_gate_veto(goal, &reopened, now, telecom_public) {
         Ok(Some(wake_ms)) => {
             info!(session = %session,
                 "goal pursuit: objective gate vetoed completion, re-running with feedback");
@@ -477,6 +499,7 @@ async fn arbitrate_gate(
                 session_manager.clone(),
                 Some(0),
                 ContinuationKind::Goal { wake_ms },
+                telecom_public.cloned(),
             );
         }
         Ok(None) => info!(session = %session,
@@ -621,13 +644,20 @@ pub(super) async fn block_goal_on_failure(
 /// outright whenever the colliding run then failed — its own hook never runs).
 /// The second `cause` is a fire whose authority was unknown (round 11, R-a):
 /// equally not a pursuit failure, so it takes the same retry.
+///
+/// `telecom_public` is the creator origin the claimed step carries and will be
+/// re-spawned with. The re-arm only goes ahead while the live goal still has
+/// that exact origin (see `GoalStore::rearm_after_busy`): a goal replaced
+/// during the busy window under a different origin is dropped, never re-run
+/// with the stale captured one.
 pub(super) async fn rearm_goal_after_busy(
     session: &str,
     origin: Option<&OriginRoute>,
+    telecom_public: Option<&crate::gateway::telecom::TelecomPublicContext>,
     cause: &'static str,
 ) -> Option<(u64, u64)> {
     let store = crate::goal::global()?;
-    match store.rearm_after_busy(session, now_ms()) {
+    match store.rearm_after_busy(session, now_ms(), telecom_public) {
         Ok(RearmDecision::Retry { delay_ms, wake_ms }) => {
             info!(session = %session, delay_ms, cause,
                 "goal pursuit: continuation could not run at fire; re-armed with a retry delay");

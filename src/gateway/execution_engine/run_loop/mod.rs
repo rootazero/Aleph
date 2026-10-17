@@ -266,7 +266,15 @@ where
     let author = request.metadata.get(super::AUTHOR_USER_KEY).cloned();
     crate::scope::with_scope(
         request_scope(request),
-        crate::scope::with_room_author(author, fut),
+        crate::scope::with_room_author(
+            author,
+            // The sole seeding point of the run's telecom origin: it comes
+            // from the admitted request, never from metadata or tool args.
+            crate::gateway::telecom::run_origin::seed_run_origin(
+                request.telecom_public.clone(),
+                fut,
+            ),
+        ),
     )
     .await
 }
@@ -522,6 +530,10 @@ pub(super) fn hook_stop_receipt(
             .as_ref()
             .map(|p| p.display().to_string()),
         envelope: None,
+        telecom_provenance:
+            crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::capture(
+                request.telecom_public.as_ref(),
+            ),
     });
     events.push(SessionEvent::Error {
         turn_id: seeded_turn,
@@ -855,6 +867,8 @@ mod hook_stop_tests {
             workspace_override: None,
             max_iterations_override: None,
             model_override: None,
+            telecom_public: None,
+            telecom_authority: None,
         }
     }
 
@@ -1103,6 +1117,8 @@ mod hook_stop_tests {
             at: 1,
             project_root: None,
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         });
         interrupted.push(SessionEvent::ResumeAttempted {
             target: 3,

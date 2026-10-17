@@ -1,6 +1,0 @@
-
-Running 1 test using 1 worker
-
-  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:68:5 › grant-boundary: fragment credential never enters the rendered document (1.2s)
-
-  1 passed (1.9s)

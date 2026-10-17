@@ -586,7 +586,10 @@ pub fn config_from_env() -> Result<ViewerLauncherConfig, ConfigError> {
         }
     }
     let enabled = read(ENV_VIEWER_ENABLED, ConfigError::InvalidEnabled)?;
-    let origins = read(ENV_VIEWER_TRUSTED_ORIGINS, ConfigError::InvalidTrustedOrigin)?;
+    let origins = read(
+        ENV_VIEWER_TRUSTED_ORIGINS,
+        ConfigError::InvalidTrustedOrigin,
+    )?;
     config_from_values(enabled.as_deref(), origins.as_deref())
 }
 
@@ -1036,11 +1039,8 @@ mod tests {
             config_from_values(Some("1"), Some("  ")),
             Err(ConfigError::MissingTrustedOrigins)
         );
-        let cfg = config_from_values(
-            Some("1"),
-            Some("https://v.example, http://127.0.0.1:18790"),
-        )
-        .unwrap();
+        let cfg = config_from_values(Some("1"), Some("https://v.example, http://127.0.0.1:18790"))
+            .unwrap();
         assert!(cfg.enabled);
         assert_eq!(cfg.browser, BrowserChoice::SystemDefault);
         assert!(cfg.extra_args.is_empty());

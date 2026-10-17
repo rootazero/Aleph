@@ -3,6 +3,7 @@ use crate::api::native_credentials::{
     AttemptReceipt, ConnectSendError, HandshakeRequest, NativeAuthState, NativeOutcome, TauriIpc,
 };
 use crate::api::ExecApprovalApi;
+use crate::api::TelecomApprovalApi;
 use crate::components::sidebar::SystemAlert;
 use crate::state::notifications::{PendingApprovalView, PendingAskView};
 use futures::channel::{mpsc, oneshot};
@@ -18,10 +19,32 @@ use shared_ui_logic::connection::{
     OriginLiveness,
 };
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
 const WS_OPEN_TIMEOUT_MS: u32 = 8_000;
+/// A/B requests emit no gateway event; mounted operator views sample this list.
+const TELECOM_APPROVAL_POLL_MS: u32 = 4_000;
+
+/// Releases the shared refresh gate even if a mounted view cancels its future.
+struct TelecomRefreshGuard(Arc<AtomicBool>);
+impl Drop for TelecomRefreshGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Retry a transient failure only after this run proved operator capability.
+/// A role refusal is always terminal until a reconnect starts a new run.
+fn telecom_poll_continues(authorized: bool, outcome: &Option<Result<(), RpcFailure>>) -> bool {
+    match outcome {
+        None | Some(Ok(())) => true,
+        Some(Err(error)) => {
+            authorized && error.code != Some(aleph_protocol::jsonrpc::AUTH_REQUIRED)
+        }
+    }
+}
 
 /// How long a request will park waiting for the socket to finish connecting
 /// before it is failed. Covers [`WS_OPEN_TIMEOUT_MS`] plus the `connect`
@@ -694,6 +717,15 @@ pub struct DashboardState {
     /// (see `setup_approval_subscriptions`).
     pub pending_approvals: RwSignal<Vec<PendingApprovalView>>,
 
+    /// Pending telecom A/B approvals (`telecom.approval.pending`), rendered as
+    /// `TelecomApprovalCard`s next to the exec approvals. Operator-only on the
+    /// server; any fetch failure (e.g. `AUTH_REQUIRED` for a non-operator)
+    /// collapses to an empty list rather than an error surface.
+    pub pending_telecom_approvals:
+        RwSignal<Vec<crate::state::telecom_approvals::TelecomApprovalView>>,
+    /// One RPC at a time across mount polling, open refresh and event refresh.
+    telecom_refresh_in_flight: StoredValue<Arc<AtomicBool>>,
+
     /// Approval subscription ID for cleanup.
     approval_subscription_id: StoredValue<Option<usize>>,
 
@@ -1002,6 +1034,8 @@ impl DashboardState {
             alerts: RwSignal::new(HashMap::new()),
             alert_subscription_id: StoredValue::new(None),
             pending_approvals: RwSignal::new(Vec::new()),
+            pending_telecom_approvals: RwSignal::new(Vec::new()),
+            telecom_refresh_in_flight: StoredValue::new(Arc::new(AtomicBool::new(false))),
             approval_subscription_id: StoredValue::new(None),
             pending_clarifications: RwSignal::new(Vec::new()),
             needs_token: RwSignal::new(false),
@@ -2257,6 +2291,75 @@ impl DashboardState {
         self.subscribe_topic("alerts.**").await
     }
 
+    /// Refetch pending telecom approvals. `Some(Ok(()))` means the operator-only
+    /// method succeeded; `Some(Err)` carries a refusal/failure; `None` means a
+    /// refresh was already in flight. Non-operators see an empty list, never a
+    /// private error surface. A single gate keeps event/open/poll refreshes
+    /// from racing and painting an older snapshot over a newer one.
+    pub async fn refresh_telecom_approvals(&self) -> Option<Result<(), RpcFailure>> {
+        let in_flight = self.telecom_refresh_in_flight.with_value(Clone::clone);
+        if in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return None;
+        }
+        let _guard = TelecomRefreshGuard(in_flight);
+        let result = TelecomApprovalApi::list_pending(self).await;
+        match result {
+            Ok(list) => {
+                self.pending_telecom_approvals.set(list);
+                Some(Ok(()))
+            }
+            Err(error) => {
+                self.pending_telecom_approvals.set(Vec::new());
+                Some(Err(error))
+            }
+        }
+    }
+
+    /// Install a view-scoped 4s poll. Continue after an authorized `pending`
+    /// response; an initial failure or a role refusal stops this run.
+    /// Reconnect starts a fresh run, while cleanup stops a disposed view.
+    /// No telecom metadata is broadcast via the shared event stream.
+    pub fn poll_telecom_approvals_while_mounted(&self) {
+        let state = *self;
+        let mounted = Arc::new(AtomicBool::new(true));
+        let cleanup = mounted.clone();
+        on_cleanup(move || cleanup.store(false, Ordering::Release));
+        Effect::new(move |previous: Option<Arc<AtomicBool>>| {
+            if let Some(previous) = previous {
+                previous.store(false, Ordering::Release);
+            }
+            let connected = state.is_connected.get();
+            state.connection_epoch.track();
+            let current = Arc::new(AtomicBool::new(true));
+            if connected {
+                let current_run = current.clone();
+                let mounted_run = mounted.clone();
+                spawn_local(async move {
+                    let mut authorized = false;
+                    loop {
+                        if !mounted_run.load(Ordering::Acquire)
+                            || !current_run.load(Ordering::Acquire)
+                            || state.is_connected.try_get_untracked() != Some(true)
+                        {
+                            break;
+                        }
+                        let outcome = state.refresh_telecom_approvals().await;
+                        if !telecom_poll_continues(authorized, &outcome) {
+                            break;
+                        }
+                        authorized |= matches!(outcome, Some(Ok(())));
+                        // Sequential awaits and the shared gate prevent overlap.
+                        TimeoutFuture::new(TELECOM_APPROVAL_POLL_MS).await;
+                    }
+                });
+            }
+            current
+        });
+    }
+
     /// Subscribe to `approval.**` events so the `NotificationCenter` can render
     /// inline operator approval cards. The `ApprovalRequested` event is sparse
     /// (ids only), so `exec.approvals.pending` is the source of truth: any
@@ -2279,6 +2382,7 @@ impl DashboardState {
                         if let Ok(list) = ExecApprovalApi::list_pending(&state).await {
                             state.pending_approvals.set(list);
                         }
+                        state.refresh_telecom_approvals().await;
                     });
                 }
                 _ => {}
@@ -2314,6 +2418,7 @@ impl DashboardState {
                     let _ = seed_state.pending_approvals.try_set(list);
                 }
             }
+            seed_state.refresh_telecom_approvals().await;
         });
 
         // Subscribe last, same reason as `setup_alert_subscriptions`.
@@ -2550,6 +2655,24 @@ mod tests {
     };
     use leptos::prelude::{GetUntracked, Update};
     use std::collections::BTreeSet;
+
+    #[test]
+    fn telecom_poll_needs_initial_success_and_stops_on_role_refusal() {
+        use super::{telecom_poll_continues, RpcFailure};
+        let transport = Some(Err(RpcFailure {
+            code: None,
+            message: "temporary disconnect".into(),
+        }));
+        let denied = Some(Err(RpcFailure {
+            code: Some(aleph_protocol::jsonrpc::AUTH_REQUIRED),
+            message: "authenticated operator required".into(),
+        }));
+        assert!(telecom_poll_continues(false, &None)); // another fetch owns the gate
+        assert!(telecom_poll_continues(false, &Some(Ok(()))));
+        assert!(!telecom_poll_continues(false, &transport));
+        assert!(telecom_poll_continues(true, &transport));
+        assert!(!telecom_poll_continues(true, &denied));
+    }
 
     /// The defect this floor exists to stop, stated as the predicate: a request
     /// issued while the socket is still connecting must **wait**, not fail.

@@ -1,1 +1,0 @@
-new server PID 12704, config .analysis/browser-live-runtime/config.toml, ALEPH_HOME=.analysis/browser-live-runtime/home, logs server-scope.out/err

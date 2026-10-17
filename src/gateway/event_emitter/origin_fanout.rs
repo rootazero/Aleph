@@ -107,19 +107,19 @@ impl OriginFanoutEmitter {
 
         for chunk in chunks {
             let msg = OutboundMessage::text(self.origin_conversation.clone(), chunk);
-            if let Err(e) = self.registry.send(&self.origin_channel, msg).await {
-                let transient = crate::gateway::delivery_queue::should_enqueue(&e);
+            let report = self.registry.send_reported(&self.origin_channel, msg).await;
+            if let Err(e) = report.result {
+                let queued =
+                    report.queue == crate::gateway::channel_registry::QueueDisposition::Queued;
                 tracing::warn!(
                     channel = %self.origin_channel.as_str(),
-                    transient,
+                    queue = ?report.queue,
                     "origin reply fan-out failed: {e}"
                 );
-                // Same split as the ReplyEmitter's chokepoint, asked of the
-                // queue's own predicate: a transient failure means each
-                // remaining chunk is persisted for durable retry, so keep
-                // offering them; a terminal one means the tail would only add
-                // noise.
-                if !transient {
+                // Only actual queue custody permits offering the remaining
+                // chunks. The registry owns retries and policy; an eligible
+                // error is not proof that persistence accepted the message.
+                if !queued {
                     break;
                 }
             }
@@ -330,6 +330,96 @@ mod tests {
                 text.len()
             );
         }
+    }
+
+    /// Explicit-only custody is authoritative even when the error itself is
+    /// one that Automatic channels normally queue. The first failed chunk must
+    /// stop the tail rather than submit fresh chunks that cannot be persisted.
+    #[tokio::test]
+    async fn explicit_only_failure_stops_origin_tail_without_queue_custody() {
+        use crate::gateway::channel::{
+            Channel, ChannelCapabilities, ChannelError, ChannelInfo, ChannelResult, ChannelState,
+            ChannelStatus, OutboundDeliveryPolicy, SendResult,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct ExplicitFailing {
+            info: ChannelInfo,
+            state: ChannelState,
+            attempts: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl Channel for ExplicitFailing {
+            fn info(&self) -> &ChannelInfo {
+                &self.info
+            }
+            fn state(&self) -> &ChannelState {
+                &self.state
+            }
+            fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
+                OutboundDeliveryPolicy::ExplicitOnly
+            }
+            async fn start(&mut self) -> ChannelResult<()> {
+                Ok(())
+            }
+            async fn stop(&mut self) -> ChannelResult<()> {
+                Ok(())
+            }
+            async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+                self.attempts.fetch_add(1, Ordering::SeqCst);
+                Err(ChannelError::NotConnected("offline".to_string()))
+            }
+        }
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let registry = ChannelRegistry::new();
+        registry
+            .register(Box::new(ExplicitFailing {
+                info: ChannelInfo {
+                    id: ChannelId::new("explicit-origin"),
+                    name: "explicit-origin".to_string(),
+                    channel_type: "test".to_string(),
+                    status: ChannelStatus::Connected,
+                    capabilities: ChannelCapabilities {
+                        max_message_length: 100,
+                        ..ChannelCapabilities::default()
+                    },
+                },
+                state: ChannelState::new(8),
+                attempts: attempts.clone(),
+            }))
+            .await;
+        let fanout = OriginFanoutEmitter::new(
+            Arc::new(CollectingEventEmitter::new()),
+            Arc::new(registry),
+            "explicit-origin",
+            "chat-explicit",
+        );
+
+        fanout
+            .emit(StreamEvent::RunComplete {
+                run_id: "r-explicit".to_string(),
+                seq: 0,
+                summary: RunSummary {
+                    final_response: Some(format!(
+                        "{}\n\n{}\n\n{}",
+                        "a".repeat(90),
+                        "b".repeat(90),
+                        "c".repeat(90)
+                    )),
+                    ..Default::default()
+                },
+                total_duration_ms: 0,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "an ExplicitOnly origin failure has no queued custody for the tail"
+        );
     }
 
     /// Every construction site is one `btw::format_side_answer`'s doc has

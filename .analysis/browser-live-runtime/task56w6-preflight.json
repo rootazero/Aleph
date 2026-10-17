@@ -1,1 +1,0 @@
-{"contract":"aleph-real-native-run-v1","status":"PREFLIGHT_OK_NOT_EXECUTED","exitCode":4,"executed":false,"windowIndex":6,"failedReason":"none","cleanupState":"NOT_ARMED","phases":[{"phase":"preflight","ok":true,"ms":9826,"seam":true,"exeFresh":true,"reaperFresh":true,"panelFresh":true,"gatewayIdentity":true,"fixtureUp":true,"reason":"none"}],"limitations":[],"documents":0}

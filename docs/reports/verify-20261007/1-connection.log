@@ -70,4 +70,3 @@ test gateway::server::connection::auth::verified_user_tests::unauthorized_no_sto
 test gateway::server::connection::auth::verified_user_tests::active_bound_member_and_admin_are_verified ... ok
 
 test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 20657 filtered out; finished in 0.17s
-

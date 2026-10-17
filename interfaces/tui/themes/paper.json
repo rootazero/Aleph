@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "name": "paper",
+  "light": true,
+  "colors": {
+    "fg": "#33352f",
+    "dim": "#64685d",
+    "accent": "#8b562c",
+    "prompt": "#8b562c",
+    "userBar": "#8b562c",
+    "toolPending": "#7e8075",
+    "toolRunning": "#855d15",
+    "toolOk": "#3f6b42",
+    "toolErr": "#a33e43",
+    "toolRail": "#b7a78a",
+    "diffAdd": "#3f6b42",
+    "diffDel": "#a33e43",
+    "diffCtx": "#64685d",
+    "diffGutter": "#7e8075",
+    "admonitionNote": "#3d638a",
+    "admonitionTip": "#3f6b42",
+    "admonitionImportant": "#8b562c",
+    "admonitionWarning": "#855d15",
+    "admonitionCaution": "#a33e43",
+    "codeBorder": "#b7a78a",
+    "link": "#3d638a",
+    "contextOk": "#3f6b42",
+    "contextWarn": "#855d15",
+    "contextDanger": "#a33e43",
+    "cost": "#3f6b42",
+    "spinner": "#855d15"
+  },
+  "chrome": {
+    "background": "#f3f0e8",
+    "surface": "#e8e4d9",
+    "selectionBg": "#b7a78a",
+    "userBg": "#e8e4d9",
+    "border": "#b7a78a",
+    "borderFocused": "#8b562c"
+  }
+}

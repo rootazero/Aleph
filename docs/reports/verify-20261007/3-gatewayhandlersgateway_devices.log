@@ -56,4 +56,3 @@ test gateway::handlers::gateway_devices::tests::a_listed_row_carries_exactly_the
 test gateway::handlers::gateway_devices::tests::revoke_requires_device_id ... ok
 
 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 20666 filtered out; finished in 0.07s
-

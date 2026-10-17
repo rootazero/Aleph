@@ -106,6 +106,25 @@ fn preset_config(entry: &CatalogEntry, model: &str, api_key: &str) -> ProviderCo
         temperature: None,
         top_p: None,
         top_k: None,
+        model_defs: None,
+        thinking_level: None,
+        effort: None,
+        cache_retention: None,
+        service_tier: None,
+        stop_sequences: None,
+        media_resolution: None,
+        system_prompt_mode: None,
+        model_behavior: None,
+        metadata_user_id: None,
+        response_format: None,
+        stream_idle_timeout_secs: None,
+        frequency_penalty: None,
+        presence_penalty: None,
+        repeat_penalty: None,
+        seed: None,
+        logprobs: None,
+        top_logprobs: None,
+        parallel_tool_calls: None,
     }
 }
 
@@ -127,8 +146,32 @@ fn passthrough(info: &ProviderInfo) -> ProviderConfigJson {
         max_tokens: info.max_tokens,
         context_window: info.context_window,
         temperature: info.temperature,
+        // `top_p` / `top_k` are not carried in `ProviderInfo`; the server's
+        // persistence path preserves the stored value when the DTO omits them.
         top_p: None,
         top_k: None,
+        // `Some` because the passthrough mirrors the stored state exactly: an
+        // empty stored list re-serialises as empty and must not read as
+        // "preserve prior".
+        model_defs: Some(info.model_defs.clone()),
+        thinking_level: info.thinking_level.clone(),
+        effort: info.effort.clone(),
+        cache_retention: info.cache_retention.clone(),
+        service_tier: info.service_tier.clone(),
+        stop_sequences: info.stop_sequences.clone(),
+        media_resolution: info.media_resolution.clone(),
+        system_prompt_mode: info.system_prompt_mode.clone(),
+        model_behavior: info.model_behavior.clone(),
+        metadata_user_id: info.metadata_user_id.clone(),
+        response_format: info.response_format.clone(),
+        stream_idle_timeout_secs: info.stream_idle_timeout_secs,
+        frequency_penalty: info.frequency_penalty,
+        presence_penalty: info.presence_penalty,
+        repeat_penalty: info.repeat_penalty,
+        seed: info.seed,
+        logprobs: info.logprobs,
+        top_logprobs: info.top_logprobs,
+        parallel_tool_calls: info.parallel_tool_calls,
     }
 }
 

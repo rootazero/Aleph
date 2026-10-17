@@ -394,6 +394,7 @@ async fn invoke_canonical(
         unattended: false,
         plan_gate: None,
         side_question: false,
+        telecom_authority: None,
     };
     let service = crate::tools::ScopedToolService::new(Arc::new(inner), Default::default())
         .with_turn_context(ctx)

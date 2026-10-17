@@ -115,6 +115,8 @@ mod tests {
             at: 0,
             project_root: None,
             envelope: None,
+            telecom_provenance:
+                crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
         }
     }
     fn rf(id: &str) -> SessionEvent {

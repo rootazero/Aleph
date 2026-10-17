@@ -39,6 +39,7 @@ pub mod bash_exec;
 // `diagnostics/checks/browser_runtime.rs`, and the executor's tool
 // registry. Re-declaring it here would just be a duplicate declaration.
 pub mod browser_tools;
+pub mod call_lifecycle;
 pub mod canvas;
 pub mod capability_projection_diagnostics;
 pub mod channel_directory;

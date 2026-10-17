@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn v14_retry_preserves_master_token_when_identity_columns_already_exist() {
+    let store = SecurityStore::in_memory().unwrap();
+    store
+        .set_shared_token_with_secret("synthetic-hash", &[7; 32], Some("synthetic-master"))
+        .unwrap();
+    // A partial upgrade can finish ALTERs without advancing the schema version.
+    store.set_schema_version(13).unwrap();
+    store
+        .migrate()
+        .expect("existing columns must not force an in-memory fallback");
+    assert_eq!(
+        store.get_shared_token_plaintext().unwrap().as_deref(),
+        Some("synthetic-master")
+    );
+    assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);
+}
+
+#[test]
 fn test_schema_migration() {
     let store = SecurityStore::in_memory().unwrap();
     assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);

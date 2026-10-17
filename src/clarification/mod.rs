@@ -34,12 +34,11 @@ pub mod session;
 pub use ask::{ask, AskOutcome, ClarificationDeps};
 pub use session::{ClarificationManager, ResolveOutcome, DEFAULT_CLARIFY_TIMEOUT};
 
-// `PendingClarification` is constructed by `ClarificationManager::list_pending`
-// and serialized as part of the gateway's clarification API response. It is
-// not part of the public Rust surface — Panel / TUI consume it via the JSON
-// gateway, not by importing the type — so it stays a private detail of the
-// `session` module.
+// The public question and pending views live in `aleph_protocol::clarification`.
+// Core alone holds option values and maps them to the value-free wire views.
 
+use aleph_protocol::AskUserOption as ClarificationOptionView;
+pub use aleph_protocol::AskUserQuestion as ClarificationQuestionView;
 use serde::{Deserialize, Serialize};
 
 /// A single option in a select-type question.
@@ -282,57 +281,22 @@ const DEFAULT_QUESTION_ID: &str = "answer";
 // Wire views
 // =============================================================================
 
-/// Wire projection of one [`ClarificationOption`].
-///
-/// `value` is deliberately absent: it is the *interpreter's* vocabulary, and
-/// every client answers by 1-based index or free text so that
-/// [`session::interpret_reply`] stays the only place a reply becomes a value.
-/// Shipping `value` too would invite a client to send it back and quietly
-/// become a second interpreter.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ClarificationOptionView {
-    /// What the user reads.
-    pub label: String,
-    /// Why they might pick it. **This is the field whose absence made the
-    /// Panel and TUI render a bare label while channels rendered
-    /// `label — description`.**
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
-
-/// Wire projection of one [`ClarificationQuestion`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClarificationQuestionView {
-    /// Stable id — echoed back in the answer set.
-    pub id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub header: Option<String>,
-    pub prompt: String,
-    #[serde(default)]
-    pub(crate) options: Vec<ClarificationOptionView>,
-    #[serde(default)]
-    pub multi_select: bool,
-    #[serde(default)]
-    pub secret: bool,
-}
-
-impl From<&ClarificationQuestion> for ClarificationQuestionView {
-    fn from(q: &ClarificationQuestion) -> Self {
-        Self {
-            id: q.id.clone(),
-            header: q.header.clone(),
-            prompt: q.prompt.clone(),
-            options: q
-                .options
-                .iter()
-                .map(|o| ClarificationOptionView {
-                    label: o.label.clone(),
-                    description: o.description.clone(),
-                })
-                .collect(),
-            multi_select: q.multi_select,
-            secret: q.secret,
-        }
+/// Project the Core-only question into the shared value-free wire contract.
+pub(crate) fn question_view(q: &ClarificationQuestion) -> ClarificationQuestionView {
+    ClarificationQuestionView {
+        id: q.id.clone(),
+        header: q.header.clone(),
+        prompt: q.prompt.clone(),
+        options: q
+            .options
+            .iter()
+            .map(|o| ClarificationOptionView {
+                label: o.label.clone(),
+                description: o.description.clone(),
+            })
+            .collect(),
+        multi_select: q.multi_select,
+        secret: q.secret,
     }
 }
 

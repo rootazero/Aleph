@@ -1,1 +1,0 @@
-driver navigate-fence: {"ok":true,"result":{"message":"Navigated to http://127.0.0.1:18791/page?after=navigation in profile 'default'","success":true},"tool_name":"browser_navigate"}

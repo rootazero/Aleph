@@ -15,6 +15,8 @@ use ratatui::{
     Frame,
 };
 
+use super::compact::fit_line;
+
 use crate::tui::app::agent_display_order;
 use crate::tui::theme::{spinner_at, theme};
 
@@ -146,22 +148,28 @@ pub fn render_agents_panel(
         header.push_str(&format!(", {finished} finished"));
     }
     header.push_str(" \u{00b7} /agents to browse");
-    lines.push(Line::from(Span::styled(
-        clamp_chars(&header, width),
-        Style::default()
-            .fg(theme().primary)
-            .add_modifier(Modifier::BOLD),
-    )));
+    lines.push(fit_line(
+        Line::from(Span::styled(
+            header,
+            Style::default()
+                .fg(theme().primary)
+                .add_modifier(Modifier::BOLD),
+        )),
+        width,
+    ));
 
     let spinner = spinner_at(spinner_frame).to_string();
     for node in ordered.iter().take(MAX_AGENT_ROWS) {
         let (glyph, style) = if node.lifecycle == NodeLifecycle::Running {
             (spinner.as_str(), lifecycle_style(NodeLifecycle::Running))
         } else {
-            (lifecycle_glyph(node.lifecycle), muted)
+            (
+                lifecycle_glyph(node.lifecycle),
+                lifecycle_style(node.lifecycle),
+            )
         };
         let row = format!("   {glyph} {}", agent_row_text(node, now_ms));
-        lines.push(Line::from(Span::styled(clamp_chars(&row, width), style)));
+        lines.push(fit_line(Line::from(Span::styled(row, style)), width));
     }
     if ordered.len() > MAX_AGENT_ROWS {
         let hidden = ordered.len() - MAX_AGENT_ROWS;
@@ -170,25 +178,16 @@ pub fn render_agents_panel(
             .skip(MAX_AGENT_ROWS)
             .filter(|n| n.lifecycle != NodeLifecycle::Running)
             .count();
-        lines.push(Line::from(Span::styled(
-            format!("   +{hidden} more ({hidden_finished} finished)"),
-            muted,
-        )));
+        lines.push(fit_line(
+            Line::from(Span::styled(
+                format!("   +{hidden} more ({hidden_finished} finished)"),
+                muted,
+            )),
+            width,
+        ));
     }
 
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// Character-safe single-line clamp (CJK-safe; same rule as the tasks panel).
-fn clamp_chars(s: &str, max: usize) -> String {
-    if max == 0 {
-        return String::new();
-    }
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let head: String = s.chars().take(max.saturating_sub(1)).collect();
-    format!("{head}\u{2026}")
 }
 
 #[cfg(test)]

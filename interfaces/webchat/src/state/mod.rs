@@ -8,6 +8,7 @@ pub mod reattach;
 
 pub mod run_clock;
 pub mod sessions;
+pub mod telecom_approvals;
 pub mod typewriter;
 pub mod user_directory;
 pub mod viewport;

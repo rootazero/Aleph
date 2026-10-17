@@ -1,6 +1,0 @@
-
-Running 1 test using 1 worker
-
-  ✓  1 [chromium] › qa\browser_live\tests\viewer.spec.ts:77:5 › reap: revoked or expired viewer closes without presenting a stale frame (1.1s)
-
-  1 passed (1.9s)

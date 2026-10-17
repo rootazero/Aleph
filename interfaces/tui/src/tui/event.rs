@@ -19,9 +19,11 @@ pub enum TermEvent {
     /// through the Enter/send path). Unix/macOS only — crossterm's Windows
     /// console source does not synthesize `Event::Paste`.
     Paste(String),
-    /// A wheel turn, click or drag. Only arrives while mouse capture is on;
-    /// a terminal that refused capture simply never produces one, which is
-    /// why every affordance a click reaches also has a key (spec §8).
+    /// A wheel turn or selection lifecycle event. Pure motion is discarded
+    /// before this layer; the left-button lifecycle and right-button copy
+    /// gesture are reliable, bounded input. Only arrives while mouse capture
+    /// is on; a terminal that refused capture simply never produces one, which
+    /// is why every affordance a click reaches also has a key (spec §8).
     Mouse(MouseEvent),
 }
 
@@ -115,12 +117,20 @@ fn map_event(ev: Event) -> Option<TermEvent> {
         Event::Key(key) if key.kind == KeyEventKind::Press => Some(TermEvent::Key(key)),
         Event::Resize(_, _) => Some(TermEvent::Resize),
         Event::Paste(text) => Some(TermEvent::Paste(sanitize_pasted_text(&text))),
-        // Forwarded whole rather than pre-classified here: which kinds mean
-        // something is a question about the screen, and the screen is
-        // `keys.rs`. Moves are the high-rate ones and they are dropped there,
-        // one layer later, so that decision sits beside the clicks it is a
-        // decision about.
-        Event::Mouse(m) => Some(TermEvent::Mouse(m)),
+        Event::Mouse(m)
+            if matches!(
+                m.kind,
+                crossterm::event::MouseEventKind::ScrollUp
+                    | crossterm::event::MouseEventKind::ScrollDown
+                    | crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                    | crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left)
+                    | crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left)
+                    | crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Right)
+            ) =>
+        {
+            Some(TermEvent::Mouse(m))
+        }
+        Event::Mouse(_) => None,
         _ => None,
     }
 }
@@ -128,9 +138,12 @@ fn map_event(ev: Event) -> Option<TermEvent> {
 /// Spawn a blocking task that polls crossterm events and sends them
 /// through an mpsc channel. Returns the receiving end.
 ///
-/// The task polls every 50ms. Key presses, resizes, pastes and mouse events
-/// are forwarded; everything else crossterm reports (focus gained/lost, key
-/// releases) is dropped by [`map_event`].
+/// The task polls every 50ms. Key presses, resizes, pastes and consumable mouse
+/// events are forwarded; pure mouse movement and everything else crossterm
+/// reports (focus gained/lost, key releases) are dropped by [`map_event`].
+/// Drag samples are disposable intermediate positions: a full queue drops only
+/// those samples, while Down/Up and wheel events remain reliable and cannot
+/// leave a selection armed or stall scrolling.
 ///
 /// The task runs until the receiver is dropped (send returns Err).
 pub fn spawn_event_collector() -> mpsc::Receiver<TermEvent> {
@@ -144,8 +157,20 @@ pub fn spawn_event_collector() -> mpsc::Receiver<TermEvent> {
                 Ok(true) => {
                     if let Ok(ev) = event::read() {
                         if let Some(te) = map_event(ev) {
-                            // If send fails, receiver was dropped — exit the loop
-                            if tx.blocking_send(te).is_err() {
+                            let is_drag = matches!(
+                                &te,
+                                TermEvent::Mouse(mouse)
+                                    if matches!(mouse.kind, crossterm::event::MouseEventKind::Drag(_))
+                            );
+                            if is_drag {
+                                // Intermediate positions are disposable; the final Up
+                                // carries the authoritative endpoint. Never let a drag
+                                // flood delay keyboard, paste, resize, or wheel delivery.
+                                match tx.try_send(te) {
+                                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                                    Err(mpsc::error::TrySendError::Closed(_)) => break,
+                                }
+                            } else if tx.blocking_send(te).is_err() {
                                 break;
                             }
                         }
@@ -194,23 +219,48 @@ mod tests {
         assert!(map_event(Event::Key(repeat)).is_none());
     }
 
-    /// Mouse events reach the router. Without this arm every click and wheel
-    /// turn is dropped one layer before anything could handle it — and the
-    /// symptom is indistinguishable from a terminal that refused capture,
-    /// which is the state the whole feature is designed to survive.
     #[test]
-    fn mouse_events_are_forwarded() {
+    fn consumable_mouse_events_are_forwarded() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-        let ev = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 4,
-            row: 9,
-            modifiers: KeyModifiers::empty(),
-        };
-        assert!(matches!(
-            map_event(Event::Mouse(ev)),
-            Some(TermEvent::Mouse(m)) if m.column == 4 && m.row == 9
-        ));
+
+        for kind in [
+            MouseEventKind::ScrollUp,
+            MouseEventKind::ScrollDown,
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+        ] {
+            let ev = MouseEvent {
+                kind,
+                column: 4,
+                row: 9,
+                modifiers: KeyModifiers::empty(),
+            };
+            assert!(matches!(
+                map_event(Event::Mouse(ev)),
+                Some(TermEvent::Mouse(m)) if m.column == 4 && m.row == 9
+            ));
+        }
+    }
+
+    #[test]
+    fn unconsumed_mouse_events_are_dropped() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        for kind in [
+            MouseEventKind::Moved,
+            MouseEventKind::Drag(MouseButton::Right),
+            MouseEventKind::Up(MouseButton::Right),
+        ] {
+            let ev = MouseEvent {
+                kind,
+                column: 4,
+                row: 9,
+                modifiers: KeyModifiers::empty(),
+            };
+            assert!(map_event(Event::Mouse(ev)).is_none());
+        }
     }
 
     #[test]

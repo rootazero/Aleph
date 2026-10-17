@@ -32,6 +32,8 @@ use super::prompt_build::*;
 use super::runner_impl::*;
 use super::*;
 
+use crate::gateway::telecom::persisted_marker::{PersistedTelecomMarker, MARKER_VERSION};
+use crate::gateway::telecom::public_context::test_support::sample_public_context;
 use crate::orchestrator::flow_spec::FlowHistoryTurn;
 use crate::session::events::MessageContent;
 use session_seed::seed_session;
@@ -112,6 +114,7 @@ fn broadcast_callback_on_complete_with_outcome_emits_terminal_event() {
         context_window: 0,
         serving_model: None,
         serving_provider: None,
+        private_lookup: None,
     };
     cb.on_complete_with_outcome(&outcome);
 
@@ -264,6 +267,8 @@ fn blocked_run_log(turn: uuid::Uuid) -> Vec<SessionEventRecord> {
                 at: 0,
                 project_root: None,
                 envelope: None,
+                telecom_provenance:
+                    crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
             },
         ),
         ev(
@@ -463,10 +468,15 @@ fn fresh_service() -> std::sync::Arc<dyn SessionService> {
 async fn seed_session_prompt_emits_one_user_message() {
     let service = fresh_service();
     let sid = SessionKey::ephemeral("seed-prompt");
-    super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Prompt("hello".into()))
-        .await
-        // rust-doctor-disable-next-line unwrap-in-production
-        .expect("seed Prompt");
+    super::session_seed::seed_session(
+        service.as_ref(),
+        &sid,
+        FlowInput::Prompt("hello".into()),
+        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+    )
+    .await
+    // rust-doctor-disable-next-line unwrap-in-production
+    .expect("seed Prompt");
 
     // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
@@ -514,6 +524,7 @@ async fn seed_session_history_replays_turns_and_adds_prompt() {
             turns,
             prompt: "q3".into(),
         },
+        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
     )
     .await
     // rust-doctor-disable-next-line unwrap-in-production
@@ -556,10 +567,15 @@ async fn history_input_does_not_reseed_when_log_nonempty() {
     let sid = SessionKey::ephemeral("seed-noreseed");
 
     // Pre-seed ONE user message so the log is non-empty
-    seed_session(service.as_ref(), &sid, FlowInput::Prompt("earlier".into()))
-        .await
-        // rust-doctor-disable-next-line unwrap-in-production
-        .unwrap();
+    seed_session(
+        service.as_ref(),
+        &sid,
+        FlowInput::Prompt("earlier".into()),
+        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+    )
+    .await
+    // rust-doctor-disable-next-line unwrap-in-production
+    .unwrap();
 
     // Then seed History with the SAME history turn + a new prompt
     let turns = vec![FlowHistoryTurn::User(MessageContent {
@@ -575,6 +591,7 @@ async fn history_input_does_not_reseed_when_log_nonempty() {
             turns,
             prompt: "new".into(),
         },
+        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
     )
     .await
     // rust-doctor-disable-next-line unwrap-in-production
@@ -615,10 +632,15 @@ async fn seed_session_multimodal_emits_one_user_per_entry() {
             thinking_signature: None,
         },
     ];
-    super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Multimodal(msgs))
-        .await
-        // rust-doctor-disable-next-line unwrap-in-production
-        .expect("seed Multimodal");
+    super::session_seed::seed_session(
+        service.as_ref(),
+        &sid,
+        FlowInput::Multimodal(msgs),
+        crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
+    )
+    .await
+    // rust-doctor-disable-next-line unwrap-in-production
+    .expect("seed Multimodal");
 
     // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
@@ -631,6 +653,152 @@ async fn seed_session_multimodal_emits_one_user_per_entry() {
         })
         .collect();
     assert_eq!(users, vec!["m1", "m2"]);
+}
+
+/// The carrier-before-message contract every `FlowInput` shape must keep: the
+/// LAST real `UserMessage` is preceded (earlier seq) by exactly one
+/// `SeedProvenance` naming its exact `turn_id`, carrying the run's origin, and
+/// the reducer reads that origin back. No body ever reaches the marker.
+async fn assert_carrier_binds_last_user(
+    service: &dyn SessionService,
+    sid: &SessionKey,
+    expect: PersistedTelecomMarker,
+) {
+    use crate::session::reduction::{is_disposition_bearing, unanswered_seed_provenance};
+    // rust-doctor-disable-next-line unwrap-in-production
+    let events = service.get_events(sid, None, None).await.unwrap();
+    let (user_seq, user_turn) = events
+        .iter()
+        .rev()
+        .find_map(|r| match &r.event {
+            SessionEvent::UserMessage {
+                turn_id,
+                synthetic: false,
+                ..
+            } => Some((r.seq, *turn_id)),
+            _ => None,
+        })
+        .expect("a real seed UserMessage");
+    let carriers: Vec<_> = events
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::SeedProvenance {
+                turn_id,
+                telecom_provenance,
+                ..
+            } => Some((r.seq, *turn_id, telecom_provenance.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(carriers.len(), 1, "exactly one carrier per seed");
+    assert!(carriers[0].0 < user_seq, "carrier precedes the message");
+    assert_eq!(carriers[0].1, user_turn, "bound by exact turn_id");
+    // Nothing between the carrier and the message but the seed's own framing.
+    assert!(events
+        .iter()
+        .filter(|r| r.seq > carriers[0].0 && r.seq < user_seq)
+        .all(|r| matches!(
+            r.event,
+            SessionEvent::TurnStarted { .. } | SessionEvent::UserMessage { .. }
+        )));
+    let bearing: Vec<_> = events
+        .iter()
+        .filter(|r| is_disposition_bearing(&r.event))
+        .cloned()
+        .collect();
+    let got = unanswered_seed_provenance(&bearing, user_seq);
+    assert_eq!(format!("{got:?}"), format!("{expect:?}"));
+    assert!(!format!("{:?}", carriers[0].2).contains("secret-body"));
+}
+
+fn public_origin() -> PersistedTelecomMarker {
+    // Wire form of a current Public marker (the same shape `RunStarted` persists).
+    let ctx = sample_public_context("b-secret");
+    serde_json::from_value(serde_json::json!({
+        "version": MARKER_VERSION, "state": "public", "channel": "sms",
+        "region": "r-secret", "binding_ref": "b-secret", "connection_generation": 3,
+        "caller_digest": ctx.provenance().caller_digest().as_str(),
+    }))
+    .expect("current public marker")
+}
+
+fn text(t: &str) -> MessageContent {
+    MessageContent {
+        text: t.into(),
+        blocks: Vec::new(),
+        thinking: None,
+        thinking_signature: None,
+    }
+}
+
+#[tokio::test]
+async fn seed_carrier_binds_the_last_user_message_for_every_input_shape() {
+    for public in [false, true] {
+        let origin = || {
+            if public {
+                public_origin()
+            } else {
+                PersistedTelecomMarker::Ordinary
+            }
+        };
+        let inputs: Vec<(&str, FlowInput)> = vec![
+            ("prompt", FlowInput::Prompt("secret-body".into())),
+            (
+                "messages",
+                FlowInput::Messages(vec![text("first"), text("secret-body")]),
+            ),
+            (
+                "history",
+                FlowInput::History {
+                    turns: vec![
+                        FlowHistoryTurn::User(text("q1")),
+                        FlowHistoryTurn::Assistant(text("a1")),
+                    ],
+                    prompt: "secret-body".into(),
+                },
+            ),
+            (
+                "multimodal",
+                FlowInput::Multimodal(vec![text("m1"), text("secret-body")]),
+            ),
+        ];
+        for (name, input) in inputs {
+            let service = fresh_service();
+            let sid = SessionKey::ephemeral(&format!("carrier-{name}-{public}"));
+            super::session_seed::seed_session(service.as_ref(), &sid, input, origin())
+                .await
+                .expect(name);
+            assert_carrier_binds_last_user(service.as_ref(), &sid, origin()).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn resume_and_empty_inputs_write_no_carrier() {
+    for (name, input) in [
+        ("resume", FlowInput::Resume),
+        ("messages", FlowInput::Messages(Vec::new())),
+        ("multimodal", FlowInput::Multimodal(Vec::new())),
+    ] {
+        let service = fresh_service();
+        let sid = SessionKey::ephemeral(&format!("nocarrier-{name}"));
+        super::session_seed::seed_session(
+            service.as_ref(),
+            &sid,
+            input,
+            PersistedTelecomMarker::Ordinary,
+        )
+        .await
+        .expect(name);
+        // rust-doctor-disable-next-line unwrap-in-production
+        let events = service.get_events(&sid, None, None).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|r| matches!(r.event, SessionEvent::SeedProvenance { .. })),
+            "{name}: a carrier with nothing to vouch for is noise"
+        );
+    }
 }
 
 // BUG-2/BUG-3 regression coverage — `last_user_query` must round-trip the
@@ -1000,6 +1168,16 @@ fn runner_with_failing_provider(
                 "invalid api key".into(),
             )),
     );
+    runner_with_default_provider(session_service, registry, provider)
+}
+
+/// Runner literal shared by fixtures: every optional collaborator `None`,
+/// `provider` as the Core default.
+fn runner_with_default_provider(
+    session_service: std::sync::Arc<dyn SessionService>,
+    registry: std::sync::Arc<AgentRegistry>,
+    provider: std::sync::Arc<dyn AiProvider>,
+) -> AgentHarnessRunner {
     AgentHarnessRunner {
         agent_registry: registry,
         session_service,
@@ -1081,6 +1259,7 @@ async fn run_until_it_fails(
             crate::thinker::TurnEnvelope::default(),
             None,
             "probe-run".to_string(),
+            None,
         )
         .await;
 
@@ -1253,6 +1432,7 @@ async fn run_measures_its_messages(agent_id: &str, config: &crate::config::Confi
             crate::thinker::TurnEnvelope::default(),
             None,
             "budget-probe-run".to_string(),
+            None,
         )
         .await;
     assert!(
@@ -1420,6 +1600,7 @@ async fn the_run_markers_carry_the_engine_run_id() {
             crate::thinker::TurnEnvelope::default(),
             None,
             "engine-run-42".to_string(),
+            None,
         )
         .await;
 
@@ -1442,4 +1623,53 @@ async fn the_run_markers_carry_the_engine_run_id() {
         ],
         "one bracket, both markers under the engine's run id"
     );
+}
+
+// -- public telecom run fixture ------------------------------------------
+
+/// Runner whose OWNER session service already holds `canary` in a prior owner
+/// turn, with `provider` as the Core default. Used by
+/// `public_run::tests` to prove the public path never reads owner history.
+pub(super) async fn runner_with_provider_for_public(
+    provider: std::sync::Arc<dyn AiProvider>,
+    canary: &str,
+) -> (AgentHarnessRunner, SessionKey) {
+    let service = fresh_service();
+    let sid = SessionKey::ephemeral("owner-main");
+    service.attach(sid.clone()).await.expect("attach owner");
+    let turn = uuid::Uuid::new_v4();
+    service
+        .emit_event(
+            &sid,
+            crate::session::events::SessionEvent::UserMessage {
+                turn_id: turn,
+                content: crate::session::events::MessageContent {
+                    text: format!("owner secret: {canary}"),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: crate::session::events::now_ms(),
+                synthetic: false,
+                author_user_id: None,
+            },
+        )
+        .await
+        .expect("plant owner canary");
+    let registry = std::sync::Arc::new(AgentRegistry::new());
+    (
+        runner_with_default_provider(service, registry, provider),
+        sid,
+    )
+}
+
+/// Owner session event count for the planted owner key, so a test can assert
+/// a public run wrote nothing to the owner service.
+pub(super) async fn owner_event_count(runner: &AgentHarnessRunner, owner: &SessionKey) -> usize {
+    runner
+        .session_service
+        .get_events(owner, None, None)
+        .await
+        .map(|v| v.len())
+        .unwrap_or(0)
 }

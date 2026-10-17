@@ -47,4 +47,3 @@ test gateway::server::device_invalidation_tests::revoking_a_device_with_no_open_
 test gateway::server::device_invalidation_tests::downgrades_only_the_revoked_device ... ok
 
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 20674 filtered out; finished in 0.00s
-

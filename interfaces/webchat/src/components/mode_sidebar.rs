@@ -124,6 +124,15 @@ impl PanelMode {
     }
 }
 
+/// Whether `pathname` is the sub-agent tree's full-screen deep-link.
+///
+/// The shell and dashboard router both consume this predicate so the route's
+/// ownership boundary cannot drift between two hand-written string checks.
+#[must_use]
+pub fn is_subagent_tree_route(pathname: &str) -> bool {
+    pathname.strip_suffix('/').unwrap_or(pathname) == "/dashboard/subagents"
+}
+
 #[component]
 #[must_use]
 pub fn ModeSidebar() -> impl IntoView {
@@ -230,7 +239,15 @@ fn SidebarBrand() -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::PanelMode;
+    use super::{is_subagent_tree_route, PanelMode};
+
+    #[test]
+    fn subagent_deep_link_matches_route_shape_without_matching_neighbors() {
+        assert!(is_subagent_tree_route("/dashboard/subagents"));
+        assert!(is_subagent_tree_route("/dashboard/subagents/"));
+        assert!(!is_subagent_tree_route("/dashboard/subagents/child"));
+        assert!(!is_subagent_tree_route("/dashboard/subagent"));
+    }
 
     #[test]
     fn from_path_classifies_more() {

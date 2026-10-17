@@ -54,4 +54,3 @@ test gateway::handlers::browser_viewer::tests::credentialless_implicit_owner_den
 test gateway::handlers::browser_viewer::tests::issuer_rpc_owned_issue_and_revoke_enforce_identity_without_oracle ... ok
 
 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 20667 filtered out; finished in 0.06s
-

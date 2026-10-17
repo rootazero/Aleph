@@ -148,6 +148,14 @@ fn classify_frame(text: &str) -> Inbound {
                 id: id.clone(),
             };
         }
+        // These exact Panel notifications are exempt from StreamEvent in the
+        // gateway frame census. They are not lost transcript events.
+        if matches!(
+            method,
+            "stream.session_updated" | "stream.running_set_changed"
+        ) {
+            return Inbound::Unrecognized;
+        }
         let Some(params) = value.get("params") else {
             return Inbound::UnhandledNotification {
                 method: method.to_string(),
@@ -222,6 +230,14 @@ const TOPIC_EVENT_METHOD: &str = "event";
 /// mirror), so a slow or absent consumer costs frames, never the socket.
 const TOPIC_EVENT_BUFFER: usize = 256;
 
+/// Observable transport continuity. Counters live outside the bounded event
+/// channel so a full channel cannot hide the fact that recovery is required.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamContinuity {
+    pub generation: u64,
+    pub dropped_events: u64,
+}
+
 /// WebSocket client for Aleph Gateway
 pub struct AlephClient {
     /// WebSocket write half
@@ -240,6 +256,7 @@ pub struct AlephClient {
     /// Nothing downstream is re-plumbed, and no caller has to learn that the
     /// socket underneath changed.
     event_tx: mpsc::Sender<StreamEvent>,
+    dropped_events: Arc<std::sync::atomic::AtomicU64>,
     /// Topic-notification sender — same ownership-anchor role as `event_tx`,
     /// for the `{"method":"event"}` plane. Every read loop (initial and each
     /// reconnect replacement) is handed a clone, so a claimed receiver
@@ -479,6 +496,7 @@ impl AlephClient {
             read_pending,
             self.event_tx.clone(),
             self.topic_tx.clone(),
+            self.dropped_events.clone(),
             self.connected.clone(),
             read_write,
             self.generation.clone(),
@@ -526,12 +544,14 @@ impl AlephClient {
         let connected = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let write = Arc::new(Mutex::new(write));
         let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let dropped_events = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
         let client = Self {
             write: write.clone(),
             pending: pending.clone(),
             id_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             event_tx: event_tx.clone(),
+            dropped_events: dropped_events.clone(),
             topic_tx: topic_tx.clone(),
             topic_events: Arc::new(std::sync::Mutex::new(Some(topic_rx))),
             connected: connected.clone(),
@@ -547,7 +567,15 @@ impl AlephClient {
         // Generation 0: the first socket, and the one every later reconnect
         // supersedes.
         tokio::spawn(Self::read_loop(
-            read, pending, event_tx, topic_tx, connected, write, generation, 0,
+            read,
+            pending,
+            event_tx,
+            topic_tx,
+            dropped_events,
+            connected,
+            write,
+            generation,
+            0,
         ));
 
         info!("Connected to Gateway");
@@ -560,7 +588,7 @@ impl AlephClient {
     /// `connected` on the way out only while `generation` still names it. See
     /// the field's doc — after a reconnect two loops can be alive, and the
     /// abandoned one must not report the live connection as dead.
-    // Eight arguments is the loop's full capability set, listed where the two
+    // These arguments are the loop's full capability set, listed where the two
     // spawn sites can be diffed against it; folding two senders into a struct
     // would trade this lint for a one-consumer type (R10 YAGNI).
     #[allow(clippy::too_many_arguments)]
@@ -569,15 +597,27 @@ impl AlephClient {
         pending: Arc<RwLock<HashMap<String, PendingRequest>>>,
         event_tx: mpsc::Sender<StreamEvent>,
         topic_tx: mpsc::Sender<TopicEvent>,
+        dropped_events: Arc<std::sync::atomic::AtomicU64>,
         connected: Arc<std::sync::atomic::AtomicBool>,
         write: WsWriter,
         generation: Arc<std::sync::atomic::AtomicU64>,
         my_generation: u64,
     ) {
         while let Some(msg) = read.next().await {
+            if generation.load(std::sync::atomic::Ordering::SeqCst) != my_generation {
+                return;
+            }
             match msg {
                 Ok(Message::Text(text)) => {
-                    Self::handle_message(&text, &pending, &event_tx, &topic_tx, &write).await;
+                    Self::handle_message(
+                        &text,
+                        &pending,
+                        &event_tx,
+                        &topic_tx,
+                        &dropped_events,
+                        &write,
+                    )
+                    .await;
                 }
                 Ok(Message::Close(_)) => {
                     info!("Server closed connection");
@@ -640,6 +680,7 @@ impl AlephClient {
         pending: &Arc<RwLock<HashMap<String, PendingRequest>>>,
         event_tx: &mpsc::Sender<StreamEvent>,
         topic_tx: &mpsc::Sender<TopicEvent>,
+        dropped_events: &std::sync::atomic::AtomicU64,
         write: &WsWriter,
     ) {
         // Never log the raw frame: the response to `connect` carries the
@@ -671,6 +712,7 @@ impl AlephClient {
                 // connection stays alive; the trade-off is logged loudly
                 // enough for a misbehaving consumer to surface in metrics.
                 if let Err(e) = event_tx.try_send(*event) {
+                    dropped_events.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     warn!(error = %e, "dropping stream event: consumer fell behind, connection stays live");
                 }
             }
@@ -687,6 +729,7 @@ impl AlephClient {
                 reason,
             } => {
                 if loud {
+                    dropped_events.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     // A `stream.*` method that does not decode is a broken
                     // cross-crate contract, not a frame family this client
                     // declines to consume — see `classify_frame`'s note on why
@@ -742,6 +785,17 @@ impl AlephClient {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
+    }
+
+    /// Snapshot transport continuity without waiting on the event queue.
+    #[must_use]
+    pub fn stream_continuity(&self) -> StreamContinuity {
+        StreamContinuity {
+            generation: self.generation.load(std::sync::atomic::Ordering::SeqCst),
+            dropped_events: self
+                .dropped_events
+                .load(std::sync::atomic::Ordering::SeqCst),
+        }
     }
 
     /// Generate next request ID
@@ -921,7 +975,11 @@ impl AlephClient {
         // exchange that must go out anyway, and the socket under it is live by
         // construction: it was opened three lines ago.
         let result: ConnectResult = self
-            .request("connect", Some(Value::Object(params)), Duration::from_secs(30))
+            .request(
+                "connect",
+                Some(Value::Object(params)),
+                Duration::from_secs(30),
+            )
             .await?;
 
         if let Some(credential) = credential {
@@ -1102,6 +1160,68 @@ mod tests {
             "operator",
             "the server-assigned role must be latched for callers to read"
         );
+    }
+
+    /// A full stream queue must report a continuity gap without parking the
+    /// only reader that can deliver an RPC response. No files or credentials
+    /// are touched: both peers use an ephemeral plaintext loopback socket.
+    #[tokio::test]
+    async fn full_stream_queue_reports_loss_and_still_delivers_rpc_reply() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            serve_handshake(&mut ws, "operator").await;
+            let request = ws.next().await.unwrap().unwrap();
+            let request: Value = serde_json::from_str(request.to_text().unwrap()).unwrap();
+            for _ in 0..101 {
+                let event = serde_json::json!({
+                    "method": "stream.response_chunk",
+                    "params": { "type": "response_chunk", "run_id": "busy", "seq": 1,
+                        "content": "x", "chunk_index": 0, "is_final": false }
+                });
+                ws.send(Message::Text(event.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+            ws.send(Message::Text(
+                serde_json::json!({
+                    "jsonrpc": "2.0", "id": request["id"], "result": { "alive": true }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+            // Wait for the client's explicit close; do not make the result
+            // depend on the reader winning a race with socket teardown.
+            while let Some(Ok(message)) = ws.next().await {
+                if message.is_close() {
+                    break;
+                }
+            }
+        });
+        let (client, mut events) =
+            AlephClient::connect(&format!("ws://{addr}"), &CliConfig::default())
+                .await
+                .unwrap();
+        let before = client.stream_continuity();
+        let response: Value = client
+            .call_with_timeout("probe", None::<()>, Duration::from_secs(5))
+            .await
+            .expect("a full event queue must not block an RPC response");
+        assert_eq!(response["alive"], true);
+        let after = client.stream_continuity();
+        assert_eq!(after.generation, before.generation);
+        assert_eq!(after.dropped_events, before.dropped_events + 1);
+        assert_eq!(events.len(), 100);
+        assert_eq!(events.recv().await.unwrap().run_id(), "busy");
+        client.close().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     /// Handshake one connection, answering with `role`.
@@ -1492,6 +1612,33 @@ mod wire_contract {
             }
             other => panic!("expected a response: {other:?}"),
         }
+    }
+
+    /// Panel invalidation notifications do not contain transcript events.
+    #[test]
+    fn panel_notifications_do_not_request_stream_recovery() {
+        for (method, params) in [
+            (
+                "stream.session_updated",
+                json!({"type": "session_updated", "session_key": "s"}),
+            ),
+            (
+                "stream.session_updated",
+                json!({"session_key": "s", "topic": "title"}),
+            ),
+            (
+                "stream.running_set_changed",
+                json!({"type": "running_set_changed", "sessions": []}),
+            ),
+        ] {
+            let text = json!({"method": method, "params": params}).to_string();
+            assert!(matches!(classify_frame(&text), Inbound::Unrecognized));
+        }
+        let malformed = json!({"method": "stream.run_complete", "params": {}}).to_string();
+        assert!(matches!(
+            classify_frame(&malformed),
+            Inbound::UnhandledNotification { loud: true, .. }
+        ));
     }
 
     /// `stream.*` promises a `StreamEvent` — the server-side census

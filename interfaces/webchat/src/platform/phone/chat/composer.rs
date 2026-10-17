@@ -31,6 +31,9 @@ use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
 use crate::state::sessions::SessionMap;
 
+use crate::views::chat::composer::appearance_command::{
+    self, parse_theme_request, ThemeCommandPicker, ThemeRequest,
+};
 use crate::views::chat::composer::attachments::{read_file_list_into, AttachmentPreviewBar};
 use crate::views::chat::dial_picker::{Dial, DialPicker};
 use crate::views::chat::exec_tier_picker::ExecTierPicker;
@@ -61,6 +64,27 @@ pub fn PhoneComposer() -> impl IntoView {
     let attachments = chat.pending_attachments;
     let file_input_ref = NodeRef::<leptos::html::Input>::new();
     let is_sending = RwSignal::new(false);
+    let theme_open = RwSignal::new(false);
+    let theme_invalid = RwSignal::new(false);
+    let theme_selected = RwSignal::new(0usize);
+    let intercept_theme = move || -> bool {
+        let Some(request) = parse_theme_request(&input_text.get_untracked()) else {
+            return false;
+        };
+        if let ThemeRequest::Apply(mode) = request {
+            crate::appearance::apply_mode(mode);
+        }
+        theme_invalid.set(request == ThemeRequest::Invalid);
+        theme_selected.set(
+            crate::appearance::ThemeMode::ALL
+                .iter()
+                .position(|mode| *mode == crate::appearance::read_mode())
+                .unwrap_or(0),
+        );
+        theme_open.set(true);
+        input_text.set(String::new());
+        true
+    };
     // Set by Stop to suppress exactly one auto-drain (B6 — Stop keeps ghosts).
     // On ChatState, not local: the queue it gates is per-conversation, so the
     // suppression has to swap with the conversation the way the queue does.
@@ -97,6 +121,9 @@ pub fn PhoneComposer() -> impl IntoView {
 
     // Idle send: start a fresh run.
     let send = move || {
+        if intercept_theme() {
+            return;
+        }
         if is_sending.get_untracked() {
             return;
         }
@@ -203,6 +230,9 @@ pub fn PhoneComposer() -> impl IntoView {
     // Queue a follow-up while a run is active → it becomes a ghost bubble.
     // No client-side prompt-injection guard (server is the authority).
     let enqueue = move || {
+        if intercept_theme() {
+            return;
+        }
         let text = input_text.get_untracked().trim().to_string();
         // The tray lives on ChatState and the shared surfaces can fill it — a
         // recalled prompt puts its files back there. Phone has no paperclip, but
@@ -251,6 +281,9 @@ pub fn PhoneComposer() -> impl IntoView {
     // cancelled). The reply is then an ordinary chat message, not an answer:
     // restore the draft and send it rather than swallowing the keystroke.
     let answer_pending_ask = move || -> bool {
+        if intercept_theme() {
+            return true;
+        }
         let Some(ask) = pending_ask.get_untracked() else {
             return false;
         };
@@ -392,6 +425,9 @@ pub fn PhoneComposer() -> impl IntoView {
     // runs the normal auto-drain, flushing the whole queue as a fresh run. With no
     // active run it degrades to a plain send (B8).
     let force_insert = move || {
+        if intercept_theme() {
+            return;
+        }
         if chat.active_run_id.get_untracked().is_none() {
             send();
             return;
@@ -486,6 +522,10 @@ pub fn PhoneComposer() -> impl IntoView {
     // Enter sends (idle) or queues (running); Shift+Enter inserts a newline.
     // A pending question outranks both — the turn is blocked on the answer.
     let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
+        if appearance_command::handle_picker_key(&ev.key(), theme_open, theme_selected) {
+            ev.prevent_default();
+            return;
+        }
         if ev.key() == "Enter" && !ev.shift_key() {
             ev.prevent_default();
             if answer_pending_ask() {
@@ -503,6 +543,9 @@ pub fn PhoneComposer() -> impl IntoView {
         <div style="flex:none; display:flex; flex-direction:column; gap:6px; padding:6px 12px calc(8px + env(safe-area-inset-bottom)); border-top:1px solid var(--color-border-subtle); background:var(--color-surface);">
             // Staged files, above everything — same chip strip the wide
             // composer renders, self-hiding while the tray is empty.
+            <div class="relative">
+                <ThemeCommandPicker open=theme_open invalid=theme_invalid selected=theme_selected />
+            </div>
             <AttachmentPreviewBar attachments=attachments />
 
             // Toolbar row: attach + the two session pills. The pickers are the

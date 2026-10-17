@@ -141,7 +141,9 @@ pub(crate) fn collect_project_skill_block(workspace: &std::path::Path) -> Option
     let home = crate::utils::paths::get_home_dir().ok();
     let is_global = |dir: &std::path::Path| -> bool {
         home.as_ref().is_some_and(|h| {
-            dir.starts_with(h.join(".aleph")) || dir.starts_with(h.join(".claude"))
+            dir.starts_with(h.join(".aleph"))
+                || dir.starts_with(h.join(".agents"))
+                || dir.starts_with(h.join(".claude"))
         })
     };
 

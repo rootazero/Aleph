@@ -536,8 +536,10 @@ mod outbound_chunking_tests {
     use super::*;
     use crate::gateway::channel::{
         Channel, ChannelCapabilities, ChannelError, ChannelInfo, ChannelResult, ChannelState,
-        ChannelStatus, MessageId, OutboundMessage, SendResult, StreamProtocol,
+        ChannelStatus, MessageId, OutboundDeliveryPolicy, OutboundMessage, SendResult,
+        StreamProtocol,
     };
+    use crate::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
     use crate::gateway::media::PendingMedia;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -551,6 +553,7 @@ mod outbound_chunking_tests {
         seen: Arc<tokio::sync::Mutex<Vec<String>>>,
         fail_from: usize,
         err_from: fn(String) -> ChannelError,
+        policy: OutboundDeliveryPolicy,
     }
 
     #[async_trait::async_trait]
@@ -560,6 +563,9 @@ mod outbound_chunking_tests {
         }
         fn state(&self) -> &ChannelState {
             &self.state
+        }
+        fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
+            self.policy
         }
         async fn start(&mut self) -> ChannelResult<()> {
             Ok(())
@@ -584,12 +590,41 @@ mod outbound_chunking_tests {
         emitter: ReplyEmitter,
         attempts: Arc<AtomicUsize>,
         seen: Arc<tokio::sync::Mutex<Vec<String>>>,
+        store: Option<Arc<DeliveryStore>>,
     }
 
     async fn rig(cap: usize, fail_from: usize, err_from: fn(String) -> ChannelError) -> Rig {
+        rig_with_policy(cap, fail_from, err_from, OutboundDeliveryPolicy::Automatic).await
+    }
+
+    async fn rig_with_policy(
+        cap: usize,
+        fail_from: usize,
+        err_from: fn(String) -> ChannelError,
+        policy: OutboundDeliveryPolicy,
+    ) -> Rig {
+        rig_with_store(
+            cap,
+            fail_from,
+            err_from,
+            policy,
+            Some(Arc::new(
+                DeliveryStore::open_in_memory(DeliveryQueueConfig::default()).unwrap(),
+            )),
+        )
+        .await
+    }
+
+    async fn rig_with_store(
+        cap: usize,
+        fail_from: usize,
+        err_from: fn(String) -> ChannelError,
+        policy: OutboundDeliveryPolicy,
+        store: Option<Arc<DeliveryStore>>,
+    ) -> Rig {
         let attempts = Arc::new(AtomicUsize::new(0));
         let seen = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        let registry = ChannelRegistry::new();
+        let mut registry = ChannelRegistry::new();
         registry
             .register(Box::new(FlakyChannel {
                 info: ChannelInfo {
@@ -604,8 +639,12 @@ mod outbound_chunking_tests {
                 seen: seen.clone(),
                 fail_from,
                 err_from,
+                policy,
             }))
             .await;
+        if let Some(store) = &store {
+            registry = registry.with_delivery_store(store.clone());
+        }
 
         // The cap arrives the way production supplies it: through the channel's
         // own declared capabilities, not as a literal on the emitter.
@@ -628,6 +667,7 @@ mod outbound_chunking_tests {
             emitter,
             attempts,
             seen,
+            store,
         }
     }
 
@@ -692,14 +732,150 @@ mod outbound_chunking_tests {
 
         assert_eq!(
             r.attempts.load(Ordering::SeqCst),
-            3,
-            "every chunk must reach ChannelRegistry::send so the durable queue can \
-             persist it; stopping at the failure discards the rest of the answer"
+            4,
+            "three fresh chunks plus the registry's inline retry of the queued head"
         );
         let seen = r.seen.lock().await;
         assert!(
-            seen[1].starts_with('b') && seen[2].starts_with('c'),
+            seen[1].starts_with('b') && seen[2].starts_with('b') && seen[3].starts_with('c'),
             "{seen:?}"
+        );
+        let queued = r
+            .store
+            .as_ref()
+            .unwrap()
+            .claim_conversation("rec", "conv-1", 10)
+            .unwrap();
+        assert_eq!(
+            queued.len(),
+            2,
+            "both failed chunks must actually be persisted"
+        );
+        assert_eq!(queued[0].message.text, seen[1]);
+        assert_eq!(queued[1].message.text, seen[3]);
+        assert!(
+            queued[0].id < queued[1].id,
+            "replay order must match chunk order"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_store_and_over_cap_failures_stop_the_tail() {
+        for store in [
+            None,
+            Some(Arc::new(
+                DeliveryStore::open_in_memory(DeliveryQueueConfig {
+                    max_payload_bytes: 1,
+                    ..Default::default()
+                })
+                .unwrap(),
+            )),
+        ] {
+            let r = rig_with_store(
+                100,
+                1,
+                ChannelError::NotConnected,
+                OutboundDeliveryPolicy::Automatic,
+                store,
+            )
+            .await;
+            r.emitter
+                .send_to_channel_sanitized(&three_chunks(), None)
+                .await;
+            assert_eq!(r.attempts.load(Ordering::SeqCst), 1);
+            if let Some(store) = &r.store {
+                assert_eq!(store.len().unwrap(), 0);
+                assert_eq!(store.recent_dead_letters(10).unwrap().len(), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn persistence_failure_stops_the_tail() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("queue.db");
+        let store = Arc::new(DeliveryStore::open(&path, DeliveryQueueConfig::default()).unwrap());
+        // Keep policy queries and claims working; fail only actual admission.
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER refuse_admission BEFORE INSERT ON outbound_deliveries
+             BEGIN SELECT RAISE(ABORT, 'test admission failure'); END;",
+            )
+            .unwrap();
+        let r = rig_with_store(
+            100,
+            1,
+            ChannelError::NotConnected,
+            OutboundDeliveryPolicy::Automatic,
+            Some(store.clone()),
+        )
+        .await;
+        r.emitter
+            .send_to_channel_sanitized(&three_chunks(), None)
+            .await;
+        assert_eq!(r.attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(store.len().unwrap(), 0);
+        assert!(store.recent_dead_letters(10).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rate_limited_final_custody_decides_tail_continuation() {
+        fn rate_limited(_: String) -> ChannelError {
+            ChannelError::RateLimited {
+                retry_after_secs: 0,
+            }
+        }
+        for has_store in [false, true] {
+            let store = has_store.then(|| {
+                Arc::new(DeliveryStore::open_in_memory(DeliveryQueueConfig::default()).unwrap())
+            });
+            let r = rig_with_store(
+                100,
+                1,
+                rate_limited,
+                OutboundDeliveryPolicy::Automatic,
+                store,
+            )
+            .await;
+            r.emitter
+                .send_to_channel_sanitized(&three_chunks(), None)
+                .await;
+            // Default registry retries twice per attempt, including its two
+            // inline head replays before the second and third fresh chunks.
+            assert_eq!(
+                r.attempts.load(Ordering::SeqCst),
+                if has_store { 15 } else { 3 }
+            );
+            if let Some(store) = &r.store {
+                let queued = store.claim_conversation("rec", "conv-1", 10).unwrap();
+                assert_eq!(queued.len(), 3);
+                assert!(queued[0].message.text.starts_with('a'));
+                assert!(queued[1].message.text.starts_with('b'));
+                assert!(queued[2].message.text.starts_with('c'));
+            }
+        }
+    }
+
+    /// An explicit-only channel is never granted implicit queue custody: a
+    /// transient-looking first failure must stop the tail immediately.
+    #[tokio::test]
+    async fn an_explicit_only_failure_stops_without_offering_tail_chunks() {
+        let r = rig_with_policy(
+            100,
+            1,
+            ChannelError::NotConnected,
+            OutboundDeliveryPolicy::ExplicitOnly,
+        )
+        .await;
+        r.emitter
+            .send_to_channel_sanitized(&three_chunks(), None)
+            .await;
+
+        assert_eq!(
+            r.attempts.load(Ordering::SeqCst),
+            1,
+            "without Queued custody, a failed first chunk must stop the tail"
         );
     }
 
@@ -729,7 +905,7 @@ mod media_cleanup_tests {
     use super::*;
     use crate::gateway::channel::{
         Attachment, Channel, ChannelError, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
-        MessageId, OutboundMessage, SendResult,
+        MessageId, OutboundDeliveryPolicy, OutboundMessage, SendResult,
     };
     use crate::media::cache::MediaCache;
 
@@ -738,6 +914,7 @@ mod media_cleanup_tests {
         state: ChannelState,
         err: fn(String) -> ChannelError,
         ok: bool,
+        policy: OutboundDeliveryPolicy,
     }
 
     #[async_trait::async_trait]
@@ -747,6 +924,9 @@ mod media_cleanup_tests {
         }
         fn state(&self) -> &ChannelState {
             &self.state
+        }
+        fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
+            self.policy
         }
         async fn start(&mut self) -> ChannelResult<()> {
             Ok(())
@@ -771,6 +951,15 @@ mod media_cleanup_tests {
         run_id: &str,
         ok: bool,
         err: fn(String) -> ChannelError,
+    ) -> (ReplyEmitter, std::path::PathBuf) {
+        emitter_with_cached_file_policy(run_id, ok, err, OutboundDeliveryPolicy::Automatic).await
+    }
+
+    async fn emitter_with_cached_file_policy(
+        run_id: &str,
+        ok: bool,
+        err: fn(String) -> ChannelError,
+        policy: OutboundDeliveryPolicy,
     ) -> (ReplyEmitter, std::path::PathBuf) {
         let cached = MediaCache::new()
             .resolve(
@@ -805,8 +994,15 @@ mod media_cleanup_tests {
                 state: ChannelState::new(8),
                 err,
                 ok,
+                policy,
             }))
             .await;
+        let registry = registry.with_delivery_store(Arc::new(
+            crate::gateway::delivery_queue::DeliveryStore::open_in_memory(
+                crate::gateway::delivery_queue::DeliveryQueueConfig::default(),
+            )
+            .expect("in-memory delivery store"),
+        ));
 
         // A path-backed attachment — the shape `take_media_custody` may refuse
         // to inline, leaving the queued row referencing this very file.
@@ -852,6 +1048,24 @@ mod media_cleanup_tests {
              by path; deleting it makes the retry unrecoverable",
             path.display()
         );
+    }
+
+    /// Policy refusal is not queue custody, even though `NotConnected` is a
+    /// queueable error for Automatic channels: explicit-only media must be
+    /// cleaned because no queued row can reference its path.
+    #[tokio::test]
+    async fn an_explicit_only_media_failure_does_not_keep_cache_alive() {
+        let (emitter, path) = emitter_with_cached_file_policy(
+            "run-media-explicit",
+            false,
+            ChannelError::NotConnected,
+            OutboundDeliveryPolicy::ExplicitOnly,
+        )
+        .await;
+
+        emitter.deliver_run_media().await;
+
+        assert!(!path.exists(), "policy-refused media must not be retained");
     }
 
     /// The control that keeps the fix from degenerating into "never clean up":

@@ -648,6 +648,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let (actor, principal) = crate::tools::turn_context::TURN_CONTEXT
             .sync_scope(turn, || (ambient_actor(), ambient_principal()));

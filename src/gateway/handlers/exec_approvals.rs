@@ -224,13 +224,26 @@ async fn handle_approval_resolve(
         None => false,
     };
 
+    // Member ownership is checked asynchronously above, so repeat the
+    // operator-only exclusion under the manager lock. Trusted operators keep
+    // the by-id path; a member must not resolve an entry replaced while the
+    // session metadata lookup was in flight.
     let resolved = addressable
-        && manager.resolve_with_reason(
-            &params.id,
-            params.decision,
-            params.resolved_by,
-            params.reason,
-        );
+        && if crate::gateway::caller_identity::caller_is_member() {
+            manager.resolve_for_channel_with_reason(
+                &params.id,
+                params.decision,
+                params.resolved_by,
+                params.reason,
+            )
+        } else {
+            manager.resolve_with_reason(
+                &params.id,
+                params.decision,
+                params.resolved_by,
+                params.reason,
+            )
+        };
 
     if resolved {
         JsonRpcResponse::success(request.id, json!({ "ok": true }))

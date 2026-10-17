@@ -233,6 +233,7 @@ pub(crate) fn is_prompt_bearing(event: &SessionEvent) -> bool {
         SessionEvent::SessionWoken { .. }
         | SessionEvent::RunStarted { .. }
         | SessionEvent::ResumeAttempted { .. }
+        | SessionEvent::SeedProvenance { .. }
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::AssistantRunMeta { .. }
         | SessionEvent::ToolCallApproved { .. }

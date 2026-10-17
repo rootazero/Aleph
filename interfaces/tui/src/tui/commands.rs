@@ -15,9 +15,8 @@ use aleph_protocol::providers::{
     ModelsRefreshResult, ModelsRefreshRow, RefreshOutcome,
 };
 use aleph_protocol::{
-    AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest,
-    AgentTraceListPage, AgentTraceReplay, LastRunDisposition, LastRunState, RunPhase,
-    SessionListRow, SessionSnapshot,
+    AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentTraceListPage,
+    LastRunDisposition, LastRunState, RunPhase, SessionListRow, SessionSnapshot,
 };
 
 use aleph_client::{AlephClient, CliError, CliResult};
@@ -251,24 +250,20 @@ fn side_run_verdict(answer: &CliResult<AgentRunStatusReport>) -> SideRunVerdict 
 /// alive at reconnect and dead a few milliseconds later. Closing it would mean
 /// letting a late terminal frame overwrite a settled exchange, which is the
 /// misattribution `for_active_run` exists to prevent.
-pub(super) async fn reconcile_side_question(state: &mut AppState, client: &AlephClient) {
-    let Some(run_id) = state.btw.active_run_id().map(str::to_string) else {
+pub(super) fn apply_side_question_status(
+    state: &mut AppState,
+    run_id: &str,
+    answer: Result<AgentRunStatusReport, CliError>,
+) {
+    if state.btw.active_run_id() != Some(run_id) {
         return;
-    };
-    let answer = client
-        .call::<_, AgentRunStatusReport>(
-            "agent.status",
-            Some(AgentRunStatusRequest {
-                run_id: run_id.clone(),
-            }),
-        )
-        .await;
+    }
     match side_run_verdict(&answer) {
         // Nothing is claimed on either: one is "it is still going", the other
         // is "I do not know". Both leave the overlay as it is.
         SideRunVerdict::StillAnswering | SideRunVerdict::CouldNotAsk => {}
-        SideRunVerdict::Failed(reason) => state.btw.fail_active(&run_id, reason),
-        SideRunVerdict::Disconnected(note) => state.btw.settle_disconnected(&run_id, note),
+        SideRunVerdict::Failed(reason) => state.btw.fail_active(run_id, reason),
+        SideRunVerdict::Disconnected(note) => state.btw.settle_disconnected(run_id, note),
     }
 }
 
@@ -334,16 +329,109 @@ pub(super) async fn btw_abort_or_close(state: &mut AppState, client: &AlephClien
     state.btw.abort_active();
 }
 
-/// Execute a local slash command (TUI-only, no Gateway RPC needed).
+/// Reset both composer entry paths without a client or any Gateway effect.
+fn execute_clear(state: &mut AppState, textarea: &mut TextArea<'_>) {
+    // Palette execution bypasses Enter's composer clearing.
+    textarea.select_all();
+    textarea.delete_char();
+    state.clear_screen();
+}
+
+/// The topic labels the closing session, not the new epoch.
+fn new_session_params(session_key: &str, topic: Option<&str>) -> Value {
+    json!({ "session_key": session_key, "topic": topic })
+}
+
+/// Apply only a confirmed session rollover; failures leave the transcript and draft intact.
+fn apply_new_session_result(
+    state: &mut AppState,
+    textarea: &mut TextArea<'_>,
+    result: CliResult<Value>,
+) {
+    let new_key = result.map_err(|e| e.to_string()).and_then(|reply| {
+        reply
+            .get("new_session_key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.trim().is_empty() && *key != state.session_key)
+            .map(str::to_string)
+            .ok_or_else(|| "Missing or invalid new_session_key in response".to_string())
+    });
+    match new_key {
+        Ok(key) => {
+            state.switch_session(&key);
+            // Reuse the startup-view reset, including removing the switch receipt.
+            execute_clear(state, textarea);
+        }
+        Err(e) => state.add_system_message(format!("New session error: {e}")),
+    }
+}
+
+/// Apply a local command; return read-only replay RPCs for the bounded UI queue.
 pub(super) async fn execute_local_command(
     state: &mut AppState,
-    _textarea: &TextArea<'_>,
+    textarea: &mut TextArea<'_>,
     client: &AlephClient,
     cmd: LocalCommand,
-) {
+) -> Option<(&'static str, Value)> {
     match cmd {
-        LocalCommand::Clear => {
-            state.clear_screen();
+        LocalCommand::JumpUser => state.jump_to_last_user(),
+        LocalCommand::Requests => {
+            if let Some(owner) =
+                state
+                    .interaction
+                    .hidden_owners()
+                    .into_iter()
+                    .find(|owner| match owner {
+                        crate::tui::interaction::ModalOwner::Clarification {
+                            session_key, ..
+                        }
+                        | crate::tui::interaction::ModalOwner::Approval { session_key, .. } => {
+                            session_key == &state.session_key
+                        }
+                    })
+            {
+                state.interaction.reopen(&owner);
+                state.sync_modal_focus();
+            } else {
+                state.add_system_message("No hidden requests for this conversation.".into());
+            }
+        }
+        LocalCommand::ToolOutput { tool_call_id } => {
+            if tool_call_id.is_empty() {
+                state.add_system_message("Usage: /tool-output <tool_call_id>".into());
+            } else {
+                state.open_tool_output(tool_call_id);
+            }
+        }
+        LocalCommand::Clear => execute_clear(state, textarea),
+        LocalCommand::New { topic } => {
+            let params = new_session_params(&state.session_key, topic.as_deref());
+            let result = client.call::<_, Value>("sessions.new", Some(params)).await;
+            apply_new_session_result(state, textarea, result);
+        }
+        LocalCommand::NewHelp => state.add_system_message(
+            "Usage: /new [topic]\nClose the current session (optionally storing its topic) and start a new session. /clear only clears the screen and keeps server history.".into(),
+        ),
+        LocalCommand::Detail { name } => {
+            use shared_ui_logic::transcript::DetailLevel;
+            match name.as_deref().and_then(DetailLevel::parse) {
+                Some(level) => {
+                    state.detail = level;
+                    state.step_overrides.clear();
+                    state.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
+                    match app::detail_setting::remember(level) {
+                        Ok(_) => state.add_system_message(format!("Detail: {}", level.as_str())),
+                        Err(e) => state.add_system_message(format!(
+                            "Detail: {} (not saved: {e})",
+                            level.as_str()
+                        )),
+                    }
+                }
+                None => state.add_system_message(format!(
+                    "Detail: {} (usage: /detail brief|full)",
+                    state.detail.as_str()
+                )),
+            }
         }
         LocalCommand::Verbose => {
             state.toggle_verbose();
@@ -357,28 +445,14 @@ pub(super) async fn execute_local_command(
             let help_text = build_help_text(state);
             state.add_system_message(help_text);
         }
-        LocalCommand::ReplayList => {
-            let params = json!({ "limit": 10 });
-            // The server answers `{traces, next_cursor}`. This asked for
-            // `Vec<AgentTraceTaskSummary>` — a THIRD shape, different from both
-            // the server's and the CLI's — so `/replay list` had never once
-            // rendered a row. One contract type now, shared by both clients.
-            match client
-                .call::<_, AgentTraceListPage>("trace.list", Some(params))
-                .await
-            {
-                Ok(page) => state.add_system_message(format_replay_list(&page)),
-                Err(e) => state.add_system_message(format!("Replay list error: {e}")),
-            }
-        }
+        LocalCommand::ReplayList => return Some(("trace.list", json!({"limit": 10}))),
         LocalCommand::ReplayShow { task_id } => {
-            let params = json!({ "task_id": task_id });
-            match client
-                .call::<_, AgentTraceReplay>("trace.get", Some(params))
-                .await
-            {
-                Ok(replay) => state.load_trace_replay(&replay),
-                Err(e) => state.add_system_message(format!("Replay load error: {e}")),
+            if state.current_run.is_some() {
+                state.add_system_message(
+                    "Wait for this run to settle before opening a replay.".into(),
+                );
+            } else {
+                return Some(("trace.get", json!({"task_id": task_id})));
             }
         }
         LocalCommand::Usage => execute_usage(state, client).await,
@@ -414,60 +488,101 @@ pub(super) async fn execute_local_command(
             };
             state.add_system_message(notice.to_string());
         }
-        LocalCommand::Theme { name } => {
-            use crate::tui::theme::{
-                current_preset, palette, remember_preset, set_preset, theme_file, Preset,
-            };
-            let notice = match name {
-                None => {
-                    let depth = if palette().is_rgb() {
-                        "24-bit"
-                    } else {
-                        "16-colour (set COLORTERM=truecolor if your terminal supports it)"
-                    };
-                    let remembered = theme_file()
-                        .map(|p| format!("Remembered in {}", p.display()))
-                        .unwrap_or_else(|| "No home directory, so this run only".to_string());
-                    format!(
-                        "Theme: {} \u{00b7} {depth}\nChoices: {}\n{remembered} \u{00b7} ALEPH_TUI_THEME=<name> overrides it for one run.",
-                        current_preset().name(),
-                        Preset::choices(),
-                    )
-                }
-                Some(requested) => match Preset::parse(&requested) {
-                    Some(preset) => {
-                        set_preset(preset);
-                        state.invalidate_rendered_lines();
-                        // Report what actually happened on disk. A `/theme`
-                        // that says "remembered" when the write failed is a
-                        // label for something that did not occur (判据 §17),
-                        // and the switch itself is still real either way.
-                        match remember_preset(preset) {
-                            Ok(path) => format!(
-                                "Theme: {} \u{00b7} remembered in {}",
-                                preset.name(),
-                                path.display()
-                            ),
-                            Err(e) => format!(
-                                "Theme: {} for this run \u{2014} could not remember it: {e}",
-                                preset.name()
-                            ),
-                        }
-                    }
-                    // Naming what was asked for, not just the choices: the
-                    // failure this guards against is a typo that silently
-                    // leaves the old theme up and reads as "it did nothing".
-                    None => format!(
-                        "No theme called {requested:?}. Choices: {}",
-                        Preset::choices()
-                    ),
-                },
-            };
-            state.add_system_message(notice);
-        }
+        LocalCommand::Theme { name } => execute_theme(state, name.as_deref()),
         LocalCommand::Browser { resource_id } => {
             execute_browser(state, client, &resource_id).await;
         }
+    }
+    None
+}
+
+/// Open the local picker and optionally apply a theme or reload it.
+fn execute_theme(state: &mut AppState, requested: Option<&str>) {
+    let (names, diagnostics) = crate::tui::theme::available_themes();
+    state.open_theme_picker(names, diagnostics);
+    match requested.map(str::trim) {
+        None | Some("list") => {}
+        Some("reload") => {
+            let name = crate::tui::theme::current_theme_name();
+            apply_theme_pick(state, &name, true);
+        }
+        Some(name) => apply_theme_pick(state, name, false),
+    }
+}
+
+/// Confirm synchronously because loading and persistence use local files.
+pub fn confirm_theme_pick(state: &mut AppState) {
+    let name = state
+        .theme_picker
+        .as_ref()
+        .and_then(|picker| picker.names.get(picker.selected))
+        .cloned();
+    if let Some(name) = name {
+        apply_theme_pick(state, &name, false);
+    }
+}
+
+fn apply_theme_pick(state: &mut AppState, name: &str, reload: bool) {
+    use crate::tui::theme::{current_theme_name, remember_theme, select_theme};
+    let feedback = match select_theme(name) {
+        Ok(()) => {
+            // Cached markdown styles must be rebuilt with the new palette.
+            state.invalidate_rendered_lines();
+            let current = current_theme_name();
+            if reload {
+                format!("Theme: {current} · reloaded")
+            } else {
+                match remember_theme(&current) {
+                    Ok(path) => format!("Theme: {current} · remembered in {}", path.display()),
+                    Err(error) => {
+                        format!("Theme: {current} for this run · could not remember it: {error}")
+                    }
+                }
+            }
+        }
+        Err(error) => format!(
+            "Could not load theme {name:?}: {error}. Theme remains {}.",
+            current_theme_name()
+        ),
+    };
+    if let Some(picker) = &mut state.theme_picker {
+        let current = current_theme_name();
+        if let Some(index) = picker.names.iter().position(|name| name == &current) {
+            picker.selected = index;
+        }
+        picker.feedback = Some(feedback);
+    }
+}
+
+#[cfg(test)]
+mod local_theme_command_tests {
+    use super::*;
+
+    #[test]
+    fn theme_list_and_invalid_selection_stay_out_of_chat() {
+        let mut state = AppState::new("theme-local".into(), "model".into());
+        state.current_run = Some("still-running".into());
+        let before = state.messages.len();
+        execute_theme(&mut state, Some("list"));
+        assert_eq!(state.focus, app::Focus::ThemePicker);
+        assert!(state
+            .theme_picker
+            .as_ref()
+            .unwrap()
+            .names
+            .iter()
+            .any(|name| name == "amber"));
+        execute_theme(&mut state, Some("../invalid-theme"));
+        assert!(state
+            .theme_picker
+            .as_ref()
+            .unwrap()
+            .feedback
+            .as_ref()
+            .unwrap()
+            .contains("Could not load theme"));
+        assert_eq!(state.messages.len(), before);
+        assert_eq!(state.current_run.as_deref(), Some("still-running"));
     }
 }
 
@@ -814,20 +929,6 @@ fn last_run_mark(last_run: &LastRunState) -> Option<&'static str> {
     }
 }
 
-/// Confirm the highlighted session: load its history and re-point the session.
-pub(super) async fn confirm_session_switch(state: &mut AppState, client: &AlephClient) {
-    let Some(key) = state.selected_session_key() else {
-        state.close_overlay();
-        return;
-    };
-    state.close_overlay();
-    // switch_session clears transient state (including the token counter and
-    // the settings of the conversation being left) and adds a "Switched"
-    // banner; `attach_session` then restores the incoming conversation's own.
-    state.switch_session(&key);
-    attach_session(state, client, &key, AttachMode::Append).await;
-}
-
 // ---------------------------------------------------------------------------
 // Agents overlay (`/agents`).
 // ---------------------------------------------------------------------------
@@ -1172,6 +1273,7 @@ pub(super) async fn confirm_provider_pick(state: &mut AppState, client: &AlephCl
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AttachMode {
     /// Append to what the caller has already prepared.
+    #[cfg(test)]
     Append,
     /// Swap in the server's copy, but only once it has arrived.
     Replace,
@@ -1194,23 +1296,123 @@ pub(super) enum AttachMode {
 /// leaves the client on the key it was given with no settings, which the status
 /// bar renders as "unknown" rather than as the global defaults. `AttachMode`
 /// exists so that survivability holds for the reconnect path too — see its doc.
-pub(super) async fn attach_session(
-    state: &mut AppState,
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) struct SessionAcquisition {
+    pub session_key: String,
+    pub generation: u64,
+    pub history: Value,
+    pub traces: Option<Value>,
+}
+
+/// RPC-only acquisition: safe to enqueue on a bounded background worker.
+/// No mutable AppState is held over either await. A trace failure degrades
+/// explicitly to history-only, never a fabricated complete replay.
+pub(super) async fn acquire_session_snapshot(
     client: &AlephClient,
-    key: &str,
-    mode: AttachMode,
-) {
-    let params = json!({ "session_key": key });
-    match client.call::<_, Value>("chat.history", Some(params)).await {
-        Ok(result) => {
-            apply_history(state, &result, mode);
-            // The sub-agent tree is per-session state the transcript does not
-            // carry; seed it from the tracker snapshot the same way the plan
-            // was seeded from the history response above.
-            refresh_agents(state, client).await;
+    key: String,
+    generation: u64,
+) -> Result<SessionAcquisition, String> {
+    let history: Value = client
+        .call("chat.history", Some(json!({ "session_key": key })))
+        .await
+        .map_err(|e| e.to_string())?;
+    let active_run = active_run_from_history(&history)
+        .flatten()
+        .map(|active| active.run_id);
+    let run_ids: Vec<String> = history
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|v| v.get("role").and_then(Value::as_str) == Some("assistant"))
+        .filter_map(|v| {
+            v.get("run_id")
+                .or_else(|| v.get("metadata").and_then(|m| m.get("run_id")))
+                .and_then(Value::as_str)
+        })
+        .filter(|id| Some(*id) != active_run.as_deref())
+        .map(str::to_owned)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let traces = if run_ids.is_empty() {
+        Some(json!({ "runs": {} }))
+    } else {
+        // The server accepts at most 200 run IDs per request. Retain each
+        // successful batch without claiming missing/expired runs are complete.
+        let mut runs = serde_json::Map::new();
+        let mut available = false;
+        for batch in run_ids.chunks(200) {
+            if let Ok(reply) = client
+                .call::<_, Value>(
+                    "trace.by_runs",
+                    Some(json!({"session_key": key, "run_ids": batch})),
+                )
+                .await
+            {
+                if let Some(batch_runs) = reply.get("runs").and_then(Value::as_object) {
+                    runs.extend(batch_runs.clone());
+                    available = true;
+                }
+            }
         }
-        Err(e) => state.add_system_message(format!("History error: {e}")),
+        available.then(|| json!({"runs": runs}))
+    };
+    Ok(SessionAcquisition {
+        session_key: key,
+        generation,
+        history,
+        traces,
+    })
+}
+
+/// UI-only application, guarded against a session switch or a newer load.
+/// Called by the main loop upon delivery of a tagged RPC job result.
+pub(super) fn apply_acquired_session(
+    state: &mut AppState,
+    acquired: SessionAcquisition,
+    mode: AttachMode,
+) -> bool {
+    if state.session_key != acquired.session_key
+        || state.transcript_generation != acquired.generation
+    {
+        return false;
     }
+    let active = active_run_from_history(&acquired.history);
+    if state.current_run.is_some() {
+        state.transcript_needs_resync = true;
+        // Frames may have arrived during the two RPC calls. Without a
+        // watermark the snapshot cannot be spliced into that live run.
+        return false;
+    }
+    let rows = acquired
+        .history
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let built = app::build_completed_history(
+        acquired.session_key,
+        acquired.generation,
+        &rows,
+        acquired.traces.as_ref(),
+        active
+            .as_ref()
+            .and_then(|a| a.as_ref())
+            .map(|a| a.run_id.as_str()),
+    );
+    if mode == AttachMode::Replace {
+        if !state.apply_completed_hydration(built) {
+            return false;
+        }
+    } else {
+        for row in built.transcript.entries() {
+            state.messages.import_legacy(row.clone());
+        }
+        state.invalidate_rendered_lines();
+    }
+    apply_history_settings(state, &acquired.history);
+    true
 }
 
 /// Apply one `chat.history` response to this screen.
@@ -1220,6 +1422,7 @@ pub(super) async fn attach_session(
 /// drops the old transcript here, which is inside the caller's `Ok` arm by
 /// construction. A reattach whose fetch failed therefore cannot blank the
 /// screen, because this never runs.
+#[cfg(test)]
 fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
     let rows = result
         .get("messages")
@@ -1250,6 +1453,10 @@ fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
         state.messages.push(msg);
     }
 
+    apply_history_settings(state, result);
+}
+
+fn apply_history_settings(state: &mut AppState, result: &Value) {
     // Restore the conversation's durable settings. Absent on an older
     // gateway — read as "I was not told", so the caption falls back to
     // the install default rather than to a value this client made up.
@@ -1434,6 +1641,7 @@ fn active_run_from_history(result: &Value) -> Option<Option<app::ActiveRunJoin>>
 /// those, and it has no client yet (Phase A shipped it with none). A restored
 /// transcript is therefore text-only, which is what this client showed before
 /// as well.
+#[cfg(test)]
 fn history_message_from_json(idx: usize, v: &Value) -> Option<app::TranscriptEntry> {
     let role = v.get("role").and_then(Value::as_str).unwrap_or("");
     let content = v
@@ -1858,7 +2066,7 @@ fn pop_last_turn_locally(state: &mut AppState) {
     state.messages.truncate(at);
 }
 
-fn format_replay_list(page: &AgentTraceListPage) -> String {
+pub(super) fn format_replay_list(page: &AgentTraceListPage) -> String {
     if page.traces.is_empty() {
         return "Recent replays:\n  (none)\n\nUse /replay <task_id> after traces are persisted."
             .to_string();
@@ -2035,6 +2243,132 @@ pub(super) async fn fetch_my_user_id(client: &AlephClient) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clear_resets_locally_without_a_gateway_reply() {
+        for input in ["/clear", "/CLEAR"] {
+            let mut state = AppState::new("adopted-session".into(), "model".into());
+            state.add_user_message("old transcript".into(), vec![]);
+            state.current_run = Some("still-running".into());
+            state.open_theme_picker(vec!["amber".into()], vec![]);
+            let mut textarea = TextArea::from(["unfinished", "draft"]);
+            let super::super::slash::ParsedInput::Local(cmd) =
+                super::super::slash::parse_input(input)
+            else {
+                panic!("{input} must not be forwarded to the Gateway");
+            };
+            assert_eq!(cmd, LocalCommand::Clear);
+            execute_clear(&mut state, &mut textarea);
+            assert!(
+                state.messages.is_empty(),
+                "no reset receipt should be stored"
+            );
+            assert_eq!(textarea.lines(), &[String::new()]);
+            assert_eq!(state.session_key, "adopted-session");
+            assert_eq!(state.current_run.as_deref(), Some("still-running"));
+            assert!(state.theme_picker.is_none());
+            assert_eq!(state.focus, app::Focus::Input);
+        }
+    }
+
+    #[test]
+    fn new_session_request_matches_the_rpc_contract() {
+        assert_eq!(
+            new_session_params("agent:main:main", None),
+            json!({
+                "session_key": "agent:main:main", "topic": null
+            })
+        );
+        assert_eq!(
+            new_session_params("agent:main:main", Some("closing topic")),
+            json!({
+                "session_key": "agent:main:main", "topic": "closing topic"
+            })
+        );
+    }
+
+    #[test]
+    fn new_session_success_switches_and_restores_welcome_without_receipt() {
+        let mut state = AppState::new("agent:main:main".into(), "model".into());
+        state.add_user_message("old transcript".into(), vec![]);
+        state.current_run = Some("old-run".into());
+        state.send_history.push("old prompt".into());
+        state.open_theme_picker(vec!["amber".into()], vec![]);
+        let generation = state.transcript_generation;
+        let mut textarea = TextArea::from(["unfinished", "draft"]);
+        apply_new_session_result(
+            &mut state,
+            &mut textarea,
+            Ok(json!({
+                "old_session_key": "agent:main:main",
+                "new_session_key": "agent:main:main:1",
+                "topic": "closing topic"
+            })),
+        );
+        assert_eq!(state.session_key, "agent:main:main:1");
+        assert!(
+            state.messages.is_empty(),
+            "welcome must not become a success receipt"
+        );
+        assert_eq!(textarea.lines(), &[String::new()]);
+        assert!(state.current_run.is_none());
+        assert!(state.send_history.is_empty());
+        assert_ne!(state.transcript_generation, generation);
+        assert!(state.theme_picker.is_none());
+        assert_eq!(state.focus, app::Focus::Input);
+    }
+
+    #[test]
+    fn new_session_failure_preserves_the_screen_run_and_draft() {
+        let mut state = AppState::new("agent:main:main".into(), "model".into());
+        state.add_user_message("old transcript".into(), vec![]);
+        state.current_run = Some("old-run".into());
+        let generation = state.transcript_generation;
+        let mut textarea = TextArea::from(["unfinished", "draft"]);
+        let error = CliError::Rpc {
+            code: -32602,
+            message: "Original gateway refusal".into(),
+        };
+        let expected = format!("New session error: {error}");
+        apply_new_session_result(&mut state, &mut textarea, Err(error));
+        assert_eq!(state.session_key, "agent:main:main");
+        assert_eq!(state.current_run.as_deref(), Some("old-run"));
+        // The error receipt invalidates the view without replacing old content.
+        assert_eq!(state.transcript_generation, generation + 1);
+        assert_eq!(state.messages.len(), 2);
+        assert_eq!(
+            textarea.lines(),
+            &["unfinished".to_string(), "draft".to_string()]
+        );
+        assert!(
+            matches!(state.messages.first(), Some(app::TranscriptEntry::UserText { text, .. }) if text == "old transcript")
+        );
+        assert!(
+            matches!(state.messages.last(), Some(app::TranscriptEntry::SystemNotice { text, .. }) if text == &expected)
+        );
+    }
+
+    #[test]
+    fn new_session_malformed_success_cannot_clear_or_reuse_the_old_session() {
+        for reply in [
+            json!({}),
+            json!({"new_session_key": 5}),
+            json!({"new_session_key": ""}),
+            json!({"new_session_key": "  "}),
+            json!({"new_session_key": "agent:main:main"}),
+        ] {
+            let mut state = AppState::new("agent:main:main".into(), "model".into());
+            state.add_user_message("keep".into(), vec![]);
+            let mut textarea = TextArea::from(["draft"]);
+            apply_new_session_result(&mut state, &mut textarea, Ok(reply));
+            assert_eq!(state.session_key, "agent:main:main");
+            assert_eq!(textarea.lines(), &["draft".to_string()]);
+            assert_eq!(state.messages.len(), 2);
+            assert!(
+                matches!(state.messages.last(), Some(app::TranscriptEntry::SystemNotice { text, .. }) if text.contains("Missing or invalid new_session_key"))
+            );
+        }
+    }
 
     #[test]
     fn browser_resource_status_classifies_blank_and_missing() {
@@ -3449,7 +3783,10 @@ mod tests {
                 .browser_resources
                 .get(&resource_id)
                 .ok_or("catalog did not store the real resource event")?;
-            check(stored.revision == first_revision, "stored revision matches event")?;
+            check(
+                stored.revision == first_revision,
+                "stored revision matches event",
+            )?;
             let (target, bound_run, bound_session) = match &stored.binding {
                 ResourceBinding::Browser { viewer } => (
                     viewer.target.clone(),
@@ -3465,7 +3802,10 @@ mod tests {
             // From here the bound tab must be closed no matter what happens.
             *target_slot.lock().unwrap() = Some(target);
             check(bound_run == run_id, "binding.run_id is this run")?;
-            check(bound_session == session_key, "binding.session_key is this run")?;
+            check(
+                bound_session == session_key,
+                "binding.session_key is this run",
+            )?;
             report.set("initial_revision", first_revision);
 
             // ---- decide(safe) with the REAL revision; feed the REAL response back ----
@@ -3484,7 +3824,10 @@ mod tests {
                 .browser_resources
                 .get(&resource_id)
                 .ok_or("resource vanished after decide")?;
-            check(after.revision > first_revision, "decide produced a newer revision")?;
+            check(
+                after.revision > first_revision,
+                "decide produced a newer revision",
+            )?;
             check(
                 after.redaction == RedactionStatus::Safe,
                 "catalog holds the safe revision",
@@ -3525,7 +3868,10 @@ mod tests {
                 "success notice is the launched text",
             )?;
             let ok_cmds = ok_commands.lock().unwrap().clone();
-            check(ok_cmds.len() == 1, "success: exactly one instrumented launch")?;
+            check(
+                ok_cmds.len() == 1,
+                "success: exactly one instrumented launch",
+            )?;
             check(
                 ok_cmds[0].program == "rundll32.exe",
                 "success: Windows default argv program",
@@ -3578,7 +3924,10 @@ mod tests {
             })
             .await;
             let after_notices = system_notices(state);
-            check(after_notices.len() == before + 1, "failure: exactly one notice")?;
+            check(
+                after_notices.len() == before + 1,
+                "failure: exactly one notice",
+            )?;
             let failure_text = after_notices.last().cloned().unwrap_or_default();
             check(
                 failure_text.starts_with("Browser viewer launch failed:"),
@@ -3589,7 +3938,10 @@ mod tests {
                 "failure: helper's revoke succeeded (no cleanup-failed suffix)",
             )?;
             let bad_cmds = bad_commands.lock().unwrap().clone();
-            check(bad_cmds.len() == 1, "failure: exactly one instrumented launch")?;
+            check(
+                bad_cmds.len() == 1,
+                "failure: exactly one instrumented launch",
+            )?;
             let bad_url = bad_cmds[0].args.get(1).cloned().unwrap_or_default();
             let bad_grant = grant_id_of(&bad_url).ok_or("failure: no grant_id in URL")?;
             check(bad_grant != ok_grant, "failure: a FRESH grant was issued")?;
@@ -3680,7 +4032,10 @@ mod tests {
             )
             .await?;
             let ok = find_success(&closed, 0);
-            report.set("tab_close_success", ok.map(Value::from).unwrap_or(Value::Null));
+            report.set(
+                "tab_close_success",
+                ok.map(Value::from).unwrap_or(Value::Null),
+            );
             check(ok != Some(false), "browser_tabs close reported failure")
         }
 
@@ -3864,7 +4219,7 @@ mod active_run_tests {
 
 #[cfg(test)]
 mod attach_mode_tests {
-    use super::{apply_history, AttachMode};
+    use super::{apply_acquired_session, apply_history, AttachMode, SessionAcquisition};
     use crate::tui::app::{AppState, TranscriptEntry};
     use serde_json::json;
 
@@ -3887,6 +4242,43 @@ mod attach_mode_tests {
                 .collect::<Vec<_>>(),
             "active_run": serde_json::Value::Null,
         })
+    }
+
+    #[test]
+    fn acquired_completed_steps_replace_atomically_and_reject_stale_generation() {
+        use super::{apply_acquired_session, SessionAcquisition};
+        let key = "agent:main:main:s1";
+        let mut state = AppState::new(key.into(), "m".into());
+        let snapshot = |generation| SessionAcquisition {
+            session_key: key.into(),
+            generation,
+            history: json!({"messages": [
+                {"role":"user", "content":"question"},
+                {"role":"assistant", "content":"answer", "run_id":"r"}
+            ], "active_run":null}),
+            traces: Some(json!({"runs":{"r":[
+                {"kind":"turn_started", "iteration":1},
+                {"kind":"text_emitted", "iteration":1, "stream":"final", "text":"thinking"}
+            ]}})),
+        };
+        let stale = snapshot(state.transcript_generation);
+        state.transcript_generation += 1;
+        assert!(!apply_acquired_session(
+            &mut state,
+            stale,
+            AttachMode::Replace
+        ));
+        assert!(state.messages.is_empty());
+        let fresh = snapshot(state.transcript_generation);
+        assert!(apply_acquired_session(
+            &mut state,
+            fresh,
+            AttachMode::Replace
+        ));
+        assert!(state
+            .messages
+            .iter()
+            .any(|m| matches!(m, TranscriptEntry::Step(_))));
     }
 
     /// Launch and `/session` prepare the list themselves — the first keeps the
@@ -3941,37 +4333,23 @@ mod attach_mode_tests {
     /// reaches this function, so it cannot leave the user on a blank screen at
     /// the exact moment the connection came back.
     #[test]
-    fn nothing_is_thrown_away_until_the_servers_copy_is_in_hand() {
-        let src = include_str!("commands.rs");
-        let production = src.split("#[cfg(test)]").next().unwrap_or_default();
-        let attach = production
-            .split("pub(super) async fn attach_session")
-            .nth(1)
-            .expect("attach_session must exist");
-        let body = attach
-            .split("\nfn apply_history")
-            .next()
-            .unwrap_or_default();
-        // Self-protection: a scanner that matched nothing would agree with
-        // everything below. Pin that this really is the function's body.
-        assert!(
-            body.contains("chat.history"),
-            "the scan found no attach_session body — the guard is blind, not clean"
-        );
-        assert!(
-            !body.contains("messages.clear()"),
-            "attach_session must not touch the transcript itself — the clear \
-             belongs in `apply_history`, which only runs on a successful fetch"
-        );
-        // Normalize line endings first: `include_str!` preserves the checkout's
-        // bytes, and a CRLF checkout would turn a `\n`-carrying needle into a
-        // guard that can never match (the "guard only recognizes the shape it
-        // was written on" defect, CRLF edition).
-        let body = body.replace("\r\n", "\n");
-        assert!(
-            body.contains("Ok(result) => {\n            apply_history(state, &result, mode);"),
-            "the applier must be reached only from the success arm"
-        );
+    fn a_late_snapshot_cannot_replace_the_new_session() {
+        let mut state = AppState::new("new".into(), "m".into());
+        state.add_user_message("keep".into(), vec![]);
+        let acquired = SessionAcquisition {
+            session_key: "old".into(),
+            generation: state.transcript_generation,
+            history: json!({"messages": []}),
+            traces: None,
+        };
+        assert!(!apply_acquired_session(
+            &mut state,
+            acquired,
+            AttachMode::Replace
+        ));
+        assert!(state.messages.iter().any(
+            |entry| matches!(entry, TranscriptEntry::UserText { text, .. } if text == "keep")
+        ));
     }
 }
 

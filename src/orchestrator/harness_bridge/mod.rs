@@ -43,11 +43,15 @@ mod session_seed;
 mod behavior_resolve;
 mod context_blocks;
 mod prompt_build;
+pub mod public_run;
+mod public_lookup_tool;
 mod runner_impl;
 
 pub mod context_estimate;
 pub mod replay_adapter;
 
+#[cfg(test)]
+mod public_spend_tests;
 #[cfg(test)]
 mod tests;
 

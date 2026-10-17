@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aleph.dev/schemas/tui-theme-v1.schema.json",
+  "title": "Aleph TUI theme, schema version 1",
+  "description": "Save a UTF-8 JSON file, at most 128 KiB, at ALEPH_HOME/themes/<name>.json. The name must equal the filename stem. Built-in and compatibility names amber, tide, jade, iris, paper, dark, light, terminal are reserved and cannot be overridden by community files. Command names list and reload are also reserved. No executable code or recursive community inheritance is supported.",
+  "$comment": "ALEPH_TUI_THEME overrides the remembered ALEPH_HOME/tui-theme name, then Amber is the fallback. ALEPH_TUI_COLOR accepts truecolor, ansi or 256; ansi and 256 both use xterm 256-color approximation. Unknown color modes fall back to capability detection. NO_COLOR does not disable theme colors. Terminal transparency is controlled by the terminal; use terminal for an inherited background.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "name"],
+  "properties": {
+    "schemaVersion": { "const": 1, "type": "integer" },
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$", "not": { "enum": ["list", "reload"] } },
+    "extends": {
+      "type": "string",
+      "enum": ["amber", "tide", "jade", "iris", "paper", "dark", "light"],
+      "default": "amber",
+      "description": "Community files inherit omitted semantic and chrome values from this built-in. dark aliases amber; light aliases paper. Built-ins supply every semantic role and have no extends field."
+    },
+    "light": {
+      "type": "boolean",
+      "description": "Choose light syntax highlighting. If absent, inferred from an RGB background using weighted brightness >= 150/255; otherwise inherits the base. Set explicitly for indexed or terminal backgrounds."
+    },
+    "colors": { "$ref": "#/$defs/semanticColors" },
+    "chrome": { "$ref": "#/$defs/chrome" }
+  },
+  "$defs": {
+    "color": {
+      "description": "A six-digit RGB hex string, terminal to reset to the terminal default, or an xterm ANSI palette index. Null, floats, negative/out-of-range numbers and named colors are invalid.",
+      "oneOf": [
+        { "type": "string", "pattern": "^(#[0-9a-fA-F]{6}|terminal)$" },
+        { "type": "integer", "minimum": 0, "maximum": 255 }
+      ]
+    },
+    "semanticColors": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Keys map exhaustively to shared_ui_logic::transcript::SemanticColor in camelCase. fg is primary body foreground; dim is secondary text; accent is headings/focus; prompt and userBar identify user input. All omitted roles inherit the selected built-in.",
+      "properties": {
+        "fg": { "$ref": "#/$defs/color" },
+        "dim": { "$ref": "#/$defs/color" },
+        "accent": { "$ref": "#/$defs/color" },
+        "prompt": { "$ref": "#/$defs/color" },
+        "userBar": { "$ref": "#/$defs/color" },
+        "toolPending": { "$ref": "#/$defs/color" },
+        "toolRunning": { "$ref": "#/$defs/color" },
+        "toolOk": { "$ref": "#/$defs/color" },
+        "toolErr": { "$ref": "#/$defs/color" },
+        "toolRail": { "$ref": "#/$defs/color" },
+        "diffAdd": { "$ref": "#/$defs/color" },
+        "diffDel": { "$ref": "#/$defs/color" },
+        "diffCtx": { "$ref": "#/$defs/color" },
+        "diffGutter": { "$ref": "#/$defs/color" },
+        "admonitionNote": { "$ref": "#/$defs/color" },
+        "admonitionTip": { "$ref": "#/$defs/color" },
+        "admonitionImportant": { "$ref": "#/$defs/color" },
+        "admonitionWarning": { "$ref": "#/$defs/color" },
+        "admonitionCaution": { "$ref": "#/$defs/color" },
+        "codeBorder": { "$ref": "#/$defs/color" },
+        "link": { "$ref": "#/$defs/color" },
+        "contextOk": { "$ref": "#/$defs/color" },
+        "contextWarn": { "$ref": "#/$defs/color" },
+        "contextDanger": { "$ref": "#/$defs/color" },
+        "cost": { "$ref": "#/$defs/color" },
+        "spinner": { "$ref": "#/$defs/color" }
+      }
+    },
+    "chrome": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Terminal-only chrome. Dark built-ins inherit the terminal background; Paper supplies ivory. Status background inherits background. userBg=terminal disables the user surface. Missing fields inherit the base.",
+      "properties": {
+        "background": { "$ref": "#/$defs/color" },
+        "surface": { "$ref": "#/$defs/color" },
+        "selectionBg": { "$ref": "#/$defs/color" },
+        "userBg": { "$ref": "#/$defs/color" },
+        "border": { "$ref": "#/$defs/color" },
+        "borderFocused": { "$ref": "#/$defs/color" }
+      }
+    }
+  }
+}

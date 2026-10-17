@@ -12,76 +12,17 @@
 
 use crate::sync_primitives::Arc;
 
-use serde::{Deserialize, Serialize};
+use aleph_protocol::{
+    ClarificationResolveParams, ClarificationResolveResponse, PendingListResponse,
+};
 use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use super::super::router::SessionKey;
 use super::HandlerRegistry;
-use crate::clarification::session::PendingClarification;
 use crate::clarification::ClarificationManager;
 use crate::gateway::session_store::SessionStore;
 use crate::gateway::visibility;
-
-/// Parameters for clarification.resolve
-#[derive(Debug, Deserialize)]
-pub struct ClarificationResolveParams {
-    /// Session the question was asked in — the clarification registry key,
-    /// shipped to the client on the `AskUser` frame.
-    pub session_key: String,
-    /// The user's answer to the question at the cursor. Interpreted exactly as
-    /// a channel reply is: a bare 1-based number picks that option, an option
-    /// label matches it, anything else is free text.
-    #[serde(default)]
-    pub reply: String,
-    /// Answers to consecutive questions, starting at the cursor — the
-    /// rich-client path for a multi-question request.
-    ///
-    /// Present and non-empty, this wins over `reply`: a client that rendered
-    /// every question posts every answer, and there is no reading under which
-    /// it also meant to answer the first one twice. Absent, `reply` alone
-    /// drives the same walk one question at a time, which is what keeps a
-    /// client that predates this field working unchanged.
-    #[serde(default)]
-    pub answers: Vec<String>,
-}
-
-/// Response for clarification.resolve
-#[derive(Debug, Serialize)]
-pub struct ClarificationResolveResponse {
-    /// Whether the answer was taken. `false` for a stale answer (already
-    /// resolved, superseded, timed out, or its run was cancelled).
-    ///
-    /// ⚠️ True does NOT mean the parked tool resumed — see `pending_questions`.
-    /// A client that treats it that way drops its card while the request is
-    /// still mid-walk.
-    pub resolved: bool,
-    /// How many questions of this request are still unanswered. `0` means the
-    /// parked tool was unblocked and the card is done; anything higher means
-    /// the client should re-render from `clarification.pending`.
-    ///
-    /// **Important:** when `stale` is `true`, this `0` does NOT mean the
-    /// request is done — it means "no live entry matched your reply", which
-    /// can also happen for a reply that raced an advance or arrived after a
-    /// timeout / cancellation. The card in the client's window must NOT be
-    /// dropped on this signal alone; the client should re-render from
-    /// `clarification.pending` (which is the source of truth for what's
-    /// actually live on the server).
-    pub pending_questions: usize,
-    /// Whether the reply was stale (no live waiter consumed it). When `true`,
-    /// `resolved` is `false` and the client SHOULD refresh from
-    /// `clarification.pending` rather than treat the card as resolved.
-    ///
-    /// Always `false` when `resolved` is `true`.
-    #[serde(default)]
-    pub stale: bool,
-}
-
-/// Response for clarification.pending
-#[derive(Debug, Serialize)]
-pub struct PendingListResponse {
-    pub pending: Vec<PendingClarification>,
-}
 
 /// Register the clarification methods, all sharing one `Arc<ClarificationManager>`
 /// — the same instance the `ask_user` tool registers its questions with.
@@ -159,7 +100,14 @@ async fn handle_resolve(
     } else {
         params.answers.iter().map(String::as_str).collect()
     };
-    let outcome = manager.resolve_many(&params.session_key, &replies).await;
+    let outcome = manager
+        .resolve_many_expected(
+            &params.session_key,
+            &replies,
+            params.expected_request_id.as_deref(),
+            params.expected_question_id.as_deref(),
+        )
+        .await;
     let resolved = outcome.consumed();
     // `More` also carries a rendered text menu — that is for a *channel*. A
     // Panel re-renders from the structured `questions` view instead, so this
@@ -263,7 +211,9 @@ mod tests {
         let store = Arc::new(
             FileSessionStore::new(FileSessionStoreConfig {
                 base_dir: tmp.path().to_path_buf(),
-                ..Default::default()
+                max_messages: 100,
+                compaction_keep: 50,
+                session_expiry_secs: 30 * 24 * 60 * 60,
             })
             .expect("file session store"),
         );
@@ -408,23 +358,28 @@ mod tests {
         let mgr = manager();
         let (_tmp, sess) = sessions();
         create_session(&sess, "agent:main:main", Some("u-alice")).await;
-        let rx = mgr
-            .register(
+        let (request_id, rx) = mgr
+            .register_with_identity(
                 "agent:main:main",
                 ClarificationRequest::text("Which file?"),
                 DEFAULT_CLARIFY_TIMEOUT,
-                "",
+                "run-alice",
             )
             .await;
+        let pending = mgr.list_pending().await;
+        let question_id = &pending[0].questions[0].id;
+        let guarded = |reply: &str| {
+            JsonRpcRequest::new(
+                "clarification.resolve",
+                Some(json!({ "session_key": "agent:main:main", "reply": reply,
+                "expected_request_id": request_id, "expected_question_id": question_id })),
+                Some(json!(1)),
+            )
+        };
 
         let bob_resp = CALLER_USER
             .scope(Some("u-bob".to_string()), async {
-                handle_resolve(
-                    resolve_request("agent:main:main", "src/evil.rs"),
-                    mgr.clone(),
-                    sess.clone(),
-                )
-                .await
+                handle_resolve(guarded("src/evil.rs"), mgr.clone(), sess.clone()).await
             })
             .await;
         assert_eq!(
@@ -435,11 +390,53 @@ mod tests {
         // The waiter is untouched — alice can still answer it.
         let alice_resp = CALLER_USER
             .scope(Some("u-alice".to_string()), async {
-                handle_resolve(resolve_request("agent:main:main", "src/main.rs"), mgr, sess).await
+                handle_resolve(guarded("src/main.rs"), mgr, sess).await
             })
             .await;
         assert_eq!(alice_resp.result.unwrap()["resolved"], true);
         assert_eq!(rx.await.unwrap().value(), Some("src/main.rs"));
+    }
+
+    #[tokio::test]
+    async fn guarded_rpc_rejects_a_superseded_request_without_consuming_its_successor() {
+        let mgr = manager();
+        let (_tmp, sess) = sessions();
+        create_session(&sess, "agent:main:main", None).await;
+        let (old, old_rx) = mgr
+            .register_with_identity(
+                "agent:main:main",
+                ClarificationRequest::text("Old?"),
+                DEFAULT_CLARIFY_TIMEOUT,
+                "r1",
+            )
+            .await;
+        let (current, current_rx) = mgr
+            .register_with_identity(
+                "agent:main:main",
+                ClarificationRequest::text("New?"),
+                DEFAULT_CLARIFY_TIMEOUT,
+                "r2",
+            )
+            .await;
+        assert_eq!(
+            old_rx.await.unwrap().result_type,
+            crate::clarification::ClarificationResultType::Cancelled
+        );
+        let guarded = |id: &str| {
+            JsonRpcRequest::new(
+                "clarification.resolve",
+                Some(json!({ "session_key": "agent:main:main", "reply": "answer",
+                "expected_request_id": id, "expected_question_id": "answer" })),
+                Some(json!(1)),
+            )
+        };
+        let stale = handle_resolve(guarded(&old), mgr.clone(), sess.clone()).await;
+        assert!(stale.is_success());
+        assert_eq!(stale.result.unwrap()["stale"], true);
+        assert_eq!(mgr.list_pending().await[0].answered, 0);
+        let done = handle_resolve(guarded(&current), mgr, sess).await;
+        assert_eq!(done.result.unwrap()["resolved"], true);
+        assert_eq!(current_rx.await.unwrap().value(), Some("answer"));
     }
 
     #[tokio::test]

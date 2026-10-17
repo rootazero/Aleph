@@ -105,7 +105,18 @@ pub fn ThemeToggle() -> impl IntoView {
         <div class="relative">
             // Trigger
             <button
-                on:click=move |_| open.update(|v| *v = !*v)
+                on:click=move |_| {
+                    let next_open = !open.get_untracked();
+                    if next_open {
+                        // Theme commands and the settings page share these
+                        // local preferences. Re-read them when opening so the
+                        // picker never presents a stale active option.
+                        mode.set(read_mode());
+                        accent.set(read_accent());
+                        material.set(read_material());
+                    }
+                    open.set(next_open);
+                }
                 class="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-text-secondary
                        hover:text-text-primary hover:bg-surface-sunken transition-all duration-200"
                 title=move || t_string!(i18n, appearance.popover_title).to_string()

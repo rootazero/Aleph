@@ -49,4 +49,3 @@ test connection::tests::connect_handshakes_before_handing_back_the_client ... ok
 test connection::tests::a_superseded_read_loop_does_not_kill_the_live_connection ... ok
 
 test result: ok. 42 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.22s
-

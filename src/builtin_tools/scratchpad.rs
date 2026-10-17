@@ -1207,6 +1207,7 @@ mod tests {
             unattended: false,
             plan_gate: Some(Arc::clone(&gate)),
             side_question: false,
+            telecom_authority: None,
         };
         crate::tools::turn_context::TURN_CONTEXT
             .scope(ctx, f(gate))

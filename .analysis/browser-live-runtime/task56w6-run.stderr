@@ -1,3 +1,0 @@
-{"qaDiag":"monitor","upgrades":3,"refusedOrigin":1,"refusedOriginKinds":{"missing":0,"appShell":1,"other":0},"refusedOther":0,"refusedConcurrent":0,"accepted":2,"streamInvalid":0,"helloSeen":2,"installFailed":0,"installFailedReason":null}
-{"qaDiag":"trace","records":4,"unconsumed":1,"ignoredLines":5,"poisoned":null}
-{"qaDiag":"shell","exitedBeforeCleanup":false,"exitCodeZero":null,"exitAfterMs":null}

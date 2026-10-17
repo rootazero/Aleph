@@ -1440,6 +1440,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         }
     }
 
@@ -1678,6 +1679,7 @@ mod tests {
             unattended: false,
             plan_gate: None,
             side_question: false,
+            telecom_authority: None,
         };
         let out = crate::tools::turn_context::TURN_CONTEXT
             .scope(turn, async {

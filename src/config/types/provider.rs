@@ -98,6 +98,201 @@ impl JsonSchema for ServerContextEditing {
 }
 
 // =============================================================================
+// ModelDef — per-model parameter overrides
+// =============================================================================
+
+/// Per-input-modality capability flags for a model.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ModelInput {
+    /// Accepts text messages.
+    pub text: bool,
+    /// Accepts image attachments.
+    pub image: bool,
+}
+
+/// Tiered pricing: applies when input token count exceeds `input_tokens_above`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct CostTier {
+    /// Lower bound (inclusive) in input tokens for this tier.
+    pub input_tokens_above: u64,
+    /// Input cost in USD per million tokens (this tier).
+    #[serde(default)]
+    pub input: Option<f64>,
+    /// Output cost in USD per million tokens (this tier).
+    #[serde(default)]
+    pub output: Option<f64>,
+    /// Cache-read cost in USD per million tokens.
+    #[serde(default)]
+    pub cache_read: Option<f64>,
+    /// Cache-write cost in USD per million tokens.
+    #[serde(default)]
+    pub cache_write: Option<f64>,
+}
+
+/// Cost information for a model, in USD per million tokens.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ModelCost {
+    /// Base input cost ($/M tokens).
+    pub input: Option<f64>,
+    /// Base output cost ($/M tokens).
+    pub output: Option<f64>,
+    /// Cache-read cost ($/M tokens, e.g. Anthropic prompt cache).
+    pub cache_read: Option<f64>,
+    /// Cache-write cost ($/M tokens).
+    pub cache_write: Option<f64>,
+    /// Reasoning-token cost ($/M tokens, for models that bill reasoning separately).
+    pub reasoning: Option<f64>,
+    /// Tiered rates — applied when input volume exceeds each tier's threshold.
+    #[serde(default)]
+    pub tiers: Vec<CostTier>,
+}
+
+/// Thinking-level → budget token mapping for extended-thinking models.
+/// Any level not listed falls back to the provider default.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ThinkingLevelMap {
+    pub off: Option<String>,
+    pub minimal: Option<String>,
+    pub low: Option<String>,
+    pub medium: Option<String>,
+    pub high: Option<String>,
+    pub xhigh: Option<String>,
+    pub max: Option<String>,
+}
+
+/// Compat flags for a model.
+///
+/// All fields are `Option<T>`: `None` means "use the adapter's built-in
+/// heuristic" (typically prefix matching). An explicit value wins.
+///
+/// Per-field integration status (kept here so a future contributor can see
+/// at a glance which overrides actually flow into request bodies):
+///
+/// | Field | Status | Consumer |
+/// |-------|--------|----------|
+/// | `uses_max_completion_tokens` | **Real** | `openai_common/max_tokens.rs::uses_max_completion_tokens_for` |
+/// | `supports_reasoning_effort` | **Real** | `openai_common/provider_policy.rs::apply_model_compat` |
+/// | `supports_prompt_cache` | **Real** | `openai_common/provider_policy.rs::apply_model_compat` |
+/// | `requires_object_properties` | **Real** | `openai_common/provider_policy.rs::apply_model_compat` |
+/// | `requires_derefed_refs` | **Real** | `openai_common/provider_policy.rs::apply_model_compat` |
+/// | `forbids_sampling_params` | Anthropic-only (existing) | `anthropic/proto_impl.rs::forbids_sampling_params` (static heuristic; not wired through this struct) |
+/// | `temperature_policy` | Anthropic-only (existing) | `presets/mod.rs::apply_temperature_policy` (parsed via `parse_temperature_policy`) |
+/// | `supports_cache_control` | Anthropic-only (existing) | `anthropic/provider_policy.rs::AnthropicCapabilities::supports_cache_control` (resolved from endpoint class; not wired through this struct) |
+/// | `thinking_format` | **Schema round-trip only** | Parsed + serialized through `gateway/handlers/providers/helpers.rs`; no adapter reads it. The thinking branch in `openai_chat/adapter.rs` keys on `payload.think_level`, not on this field. |
+/// | `vendor_behavior_profile` | **Schema round-trip only** | Parsed + serialized through `gateway/handlers/providers/helpers.rs`; no adapter reads it. The behavioural gating in `model_behaviors/mod.rs` keys on `ProviderConfig::model_behavior`, not on this field. |
+///
+/// **Real** = the value flows from `model_defs[].compat` into the request
+/// body via `model_compat_for` / `apply_model_compat` / `uses_max_completion_tokens_for`.
+/// **Anthropic-only** = the same capability exists in Anthropic adapter paths
+/// but is resolved by endpoint class + model-version heuristic, not by this
+/// struct (the doc claims above for these three are stale; they predate the
+/// `PayloadPolicy::apply_model_compat` pattern and were never updated).
+/// **Schema round-trip only** = the field is parsed and re-serialized
+/// (so configs survive a load/save round-trip and the JSON schema documents
+/// the knob), but no production code path reads it. Touching either of these
+/// to do something real is a separate task; do NOT remove them just because
+/// they look dead — they are a contract surface with operator configs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ModelCompat {
+    /// Use `max_completion_tokens` instead of `max_tokens` (o1/o3/o4/gpt-5).
+    /// Real. Consumer: `openai_common/max_tokens.rs::uses_max_completion_tokens_for`
+    /// (called from `openai_chat/adapter.rs::build_request`).
+    pub uses_max_completion_tokens: Option<bool>,
+
+    /// Strip temperature/top_p/top_k from the request (claude-4.7+).
+    /// Anthropic-only heuristic today: `anthropic/proto_impl.rs::forbids_sampling_params`
+    /// keys on the `claude-*-<version>` model id, not on this field. The
+    /// field is parsed for backward compatibility with operator configs.
+    pub forbids_sampling_params: Option<bool>,
+
+    /// Override temperature handling: `"omit"` | `"force:<f32>"`.
+    /// Anthropic-only via `presets/mod.rs::apply_temperature_policy`
+    /// (called from `anthropic/adapter.rs`). Real on the Anthropic path,
+    /// schema-only elsewhere.
+    pub temperature_policy: Option<String>,
+
+    /// Inject Anthropic `cache_control` breakpoints.
+    /// Anthropic-only: resolved by `anthropic/provider_policy.rs::resolve_anthropic_capabilities`
+    /// from endpoint class, not from this struct. Field is parsed for
+    /// backward compatibility.
+    pub supports_cache_control: Option<bool>,
+
+    /// Allow `reasoning_effort` field in requests.
+    /// Real. Consumer: `openai_common/provider_policy.rs::apply_model_compat`.
+    pub supports_reasoning_effort: Option<bool>,
+
+    /// Add empty `properties: {}` to object schemas (Moonshot/DeepSeek).
+    /// Real. Consumer: `openai_common/provider_policy.rs::apply_model_compat`.
+    pub requires_object_properties: Option<bool>,
+
+    /// Inline all `$ref` schema references (Moonshot).
+    /// Real. Consumer: `openai_common/provider_policy.rs::apply_model_compat`.
+    pub requires_derefed_refs: Option<bool>,
+
+    /// Send `prompt_cache_key` / `retention` fields.
+    /// Real. Consumer: `openai_common/provider_policy.rs::apply_model_compat`.
+    pub supports_prompt_cache: Option<bool>,
+
+    /// Thinking block encoding: `"openai"` | `"deepseek"` | `"qwen"` |
+    /// `"string-thinking"` | `null` (no thinking support).
+    /// Schema round-trip only — see struct doc above.
+    pub thinking_format: Option<String>,
+
+    /// Vendor behaviour profile: `"strict"` | `null`.
+    /// Schema round-trip only — see struct doc above.
+    pub vendor_behavior_profile: Option<String>,
+}
+
+/// Per-model parameter overrides. Matched by `id` inside a provider's
+/// `model_defs` list. Wins over the built-in capability catalog and the
+/// provider-level defaults for every field it specifies.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ModelDef {
+    /// Canonical model id — must match the string in `models`.
+    pub id: String,
+
+    /// Human-readable display name (optional).
+    #[serde(default)]
+    pub name: Option<String>,
+
+    /// Override the endpoint base URL for this model only.
+    #[serde(default)]
+    pub base_url: Option<String>,
+
+    /// Operator-declared context window in tokens.
+    #[serde(default)]
+    pub context_window: Option<u32>,
+
+    /// Maximum output tokens for this model.
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
+
+    /// Input modality flags.
+    #[serde(default)]
+    pub input: Option<ModelInput>,
+
+    /// Whether this model performs chain-of-thought / reasoning.
+    #[serde(default)]
+    pub reasoning: Option<bool>,
+
+    /// Thinking-level → budget token map.
+    #[serde(default)]
+    pub thinking_level_map: Option<ThinkingLevelMap>,
+
+    /// Pricing information for this model.
+    #[serde(default)]
+    pub cost: Option<ModelCost>,
+
+    /// Adapter compatibility flags.
+    #[serde(default)]
+    pub compat: Option<ModelCompat>,
+}
+
+// =============================================================================
 // ResponseFormat
 // =============================================================================
 
@@ -317,6 +512,22 @@ pub struct ProviderConfig {
     /// Server-side context editing (Anthropic). See [`ServerContextEditing`].
     #[serde(default)]
     pub server_context_editing: ServerContextEditing,
+
+    /// Per-model parameter overrides. Each entry matches one model by `id`
+    /// and wins over the provider-level defaults and the built-in capability
+    /// catalog. Entries are keyed by the model's canonical id string.
+    ///
+    /// Example in config.toml:
+    /// ```toml
+    /// [[providers.claude.model_defs]]
+    /// id = "claude-opus-4-5"
+    /// context_window = 200000
+    /// [providers.claude.model_defs.cost]
+    /// input = 15.0
+    /// output = 75.0
+    /// ```
+    #[serde(default)]
+    pub model_defs: Vec<ModelDef>,
 }
 
 pub fn default_provider_color() -> String {
@@ -401,6 +612,7 @@ impl ProviderConfig {
             metadata_user_id: None,
             effort: None,
             server_context_editing: ServerContextEditing::default(),
+            model_defs: vec![],
         }
     }
 }
@@ -456,9 +668,9 @@ mod tests {
     /// edit of an unrelated field of the same provider.
     #[tokio::test]
     async fn server_context_editing_round_trips_through_the_config_patcher() {
+        use crate::config::Config;
         use crate::config::backup::ConfigBackup;
         use crate::config::patcher::{ConfigPatcher, PatchRequest};
-        use crate::config::Config;
 
         let (_scratch, dir) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&dir).expect("scratch dir");
@@ -552,6 +764,7 @@ mod tests {
             metadata_user_id: None,
             effort: None,
             server_context_editing: Default::default(),
+            model_defs: vec![],
         };
         assert_eq!(config.protocol(), "anthropic");
     }
@@ -591,6 +804,7 @@ mod tests {
             metadata_user_id: None,
             effort: None,
             server_context_editing: Default::default(),
+            model_defs: vec![],
         };
         assert_eq!(config.protocol(), "openai");
     }

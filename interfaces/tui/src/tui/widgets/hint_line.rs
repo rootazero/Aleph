@@ -31,17 +31,20 @@ pub const MARKER: &str = "\u{23f5}\u{23f5} ";
 
 /// While a run is in flight: the interrupt comes first, because it is the one
 /// thing a reader may urgently want and cannot guess.
-pub const RUNNING: &str = "ctrl+c interrupt \u{b7} ctrl+o expand \u{b7} ctrl+end bottom";
+pub const RUNNING: &str =
+    "ctrl+c interrupt \u{b7} ctrl+o expand \u{b7} ctrl+end bottom \u{b7} drag select \u{b7} ctrl+c copy";
 
 /// While the composer holds text: the two keys that send it, and what Ctrl+C
 /// means *here* (clear the draft — there is no run to cancel).
 ///
 /// These words used to be the input box's title, which B6 removed along with
 /// the box.
-pub const TYPING: &str = "enter send \u{b7} \\+enter newline \u{b7} ctrl+c clear";
+pub const TYPING: &str =
+    "enter send \u{b7} \\+enter newline \u{b7} ctrl+c clear \u{b7} drag select \u{b7} ctrl+c copy";
 
 /// Idle.
-pub const IDLE: &str = "ctrl+o expand \u{b7} ctrl+end bottom \u{b7} /help commands";
+pub const IDLE: &str =
+    "ctrl+o expand \u{b7} ctrl+end bottom \u{b7} /help commands \u{b7} drag select \u{b7} ctrl+c copy";
 
 /// Which of the three forms the current state calls for.
 ///
@@ -60,11 +63,18 @@ pub const fn hint_text(running: bool, typing: bool) -> &'static str {
 }
 
 /// Paint the hint row.
-pub fn render_hint_line(frame: &mut Frame, area: Rect, running: bool, typing: bool) {
+pub fn render_hint_line(frame: &mut Frame, area: Rect, running: bool, typing: bool, hidden: bool) {
     let dim = Style::default().fg(palette().color(SemanticColor::Dim));
     let line = Line::from(vec![
         Span::styled(MARKER.to_string(), dim),
-        Span::styled(hint_text(running, typing).to_string(), dim),
+        Span::styled(
+            if hidden {
+                format!("ctrl+p reopen request · {}", hint_text(running, typing))
+            } else {
+                hint_text(running, typing).to_string()
+            },
+            dim,
+        ),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }

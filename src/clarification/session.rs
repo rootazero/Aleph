@@ -43,12 +43,12 @@
 
 use super::render::{self, RenderedQuestion};
 use super::{
-    ClarificationAnswer, ClarificationQuestion, ClarificationQuestionView, ClarificationRequest,
+    question_view, ClarificationAnswer, ClarificationQuestion, ClarificationRequest,
     ClarificationResult,
 };
 use crate::gateway::events::{ClarificationOutcome, GatewayEventFrame};
 use crate::sync_primitives::{Arc, AsyncRwLock};
-use serde::Serialize;
+pub use aleph_protocol::PendingClarification;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
@@ -63,26 +63,6 @@ use tokio::sync::oneshot;
 /// discards an answer the human already gave. That ordering is pinned by
 /// `budget::tests::ask_user_budget_outlives_the_clarification_timeout`.
 pub const DEFAULT_CLARIFY_TIMEOUT: Duration = Duration::from_secs(600);
-
-/// One outstanding request, as a client needs to render and answer it.
-#[derive(Debug, Clone, Serialize)]
-pub struct PendingClarification {
-    /// Key to pass back to [`ClarificationManager::resolve`].
-    pub session_key: String,
-    /// Legacy single-question projection: the prompt the **next** plain reply
-    /// answers, i.e. the one at the cursor. A client that understands nothing
-    /// but this field still drives the whole request to completion, one
-    /// message at a time.
-    pub question: String,
-    /// Choice labels for that same question; empty for a free-text question.
-    pub options: Vec<String>,
-    /// Every question in the request, in order — the full-fidelity view, with
-    /// per-option descriptions the legacy `options` array cannot carry.
-    pub questions: Vec<ClarificationQuestionView>,
-    /// How many of `questions` already have answers. A client that just
-    /// connected resumes at this index.
-    pub answered: usize,
-}
 
 /// What [`ClarificationManager::resolve`] did with a reply.
 ///
@@ -121,6 +101,7 @@ impl ResolveOutcome {
 
 /// A clarification awaiting the user's reply.
 struct PendingEntry {
+    request_id: String,
     request: ClarificationRequest,
     /// Answers collected so far, in question order. `answers.len()` is the
     /// cursor: the index of the question the next plain reply answers.
@@ -164,12 +145,13 @@ impl PendingEntry {
 /// question ended and keeps the card (and its Enter hijack) alive — in every
 /// window, not just the one that answered. Best-effort: no bus is wired in CLI
 /// subcommands and unit tests, and a clarification must still resolve there.
-fn publish_ended(session_key: &str, outcome: ClarificationOutcome) {
+fn publish_ended(session_key: &str, request_id: &str, outcome: ClarificationOutcome) {
     let Some(bus) = crate::gateway::event_emitter::gateway_event_bus() else {
         return;
     };
     if let Err(e) = bus.publish_frame(&GatewayEventFrame::ClarificationEnded {
         session_key: session_key.to_string(),
+        request_id: request_id.to_string(),
         outcome,
     }) {
         tracing::debug!(error = %e, "failed to publish ClarificationEnded");
@@ -191,6 +173,7 @@ fn publish_ended(session_key: &str, outcome: ClarificationOutcome) {
 pub fn ask_user_frame(
     run_id: &str,
     session_key: &str,
+    request_id: &str,
     request: &ClarificationRequest,
     cursor: usize,
 ) -> GatewayEventFrame {
@@ -211,13 +194,10 @@ pub fn ask_user_frame(
         // operator approval requester's out-of-band frames.
         seq: 0,
         session_key: session_key.to_string(),
+        request_id: request_id.to_string(),
         question: current.prompt.clone(),
         options: current.options.iter().map(|o| o.label.clone()).collect(),
-        questions: request
-            .questions
-            .iter()
-            .map(ClarificationQuestionView::from)
-            .collect(),
+        questions: request.questions.iter().map(question_view).collect(),
         answered: cursor,
     }
 }
@@ -237,6 +217,7 @@ fn publish_advance(entry: &PendingEntry, session_key: &str) {
     let frame = ask_user_frame(
         &entry.run_id,
         session_key,
+        &entry.request_id,
         &entry.request,
         entry.answers.len(),
     );
@@ -283,6 +264,21 @@ impl ClarificationManager {
         timeout: Duration,
         run_id: impl Into<String>,
     ) -> oneshot::Receiver<ClarificationResult> {
+        self.register_with_identity(session_key, request, timeout, run_id)
+            .await
+            .1
+    }
+
+    /// Register and return the stable identity alongside the parked receiver.
+    /// The producer publishes this exact id, not a later snapshot that may
+    /// already belong to a superseding request.
+    pub async fn register_with_identity(
+        &self,
+        session_key: impl Into<String>,
+        request: ClarificationRequest,
+        timeout: Duration,
+        run_id: impl Into<String>,
+    ) -> (String, oneshot::Receiver<ClarificationResult>) {
         // Opportunistic sweep: an `ask_user` whose future was dropped (aborted
         // agent run) never reaches its own `cancel`, so its entry would linger
         // forever — `cleanup_expired` has no scheduled caller. Each new
@@ -292,7 +288,9 @@ impl ClarificationManager {
         self.cleanup_expired().await;
 
         let (tx, rx) = oneshot::channel();
+        let request_id = uuid::Uuid::new_v4().to_string();
         let entry = PendingEntry {
+            request_id: request_id.clone(),
             request,
             answers: Vec::new(),
             sender: Some(tx),
@@ -308,19 +306,23 @@ impl ClarificationManager {
                 if let Some(sender) = old.sender.take() {
                     let _ = sender.send(ClarificationResult::cancelled());
                 }
-                true
+                Some(old.request_id)
             }
-            None => false,
+            None => None,
         };
         drop(pending);
-        if superseded {
+        if let Some(old_request_id) = superseded {
             // Honor the same "one terminal frame per clarification" invariant as
             // resolve/cleanup so clients drop the old card in every window.
             // `Cancelled` is the canonical outcome for "nobody can answer any
             // more (… superseded)" per the `ClarificationOutcome` docstring.
-            publish_ended(&session_key, ClarificationOutcome::Cancelled);
+            publish_ended(
+                &session_key,
+                &old_request_id,
+                ClarificationOutcome::Cancelled,
+            );
         }
-        rx
+        (request_id, rx)
     }
 
     /// Whether `session_key` has a live pending clarification — one that is
@@ -375,14 +377,11 @@ impl ClarificationManager {
                 })?;
                 Some(PendingClarification {
                     session_key: session_key.clone(),
+                    request_id: e.request_id.clone(),
+                    run_id: e.run_id.clone(),
                     question: current.prompt.clone(),
                     options: current.options.iter().map(|o| o.label.clone()).collect(),
-                    questions: e
-                        .request
-                        .questions
-                        .iter()
-                        .map(ClarificationQuestionView::from)
-                        .collect(),
+                    questions: e.request.questions.iter().map(question_view).collect(),
                     answered: e.answers.len(),
                 })
             })
@@ -410,6 +409,19 @@ impl ClarificationManager {
     /// ignored rather than rejected — a client that raced an advance would
     /// otherwise lose the answers it did get right.
     pub async fn resolve_many(&self, session_key: &str, replies: &[&str]) -> ResolveOutcome {
+        self.resolve_many_expected(session_key, replies, None, None)
+            .await
+    }
+
+    /// Compare optional identities under the very lock that advances answers.
+    /// A supersede or another reply cannot slip between the check and mutation.
+    pub async fn resolve_many_expected(
+        &self,
+        session_key: &str,
+        replies: &[&str],
+        expected_request_id: Option<&str>,
+        expected_question_id: Option<&str>,
+    ) -> ResolveOutcome {
         /// What the write-locked inspection decided, so the acting half runs
         /// with no outstanding borrow of the map.
         enum Step {
@@ -433,6 +445,13 @@ impl ClarificationManager {
             // Reporting anything but `Stale` would let the caller eat the
             // user's message and deliver a follow-up question into the void.
             Some(entry) if !entry.is_live() => Step::Abandoned,
+            Some(entry)
+                if expected_request_id.is_some_and(|id| id != entry.request_id)
+                    || expected_question_id
+                        .is_some_and(|id| entry.current().is_none_or(|q| q.id != id)) =>
+            {
+                Step::Absent
+            }
             Some(entry) => {
                 for reply in replies {
                     let Some(question) = entry.current() else {
@@ -461,6 +480,7 @@ impl ClarificationManager {
                 let mut entry = pending
                     .remove(session_key)
                     .expect("invariant: observed under this same write lock");
+                let request_id = entry.request_id.clone();
                 if let Some(sender) = entry.sender.take() {
                     // A closed receiver makes this a no-op, which is exactly
                     // the abandoned case.
@@ -472,6 +492,7 @@ impl ClarificationManager {
                 // the 600 s deadline.
                 publish_ended(
                     session_key,
+                    &request_id,
                     if expired {
                         ClarificationOutcome::Expired
                     } else {
@@ -486,6 +507,7 @@ impl ClarificationManager {
                 let mut entry = pending
                     .remove(session_key)
                     .expect("invariant: observed under this same write lock");
+                let request_id = entry.request_id.clone();
                 let answers = std::mem::take(&mut entry.answers);
                 let delivered = match entry.sender.take() {
                     Some(sender) => sender.send(ClarificationResult::answered(answers)).is_ok(),
@@ -493,7 +515,7 @@ impl ClarificationManager {
                 };
                 drop(pending);
                 if delivered {
-                    publish_ended(session_key, ClarificationOutcome::Resolved);
+                    publish_ended(session_key, &request_id, ClarificationOutcome::Resolved);
                     ResolveOutcome::Done
                 } else {
                     // The waiter vanished between the liveness check and the
@@ -508,15 +530,31 @@ impl ClarificationManager {
     /// Cancel the pending clarification for `session_key`, if any, unblocking
     /// its waiter with [`ClarificationResult::cancelled`].
     pub async fn cancel(&self, session_key: &str) -> bool {
+        self.cancel_if_request(session_key, None).await
+    }
+
+    /// Only retire the named request; an old producer must not cancel its successor.
+    pub async fn cancel_if_request(
+        &self,
+        session_key: &str,
+        expected_request_id: Option<&str>,
+    ) -> bool {
         let mut pending = self.pending.write().await;
+        if !pending
+            .get(session_key)
+            .is_some_and(|entry| expected_request_id.is_none_or(|id| id == entry.request_id))
+        {
+            return false;
+        }
         let Some(mut entry) = pending.remove(session_key) else {
             return false;
         };
         if let Some(sender) = entry.sender.take() {
             let _ = sender.send(ClarificationResult::cancelled());
         }
+        let request_id = entry.request_id;
         drop(pending);
-        publish_ended(session_key, ClarificationOutcome::Cancelled);
+        publish_ended(session_key, &request_id, ClarificationOutcome::Cancelled);
         true
     }
 
@@ -531,6 +569,15 @@ impl ClarificationManager {
     ///
     /// Returns whether an entry was retired.
     pub async fn cancel_abandoned(&self, session_key: &str) -> bool {
+        self.cancel_abandoned_if_request(session_key, None).await
+    }
+
+    /// Abandonment cleanup scoped to the producer's registration identity.
+    pub async fn cancel_abandoned_if_request(
+        &self,
+        session_key: &str,
+        expected_request_id: Option<&str>,
+    ) -> bool {
         let mut pending = self.pending.write().await;
         // Peek first (immutably) so we can distinguish "waiter was abandoned"
         // (`Cancelled` is the canonical outcome) from "entry is past its
@@ -539,7 +586,7 @@ impl ClarificationManager {
         // model sees a `Cancelled` outcome for a question that was actually
         // timed out, drifting apart from the `cleanup_expired` contract.
         let (is_expired, mut entry) = match pending.get(session_key) {
-            Some(e) if !e.is_live() => {
+            Some(e) if !e.is_live() && expected_request_id.is_none_or(|id| id == e.request_id) => {
                 let expired = e.is_expired();
                 let entry = pending
                     .remove(session_key)
@@ -562,6 +609,7 @@ impl ClarificationManager {
         drop(pending);
         publish_ended(
             session_key,
+            &entry.request_id,
             if is_expired {
                 ClarificationOutcome::Expired
             } else {
@@ -597,7 +645,7 @@ impl ClarificationManager {
     /// caller, and a long-running gateway with many cancelled runs would
     /// otherwise leak them in the pending map.
     pub async fn cleanup_expired(&self) -> usize {
-        let reaped: Vec<(String, ClarificationOutcome)> = {
+        let reaped: Vec<(String, String, ClarificationOutcome)> = {
             let mut pending = self.pending.write().await;
             let mut reaped = Vec::new();
             pending.retain(|session_key, entry| {
@@ -605,14 +653,22 @@ impl ClarificationManager {
                     if let Some(sender) = entry.sender.take() {
                         let _ = sender.send(ClarificationResult::timeout());
                     }
-                    reaped.push((session_key.clone(), ClarificationOutcome::Expired));
+                    reaped.push((
+                        session_key.clone(),
+                        entry.request_id.clone(),
+                        ClarificationOutcome::Expired,
+                    ));
                     false
                 } else if !entry.is_live() {
                     // Abandoned (sender closed but not past the deadline): the
                     // run was cancelled, the receiver is gone, the send is a
                     // no-op. Tell the client side so the card is retired.
                     entry.sender.take();
-                    reaped.push((session_key.clone(), ClarificationOutcome::Cancelled));
+                    reaped.push((
+                        session_key.clone(),
+                        entry.request_id.clone(),
+                        ClarificationOutcome::Cancelled,
+                    ));
                     false
                 } else {
                     true
@@ -620,8 +676,8 @@ impl ClarificationManager {
             });
             reaped
         };
-        for (session_key, outcome) in &reaped {
-            publish_ended(session_key, *outcome);
+        for (session_key, request_id, outcome) in &reaped {
+            publish_ended(session_key, request_id, *outcome);
         }
         reaped.len()
     }
@@ -1123,6 +1179,110 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn request_and_cursor_guards_reject_stale_answers_under_the_registry_lock() {
+        let mgr = ClarificationManager::new();
+        let (old_id, old_rx) = mgr
+            .register_with_identity(
+                "sess-guard",
+                two_question_request(),
+                DEFAULT_CLARIFY_TIMEOUT,
+                "run-old",
+            )
+            .await;
+        let (new_id, new_rx) = mgr
+            .register_with_identity(
+                "sess-guard",
+                two_question_request(),
+                DEFAULT_CLARIFY_TIMEOUT,
+                "run-new",
+            )
+            .await;
+        assert_ne!(old_id, new_id);
+        assert_eq!(
+            old_rx.await.unwrap().result_type,
+            ClarificationResultType::Cancelled
+        );
+        let snapshot = mgr.list_pending().await;
+        assert_eq!(snapshot[0].request_id, new_id);
+        assert_eq!(snapshot[0].run_id, "run-new");
+        assert_eq!(snapshot[0].questions[0].id, "env");
+        assert_eq!(
+            mgr.resolve_many_expected("sess-guard", &["1"], Some(&old_id), Some("env"))
+                .await,
+            ResolveOutcome::Stale
+        );
+        assert_eq!(mgr.list_pending().await[0].answered, 0);
+        assert!(!mgr.cancel_if_request("sess-guard", Some(&old_id)).await);
+        assert!(matches!(
+            mgr.resolve_many_expected("sess-guard", &["1"], Some(&new_id), Some("env"))
+                .await,
+            ResolveOutcome::More { remaining: 1, .. }
+        ));
+        assert_eq!(mgr.list_pending().await[0].answered, 1);
+        // Same request, but a reply dispatched against its previous cursor.
+        assert_eq!(
+            mgr.resolve_many_expected("sess-guard", &["oops"], Some(&new_id), Some("env"))
+                .await,
+            ResolveOutcome::Stale
+        );
+        assert_eq!(mgr.list_pending().await[0].answered, 1);
+        assert_eq!(
+            mgr.resolve_many_expected("sess-guard", &["T-42"], Some(&new_id), Some("ticket"))
+                .await,
+            ResolveOutcome::Done
+        );
+        let result = new_rx.await.unwrap();
+        assert_eq!(result.answers.len(), 2);
+        assert_eq!(result.answers[1].value, "T-42");
+    }
+
+    #[tokio::test]
+    async fn frame_and_pending_share_registration_identity_and_hide_option_values() {
+        let mgr = ClarificationManager::new();
+        let (id, rx) = mgr
+            .register_with_identity(
+                "sess-wire",
+                ClarificationRequest::select(
+                    "Where?",
+                    vec![ClarificationOption::new("private-value", "Display label")],
+                ),
+                DEFAULT_CLARIFY_TIMEOUT,
+                "run-wire",
+            )
+            .await;
+        let pending = mgr.list_pending().await;
+        let frame = ask_user_frame(
+            "run-wire",
+            "sess-wire",
+            &id,
+            &ClarificationRequest::select(
+                "Where?",
+                vec![ClarificationOption::new("private-value", "Display label")],
+            ),
+            0,
+        );
+        let json = serde_json::to_value(&frame).unwrap();
+        let client: aleph_protocol::StreamEvent = serde_json::from_value(json.clone()).unwrap();
+        let aleph_protocol::StreamEvent::AskUser {
+            request_id,
+            questions,
+            ..
+        } = client
+        else {
+            panic!("expected ask_user");
+        };
+        assert_eq!(request_id, id);
+        assert_eq!(pending[0].request_id, request_id);
+        assert_eq!(pending[0].run_id, "run-wire");
+        assert_eq!(questions, pending[0].questions);
+        assert!(!json.to_string().contains("private-value"));
+        assert!(!serde_json::to_string(&pending)
+            .unwrap()
+            .contains("private-value"));
+        drop(rx);
+    }
+
     /// The frame carries the same fact twice — a flat `question`/`options` pair
     /// for clients that predate the structured view, and the full `questions`
     /// array. Two representations of one fact drift the moment they have two
@@ -1135,7 +1295,7 @@ mod tests {
     #[test]
     fn the_frames_legacy_projection_is_the_question_at_the_cursor() {
         let request = two_question_request();
-        let frame = ask_user_frame("run-1", "sess", &request, 1);
+        let frame = ask_user_frame("run-1", "sess", "request-1", &request, 1);
         match frame {
             GatewayEventFrame::AskUser {
                 run_id,
@@ -1172,7 +1332,8 @@ mod tests {
                 ClarificationOption::new("blue-green", "blue-green"),
             ],
         );
-        let GatewayEventFrame::AskUser { questions, .. } = ask_user_frame("r", "s", &request, 0)
+        let GatewayEventFrame::AskUser { questions, .. } =
+            ask_user_frame("r", "s", "request-1", &request, 0)
         else {
             panic!("expected an AskUser frame");
         };
@@ -1189,7 +1350,8 @@ mod tests {
     #[test]
     fn an_out_of_range_cursor_falls_back_to_the_first_question() {
         let request = two_question_request();
-        let GatewayEventFrame::AskUser { question, .. } = ask_user_frame("r", "s", &request, 9)
+        let GatewayEventFrame::AskUser { question, .. } =
+            ask_user_frame("r", "s", "request-1", &request, 9)
         else {
             panic!("expected an AskUser frame");
         };

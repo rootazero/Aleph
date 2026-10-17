@@ -976,6 +976,29 @@ impl AiProvider for FailingProvider {
     }
 }
 
+async fn seed_prior_reply(
+    session: &Arc<dyn crate::session::service::SessionService>,
+    sid: &crate::session::service::SessionId,
+) {
+    session
+        .emit_event(
+            sid,
+            SessionEvent::AssistantMessage {
+                turn_id: uuid::Uuid::new_v4(),
+                content: MessageContent {
+                    text: "earlier run answer".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                usage: None,
+                at: now_ms(),
+            },
+        )
+        .await
+        .unwrap();
+}
+
 /// A provider failure is a failure, not a user cancellation.
 ///
 /// The exit arm used to compute `HarnessError::class()` and then fan all four
@@ -991,6 +1014,7 @@ async fn a_provider_failure_is_traced_as_failed_not_cancelled() {
     let (sink, events) = RecordingTraceSink::new();
     let provider: Arc<dyn AiProvider> = Arc::new(FailingProvider);
     let (session, sid) = fresh_session("trace-failed").await;
+    seed_prior_reply(&session, &sid).await;
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
 
     let mut deps = minimal_deps(session, tools, provider);
@@ -1003,6 +1027,16 @@ async fn a_provider_failure_is_traced_as_failed_not_cancelled() {
     assert!(result.is_err(), "the run must surface the provider error");
 
     let captured = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert!(
+        captured.iter().any(|event| matches!(
+            event,
+            LoopTraceEvent::SessionCompleted {
+                final_text: None,
+                ..
+            }
+        )),
+        "a failed run must not replay the preceding run's answer"
+    );
     let outcome = captured
         .iter()
         .rev()
@@ -1026,6 +1060,7 @@ async fn a_real_cancel_is_still_traced_as_cancelled() {
     let (sink, events) = RecordingTraceSink::new();
     let provider: Arc<dyn AiProvider> = Arc::new(HangingProvider);
     let (session, sid) = fresh_session("trace-cancelled").await;
+    seed_prior_reply(&session, &sid).await;
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
 
     let mut deps = minimal_deps(session, tools, provider);
@@ -1042,6 +1077,16 @@ async fn a_real_cancel_is_still_traced_as_cancelled() {
     );
 
     let captured = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert!(
+        captured.iter().any(|event| matches!(
+            event,
+            LoopTraceEvent::SessionCompleted {
+                final_text: None,
+                ..
+            }
+        )),
+        "a cancelled run must not replay the preceding run's answer"
+    );
     let outcome = captured
         .iter()
         .rev()

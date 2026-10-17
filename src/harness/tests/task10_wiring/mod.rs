@@ -287,6 +287,8 @@ fn run_started_event() -> SessionEvent {
             exec_tier: Some("full".to_string()),
             ..Default::default()
         }),
+        telecom_provenance:
+            crate::gateway::telecom::persisted_marker::PersistedTelecomMarker::Ordinary,
     }
 }
 

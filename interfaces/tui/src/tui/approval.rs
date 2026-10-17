@@ -16,11 +16,12 @@
 // (`gateway::handlers::exec_approvals`). Left in place because a client-side
 // filter is still the right shape for "which card belongs on THIS screen".
 
-use serde_json::{json, Value};
-
-use aleph_client::AlephClient;
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 
 use super::app::{self, AppState, Focus};
+use super::interaction::ModalOwner;
 
 /// A pending approval that belongs to this session, projected to the fields the
 /// overlay renders.
@@ -102,67 +103,60 @@ pub(super) fn approval_id_present(resp: &Value, id: &str) -> bool {
         })
 }
 
-/// Poll `exec.approvals.pending` and reconcile the overlay. Called from the
-/// main-loop tick at ~1s cadence while a run is active. Opens the overlay for a
-/// newly-pending, session-owned approval and retracts a showing one that has
-/// since vanished. A transient RPC error is swallowed — the next tick retries.
-pub(super) async fn poll_approvals(state: &mut AppState, client: &AlephClient) {
-    let Ok(resp) = client
-        .call::<_, Value>("exec.approvals.pending", None::<()>)
-        .await
-    else {
-        return;
-    };
-
-    // One prompt at a time: if an overlay is already up, only check whether its
-    // approval is still live (resolved elsewhere / expired → retract it).
-    if let Some(current) = &state.approval {
-        if !approval_id_present(&resp, &current.id) {
+/// Apply a completed snapshot on the UI thread. Fetching belongs to the
+/// event loop's bounded background queue so input never waits on this RPC.
+pub(super) fn reconcile_approvals(state: &mut AppState, resp: &Value) {
+    // One prompt at a time: if an overlay is already up, only check whether
+    // its approval is still live (resolved elsewhere / expired → retract it).
+    if let Some(current_id) = state.approval.as_ref().map(|a| a.id.clone()) {
+        if !approval_id_present(resp, &current_id) {
+            let session_key = state.session_key.clone();
+            state.interaction.retire_approval(&session_key, &current_id);
             state.close_approval();
         }
+        // A head-of-queue approval card that no longer matches the overlay
+        // blocks every queued question behind it: `displayed_owner` is None
+        // (the state does not match), so no key reaches the queue. Retire
+        // the stale card so the queue can advance.
+        if let Some(ModalOwner::Approval { session_key, id }) = state.interaction.active_owner() {
+            if id != &current_id {
+                let session_key = session_key.clone();
+                let id = id.clone();
+                state.interaction.retire_approval(&session_key, &id);
+            }
+        }
+        state.sync_modal_focus();
         return;
+    }
+
+    // No overlay up: an approval card with nothing to render against would
+    // block the queue the same way — `displayed_owner` stays None forever.
+    if let Some(ModalOwner::Approval { session_key, id }) = state.interaction.active_owner() {
+        let session_key = session_key.clone();
+        let id = id.clone();
+        state.interaction.retire_approval(&session_key, &id);
     }
 
     // Don't yank the user out of another overlay (palette / dialog / picker);
     // the approval stays pending server-side and a later idle tick surfaces it.
-    if !matches!(state.focus, Focus::Input | Focus::Chat) {
+    if !matches!(state.focus, Focus::Input | Focus::Chat | Focus::Dialog) {
         return;
     }
 
-    if let Some(view) = select_session_approval(&resp, &state.session_key) {
+    if let Some(view) = select_session_approval(resp, &state.session_key) {
+        if state
+            .interaction
+            .approval_retired(&state.session_key, &view.id)
+        {
+            return;
+        }
+        let session_key = state.session_key.clone();
+        state
+            .interaction
+            .offer_approval(session_key, view.id.clone());
         state.open_approval(view.id, view.command, view.reason, view.decisions);
     }
-}
-
-/// Resolve the showing approval by decision index and tell the server. On
-/// failure the overlay is left closed — the approval is still pending, so the
-/// next poll re-surfaces it.
-pub(super) async fn resolve_approval(state: &mut AppState, client: &AlephClient, index: usize) {
-    let Some(approval) = state.approval.take() else {
-        return;
-    };
-    state.focus = Focus::Input;
-
-    // Index into the decisions THIS card offered, not a global list: the two
-    // differ whenever the server narrowed the set, and indexing the wrong one
-    // sends a decision the user did not pick.
-    let Some((label, decision)) = approval.decisions.get(index).copied() else {
-        return;
-    };
-    let params = json!({
-        "id": approval.id,
-        "decision": decision,
-        "resolved_by": "TUI",
-    });
-    match client
-        .call::<_, Value>("exec.approval.resolve", Some(params))
-        .await
-    {
-        Ok(_) => {
-            state.add_system_message(format!("Tool approval — {label}: {}", approval.command));
-        }
-        Err(e) => state.add_system_message(format!("Approval resolve error: {e}")),
-    }
+    state.sync_modal_focus();
 }
 
 #[cfg(test)]
@@ -257,6 +251,18 @@ mod tests {
         let picked = select_session_approval(&resp, "mine").unwrap();
         assert_eq!(picked.command, "(tool execution)");
         assert_eq!(picked.reason, None);
+    }
+
+    #[test]
+    fn a_delayed_snapshot_cannot_resurrect_a_retired_approval() {
+        let mut state = AppState::new("mine".into(), "m".into());
+        let snapshot = json!({"pending": [record("mine", "b")]});
+        reconcile_approvals(&mut state, &snapshot);
+        assert_eq!(state.approval.as_ref().map(|a| a.id.as_str()), Some("b"));
+        state.close_approval();
+        reconcile_approvals(&mut state, &snapshot);
+        assert!(state.approval.is_none());
+        assert!(state.interaction.active_owner().is_none());
     }
 
     #[test]

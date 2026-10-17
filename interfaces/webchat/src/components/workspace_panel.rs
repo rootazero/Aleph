@@ -31,6 +31,7 @@
 //! *removes* the property to go back to that default rather than writing a
 //! second copy of the number.
 
+use crate::components::mode_sidebar::is_subagent_tree_route;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::{
@@ -40,6 +41,7 @@ use crate::views::browser::{BrowserViewer, BrowserWorkspace};
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::hooks::use_location;
 use wasm_bindgen::JsCast;
 
 /// Localized label for a body tab.
@@ -65,30 +67,17 @@ fn body_testid(body: WorkspaceBody) -> &'static str {
     }
 }
 
-/// Workspace pane root — always mounted, CSS-collapsed outside
-/// [`LayoutMode::Split`].
+/// Workspace pane host. `legacy=true` keeps the rollback overlay path; the
+/// app-shell flex host passes `legacy=false` and owns the pane as a third
+/// sibling beside `<main>`.
 #[component]
 #[must_use]
-pub fn WorkspacePanel() -> impl IntoView {
+pub fn WorkspacePanel(legacy: bool) -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
-    let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
-
-    let is_team = Memo::new(move |_| chat.team_id.get().is_some());
-    // The body actually shown. Derived, not written back: leaving the stored
-    // body alone means a user who was on `Tasks`, visited a single-agent
-    // conversation and came back finds `Tasks` again — and nothing has to
-    // race a team_id that arrives one frame after the session switch.
-    // The Browser body exists only while a `BrowserWorkspace` context holds an
-    // authorized browser resource. The context is optional on purpose: nothing
-    // provides it at the app root yet (TODO(Task6): the producer/issuer wiring
-    // provides it and feeds its model), so until then there is no Browser tab
-    // rather than an empty one.
-    let browser = use_context::<BrowserWorkspace>();
-    let has_browser = Memo::new(move |_| browser.is_some_and(|b| b.has_browser()));
-    let active = Memo::new(move |_| {
-        coerce_body_with(workspace.body.get(), is_team.get(), has_browser.get())
-    });
+    let location = use_location();
+    let full_screen_subagents =
+        Memo::new(move |_| is_subagent_tree_route(&location.pathname.get()));
 
     let pane_ref = NodeRef::<leptos::html::Aside>::new();
     let dragging = RwSignal::new(false);
@@ -114,8 +103,7 @@ pub fn WorkspacePanel() -> impl IntoView {
                 let viewport_w = web_sys::window()
                     .and_then(|w| w.inner_width().ok())
                     .and_then(|v| v.as_f64())
-                    .map(|f| f as u32)
-                    .unwrap_or(0);
+                    .unwrap_or(0.0);
                 let clamped = clamp_width(px, viewport_w);
                 let _ = root
                     .style()
@@ -171,23 +159,30 @@ pub fn WorkspacePanel() -> impl IntoView {
     };
 
     view! {
-        // Always mounted so collapse/expand can EASE via a CSS transition.
-        // FLOATS over the chat surface as an opaque overlay (same idiom as
-        // the composer's project / model-picker popovers: `glass` +
-        // `bg-surface-overlay` + `shadow-xl`) instead of being a flex sibling
-        // column — so opening/closing it no longer reflows the chat detail.
-        // `absolute inset-y-0 right-0` anchors it to the right edge of the
-        // ChatView's `relative` root; the `workspace-collapsed` modifier
-        // slides it off-screen right + fades over 200ms when not in Split.
-        // Width still reads `--aleph-workspace-w` so the band chrome
-        // (label + LayoutToggle in app.rs) stays glued to its leading edge.
+        // The flex host is a normal third shell column. The legacy branch is
+        // kept for visual comparison and rollback, but both branches share
+        // this body, width writer, pointer capture and keep-alive canvas.
         <aside
             node_ref=pane_ref
             data-testid="workspace-panel"
-            class="aleph-workspace-pane absolute inset-y-0 right-0 z-20 flex flex-col
-                   glass border-l border-border bg-surface-overlay/95 shadow-xl
-                   min-w-[280px] w-[var(--aleph-workspace-w)] overflow-hidden"
-            class:workspace-collapsed=move || workspace.mode.get() != LayoutMode::Split
+            class=move || {
+                if legacy {
+                    "aleph-workspace-pane absolute inset-y-0 right-0 z-20 flex flex-col glass border-l border-border bg-surface-overlay/95 shadow-xl min-w-[280px] w-[var(--aleph-workspace-w)] overflow-hidden".to_string()
+                } else {
+                    "aleph-workspace-pane relative shrink-0 flex flex-col border-l border-border bg-surface-base w-[var(--aleph-workspace-w)] min-w-0 overflow-hidden transition-[width] duration-200".to_string()
+                }
+            }
+            class:legacy-workspace-pane=move || legacy
+            class:workspace-collapsed=move || legacy && workspace.mode.get() != LayoutMode::Split
+            style:display=move || {
+                if full_screen_subagents.get() {
+                    "none"
+                } else if legacy || workspace.mode.get() == LayoutMode::Split {
+                    "flex"
+                } else {
+                    "none"
+                }
+            }
         >
             // Left-edge resize handle. Absolutely positioned so it costs the
             // flex column no space; pointer capture is what keeps the drag
@@ -203,10 +198,31 @@ pub fn WorkspacePanel() -> impl IntoView {
                 on:dblclick=move |_| workspace.clear_width()
             />
 
-            // Body tab strip. `aleph-pane-top` (not `aleph-content-top`):
-            // these are real buttons, and on web the smaller content inset
-            // would park them under the NotificationCenter bell — the same
-            // reason `ArtifactsSurface` used to carry it.
+            {if legacy {
+                view! { <WorkspaceBodyView /> }.into_any()
+            } else {
+                view! { <crate::components::right_pane::pane::RegistryPane /> }.into_any()
+            }}
+        </aside>
+    }
+}
+
+/// Shared workspace content for the legacy host and the artifacts slot.
+/// Its Canvas stays mounted even when the enclosing slot is hidden.
+#[component]
+pub(crate) fn WorkspaceBodyView() -> impl IntoView {
+    let workspace = expect_context::<WorkspaceState>();
+    let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
+    let is_team = Memo::new(move |_| chat.team_id.get().is_some());
+    // Browser remains absent until the authorized Task6 producer supplies it.
+    let browser = use_context::<BrowserWorkspace>();
+    let has_browser = Memo::new(move |_| browser.is_some_and(|b| b.has_browser()));
+    let active = Memo::new(move |_| {
+        coerce_body_with(workspace.body.get(), is_team.get(), has_browser.get())
+    });
+    view! {
+            // Body tab strip.
             <div class="aleph-pane-top flex gap-1 px-3 py-2 border-b border-border text-xs shrink-0">
                 // A plain map, not a keyed `<For>`: the slice is two or three
                 // static variants and only changes when team-ness does, so
@@ -277,7 +293,7 @@ pub fn WorkspacePanel() -> impl IntoView {
             >
                 <crate::views::canvas::CanvasView />
             </div>
-        </aside>
+        // Fragment: the parent owns the flex column and pane chrome.
     }
 }
 
@@ -299,9 +315,9 @@ fn width_from_pointer(pane: NodeRef<leptos::html::Aside>, client_x: i32) -> Opti
     let viewport = web_sys::window()
         .and_then(|w| w.inner_width().ok())
         .and_then(|v| v.as_f64())
-        .unwrap_or(right);
+        .unwrap_or(0.0);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    Some(clamp_width(raw.max(0.0) as u32, viewport.max(0.0) as u32))
+    Some(clamp_width(raw.max(0.0) as u32, viewport))
 }
 
 /// Deliverables tab — artifacts produced by the team, via teams.chat.thread.

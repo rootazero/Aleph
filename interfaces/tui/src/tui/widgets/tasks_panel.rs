@@ -16,7 +16,11 @@ use ratatui::{
     Frame,
 };
 
+use super::compact::fit_line;
+
 use crate::tui::theme::theme;
+
+const INDENT: &str = "  ";
 
 /// Cap on checklist rows (excluding the header and elision lines). The plan
 /// itself is bounded server-side at 40 items (`PROMPT_PLAN_LIMITS`), but a
@@ -90,7 +94,8 @@ pub fn render_tasks_panel(frame: &mut Frame, plan: &PlanSnapshot, area: Rect) {
         return;
     }
     let width = area.width as usize;
-    let muted = Style::default().fg(theme().muted);
+    let colors = theme();
+    let muted = Style::default().fg(colors.muted);
     let mut lines: Vec<Line> = Vec::new();
 
     // Header: "● 6 tasks (1 done, 1 in progress, 4 open) · objective"
@@ -103,7 +108,7 @@ pub fn render_tasks_panel(frame: &mut Frame, plan: &PlanSnapshot, area: Rect) {
         .count();
     let open = total - done - in_progress;
     let mut header = format!(
-        " \u{25cf} {total} task{s}",
+        "{INDENT}\u{25cf} {total} task{s}",
         s = if total == 1 { "" } else { "s" }
     );
     if total > 0 {
@@ -115,22 +120,28 @@ pub fn render_tasks_panel(frame: &mut Frame, plan: &PlanSnapshot, area: Rect) {
         header.push_str(" \u{00b7} ");
         header.push_str(objective);
     }
-    lines.push(Line::from(Span::styled(
-        clamp_chars(&header, width),
-        Style::default()
-            .fg(theme().primary)
-            .add_modifier(Modifier::BOLD),
-    )));
+    lines.push(fit_line(
+        Line::from(Span::styled(
+            header,
+            Style::default()
+                .fg(colors.primary)
+                .add_modifier(Modifier::BOLD),
+        )),
+        width,
+    ));
 
     let window = row_window(plan);
     if window.elided_done > 0 {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "   \u{2026} {} earlier step(s), all done",
-                window.elided_done
-            ),
-            muted,
-        )));
+        lines.push(fit_line(
+            Line::from(Span::styled(
+                format!(
+                    "{INDENT}\u{2026} {} earlier step(s), all done",
+                    window.elided_done
+                ),
+                muted,
+            )),
+            width,
+        ));
     }
     for (idx, item) in plan
         .items
@@ -148,36 +159,25 @@ pub fn render_tasks_panel(frame: &mut Frame, plan: &PlanSnapshot, area: Rect) {
             PlanItemStatus::InProgress => (
                 "\u{273b}", // ❋
                 Style::default()
-                    .fg(theme().tool_name)
+                    .fg(colors.tool_running)
                     .add_modifier(Modifier::BOLD),
             ),
             PlanItemStatus::Pending => ("\u{25a1}", muted), // □
         };
-        let row = format!("   {glyph} #{n} {}", item.text);
-        lines.push(Line::from(Span::styled(clamp_chars(&row, width), style)));
+        let row = format!("{INDENT}{glyph} #{n} {}", item.text);
+        lines.push(fit_line(Line::from(Span::styled(row, style)), width));
     }
     if window.elided_tail > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("   \u{2026} {} more", window.elided_tail),
-            muted,
-        )));
+        lines.push(fit_line(
+            Line::from(Span::styled(
+                format!("{INDENT}\u{2026} {} more", window.elided_tail),
+                muted,
+            )),
+            width,
+        ));
     }
 
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// Character-safe single-line clamp with an ellipsis (`&s[..n]` panics inside
-/// a multi-byte char — plan text is routinely CJK).
-fn clamp_chars(s: &str, max: usize) -> String {
-    if max == 0 {
-        return String::new();
-    }
-    let count = s.chars().count();
-    if count <= max {
-        return s.to_string();
-    }
-    let head: String = s.chars().take(max.saturating_sub(1)).collect();
-    format!("{head}\u{2026}")
 }
 
 #[cfg(test)]
@@ -242,9 +242,16 @@ mod tests {
     }
 
     #[test]
-    fn clamp_is_char_safe_on_cjk() {
-        let clamped = clamp_chars("任务甲乙丙丁", 4);
-        assert_eq!(clamped.chars().count(), 4);
-        assert!(clamped.ends_with('\u{2026}'));
+    fn clipping_is_cell_safe_on_cjk() {
+        let clipped = fit_line(Line::from("任务甲乙丙丁"), 4);
+        // A two-cell character must not occupy the one-cell gap before the
+        // ellipsis. The contract is no overflow, not forced padding.
+        assert_eq!(clipped.width(), 3);
+        let text: String = clipped
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(text, "任\u{2026}");
     }
 }

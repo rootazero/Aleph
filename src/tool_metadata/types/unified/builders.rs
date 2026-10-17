@@ -161,21 +161,21 @@ impl UnifiedTool {
     ///
     /// Policy (matches the contract the MCP path established in round-8):
     /// - `requires_confirmation=true` → `with_requires_confirmation(true)`
-    /// - `!read_only && requires_confirmation` → `IrreversibleHighRisk`
-    ///   (panel/cli-only gating kicks in for destructive tools)
+    ///   and `IrreversibleHighRisk` (confirmation wins even if the catalog
+    ///   also says `read_only`)
     /// - `!read_only && !requires_confirmation` → `Reversible`
     ///   (catalog reflects that the tool mutates state, without the
     ///   panel/cli-only gate on its own)
-    /// - `read_only` → safety level left at the default `ReadOnly`
+    /// - `read_only && !requires_confirmation` → safety level left at the
+    ///   default `ReadOnly`
     ///
     /// (occams-r9 tool_metadata C-NEW-1.)
     #[must_use]
     pub fn populate_safety_profile(mut self, read_only: bool, requires_confirmation: bool) -> Self {
         if requires_confirmation {
-            self = self.with_requires_confirmation(true);
-        }
-        if !read_only && requires_confirmation {
-            self = self.with_safety_level(ToolSafetyLevel::IrreversibleHighRisk);
+            self = self
+                .with_requires_confirmation(true)
+                .with_safety_level(ToolSafetyLevel::IrreversibleHighRisk);
         } else if !read_only {
             self = self.with_safety_level(ToolSafetyLevel::Reversible);
         }

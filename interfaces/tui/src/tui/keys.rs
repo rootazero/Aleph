@@ -12,6 +12,7 @@ use tui_textarea::{Input, TextArea};
 use super::app::{Action, AppState, Focus};
 use super::command_tree;
 use super::event;
+use super::interaction::ModalOwner;
 use super::regions::RegionKind;
 use super::slash::{self, LocalCommand, ParsedInput};
 
@@ -22,7 +23,13 @@ pub(super) fn handle_terminal_event(
     event: &event::TermEvent,
 ) -> Action {
     match event {
-        event::TermEvent::Key(key) => handle_key_event(state, textarea, *key),
+        event::TermEvent::Key(key) => {
+            let mut key = *key;
+            if key.code == KeyCode::Char('\x1b') {
+                key.code = KeyCode::Esc;
+            }
+            handle_key_event(state, textarea, key)
+        }
         event::TermEvent::Resize => {
             // Terminal resize is handled automatically by ratatui
             Action::None
@@ -31,6 +38,19 @@ pub(super) fn handle_terminal_event(
             // Insert a bracketed paste verbatim (multi-line safe) — never route
             // it through the Enter/send path, so a multi-line paste no longer
             // auto-sends its first line.
+            if let Some(dialog) = state
+                .interaction
+                .active_dialog_mut()
+                .filter(|_| state.focus == Focus::Dialog)
+            {
+                dialog.typing = true;
+                dialog.input.push_str(text);
+                state.sync_modal_focus();
+                return Action::None;
+            }
+            if !matches!(state.focus, Focus::Input | Focus::Chat) {
+                return Action::None;
+            }
             textarea.insert_str(text);
             Action::None
         }
@@ -58,8 +78,87 @@ const WHEEL_LINES: usize = 3;
 /// reaching rows the overlay is covering.
 fn handle_mouse_event(state: &mut AppState, m: MouseEvent) -> Action {
     match m.kind {
-        MouseEventKind::ScrollUp => Action::ScrollUp(WHEEL_LINES),
-        MouseEventKind::ScrollDown => Action::ScrollDown(WHEEL_LINES),
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            let up = matches!(m.kind, MouseEventKind::ScrollUp);
+            let wheel_key = KeyEvent::new(
+                if up { KeyCode::Up } else { KeyCode::Down },
+                KeyModifiers::NONE,
+            );
+            match state.focus {
+                Focus::Input | Focus::Chat => {
+                    if up {
+                        Action::ScrollUp(WHEEL_LINES)
+                    } else {
+                        Action::ScrollDown(WHEEL_LINES)
+                    }
+                }
+                Focus::Context => handle_context_key(state, wheel_key),
+                Focus::ToolOutput => {
+                    if let Some(view) = &mut state.tool_output {
+                        view.scroll_by(if up {
+                            -(WHEEL_LINES as i16)
+                        } else {
+                            WHEEL_LINES as i16
+                        });
+                    }
+                    Action::None
+                }
+                Focus::Btw => {
+                    if up {
+                        state.btw.scroll_up(WHEEL_LINES as u16)
+                    } else {
+                        state.btw.scroll_down(WHEEL_LINES as u16)
+                    }
+                    Action::None
+                }
+                Focus::Agents => {
+                    for _ in 0..WHEEL_LINES {
+                        handle_agents_key(state, wheel_key);
+                    }
+                    Action::None
+                }
+                Focus::SessionPicker => {
+                    for _ in 0..WHEEL_LINES {
+                        handle_session_picker_key(state, wheel_key);
+                    }
+                    Action::None
+                }
+                Focus::ProviderPicker => {
+                    for _ in 0..WHEEL_LINES {
+                        handle_provider_picker_key(state, wheel_key);
+                    }
+                    Action::None
+                }
+                Focus::ThemePicker => {
+                    for _ in 0..WHEEL_LINES {
+                        handle_theme_picker_key(state, wheel_key);
+                    }
+                    Action::None
+                }
+                Focus::Dialog | Focus::Approval => {
+                    // Dialog/approval wheel uses the same Up/Down selection
+                    // route as keys; it never answers or aborts by itself.
+                    for _ in 0..WHEEL_LINES {
+                        match state.displayed_interaction() {
+                            Some(ModalOwner::Clarification { .. }) => {
+                                handle_dialog_key(state, wheel_key);
+                            }
+                            Some(ModalOwner::Approval { .. }) => {
+                                handle_approval_key(state, wheel_key);
+                            }
+                            None => break,
+                        }
+                    }
+                    Action::None
+                }
+                Focus::CommandPalette => {
+                    for _ in 0..WHEEL_LINES {
+                        handle_palette_key(state, wheel_key);
+                    }
+                    Action::None
+                }
+            }
+        }
         MouseEventKind::Down(MouseButton::Left) => {
             if !matches!(state.focus, Focus::Input | Focus::Chat) {
                 return Action::None;
@@ -68,6 +167,10 @@ fn handle_mouse_event(state: &mut AppState, m: MouseEvent) -> Action {
                 Some(region) => match region.kind {
                     RegionKind::BackToBottom => Action::ScrollToBottom,
                     RegionKind::ToggleRow => Action::ToggleRow(region.row_id.clone()),
+                    RegionKind::JumpToUser => {
+                        region.jump.clone().map_or(Action::None, Action::JumpToUser)
+                    }
+                    RegionKind::StickyUserShield => Action::None,
                 },
                 None => Action::None,
             }
@@ -88,13 +191,39 @@ fn handle_key_event(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
         Focus::Input => handle_input_key(state, textarea, key),
         Focus::Chat => handle_chat_key(state, key),
         Focus::CommandPalette => handle_palette_key(state, key),
-        Focus::Dialog => handle_dialog_key(state, key),
+        Focus::Dialog | Focus::Approval => match state.displayed_interaction() {
+            Some(ModalOwner::Clarification { .. }) => {
+                let action = handle_dialog_key(state, key);
+                state.sync_modal_focus();
+                action
+            }
+            Some(ModalOwner::Approval { .. }) => handle_approval_key(state, key),
+            None => Action::None,
+        },
         Focus::SessionPicker => handle_session_picker_key(state, key),
         Focus::ProviderPicker => handle_provider_picker_key(state, key),
-        Focus::Approval => handle_approval_key(state, key),
+        Focus::ThemePicker => handle_theme_picker_key(state, key),
         Focus::Btw => handle_btw_key(state, key),
         Focus::Agents => handle_agents_key(state, key),
         Focus::Context => handle_context_key(state, key),
+        Focus::ToolOutput => {
+            let Some(view) = &mut state.tool_output else {
+                return Action::None;
+            };
+            match key.code {
+                KeyCode::Up => view.scroll_by(-1),
+                KeyCode::Down => view.scroll_by(1),
+                KeyCode::PageUp => view.scroll_by(-20),
+                KeyCode::PageDown => view.scroll_by(20),
+                KeyCode::Char('n') if view.can_load() => {
+                    return Action::LoadToolOutput {
+                        tool_call_id: view.tool_call_id.clone(),
+                    }
+                }
+                _ => {}
+            }
+            Action::None
+        }
     }
 }
 
@@ -266,6 +395,18 @@ fn handle_global_key(
 ) -> Option<Action> {
     // Ctrl+C: smart cascade
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if matches!(
+            state.displayed_interaction(),
+            Some(ModalOwner::Clarification { .. })
+        ) {
+            state.ctrl_c_count = 0;
+            return Some(
+                state
+                    .interaction
+                    .active_cancel_run()
+                    .map_or(Action::None, |id| Action::CancelRun(id.to_owned())),
+            );
+        }
         // If there's an active run, cancel it
         if let Some(run_id) = state.current_run.clone() {
             state.ctrl_c_count = 0;
@@ -304,7 +445,29 @@ fn handle_global_key(
     // AskUser dialog — it is backed by a server run parked on a oneshot, so
     // silently closing it would orphan that run with no response. Keep the
     // dialog on screen and force the user to answer (or /stop / Ctrl+C to abort).
+    if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let Some(owner) = state
+            .interaction
+            .hidden_owners()
+            .into_iter()
+            .find(|owner| match owner {
+                ModalOwner::Clarification { session_key, .. }
+                | ModalOwner::Approval { session_key, .. } => session_key == &state.session_key,
+            })
+        {
+            state.interaction.reopen(&owner);
+            state.sync_modal_focus();
+        }
+        return Some(Action::None);
+    }
     if key.code == KeyCode::Esc {
+        if state.focus == Focus::Dialog {
+            state.close_overlay();
+            return Some(Action::None);
+        }
+        if state.focus == Focus::ToolOutput {
+            return Some(Action::CloseOverlay);
+        }
         // The agents overlay is local and two-level: Esc backs out of the
         // detail view before it closes the list (pi's "esc back").
         if state.agents_overlay.is_some() {
@@ -317,11 +480,12 @@ fn handle_global_key(
         if state.palette.is_some()
             || state.session_picker.is_some()
             || state.provider_picker.is_some()
+            || state.theme_picker.is_some()
             || state.context_overlay.is_some()
         {
             return Some(Action::CloseOverlay);
         }
-        if state.dialog.is_some() {
+        if state.interaction.active_dialog().is_some() {
             return Some(Action::None);
         }
         // Same for a tool-approval overlay: the run is parked on a decision.
@@ -488,6 +652,10 @@ fn handle_input_key(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
             }
             Action::None
         }
+
+        // Paging always moves the transcript; arrows/Home/End still edit the draft.
+        KeyCode::PageUp => Action::ScrollUp(20),
+        KeyCode::PageDown => Action::ScrollDown(20),
 
         // Tab: cycle focus
         KeyCode::Tab => Action::FocusChat,
@@ -673,7 +841,23 @@ fn recompute_palette_filter(state: &mut AppState) {
 /// (the run is parked on a oneshot), so the TUI was held by a modal nothing
 /// could dismiss.
 fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
-    let Some(dialog) = &mut state.dialog else {
+    if key.code == KeyCode::Enter {
+        if let Some(dialog) = state.interaction.active_dialog_mut() {
+            if let ParsedInput::Local(command @ LocalCommand::Theme { .. }) =
+                slash::parse_input(&dialog.input)
+            {
+                dialog.input.clear();
+                return Action::LocalCommand(command);
+            }
+        }
+    }
+    if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let Some(owner) = state.interaction.active_owner().cloned() {
+            state.interaction.confirm_legacy(&owner);
+        }
+        return Action::None;
+    }
+    let Some(dialog) = state.interaction.active_dialog_mut() else {
         return Action::None;
     };
     // A chord is a command, not text. Ctrl+C / Ctrl+D are already claimed by
@@ -705,6 +889,7 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
                 && (c as usize) - ('1' as usize) < dialog.options.len() =>
         {
             let idx = (c as usize) - ('1' as usize);
+            dialog.selected = idx;
             Action::RespondToDialog {
                 session_key: dialog.session_key.clone(),
                 // 1-based index, not the label — see `pending_reply`.
@@ -825,6 +1010,27 @@ fn handle_session_picker_key(state: &mut AppState, key: KeyEvent) -> Action {
         }
         _ => Action::None,
     }
+}
+
+/// Navigate local themes and keep application feedback in the overlay.
+fn handle_theme_picker_key(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Up | KeyCode::Down => {
+            if let Some(picker) = &mut state.theme_picker {
+                let count = picker.names.len();
+                if count > 0 {
+                    picker.selected = if key.code == KeyCode::Up {
+                        (picker.selected + count - 1) % count
+                    } else {
+                        (picker.selected + 1) % count
+                    };
+                }
+            }
+        }
+        KeyCode::Enter => crate::tui::commands::confirm_theme_pick(state),
+        _ => {}
+    }
+    Action::None
 }
 
 /// Handle key events when the provider/model picker is focused.
@@ -1090,13 +1296,13 @@ mod dialog_key_tests {
     fn arrows_move_the_highlight_and_enter_confirms_it() {
         let mut state = state_with(menu());
         handle_dialog_key(&mut state, key(KeyCode::Down));
-        assert_eq!(state.dialog.as_ref().unwrap().selected, 1);
+        assert_eq!(state.interaction.active_dialog().unwrap().selected, 1);
         // Clamped at both ends rather than wrapping.
         handle_dialog_key(&mut state, key(KeyCode::Down));
-        assert_eq!(state.dialog.as_ref().unwrap().selected, 1);
+        assert_eq!(state.interaction.active_dialog().unwrap().selected, 1);
         handle_dialog_key(&mut state, key(KeyCode::Up));
         handle_dialog_key(&mut state, key(KeyCode::Up));
-        assert_eq!(state.dialog.as_ref().unwrap().selected, 0);
+        assert_eq!(state.interaction.active_dialog().unwrap().selected, 0);
         match handle_dialog_key(&mut state, key(KeyCode::Enter)) {
             Action::RespondToDialog { reply, .. } => assert_eq!(reply, "1"),
             other => panic!("expected the highlighted choice, got {other:?}"),
@@ -1111,11 +1317,11 @@ mod dialog_key_tests {
     fn tab_reaches_free_text_from_a_menu_and_digits_become_characters() {
         let mut state = state_with(menu());
         handle_dialog_key(&mut state, key(KeyCode::Tab));
-        assert!(state.dialog.as_ref().unwrap().typing);
+        assert!(state.interaction.active_dialog().unwrap().typing);
         for c in "3 days".chars() {
             handle_dialog_key(&mut state, key(KeyCode::Char(c)));
         }
-        assert_eq!(state.dialog.as_ref().unwrap().input, "3 days");
+        assert_eq!(state.interaction.active_dialog().unwrap().input, "3 days");
         match handle_dialog_key(&mut state, key(KeyCode::Enter)) {
             Action::RespondToDialog { reply, .. } => assert_eq!(reply, "3 days"),
             other => panic!("expected the typed answer, got {other:?}"),
@@ -1129,7 +1335,7 @@ mod dialog_key_tests {
         let mut state = state_with(free_text());
         handle_dialog_key(&mut state, key(KeyCode::Tab));
         assert!(
-            state.dialog.as_ref().unwrap().typing,
+            state.interaction.active_dialog().unwrap().typing,
             "a question with no menu has nowhere else to be"
         );
     }
@@ -1144,8 +1350,11 @@ mod dialog_key_tests {
         for c in "5 minutes".chars() {
             handle_dialog_key(&mut state, key(KeyCode::Char(c)));
         }
-        assert!(state.dialog.as_ref().unwrap().typing);
-        assert_eq!(state.dialog.as_ref().unwrap().input, "5 minutes");
+        assert!(state.interaction.active_dialog().unwrap().typing);
+        assert_eq!(
+            state.interaction.active_dialog().unwrap().input,
+            "5 minutes"
+        );
         match handle_dialog_key(&mut state, key(KeyCode::Enter)) {
             Action::RespondToDialog { reply, .. } => assert_eq!(reply, "5 minutes"),
             other => panic!("expected the typed answer, got {other:?}"),
@@ -1159,7 +1368,7 @@ mod dialog_key_tests {
             handle_dialog_key(&mut state, key(KeyCode::Char(c)));
         }
         handle_dialog_key(&mut state, key(KeyCode::Backspace));
-        assert_eq!(state.dialog.as_ref().unwrap().input, "a");
+        assert_eq!(state.interaction.active_dialog().unwrap().input, "a");
     }
 
     /// A chord is a command, not text. Without this guard every unclaimed
@@ -1175,7 +1384,7 @@ mod dialog_key_tests {
             &mut state,
             KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
         );
-        assert!(state.dialog.as_ref().unwrap().input.is_empty());
+        assert!(state.interaction.active_dialog().unwrap().input.is_empty());
     }
 }
 
@@ -1666,6 +1875,26 @@ mod mouse_tests {
     }
 
     #[test]
+    fn paging_from_composer_preserves_the_draft() {
+        let mut s = state();
+        s.focus = Focus::Input;
+        let mut textarea = TextArea::default();
+        textarea.insert_str("unfinished draft");
+        let cursor = textarea.cursor();
+        for (code, up) in [(KeyCode::PageUp, true), (KeyCode::PageDown, false)] {
+            let action =
+                handle_terminal_event(&mut s, &mut textarea, &key(code, KeyModifiers::NONE));
+            assert!(matches!(
+                (up, action),
+                (true, Action::ScrollUp(20)) | (false, Action::ScrollDown(20))
+            ));
+            assert_eq!(textarea.lines(), &["unfinished draft"]);
+            assert_eq!(textarea.cursor(), cursor);
+            assert_eq!(s.focus, Focus::Input);
+        }
+    }
+
+    #[test]
     fn the_wheel_scrolls_the_transcript() {
         let mut s = state();
         assert!(matches!(
@@ -1740,6 +1969,7 @@ mod mouse_tests {
             Focus::Agents,
             Focus::SessionPicker,
             Focus::ProviderPicker,
+            Focus::ThemePicker,
         ] {
             s.focus = focus;
             assert!(
@@ -1876,6 +2106,48 @@ mod mouse_tests {
 
         assert!(matches!(
             route(&mut s, &key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::CloseOverlay
+        ));
+    }
+
+    #[test]
+    fn the_wheel_routes_to_the_focused_context_overlay() {
+        let mut s = state();
+        s.open_context_overlay(&aleph_protocol::ContextBreakdown {
+            session_key: "agent:main".into(),
+            turn: 1,
+            layers: (0..8)
+                .map(|i| aleph_protocol::context_breakdown::LayerSizeView {
+                    name: format!("layer{i}"),
+                    bytes: 100,
+                    tokens: 10,
+                    zone: "stable".into(),
+                })
+                .collect(),
+            tools: Vec::new(),
+            messages: None,
+            tool_output: None,
+            provider_reported: None,
+            context_window: None,
+            dynamic_bytes_sent: None,
+        });
+        assert_eq!(s.focus, Focus::Context);
+
+        assert!(matches!(
+            route(&mut s, &mouse(MouseEventKind::ScrollDown, 2, 2)),
+            Action::None
+        ));
+        assert_eq!(s.context_overlay.as_ref().map(|v| v.scroll), Some(1));
+    }
+
+    #[test]
+    fn char_escape_closes_the_theme_picker_through_the_real_router() {
+        let mut s = state();
+        s.open_theme_picker(vec!["amber".into()], Vec::new());
+        assert_eq!(s.focus, Focus::ThemePicker);
+
+        assert!(matches!(
+            route(&mut s, &key(KeyCode::Char('\x1b'), KeyModifiers::NONE)),
             Action::CloseOverlay
         ));
     }

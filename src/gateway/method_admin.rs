@@ -106,7 +106,8 @@
 /// (fail-closed for privilege); carve-outs below re-open member-safe reads.
 const ADMIN_PREFIXES: &[&str] = &[
     // --- Gateway trust boundary: tokens, tickets, devices, credentials ---
-    "gateway.", // token.{current,rotate}, ticket.{create,list,revoke},
+    "telecom.approval.", // operator-only private-read/disclosure control plane.
+    "gateway.",          // token.{current,rotate}, ticket.{create,list,revoke},
     // devices.{list,revoke},
     // identity.get, metrics.*, credentials, flow.reload. One carve-out since
     // 2026-08-07: `gateway.metrics.run_concurrency`, whose response is now
@@ -657,6 +658,22 @@ mod tests {
     /// name, not rely on a smaller sample happening to still cover it. Every
     /// method below is confirmed registered by the Task 4 enumeration (or,
     /// for `users.*`, pre-emptively pinned ahead of Task 5's surface).
+    #[test]
+    fn telecom_approval_family_is_operator_only_including_future_siblings() {
+        for method in [
+            "telecom.approval.request",
+            "telecom.approval.pending",
+            "telecom.approval.review",
+            "telecom.approval.resolve",
+            "telecom.approval.future_sibling",
+        ] {
+            assert!(method_requires_admin(method), "{method}");
+        }
+        // The unregistered A/B service does not widen ordinary exec approval.
+        assert!(!method_requires_admin("exec.approval.resolve"));
+        assert!(!method_requires_admin("exec.approvals.pending"));
+    }
+
     #[test]
     fn credential_and_config_methods_require_admin() {
         for m in [

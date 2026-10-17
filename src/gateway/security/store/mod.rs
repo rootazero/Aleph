@@ -257,10 +257,17 @@ impl SecurityStore {
             info!("Migrating security store to v14 (users + identity linking)");
             let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             conn.execute_batch(users::USERS_SCHEMA)?;
-            // ALTER TABLE ADD COLUMN is not idempotent in SQLite — the version gate
-            // guarantees single execution.
-            conn.execute("ALTER TABLE devices ADD COLUMN user_id TEXT", [])?;
-            conn.execute("ALTER TABLE bootstrap_tickets ADD COLUMN user_id TEXT", [])?;
+            // An interrupted historical upgrade can leave either column in
+            // place while the recorded schema version still precedes v14. Probe each table
+            // separately so opening the vault's key store remains recoverable.
+            for table in ["devices", "bootstrap_tickets"] {
+                if conn
+                    .prepare(&format!("SELECT user_id FROM {table} LIMIT 0"))
+                    .is_err()
+                {
+                    conn.execute(&format!("ALTER TABLE {table} ADD COLUMN user_id TEXT"), [])?;
+                }
+            }
             drop(conn);
             self.set_schema_version(14)?;
         }

@@ -306,10 +306,22 @@ All three answer with `aleph_protocol::SubscriptionList`: `subscribed` (one patt
 | `plugins.*` | `install`, `uninstall`, `list`, `enable`, `disable` |
 | `skills.*` | `list`, `install`, `activate` |
 | `runs.*` | `list`, `status`, `wait`, `queue` |
+| `clarification.*` | `pending`, `resolve` — value-free shared question views and optional request/question identity guards; see below |
+| `trace.*` | `by_runs`, `tool_output` — recorded loop replay and masked byte-paged tool output |
 | `models.*` | `list`, `config` |
 | `generation.*` | `image`, `video` |
 | `cron.*` | `list`, `add`, `remove`, `run` |
 | `projects.*` | rooms: `list`, `get`, `create`, `rename`, `archive`, `member_*`, `bind_workspace`, `room_session`, `workspace.list/read` — plus `channel.bind` / `channel.unbind` / `channel.list`, below |
+
+### Clarification identity and recovery（2026-10-15）
+
+公开形状集中在 `shared/protocol/src/clarification.rs`。注册生成 `request_id`，并原样出现在 `AskUser`、pending 与 `ClarificationEnded`；pending 还携带关联 `run_id`，客户端取消后台请求时必须使用这个 run，不得猜当前屏幕上的 run。旧帧省略新增身份字段仍可解码。
+
+`clarification.resolve` 支持可选 `expected_request_id` 与 `expected_question_id`。Core `ClarificationManager::resolve_many_expected` 在推进问题游标的同一把写锁内检查身份；旧问题的迟到回复不会消费其替代请求。调用方必须读取 `resolved`、`stale` 和 `pending_questions`：`resolved: true` 只说明本次答案已接受，未必代表多题请求结束。传输失败、身份过期或遗漏后继帧时，应保留输入并用 `clarification.pending` 恢复公开状态。选项内部 value 仅留在 Core，不通过 pending/事件发给 TUI。
+
+English: Registration identity is shared across event, pending snapshot and completion. Guarded resolution compares request and cursor under the same lock as mutation. An accepted answer can leave more questions; clients recover through pending snapshots and retain drafts on uncertain transport outcomes.
+
+`trace.tool_output` 返回 `ToolOutputPage { tool_call_id, text, offset, total_bytes, truncated, source }`。offset 是实际 UTF-8 页起点，下一页用 `offset + text.len()`，不能按字符计数。`source: expired` 表示持久化原文已过期，`truncated: true` 不应触发无限加载。正文脱敏归 Gateway，客户端只消费 RPC，不读取服务器路径。
 
 ---
 

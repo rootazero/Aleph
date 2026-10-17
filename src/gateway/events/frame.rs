@@ -115,6 +115,8 @@ pub enum GatewayEventFrame {
         /// `clarification.resolve` to unblock the parked `ask_user` tool. The
         /// frame carries it because the reply is routed by session, not by run.
         session_key: String,
+        #[serde(default)]
+        request_id: String,
         /// Legacy single-question projection: the prompt of the question **at
         /// the cursor** (not `questions[0]`). A client that understands only
         /// this and `options` still drives a multi-question request to
@@ -143,6 +145,8 @@ pub enum GatewayEventFrame {
     /// per-session and the answer is routed by session.
     ClarificationEnded {
         session_key: String,
+        #[serde(default)]
+        request_id: String,
         outcome: ClarificationOutcome,
     },
     UncertaintySignal {
@@ -711,6 +715,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 run_id,
                 seq,
                 session_key,
+                request_id,
                 question,
                 options,
                 questions,
@@ -719,6 +724,7 @@ impl From<StreamEvent> for GatewayEventFrame {
                 run_id,
                 seq,
                 session_key,
+                request_id,
                 question,
                 options,
                 questions,
@@ -901,6 +907,7 @@ mod tests {
     fn clarification_ended_wire_shape() {
         let f = GatewayEventFrame::ClarificationEnded {
             session_key: "agent:main|conv-1".into(),
+            request_id: "request-1".into(),
             outcome: ClarificationOutcome::Expired,
         };
         assert_eq!(f.stream_method(), Some("stream.clarification_ended"));

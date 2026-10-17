@@ -195,6 +195,8 @@ pub enum StreamEvent {
         /// Clarification registry key the reply must be posted back against
         /// (`clarification.resolve`). Replies route by session, not by run.
         session_key: String,
+        #[serde(default)]
+        request_id: String,
         /// Legacy single-question projection: the question at the cursor.
         question: String,
         /// Its choice labels.

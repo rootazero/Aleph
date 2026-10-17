@@ -16,9 +16,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use shared_ui_logic::transcript::SemanticColor;
+use unicode_width::UnicodeWidthStr;
 
-use crate::tui::theme::palette;
+use super::compact::fit_line;
+use crate::tui::theme::theme;
 
 /// The version of the binary the user launched, from the workspace `VERSION`
 /// file via this crate's `build.rs` — not `CARGO_PKG_VERSION`, which is the
@@ -26,6 +27,94 @@ use crate::tui::theme::palette;
 pub const VERSION: &str = env!("ALEPH_VERSION");
 
 const SEP: &str = " \u{b7} "; // ·
+
+// Hollow slanted outline lettering (figlet `slant` strokes, kerned to one
+// cell). ASCII only, so every glyph is exactly one cell on every terminal.
+const ALEPH_LOGO: [&str; 6] = [
+    r"           __                 __  ",
+    r"  ____ _  / / ___    ____    / /_ ",
+    r" / __ `/ / / / _ \  / __ \  / __ \",
+    r"/ /_/ / / / /  __/ / /_/ / / / / /",
+    r"\__,_/  /_/ \___/ / .___/ /_/ /_/ ",
+    r"                 /_/              ",
+];
+
+// Which letter (0..=4, a-l-e-p-h) owns each cell of `ALEPH_LOGO`; `.` is
+// blank. Same shape as the logo, pinned by a test, so a colour can never land
+// on the neighbouring letter's stroke.
+const ALEPH_LOGO_MASK: [&str; 6] = [
+    "...........11.................44..",
+    "..0000.0..1.1.222....3333....4.44.",
+    ".0.00.00.1.1.2.2.2..3.33.3..4.44.4",
+    "0.000.0.1.1.2..222.3.333.3.4.4.4.4",
+    "000000..111.22222.3.33333.444.444.",
+    ".................333..............",
+];
+
+const LOGO_WIDTH: usize = 34;
+
+/// One hue per letter, warm to cool, like a spectrum across the word.
+const LOGO_HUES: [((u8, u8, u8), ratatui::style::Color); 5] = {
+    use ratatui::style::Color;
+    [
+        ((0xff, 0x5f, 0x56), Color::Red),
+        ((0xff, 0xa5, 0x3c), Color::LightRed),
+        ((0xff, 0xe3, 0x5a), Color::Yellow),
+        ((0x6e, 0xe0, 0x5a), Color::Green),
+        ((0x8c, 0x64, 0xff), Color::Magenta),
+    ]
+};
+
+/// Narrowest frame that shows logo │ guide side by side.
+const WIDE_MIN: usize = 73;
+
+fn logo_row(row: usize) -> Line<'static> {
+    let palette = crate::tui::theme::palette();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut run = String::new();
+    let mut owner = None;
+    for (ch, tag) in ALEPH_LOGO[row].chars().zip(ALEPH_LOGO_MASK[row].chars()) {
+        let next = tag.to_digit(10).map(|d| d as usize);
+        if next != owner && !run.is_empty() {
+            spans.push(logo_span(std::mem::take(&mut run), owner, &palette));
+        }
+        owner = next;
+        run.push(ch);
+    }
+    if !run.is_empty() {
+        spans.push(logo_span(run, owner, &palette));
+    }
+    Line::from(spans)
+}
+
+fn logo_span(
+    text: String,
+    owner: Option<usize>,
+    palette: &crate::tui::theme::Palette,
+) -> Span<'static> {
+    match owner {
+        Some(i) => {
+            let (rgb, fallback) = LOGO_HUES[i];
+            Span::styled(
+                text,
+                Style::default()
+                    .fg(palette.brand(rgb, fallback))
+                    .add_modifier(Modifier::BOLD),
+            )
+        }
+        None => Span::raw(text),
+    }
+}
+
+/// Fit `line` to exactly `width` cells, padding with blanks.
+fn pad_line(line: Line<'static>, width: usize) -> Line<'static> {
+    let mut line = fit_line(line, width);
+    let pad = width.saturating_sub(line.width());
+    if pad > 0 {
+        line.spans.push(Span::raw(" ".repeat(pad)));
+    }
+    line
+}
 
 /// Build the header line.
 ///
@@ -42,25 +131,23 @@ pub fn header_line(
     project_root: Option<&str>,
     branch: Option<&str>,
 ) -> Line<'static> {
-    let dim = Style::default().fg(palette().color(SemanticColor::Dim));
+    let colors = theme();
+    let dim = Style::default().fg(colors.muted);
     let mut spans = vec![
         Span::styled(
             "\u{2135} ".to_string(), // ℵ
             Style::default()
-                .fg(palette().color(SemanticColor::Prompt))
+                .fg(colors.user)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("Aleph {version}"),
             Style::default()
-                .fg(palette().color(SemanticColor::Fg))
+                .fg(colors.heading)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(SEP.to_string(), dim),
-        Span::styled(
-            model.to_string(),
-            Style::default().fg(palette().color(SemanticColor::Accent)),
-        ),
+        Span::styled(model.to_string(), Style::default().fg(colors.tool_name)),
     ];
     if let Some(root) = project_root {
         spans.push(Span::styled(SEP.to_string(), dim));
@@ -71,6 +158,145 @@ pub fn header_line(
         if let Some(b) = branch {
             spans.push(Span::styled(format!(" ({b})"), dim));
         }
+    }
+    Line::from(spans)
+}
+
+/// Empty conversations get a welcome surface; history keeps the one-line identity.
+/// Widths are terminal cells, not font sizes. All facts still come from the caller.
+#[must_use]
+pub fn header_lines(
+    version: &str,
+    model: &str,
+    project_root: Option<&str>,
+    branch: Option<&str>,
+    width: u16,
+    welcome: bool,
+) -> Vec<Line<'static>> {
+    let width = usize::from(width);
+    let identity = header_line(version, model, project_root, branch);
+    if !welcome {
+        return vec![fit_line(identity, width)];
+    }
+    let colors = theme();
+    let title = Style::default()
+        .fg(colors.heading)
+        .add_modifier(Modifier::BOLD);
+    let accent = Style::default()
+        .fg(colors.user)
+        .add_modifier(Modifier::BOLD);
+    let muted = Style::default().fg(colors.muted);
+    let command = Style::default().fg(colors.tool_name);
+    let mut lines = vec![hero_frame_line(
+        Line::from(Span::styled(format!("─ Aleph {version} "), title)),
+        width,
+        "╭",
+        "╮",
+        "─",
+    )];
+    let mut body = Vec::with_capacity(8);
+    if width >= WIDE_MIN {
+        // Left: logo, then the identity split over two left-aligned rows.
+        // Right: the guide. A vertical rule between them, as in Pi's hero.
+        let mut left: Vec<Line<'static>> = (0..ALEPH_LOGO.len()).map(logo_row).collect();
+        left.push(Line::from(vec![
+            Span::styled("\u{2135} ", accent),
+            Span::styled(model.to_string(), command),
+        ]));
+        left.push(match project_root {
+            Some(root) => {
+                let mut spans = vec![Span::styled(
+                    abbreviate_home(root, home_dir().as_deref()),
+                    muted,
+                )];
+                if let Some(b) = branch {
+                    spans.push(Span::styled(format!(" ({b})"), muted));
+                }
+                Line::from(spans)
+            }
+            None => Line::default(),
+        });
+        // inner = width - 2 edges; content = 1 lead pad + left + " │ " + right + 1 pad.
+        let inner = width - 2;
+        let left_width = LOGO_WIDTH + 2;
+        let right_width = inner - 1 - left_width - 3 - 1;
+        let rule = Style::default().fg(colors.muted);
+        let key_line = |key: &'static str, description: &'static str| {
+            Line::from(vec![
+                Span::styled(key, command),
+                Span::raw(" ".repeat(10usize.saturating_sub(key.width()))),
+                Span::styled(description, muted),
+            ])
+        };
+        let right = [
+            Line::from(Span::styled("Welcome to Aleph", title)),
+            Line::from(Span::styled("Ask a question to begin", muted)),
+            Line::from(Span::styled("\u{2500}".repeat(right_width.min(30)), rule)),
+            Line::from(Span::styled("Commands", title)),
+            key_line("/help", "Commands & shortcuts"),
+            key_line("/session", "Browse conversations"),
+            key_line("/agents", "Background agents"),
+            Line::default(),
+        ];
+        for (l, r) in left.into_iter().zip(right) {
+            let mut spans = pad_line(l, left_width).spans;
+            spans.push(Span::styled(" \u{2502} ", rule));
+            spans.extend(pad_line(r, right_width).spans);
+            body.push(Line::from(spans));
+        }
+        for mut line in body {
+            line.spans.insert(0, Span::raw(" "));
+            lines.push(hero_frame_line(line, width, "│", "│", " "));
+        }
+        lines.push(hero_frame_line(Line::default(), width, "╰", "╯", "─"));
+        return lines;
+    } else {
+        body.push(Line::from(Span::styled("ℵ Welcome to Aleph", title)));
+        body.push(Line::from(Span::styled("Ask a question to begin", muted)));
+        for (key, description) in [
+            ("/help", "Commands & shortcuts"),
+            ("/session", "Conversations"),
+            ("/agents", "Background agents"),
+        ] {
+            let mut spans = vec![Span::styled(key, command)];
+            if width >= 32 {
+                spans.push(Span::styled(format!("  {description}"), muted));
+            }
+            body.push(Line::from(spans));
+        }
+    }
+    // Narrow: eight rows including identity and borders. Wide: ten rows.
+    // chat_area adds a separator and gates the hero on a twelve-row viewport.
+    body.push(identity);
+    for mut line in body {
+        line.spans.insert(0, Span::raw(" "));
+        lines.push(hero_frame_line(line, width, "│", "│", " "));
+    }
+    lines.push(hero_frame_line(Line::default(), width, "╰", "╯", "─"));
+    lines
+}
+
+/// Fit the contents before adding edges, so truncation never eats the right edge.
+/// All frame glyphs occupy one terminal cell; even widths zero and one are safe.
+fn hero_frame_line(
+    content: Line<'static>,
+    width: usize,
+    left: &'static str,
+    right: &'static str,
+    fill: &'static str,
+) -> Line<'static> {
+    let border = Style::default().fg(theme().muted);
+    if width == 0 {
+        return Line::default();
+    }
+    let mut spans = vec![Span::styled(left, border)];
+    if width > 1 {
+        let inner_width = width - 2;
+        let content = fit_line(content, inner_width);
+        let padding = inner_width.saturating_sub(content.width());
+        spans.extend(content.spans);
+        spans.push(Span::styled(fill.repeat(padding), border));
+        spans.push(Span::styled(right, border));
     }
     Line::from(spans)
 }
@@ -164,6 +390,123 @@ mod tests {
 
     fn text(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn logo_and_mask_share_one_shape() {
+        for (row, mask) in ALEPH_LOGO.iter().zip(ALEPH_LOGO_MASK) {
+            assert_eq!(row.chars().count(), LOGO_WIDTH, "{row}");
+            assert_eq!(mask.chars().count(), LOGO_WIDTH, "{mask}");
+            assert!(row.is_ascii());
+            for (ch, tag) in row.chars().zip(mask.chars()) {
+                assert_eq!(ch == ' ', tag == '.', "{row} / {mask}");
+            }
+        }
+    }
+
+    #[test]
+    fn wide_hero_fills_every_cell_with_borders_logo_and_real_commands() {
+        for width in [73, 80, 120, 240] {
+            let lines = header_lines(
+                "26.9.1",
+                "model",
+                Some("/w/proj"),
+                Some("main"),
+                width,
+                true,
+            );
+            assert_eq!(lines.len(), 10);
+            for line in &lines {
+                assert_eq!(line.width(), usize::from(width), "{}", text(line));
+                assert_eq!(text(line).width(), usize::from(width));
+            }
+            let rows = lines.iter().map(text).collect::<Vec<_>>();
+            assert_eq!(
+                rows[0],
+                format!("╭─ Aleph 26.9.1 {}╮", "─".repeat(usize::from(width) - 17))
+            );
+            assert_eq!(rows[9], format!("╰{}╯", "─".repeat(usize::from(width) - 2)));
+            for (row, logo) in rows[1..7].iter().zip(ALEPH_LOGO) {
+                assert!(row.starts_with(&format!("│ {logo}")), "{row}");
+                assert!(row.ends_with('│'));
+            }
+            // Left column text is left-aligned, and a rule splits the columns
+            // at the same cell on every body row.
+            assert!(rows[7].starts_with("│ ℵ model "), "{}", rows[7]);
+            assert!(rows[8].starts_with("│ /w/proj (main) "), "{}", rows[8]);
+            let rule_at = 2 + LOGO_WIDTH + 2 + 1;
+            for row in &rows[1..9] {
+                assert_eq!(row.chars().nth(rule_at), Some('│'), "{row}");
+            }
+            let rendered = rows.join(
+                "
+",
+            );
+            for expected in [
+                "Welcome to Aleph",
+                "Ask a question to begin",
+                "Commands",
+                "/help     Commands & shortcuts",
+                "/session  Browse conversations",
+                "/agents   Background agents",
+            ] {
+                assert!(
+                    rendered.contains(expected),
+                    "missing {expected}: {rendered}"
+                );
+            }
+            assert!(!rendered.contains("skills"));
+        }
+    }
+
+    #[test]
+    fn narrow_hero_is_cell_safe_for_every_width_and_unicode_identity() {
+        for width in 0..73 {
+            let lines = header_lines(
+                "版本26.9.1🦀",
+                "模型e\u{301}🦀",
+                Some("/项目/界面"),
+                Some("分支"),
+                width,
+                true,
+            );
+            assert_eq!(lines.len(), 8);
+            for (index, line) in lines.iter().enumerate() {
+                let row = text(line);
+                assert_eq!(line.width(), usize::from(width), "width {width}: {row}");
+                assert_eq!(row.width(), usize::from(width), "width {width}: {row}");
+                if width >= 2 {
+                    let (left, right) = match index {
+                        0 => ('╭', '╮'),
+                        7 => ('╰', '╯'),
+                        _ => ('│', '│'),
+                    };
+                    assert!(row.starts_with(left) && row.ends_with(right), "{row}");
+                }
+            }
+            if width >= 21 {
+                let rendered = lines.iter().map(text).collect::<Vec<_>>().join("\n");
+                for expected in ["Welcome to Aleph", "/help", "/session", "/agents"] {
+                    assert!(rendered.contains(expected), "width {width}: {rendered}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn existing_conversations_keep_one_compact_identity_line() {
+        let lines = header_lines("26.9.1", "model", Some("/w/proj"), Some("main"), 80, false);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            text(&lines[0]),
+            text(&header_line(
+                "26.9.1",
+                "model",
+                Some("/w/proj"),
+                Some("main")
+            ))
+        );
+        assert!(!text(&lines[0]).contains("Welcome"));
     }
 
     /// The full shape, and the one thing about it that is easy to get

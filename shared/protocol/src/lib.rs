@@ -22,6 +22,7 @@ pub mod btw;
 pub mod canvas;
 pub mod channel_pairing;
 pub mod channels;
+pub mod clarification;
 pub mod commands;
 pub mod context_breakdown;
 pub mod cron;
@@ -54,6 +55,7 @@ pub mod spend;
 pub mod subagent_tree;
 pub mod subscription;
 pub mod team_topic;
+pub mod telecom_relay;
 pub mod terminal;
 pub mod terminate;
 pub mod tool_permissions;
@@ -65,6 +67,10 @@ pub mod workspace;
 
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, IdentityContext, Role};
+pub use clarification::{
+    ClarificationResolveParams, ClarificationResolveResponse, PendingClarification,
+    PendingListResponse,
+};
 pub use context_breakdown::{
     ContextBreakdown, LayerSizeView, MessageTokens, ToolOutputIngress, ToolOutputPage,
     ToolOutputSource, ToolSchemaSize, UsageTokens,

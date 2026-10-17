@@ -1237,7 +1237,7 @@ mod tests {
     fn no_verb_is_left_unwired() {
         let marker = concat!("CDP_VERB", "_NOT_WIRED");
         let helper = concat!("not_yet", "_wired");
-        let scanned: [(&str, &str); 14] = [
+        let scanned: [(&str, &str); 15] = [
             ("mod.rs", include_str!("mod.rs")),
             ("actions.rs", include_str!("actions.rs")),
             ("cookies.rs", include_str!("cookies.rs")),
@@ -1248,6 +1248,10 @@ mod tests {
             ("navigate.rs", include_str!("navigate.rs")),
             ("operation.rs", include_str!("operation.rs")),
             ("recording.rs", include_str!("recording.rs")),
+            (
+                "recording_test_encoder.rs",
+                include_str!("recording_test_encoder.rs"),
+            ),
             ("routes.rs", include_str!("routes.rs")),
             ("screenshot.rs", include_str!("screenshot.rs")),
             ("snapshot.rs", include_str!("snapshot.rs")),

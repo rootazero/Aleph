@@ -25,7 +25,10 @@ const PROVIDER_LEAVES: &[&str] = &[
     "RecordingMockProvider",
     "DummyProvider",
 ];
-const TOOL_SERVICE_LEAVES: &[&str] = &["NullToolService"];
+// PrivateLookupToolService owns a turn-local signal slot and wraps no service.
+// Its empty recovery-tools default is intentional; recovery must not add tools
+// to the isolated public surface.
+const TOOL_SERVICE_LEAVES: &[&str] = &["NullToolService", "PrivateLookupToolService"];
 
 /// Impls that OWN the answer: they override the methods and derive the value
 /// from their own state (the wire family and host, the dispatcher's gates)

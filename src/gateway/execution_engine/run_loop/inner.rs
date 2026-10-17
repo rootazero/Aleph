@@ -992,7 +992,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     loop_registry.clone(),
                     allowed_names.clone(),
                     None,
-                    Some(turn_context.clone()),
+                    Some(turn_context.clone().without_telecom_authority()),
                     hook_executor.clone(),
                     hook_session_id.clone(),
                     turn_permissions
@@ -1504,6 +1504,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // rebuilt on each retry iteration of the enclosing loop.
                 // rust-doctor-disable-next-line excessive-clone
                 model_directive: turn_model.clone(),
+                // Typed copy of the originating request's provenance; the
+                // retry loop rebuilds this FlowRequest but never alters it.
+                telecom_public: request.telecom_public.clone(),
             };
 
             // Dispatch via the orchestrator

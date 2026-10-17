@@ -1,8 +1,0 @@
-    Checking serde v1.0.228
-    Checking memchr v2.8.1
-    Checking chrono v0.4.44
-    Checking serde_json v1.0.150
-    Checking ref-cast v1.0.25
-    Checking schemars v1.2.1
-    Checking aleph-protocol v0.1.0 (D:\Workspace\Aleph-worktrees\panel-browser-workspace-20261007-202532-13256\shared\protocol)
-    Finished `dev` profile [unoptimized] target(s) in 28.73s

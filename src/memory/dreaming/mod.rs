@@ -2526,6 +2526,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_dream_executes_pipeline_not_stub() {
+        let home_root = tempfile::tempdir().unwrap();
+        let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+            home_root.path().join("aleph"),
+            home_root.path().join("home"),
+        );
         let (_temp_guard, temp) = scratch_root();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let daemon = test_daemon(store, temp.clone());
@@ -2643,6 +2648,11 @@ mod tests {
     /// to both the Panel's run history and the governance audit's activity probe.
     #[tokio::test]
     async fn run_now_persists_an_audit_row_with_its_decision() {
+        let home_root = tempfile::tempdir().unwrap();
+        let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+            home_root.path().join("aleph"),
+            home_root.path().join("home"),
+        );
         let (_temp_guard, temp) = scratch_root();
         std::fs::create_dir_all(&temp).unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
@@ -3176,6 +3186,11 @@ mod tests {
     /// dreamed every night invisibly.
     #[tokio::test]
     async fn a_project_sub_cycle_lands_in_the_audit_table_under_its_namespace() {
+        let home_root = tempfile::tempdir().unwrap();
+        let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+            home_root.path().join("aleph"),
+            home_root.path().join("home"),
+        );
         let (_dir_guard, dir) = scratch_root();
         let ns = format!("{DEFAULT_AGENT_ID}__proj-audited");
         // `list_note_corpora` discovers corpora by directory listing.
@@ -3238,6 +3253,11 @@ mod tests {
     /// created — silently, because an untaken branch reports nothing.
     #[tokio::test]
     async fn every_corpus_family_is_maintained_under_the_default_config() {
+        let home_root = tempfile::tempdir().unwrap();
+        let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+            home_root.path().join("aleph"),
+            home_root.path().join("home"),
+        );
         let (_dir_guard, dir) = scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
@@ -3389,6 +3409,11 @@ mod tests {
     /// written at the default value can see.
     #[tokio::test]
     async fn the_nightly_fan_out_stops_at_the_configured_budget() {
+        let home_root = tempfile::tempdir().unwrap();
+        let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+            home_root.path().join("aleph"),
+            home_root.path().join("home"),
+        );
         const CONFIGURED_BUDGET: usize = 3;
         assert_ne!(
             CONFIGURED_BUDGET, MAX_CORPUS_CYCLES_PER_NIGHT,

@@ -193,6 +193,98 @@ fn principal_from_metadata_is_unattributed_when_neither_key_is_present() {
 // The floor arm: Principal::from_person(visibility::ambient_principal())
 // ============================================================================
 
+/// `TelecomPublic` has its own stable key and round-trips through
+/// `as_key`/`from_key` — the ledger row key and the SQLite reader agree.
+#[test]
+fn telecom_public_key_is_stable_and_round_trips() {
+    assert_eq!(Principal::TelecomPublic.as_key(), "@telecom-public");
+    assert_eq!(
+        Principal::from_key("@telecom-public"),
+        Principal::TelecomPublic
+    );
+    for p in [
+        Principal::TelecomPublic,
+        Principal::Unattributed,
+        Principal::User("u-alice".to_string()),
+    ] {
+        assert_eq!(Principal::from_key(p.as_key()), p);
+    }
+}
+
+/// The three row spaces never collapse: the untrusted-input constructors
+/// refuse to mint `TelecomPublic` from any string, and it is not
+/// `Unattributed`.
+#[test]
+fn telecom_public_is_never_minted_from_strings_or_ambient_people() {
+    assert_eq!(
+        Principal::user("@telecom-public"),
+        Principal::Unattributed,
+        "the string form must not alias the typed variant"
+    );
+    assert_eq!(
+        Principal::from_person(Some("@telecom-public".to_string())),
+        Principal::Unattributed
+    );
+    assert_ne!(Principal::TelecomPublic, Principal::Unattributed);
+    assert_ne!(
+        Principal::TelecomPublic.as_key(),
+        Principal::Unattributed.as_key()
+    );
+    let mut meta = HashMap::new();
+    meta.insert(
+        crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+        "@telecom-public".to_string(),
+    );
+    assert_eq!(principal_from_metadata(&meta), Principal::Unattributed);
+}
+
+/// `telecom_public_usd` is the public principal's own line and moves nobody
+/// else's; unset, the public principal inherits `per_user_usd`.
+#[test]
+fn check_with_applies_telecom_public_line_only_to_the_public_principal() {
+    let ledger = InMemorySpendLedger::default();
+    let policy = SpendPolicy {
+        per_user_usd: Some(100.0),
+        telecom_public_usd: Some(1.0),
+        ..SpendPolicy::default()
+    };
+    let now_ms = 1_700_000_000_000;
+    let start = period::period_start_ms(now_ms, policy.period);
+    let alice = Principal::User("u-alice".to_string());
+    for p in [&Principal::TelecomPublic, &alice] {
+        ledger.record(p, start, Delta::Usd(1.0)).unwrap();
+    }
+    assert!(matches!(
+        check_with(&Principal::TelecomPublic, now_ms, &policy, &ledger),
+        Verdict::Denied {
+            limit: Limit::PerUser { limit, .. },
+            ..
+        } if limit == 1.0
+    ));
+    assert!(matches!(
+        check_with(&alice, now_ms, &policy, &ledger),
+        Verdict::Allowed(_)
+    ));
+
+    let inherit = SpendPolicy {
+        per_user_usd: Some(1.0),
+        ..SpendPolicy::default()
+    };
+    assert!(matches!(
+        check_with(&Principal::TelecomPublic, now_ms, &inherit, &ledger),
+        Verdict::Denied { .. }
+    ));
+    // A public-only policy leaves ordinary principals uncapped.
+    let public_only = SpendPolicy {
+        telecom_public_usd: Some(0.5),
+        ..SpendPolicy::default()
+    };
+    assert!(matches!(
+        check_with(&alice, now_ms, &public_only, &ledger),
+        Verdict::Allowed(_)
+    ));
+}
+
 /// The floor arm exactly as `providers::metering` spells it.
 fn floor_principal() -> Principal {
     Principal::from_person(crate::gateway::visibility::ambient_principal())
@@ -649,6 +741,22 @@ fn principals_in_reconstructs_the_unattributed_sentinel() {
     let rows = ledger.principals_in(1_000).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0, Principal::Unattributed);
+}
+
+#[test]
+fn principals_in_reconstructs_the_telecom_public_principal() {
+    let ledger = InMemorySpendLedger::default();
+    ledger
+        .record(&Principal::TelecomPublic, 1_000, Delta::Usd(1.0))
+        .unwrap();
+    ledger
+        .record(&Principal::Unattributed, 1_000, Delta::Usd(0.5))
+        .unwrap();
+
+    let rows = ledger.principals_in(1_000).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].0, Principal::TelecomPublic);
+    assert_eq!(rows[1].0, Principal::Unattributed);
 }
 
 #[test]

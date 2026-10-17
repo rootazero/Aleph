@@ -80,6 +80,11 @@ impl Config {
         self.validate_group_chat_and_personas()?;
         self.validate_policies()?;
         self.validate_browser_config()?;
+        if let Some(history) = &self.telecom_public_history {
+            history
+                .validate()
+                .map_err(|e| AlephError::invalid_config(e.to_string()))?;
+        }
 
         info!(
             providers_count = self.providers.len(),
@@ -765,6 +770,7 @@ mod tests {
             metadata_user_id: None,
             effort: None,
             server_context_editing: Default::default(),
+            model_defs: vec![],
         }
     }
 

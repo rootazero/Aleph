@@ -1,2 +1,0 @@
-dc8dc4c28ef489709da53d02937eb6187d738f8ab5823d6dc09e2c43066f124c *interfaces/tui/src/tui/commands.rs
-892505968c27459804f7eb50bdb3ce01406321ca16a0c1092e38dc388d0af3e3 *interfaces/tui/src/lib.rs
