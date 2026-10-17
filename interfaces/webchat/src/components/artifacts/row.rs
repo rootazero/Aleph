@@ -5,6 +5,7 @@ use leptos::prelude::*;
 use super::preview::PreviewTarget;
 use super::{origin_badge_class, ArtifactFilter};
 use crate::api::artifacts::ArtifactItem;
+use crate::components::right_pane::tray::TrayPinArtifactButton;
 
 /// One filter chip. Extracted so the call sites stay one line each.
 #[component]
@@ -42,6 +43,9 @@ where
 /// * **Everything else** is a plain top-level link to the capability URL. In
 ///   the desktop shell that path is classified external (`external_link.rs`),
 ///   so the OS browser opens it instead of replacing the single webview.
+///
+/// The sibling pin action explicitly copies current bytes into the shared tray;
+/// the artifact remains the server authority.
 #[component]
 pub(super) fn ArtifactRow(
     item: ArtifactItem,
@@ -54,20 +58,16 @@ pub(super) fn ArtifactRow(
     let size = item.human_size();
     let origin = item.origin.clone();
     let badge = origin_badge_class(&origin);
+    let pin_item = item.clone();
 
-    // Shared inner body so the image and file variants cannot drift apart.
     let body = {
         let filename = filename.clone();
         let thumb_src = url.clone();
         let thumb_alt = filename.clone();
         view! {
             {is_image.then(|| view! {
-                <img
-                    src=thumb_src
-                    alt=thumb_alt
-                    loading="lazy"
-                    class="w-9 h-9 rounded object-cover bg-surface-muted shrink-0"
-                />
+                <img src=thumb_src alt=thumb_alt loading="lazy"
+                    class="w-9 h-9 rounded object-cover bg-surface-muted shrink-0" />
             })}
             <span class="min-w-0 flex-1 text-left">
                 <span class="block text-xs truncate group-hover:text-primary">{filename}</span>
@@ -78,23 +78,23 @@ pub(super) fn ArtifactRow(
     };
 
     let row_class = "w-full flex items-center gap-2 py-1.5 border-b border-border/40 group";
-
     match target {
         Some(target) => view! {
-            <button
-                type="button"
-                class=row_class
-                on:click=move |_| preview.set(Some(target.clone()))
-            >
-                {body}
-            </button>
-        }
-        .into_any(),
+            <div class=row_class>
+                <button type="button" class="flex items-center gap-2 min-w-0 flex-1"
+                    on:click=move |_| preview.set(Some(target.clone()))>
+                    {body}
+                </button>
+                <TrayPinArtifactButton item=pin_item.clone() />
+            </div>
+        }.into_any(),
         None => view! {
-            <a href=url target="_blank" rel="noreferrer" class=row_class>
-                {body}
-            </a>
-        }
-        .into_any(),
+            <div class=row_class>
+                <a href=url target="_blank" rel="noreferrer" class="flex items-center gap-2 min-w-0 flex-1">
+                    {body}
+                </a>
+                <TrayPinArtifactButton item=pin_item />
+            </div>
+        }.into_any(),
     }
 }

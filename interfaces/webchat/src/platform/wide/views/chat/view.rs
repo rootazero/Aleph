@@ -17,18 +17,15 @@
 
 use super::composer::InputArea;
 use super::messages::MessageList;
-use super::state::{ChatState, PendingAttachment};
+use super::state::ChatState;
 use super::team_events::subscribe_team_events;
 use crate::components::team_participants::TeamParticipants;
 use crate::components::team_task_strip::TaskDrawerOpen;
 use crate::components::team_task_strip::TeamTaskDrawer;
-use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
-use crate::state::layout::{LayoutMode, WorkspaceState};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use wasm_bindgen::prelude::*;
 
 /// Top-level Chat view component.
 #[component]
@@ -39,12 +36,6 @@ pub fn ChatView() -> impl IntoView {
     // ChatState is provided once at the app root so the chat sidebar
     // (left column) and this view share one session / agent selection.
     let chat = expect_context::<ChatState>();
-    // WorkspaceState is optional during early boot races; when present, the
-    // chat surface reserves the workspace pane's width on the right in Split
-    // mode so message/composer max-width centers inside the *visible* chat
-    // area instead of drifting under the floating workspace pane.
-    let workspace = use_context::<WorkspaceState>();
-
     // Team chat: subscribe to team.<id>.* events alongside the single-agent stream.
     // Harmless when not in team mode (the handler short-circuits on topic prefix).
     let team_sub_id = subscribe_team_events(&dashboard, chat);
@@ -166,42 +157,22 @@ pub fn ChatView() -> impl IntoView {
         chat.is_dragging_files.set(false);
         let Some(dt) = ev.data_transfer() else { return };
         let Some(files) = dt.files() else { return };
-        let attachments = chat.pending_attachments;
-        for i in 0..files.length() {
-            let Some(file) = files.get(i) else { continue };
-            ingest_dropped_file(file, attachments);
-        }
+        super::composer::attachments::read_file_list_into(&files, chat.pending_attachments);
     };
 
     view! {
-        // Transparent — the shell's light-field shows through. `relative` is
-        // the positioning ancestor for the workspace pane, which now FLOATS
-        // over the chat surface as a right-anchored overlay (see
-        // `WorkspacePanel`); `overflow-hidden` clips it while it's slid
-        // off-screen-right when collapsed, so `<main>` grows no horizontal
-        // scrollbar.
+        // Transparent — the shell's light-field shows through. The right pane
+        // now lives beside `<main>` as a normal flex sibling, so this chat
+        // root only clips its own drag overlay and content.
         <div
             class="relative flex h-full overflow-hidden"
             on:dragover=on_dragover
             on:dragleave=on_dragleave
             on:drop=on_drop
         >
-            // Chat surface — yields ~40% to the workspace pane when it's open.
-            // `relative` anchors the workspace toggle (top-right corner
-            // affordance) so it follows the chat-surface boundary: in
-            // ChatOnly mode the toggle sits to the LEFT of the
-            // window-fixed NotificationCenter bell, in Split mode the
-            // chat-surface shrinks and the toggle naturally shifts left
-            // toward the workspace pane edge.
-            <div class=move || {
-                let base = "relative flex flex-col flex-1 min-w-0 h-full";
-                let split = workspace.map(|w| w.mode.get() == LayoutMode::Split).unwrap_or(false);
-                if split {
-                    format!("{base} pr-[var(--aleph-workspace-w)]")
-                } else {
-                    base.to_string()
-                }
-            }>
+            // Chat surface — the shell-owned right pane is a normal flex
+            // sibling, so this column keeps all available chat width.
+            <div class="relative flex flex-col flex-1 min-w-0 h-full">
                 // No chat-local drag strip or LayoutToggle here: the
                 // global `aleph-main-drag-band` at the top of `<main>`
                 // (see `app.rs` → `ChatBandChrome`) hosts the workspace
@@ -253,8 +224,6 @@ pub fn ChatView() -> impl IntoView {
                     </Show>
                 </div>
             </div>
-            // Workspace pane — always mounted; eases open/closed on Split.
-            <WorkspacePanel />
             // Drop overlay — only visible while a file is hovering.
             <Show when=move || chat.is_dragging_files.get()>
                 <div class="absolute inset-0 z-30 pointer-events-none
@@ -274,64 +243,6 @@ pub fn ChatView() -> impl IntoView {
             </Show>
         </div>
     }
-}
-
-/// Read a single dropped `web_sys::File` into base64 and append it to the
-/// shared pending-attachments list. Mirrors the per-file logic used by the
-/// paperclip input — kept as a free fn so the drop handler stays tight.
-fn ingest_dropped_file(file: web_sys::File, attachments: RwSignal<Vec<PendingAttachment>>) {
-    use super::composer::attachments::{MAX_ATTACHMENT_COUNT, MAX_ATTACHMENT_SIZE_BYTES};
-
-    let name = file.name();
-    let mime_type = file.type_();
-    let size = file.size() as u64;
-    if size > MAX_ATTACHMENT_SIZE_BYTES {
-        web_sys::console::warn_1(
-            &format!(
-                "skipping dropped file '{name}': {size} bytes exceeds the {} MB limit",
-                MAX_ATTACHMENT_SIZE_BYTES / (1024 * 1024)
-            )
-            .into(),
-        );
-        return;
-    }
-    let accepted = attachments.with_untracked(|list| list.len());
-    if accepted >= MAX_ATTACHMENT_COUNT {
-        web_sys::console::warn_1(
-            &format!(
-                "skipping dropped file '{name}': already at the {MAX_ATTACHMENT_COUNT}-file limit"
-            )
-            .into(),
-        );
-        return;
-    }
-    let Ok(reader) = web_sys::FileReader::new() else {
-        return;
-    };
-    let reader_clone = reader.clone();
-    let file_name = name;
-    let file_mime = if mime_type.is_empty() {
-        "application/octet-stream".to_string()
-    } else {
-        mime_type
-    };
-    let onload = Closure::wrap(Box::new(move || {
-        if let Ok(result) = reader_clone.result() {
-            if let Some(data_url) = result.as_string() {
-                let base64_data = data_url.split(',').nth(1).unwrap_or("").to_string();
-                let attachment = PendingAttachment {
-                    name: file_name.clone(),
-                    mime_type: file_mime.clone(),
-                    data_base64: base64_data,
-                    size,
-                };
-                attachments.update(|list| list.push(attachment));
-            }
-        }
-    }) as Box<dyn Fn()>);
-    reader.set_onload(Some(onload.as_ref().unchecked_ref()));
-    onload.forget();
-    let _ = reader.read_as_data_url(&file);
 }
 
 /// Sticky banner for pending approvals addressed to the CURRENT conversation.

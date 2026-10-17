@@ -212,16 +212,39 @@ pub fn StandaloneBrowserViewerRoute() -> impl IntoView {
     }
 }
 
+fn retain_transport_owner(transport_owner: Owner, on_ready: Option<Callback<Owner>>) {
+    if let Some(on_ready) = on_ready {
+        on_ready.run(transport_owner.clone());
+    }
+    // Parent owners keep only weak child references. Retain the transport even
+    // without an inline callback; cleanup is idempotent after an early stop.
+    on_cleanup(move || transport_owner.cleanup());
+}
+
 /// The standalone viewer for a valid session. Independent of every Panel
 /// context. `origin` is the page origin the transport derives its endpoints
 /// from; the transport's lifetime is bound to this component.
 #[component]
-pub fn StandaloneBrowserViewer(session: ViewerSession, origin: String) -> impl IntoView {
-    // The transport writes to this signal (`close` / `accept_*`) and the
-    // notice follows the phase; its failure flag overrides the phase notice.
+pub fn StandaloneBrowserViewer(
+    session: ViewerSession,
+    origin: String,
+    #[prop(optional)] compact: bool,
+    #[prop(optional)] on_notice: Option<Callback<StandaloneNotice>>,
+    #[prop(optional)] on_transport_ready: Option<Callback<Owner>>,
+) -> impl IntoView {
     let session = RwSignal::new(session);
     let ui = TransportUi::new();
-    transport::start(session, ui, origin);
+    // Keep transport cleanup separate from the render owner. InlineBrowser may
+    // stop the transport synchronously on a terminal notice while Show still
+    // retains this component's OwnedView; the render owner must remain alive
+    // until that branch is removed naturally.
+    let transport_owner = Owner::new();
+    transport_owner.with(|| {
+        // The transport writes to this signal (`close` / `accept_*`) and the
+        // notice follows the phase; its failure flag overrides the phase notice.
+        transport::start(session, ui, origin);
+    });
+    retain_transport_owner(transport_owner, on_transport_ready);
     // Sticky: true once the session has authenticated at least once.
     let was_live = Memo::new(move |prev: Option<&bool>| {
         prev.copied().unwrap_or(false) || session.with(|s| s.phase()) == SessionPhase::Authenticated
@@ -230,19 +253,27 @@ pub fn StandaloneBrowserViewer(session: ViewerSession, origin: String) -> impl I
         notice_with_history(session.with(|s| s.phase()), ui.failed.get(), was_live.get())
     });
     let frame_url = Signal::derive(move || ui.frame_url.get());
-    view! { <StandaloneShell notice=notice frame_url=frame_url /> }
+    if let Some(on_notice) = on_notice {
+        Effect::new(move |_| {
+            if let Some(notice) = notice.try_get() {
+                let _ = on_notice.try_run(notice);
+            }
+        });
+    }
+    view! { <StandaloneShell notice=notice frame_url=frame_url compact=compact /> }
 }
 
 #[component]
 fn StandaloneShell(
     notice: Signal<StandaloneNotice>,
     frame_url: Signal<Option<String>>,
+    #[prop(optional)] compact: bool,
 ) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <section
             data-testid="browser-live-viewer"
-            class="flex flex-col gap-3 p-4 min-h-screen"
+            class=if compact { "flex flex-col flex-1 min-h-0 gap-2" } else { "flex flex-col gap-3 p-4 min-h-screen" }
             aria-label=t_string!(i18n, browser_viewer.region_label).to_string()
         >
             <h2 class="text-base font-semibold text-text-primary">
@@ -256,7 +287,7 @@ fn StandaloneShell(
                             data-testid="browser-live-frame"
                             src=url
                             alt=t_string!(i18n, browser_viewer.title).to_string()
-                            class="max-w-full h-auto"
+                            class=if compact { "w-full min-h-0 object-contain" } else { "max-w-full h-auto" }
                         />
                     }
                     .into_any(),
@@ -275,6 +306,74 @@ fn StandaloneShell(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    fn setup_transport_lifecycle(
+        session: RwSignal<ViewerSession>,
+        stopped: Arc<AtomicUsize>,
+        on_ready: Option<Callback<Owner>>,
+    ) {
+        let transport_owner = Owner::new();
+        transport_owner.with(|| {
+            on_cleanup(move || {
+                session.update(|session| session.close(CloseReason::Local));
+                stopped.fetch_add(1, Ordering::SeqCst);
+            });
+        });
+        retain_transport_owner(transport_owner, on_ready);
+    }
+
+    #[test]
+    fn standalone_transport_survives_setup_without_callback_until_parent_cleanup() {
+        let parent = Owner::new();
+        let stopped = Arc::new(AtomicUsize::new(0));
+        parent.with(|| {
+            let session = RwSignal::new(ViewerSession::from_location(ORIGIN, VALID_HASH).unwrap());
+            setup_transport_lifecycle(session, stopped.clone(), None);
+            // The setup stack is gone: only the component's parent may retain it.
+            assert_eq!(stopped.load(Ordering::SeqCst), 0);
+            session.update(|session| assert!(session.begin_consume().is_ok()));
+            assert_eq!(session.with(ViewerSession::phase), SessionPhase::Consuming);
+        });
+        parent.cleanup();
+        assert_eq!(stopped.load(Ordering::SeqCst), 1);
+        parent.cleanup();
+        drop(parent);
+        assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn early_transport_cleanup_is_once_and_preserves_render_until_parent_cleanup() {
+        let parent = Owner::new();
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let render_disposed = Arc::new(AtomicUsize::new(0));
+        parent.with(|| {
+            let render_counter = render_disposed.clone();
+            on_cleanup(move || {
+                render_counter.fetch_add(1, Ordering::SeqCst);
+            });
+            let session = RwSignal::new(ViewerSession::from_location(ORIGIN, VALID_HASH).unwrap());
+            let on_ready = Callback::new(move |owner: Owner| {
+                owner.cleanup();
+                owner.cleanup();
+            });
+            setup_transport_lifecycle(session, stopped.clone(), Some(on_ready));
+            assert_eq!(stopped.load(Ordering::SeqCst), 1);
+            assert_eq!(render_disposed.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                session.with(ViewerSession::phase),
+                SessionPhase::Closed(CloseReason::Local)
+            );
+        });
+        parent.cleanup();
+        parent.cleanup();
+        drop(parent);
+        assert_eq!(stopped.load(Ordering::SeqCst), 1);
+        assert_eq!(render_disposed.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn phases_map_to_fixed_notices() {

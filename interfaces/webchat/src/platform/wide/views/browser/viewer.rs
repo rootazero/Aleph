@@ -15,6 +15,7 @@ use super::launch::{
 use super::model::{
     BoundBrowser, BrowserViewerModel, BrowserWorkspace, UnboundReason, ViewerPhase,
 };
+use super::session::{ViewerSession, VIEWER_PAGE_PATH};
 use crate::api::{BrowserViewerApi, ViewerCaller};
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n, I18nCtx};
@@ -24,12 +25,12 @@ use aleph_protocol::browser_live::{
 };
 
 #[cfg(target_arch = "wasm32")]
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     js_sys::Date::now() as i64
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const fn now_ms() -> i64 {
+pub(crate) const fn now_ms() -> i64 {
     0
 }
 
@@ -397,14 +398,78 @@ fn commit_launch_phase(
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct InlineDestination {
+    pub accept: Callback<(ViewerSession, String), bool>,
+    pub notice: Callback<InlineLaunchNotice>,
+    pub tab_requested: Callback<()>,
+    pub is_current: Callback<(), bool>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum InlineLaunchNotice {
+    NoGrant,
+    Pending,
+    Failed,
+    InvalidFragment,
+}
+
+/// Parse only the already validated issuer URL, without retaining its secret.
+fn inline_session(url: &str) -> Option<(ViewerSession, String)> {
+    let (head, hash) = url.split_once('#')?;
+    let origin = head.strip_suffix(VIEWER_PAGE_PATH)?;
+    let session = ViewerSession::from_location(origin, hash).ok()?;
+    Some((session, origin.to_string()))
+}
+
+/// A rejected handoff must be revoked, never retained as a popup retry link.
+fn open_inline_ready(
+    phase: &mut LaunchPhase,
+    now: i64,
+    accept: impl FnOnce((ViewerSession, String)) -> bool,
+) -> (bool, Option<String>) {
+    let mut rejected = false;
+    let opened = open_ready(phase, now, |url| {
+        let accepted = inline_session(url).is_some_and(accept);
+        rejected = !accepted;
+        accepted
+    });
+    let revoke = rejected.then(|| take_unopened(phase)).flatten();
+    if rejected {
+        *phase = LaunchPhase::Failed;
+    }
+    (opened, revoke)
+}
+
+// Leptos generates a public inner helper even for this crate-private component.
+#[allow(private_interfaces)]
 #[component]
-fn LaunchSection(target: LaunchTarget, workspace: Option<BrowserWorkspace>) -> impl IntoView {
+pub(crate) fn LaunchSection(
+    target: LaunchTarget,
+    workspace: Option<BrowserWorkspace>,
+    #[prop(optional)] inline: Option<InlineDestination>,
+) -> impl IntoView {
     let i18n = use_i18n();
     let dashboard = use_context::<DashboardState>();
     let phase = RwSignal::new(LaunchPhase::default());
     let target = StoredValue::new(target);
     // The paired caller the held / in-flight grant was requested under.
     let held_caller = StoredValue::new(None::<ViewerCaller>);
+    let in_tab = RwSignal::new(inline.is_none());
+    let notify = move |notice| {
+        if let Some(inline) = inline {
+            let _ = inline.notice.try_run(notice);
+        }
+    };
+    let target_current = move || {
+        workspace.is_some_and(|workspace| {
+            workspace.model.try_get_untracked().is_some_and(|model| {
+                model_launch_target(&model, now_ms())
+                    .ok()
+                    .is_some_and(|current| Some(current) == target.try_get_value())
+            })
+        }) && inline.is_none_or(|inline| inline.is_current.try_run(()).unwrap_or(false))
+    };
 
     // A resource revision, binding or caller change invalidates every unopened
     // link. An in-flight response is handled by `finish_issue`, which sees the
@@ -425,7 +490,9 @@ fn LaunchSection(target: LaunchTarget, workspace: Option<BrowserWorkspace>) -> i
             if authorized {
                 return;
             }
-            let mut next = phase.get_untracked();
+            let Some(mut next) = phase.try_get_untracked() else {
+                return;
+            };
             let Some(grant_id) = invalidate_unopened(&mut next, authorized) else {
                 return;
             };
@@ -450,26 +517,27 @@ fn LaunchSection(target: LaunchTarget, workspace: Option<BrowserWorkspace>) -> i
         });
     });
 
-    let issue = move |_| {
+    let issue = Callback::new(move |()| {
         let Some(dashboard) = dashboard else {
-            phase.set(LaunchPhase::Failed);
+            let _ = phase.try_set(LaunchPhase::Failed);
+            notify(InlineLaunchNotice::Failed);
             return;
         };
-        if !begin_issue(&mut phase.get_untracked()) {
+        let Some(mut next) = phase.try_get_untracked() else {
+            return;
+        };
+        if !begin_issue(&mut next) {
             return;
         }
-        let target_value = target.get_value();
-        let current = workspace.is_some_and(|workspace| {
-            workspace.model.with_untracked(|model| {
-                model_launch_target(model, now_ms())
-                    .ok()
-                    .is_some_and(|current| current == target_value)
-            })
-        });
+        let Some(target_value) = target.try_get_value() else {
+            return;
+        };
+        let current = target_current();
         // No paired caller (or a stale target): nothing is sent.
         let caller = ViewerCaller::current(&dashboard);
         let Some(caller) = caller.filter(|_| current) else {
-            phase.set(LaunchPhase::Failed);
+            let _ = phase.try_set(LaunchPhase::Failed);
+            notify(InlineLaunchNotice::Failed);
             return;
         };
         held_caller.set_value(Some(caller.clone()));
@@ -482,13 +550,7 @@ fn LaunchSection(target: LaunchTarget, workspace: Option<BrowserWorkspace>) -> i
                 &target_value.resource_id,
             )
             .await;
-            let target_matches = workspace.is_some_and(|workspace| {
-                workspace.model.try_get_untracked().is_some_and(|model| {
-                    model_launch_target(&model, now_ms())
-                        .ok()
-                        .is_some_and(|current| current == target_value)
-                })
-            });
+            let target_matches = target_current();
             let authorized = launch_authorized(
                 target_matches,
                 Some(&caller),
@@ -505,29 +567,33 @@ fn LaunchSection(target: LaunchTarget, workspace: Option<BrowserWorkspace>) -> i
                 Err(_) => None,
             };
             let grant_to_revoke = finish_issue(&mut next, authorized, result, now_ms());
+            let ready = matches!(next, LaunchPhase::Ready(_));
             let grant_to_revoke =
                 commit_launch_phase(phase, next, grant_to_revoke, response_grant_id);
+            if phase.try_get_untracked().is_some() && !in_tab.try_get_untracked().unwrap_or(true) {
+                notify(if ready {
+                    InlineLaunchNotice::Pending
+                } else {
+                    InlineLaunchNotice::Failed
+                });
+            }
             if let Some(grant_id) = grant_to_revoke {
                 let _ = BrowserViewerApi::revoke_grant(&dashboard, &grant_id).await;
             }
         });
-    };
+    });
 
-    let open = move |_: web_sys::MouseEvent| {
-        let target_matches = workspace.is_some_and(|workspace| {
-            workspace.model.with_untracked(|model| {
-                model_launch_target(model, now_ms())
-                    .ok()
-                    .is_some_and(|current| current == target.get_value())
-            })
-        });
+    let open = Callback::new(move |()| {
+        let target_matches = target_current();
         let now = dashboard.and_then(|dashboard| ViewerCaller::current(&dashboard));
         let authorized = launch_authorized(
             target_matches,
             held_caller.get_value().as_ref(),
             now.as_ref(),
         );
-        let mut next = phase.get_untracked();
+        let Some(mut next) = phase.try_get_untracked() else {
+            return;
+        };
         if let Some(grant_id) = invalidate_unopened(&mut next, authorized) {
             // A late grant is never handed to a different caller / target.
             phase.set(next);
@@ -541,13 +607,30 @@ fn LaunchSection(target: LaunchTarget, workspace: Option<BrowserWorkspace>) -> i
         if !authorized {
             return;
         }
-        let _ = open_ready(&mut next, now_ms(), open_in_new_tab);
-        phase.set(next);
-    };
+        let revoke = if let Some(inline) = inline.filter(|_| !in_tab.get_untracked()) {
+            let (opened, revoke) = open_inline_ready(&mut next, now_ms(), |session| {
+                inline.accept.try_run(session).unwrap_or(false)
+            });
+            if !opened {
+                notify(InlineLaunchNotice::InvalidFragment);
+            }
+            revoke
+        } else {
+            let _ = open_ready(&mut next, now_ms(), open_in_new_tab);
+            None
+        };
+        let _ = phase.try_set(next);
+        if let (Some(dashboard), Some(grant_id)) = (dashboard, revoke) {
+            spawn_local(async move {
+                let _ = BrowserViewerApi::revoke_grant(&dashboard, &grant_id).await;
+            });
+        }
+    });
     let dismiss = move |_: web_sys::MouseEvent| {
         let mut next = phase.get_untracked();
         let grant_id = take_unopened(&mut next);
         phase.set(next);
+        notify(InlineLaunchNotice::NoGrant);
         if let (Some(dashboard), Some(grant_id)) = (dashboard, grant_id) {
             spawn_local(async move {
                 let _ = BrowserViewerApi::revoke_grant(&dashboard, &grant_id).await;
@@ -555,6 +638,34 @@ fn LaunchSection(target: LaunchTarget, workspace: Option<BrowserWorkspace>) -> i
         }
     };
     let unpaired = move || caller_now(dashboard).is_none();
+    let tab = move |_| {
+        if phase.try_get_untracked() == Some(LaunchPhase::Issuing) || !target_current() {
+            return;
+        }
+        if in_tab.get_untracked()
+            && matches!(
+                phase.get_untracked(),
+                LaunchPhase::Ready(_) | LaunchPhase::Blocked(_)
+            )
+        {
+            open.run(());
+            return;
+        }
+        if let Some(inline) = inline {
+            let _ = inline.tab_requested.try_run(());
+        }
+        let mut next = phase.get_untracked();
+        let revoke = take_unopened(&mut next);
+        // The consumed inline URL was dropped; this explicit action issues anew.
+        phase.set(LaunchPhase::Idle);
+        in_tab.set(true);
+        if let (Some(dashboard), Some(grant_id)) = (dashboard, revoke) {
+            spawn_local(async move {
+                let _ = BrowserViewerApi::revoke_grant(&dashboard, &grant_id).await;
+            });
+        }
+        issue.run(());
+    };
 
     view! {
         <section
@@ -564,9 +675,17 @@ fn LaunchSection(target: LaunchTarget, workspace: Option<BrowserWorkspace>) -> i
                 {t_string!(i18n, browser_viewer.launch_title)}
             </h3>
             <p class="text-xs text-text-secondary">
-                {t_string!(i18n, browser_viewer.launch_hint)}
+                {move || if inline.is_some() && !in_tab.get() { t_string!(i18n, browser_viewer.slot_no_grant).to_string() } else { t_string!(i18n, browser_viewer.launch_hint).to_string() }}
             </p>
             {move || unpaired().then(|| view! { <PairingNotice dashboard=dashboard /> })}
+            {inline.map(|_| view! {
+                <button data-testid="browser-slot-open-tab" type="button"
+                    class="self-start px-2 py-1 rounded border border-border text-xs disabled:opacity-50"
+                    title=move || if unpaired() { t_string!(i18n, browser_viewer.pair_required_hint).to_string() } else { t_string!(i18n, browser_viewer.slot_tab_hint).to_string() }
+                    prop:disabled=move || unpaired() || phase.get() == LaunchPhase::Issuing
+                    on:click=tab
+                >{t_string!(i18n, browser_viewer.slot_open_tab)}</button>
+            })}
             {move || match phase.get() {
                 LaunchPhase::Ready(_) | LaunchPhase::Blocked(_) => view! {
                     <div class="flex gap-2">
@@ -574,9 +693,9 @@ fn LaunchSection(target: LaunchTarget, workspace: Option<BrowserWorkspace>) -> i
                             data-testid="browser-live-open"
                             type="button"
                             class="px-2 py-1 rounded border border-border text-xs hover:bg-surface-hover"
-                            on:click=open
+                            on:click=move |_| open.run(())
                         >
-                            {t_string!(i18n, browser_viewer.launch_open)}
+                            {move || if inline.is_some() && !in_tab.get() { t_string!(i18n, browser_viewer.slot_open_inline).to_string() } else { t_string!(i18n, browser_viewer.launch_open).to_string() }}
                         </button>
                         <button
                             data-testid="browser-live-dismiss"
@@ -595,7 +714,7 @@ fn LaunchSection(target: LaunchTarget, workspace: Option<BrowserWorkspace>) -> i
                 }.into_any(),
                 LaunchPhase::Opened => view! {
                     <p class="text-xs text-text-secondary" role="status">
-                        {t_string!(i18n, browser_viewer.launch_opened)}
+                        {move || if inline.is_some() && !in_tab.get() { String::new() } else { t_string!(i18n, browser_viewer.launch_opened).to_string() }}
                     </p>
                 }.into_any(),
                 LaunchPhase::Failed => view! {
@@ -604,23 +723,25 @@ fn LaunchSection(target: LaunchTarget, workspace: Option<BrowserWorkspace>) -> i
                             {t_string!(i18n, browser_viewer.launch_failed)}
                         </p>
                         <button
+                            data-testid="browser-live-issue"
                             type="button"
                             class="self-start px-2 py-1 rounded border border-border text-xs hover:bg-surface-hover disabled:opacity-50"
                             prop:disabled=unpaired
-                            on:click=issue
+                            on:click=move |_| issue.run(())
                         >
-                            {t_string!(i18n, browser_viewer.launch_open)}
+                            {move || if inline.is_some() && !in_tab.get() { t_string!(i18n, browser_viewer.slot_request).to_string() } else { t_string!(i18n, browser_viewer.launch_open).to_string() }}
                         </button>
                     </div>
                 }.into_any(),
                 LaunchPhase::Idle => view! {
                     <button
+                        data-testid="browser-live-issue"
                         type="button"
                         class="self-start px-2 py-1 rounded border border-border text-xs hover:bg-surface-hover"
                         prop:disabled=move || workspace.is_none() || unpaired()
-                        on:click=issue
+                        on:click=move |_| issue.run(())
                     >
-                        {t_string!(i18n, browser_viewer.launch_open)}
+                        {move || if inline.is_some() && !in_tab.get() { t_string!(i18n, browser_viewer.slot_request).to_string() } else { t_string!(i18n, browser_viewer.launch_open).to_string() }}
                     </button>
                 }.into_any(),
             }}
@@ -636,7 +757,7 @@ fn launch_target_for_bound(bound: &BoundBrowser) -> Option<LaunchTarget> {
 }
 
 #[component]
-fn BoundSummary(bound: BoundBrowser) -> impl IntoView {
+fn BoundSummary(bound: BoundBrowser, suppress_launch: bool) -> impl IntoView {
     let i18n = use_i18n();
     let text = bound_text(i18n, &bound);
 
@@ -746,7 +867,7 @@ fn BoundSummary(bound: BoundBrowser) -> impl IntoView {
                 </h3>
                 {candidate_list}
             </section>
-            {launch_target_for_bound(&bound).map(|target| {
+            {(!suppress_launch).then(|| launch_target_for_bound(&bound)).flatten().map(|target| {
                 view! { <LaunchSection target=target workspace=workspace /> }
             })}
         </div>
@@ -759,7 +880,11 @@ fn BoundSummary(bound: BoundBrowser) -> impl IntoView {
 /// height). The in-workspace tab omits the heading because the tab label
 /// already carries it.
 #[component]
-pub fn BrowserViewer(model: BrowserViewerModel, standalone: bool) -> impl IntoView {
+pub fn BrowserViewer(
+    model: BrowserViewerModel,
+    standalone: bool,
+    #[prop(optional)] suppress_launch: bool,
+) -> impl IntoView {
     let i18n = use_i18n();
     let container = if standalone {
         "flex flex-col gap-3 p-4 min-h-screen"
@@ -791,7 +916,9 @@ pub fn BrowserViewer(model: BrowserViewerModel, standalone: bool) -> impl IntoVi
                 </p>
             }
             .into_any(),
-            None => view! { <BoundSummary bound=*bound /> }.into_any(),
+            None => {
+                view! { <BoundSummary bound=*bound suppress_launch=suppress_launch /> }.into_any()
+            }
         },
     };
     view! {
@@ -845,6 +972,87 @@ mod tests {
         assert_eq!(revoke, None);
         assert!(matches!(phase, LaunchPhase::Ready(_)));
         phase
+    }
+
+    #[test]
+    fn inline_handoff_moves_the_session_once_and_leaves_no_retryable_url() {
+        let mut phase = ready_phase();
+        let (opened, revoke) = open_inline_ready(&mut phase, 1_000, |(mut session, origin)| {
+            assert_eq!(origin, "https://gw.example");
+            assert_eq!(session.begin_consume().unwrap().grant_id, "g-1");
+            assert!(session.begin_consume().is_err());
+            true
+        });
+        assert!(opened);
+        assert_eq!(revoke, None);
+        assert_eq!(phase, LaunchPhase::Opened);
+        assert!(!open_ready(&mut phase, 1_000, |_| panic!(
+            "consumed URL reused"
+        )));
+        assert!(begin_issue(&mut phase));
+        assert_eq!(phase, LaunchPhase::Issuing);
+    }
+
+    #[test]
+    fn a_rejected_inline_destination_revokes_instead_of_retaining_a_blocked_url() {
+        let mut phase = ready_phase();
+        assert_eq!(
+            open_inline_ready(&mut phase, 1_000, |_| false),
+            (false, Some("g-1".into()))
+        );
+        assert_eq!(phase, LaunchPhase::Failed);
+        assert_eq!(take_unopened(&mut phase), None);
+    }
+
+    #[test]
+    fn inline_fragment_parser_refuses_untrusted_origin_path_and_extra_fields() {
+        for url in [
+            "https://gw.example/viewer/browser#grant_id=g&nonce=n",
+            "http://127.0.0.1:1234/viewer/browser#grant_id=g&nonce=n",
+        ] {
+            assert!(inline_session(url).is_some());
+        }
+        for url in [
+            "http://untrusted.example/viewer/browser#grant_id=g&nonce=n",
+            "javascript:alert(1)/viewer/browser#grant_id=g&nonce=n",
+            "https://gw.example/other#grant_id=g&nonce=n",
+            "https://gw.example/viewer/browser?x=y#grant_id=g&nonce=n",
+            "https://gw.example/viewer/browser#grant_id=g",
+            "https://gw.example/viewer/browser#grant_id=g&nonce=n&extra=x",
+        ] {
+            assert!(inline_session(url).is_none());
+        }
+    }
+
+    #[test]
+    fn fresh_tab_launch_keeps_its_own_blocked_retry_after_inline_consumption() {
+        let mut phase = ready_phase();
+        assert!(open_inline_ready(&mut phase, 1_000, |_| true).0);
+        assert!(begin_issue(&mut phase));
+        assert_eq!(
+            finish_issue(
+                &mut phase,
+                true,
+                Ok(aleph_protocol::browser_live::IssueViewerGrantResponse {
+                    launch_url: "https://gw.example/viewer/browser#grant_id=g-fresh&nonce=n-fresh"
+                        .into(),
+                    grant_id: "g-fresh".into(),
+                    expires_at_ms: 2_000,
+                }),
+                1_000
+            ),
+            None
+        );
+        assert!(!open_ready(&mut phase, 1_000, |url| {
+            assert!(url.contains("grant_id=g-fresh&"));
+            false
+        }));
+        assert!(matches!(phase, LaunchPhase::Blocked(_)));
+        assert!(open_ready(&mut phase, 1_000, |url| {
+            assert!(url.contains("grant_id=g-fresh&"));
+            true
+        }));
+        assert_eq!(phase, LaunchPhase::Opened);
     }
 
     #[test]
