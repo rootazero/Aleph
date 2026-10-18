@@ -33,6 +33,8 @@
 //! would have left the other two writing to memory only, each with its own
 //! green unit test.
 
+use tracing::warn;
+
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
@@ -60,6 +62,8 @@ pub struct SessionModelSnapshot {
 pub struct SessionModelUpdate {
     pub pref: Option<SessionModelPref>,
     pub generation: u64,
+    /// Whether the live map changed and the durable sink was eligible to run.
+    pub accepted: bool,
 }
 
 /// `identity_meta.custom` key under which a session's model pick is persisted.
@@ -102,23 +106,24 @@ fn map() -> &'static RwLock<HashMap<String, SessionModelState>> {
 /// installed once at boot, because `providers` must not depend on it. `pref`
 /// is `None` for "the pin was cleared".
 pub trait SessionPinSink: Send + Sync {
-    /// Persist the pin for `session_key`, or clear it when `pref` is `None`.
+    /// Persist the pin for `session_key` with its ordering generation, or
+    /// clear it when `pref` is `None`.
     ///
-    /// Best-effort and non-blocking: this is called from synchronous code on a
-    /// path where a store failure must not fail the turn. The in-memory map has
-    /// already been updated, so the pin governs *this* process either way; what
-    /// a failure costs is durability across a restart.
-    fn persist(&self, session_key: &str, pref: Option<&SessionModelPref>);
-
-    /// Persist a pin with its generation. Existing sinks that only understand
-    /// the legacy API remain valid and receive generation zero.
+    /// This is required so every installed sink receives the generation-aware
+    /// write. A sink cannot accidentally fall back to an unconditional legacy
+    /// persistence path and allow an older spawned task to overwrite newer
+    /// durable state.
     fn persist_with_generation(
         &self,
         session_key: &str,
         pref: Option<&SessionModelPref>,
-        _generation: u64,
-    ) {
-        self.persist(session_key, pref);
+        generation: u64,
+    );
+
+    /// Compatibility entry point for callers that predate generations.
+    /// Legacy writes use generation zero.
+    fn persist(&self, session_key: &str, pref: Option<&SessionModelPref>) {
+        self.persist_with_generation(session_key, pref, 0);
     }
 }
 
@@ -162,17 +167,28 @@ pub fn set_session_model(session_key: &str, provider: Option<String>, model: Str
 }
 
 /// Atomically update the live selection and return the exact selection and
-/// generation sent to the durable sink.
+/// generation sent to the durable sink. A generation at `u64::MAX` is a
+/// terminal state: refusing the update avoids reusing an ordering value.
 pub(crate) fn update_session_model(
     session_key: &str,
     pref: Option<SessionModelPref>,
 ) -> SessionModelUpdate {
     let update = {
         let mut guard = map().write().unwrap_or_else(|e| e.into_inner());
-        let generation = guard
-            .get(session_key)
-            .map_or(0, |state| state.generation)
-            .saturating_add(1);
+        if let Some(existing) = guard.get(session_key) {
+            if existing.generation == u64::MAX {
+                warn!(
+                    session_key,
+                    "refusing session model update because generation reached u64::MAX"
+                );
+                return SessionModelUpdate {
+                    pref: existing.pref.clone(),
+                    generation: u64::MAX,
+                    accepted: false,
+                };
+            }
+        }
+        let generation = guard.get(session_key).map_or(0, |state| state.generation) + 1;
         guard.insert(
             session_key.to_string(),
             SessionModelState {
@@ -180,10 +196,16 @@ pub(crate) fn update_session_model(
                 generation,
             },
         );
-        SessionModelUpdate { pref, generation }
+        SessionModelUpdate {
+            pref,
+            generation,
+            accepted: true,
+        }
     };
-    if let Some(sink) = sink() {
-        sink.persist_with_generation(session_key, update.pref.as_ref(), update.generation);
+    if update.accepted {
+        if let Some(sink) = sink() {
+            sink.persist_with_generation(session_key, update.pref.as_ref(), update.generation);
+        }
     }
     update
 }
@@ -432,6 +454,34 @@ mod tests {
         assert_eq!(cleared.pref, None);
         assert_eq!(get_session_model_snapshot(key).pref, reselected.pref);
         clear_session_model(key);
+    }
+
+    #[test]
+    fn max_generation_refuses_update_without_changing_live_state() {
+        let key = "test:session:generation-max";
+        let old = SessionModelPref {
+            provider: Some("openai".to_string()),
+            model: "old-model".to_string(),
+        };
+        let new = SessionModelPref {
+            provider: Some("anthropic".to_string()),
+            model: "new-model".to_string(),
+        };
+        map().write().unwrap().insert(
+            key.to_string(),
+            SessionModelState {
+                pref: Some(old.clone()),
+                generation: u64::MAX,
+            },
+        );
+
+        let update = update_session_model(key, Some(new));
+
+        assert!(!update.accepted);
+        assert_eq!(update.generation, u64::MAX);
+        assert_eq!(update.pref, Some(old.clone()));
+        assert_eq!(get_session_model_snapshot(key).pref, Some(old));
+        map().write().unwrap().remove(key);
     }
 
     #[test]

@@ -84,10 +84,27 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let provider =
             crate::gateway::session_snapshot::custom_str(&meta, MODEL_PIN_PROVIDER_SESSION_KEY)
                 .filter(|p| !p.trim().is_empty());
-        let generation =
-            crate::gateway::session_snapshot::custom_str(&meta, MODEL_PIN_GENERATION_SESSION_KEY)
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(0);
+        let generation = meta
+            .identity_meta
+            .as_ref()
+            .and_then(|im| im.custom.get(MODEL_PIN_GENERATION_SESSION_KEY))
+            .map(|value| {
+                value
+                    .as_str()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .or_else(|| value.as_u64())
+            });
+        let generation = match generation {
+            None => 0,
+            Some(Some(generation)) => generation,
+            Some(None) => {
+                warn!(
+                    key = %session_key.to_key_string(),
+                    "Invalid stored model pin generation — model pin not restored"
+                );
+                return None;
+            }
+        };
         Some((SessionModelPref { provider, model }, generation))
     }
 }

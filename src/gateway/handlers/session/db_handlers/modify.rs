@@ -413,6 +413,7 @@ fn knob_validators() -> [(&'static str, KnobValidator); 4] {
 const NOT_PATCHABLE: &[&str] = &[
     crate::providers::session_model_handle::MODEL_PIN_SESSION_KEY,
     crate::providers::session_model_handle::MODEL_PIN_PROVIDER_SESSION_KEY,
+    crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY,
 ];
 
 /// The first key in `bag` that this endpoint refuses to write at all.
@@ -1047,6 +1048,10 @@ mod tests {
         let mut m3 = serde_json::Map::new();
         m3.insert("model_pin".to_string(), serde_json::Value::Null);
         assert_eq!(first_foreign_knob(&m3), Some("model_pin"));
+
+        let mut m4 = serde_json::Map::new();
+        m4.insert("model_pin_generation".to_string(), serde_json::json!("7"));
+        assert_eq!(first_foreign_knob(&m4), Some("model_pin_generation"));
 
         let mut ok = serde_json::Map::new();
         ok.insert("exec_tier".to_string(), serde_json::json!("auto"));

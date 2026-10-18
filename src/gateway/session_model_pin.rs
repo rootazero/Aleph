@@ -72,10 +72,6 @@ impl StoreBackedPinSink {
 }
 
 impl SessionPinSink for StoreBackedPinSink {
-    fn persist(&self, session_key: &str, pref: Option<&SessionModelPref>) {
-        self.persist_with_generation(session_key, pref, 0);
-    }
-
     fn persist_with_generation(
         &self,
         session_key: &str,
@@ -101,7 +97,10 @@ impl SessionPinSink for StoreBackedPinSink {
             return;
         };
         handle.spawn(async move {
-            if let Err(e) = store.patch_session(&key, &patch).await {
+            if let Err(e) = store
+                .patch_session_if_model_pin_generation_newer(&key, &patch, generation)
+                .await
+            {
                 warn!(error = %e, "Failed to persist session model pin");
             }
         });
@@ -169,6 +168,21 @@ mod tests {
         assert_eq!(m[MODEL_PIN_GENERATION_SESSION_KEY], "8");
     }
 
+    #[test]
+    fn generation_zero_remains_the_legacy_compatibility_value() {
+        let patch = StoreBackedPinSink::patch_for_at_generation(
+            Some(&SessionModelPref {
+                provider: None,
+                model: "legacy-model".to_string(),
+            }),
+            0,
+        );
+        assert_eq!(
+            keys(&patch)[MODEL_PIN_GENERATION_SESSION_KEY],
+            "0",
+            "legacy persistence must retain generation zero"
+        );
+    }
     #[test]
     fn a_clear_nulls_both_keys_rather_than_omitting_them() {
         let patch = StoreBackedPinSink::patch_for(None);
