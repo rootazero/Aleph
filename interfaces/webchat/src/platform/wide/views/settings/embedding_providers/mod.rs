@@ -2,9 +2,9 @@
 //!
 //! ## Layout
 //! - this module — top-level `EmbeddingProvidersView` (left list + right pane router) + `EmptyState`
-//! - [`detail_panel`] — `ProviderDetailPanel` for selected provider (embeds [`reembed_card`])
-//! - [`reembed_card`] — `ReembedMigrationCard` driving the memory.reembed.* event subscription
-//! - [`add_panel`] — `AddProviderPanel` for custom (non-preset) endpoints
+//! - `detail_panel` — `ProviderDetailPanel` for selected provider (embeds `reembed_card`)
+//! - `reembed_card` — `ReembedMigrationCard` driving the memory.reembed.* event subscription
+//! - `add_panel` — `AddProviderPanel` for custom (non-preset) endpoints
 
 mod add_panel;
 mod detail_panel;

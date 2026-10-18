@@ -211,7 +211,7 @@ pub struct GraphNode {
     pub body: Option<String>,
     /// Declared pace class ("per_turn" | "hourly" | "nightly" | "weekly" |
     /// "monthly" | free text; "daily" is also accepted as a legacy alias of
-    /// "nightly" — see [`cadence_rank`]). Used by lint to flag fast loops
+    /// "nightly" — see `cadence_rank`). Used by lint to flag fast loops
     /// owning slow loops' references; free text simply opts out of that check.
     pub cadence: Option<String>,
     pub origin: Origin,

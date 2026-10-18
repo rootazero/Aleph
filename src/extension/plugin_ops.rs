@@ -11,7 +11,7 @@ impl ExtensionManager {
     /// Call a tool on a runtime plugin (Node.js or WASM).
     ///
     /// The plugin's module must already be mounted (see
-    /// [`Self::ensure_runtime_mounted`]).
+    /// `Self::ensure_runtime_mounted`).
     /// Acquires a write lock on the plugin loader for IPC. The guest call is
     /// CPU-bound untrusted code, so it runs on the blocking pool (bounded by
     /// the Extism manifest timeout) rather than on an async worker thread.

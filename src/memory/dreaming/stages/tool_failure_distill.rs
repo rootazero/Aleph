@@ -1,7 +1,7 @@
 //! `ToolFailureDistill` stage — turns the agent's own tool failures into lessons.
 //!
 //! Every tool call, success or failure, is already captured as a
-//! [`RawMemorySource::ToolInvocation`] row by
+//! `RawMemorySource::ToolInvocation` row by
 //! [`crate::memory::tool_signal_sink::RawMemoryToolSink`]. Until this stage
 //! existed those rows had exactly one reader — the read-only `insights.tools`
 //! admin RPC — so the failure half of the agent's experience produced a

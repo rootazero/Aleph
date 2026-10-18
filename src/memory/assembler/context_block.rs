@@ -3,7 +3,7 @@
 //!
 //! Why this exists
 //! ---------------
-//! [`render::render_with`] turns a [`MemoryEnvelope`](super::envelope::MemoryEnvelope)
+//! `render::render_with` turns a [`MemoryEnvelope`](super::envelope::MemoryEnvelope)
 //! into a block of recalled notes / raw fragments / session summaries. That
 //! block is delivered verbatim as the transient trailing recall message
 //! (`HarnessDeps::recall_context`). Without framing, the model cannot tell

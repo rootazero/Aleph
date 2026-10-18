@@ -12,7 +12,16 @@ struct PiiPatterns {
     ssn: Regex,
     credit_card: Regex,
     api_key: Regex,
+    /// `Authorization: <scheme> <multi-word credential>` — split out from
+    /// `generic_secret` so the latter can stay single-token. Without this
+    /// split, `generic_secret` either over-consumed into the next `key=value`
+    /// pair (the unquoted-multi-token arm was too greedy) or under-matched
+    /// `Authorization: ApiKey xyz123` (the single-token arm stopped at the
+    /// first space, leaving the credential unredacted).
+    authorization_multi: Regex,
     /// Generic `key = value` / `key: value` credential assignment, vendor-agnostic.
+    /// Preserves the key name; redacts only the value. Conservative over-match
+    /// is acceptable (this module favours false positives over leaks).
     generic_secret: Regex,
     china_mobile: Regex,
     china_id: Regex,
@@ -55,6 +64,22 @@ fn get_patterns() -> &'static PiiPatterns {
         // reject the very credential we are trying to catch. The body
         // length of 8 still bounds the match.
         api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|Bearer\s+[a-zA-Z0-9._\-]{8,}|Basic\s+[A-Za-z0-9+/]{8,}=*)").expect("static PII regex is valid"),
+        // `Authorization: <scheme> <multi-word credential>` where the
+        // credential is one or more whitespace-separated tokens (e.g.
+        // `Authorization: Token some secret credential value`). The
+        // value arm uses `[^\s",}]+` to bound each token (no quotes, no
+        // commas, no closing braces) and `(?:\s+...)+` to chain them.
+        // Scheme is required (one of the well-known auth schemes) so
+        // `Authorization: dGVzdA` does not over-match into a single
+        // `Authorization` key/value pair.
+        //
+        // Run BEFORE `generic_secret` so the multi-word value is
+        // consumed in full; otherwise `generic_secret` would only
+        // redact the first token and leave the credential visible.
+        authorization_multi: Regex::new(
+            r#"(?i)(authorization)(\s*[:=]\s*)(Bearer|Basic|ApiKey|Token|Digest|Auth)\s+[^\s",}]+(?:\s+[^\s",}]+)*"#,
+        )
+        .expect("static PII regex is valid"),
         // Catch arbitrary secrets assigned to a credential-like key, regardless of
         // vendor prefix: `password=...`, `api_key: ...`, `token = "..."`, etc.
         // Preserves the key name; redacts only the value. Conservative over-match
@@ -64,22 +89,26 @@ fn get_patterns() -> &'static PiiPatterns {
         // `Authorization: api key <value>` is caught.
         //
         // The value arm has three alternatives:
-        //   1. Double- or single-quoted strings (any content, including spaces
-        //      inside the quotes). So `password = "my secret phrase"` is fully
-        //      redacted, not just the first word.
-        //   2. Multiple space-separated unquoted tokens. Required to catch
-        //      `Authorization: <scheme> <credential>` headers where the
-        //      credential follows the scheme word (the previous single-token
-        //      arm left the credential unredacted).
-        //   3. A single unquoted token (the legacy behaviour).
+        //   1. Double-quoted string — content captured in group 4 (used by the
+        //      callback to decide whether to preserve the surrounding quotes).
+        //      So `password = "my secret phrase"` is fully redacted; for JSON
+        //      payloads like `{"token":"xyz"}` the callback re-adds the quotes
+        //      so the output is still valid JSON: `{"token":"[REDACTED]"}`.
+        //   2. Single-quoted string — content captured in group 5 (same
+        //      callback logic).
+        //   3. A single unquoted token `[^\s",}]+`. Intentionally NOT
+        //      multi-token here: the previous `(?:\s+...)*` form was too
+        //      greedy and would swallow the next `key=value` pair, e.g.
+        //      `db_password=hunter2 host=localhost` redacted both. Multi-word
+        //      values for the `Authorization` key specifically are handled
+        //      by the `authorization_multi` regex above.
         //
         // The key arm also accepts optional surrounding `"` so JSON-shaped
-        // payloads like `{"token":"xyz"}` are matched: previously the closing
-        // `"` of the JSON key was consumed by the regex's separator group
-        // only when it was `:`, but the optional-key-quote lets us attach to
-        // the actual JSON key span and redacted its value cleanly.
+        // payloads like `{"token":"xyz"}` are matched: the key is then
+        // `"token"` (with quotes), and the callback uses that signal to
+        // preserve the value's quotes in the replacement.
         generic_secret: Regex::new(
-            r#"(?i)("?(?:password|passwd|pwd|secret|token|api[_\-\s]?key|access[_\-\s]?token|authorization)"?)(\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s",}]+(?:\s+[^\s",}]+)*)"#,
+            r#"(?i)("?(?:password|passwd|pwd|secret|token|api[_\-\s]?key|access[_\-\s]?token|authorization)"?)(\s*[:=]\s*)("((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|[^\s",}]+)"#,
         )
         .expect("static PII regex is valid"),
         china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").expect("static PII regex is valid"),
@@ -92,13 +121,13 @@ fn get_patterns() -> &'static PiiPatterns {
 /// Scrub personally identifiable information from text
 ///
 /// Replaces PII patterns with placeholder tokens:
-/// - Email addresses → [EMAIL]
-/// - Phone numbers → [PHONE]
-/// - SSN/Tax IDs → [SSN]
-/// - Credit card numbers → [`CREDIT_CARD`]
-/// - API keys → [REDACTED]
-/// - Chinese ID cards → [`ID_CARD`]
-/// - Bank card numbers → [`BANK_CARD`]
+/// - Email addresses → \[EMAIL\]
+/// - Phone numbers → \[PHONE\]
+/// - SSN/Tax IDs → \[SSN\]
+/// - Credit card numbers → `CREDIT_CARD`
+/// - API keys → \[REDACTED\]
+/// - Chinese ID cards → `ID_CARD`
+/// - Bank card numbers → `BANK_CARD`
 #[must_use]
 pub fn scrub_pii(text: &str) -> String {
     let patterns = get_patterns();
@@ -109,11 +138,43 @@ pub fn scrub_pii(text: &str) -> String {
         .api_key
         .replace_all(&scrubbed, "[REDACTED]")
         .to_string();
+    // Multi-word Authorization values: `Authorization: <scheme> <credential...>`.
+    // Must run BEFORE `generic_secret` so the whole `scheme + credential` span
+    // is consumed; `generic_secret` would only redact the first token.
+    scrubbed = patterns
+        .authorization_multi
+        .replace_all(&scrubbed, "${1}${2}[REDACTED]")
+        .to_string();
     // Generic credential assignments (keeps the key and separator, redacts the
-    // whole value — including any surrounding quotes and spaces inside quotes).
+    // value). The callback decides whether to preserve the value's surrounding
+    // quotes (JSON-shaped payload, where output must still parse as JSON) or
+    // replace the entire value verbatim (everything else, where the quotes
+    // are stylistic and the secret content is what we want gone).
     scrubbed = patterns
         .generic_secret
-        .replace_all(&scrubbed, "${1}${2}[REDACTED]")
+        .replace_all(&scrubbed, |caps: &regex::Captures<'_>| {
+            let key = &caps[1];
+            let sep = &caps[2];
+            let key_has_quote = key.starts_with('"') || key.starts_with('\'');
+            if key_has_quote {
+                // JSON-shaped: keep the value's surrounding quotes so the
+                // output is still valid JSON. `caps.get(4)` is the
+                // double-quoted content arm; `caps.get(5)` is single-quoted.
+                if caps.get(4).is_some() {
+                    format!("{key}{sep}\"[REDACTED]\"")
+                } else if caps.get(5).is_some() {
+                    format!("{key}{sep}'[REDACTED]'")
+                } else {
+                    // Quoted key but unquoted value — shouldn't normally
+                    // happen, but fall through to the simple replacement.
+                    format!("{key}{sep}[REDACTED]")
+                }
+            } else {
+                // Non-JSON: replace the entire value (including any
+                // surrounding quotes that were part of the match).
+                format!("{key}{sep}[REDACTED]")
+            }
+        })
         .to_string();
     scrubbed = patterns
         .china_id

@@ -13,7 +13,7 @@
 //! confident false claim about a runtime the user does not have costs more than
 //! a blank.
 //!
-//! So the state machine has three states, not two: [`BannerState::Unknown`]
+//! So the state machine has three states, not two: `BannerState::Unknown`
 //! exists precisely so that "I could not find out" has somewhere to go that is
 //! not "ready". Every failure mode lands there — refusal, disconnect, and a
 //! response this build cannot parse are all things the banner does not know the
@@ -37,7 +37,7 @@
 //!   READY over a `browser_open` that cannot launch anything.
 //!
 //! So the requirement is derived from the driver the operator has selected, and
-//! the caller passes it in: [`required_runtimes`] is the table, and `None` from
+//! the caller passes it in: `required_runtimes` is the table, and `None` from
 //! it means "this build does not know what that driver needs" — which renders
 //! nothing rather than a verdict (判据 §8).
 //!

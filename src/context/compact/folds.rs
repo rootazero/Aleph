@@ -5,15 +5,15 @@
 //! it covered, the summary that replaced it, the strategy and trigger, and
 //! the token accounting the fold ledger (§3.1c) reads. The registry builds no
 //! parallel table — `session_events` is the single source of truth — so this
-//! module is a pure derived view: [`list_folds`] scans an event slice and
-//! returns one [`FoldRecord`] per fold, in seq order.
+//! module is a pure derived view: `list_folds` scans an event slice and
+//! returns one `FoldRecord` per fold, in seq order.
 //!
 //! Two sources feed the view:
 //!
-//! - [`SessionEvent::FoldRecorded`] — the explicit record, emitted in the
+//! - `SessionEvent::FoldRecorded` — the explicit record, emitted in the
 //!   SAME `emit_batch` as the `CompactionPerformed` it annotates (both land
 //!   or neither does), carrying the token accounting the checkpoint lacks.
-//! - [`SessionEvent::CompactionPerformed`] with no matching `FoldRecorded` —
+//! - `SessionEvent::CompactionPerformed` with no matching `FoldRecorded` —
 //!   every session compacted before this module existed. These derive a
 //!   `Legacy` fold with zeroed token accounting and a deterministic fold_id,
 //!   so old sessions stay addressable without a migration.

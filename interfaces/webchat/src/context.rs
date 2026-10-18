@@ -1229,7 +1229,7 @@ impl DashboardState {
     /// The pattern is filed in `subscribed_topics` only **after** the RPC
     /// succeeded on the connection it was issued on: the ledger is what a
     /// reconnect replays, so it records what the server accepted, not what was
-    /// asked for (see [`subscribe_recorded`]). A failed subscribe therefore
+    /// asked for (see `subscribe_recorded`). A failed subscribe therefore
     /// returns `Err` and leaves no entry - the caller decides whether to retry.
     /// A subscribe whose reply lands after a reconnect is re-issued once on the
     /// new socket, because the replay (which only knows ledger entries) will
@@ -1339,7 +1339,7 @@ impl DashboardState {
     ///
     /// # Why this waits
     ///
-    /// [`Self::send_rpc`] answers "the socket is not up yet" with
+    /// `Self::send_rpc` answers "the socket is not up yet" with
     /// `Err("Not connected")` — a value indistinguishable from a verdict about
     /// the call. Every mount-time load in the Panel inherited that confusion: a
     /// page opened by URL or reloaded (as opposed to navigated to inside the

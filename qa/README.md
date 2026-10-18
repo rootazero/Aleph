@@ -1963,6 +1963,16 @@ widened a narrowly-scoped change into that question. Tracked in
     单测够不着（并行测试下的 WARN 捕获会漏），这里是它唯一的证据。
   - **它不覆盖**：真实厂商。mock 执行的是 DeepSeek 写在文档里的规则、按 Aleph 适配器读法编码的
     Anthropic wire，证不出厂商真的接受 Aleph 发的东西（U1：不做线上探测）。
+- **`capability_hpre`** — 改 `src/capability/{descriptor,facade,backend,ownership,effect_claim}.rs`、
+  `crates/agent-detect` 的 capability slot 装载、`src/builtin_tools/` 暴露的 capability 工具名或
+  MCP stdio 装载路径前跑 `{disabled,initial,replacement,ownership,delivery,source,close,negative,tls}`。
+  真实 `aleph-server` 启起来 + disposable stdio MCP server，断言在 **consumer 边界**（provider request log 上的
+  `tools[]` 列表与 disposable server 写入的 handler-effect receipt）而非日志：feature off 时 DIAG 名
+  不在 `tools[]` 里、`initial` 投影的 marker 进入第一轮、replacement 把旧名换下新名、ownership 失效阻断同
+  名复用、`close` 把已发 lease 收回；`tls` 是客户端证书拒接的负向臂。设计前提与全部断言来源在
+  `docs/superpowers/plans/2026-10-07-capability-phase4-h-pre-runtime-mount.md`；fixture 自己的
+  `run.sh:2-7` 写明它是 phase 4 h-pre 的诊断补充，**不在 `cargo test` 里**——本节的目的就是给它一个能被
+  编辑者 grep 到的入口。
 
 ## `browser_live` — Panel browser workspace gates (real runner, fail-closed)
 <!-- browser-live-docs:begin -->

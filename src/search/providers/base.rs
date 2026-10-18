@@ -17,8 +17,8 @@
 //!   `tavily [provider] tavily API error: 400 Bad Request`. The vendor had
 //!   said *which* parameter it disliked, in the body, and we threw it away.
 //!
-//! Both are enforced structurally rather than by convention: [`send`] is the
-//! only public way to dispatch, [`check_status`] is private to this module,
+//! Both are enforced structurally rather than by convention: `send` is the
+//! only public way to dispatch, `check_status` is private to this module,
 //! and `error_funnel_census.rs` asserts at the source level that no provider
 //! dispatches a request or maps a status code on its own.
 

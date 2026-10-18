@@ -5,7 +5,7 @@
 //! parsing config.toml, this file must be loaded and the slot below
 //! initialized BEFORE config.toml is parsed.
 //!
-//! All fields are Option<T> so users only need to specify the defaults they
+//! All fields are Option`&lt;T&gt;` so users only need to specify the defaults they
 //! want to change. Missing fields fall back to the hard-coded defaults.
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};

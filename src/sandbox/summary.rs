@@ -270,7 +270,7 @@ impl SandboxSummary {
 
     /// The network posture, as the **only** place that sentence is produced.
     ///
-    /// It used to be produced twice: [`Self::lines`] pushed it into the stable
+    /// It used to be produced twice: `Self::lines` pushed it into the stable
     /// `SecurityLayer` @600 half *and* this method rendered it again into the
     /// dynamic `OperatingEnvelopeLayer` @1758 half. The duplication was
     /// defended as "the session rule and the rule this run actually applies",

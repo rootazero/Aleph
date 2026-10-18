@@ -18,7 +18,7 @@
 //! * **inbound** — what you gave the agent,
 //! * **outbound** — what it produced along the way,
 //! * **workspace files** — the project tree, folded in at the foot
-//!   ([`files::WorkspaceFiles`]) rather than living as a second browser.
+//!   (`files::WorkspaceFiles`) rather than living as a second browser.
 //!
 //! Freshness comes from the gateway's content-free `session.artifact` ping: the
 //! frame carries only the session key, so every arrival triggers a re-read of

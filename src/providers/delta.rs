@@ -7,7 +7,7 @@
 //! - [`DeltaCollector`] — accumulates deltas into a [`ProviderResponse`]
 //! - [`IndexIdTracker`] — maps u64 stream index → String id (for OpenAI/Anthropic streaming)
 //! - [`DeltaSink`] — observer trait for reactive consumers
-//! - [`response_to_delta_stream`] / [`response_to_delta_stream_result`] — bridge from non-streaming responses
+//! - [`response_to_delta_stream`] / `response_to_delta_stream_result` — bridge from non-streaming responses
 //!
 //! # Error Semantics
 //!
@@ -178,7 +178,7 @@ impl DeltaCollector {
     /// Consume the collector and produce a [`ProviderResponse`].
     ///
     /// Malformed tool arguments are handled gracefully: if `serde_json::from_str`
-    /// fails, a salvage pass ([`salvage_malformed_args`]) first repairs the
+    /// fails, a salvage pass (`salvage_malformed_args`) first repairs the
     /// *emission defects* models are known to produce (raw control characters
     /// inside string literals, invalid escape sequences, trailing commas) and
     /// retries the parse. Only when the payload is still unparseable — the

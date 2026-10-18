@@ -79,7 +79,7 @@ impl ScopedToolService {
 
     /// Mark which exact `allow` entries of [`Self::with_tool_permissions`]'s
     /// policy are a `/<skill>`'s pre-grant rather than a person's decision —
-    /// see [`Self::pregranted`]. The names are the ones
+    /// see `Self::pregranted`. The names are the ones
     /// `turn_permissions::apply_pregrant` folded into that same policy.
     #[must_use]
     pub fn with_pregranted(mut self, names: BTreeSet<String>) -> Self {
@@ -88,7 +88,7 @@ impl ScopedToolService {
     }
 
     /// Attach the effective execution tier for this turn. The tier decides
-    /// every tool no explicit override names — see [`Self::permission_for`].
+    /// every tool no explicit override names — see `Self::permission_for`.
     #[must_use]
     pub fn with_exec_tier(mut self, tier: crate::config::types::policies::ExecTier) -> Self {
         self.exec_tier = Some(tier);
@@ -96,7 +96,7 @@ impl ScopedToolService {
     }
 
     /// Mark this service as serving an unattended (autonomous continuation)
-    /// run. Confirm-gated tools then fail closed. See [`Self::unattended`].
+    /// run. Confirm-gated tools then fail closed. See `Self::unattended`.
     #[must_use]
     pub fn with_unattended(mut self, unattended: bool) -> Self {
         self.unattended = unattended;

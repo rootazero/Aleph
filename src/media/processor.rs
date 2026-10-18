@@ -12,7 +12,7 @@
 //! Each attachment is processed independently — a single failure produces a
 //! fallback text block, never an abort.
 //!
-//! Every non-native path produces *self-describing* text via [`media_summary`].
+//! Every non-native path produces *self-describing* text via `media_summary`.
 //! It used to emit a `{{media:<kind>:<id>}}` placeholder instead, which was a
 //! dangling handle: the registry that resolved those ids had no production
 //! consumer, so the model received an opaque token naming neither the file nor

@@ -9,7 +9,7 @@
 //! offline `aleph-server doctor` builds, and a check that always fires there
 //! turns that command's exit code into a constant; see that function's doc.
 //!
-//! Answering "is this path there?" is [`super::check::Presence`]'s job, never
+//! Answering "is this path there?" is `super::check::Presence`'s job, never
 //! `Path::exists()` — see the `presence_discipline` test module at the foot of
 //! this file for why, and for the guard that keeps it that way.
 

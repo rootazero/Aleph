@@ -17,7 +17,7 @@
 //!    `render_agent_call` (a header-stripped export re-imports its opts intact).
 //!    A `schema` may be an inline literal *or* a `schema: NAME_SCHEMA` reference
 //!    to a hoisted top-level `const` — the engineering format's convention.
-//!    Both are normalised by the bounded data parser in [`super::consts`], which
+//!    Both are normalised by the bounded data parser in `super::consts`, which
 //!    accepts JS-lax literals (bare keys, single quotes, trailing commas) that
 //!    plain JSON parsing rejects, and *abstains* on any expression value.
 //!    A `parallel([...])` block is reconstructed into sibling steps of one DAG
@@ -29,9 +29,9 @@
 //! `dropped` — an unresolved / non-data `schema`, and a count of `agent()` calls
 //! skipped for a dynamic (non-literal) prompt — never hidden (P7).
 //!
-//! **Layout.** [`lexer`] holds the literal readers and the two whole-source
-//! rewrites; [`opts`] holds the `agent(…, { … })` opts object; [`scan`] turns a
-//! body into ordered [`ScanEvent`]s. This file keeps the three entry paths and
+//! **Layout.** `lexer` holds the literal readers and the two whole-source
+//! rewrites; `opts` holds the `agent(…, { … })` opts object; `scan` turns a
+//! body into ordered `ScanEvent`s. This file keeps the three entry paths and
 //! the one thing that needs the whole picture — turning those events into a
 //! manifest (DAG layers, phase plan, `dropped`).
 

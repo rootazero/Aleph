@@ -105,7 +105,7 @@ pub struct BrowserQaArgs {
     #[serde(default = "default_true")]
     pub check_console: bool,
     /// Check for new error-level lines — console.error AND uncaught
-    /// exceptions, which the cdp backend folds into the same [error] ring
+    /// exceptions, which the cdp backend folds into the same \[error\] ring
     /// (default: true). Only the cdp backend subscribes
     /// Runtime.exceptionThrown; other drivers land this check in
     /// `unverified` with the driver named.
@@ -118,7 +118,7 @@ pub struct BrowserQaArgs {
     #[serde(default = "default_true")]
     pub check_network: bool,
     /// Attach an evidence screenshot when the run does not pass cleanly
-    /// (default: false). Saved under ~/.aleph/qa/<profile>/ and named in
+    /// (default: false). Saved under ~/.aleph/qa/`&lt;profile&gt;`/ and named in
     /// `evidence.screenshot_path`.
     #[serde(default)]
     pub screenshot: bool,

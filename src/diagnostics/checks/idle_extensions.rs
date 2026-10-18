@@ -16,7 +16,7 @@
 //! ## Registered by the daemon faces only, and never silently narrowed
 //!
 //! Like `providers/connectivity`, this check reaches the registry through an
-//! explicit builder ([`DiagnosticEngine::with_extension_usage_check`]) rather
+//! explicit builder (`DiagnosticEngine::with_extension_usage_check`) rather
 //! than `default_registry()` — the offline `aleph-server doctor` command has no
 //! MCP actor and no extension manager to ask, so it does not run this check at
 //! all. The two daemon faces (the `doctor` tool and `diagnostics.run`) both

@@ -14,7 +14,7 @@
 //! `FsScope` closes both holes the same way `projects::run_context` solved
 //! project-root inheritance: a task-local published for the duration of the
 //! run. File tools consult it at their single path-resolution chokepoint
-//! ([`crate::builtin_tools::file_ops::check_and_resolve_path`]), so no tool
+//! (`crate::builtin_tools::file_ops::check_and_resolve_path`), so no tool
 //! constructor signature changes.
 //!
 //! Children invoked synchronously (normal await chains, `tokio::time::timeout`)

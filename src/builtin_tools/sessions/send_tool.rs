@@ -702,7 +702,7 @@ impl Default for SessionsSendTool {
 
 /// Canonical concurrency-claim key for a `session_send` target: the SAME
 /// gateway session key the send actually executes under
-/// ([`session_key_to_gateway`]), rendered to its stable string.
+/// (`session_key_to_gateway`), rendered to its stable string.
 ///
 /// The claim MUST key on the gateway form rather than the raw spelling,
 /// because *that* is the key the send executes on: two raw spellings that
@@ -712,7 +712,7 @@ impl Default for SessionsSendTool {
 /// **The dm/group example this doc used to give is no longer one.** It said
 /// `dm` and `group` keys with the same agent + peer "both collapse to `peer`"
 /// and used that as the whole justification — but PR-6 / BT-D-R4-20 removed
-/// that collapse deliberately (see [`session_key_to_gateway`]): it made a
+/// that collapse deliberately (see `session_key_to_gateway`): it made a
 /// delegated send fork a seam-private `peer:` thread instead of continuing the
 /// visible conversation. The reasoning above survives the example's removal;
 /// the example did not, and the test that pinned it was asserting a rule the

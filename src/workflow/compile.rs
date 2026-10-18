@@ -5,7 +5,7 @@
 //! the existing [`TeamDispatcher`](crate::teams::dispatcher::TeamDispatcher).
 //! No new scheduler, no reasoning — a pure mapping (R10 / R7 safe):
 //!
-//! - each [`WorkflowStepDef`] → one `coord_task` owned by `step.agent`
+//! - each `WorkflowStepDef` → one `coord_task` owned by `step.agent`
 //! - `step.depends_on` → `coord_task.blocked_by` (cycle-checked by the store)
 //! - tasks are tagged `{"managed_by": "dispatcher"}` so the autonomous loop
 //!   picks them up; upstream step outputs flow into each step automatically
@@ -71,8 +71,8 @@ pub const WORKFLOW_PHASE_KEY: &str = "workflow_phase";
 pub const WORKFLOW_SCHEMA_KEY: &str = "workflow_schema";
 /// Metadata key carrying the run-global welded strategy frame on every
 /// materialised **agent** step. Stamped once per run (beside [`WORKFLOW_RUN_ID_KEY`])
-/// from the planned [`Strategy`](crate::strategy::Strategy) via
-/// [`render_workflow_global_frame`](crate::strategy::render_workflow_global_frame);
+/// from the planned `Strategy` via
+/// `render_workflow_global_frame`;
 /// `build_handoff_context` renders it as a `## Global Strategy` section after the
 /// task block. Absent when no strategy was planned (byte-identical legacy rows).
 /// Clarify steps run no agent, so they are never stamped.
@@ -320,7 +320,7 @@ pub struct MaterializedWorkflow {
 /// List the parallel groups declared by `manifest`, in declaration order
 /// (the order the first member of each group first appears in the step
 /// list). Each inner `Vec` is the set of step ids that share a
-/// [`WorkflowStepDef::parallel_group`] label, sorted by the position of
+/// `WorkflowStepDef::parallel_group` label, sorted by the position of
 /// each member in `manifest.steps`. Steps with no `parallel_group` label
 /// are omitted entirely; a label declared on only one step is reported as
 /// a one-member group (the labelling is the authoritive part — the count

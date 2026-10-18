@@ -686,11 +686,11 @@ impl ChannelRegistry {
     /// attached [`delivery_store`](Self::with_delivery_store), if any, for
     /// background retry — then the original error is still returned so callers
     /// observe unchanged semantics. When no store is attached this is a
-    /// zero-overhead passthrough to [`send_attempt`](Self::send_attempt).
+    /// zero-overhead passthrough to `send_attempt`.
     ///
     /// When a store *is* attached, this message's conversation gets its queued
     /// backlog flushed first
-    /// ([`flush_conversation`](super::delivery_queue::flush_conversation)) so a
+    /// (`flush_conversation`) so a
     /// live send cannot overtake replies that failed earlier. That flush is
     /// deliberately invisible from here: it settles nothing this call reports
     /// on, and whether it ran or was skipped, the value returned below is the

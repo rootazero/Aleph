@@ -19,7 +19,7 @@
 //!     **no `find_chromium`**: a `cdp` profile on `Engine::Chromium` still
 //!     needs `playwright-cli`, so that half is `managed_driver_ready`'s
 //!     question and asking it twice would license a launch the launcher
-//!     refuses. [`cdp_driver_ready`] carries the reading.
+//!     refuses. `cdp_driver_ready` carries the reading.
 //!
 //! # Why the third question was added, and what it cost to not have it
 //!
@@ -49,7 +49,7 @@
 //! the install command; this gate only decides whether the family is worth
 //! offering at all.
 //!
-//! [`self::tests::every_auto_injected_profile_uses_a_driver_this_probe_asks_about`]
+//! `self::tests::every_auto_injected_profile_uses_a_driver_this_probe_asks_about`
 //! is the guard that would have caught the flip: it derives its question from
 //! the profiles `ProfileManager::new` actually injects rather than from a
 //! remembered sentence, so the default moving into an uncovered set reddens

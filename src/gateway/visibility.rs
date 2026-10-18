@@ -449,7 +449,7 @@ pub async fn ambient_transcript_visible(store: &dyn SessionStore, session_key: &
 }
 
 /// Whether a partition-composed `agent_id` (spec §11-1c, Task 4's grammar:
-/// `<base>__<suffix>` via [`crate::memory::project_scope::NS_SEP`]) is
+/// `<base>__<suffix>` via `crate::memory::project_scope::NS_SEP`) is
 /// visible to the current caller.
 ///
 /// Split ONCE on the namespace separator:

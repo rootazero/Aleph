@@ -204,7 +204,7 @@ pub fn decline_global_session_service(because: &'static str) {
 /// Fetch the process-wide `SessionService`, if one has been installed.
 ///
 /// ⚠️ `None` here says nothing about whether boot reached this slot — that is
-/// the whole point of the round. Ask [`global_session_service_slot`]`().outcome()`
+/// the whole point of the round. Ask `global_session_service_slot``().outcome()`
 /// for that; never infer it from this function.
 #[inline]
 pub fn global_session_service() -> Option<Arc<dyn SessionService>> {

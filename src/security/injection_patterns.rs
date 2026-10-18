@@ -38,11 +38,11 @@
 //! (`{0,n}`) keep the compiled automaton small.
 //!
 //! Invisible / bidi character smuggling is intentionally NOT handled by the raw
-//! [`scan`] / [`first_threat_message`] entry points: `content_sanitizer` folds
+//! `scan` / `first_threat_message` entry points: `content_sanitizer` folds
 //! homoglyphs + strips invisibles via `unicode_guard` BEFORE it scans, so on the
 //! external-content path this library always sees canonicalized text. Consumers
 //! that hold *raw* model-authored text (the memory-write tools) must instead
-//! call [`first_threat_message_canonicalized`], which applies the same fold +
+//! call `first_threat_message_canonicalized`, which applies the same fold +
 //! strip first — otherwise a zero-width-split keyword (`ig<ZWSP>nore …`) or a
 //! Cyrillic homoglyph evades the scan while the model still reconstructs the
 //! phrase on recall.

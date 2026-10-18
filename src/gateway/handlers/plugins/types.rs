@@ -98,7 +98,7 @@ pub struct InstallFromZipParams {
 
 /// Build the wire row for one marketplace entry.
 ///
-/// `installable` comes from [`PluginSearchResult::installable_path`] — the same
+/// `installable` comes from `PluginSearchResult::installable_path` — the same
 /// call `install_to_scope` makes — rather than from re-reading the source enum
 /// here. Two readings drift, and the direction they drift in is a catalogue
 /// that offers an Install button the install call then refuses.
@@ -124,7 +124,7 @@ pub fn marketplace_row(
 ///
 /// The sibling above describes a plugin inside a marketplace; this one
 /// describes the marketplace itself. `removable` comes from
-/// [`MarketplaceManager::removal_refusal`] — the same call `remove` makes —
+/// `MarketplaceManager::removal_refusal` — the same call `remove` makes —
 /// rather than from comparing `name` against `"aleph-official"` here. Two
 /// readings drift, and the direction they drift in is a list that offers a
 /// Remove button the remove call then refuses; the built-in marketplace is

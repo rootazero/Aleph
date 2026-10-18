@@ -22,7 +22,7 @@
 //! R7 stance: this is data. Nothing here silently reroutes a request. It makes
 //! the retirement *visible* — to the picker, to `list_models`, to
 //! `select_model`'s refusal message, and (most usefully) to the drift guard in
-//! [`super::drift_tests`], which fails the build if a preset ever ships a deprecated
+//! `super::drift_tests`, which fails the build if a preset ever ships a deprecated
 //! id as its default.
 //!
 //! # Retirement has a scope, and it is not always global
@@ -287,7 +287,7 @@ const LIFECYCLE_TABLE: &[LifecycleRow] = &[
 /// `None` means the caller has no provider context — only vendor-wide rows
 /// apply, because "retired on Groq" says nothing about an unqualified id.
 ///
-/// Resolution order: host-scoped [`LIFECYCLE_TABLE`] rows for this provider,
+/// Resolution order: host-scoped `LIFECYCLE_TABLE` rows for this provider,
 /// then vendor-wide rows, then a preview marker in the id, then
 /// [`ModelLifecycle::ACTIVE`]. Never returns `None` — "we have nothing
 /// recorded" and "generally available" are the same answer for every consumer,

@@ -62,7 +62,7 @@ const DECAY_WRITE_EPSILON: f32 = 0.02;
 // Stage struct
 // ---------------------------------------------------------------------------
 
-/// `NoteDecay` stage, parameterised by the runtime [`MemoryDecayPolicy`] so the
+/// `NoteDecay` stage, parameterised by the runtime `MemoryDecayPolicy` so the
 /// previously-dead `memory.memory_decay.*` config finally drives behaviour.
 ///
 /// `half_life_days` replaces the old hard-coded `DECAY_TAU_DAYS = 90`,

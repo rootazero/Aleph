@@ -80,7 +80,7 @@ pub fn set_global_in_flight_tool_calls(reg: InFlightToolCalls) {
 /// Read the process-wide in-flight registry, if installed.
 ///
 /// ⚠️ `None` says nothing about whether boot reached this slot. Ask
-/// [`global_in_flight_tool_calls_slot`]`().outcome()` for that.
+/// `global_in_flight_tool_calls_slot``().outcome()` for that.
 #[inline]
 pub fn global_in_flight_tool_calls() -> Option<InFlightToolCalls> {
     GLOBAL_REGISTRY.get().cloned()

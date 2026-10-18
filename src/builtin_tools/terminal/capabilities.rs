@@ -3,7 +3,7 @@
 //! Six read-only capabilities (`list`, `read`, `status`, `wait`, `explain`,
 //! `attach`), one registry entry each, replace the former single `terminal`
 //! tool and its `action` selector. All six handlers funnel through the one
-//! [`invoke_observation`] entrypoint, so the operator gate, the envelope and
+//! `invoke_observation` entrypoint, so the operator gate, the envelope and
 //! the tombstone adapter exist exactly once.
 //!
 //! The legacy `terminal{action}` shape survives only as a compatibility

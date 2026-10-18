@@ -144,7 +144,7 @@ fn tts_candidates(
 /// 3. First registered speech provider
 ///
 /// If the resolved provider yields no audio, one fallback hop to another
-/// registered speech provider is attempted ([`TTS_MAX_PROVIDERS`]).
+/// registered speech provider is attempted (`TTS_MAX_PROVIDERS`).
 ///
 /// Returns `None` if no provider is configured or every candidate fails.
 pub async fn generate_tts(

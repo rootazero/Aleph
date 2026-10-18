@@ -35,7 +35,7 @@ pub(crate) fn marker_path(name: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Home directory the markers live under. Production: the real user home.
-/// Test builds: ONLY the owned temp root installed by [`test_home::TestHome`]
+/// Test builds: ONLY the owned temp root installed by `test_home::TestHome`
 /// on the current thread, otherwise `None` — a test can never fall back to (or
 /// be redirected by env vars to) the real home, so marker I/O in tests is
 /// structurally confined to a temp dir we created.
@@ -153,7 +153,7 @@ fn target_marker() -> Option<std::path::PathBuf> {
 /// notification bridge runs in Rust and cannot read it (and a remote-origin
 /// Panel cannot invoke shell commands — the capability scopes IPC to loopback).
 /// So the shell captures the token from the remote URL's `?token=` query when
-/// the target is set (see [`persist_token_from_url`]) and the bridge reads it
+/// the target is set (see `persist_token_from_url`) and the bridge reads it
 /// here, letting it present the same token and stay authorized on a remote
 /// token-protected Gateway (R5 — desktop banners on remote). Sibling of the
 /// other `.desktop-shell-*` markers.

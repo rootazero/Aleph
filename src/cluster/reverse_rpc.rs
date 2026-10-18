@@ -247,7 +247,7 @@ impl ReverseRpcChannel {
     ///
     /// `timeout_ms` is the budget for the **response wait** phase. The
     /// outbound-enqueue phase is bounded independently by
-    /// [`OUTBOUND_PUSH_BUDGET_MS`] (500 ms), so total wall-time can be up to
+    /// `OUTBOUND_PUSH_BUDGET_MS` (500 ms), so total wall-time can be up to
     /// `min(timeout_ms, OUTBOUND_PUSH_BUDGET_MS) + timeout_ms` — call it
     /// `~1.5x–2x timeout_ms` in the worst case. This split is deliberate: a
     /// slow enqueue already surfaces as [`ReverseRpcError::OutboundWedged`],

@@ -152,7 +152,7 @@ impl BrowserSsrfGuard {
 
     /// Whether this policy lets a browser reach private / loopback ranges.
     ///
-    /// The engine launch needs the same bit [`Self::build_core_policy`] reads
+    /// The engine launch needs the same bit `Self::build_core_policy` reads
     /// (`allow_private_network: !self.config.block_private`), so it is derived
     /// here rather than re-read at the launch site: two readers of one field
     /// are how `--allow-private-network` ends up disagreeing with the guard

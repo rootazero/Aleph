@@ -7,8 +7,8 @@
 //! call (R7/R10-safe analytics infrastructure, same class as
 //! `GraphRecomputeStage`, which runs right after and consumes these edges).
 //!
-//! Edge discipline (anti-mush): pairs need ≥ [`MIN_CO_HITS`] distinct
-//! co-occurrences, each node keeps at most [`MAX_EDGES_PER_NODE`] behavioral
+//! Edge discipline (anti-mush): pairs need ≥ `MIN_CO_HITS` distinct
+//! co-occurrences, each node keeps at most `MAX_EDGES_PER_NODE` behavioral
 //! edges (strongest first), and an existing semantic link for a pair always
 //! wins over the behavioral edge (enforced by the store).
 

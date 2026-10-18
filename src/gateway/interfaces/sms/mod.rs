@@ -3,7 +3,7 @@
 //! Core side of the PSTN/SMS design
 //! (`docs/superpowers/specs/2026-10-09-pstn-sms-thin-relay-design.md`). The
 //! Relay is a hosted, content-free transport; this channel is the Core
-//! adapter: it normalises inbound SMS into [`InboundMessage`]s and turns an
+//! adapter: it normalises inbound SMS into `InboundMessage`s and turns an
 //! outbound [`OutboundMessage`] into a *pending operation* for the Relay.
 //!
 //! # What this module does not do
@@ -21,7 +21,7 @@
 //!
 //! `Ok(SendResult)` means exactly "the Relay took the request"
 //! (`accepted`/`submitted`, or a later stage). `SendResult::message_id` is the
-//! `operation_id`, which later [`OutcomeReport`]s correlate to; it is **not**
+//! `operation_id`, which later `OutcomeReport`s correlate to; it is **not**
 //! a delivery claim. `unknown` is reported as an error that says so and must
 //! not be retried implicitly (spec §6).
 //!

@@ -115,7 +115,8 @@ pub struct FenceSplit {
 /// let text = "Hello\n```rust\nfn main() {}\n```\nWorld";
 /// let spans = parse_fence_spans(text);
 /// assert_eq!(spans.len(), 1);
-/// assert_eq!(spans[0].language.as_deref(), Some("rust"));
+/// assert_eq!(spans[0].start(), 6);
+/// assert_eq!(spans[0].close_line(), "```");
 /// ```
 pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
     let mut spans = Vec::new();

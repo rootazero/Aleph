@@ -141,7 +141,7 @@ pub fn map_webhook_record(payload: &serde_json::Value) -> Option<MappedMessage> 
 /// Build an `InboundMessage` from a mapped record (attachments already downloaded).
 ///
 /// An *add* tapback is rendered like the Telegram/Matrix reaction convention —
-/// `text = "Reacted with: <emoji>"` plus a [`MessageMeta::Reaction`] carrying the
+/// `text = "Reacted with: <emoji>"` plus a `MessageMeta::Reaction` carrying the
 /// emoji — so it surfaces as a context signal against the reacted-to message
 /// (`reply_to`), and the model decides whether it warrants a reply.
 pub fn to_inbound(

@@ -350,7 +350,7 @@ pub fn is_transient_overload(msg_lower: &str) -> bool {
 /// excluded — a momentary "forbidden"-looking overload must not be mistaken
 /// for a dead key. An account/quota 429 does reach the breaker (`decide`'s
 /// `Fatal` arm ends at `NextProvider(Transient)` once the in-place budget is
-/// spent — see [`classify_rate_limit`]); this predicate's job is only to say it
+/// spent — see `classify_rate_limit`); this predicate's job is only to say it
 /// is not *permanent*, so it costs a strike instead of shedding the provider
 /// for the session.
 #[must_use]

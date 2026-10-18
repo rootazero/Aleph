@@ -576,8 +576,8 @@ impl SessionStore for SessionManager {
     /// `id` order inside a range is not seq order after a repair.
     ///
     /// The whole range is read, not only its newest row: the idempotence
-    /// guard is [`run_stamped_in_range`] over every row, then
-    /// [`already_stamped_by`] on the target, both inside the transaction and
+    /// guard is `run_stamped_in_range` over every row, then
+    /// `already_stamped_by` on the target, both inside the transaction and
     /// before any write.
     ///
     /// Stamp and bill share one transaction on the connection mutex, so a

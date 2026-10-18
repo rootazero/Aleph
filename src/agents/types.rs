@@ -131,7 +131,7 @@ pub enum SpawnContext {
     ///
     /// Highest fidelity — the child reads what actually happened rather than
     /// the parent's précis of it — and the only mode with prefix warmth across
-    /// a fan-out (see [`crate::agents::subagent_spawner::fork`] for what that
+    /// a fan-out (see `crate::agents::subagent_spawner::fork` for what that
     /// does and does not mean). It also inherits the parent's framing wholesale,
     /// which is the opposite of what [`Self::Isolated`] is for.
     ///

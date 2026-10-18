@@ -12,7 +12,7 @@ use super::super::config::GatewayServerConfig;
 use super::super::credential_planner::build_credential_plan;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 
-/// Handle `gateway.credentials`. Returns the structured [`CredentialPlan`]
+/// Handle `gateway.credentials`. Returns the structured `CredentialPlan`
 /// derived from the live `GatewayServerConfig`.
 pub async fn handle_gateway_credentials(
     request: JsonRpcRequest,

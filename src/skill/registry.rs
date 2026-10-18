@@ -8,7 +8,7 @@ use crate::domain::Entity;
 /// In-memory skill registry that stores `SkillManifest` values keyed by `SkillId`.
 ///
 /// When two manifests share the same id, the one with the higher
-/// [`SkillSource::priority`] wins (workspace > plugin > global > bundled).
+/// `SkillSource::priority` wins (workspace > plugin > global > bundled).
 #[derive(Debug, Default)]
 pub struct SkillRegistry {
     manifests: HashMap<SkillId, SkillManifest>,

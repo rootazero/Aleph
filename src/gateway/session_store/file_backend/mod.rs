@@ -201,7 +201,7 @@ impl FileSessionStore {
     /// connected Panels never receive the delete frame and keep showing the
     /// conversation until their next full refresh. This sweep closes that
     /// window on the next boot: for every archive entry from the last
-    /// [`ARCHIVE_SWEEP_DAYS`] days it re-reads the archived `metadata.json`
+    /// `ARCHIVE_SWEEP_DAYS` days it re-reads the archived `metadata.json`
     /// (the dir name is sanitized and NOT reliably reversible, so the
     /// original key comes from the file) and re-emits the delete event.
     /// The event is idempotent for Panels (removing an already-absent entry

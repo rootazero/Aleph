@@ -5,7 +5,7 @@
 //! Every stage is a zero-LLM structural transform (tool-result pruning,
 //! file-op supersession, historical image stripping) gated by the preventive
 //! band: below the configured fill-ratio floor
-//! ([`PreflightPipeline::with_min_pressure_ratio`]) the whole pipeline is a
+//! (`PreflightPipeline::with_min_pressure_ratio`) the whole pipeline is a
 //! no-op. The trait is `async` only because the pipeline sits on the agent's
 //! async path — implementations are deterministic and make no LLM calls.
 
@@ -114,13 +114,13 @@ pub struct PreflightPipeline {
 impl PreflightPipeline {
     /// Create a new pipeline with the given ordered stages. The preventive-band
     /// floor defaults to `0.0` (always run); set it with
-    /// [`with_min_pressure_ratio`](Self::with_min_pressure_ratio).
+    /// `with_min_pressure_ratio`.
     ///
     /// **Cache-stability defaults (audit 2026-08-26 F3):** the previous
     /// `new()` shipped with `cut_quantum = 1` and `min_savings_ratio = 0.0`
     /// (commit any rewrite, even one token). On a near-empty context that
     /// would bust the prompt cache every turn. The defaults now match
-    /// [`DEFAULT_CUT_QUANTUM`] and [`DEFAULT_MIN_SAVINGS_RATIO`] so a
+    /// `DEFAULT_CUT_QUANTUM` and `DEFAULT_MIN_SAVINGS_RATIO` so a
     /// caller that builds the pipeline directly (without going through
     /// [`default_pipeline`]) still inherits the cache-safe guardrails.
     /// `flush_ratio = 1.0` is kept so the degenerate no-budget path
@@ -203,14 +203,14 @@ impl PreflightPipeline {
     /// Run all stages in order, returning the total tokens freed.
     ///
     /// Two guards protect the prompt-cache prefix, both waived at/above
-    /// [`flush_ratio`](Self::flush_ratio) where compaction is about to break it
+    /// `flush_ratio` where compaction is about to break it
     /// anyway:
     ///
     /// 1. The pruning boundary is **quantised** so it steps rather than slides
-    ///    (see [`DEFAULT_CUT_QUANTUM`]). Within a step the candidate set — and
+    ///    (see `DEFAULT_CUT_QUANTUM`). Within a step the candidate set — and
     ///    therefore the rendered history — is identical turn after turn.
     /// 2. The whole pass is **staged and only committed** when it frees more
-    ///    than [`min_savings_ratio`](Self::min_savings_ratio) of the budget.
+    ///    than `min_savings_ratio` of the budget.
     ///    A discarded pass leaves `messages` untouched, so its candidates stay
     ///    pending and are re-offered — with everything that became eligible
     ///    since — on the next turn. That accumulation is what makes batching
@@ -294,9 +294,9 @@ impl PreflightPipeline {
 /// overridden to that same value so its standalone gate cannot drift above a
 /// custom warning threshold.
 ///
-/// The cache guards ([`PreflightPipeline::with_cache_stability`]) are wired
-/// from the same config: the boundary steps in [`DEFAULT_CUT_QUANTUM`]-message
-/// increments and a pass must free [`DEFAULT_MIN_SAVINGS_RATIO`] of the budget
+/// The cache guards (`PreflightPipeline::with_cache_stability`) are wired
+/// from the same config: the boundary steps in `DEFAULT_CUT_QUANTUM`-message
+/// increments and a pass must free `DEFAULT_MIN_SAVINGS_RATIO` of the budget
 /// to be committed, both waived once the fill ratio reaches the warning line
 /// that governs LLM compaction.
 ///

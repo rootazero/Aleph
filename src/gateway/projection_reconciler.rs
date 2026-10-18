@@ -48,7 +48,7 @@
 //!
 //! # The one thing it does besides driving: heal split epochs
 //!
-//! Since 2026-09-13 the scan also carries [`ProjectionReconciler::heal_split_epochs`]:
+//! Since 2026-09-13 the scan also carries `ProjectionReconciler::heal_split_epochs`:
 //! a compaction split writes its routing epoch AFTER its two log batches (a
 //! different connection), so a crash in between leaves a forked child the
 //! routing table never learned. The heal registers it at boot, before the

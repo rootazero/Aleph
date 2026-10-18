@@ -194,7 +194,7 @@ pub(crate) fn drain_on_thread<R: Read + Send + 'static>(
 ///
 /// # Errors
 ///
-/// - [`DesktopError::InputFailed`] prefixed with [`SPAWN_FAILURE_PREFIX`] when
+/// - [`DesktopError::InputFailed`] prefixed with `SPAWN_FAILURE_PREFIX` when
 ///   the binary could not be launched — classify it with [`is_spawn_failure`].
 /// - [`DesktopError::InputFailed`] naming `what` and the cap when the deadline
 ///   elapses; the child is killed and reaped before returning.

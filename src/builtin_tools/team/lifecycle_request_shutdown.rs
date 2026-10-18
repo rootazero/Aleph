@@ -1,6 +1,6 @@
 //! `LifecycleRequestShutdownTool` — worker asks the leader for permission
 //! to terminate. Mirrors `ClawTeam` `lifecycle request-shutdown` and pairs
-//! with [`LifecycleResolveShutdownTool`].
+//! with `LifecycleResolveShutdownTool`.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

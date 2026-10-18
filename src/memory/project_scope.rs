@@ -116,7 +116,7 @@ pub fn is_global(ns: &str) -> bool {
 /// `agent_id` and a project namespace.
 ///
 /// Global namespace → the base id unchanged (non-breaking). Otherwise the
-/// project is appended with [`NS_SEP`] so the existing `(agent_id, …)` partition
+/// project is appended with `NS_SEP` so the existing `(agent_id, …)` partition
 /// — DB rows and the `note/{agent_id}/…` directory alike — isolates the project
 /// automatically with no schema change.
 #[must_use]
@@ -169,7 +169,7 @@ pub fn scoped_or_base(base: &str, project_scoped: bool, project_root: Option<&Pa
 const SCOPED_FAMILIES: [&str; 3] = ["proj-", "u-", "p-"];
 
 /// `true` when `agent_id` already carries a scope suffix from one of
-/// [`SCOPED_FAMILIES`], i.e. it is the OUTPUT of a composition rather than a
+/// `SCOPED_FAMILIES`, i.e. it is the OUTPUT of a composition rather than a
 /// base agent id.
 ///
 /// Exists because composition is **not idempotent**: feeding an already
@@ -180,7 +180,7 @@ const SCOPED_FAMILIES: [&str; 3] = ["proj-", "u-", "p-"];
 /// registry's `remember` arm carries the same warning in prose) use this to
 /// refuse a pre-composed id instead of silently landing on a phantom store.
 ///
-/// Derived from [`SCOPED_FAMILIES`], never from a second literal list: a new
+/// Derived from `SCOPED_FAMILIES`, never from a second literal list: a new
 /// family added there is recognised here for free.
 #[must_use]
 pub fn is_composed_id(agent_id: &str) -> bool {
@@ -270,7 +270,7 @@ pub fn list_note_corpora(memory_dir: &Path) -> Vec<String> {
 
 /// Enumerate the scoped composed agent ids that already have memory on disk
 /// for a given base agent, across every sibling suffix family
-/// ([`SCOPED_FAMILIES`]).
+/// (`SCOPED_FAMILIES`).
 ///
 /// The note store lays memory out as `note/{agent_id}/…`, so the scoped
 /// namespaces created by [`scoped_agent_id`] surface as sibling directories

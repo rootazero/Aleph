@@ -25,7 +25,7 @@
 //! Genuinely interchange-only: `label`, `agentType`, and `phase.model` — the
 //! Aleph executor resolves execution via the team member named in `agent`, and
 //! the run's model is decided per step, not per phase. `isolation` is a third
-//! kind: it is *validated* (see [`ISOLATION_VOCABULARY`]) but not applied,
+//! kind: it is *validated* (see `ISOLATION_VOCABULARY`) but not applied,
 //! because every in-process agent member run is already worktree-isolated.
 
 use serde::{Deserialize, Serialize};
@@ -113,7 +113,7 @@ pub struct WorkflowManifestStep {
     pub schema: Option<Value>,
     /// `.workflow.js` `agent(..., { isolation })` hint (e.g. `"worktree"`).
     ///
-    /// Validated against [`ISOLATION_VOCABULARY`] and preserved for faithful
+    /// Validated against `ISOLATION_VOCABULARY` and preserved for faithful
     /// export, but never *applied*: the dispatcher already gives every
     /// in-process agent member run its own git worktree, so `"worktree"` is a
     /// declaration that already holds. This field previously read

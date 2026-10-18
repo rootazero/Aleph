@@ -452,7 +452,7 @@ impl CronService {
     /// The two state refusals below are [`TaskError::Invalid`], not a variant
     /// of their own: the request named a real job and was well-formed, the job
     /// is simply in a state that refuses it. See
-    /// [`TaskError`][crate::tasks::shared::error::TaskError] for why there is
+    /// `TaskError` for why there is
     /// no `Conflict`.
     pub async fn run_job(&self, id: &str) -> Result<(), TaskError> {
         {
@@ -553,7 +553,7 @@ impl CronService {
 
     /// Delete cron run history older than `history_retention_days`
     /// (from this service's `CronConfig`). Used by the shared task reaper
-    /// daemon ([[reaper]]) so the cron history table does not grow without
+    /// daemon ([\[reaper\]]) so the cron history table does not grow without
     /// bound. Returns the number of rows deleted.
     pub async fn reap_history(&self) -> Result<u64, TaskError> {
         let now = self.state.clock.now_ms();

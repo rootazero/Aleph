@@ -30,17 +30,17 @@
 //! **The snapshot bytes are PRE-scrub**; rendering one without re-running the
 //! finished path's secret gate would make "poll a running job" a way to read
 //! what the completed path refuses. The one gate all of them share lives in
-//! [`partial_output`](super::partial_output).
+//! `partial_output`.
 //!
 //! The rings are also the *only* record a job aborted mid-flight leaves behind
 //! — an abort drops the future, so there is no `CodeExecOutput` at all — so
 //! `kill` and `shutdown` take a gated snapshot on their way through, at the
-//! last instant the bytes exist. See [`journal_live_tail`].
+//! last instant the bytes exist. See `journal_live_tail`.
 //!
 //! Durability: this table is pure process memory, so a daemon restart used to
 //! turn every id into `"no background process #N for this session"` — *"there
 //! was never such a thing"*. Each state transition here is therefore mirrored
-//! into [`process_journal`](super::process_journal), the on-disk sidecar that
+//! into `process_journal`, the on-disk sidecar that
 //! lets a later daemon answer for an id it never issued. The journal is a
 //! zero-I/O no-op until boot enables it, so nothing below changes behaviour in
 //! tests, the CLI, or any embedding that never calls its boot reconcile.
@@ -219,7 +219,7 @@ pub enum KillOutcome {
 pub enum RegisterOutcome {
     /// Slot allocated; carries the new process id.
     Registered(u64),
-    /// This session already has [`MAX_RUNNING_PER_SESSION`] running jobs.
+    /// This session already has `MAX_RUNNING_PER_SESSION` running jobs.
     /// The caller must not spawn — it should poll/kill an existing one first.
     TooManyRunning { limit: usize },
 }
@@ -319,7 +319,7 @@ impl ProcessRegistry {
     /// [`complete`](Self::complete).
     ///
     /// Enforces the per-session running cap atomically under the table lock: a
-    /// session already at [`MAX_RUNNING_PER_SESSION`] running jobs gets
+    /// session already at `MAX_RUNNING_PER_SESSION` running jobs gets
     /// [`RegisterOutcome::TooManyRunning`] and no slot — the count and the
     /// insert happen under one lock acquisition so concurrent spawns in the same
     /// session can't both slip past the gate.
@@ -493,7 +493,7 @@ impl ProcessRegistry {
     /// The same tail is also the wire the child's pid travels back on: the
     /// platform driver reports it through [`LiveTail::set_child_pid`], and
     /// the journaling registry hooks that report to
-    /// [`process_journal::record_child`], the row's third write. Hooked here
+    /// `process_journal::record_child`, the row's third write. Hooked here
     /// rather than in `bash_exec` so the one registry that may write rows is
     /// the one that decides; a test registry attaches the rings and nothing
     /// else.
@@ -572,7 +572,7 @@ impl ProcessRegistry {
     /// `caller` — a mismatch is reported as `NotFound` to avoid leaking the
     /// existence of another session's processes.
     ///
-    /// A terminal read stamps [`reported`](ProcEntry::reported): from here on
+    /// A terminal read stamps `reported`: from here on
     /// the model has the result, so the proactive announcer must not spend a
     /// parent turn re-delivering it. `wait` returns through this same read, so
     /// both collecting faces stamp it.
@@ -670,7 +670,7 @@ impl ProcessRegistry {
 
     /// Block until process `id` (owned by `caller`) finishes, or until
     /// `timeout` elapses — whichever comes first. Unlike a `poll` loop this
-    /// parks on the [`completion`](Self::completion) notifier and only re-checks
+    /// parks on the `completion` notifier and only re-checks
     /// when *some* job finishes, so it costs no CPU while waiting and returns
     /// the captured output the instant the job is done.
     ///

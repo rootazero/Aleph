@@ -16,11 +16,11 @@
 //!
 //! ## Layout
 //! - this module — top-level `ProvidersView`, owns the two fetches
-//! - [`list`] — left-panel sections (Subscription / Configured)
-//! - [`picker`] — the "add a provider" disclosure: search + the rest of the
+//! - `list` — left-panel sections (Subscription / Configured)
+//! - `picker` — the "add a provider" disclosure: search + the rest of the
 //!   catalogue, keyboard-walkable. The 56 unconfigured presets used to render
 //!   as cards in the left panel, which buried the rows actually in use.
-//! - [`detail_panel`] — right-panel detail editor
+//! - `detail_panel` — right-panel detail editor
 
 mod detail_panel;
 mod list;

@@ -2,16 +2,16 @@
 //!
 //! ## Layout
 //! - this module — top-level `SearchView` (left list + right pane router)
-//! - [`presentation`] — the identity⋈styling join: which backends exist comes
+//! - `presentation` — the identity⋈styling join: which backends exist comes
 //!   from `aleph_protocol::search::CONFIGURABLE_SEARCH_PROVIDERS`, how they
 //!   look comes from this crate
-//! - [`picker`] — which rows the panel lists vs. which the disclosure offers
-//! - [`list`] — the single configured-backend card list
-//! - [`detail_panel`] — `ProviderDetailPanel`, one component covering both the
+//! - `picker` — which rows the panel lists vs. which the disclosure offers
+//! - `list` — the single configured-backend card list
+//! - `detail_panel` — `ProviderDetailPanel`, one component covering both the
 //!   configured and the not-yet-configured state of a backend
-//! - [`add_custom`] — `AddCustomSearchProviderPanel`
-//! - [`global_settings`] — enable/max_results/timeout/PII
-//! - [`fetch_section`] — `FetchProvidersSection` (crawl4ai + shared Firecrawl)
+//! - `add_custom` — `AddCustomSearchProviderPanel`
+//! - `global_settings` — enable/max_results/timeout/PII
+//! - `fetch_section` — `FetchProvidersSection` (crawl4ai + shared Firecrawl)
 
 mod add_custom;
 mod detail_panel;

@@ -11,10 +11,10 @@
 //! other:
 //!
 //! - **Which agent** may reach which — the caller's A2A policy
-//!   ([`SessionSearchTool::is_accessible`]).
+//!   (`SessionSearchTool::is_accessible`).
 //! - **Which user** a session belongs to — P1/P2 isolation, through
 //!   [`crate::gateway::visibility::ambient_transcript_visible`]
-//!   ([`SessionSearchTool::transcript_visible`]). `search_messages` is a global
+//!   (`SessionSearchTool::transcript_visible`). `search_messages` is a global
 //!   FTS5 sweep over every session on the install; the A2A policy is blind to
 //!   ownership, so this axis is the only thing standing between the model and
 //!   another person's private transcript.

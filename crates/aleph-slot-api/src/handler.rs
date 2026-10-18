@@ -4,15 +4,15 @@
 //! Five methods, all with `&self` (and a `&Value` for
 //! `concurrency_claim`, a `&McpServerFilter` for
 //! `bind_visible_servers`):
-//!   * [`Self::invoke`] — execute a call.
-//!   * [`Self::definition`] — describe the tool's contract.
-//!   * [`Self::concurrency_claim`] — claim for the actual
+//!   * `Self::invoke` — execute a call.
+//!   * `Self::definition` — describe the tool's contract.
+//!   * `Self::concurrency_claim` — claim for the actual
 //!     implementation and input, not its registry name. Default:
 //!     `Global` (the safest answer).
-//!   * [`Self::bind_visible_servers`] — when an MCP handler depends
+//!   * `Self::bind_visible_servers` — when an MCP handler depends
 //!     on the visible-server set, return a child that knows about
 //!     it. Default: `None`.
-//!   * [`Self::fences_output`] — `true` when the tool's output must
+//!   * `Self::fences_output` — `true` when the tool's output must
 //!     be wrapped in a presentation fence before the model reads it.
 //!     Default: `true` for `Mcp` sources, `false` otherwise.
 //!

@@ -20,7 +20,7 @@
 //! - Not a [`PromptLayer`](crate::thinker::prompt_layer::PromptLayer):
 //!   layers live in the cached system prompt prefix, which is built once
 //!   at harness construction. Per-turn dynamic aggregation belongs in the
-//!   per-turn message vector path ([`crate::harness::agent::prompt`]).
+//!   per-turn message vector path (`crate::harness::agent::prompt`).
 //! - Not a persistence change: the summary is computed fresh from
 //!   `events[tail_start..]` on every turn and never written back to the
 //!   session log. The log stays a faithful record of what actually happened.
@@ -87,7 +87,7 @@ pub struct ToolFailureGroup {
 /// for snapshot tests.
 ///
 /// Tool name resolution mirrors
-/// [`crate::harness::agent::prompt::build_prompt`]'s lookup: walk
+/// `crate::harness::agent::prompt::build_prompt`'s lookup: walk
 /// backwards from the `ToolError` to find the most recent
 /// `ToolCallRequested` with a matching `call_id`. If no matching request
 /// is found (truncated tail, replay edge case) the row is dropped from the
@@ -144,7 +144,7 @@ pub fn aggregate_failures(events: &[SessionEventRecord]) -> Vec<ToolFailureGroup
 ///
 /// The output is wrapped in `<system-reminder>` matching the rest of
 /// Aleph's harness-injected channel (see opencode-parity G2 in
-/// [`crate::harness::agent::prompt`]).
+/// `crate::harness::agent::prompt`).
 #[must_use]
 pub fn render_run_summary(events: &[SessionEventRecord]) -> Option<String> {
     let groups = aggregate_failures(events);

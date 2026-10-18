@@ -15,7 +15,7 @@
 //! to `ctx_search` its `ctx_search` result. So the assembled output is measured
 //! on the exact string Layer 2 measures (the flattened JSON) against the budget
 //! [`resolve_result_budget`] resolves for this tool, and section text is cut
-//! until it fits ([`fit_to_budget`]).
+//! until it fits (`fit_to_budget`).
 //!
 //! Read-only and side-effect-free, so it is safe under parallel dispatch.
 

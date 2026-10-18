@@ -4,10 +4,10 @@
 //! `LazyLock` singleton so the JSON-RPC handlers stay stateless and reach it
 //! through a free function (`pty::manager()`), exactly like the user-hooks
 //! admin handlers reach the extension manager. The gateway attaches its
-//! [`GatewayEventBus`] once at serve time via [`PtyManager::attach_event_bus`]
+//! [`GatewayEventBus`] once at serve time via `PtyManager::attach_event_bus`
 //! so reader threads can stream output without per-connection wiring.
 //!
-//! Sessions are bounded (FIFO eviction at [`MAX_SESSIONS`]) so a runaway client
+//! Sessions are bounded (FIFO eviction at `MAX_SESSIONS`) so a runaway client
 //! cannot exhaust descriptors/threads — the Rust analogue of hermes' implicit
 //! per-process `_sessions` dict, but with an explicit ceiling.
 
@@ -145,7 +145,7 @@ impl Inner {
 ///
 /// Two variants rather than `Option<Option<String>>` because the outer layer
 /// is a different question from the inner one: `Unknown` is "there is no
-/// record of this id" (never existed, or aged out of [`OWNER_RETENTION`]),
+/// record of this id" (never existed, or aged out of `OWNER_RETENTION`),
 /// while `Known(None)` is "this session exists and was spawned through a face
 /// that resolved no caller". Folding them together is how a fail-closed answer
 /// gets consumed as a value — `CLAUDE.md` §0 rules on exactly that shape.
@@ -660,7 +660,7 @@ impl PtyManager {
 
     /// Who created a session — the ownership input for every `pty.*` face.
     ///
-    /// Answers for sessions that are ALREADY GONE, up to [`OWNER_RETENTION`].
+    /// Answers for sessions that are ALREADY GONE, up to `OWNER_RETENTION`.
     /// That is not slack, it is the requirement: `pty.exit` is published and
     /// `remove` is called on the next line, so a filter that consulted
     /// `inner.sessions` would deny a client the frame announcing its own

@@ -313,7 +313,7 @@ pub async fn get_top_layer_elements(
 /// events — and the expensive shape is the one a page with an open dialog is most likely to have.
 ///
 /// Those events land on the connection's event broadcast, which is bounded
-/// ([`crate::events`]'s capacity), so on a churning page they can push a subscriber past its
+/// (`crate::events`'s capacity), so on a churning page they can push a subscriber past its
 /// window. A subscriber that reads `lagged()` reports a hole; one that does not simply misses
 /// what it was waiting for.
 ///

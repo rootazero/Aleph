@@ -1,4 +1,4 @@
-//! Concrete [`VisionProvider`] implementations.
+//! Concrete `VisionProvider` implementations.
 //!
 //! - [`PlatformOcrProvider`] — delegates to the platform-native OCR engine via `desktop/*`
 

@@ -76,7 +76,7 @@ pub trait SessionStore: Send + Sync {
     ///
     /// A session is deadlocked when it is still `active` and either:
     /// - its transcript has reached `max_rounds` but nobody concluded it for
-    ///   at least `grace_secs` (further turns are rejected by [`add_turn`],
+    ///   at least `grace_secs` (further turns are rejected by `add_turn`,
     ///   so without intervention it would stay Active forever), or
     /// - it has seen no activity (last turn, or creation when empty) for
     ///   `stale_secs`.
@@ -97,7 +97,7 @@ pub struct SqliteSessionStore {
 
 impl SqliteSessionStore {
     /// Create a new store wrapping the given connection.
-    /// Call [`migrate`] before using the store.
+    /// Call `migrate` before using the store.
     pub fn new(conn: Connection) -> Self {
         Self {
             conn: Arc::new(Mutex::new(conn)),

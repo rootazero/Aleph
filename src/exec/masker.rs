@@ -207,7 +207,7 @@ pub fn mask_json_strings(masker: &SecretMasker, value: &mut serde_json::Value) -
 /// reason to expect one field on one frame to be exempt.
 ///
 /// Every level destructures **without `..`** (here and in
-/// [`mask_file_change`]) and the variant match has no wildcard, so a new
+/// `mask_file_change`) and the variant match has no wildcard, so a new
 /// text-bearing field on `Presentation` / `FileChange` / `Hunk` / `HunkLine` —
 /// and a second `Presentation` variant — is a compile error. That is the axis
 /// a caller's arm-level exhaustiveness cannot reach: `presentation` itself

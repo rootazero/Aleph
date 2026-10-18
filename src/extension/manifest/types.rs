@@ -171,7 +171,7 @@ impl AuthorInfo {
 
 /// Parse author from npm package.json format
 ///
-/// Supports both string format ("Name <email> (url)") and object format.
+/// Supports both string format ("Name `&lt;email&gt;` (url)") and object format.
 impl From<&str> for AuthorInfo {
     fn from(s: &str) -> Self {
         // Parse npm author string: "Name <email> (url)".
@@ -321,12 +321,12 @@ pub struct PluginManifest {
     #[serde(skip)]
     pub wasm_resource_limits: Option<WasmResourceLimits>,
 
-    /// Aleph-only extensions from [aleph] section in CC-format manifest
+    /// Aleph-only extensions from \[aleph\] section in CC-format manifest
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aleph_extensions: Option<AlephExtensions>,
 
-    /// Optional [memory] section — memory extension hook declarations.
-    /// Parsed from aleph.plugin.toml or .claude-plugin/plugin.toml [memory].
+    /// Optional \[memory\] section — memory extension hook declarations.
+    /// Parsed from aleph.plugin.toml or .claude-plugin/plugin.toml \[memory\].
     #[serde(skip)]
     pub memory_manifest: Option<crate::memory::extensions::manifest::MemoryManifestSection>,
 }
@@ -469,7 +469,7 @@ pub enum AlephRuntime {
     Static,
 }
 
-/// Aleph-only extension fields in plugin.toml [aleph] section.
+/// Aleph-only extension fields in plugin.toml \[aleph\] section.
 /// Claude Code ignores these fields.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]

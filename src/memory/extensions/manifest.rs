@@ -1,4 +1,4 @@
-//! [memory] TOML section for Aleph plugin manifests.
+//! \[memory\] TOML section for Aleph plugin manifests.
 //!
 //! Third-party plugins add this optional section to declare which memory
 //! hooks they implement, along with priority and scheduling hints.

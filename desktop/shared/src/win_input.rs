@@ -28,7 +28,7 @@
 //!
 //! # Contract
 //!
-//! [`move_cursor_absolute`] takes a point in the **global screen pixel space** —
+//! `move_cursor_absolute` takes a point in the **global screen pixel space** —
 //! the space `window_list` bounds, `display_list` origins and `GetCursorPos` all
 //! speak — and puts the pointer there. Button presses stay with enigo: they act
 //! at the current pointer position and need no coordinate at all.

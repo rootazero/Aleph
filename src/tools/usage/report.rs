@@ -1,6 +1,6 @@
 //! The join: installed things × recorded activity.
 //!
-//! [`ToolUsageStore`](super::store::ToolUsageStore) only knows what was
+//! `ToolUsageStore` only knows what was
 //! *called*; it deliberately seeds nothing at registration. "Installed but
 //! never called" therefore only exists as an answer once the sidecar is joined
 //! against the live inventory of configured MCP servers / installed plugins /

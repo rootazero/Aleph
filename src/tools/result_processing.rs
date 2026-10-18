@@ -14,7 +14,7 @@
 //!   over a tool's text output and returns `ProcessedResult`.
 //!
 //! The *content-aware* half of the cleaning happens one step earlier, in
-//! [`crate::tool_output::hygiene`], because it has to see the tool's structured
+//! `crate::tool_output::hygiene`, because it has to see the tool's structured
 //! value while its text fields still carry real newlines — see that module for
 //! why flattening first made both content-aware cleaners blind.
 
@@ -36,7 +36,7 @@ const MAX_INLINE_IMAGE_BASE64_CHARS: usize = (20usize * 1024 * 1024).div_ceil(3)
 /// result typically needs in context, not to what it might contain.
 pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 4_000;
 
-/// The read family's window ([`read_backstop_tokens`]), and so the largest
+/// The read family's window (`read_backstop_tokens`), and so the largest
 /// per-result budget any result gets. A read returns exactly the lines the
 /// model asked for (`offset`/`limit`) and is never offloaded — offloading a
 /// read would hand back a marker to read again — so cutting its window below
@@ -165,7 +165,7 @@ pub(crate) fn read_backstop_tokens() -> usize {
 /// Resolve a tool's per-result token budget.
 ///
 /// Lookup order:
-/// 1. The read family ([`is_read_family`]) always returns `None` (system
+/// 1. The read family (`is_read_family`) always returns `None` (system
 ///    invariant — a `file_read` result is the only way the model can pull
 ///    a persisted marker file back into context, so persisting one would
 ///    create a loop).
@@ -186,7 +186,7 @@ pub(crate) fn read_backstop_tokens() -> usize {
 /// rather than a maximum would let the worst offenders through untouched.
 ///
 /// `None` from this function means "do not persist this tool's output;
-/// just truncate when it exceeds [`read_backstop_tokens`]".
+/// just truncate when it exceeds `read_backstop_tokens`".
 #[must_use]
 pub fn resolve_result_budget(name: &str, explicit: Option<usize>) -> Option<usize> {
     resolve_result_budget_under(name, explicit, result_budget_ceiling())
@@ -282,7 +282,7 @@ pub struct RecoveryTools {
 impl RecoveryTools {
     /// Neither retrieval tool is callable: an offloaded original would be a
     /// path the model has no tool to open. The one predicate every offload
-    /// writer consults (through [`offload`]) before it writes.
+    /// writer consults (through `offload`) before it writes.
     #[must_use]
     pub const fn is_empty(self) -> bool {
         !self.ctx_search && !self.file_read
@@ -298,7 +298,7 @@ impl RecoveryTools {
     }
 
     /// Both callable — what a caller that cannot see the turn's tool gates
-    /// assumes: [`dispatch_recovery_tools`]'s fallback outside a dispatch, and
+    /// assumes: `dispatch_recovery_tools`'s fallback outside a dispatch, and
     /// `ToolService::recovery_tools`'s default for a service that has no gates
     /// to consult. The harness Layer-3 spill asks its `ToolService`, which
     /// answers from the turn's gates when it is a `ScopedToolService`.
@@ -322,7 +322,7 @@ pub struct ProcessedResult {
 ///
 /// Caller is responsible for any tool-specific compression (e.g.
 /// `compress_tool_output`) and for the field-wise ingress hygiene pass
-/// ([`crate::tool_output::hygiene::clean_result_value`]) before invoking this
+/// (`crate::tool_output::hygiene::clean_result_value`) before invoking this
 /// helper; this layer decides between "keep verbatim", "persist + marker", and
 /// "truncate".
 ///

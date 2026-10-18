@@ -47,7 +47,7 @@
 //! content through the ordinary owner-scoped surface. Reading your OWN trace
 //! is not an event, so a single-user box records nothing at all — that is what
 //! keeps the log readable enough to be worth having. See
-//! [`caller_could_reach`] for why the predicate is `session_visible_to` and
+//! `caller_could_reach` for why the predicate is `session_visible_to` and
 //! not a bare owner comparison.
 
 use std::collections::{HashMap, HashSet};
@@ -108,7 +108,7 @@ const MAX_HISTORY_SCAN: usize = 500;
 /// for as long as it did: `execute.rs` switches trace persistence on ONLY when
 /// the `agent_tasks` insert succeeded (`trace_task_persisted.then(...)`), and
 /// nothing anywhere deletes a task row. The 2026-08-07 audit walks that hop
-/// ([`session_of_run`]) precisely because it is there.
+/// (`session_of_run`) precisely because it is there.
 ///
 /// This method still names the session rather than walking the hop, for the
 /// two reasons that survive the correction: it is an ADDRESSED surface, so it

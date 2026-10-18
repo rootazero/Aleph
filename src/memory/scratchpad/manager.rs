@@ -440,7 +440,7 @@ impl ScratchpadManager {
     /// budget behind it — takes the head, so the freshest note is the one that
     /// survives truncation.
     ///
-    /// **This was the last writer not routed through [`section_span`].** It
+    /// **This was the last writer not routed through `section_span`.** It
     /// used a bare `content.find("## Notes")` and, when the header was absent,
     /// fell out of the `if let` and wrote the document back *unchanged* while
     /// the tool reported `success: true, "Note appended"` — the same
@@ -449,7 +449,7 @@ impl ScratchpadManager {
     /// the one surface nobody had swept. Reachable without any hand-editing:
     /// `action='clear'` writes `DEFAULT_TEMPLATE`, and any scratchpad whose
     /// sections were reordered or trimmed loses every note from then on.
-    /// [`prepend_to_section`] self-heals the section instead, so the write
+    /// `prepend_to_section` self-heals the section instead, so the write
     /// always lands.
     pub async fn append_note(&self, note: &str) -> Result<(), AlephError> {
         let note = note.trim();

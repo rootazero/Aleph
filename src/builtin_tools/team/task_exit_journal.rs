@@ -11,7 +11,7 @@
 //!   prior journal (typical: agent updates `next_steps` after a retry).
 //! - All list fields are optional. Empty lists are legal — the only
 //!   required input is `summary`.
-//! - `confidence` is clamped to [0,100] by the store. None ⇒ "did not
+//! - `confidence` is clamped to \[0,100\] by the store. None ⇒ "did not
 //!   self-rate".
 
 use async_trait::async_trait;

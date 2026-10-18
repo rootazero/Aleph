@@ -5,9 +5,9 @@
 //! [`aleph_protocol::providers::GenerationProviderConfigJson`]), so these
 //! conversions are asymmetric and each direction has a different job:
 //!
-//! * outbound ([`config_to_wire`]) drops nothing a client is entitled to see,
+//! * outbound (`config_to_wire`) drops nothing a client is entitled to see,
 //!   and never carries the API key;
-//! * inbound ([`config_from_wire`]) produces only the fields a client can set,
+//! * inbound (`config_from_wire`) produces only the fields a client can set,
 //!   and is meaningless on its own — the caller must merge it onto the stored
 //!   entry, which is what `build_generation_provider_for_persistence`'s `prior`
 //!   argument is for. Persisting the result of this function directly is the

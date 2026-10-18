@@ -2366,7 +2366,7 @@ pub fn decline_global_session_event_store(because: &'static str) {
 /// Fetch the process-wide session event store, if one has been installed.
 ///
 /// ⚠️ `None` says nothing about whether boot reached this slot. Ask
-/// [`global_session_event_store_slot`]`().outcome()` for that.
+/// `global_session_event_store_slot``().outcome()` for that.
 #[inline]
 pub fn global_session_event_store() -> Option<Arc<dyn SessionEventStore>> {
     GLOBAL_EVENT_STORE.get().cloned()

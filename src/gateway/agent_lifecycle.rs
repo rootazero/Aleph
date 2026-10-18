@@ -51,7 +51,7 @@ impl AgentLifecycleEvent {
         }
     }
 
-    /// Publish this event on the bus, wrapped in a [`TopicEvent`].
+    /// Publish this event on the bus, wrapped in a `TopicEvent`.
     ///
     /// The wrap is load-bearing: a bare `publish_json` serializes topic-less,
     /// the WS forwarder reads that as topic `""`, and every concrete

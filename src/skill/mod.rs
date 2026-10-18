@@ -240,7 +240,7 @@ impl SkillSystem {
     /// `.aleph/skills` / `.claude/skills`, whatever an RPC registers. Plugin
     /// skill dirs are NOT passed here: every scan reads them from the list
     /// `extension::projection` publishes (`utils::paths::plugin_skill_dirs`),
-    /// see [`Self::scan_roots`]. Each directory is scanned for SKILL.md files,
+    /// see `Self::scan_roots`. Each directory is scanned for SKILL.md files,
     /// the source is guessed from the path, and a snapshot is built.
     ///
     /// **Merge semantics, not replace.** Under startup contention
@@ -1053,9 +1053,9 @@ fn plugin_id_from_path(path: &Path) -> Option<String> {
 /// Guess the `SkillSource` from a file path.
 ///
 /// - Under a published plugin skill dir (`extension::projection`) →
-///   Plugin(<registry id published with that dir>)
+///   Plugin(`&lt;registry id published with that dir&gt;`)
 /// - Under `<…>/plugins/<dir>/skills/` that no published dir covers →
-///   Plugin(<dir>) — the fail-closed fallback for an unloaded plugin
+///   Plugin(`&lt;dir&gt;`) — the fail-closed fallback for an unloaded plugin
 /// - Under `~/.aleph/skills/` with manifest marking official → Bundled
 /// - Under `~/.aleph/skills/` otherwise → Global
 /// - Contains a `.aleph/skills` component pair but not under home → Workspace

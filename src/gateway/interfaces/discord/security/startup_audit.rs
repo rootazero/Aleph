@@ -6,7 +6,7 @@
 //!
 //! The audit pipeline is generic; what makes an audit entry
 //! **discord-shaped** is the `(event_type, severity, detail)` triple we
-//! derive from [`super::permissions::PermissionAudit`]. That translation
+//! derive from `super::permissions::PermissionAudit`. That translation
 //! is the only place in the tree that knows both surfaces, so it has to
 //! live on the discord side of the seam — and keeping it out of
 //! `crate::security::audit` keeps that module small (R3).
@@ -76,7 +76,7 @@ pub fn for_guild(guild_id: u64, guild_name: &str, bot_permissions: u64) -> Audit
 ///
 /// The bitfield in practice is per-guild; this helper is for tests and
 /// for the "no live gateway" path. Real callers will want
-/// [`Self::for_guild`] in a loop.
+/// `Self::for_guild` in a loop.
 #[must_use]
 pub fn for_config(config: &DiscordConfig, bot_permissions: u64) -> Vec<AuditEntry> {
     if config.allowed_guilds.is_empty() {

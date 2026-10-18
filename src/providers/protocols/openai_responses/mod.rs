@@ -283,7 +283,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
 
     /// Share the Chat protocol's canonicalization (no-dash typos, `openai/`
     /// prefix). Endpoint-blind hook (assumes first-party `OpenAI`); `build_request`
-    /// calls [`normalize_openai_model_id`] directly with the configured
+    /// calls `normalize_openai_model_id` directly with the configured
     /// `base_url` so the `openai/` slug survives on aggregators (`OpenRouter`,
     /// which ships an `openai-responses` preset).
     fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {

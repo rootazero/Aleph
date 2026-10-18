@@ -48,7 +48,7 @@ pub struct SkillStatusEntry {
     pub emoji: Option<String>,
     pub source: SkillSource,
     /// Human-readable source label for UI display: "Official", "Aleph",
-    /// "Claude", "Agents", "Workspace", or "Plugin: <id>" — the Panel
+    /// "Claude", "Agents", "Workspace", or "Plugin: `&lt;id&gt;`" — the Panel
     /// groups by this string verbatim.
     pub source_label: String,
     pub homepage: Option<String>,

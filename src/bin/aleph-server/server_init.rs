@@ -61,7 +61,7 @@ pub async fn serve_webchat(
     Ok(())
 }
 
-/// Map a [`BuildRunError`] onto the wire.
+/// Map a `BuildRunError` onto the wire.
 ///
 /// One function, both real-engine handlers: a project denial must produce the
 /// SAME `RESOURCE_NOT_FOUND` shape `projects.get` produces for an id that was

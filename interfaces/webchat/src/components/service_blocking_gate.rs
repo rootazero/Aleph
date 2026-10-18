@@ -2,7 +2,7 @@
 //! been live but lost the Gateway connection and exhausted its automatic
 //! reconnect budget.
 //!
-//! Distinct from [`BootCheckGate`]:
+//! Distinct from `BootCheckGate`:
 //!   * `BootCheckGate` engages BEFORE the first successful connect.
 //!   * `ServiceBlockingGate` engages AFTER, when `reconnect()` gives up.
 //!

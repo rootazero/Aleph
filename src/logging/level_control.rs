@@ -221,7 +221,7 @@ fn try_self_heal(raw: u8) {
 /// Atomically swaps the reported level into the global atomic and asks the
 /// shared logging backend to apply the same level to the live `EnvFilter`.
 /// Serialization between concurrent `set_log_level` callers is provided by
-/// [`SET_LOCK`] (held across both the atomic and the filter update below),
+/// `SET_LOCK` (held across both the atomic and the filter update below),
 /// not by a CAS loop on the atomic — `AtomicU8::swap` is fine on its own once
 /// the writers are serialized.
 ///

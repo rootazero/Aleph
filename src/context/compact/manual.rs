@@ -24,14 +24,14 @@
 //!    one-line turns throw away context for nothing.
 //! 2. Snap the cut so it never orphans a `tool_result` from its `tool_use`, and
 //!    never lands inside an open run's `RunStarted … RunFinished` span.
-//! 3. Summarize the dropped span through the same [`ContextCompactor`] the
+//! 3. Summarize the dropped span through the same `ContextCompactor` the
 //!    automatic path uses (LLM, deterministic-truncation fallback), optionally
 //!    steered by the user's own `/compact <instructions>` directive.
 //! 4. **One transaction**: append the summary as a `SystemMessage` plus a
 //!    `CompactionPerformed` checkpoint — finally giving that long-declared,
 //!    never-produced event a producer — and its `FoldRecorded` fold-registry
 //!    entry (Context Fabric spec §3.1a), and **soft-retire** the compacted
-//!    prefix (`Retire::Through`) in the same [`SessionService::emit_batch`]
+//!    prefix (`Retire::Through`) in the same `SessionService::emit_batch`
 //!    call. The rows survive (the log stays append-only, `/undo` and export
 //!    are unaffected) and the BM25 mirror is deliberately kept, so
 //!    `recall_events` can still surface a detail the summary abstracted away.
@@ -41,7 +41,7 @@
 //!
 //! # One at a time, over a span that is still there
 //!
-//! The sequence runs inside a per-session [`CompactionBracket`], and the batch
+//! The sequence runs inside a per-session `CompactionBracket`, and the batch
 //! commits only if the span it summarized is still exactly there: its
 //! `Retire::Through` names how many live rows it read, and the store rolls the
 //! whole batch back when any other count retires. Without the first, two

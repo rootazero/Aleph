@@ -762,7 +762,7 @@ fn bound_workspace_of(
 /// `SessionStore` at all — the SAME carve-out `method_visibility.rs` already
 /// records for `chat.send` / `agent.run`. Without a store this cannot tell an
 /// existing session from a new one, so it treats every turn as new; see
-/// [`resolve_attribution`].
+/// `resolve_attribution`.
 ///
 /// Callers map [`BuildRunError`] to their transport's error shape, and the
 /// variants must NOT be flattened into one another: a bad-params complaint, a

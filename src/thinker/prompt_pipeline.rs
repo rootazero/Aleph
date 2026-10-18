@@ -21,7 +21,7 @@ use crate::context::budget::pressure::{estimate_tokens_aware, DEFAULT_PROSE_RATI
 /// One layer's contribution to the assembled prompt, for size introspection
 /// and budget tuning.
 ///
-/// Produced by the single traversal [`PromptPipeline::execute_filtered_measured`]
+/// Produced by the single traversal `PromptPipeline::execute_filtered_measured`
 /// and surfaced through [`PromptPipeline::layer_breakdown`] (sizes only) and
 /// the two `*_measured` entries (text + sizes). From there it is carried in
 /// `thinker::prompt_builder::PromptLayout`, stored in
@@ -52,7 +52,7 @@ pub struct LayerSize {
 ///
 /// Cross-build reuse of the stable prefix is provided by the cached two-part
 /// split (`PromptBuilder::build_system_prompt_cached_with_mode`), which emits
-/// the Stable layers as one cacheable [`SystemPromptPart`] and the Dynamic
+/// the Stable layers as one cacheable `SystemPromptPart` and the Dynamic
 /// layers as a marker-free tail — not by an internal name-keyed cache. A fresh
 /// builder is constructed per prompt build, so an in-pipeline cache never
 /// served a cross-call hit and could only ever return stale sections if a

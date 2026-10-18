@@ -178,7 +178,7 @@ pub fn read(job_id: &str) -> std::io::Result<Option<CarryOver>> {
 
 /// Write `record` for `job_id` under `dir`. Creates the directory on
 /// demand. Atomic-rename via tempfile to avoid partial reads on crash —
-/// matches the [`crate::json_canvas_io::save_canvas`] pattern.
+/// matches the `crate::json_canvas_io::save_canvas` pattern.
 pub fn write_at(dir: &std::path::Path, job_id: &str, record: &CarryOver) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
     let dest = carryover_path_at(dir, job_id);

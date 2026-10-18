@@ -111,7 +111,7 @@ impl ArtifactError {
 /// parses an envelope can turn it into a ledger row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactSignature {
-    /// Envelope format version — see [`ENVELOPE_VERSION`].
+    /// Envelope format version — see `ENVELOPE_VERSION`.
     pub v: u32,
     /// The agent the envelope claims signed. Inside the preimage, so swapping
     /// it for another agent's name invalidates the signature.

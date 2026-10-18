@@ -326,7 +326,7 @@ impl AgentLedger {
     }
 }
 
-/// What [`AgentLedger::perform_rotate`] did, so the caller does not have to
+/// What `AgentLedger::perform_rotate` did, so the caller does not have to
 /// re-read "which key was active before" and risk reporting a different answer
 /// than the one the chain recorded.
 #[derive(Debug, Clone)]

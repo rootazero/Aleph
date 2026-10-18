@@ -100,7 +100,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// handlers' — so a mode it stamps is marked as typed by a person
     /// (`slash_skill_scope::mark_typed`), which a `/skill`'s pre-grant
     /// requires. `execute()`'s safety net, which stamps text other producers
-    /// put in a request, calls [`Self::stamp_slash_mode_unattested`] instead.
+    /// put in a request, calls `Self::stamp_slash_mode_unattested` instead.
     pub async fn stamp_slash_mode(&self, input: &str, metadata: &mut HashMap<String, String>) {
         if self.stamp_mode(input, metadata).await {
             super::slash_skill_scope::mark_typed(metadata);

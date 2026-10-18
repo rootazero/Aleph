@@ -13,7 +13,7 @@ use serde_json::Value;
 /// # Arguments
 ///
 /// * `json` - The JSON value to query
-/// * `path` - `JSONPath` expression (e.g., "$.data.choices[0].message.content")
+/// * `path` - `JSONPath` expression (e.g., "$.data.choices\[0\].message.content")
 ///
 /// # Returns
 ///

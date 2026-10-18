@@ -19,9 +19,9 @@
 //! `#[cfg(target_os = "windows")]`-gated.
 //!
 //! Module layout:
-//! - [`policy`] — `WindowsInitPolicy`, capability translation, DACL
+//! - `policy` — `WindowsInitPolicy`, capability translation, DACL
 //!   constants, protected-metadata classifier (cross-platform).
-//! - [`args`] — the `--policy ... -- <target>` argv parser
+//! - `args` — the `--policy ... -- <target>` argv parser
 //!   (cross-platform).
 //! - `imp` — the Windows-only Win32 launch implementation
 //!   (`#[cfg(target_os = "windows")]`).

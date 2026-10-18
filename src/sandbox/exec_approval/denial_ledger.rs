@@ -141,7 +141,7 @@ impl DenialReason {
     /// *everything else* fell through to [`Self::UserRejected`], so a delivery
     /// failure, an unwired requester and an unattended run were all filed as
     /// "the user said no". Deriving it here means a new
-    /// [`ApprovalOutcome`] variant is a compile error at one site instead of a
+    /// `ApprovalOutcome` variant is a compile error at one site instead of a
     /// silent mislabel at two.
     #[must_use]
     pub const fn for_refusal(outcome: super::gate::ApprovalOutcome) -> Option<Self> {
@@ -406,7 +406,7 @@ impl DenialLedger {
 
     /// Record that `fingerprint` was denied in `session` for `reason`. Bumps
     /// the per-intent count and the session total, tripping the sticky pause
-    /// flag once the total reaches [`SESSION_PAUSE_THRESHOLD`].
+    /// flag once the total reaches `SESSION_PAUSE_THRESHOLD`.
     ///
     /// Returns `true` iff this call *just* tripped the session pause (the
     /// circuit-breaker flipped false→true on this denial, never on later ones

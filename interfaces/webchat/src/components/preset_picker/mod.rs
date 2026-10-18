@@ -45,7 +45,7 @@
 //!
 //! # One owner for the highlight index
 //!
-//! [`super::picker_nav::step_highlight`] is the only thing that moves the
+//! `super::picker_nav::step_highlight` is the only thing that moves the
 //! selection, in this component and in the three others that walk a list — see
 //! that module for what a per-surface answer cost the palette.
 

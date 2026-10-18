@@ -1,4 +1,4 @@
-//! The runtime overlay the gateway applies on top of [`resolve_route`].
+//! The runtime overlay the gateway applies on top of `resolve_route`.
 //!
 //! [`resolve_route`](super::resolve::resolve_route) answers from **config**:
 //! the `[[bindings]]` table, snapshotted at boot. Two runtime facts sit on top

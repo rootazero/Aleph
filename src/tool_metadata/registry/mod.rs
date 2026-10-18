@@ -139,9 +139,9 @@ impl ToolCatalog {
     }
 
     /// Register SKILL rows (Flat Namespace Mode): each skill's `allowed-tools:`
-    /// pre-grants ([`AllowedToolsMeaning::PreGrants`]) — Claude Code names are
+    /// pre-grants (`AllowedToolsMeaning::PreGrants`) — Claude Code names are
     /// mapped, entries that grant nothing are dropped with a warn, and every
-    /// skill registers. See [`ToolRegistrar::register_skills`].
+    /// skill registers. See `ToolRegistrar::register_skills`.
     pub async fn register_skills(&self, skills: &[SkillInfo]) {
         let refused = self
             .registrar

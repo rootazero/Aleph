@@ -28,7 +28,7 @@
 //!    a failed write left the file untouched, so the earlier read is still
 //!    the model's only accurate view of it.
 //! 7. **No-win and persisted-marker guards.** Mirroring
-//!    [`ToolResultPruningStage`]: a body already smaller than the stub is
+//!    `ToolResultPruningStage`: a body already smaller than the stub is
 //!    left verbatim (stubbing it would inflate context), and
 //!    `[Full output persisted: …]` markers are never stubbed — they carry
 //!    the disk-recovery path the LLM needs.
@@ -38,8 +38,8 @@
 //!     LLM-style judgement is replicated in code.
 //!
 //! R10 alignment: lives in `src/context/budget/cheap_passes/`, alongside
-//! the other deterministic transforms ([`ToolResultPruningStage`],
-//! [`HistoricalImageStrippingStage`]). Wired into the production
+//! the other deterministic transforms (`ToolResultPruningStage`,
+//! `HistoricalImageStrippingStage`). Wired into the production
 //! `PreflightPipeline` in `orchestrator::harness_bridge`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -85,7 +85,7 @@ const MIN_OPS_PER_PATH: usize = 2;
 
 impl FileOpSupersedeStage {
     /// Override just the pressure gate. Production wires this from
-    /// [`ContextBudgetConfig::preventive_floor`](crate::context::budget::ContextBudgetConfig::preventive_floor)
+    /// `ContextBudgetConfig::preventive_floor`
     /// so all three cheap passes share one config-derived band instead of this
     /// stage carrying its own hardcoded ratio.
     #[must_use]

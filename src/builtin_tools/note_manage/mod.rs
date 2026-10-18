@@ -5,7 +5,7 @@
 //! transcript, other, and the subagent-* family.
 //!
 //! Split by surface, mirroring how the tool is actually reasoned about:
-//! [`args`] holds the wire shapes, [`helpers`] the questions every action asks
+//! `args` holds the wire shapes, `helpers` the questions every action asks
 //! first, and `write` / `read` / `lifecycle` / `analysis` one action family
 //! each. This module keeps the pieces that must not move: the struct (so the
 //! surface modules can reach its private fields as descendants), the

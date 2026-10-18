@@ -35,7 +35,7 @@ pub struct PromptLayout {
     /// (`stable ++ dynamic`).
     pub layers: Vec<LayerSize>,
     /// Byte length of the dynamic half after
-    /// [`prompt_budget::fit_dynamic_suffix_with_content`](crate::thinker::prompt_budget::fit_dynamic_suffix_with_content)
+    /// `prompt_budget::fit_dynamic_suffix_with_content`
     /// — i.e. what the model actually received for that half. Equal to the sum
     /// of the Dynamic-zone `layers` bytes whenever the budget did not bite.
     ///

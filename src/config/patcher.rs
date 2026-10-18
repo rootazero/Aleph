@@ -243,7 +243,7 @@ impl ConfigPatcher {
     /// 9. If `dry_run`: return early with diff
     /// 10. Check conflict (mtime)
     /// 11. Backup snapshot
-    /// 12. Write lock -> replace config -> `save_incremental`([`top_section`])
+    /// 12. Write lock -> replace config -> `save_incremental`(`top_section`)
     /// 13. Update mtime
     /// 14. Run post-patch provider health check when `health_check` is set
     /// 15. Return `PatchResult`

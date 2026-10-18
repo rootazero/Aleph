@@ -39,6 +39,7 @@
 //!     ApprovalDecision::Allow => { /* proceed */ }
 //!     ApprovalDecision::Deny { reason } => { /* abort */ }
 //!     ApprovalDecision::Ask { prompt } => { /* ask user */ }
+//!     _ => { /* new variants are non-exhaustive; forward to a default policy */ }
 //! }
 //! # }
 //! ```

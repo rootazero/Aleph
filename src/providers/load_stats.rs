@@ -1,7 +1,7 @@
 //! Lock-free per-provider runtime load statistics for the failover balancer.
 //!
 //! The [`route_policy`](crate::providers::route_policy) load-balancing
-//! strategies ([`LoadBalanceStrategy`](crate::config::types::LoadBalanceStrategy))
+//! strategies (`LoadBalanceStrategy`)
 //! need two prompt-blind hard signals about each candidate provider: how many
 //! requests are *in flight* right now, and how *fast* it has been responding.
 //! This module owns both, keyed by provider name in a [`DashMap`] so the
@@ -9,7 +9,7 @@
 //! reference routers' mutex/Redis-guarded Python state).
 //!
 //! The map is shared (behind an `Arc`) across the global chain and every
-//! per-agent override chain — exactly like [`FailoverHealth`] — so one
+//! per-agent override chain — exactly like `FailoverHealth` — so one
 //! endpoint's load is visible to every chain that might dial it.
 //!
 //! R7/R10 stance: this is **infrastructure** (infrastructure layer). It records counts and

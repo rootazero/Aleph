@@ -99,7 +99,7 @@
 //! In-memory and best-effort by design, exactly like the trace mirror: this must
 //! never be able to fail a request or grow without bound. Entries are removed by
 //! [`take`]; runs that never reach a taker (subagent and team child sessions get
-//! their own session keys) are bounded by [`MAX_TRACKED_SESSIONS`], whose
+//! their own session keys) are bounded by `MAX_TRACKED_SESSIONS`, whose
 //! overflow evicts the *least recently written* entry rather than wiping the
 //! whole map — a bulk clear used to erase the witnesses of runs still in flight
 //! (a session's record is only taken when its run ends, so every in-flight run
@@ -419,7 +419,7 @@ pub fn record_success(session_key: &str, attempted: Dialed, served: Dialed) {
 /// request is built, so waiting for a dial anchors on the fallback and reports
 /// an ongoing outage as "nothing deviated". And once more with the fully
 /// resolved [`Dialed`] of the first endpoint it actually dials, which refines
-/// that anchor's model (see [`RouteWitness::absorb`]).
+/// that anchor's model (see `RouteWitness::absorb`).
 ///
 /// The earliest anchor of a run wins: a later walk (there is one per Think turn)
 /// and a chain nested behind `NESTED_CHAIN_NODE` both find the entry present and
@@ -445,7 +445,7 @@ pub fn record_attempt(session_key: &str, attempted: Dialed) {
 /// event that invalidates it, rather than never written at all.
 ///
 /// A no-op unless the record is still that bare anchor — see
-/// [`BoundedWitnesses::retract`].
+/// `BoundedWitnesses::retract`.
 pub fn retract(session_key: &str, provider: &str) {
     let key = witness_key(session_key);
     map()

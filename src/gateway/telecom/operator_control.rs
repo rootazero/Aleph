@@ -3,7 +3,7 @@
 //! Startup registers this service (`telecom.approval.*`) and hands the same
 //! instance to the inbound router, which opens a trusted live turn scope only
 //! after a public SMS is admitted and retires it on every exit path via
-//! [`ScopeGuard`]. Production wires no private-read driver, so an approved A
+//! `ScopeGuard`. Production wires no private-read driver, so an approved A
 //! record is never consumed and no private disclosure (B) is ever produced.
 //!
 //! The service is separate from `exec.approval.*`: complete bodies and stages

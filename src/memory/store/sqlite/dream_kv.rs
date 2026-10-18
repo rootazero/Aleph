@@ -148,7 +148,7 @@ impl SqliteMemoryBackend {
     /// Remember a rejected distill edit so the same bad edit is dropped on later
     /// cycles without re-running the gate, *and* so its context can be replayed
     /// as negative feedback into the next distill prompt. Deduped by fingerprint;
-    /// FIFO-capped at [`MAX_DISTILL_REJECTS`].
+    /// FIFO-capped at `MAX_DISTILL_REJECTS`.
     pub fn record_distill_reject(
         &self,
         agent_id: &str,

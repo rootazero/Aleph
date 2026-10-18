@@ -69,7 +69,7 @@ pub struct TurnVerifyContext<'a> {
 
 /// Canonical `stop_reason` the harness emits when the model finishes a turn
 /// without tool calls. Used by both the producer (the harness agent loop)
-/// and [`MutationEvidenceVerifier`] (the only verifier that gates on the
+/// and `MutationEvidenceVerifier` (the only verifier that gates on the
 /// specific value rather than on `is_some()`), so the verifier cannot drift
 /// from the producer by a spelling change.
 pub const STOP_REASON_END_TURN: &str = "end_turn";

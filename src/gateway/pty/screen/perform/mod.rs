@@ -2,7 +2,7 @@
 //!
 //! Split by dispatch face: the `vte::Perform` impl below is a uniform
 //! forwarding block, and the real work lives one file per face --
-//! [`csi`], [`esc`] (which also owns the C0 table) and [`osc`]. The
+//! `csi`, `esc` (which also owns the C0 table) and `osc`. The
 //! forwarding is deliberately verb-free so the dispatch-table censuses in
 //! `tests.rs` have exactly one place to read each table from; they assert
 //! that the bodies here claim nothing, which is what keeps this file from

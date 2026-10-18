@@ -74,7 +74,7 @@ pub struct SpawnOverride {
     pub spawn_context: Option<crate::agents::SpawnContext>,
     /// Parent transcript for a `context=fork` spawn, captured once per tool
     /// call so every child of one fan-out forks the same instant. See
-    /// [`crate::agents::subagent_spawner::fork::ForkSource`].
+    /// `crate::agents::subagent_spawner::fork::ForkSource`.
     pub fork_source: Option<crate::agents::subagent_spawner::fork::ForkSource>,
     /// Explicit model override (highest priority).
     pub model: Option<String>,

@@ -115,7 +115,7 @@ pub struct StreamingOptions {
     /// Buffer size for streaming events
     #[serde(default = "default_stream_buffer_size")]
     pub buffer_size: usize,
-    /// Enable reasoning lane extraction (<think> tags)
+    /// Enable reasoning lane extraction (`&lt;think&gt;` tags)
     #[serde(default = "default_false")]
     pub reasoning_lane_enabled: bool,
     /// Status reaction configuration

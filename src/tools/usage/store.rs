@@ -89,7 +89,7 @@ pub struct OriginUsage {
     pub last_used_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error_at: Option<String>,
-    /// Per-tool breakdown, capped at [`MAX_TOOLS_PER_ORIGIN`] distinct names.
+    /// Per-tool breakdown, capped at `MAX_TOOLS_PER_ORIGIN` distinct names.
     /// `BTreeMap` so the emitted JSON is byte-deterministic across runs.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tools: BTreeMap<String, u64>,

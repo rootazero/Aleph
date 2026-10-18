@@ -39,7 +39,7 @@ use crate::i18n::{t_string, use_i18n};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabEntry {
     pub session_id: String,
-    /// What the tab shows. Derived by [`derive_title`] and never empty.
+    /// What the tab shows. Derived by `derive_title` and never empty.
     pub title: String,
     pub state: Option<RuntimeAgentState>,
     pub program: Option<String>,

@@ -1,9 +1,9 @@
 //! The character grid: cells, rows, cursor, and the scrollback ring.
 //!
 //! Split by responsibility, one file per kind of change to the cells:
-//! [`write`] (printing a glyph), [`edit`] (the erase and insert/delete
-//! verbs), [`scroll`] (the scrolling region and everything that shifts whole
-//! rows), and [`resize`]. This file keeps the types, the state, and the
+//! [`write`] (printing a glyph), `edit` (the erase and insert/delete
+//! verbs), `scroll` (the scrolling region and everything that shifts whole
+//! rows), and `resize`. This file keeps the types, the state, and the
 //! moves that touch only the cursor.
 //!
 //! Every helper stays private to the file that calls it. That works because
@@ -82,7 +82,7 @@ impl Cell {
 /// not modelled, so every stop is a multiple of this.
 const TAB_WIDTH: u16 = 8;
 
-/// The visible screen plus its cursor. Scrollback lands in [`Grid::scrollback`]
+/// The visible screen plus its cursor. Scrollback lands in `Grid::scrollback`
 /// as rows fall off the top.
 #[derive(Debug)]
 pub struct Grid {
@@ -337,7 +337,7 @@ impl Grid {
 
     /// CUP / HVP. Callers pass 0-based coordinates; the 1-based CSI
     /// convention is converted by the caller. The row goes through DECOM
-    /// (see [`Self::resolve_row`]); the column does not, because DECOM has
+    /// (see `Self::resolve_row`); the column does not, because DECOM has
     /// no left/right margins to be relative to.
     pub fn goto(&mut self, row: u16, col: u16) {
         self.cursor_row = self.resolve_row(row);

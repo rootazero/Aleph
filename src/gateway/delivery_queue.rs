@@ -49,7 +49,7 @@
 //! # Layering (no reference cycle)
 //!
 //! [`DeliveryStore`] owns only the `SQLite` handle — it holds *no* reference to
-//! the registry. [`ChannelRegistry`](super::channel_registry::ChannelRegistry)
+//! the registry. `ChannelRegistry`
 //! holds `Option<Arc<DeliveryStore>>` and enqueues on transient failure. The
 //! drain task ([`drain_loop`] / [`spawn_drain`]) is a free function holding
 //! `Arc<ChannelRegistry>` + `Arc<DeliveryStore>`. The store never points back,
@@ -99,7 +99,7 @@ pub struct DeliveryQueueConfig {
     pub max_payload_bytes: usize,
     /// Most queued records one live [`send`](ChannelRegistry::send) will flush
     /// ahead of itself to keep a conversation in order (see
-    /// [`flush_conversation`]). `0` disables the inline flush entirely.
+    /// `flush_conversation`). `0` disables the inline flush entirely.
     ///
     /// This bounds how long a user-facing send can block behind its own
     /// backlog: the flush stops at the first failure anyway, so the cap only
@@ -370,7 +370,7 @@ pub enum DeadLetterReason {
     /// is acceptable".
     PayloadTooLarge,
     /// A queued row addressed to a channel whose
-    /// [`OutboundDeliveryPolicy`](super::channel::OutboundDeliveryPolicy) is
+    /// `OutboundDeliveryPolicy` is
     /// `ExplicitOnly` (e.g. SMS). Such a channel is never replayed from the
     /// queue, so the row was retired without any transport call and its payload
     /// scrubbed ([`DeliveryStore::record_scrubbed_dead_letter`]).
@@ -1090,11 +1090,11 @@ impl DeliveryStore {
     /// # Concurrency
     ///
     /// This claim is a plain SELECT — it does **not** lease or mark rows, so a
-    /// row stays visible to any concurrent `claim_due` until [`drain_once`]
+    /// row stays visible to any concurrent `claim_due` until `drain_once`
     /// settles it (delete / reschedule / dead-letter). Correctness therefore
     /// rests on a **single-drainer invariant**: exactly one [`drain_loop`] runs
     /// per store (one [`spawn_drain`] at boot, guarded against a second spawn by
-    /// [`try_claim_drainer`](Self::try_claim_drainer)), and it awaits each
+    /// `try_claim_drainer`), and it awaits each
     /// `drain_once` to completion before the next tick. Two concurrent drainers
     /// would double-claim and double-deliver; if a second drainer is ever
     /// introduced, give this a real row lease (e.g. a `claimed_until` column
@@ -1141,7 +1141,7 @@ impl DeliveryStore {
     /// one a live send would jump ahead of. Pulling it forward is no more
     /// aggressive than the live send that is about to hit the same transport
     /// anyway. What the caller must *not* do is settle a transient failure here
-    /// — see [`AttemptMode::Inline`].
+    /// — see `AttemptMode::Inline`.
     ///
     /// Ordered by `id` (enqueue order), which is the order the caller produced
     /// them in. Same poison-row handling as [`claim_due`](Self::claim_due).
@@ -1290,7 +1290,7 @@ impl DeliveryStore {
     /// The counterpart to [`mark_inflight`](Self::mark_inflight) for an attempt
     /// that ended in a *reported* transient failure yet must leave the record
     /// exactly as it was — the opportunistic inline flush
-    /// ([`AttemptMode::Inline`]). [`reschedule`](Self::reschedule) also clears
+    /// (`AttemptMode::Inline`). [`reschedule`](Self::reschedule) also clears
     /// the stamp but owns `attempts` and `next_attempt_at` with it, which is
     /// precisely what an opportunistic probe must not spend.
     pub fn clear_inflight(&self, id: i64) -> rusqlite::Result<()> {

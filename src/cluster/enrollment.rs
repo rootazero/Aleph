@@ -157,7 +157,7 @@ fn match_by_name(store: &SecurityStore, node_name: &str) -> Result<NameMatch, ru
 /// Idempotence is the whole point. `mint_node_device` alone made every click of
 /// the Panel's "+ Enroll" (or every retried RPC) create another `role=node` row
 /// with the same name, and those duplicates are **self-sealing**: the second row
-/// makes [`match_by_name`] ambiguous, so the node's own first boot stops
+/// makes `match_by_name` ambiguous, so the node's own first boot stops
 /// adopting either and mints a *third*, while `cluster.deregister`'s offline
 /// fallback — which requires a unique name match — can no longer address any of
 /// them. The operator ends up with permanent ghost rows removable only by
@@ -399,7 +399,7 @@ fn match_name_in(devices: &[DeviceRow], q: &str) -> NameMatch {
 /// stays pure I/O).
 ///
 /// Two-phase takedown:
-/// ① [`NodeRegistry::forget`] evicts the live session — it vanishes from
+/// ① `NodeRegistry::forget` evicts the live session — it vanishes from
 ///    `environments.list`, stops being addressable by `node_invoke`/`node_file`,
 ///    and its connection is asked to close (so the revoked node cannot keep
 ///    running dispatched work or raising approval cards);

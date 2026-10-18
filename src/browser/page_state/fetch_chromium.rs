@@ -784,14 +784,14 @@ const fn minus_one() -> i64 {
 ///
 /// `loaders` maps frame id → loader id (from `Page.getFrameTree`). The MAIN
 /// frame must be in it; a child that is not is tolerated with an empty loader
-/// id — see [`frames_of`].
+/// id — see `frames_of`.
 ///
 /// This is [`stitch_snapshots`] with no child captures, which is the honest
 /// description of a single-session capture: complete for everything in this
 /// renderer, and silent about a cross-origin frame's content.
 ///
 /// `top_layer` is the session's own `DOM.getTopLayerElements`, translated to
-/// backendNodeIds — see [`top_layer_backend_ids`], which is the only thing that
+/// backendNodeIds — see `top_layer_backend_ids`, which is the only thing that
 /// should ever produce one for a real capture. It is a PARAMETER rather than
 /// something this function could default, because there is no honest default:
 /// an empty set is the answer for most pages AND the answer a forgotten read
@@ -811,7 +811,7 @@ pub fn parse_snapshot(
 ///
 /// Each child's document is placed at its owner element's page origin — the
 /// **same addition** the same-origin path does through `contentDocumentIndex`,
-/// reached through the same [`frames_of`] call, because two spellings of one
+/// reached through the same `frames_of` call, because two spellings of one
 /// arithmetic part company (判据 §16).
 ///
 /// # `loaders` is a UNION over every session, not the parent's

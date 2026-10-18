@@ -673,7 +673,7 @@ impl HttpProvider {
     }
 
     /// Streaming variant of the non-streaming `process()` path: runs the exact
-    /// same full pipeline as [`HttpProvider::execute`] (so cost metering,
+    /// same full pipeline as `HttpProvider::execute` (so cost metering,
     /// provider-error promotion, truncation handling, validation and inbound
     /// secret-leak detection all still apply to the assembled response) while
     /// forwarding each [`ProviderDelta`] to `sink` as it streams in.

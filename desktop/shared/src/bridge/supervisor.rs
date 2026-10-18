@@ -102,7 +102,7 @@ const STABLE_UPTIME: Duration = Duration::from_secs(10);
 /// The backoff ladder resets on a *stable* session, not on a bare fork: a
 /// forked helper that exits milliseconds later would otherwise reset the ladder
 /// on every attempt, so a crash loop paced itself at a flat 1s forever instead
-/// of climbing. Liveness is proxied by uptime ([`STABLE_UPTIME`]) rather than a
+/// of climbing. Liveness is proxied by uptime (`STABLE_UPTIME`) rather than a
 /// handshake ping, keeping the gate self-contained.
 #[derive(Debug)]
 pub struct SpawnGate {
@@ -149,7 +149,7 @@ impl SpawnGate {
     /// arms the next-spawn gate, and returns `true` when the restart threshold
     /// has been exceeded (caller should latch the bridge into disabled mode).
     ///
-    /// If the helper that just died had been alive past [`STABLE_UPTIME`], the
+    /// If the helper that just died had been alive past `STABLE_UPTIME`, the
     /// ladder resets first so this isolated death cools from the first rung; a
     /// helper that died sooner (or never spawned — a bare spawn failure) leaves
     /// the ladder climbing so a crash loop actually spaces out.
@@ -170,7 +170,7 @@ impl SpawnGate {
     /// succeeded). Clears the next-spawn gate — a spawn was allowed to proceed —
     /// and stamps the spawn instant, but does **not** reset the backoff ladder:
     /// a bare fork is not proof of liveness, so the ladder only resets once the
-    /// helper survives past [`STABLE_UPTIME`] (see [`record_failure`]). The
+    /// helper survives past `STABLE_UPTIME` (see `record_failure`). The
     /// restart window is intentionally never cleared here — a flapping helper
     /// (spawn → crash → spawn → crash) must still trip the threshold.
     pub fn record_spawn(&mut self) {

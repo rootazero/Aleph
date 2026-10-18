@@ -41,7 +41,7 @@ pub struct SearchAnswer {
     pub results: Vec<SearchResult>,
     /// Which backend answered. Not always the one the chain starts with.
     pub provider: String,
-    /// Sentences from [`crate::search::notes`] naming what this answer is
+    /// Sentences from `crate::search::notes` naming what this answer is
     /// missing and which lever the caller can pull. Empty is the common case.
     pub notes: Vec<String>,
 }
@@ -690,7 +690,7 @@ impl SearchRegistry {
     /// an answer that is only interesting as a whole. Concurrency needs no
     /// extra care here for the same reason `fan_out` does: the futures
     /// borrow the registry and the options and nothing outlives the call,
-    /// and [`ProviderHealth`] is internally locked with every method taking
+    /// and `ProviderHealth` is internally locked with every method taking
     /// `&self`, so two queries recording a failure at the same instant is
     /// just two inserts.
     ///

@@ -104,7 +104,7 @@ impl IncomingHandler {
     ///
     /// The root is made absolute and lexically normalized — NOT
     /// symlink-canonicalized — so it shares one path namespace with the
-    /// (also lexically normalized) request paths in [`confine`](Self::confine).
+    /// (also lexically normalized) request paths in `confine`.
     /// Canonicalizing only the root would wrongly deny legitimate absolute
     /// paths the agent derives from the cwd string we handed it when that cwd
     /// contains a symlink (e.g. macOS `/tmp` → `/private/tmp`).

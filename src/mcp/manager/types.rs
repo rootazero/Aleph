@@ -516,7 +516,7 @@ pub enum McpCommand {
     GetClient {
         /// Server ID
         server_id: String,
-        /// Response channel (returns Arc<McpClient> if available)
+        /// Response channel (returns Arc`&lt;McpClient&gt;` if available)
         respond_to: oneshot::Sender<Option<Arc<McpClient>>>,
     },
 

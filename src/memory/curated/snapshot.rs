@@ -133,7 +133,7 @@ fn capture_expired(captured_on: Option<&str>, today: &str, max_age_days: u32) ->
 ///
 /// Naming the date told the model how old the loops were; it did not stop them
 /// arriving. `max_age_days` (0 = no ceiling) is the half that does — see
-/// [`capture_expired`], and note that the date this block already parsed for
+/// `capture_expired`, and note that the date this block already parsed for
 /// its own prose was the only thing needed to enforce it.
 #[must_use]
 pub fn render_open_loops_block(

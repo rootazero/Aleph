@@ -10,7 +10,7 @@
 //! deliver consistent savings without LLM cost.
 //!
 //! The content-type router these stages lean on lives in
-//! [`crate::tool_output::structured`] — it is shared with the *ingress* cleaner
+//! `crate::tool_output::structured` — it is shared with the *ingress* cleaner
 //! in [`crate::tools::result_processing`], so it belongs to the tool-output
 //! module rather than to this pipeline. Stale logs/search-results/diffs are
 //! reduced to their signal here rather than truncated to a single line.

@@ -51,7 +51,7 @@
 //!
 //! Scope (Phase 2b): `AllowOnce` + `AllowSession` only. `AllowAlways` collapses to a
 //! session grant — permanent device elevation is Phase 3 (the narrowing lives in
-//! [`ApprovalDecisionType::clamped`], shared by every surface).
+//! `ApprovalDecisionType::clamped`, shared by every surface).
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;

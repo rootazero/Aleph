@@ -18,7 +18,7 @@
 //! A message is **lost** (§8.2(b)) iff the engine's `agent_tasks` row for it
 //! exists and its session log holds no `UserMessage` since — the crash
 //! landed before the seed itself. Nothing can be re-run; the user is told
-//! once, in-band, to re-send it ([`ResumeCoordinator::adjudicate_orphaned_tasks`]).
+//! once, in-band, to re-send it (`ResumeCoordinator::adjudicate_orphaned_tasks`).
 //!
 //! R10-safe: `src/harness/` is untouched. The harness already replays the
 //! event log on every `run()`; resume only re-triggers it.
@@ -666,7 +666,7 @@ pub(crate) struct ResumePlan {
 /// `slash_skill_scope` (`SLASH_SKILL_ALLOWED_TOOLS_KEY`) and is deliberately
 /// not the marker's word.
 ///
-/// Not knobs: no `custom` twin, no session / global rung, so [`plan_resume`]
+/// Not knobs: no `custom` twin, no session / global rung, so `plan_resume`
 /// below — their only production reader — replays them from the snapshot or
 /// not at all. That is why the array lives here rather than beside
 /// [`crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS`]:
@@ -1679,7 +1679,7 @@ impl ResumeCoordinator {
     /// no-op that reads as a broken feature.
     ///
     /// Everything else is shared with boot via
-    /// [`resume_from_markers`](Self::resume_from_markers): same recency filter,
+    /// `resume_from_markers`: same recency filter,
     /// same crash-loop cap, same boundary repair, same concurrency permit.
     ///
     /// Reads the same cross-session marker query boot uses and picks this

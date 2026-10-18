@@ -740,7 +740,7 @@ impl GoalStore {
     }
 
     /// Commit an objective-gate verdict that ends the pursuit (confirmed complete,
-    /// or vetoed with no runway left), guarded by [`Self::still_awaiting_gate`].
+    /// or vetoed with no runway left), guarded by `Self::still_awaiting_gate`.
     /// `false` = the goal changed under the gate and the verdict was discarded.
     /// Clears any pending marker so no in-flight continuation can resurrect it.
     pub fn commit_gate_pass(&self, expected: &Goal, next: &Goal) -> Result<bool> {

@@ -58,7 +58,7 @@ impl GuideTopic {
 
     /// Wire id — the exact string the `topic` argument accepts. Kept in
     /// lock-step with the `serde(rename_all = "snake_case")` above by
-    /// [`tests::ids_match_the_serialized_form`].
+    /// `tests::ids_match_the_serialized_form`.
     #[must_use]
     pub const fn id(&self) -> &'static str {
         match self {

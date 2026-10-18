@@ -16,7 +16,7 @@ pub struct DreamingConfig {
     #[serde(default = "super::defaults::default_drift_max_pairs_per_run")]
     pub drift_max_pairs_per_run: usize,
     /// Ceiling on `NoteConsolidate` pairs judged per corpus per night. See
-    /// [`super::defaults::default_consolidate_max_pairs_per_run`].
+    /// `super::defaults::default_consolidate_max_pairs_per_run`.
     #[serde(default = "super::defaults::default_consolidate_max_pairs_per_run")]
     pub consolidate_max_pairs_per_run: usize,
     #[serde(default = "super::defaults::default_skill_distill_max_per_cycle")]

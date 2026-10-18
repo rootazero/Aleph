@@ -65,7 +65,7 @@ impl LaneHandle {
     ///   interval (or `finalize`) flushes the latest accumulated text.
     ///
     /// Reasoning lane additionally wraps the accumulated text with the
-    /// [`REASONING_MESSAGE_PREFIX`] marker so a reader can tell the message
+    /// `REASONING_MESSAGE_PREFIX` marker so a reader can tell the message
     /// is "the model thought this" rather than the answer. The marker is
     /// idempotent across re-splits.
     pub async fn write_chunk(&self, delta: &str) -> ChannelResult<()> {

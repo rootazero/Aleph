@@ -343,7 +343,7 @@ impl LoopGraphStore {
     /// enums are `#[non_exhaustive]`, so the vocabulary is expected to grow)
     /// would be answered "ungoverned" and allowed to rewrite its own objective.
     /// Existence questions read the columns that cannot fail to parse, exactly
-    /// as [`node_ids_present`] does.
+    /// as `node_ids_present` does.
     pub fn owns_reference_sources(&self, agent_id: &str, to_id: &str) -> Result<Vec<String>> {
         self.edge_sources(agent_id, to_id, EdgeKind::OwnsReference, "owns_reference")
     }
@@ -493,7 +493,7 @@ impl LoopGraphStore {
 
     /// Ids of the nodes whose `body` is exactly `body`, read from raw columns.
     ///
-    /// Same reasoning as [`node_ids_present`] / `owns_reference_sources`: this
+    /// Same reasoning as `node_ids_present` / `owns_reference_sources`: this
     /// answers an EXISTENCE question (`enable_audit`'s "is an audit ring
     /// already installed"), and `list_nodes` fail-softs an unreadable row to
     /// nothing. An audit node this build cannot parse — a downgrade past a new
@@ -521,7 +521,7 @@ impl LoopGraphStore {
     /// Remove dangling edges (endpoint node gone). Explicit only — never
     /// automatic.
     ///
-    /// "Gone" is decided by [`node_ids_present`] — raw `id` text, not a parsed
+    /// "Gone" is decided by `node_ids_present` — raw `id` text, not a parsed
     /// row. `row_to_node` fail-softs an unknown `kind`/`origin` to `Ok(None)`
     /// so one odd row cannot wedge a reader, but feeding that skip into a
     /// DELETE predicate turns "I could not read this node" into "this node

@@ -51,7 +51,7 @@
 //! nothing else (spec R2-2). R1 forbids `src/` from reaching a platform API
 //! crate directly; `MasterPty::process_group_leader` is `tcgetpgrp` behind
 //! `portable-pty`'s abstraction, and the process table comes from
-//! [`crate::utils::process_alive::with_process_specifics`], the one place in
+//! `crate::utils::process_alive::with_process_specifics`, the one place in
 //! this repo that owns the `sysinfo` single-pid idiom.
 //!
 //! # Locks

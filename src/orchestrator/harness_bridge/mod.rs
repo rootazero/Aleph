@@ -1,9 +1,9 @@
 //! Bridge between the Phase 5 Orchestrator and the Phase 4 `AgentHarness`.
 //!
-//! `AgentHarnessRunner` implements [`HarnessRunner`] by:
+//! `AgentHarnessRunner` implements `HarnessRunner` by:
 //!   1. Verifying `spec.agent` is registered in the [`AgentRegistry`].
-//!   2. Picking an `Arc<dyn AiProvider>` from [`BrainRef`].
-//!   3. Seeding the session with the [`FlowInput`] as a `UserMessage` event.
+//!   2. Picking an `Arc<dyn AiProvider>` from `BrainRef`.
+//!   3. Seeding the session with the `FlowInput` as a `UserMessage` event.
 //!   4. Running the inner `AgentHarness` loop to completion.
 //!   5. Extracting the last `AssistantMessage.text` as `final_text`.
 //!
@@ -15,7 +15,7 @@
 //!   `context_mode` — were cut instead: they had no reader on either side, and
 //!   `~/.aleph/flows/*.toml` is now loaded at boot, which would have shipped
 //!   them to users as knobs that accept a value and do nothing.
-//! * [`BrainRef::Strict`] **is** honoured — `llm::pick_llm` wraps the named
+//! * `BrainRef::Strict` **is** honoured — `llm::pick_llm` wraps the named
 //!   provider in `ModelOverrideProvider`, stamping the pinned model onto every
 //!   request. This note claimed the opposite for four rounds while the code
 //!   right next to it did the work.
@@ -79,7 +79,7 @@ pub(crate) use behavior_resolve::resolve_behavior;
 pub(crate) use prompt_build::{agent_identity_dir_exists, last_user_query, resolve_max_iterations};
 pub(crate) use runner_impl::seeded_calibration_for_model;
 
-/// Concrete [`HarnessRunner`] that dispatches to the Phase 4 `AgentHarness`.
+/// Concrete `HarnessRunner` that dispatches to the Phase 4 `AgentHarness`.
 pub struct AgentHarnessRunner {
     pub agent_registry: Arc<AgentRegistry>,
     pub session_service: Arc<dyn SessionService>,
@@ -143,13 +143,13 @@ pub struct AgentHarnessRunner {
     /// Boot-time default for the harness Think→Act iteration cap, sourced from
     /// `[execution] max_iterations`. A per-flow `FlowOverrides.max_iterations`
     /// overrides it on a run-by-run basis. The harness loop is never left
-    /// uncapped — see [`resolve_max_iterations`].
+    /// uncapped — see `resolve_max_iterations`.
     pub default_max_iterations: usize,
 
     /// Boot-time system-prompt verbosity tier, sourced from
     /// `[execution] prompt_mode`. Threaded into `build_system_prompt` so the
     /// cache-aware assembly can shed heavy guidance layers in `Compact` /
-    /// `Minimal` deployments. Defaults to [`PromptMode::Full`] — byte-identical
+    /// `Minimal` deployments. Defaults to `PromptMode::Full` — byte-identical
     /// to the prior always-Full behaviour.
     pub default_prompt_mode: crate::thinker::prompt_mode::PromptMode,
 

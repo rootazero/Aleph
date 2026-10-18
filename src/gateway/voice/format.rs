@@ -55,7 +55,7 @@ pub fn build_format_prompt(custom: &str, raw: &str) -> String {
 ///
 /// Resolves an `AiProvider` from `cfg` (provider/model) + the main config's
 /// provider map + vault, falling back to the agent's default chat provider when
-/// `cfg.provider` is empty. Sends the head ([`format_head`]) as the system
+/// `cfg.provider` is empty. Sends the head (`format_head`) as the system
 /// prompt and `raw` as the user message.
 ///
 /// P7 graceful degrade: on ANY failure (no provider, network, blank response)

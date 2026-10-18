@@ -143,7 +143,7 @@ impl AgentIdentityProfile {
     /// Parse `IDENTITY.md` from an agent directory.
     ///
     /// Returns an empty profile when the file is absent, unreadable, larger
-    /// than [`MAX_IDENTITY_PARSE_BYTES`], or carries only placeholders. This
+    /// than `MAX_IDENTITY_PARSE_BYTES`, or carries only placeholders. This
     /// is deliberately infallible: identity is decorative metadata, and no
     /// caller has a better answer to "the file is malformed" than "treat the
     /// agent as unnamed", so an error type would only push `unwrap_or_default`

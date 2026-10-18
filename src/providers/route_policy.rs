@@ -1,7 +1,7 @@
 //! R7-safe local/cloud route policy selector.
 //!
 //! A self-contained, prompt-blind module that turns two HARD signals — the
-//! operator's [`RouteMode`] (an explicit user choice) and a candidate's
+//! operator's `RouteMode` (an explicit user choice) and a candidate's
 //! [`EndpointTier`] (a `base_url`-derived connectivity fact) — into a
 //! [`CandidateAction`]. It never sees messages, tools, or the prompt; it
 //! cannot classify task intent. Choosing local vs cloud is *infrastructure*
@@ -9,7 +9,7 @@
 //! failover engine which owns all retry / breaker / model-walk logic (R10 dumb
 //! loop preserved — the harness never learns the route mode).
 //!
-//! In [`RouteMode::Auto`] every candidate is [`Allow`](CandidateAction::Allow)
+//! In `RouteMode::Auto` every candidate is [`Allow`](CandidateAction::Allow)
 //! in original order, so the policy is a no-op (byte-identical to pre-route
 //! failover).
 
@@ -38,7 +38,7 @@ pub struct LoadMetric {
     pub tpm_used: u64,
     /// Rate-window utilisation in per-mille (‰): `max(rpm, tpm) / limit * 1000`,
     /// pre-computed by the failover layer. `0` when no limit is configured — so
-    /// [`UsageBased`](crate::config::types::LoadBalanceStrategy::UsageBased)
+    /// `UsageBased`
     /// degrades to configured order. The sort key for `UsageBased`.
     pub utilization_permille: u16,
     /// Whether this provider has hit or exceeded any configured rate dimension
@@ -53,7 +53,7 @@ pub struct LoadMetric {
     /// [`utilization_permille`](Self::utilization_permille). `0` = free local
     /// inference (an on-machine / self-hosted model that carries no rate card),
     /// which sorts *first* under
-    /// [`CostAware`](crate::config::types::LoadBalanceStrategy::CostAware) so it
+    /// `CostAware` so it
     /// is preferred; [`u64::MAX`] = unpriced *cloud* (a model absent from the
     /// table, whose cost is unknown rather than zero), which sorts *last* so it
     /// never ranks ahead of a confirmable price. The failover layer derives this
@@ -90,7 +90,7 @@ impl LoadMetric {
 ///
 /// Both `None` (default) means no promotion: the configured candidate order is
 /// the route, byte-identical to pre-selection failover. A hard signal like
-/// [`RouteMode`] — names only, never the prompt (R7 preserved).
+/// `RouteMode` — names only, never the prompt (R7 preserved).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RouteTargets {
     /// Preferred local provider name, promoted to the front of the local tier.
@@ -179,7 +179,7 @@ impl RateLimits {
     ///
     /// Diagnostic accessor for the `route_status` snapshot; the hot path only
     /// ever uses the folded output of [`assess`](Self::assess). It returns the
-    /// values *after* [`effective_ceiling`], so a rendered number can never
+    /// values *after* `effective_ceiling`, so a rendered number can never
     /// disagree with what the ordering layer binds on: a configured `0` comes
     /// back `None` here exactly as it contributes nothing there. There is
     /// deliberately no raw accessor beside it — the raw value has one honest
@@ -395,10 +395,10 @@ where
 ///    tier (never dropped — the chain must not starve);
 /// 4. the remaining fresh same-tier `Allow` candidates are reordered by
 ///    `strategy` using the prompt-blind [`LoadMetric`] from `metric_of` (and
-///    `rr_base` for [`RoundRobin`](LoadBalanceStrategy::RoundRobin) rotation);
+///    `rr_base` for `RoundRobin` rotation);
 /// 5. cross-tier crossings are appended last, unchanged.
 ///
-/// Under [`LoadBalanceStrategy::Ordered`] with no `rate_limits`, steps 3–4 are
+/// Under `LoadBalanceStrategy::Ordered` with no `rate_limits`, steps 3–4 are
 /// no-ops, so the result is byte-identical to the pre-balance failover ordering.
 #[allow(clippy::too_many_arguments)]
 pub fn order_candidates_balanced<T, FT, FN, FM>(

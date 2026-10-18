@@ -8,7 +8,7 @@
 //! `category/filename` path and must retype that path in every
 //! `append`/`update`/`contradict`/`link`/`supersede` op. A single typo
 //! (`preference` → `preferences`, a dropped `.md`, a normalised slug) made
-//! [`apply::CompoundApplyTx::load_existing_or_default`] forge a brand-new
+//! `apply::CompoundApplyTx::load_existing_or_default` forge a brand-new
 //! orphan page and report `appended += 1` as success — silent data loss.
 //!
 //! [`RefTable`] is the Rust analog of Mem0's mapping: related pages are shown

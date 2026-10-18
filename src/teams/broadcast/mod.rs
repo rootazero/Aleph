@@ -430,7 +430,7 @@ impl GroupChatBroadcaster {
     /// (poisoning new member spawns), then walks `running_children_of(run_id)`
     /// to abort in-flight member runs.
     ///
-    /// Also records `run_id → team_id` in [`FANOUT_TEAMS`] — the ONLY write to
+    /// Also records `run_id → team_id` in `FANOUT_TEAMS` — the ONLY write to
     /// that index, and the reason `teams.chat.cancel` can be ownership-gated at
     /// all. It happens BEFORE the tracker registration so the index is never
     /// behind the running set: a run id that is cancellable is always

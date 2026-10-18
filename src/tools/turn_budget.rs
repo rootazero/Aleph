@@ -132,7 +132,7 @@ pub fn decline_global_turn_result_budget(because: &'static str) {
 /// Read the process-wide `TurnResultBudget`, if installed.
 ///
 /// ⚠️ `None` says nothing about whether boot reached this slot. Ask
-/// [`global_turn_result_budget_slot`]`().outcome()` for that — the difference
+/// `global_turn_result_budget_slot``().outcome()` for that — the difference
 /// between "this deployment sets no turn cap" and "boot never got here" is
 /// invisible from this return value, and the second one is a silent regression.
 #[inline]

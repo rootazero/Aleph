@@ -102,9 +102,9 @@ impl RuntimeSecurityGuard {
     /// Create a new guard with default configuration.
     ///
     /// The default config sets `audit_enabled: true`, which this constructor
-    /// cannot honour (see [`new_without_audit`]) — the default guard runs
+    /// cannot honour (see `new_without_audit`) — the default guard runs
     /// without an audit trail. Callers that need one must use
-    /// [`new_with_audit`] and own the returned receiver.
+    /// `new_with_audit` and own the returned receiver.
     #[must_use]
     pub fn default_guard() -> Self {
         Self::new_without_audit(SecurityGuardConfig::default())
@@ -112,14 +112,14 @@ impl RuntimeSecurityGuard {
 
     /// Create a new guard WITHOUT an audit pipeline.
     ///
-    /// The audit receiver is handed out by [`new_with_audit`], so a guard
+    /// The audit receiver is handed out by `new_with_audit`, so a guard
     /// built here has nowhere to send entries; `config.audit_enabled` is
     /// therefore forced to `false`. That override used to be silent (audit
     /// I-7): a caller passing `audit_enabled: true` got a guard that recorded
     /// nothing, with no signal that the trail they asked for does not exist.
     /// It now warns, and the constructor's name says what it does. Callers
     /// that want the audit pipeline must construct the guard via
-    /// [`new_with_audit`] and own the returned receiver.
+    /// `new_with_audit` and own the returned receiver.
     #[must_use]
     pub fn new_without_audit(mut config: SecurityGuardConfig) -> Self {
         if config.audit_enabled {

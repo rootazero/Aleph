@@ -42,7 +42,7 @@ const LEGACY_MAX_PATH: usize = 260;
 /// embed a path.
 ///
 /// **Display boundary only — never on a value that is stored or compared.**
-/// The transform is deliberately partial: a path past [`LEGACY_MAX_PATH`], or a
+/// The transform is deliberately partial: a path past `LEGACY_MAX_PATH`, or a
 /// UNC path (`\\?\UNC\server\share`, whose un-prefixed form is not a path at
 /// all), keeps its prefix. So simplifying one side of a `starts_with` and not
 /// the other silently flips an allow into a deny — which is exactly what an
@@ -535,7 +535,7 @@ pub(crate) fn private_temp_root() -> std::io::Result<PathBuf> {
 
 /// Create `dir` owner-only if absent, then verify we exclusively own it.
 ///
-/// Shared with Core-local startup stores and [`private_temp_root`]. The parent
+/// Shared with Core-local startup stores and `private_temp_root`. The parent
 /// directory must already exist on Unix. Refuses symlinks, foreign ownership,
 /// and group/other access rather than repairing or adopting an unsafe directory.
 /// On non-Unix targets this helper does not verify ACLs; callers requiring an

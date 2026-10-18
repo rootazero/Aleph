@@ -38,14 +38,13 @@
 //!
 //! # Persistence shape
 //!
-//! Mirrors [`ShellHookConsent`] — the repo's other human-consent registry —
+//! Mirrors `ShellHookConsent` — the repo's other human-consent registry —
 //! down to the file lock, the atomic tmp+rename write, and the `(mtime, len)`
 //! cache stamp: two stores answering "did a human approve this, durably?"
 //! should not answer it in two different shapes. A corrupt file reads as empty
 //! (fail **closed** — every gated call asks again), never as "allow".
 //!
 //! [`ApprovalAction::summary`]: super::action::ApprovalAction::summary
-//! [`ShellHookConsent`]: crate::extension::hooks::consent::ShellHookConsent
 
 use crate::sync_primitives::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};

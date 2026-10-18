@@ -1,8 +1,8 @@
 //! ACP Harnesses settings page — split into three sibling modules.
 //!
 //! - `AcpHarnessesView` (this file) — left list + right pane router
-//! - [`detail_panel::HarnessDetailPanel`] — right pane when a harness is selected
-//! - [`add_panel::AddHarnessPanel`] — right pane when adding a custom harness
+//! - `detail_panel::HarnessDetailPanel` — right pane when a harness is selected
+//! - `add_panel::AddHarnessPanel` — right pane when adding a custom harness
 
 mod add_panel;
 mod detail_panel;

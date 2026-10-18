@@ -277,7 +277,7 @@ impl BusyInputMode {
         Self::from_wire(metadata.get(BUSY_INPUT_MODE_KEY).map(String::as_str))
     }
 
-    /// Downgrade to [`Queue`] when this turn would disturb SOMEBODY ELSE's
+    /// Downgrade to `Queue` when this turn would disturb SOMEBODY ELSE's
     /// in-flight run in a shared project room (P2, spec §10).
     ///
     /// `Steer` and `Interrupt` are authority over your own turn: one injects
@@ -614,7 +614,7 @@ impl ExecutionError {
     /// error chain.
     ///
     /// **Single source of truth** for user-facing error presentation. The
-    /// in-engine `RunError` emit ([`execute`]), the gateway RPC handlers
+    /// in-engine `RunError` emit (`execute`), the gateway RPC handlers
     /// (`agent.run` / `chat.send` in the aleph-server bin) and the inbound
     /// router's channel error reply all route through it, so the flattened
     /// internal chain (e.g. `"Execution failed: flow: internal dispatch error:

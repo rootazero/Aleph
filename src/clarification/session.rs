@@ -252,7 +252,7 @@ impl ClarificationManager {
     /// reaped on the next [`register`](Self::register) call after its timeout
     /// expires. There is no background timer; stale entries are cleared
     /// opportunistically by the next registration, mirroring
-    /// [`ExecApprovalManager::register_pending`].
+    /// `ExecApprovalManager::register_pending`.
     ///
     /// `run_id` correlates the advance frames with the run that asked. Pass
     /// `""` when there is no gateway run — publishing is then skipped rather
@@ -326,7 +326,7 @@ impl ClarificationManager {
     }
 
     /// Whether `session_key` has a live pending clarification — one that is
-    /// neither expired nor abandoned by its waiter (see [`PendingEntry::is_live`]).
+    /// neither expired nor abandoned by its waiter (see `PendingEntry::is_live`).
     pub async fn has_pending(&self, session_key: &str) -> bool {
         self.pending
             .read()
@@ -337,7 +337,7 @@ impl ClarificationManager {
 
     /// Snapshot every live pending clarification.
     ///
-    /// The clarification twin of [`ExecApprovalManager::list_pending`]: the
+    /// The clarification twin of `ExecApprovalManager::list_pending`: the
     /// `AskUser` frame is a one-shot push, so a Panel that connects (or
     /// reloads) mid-question would otherwise never learn a tool is parked on
     /// its answer and would strand it until its timeout.

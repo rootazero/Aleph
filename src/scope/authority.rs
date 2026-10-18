@@ -173,7 +173,7 @@ pub fn checked_person<'a>(subject: &FireSubject<'a>) -> Option<(&'a str, bool)> 
 /// Resolve against an explicit store. `None` store ⇒ `Legacy` — the
 /// `FailsOpen` contract of `security/users-store`, stated at the slot.
 /// A store handed in here is taken as the durable table; the degraded
-/// (in-memory fallback) state is [`resolve_with_users`]'s.
+/// (in-memory fallback) state is `resolve_with_users`'s.
 ///
 /// An empty author or owner is read as absent: a malformed
 /// `AUTHOR_USER_KEY` of `""` falls back to the owner instead of being looked

@@ -121,7 +121,7 @@ pub struct FlowOutcome {
     /// flush. `0` when the runner did not record it (test fixtures).
     pub duration_ms: u64,
     /// Per-component provider-reported token usage accumulated across every
-    /// LLM call in this run. Granular complement to [`total_tokens`] —
+    /// LLM call in this run. Granular complement to `total_tokens` —
     /// surfaces cache hit ratio and reasoning-token spend that the single
     /// sum hides.
     pub token_breakdown: TokenBreakdown,
@@ -136,7 +136,7 @@ pub struct FlowOutcome {
     pub estimated_cost: Option<crate::pricing::CostEstimate>,
     /// Tokens occupying the model's context window as of the run's most recent
     /// LLM call (last prompt sent + that call's output). Gauge numerator —
-    /// distinct from cumulative [`total_tokens`]. `0` when no LLM call ran.
+    /// distinct from cumulative `total_tokens`. `0` when no LLM call ran.
     pub context_tokens: u32,
     /// Authoritative context-window size (tokens) for this run's model, with a
     /// conservative fallback for unknown models. Gauge denominator. `0` only on
@@ -434,7 +434,7 @@ pub struct ToolInvocation {
     /// `true` when the underlying `ToolResult` was `Success`;
     /// `false` on `Error`.
     pub success: bool,
-    /// Provider error message when [`success`] is `false`.
+    /// Provider error message when `success` is `false`.
     pub error: Option<String>,
 }
 
@@ -577,9 +577,9 @@ pub struct FlowRequest {
     /// request/session/global precedence (and, for the tier, the channel clamp).
     /// Forwarded into `HarnessRunner::run`, which threads it into the
     /// `ResolvedContext` that `SecurityLayer` and `RuntimeContextLayer` render.
-    /// [`TurnEnvelope::none()`] for internal / subagent dispatch that resolves
+    /// `TurnEnvelope::none()` for internal / subagent dispatch that resolves
     /// none of the three — their prompt stays byte-identical. See
-    /// [`TurnEnvelope`] for the per-field contract.
+    /// `TurnEnvelope` for the per-field contract.
     pub envelope: crate::thinker::TurnEnvelope,
     /// This turn's explicit (provider, model) pick — the chat-window model
     /// picker's `chat.send.model_override`, or the `[voice]` low-TTFT pin on a

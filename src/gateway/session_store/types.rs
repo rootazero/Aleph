@@ -28,7 +28,7 @@ pub struct MessageRecord {
     /// **Both** backends now normalize to milliseconds at the boundary, so
     /// every row written from 2026-08-28 on is in one unit and neither store
     /// widens the mixture any further. Rows written before that are NOT
-    /// migrated, on either side, which is why [`stamp_millis`] is permanent
+    /// migrated, on either side, which is why `stamp_millis` is permanent
     /// rather than transitional: the install that never runs a migration is
     /// exactly the install that still holds the old rows, so no reader could
     /// ever be given the right to stop normalizing — the only thing a migration
@@ -40,7 +40,7 @@ pub struct MessageRecord {
     /// (the `before` cursor) and rendered, never ranked.
     ///
     /// A row nobody dated gets the insert clock on both backends rather than
-    /// 1970 — see [`producer_instant`], which is where "the producer did not
+    /// 1970 — see `producer_instant`, which is where "the producer did not
     /// say when" is decided, once, for both.
     ///
     /// The unit could not simply be corrected for the rows already written:
@@ -48,7 +48,7 @@ pub struct MessageRecord {
     /// on disk would have to be migrated with it. So the resolution lives here,
     /// at the type,
     /// where both readers and the cursor see the same interpretation — via
-    /// [`stamp_millis`], which is the crate's single application of the
+    /// `stamp_millis`, which is the crate's single application of the
     /// boundary. That last clause used to be a promise the cursor did not
     /// keep: it compared the raw column against a seconds number, so no
     /// millisecond row was ever "strictly older" than any cursor and
@@ -213,7 +213,7 @@ impl MessageRecord {
     /// Every reader goes through this. Formatting the raw field directly is the
     /// bug that was independently repeated at five call sites.
     ///
-    /// Expressed via [`stamp_millis`] so the boundary has exactly one
+    /// Expressed via `stamp_millis` so the boundary has exactly one
     /// application in the crate; the two used to be spelled separately, and the
     /// cursor's copy was the one that was never written.
     #[must_use]

@@ -61,7 +61,7 @@ pub enum ApprovalSource {
 ///
 /// Deliberately NOT open vocabulary. `Llm`, `Tool`, `Sandbox`, `Harness`,
 /// `Serialization` and `Other` were removed for the same reason
-/// [`ApprovalSource::Autoconfirm`] was: nothing constructed them, so no stored
+/// `ApprovalSource::Autoconfirm` was: nothing constructed them, so no stored
 /// event could carry one and nothing could ever read one back. The next kind
 /// arrives in the same commit as the producer that emits it — a variant is a
 /// claim about what the log can contain, and an unproduced one is false.
@@ -466,7 +466,7 @@ pub enum SessionEvent {
     /// final real seed `UserMessage` of a run and binds it to that message by
     /// `turn_id` (exact id, never position or heuristic). A crash after the
     /// `UserMessage` but before `RunStarted` leaves an unanswered tail whose
-    /// origin ([`PersistedTelecomMarker`]) would otherwise be unknowable;
+    /// origin (`PersistedTelecomMarker`) would otherwise be unknowable;
     /// `ResumeCoordinator::handle_unanswered` reads it back through
     /// `reduction::unanswered_seed_provenance`.
     ///

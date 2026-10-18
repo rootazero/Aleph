@@ -60,7 +60,7 @@ impl FeedbackFloorLoader {
     /// everyone (base is always in that set) and a session additionally sees
     /// its own.
     ///
-    /// Ranking and [`FLOOR_CAP`] are applied **once, after merging**: capping
+    /// Ranking and `FLOOR_CAP` are applied **once, after merging**: capping
     /// per partition would hand a session with two partitions twice the floor,
     /// and would let a partition with three Critical rules crowd out another's.
     pub async fn load_many(&self, agent_ids: &[String]) -> Vec<FeedbackFloorEntry> {

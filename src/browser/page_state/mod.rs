@@ -144,7 +144,7 @@ impl Role {
         }
     }
 
-    /// Every variant, walked out of [`Self::next`] rather than typed out.
+    /// Every variant, walked out of `Self::next` rather than typed out.
     pub const ALL: [Role; Self::COUNT] = Self::walk();
 
     /// [`Self::ALL`]'s body. Const-evaluated, so both panics below are compile

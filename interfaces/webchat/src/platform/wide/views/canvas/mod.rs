@@ -6,7 +6,7 @@
 //! `components/workspace_panel.rs` can show beside the chat, because a
 //! whiteboard the model draws on while you talk to it is worth more next to
 //! the conversation than in a section you have to leave the conversation to
-//! reach. The library came along as [`library::CanvasPicker`], a popover on
+//! reach. The library came along as `library::CanvasPicker`, a popover on
 //! the header strip below; the welcome pane inlines the same list.
 //!
 //! Not the memory galaxy: that renderer moved to `views/memory/galaxy/` when

@@ -133,7 +133,7 @@ impl RuntimeContext {
     /// because the gateway already hard-fails a vanished project override.
     ///
     /// `repo_root` is populated lazily via a process-lifetime cache keyed by the
-    /// resolved directory (see [`cached_repo_root`]). The detector walks up
+    /// resolved directory (see `cached_repo_root`). The detector walks up
     /// looking for `.git`; no `git` subprocess is spawned.
     #[must_use]
     pub fn collect_in(current_model: &str, cwd: Option<&Path>) -> Self {

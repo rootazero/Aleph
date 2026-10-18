@@ -10,7 +10,7 @@
 //! "static placeholders for v1". That made it a second source of navigation
 //! truth *and* a set of numbers with no producer: 17 of the 22 desktop settings
 //! pages had no phone entry at all, and every value shown was fiction. Both are
-//! gone — a row shows a value only when [`live_value`] can name the code that
+//! gone — a row shows a value only when `live_value` can name the code that
 //! computes it.
 //!
 //! Screens come in two shapes, decided by [`screen_for_path`]:

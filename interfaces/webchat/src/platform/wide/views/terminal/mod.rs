@@ -25,7 +25,7 @@
 //! one exits. `DashboardState::terminal_selection` is that answer's ADDRESS —
 //! other surfaces (the agent panel's row click) write it to REQUEST a session,
 //! and this view writes it back to PUBLISH what it settled on. One authority,
-//! one published copy, and [`publish_selection`] is the only place that writes
+//! one published copy, and `publish_selection` is the only place that writes
 //! the copy.
 
 pub mod keymap;

@@ -11,13 +11,13 @@
 //!
 //! # Shape
 //!
-//! - [`walk`] — the one answer to "which files does this repository consider
+//! - `walk` — the one answer to "which files does this repository consider
 //!   its own", plus the denylist floor a byte-reading face has to bind.
-//! - [`scan`] — pure line matching and rendering, testable against strings.
-//! - [`notes`] — the clauses that name what a result withheld, written once so
+//! - `scan` — pure line matching and rendering, testable against strings.
+//! - `notes` — the clauses that name what a result withheld, written once so
 //!   the two tools cannot spell the same omission two ways.
-//! - [`grep`] / [`find`] — the two tools, which differ only in what they do
-//!   with the file list [`walk`] hands them.
+//! - `grep` / `find` — the two tools, which differ only in what they do
+//!   with the file list `walk` hands them.
 //!
 //! # Deliberately not a third tool
 //!

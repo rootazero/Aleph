@@ -1,8 +1,8 @@
 //! Per-principal and machine-total USD spend ceilings.
 //!
-//! See [`crate::config::types::policies::spend`] for the config shape
-//! ([`crate::config::types::policies::SpendPolicy`] /
-//! [`crate::config::types::policies::SpendPeriod`]) and [`period`] for the
+//! See `crate::config::types::policies::spend` for the config shape
+//! (`crate::config::types::policies::SpendPolicy` /
+//! `crate::config::types::policies::SpendPeriod`) and [`period`] for the
 //! local-calendar boundaries a period resolves to.
 //!
 //! This module additionally carries:
@@ -88,7 +88,7 @@ impl Principal {
     /// `principal_id` row space and the `User(String)` row space can never
     /// collide:
     ///
-    /// - the literal [`Self::UNATTRIBUTED_KEY`] (`"@unattributed"`), which
+    /// - the literal `Self::UNATTRIBUTED_KEY` (`"@unattributed"`), which
     ///   would otherwise write to the same ledger row as the actual
     ///   [`Self::Unattributed`] variant (see [`Self::as_key`] /
     ///   [`Self::from_key`]);
@@ -167,7 +167,7 @@ pub struct Spent {
     /// keyed by `period_start_ms` alone and has no notion of period
     /// *length* (`Day` vs `Month`), so it cannot compute this value — only
     /// [`check`], which knows the configured
-    /// [`SpendPeriod`](crate::config::types::policies::SpendPeriod), can.
+    /// `SpendPeriod`, can.
     /// Before this was `Option`, both backends filled it with
     /// `period_start_ms` as a placeholder documented "the real value is
     /// computed later by `check`" — a value that type-checks, reads as a
@@ -273,7 +273,7 @@ pub trait SpendLedger: Send + Sync {
     /// - its `period_start_ms == coarse_ancestor_start_ms` — the row was
     ///   recorded under a *coarser* period whose window still contains the
     ///   current one. Callers pass the start of the longest period kind
-    ///   ([`SpendPeriod::Month`]) containing the current window
+    ///   (`SpendPeriod::Month`) containing the current window
     ///   (`period::period_start_ms(now, SpendPeriod::Month)`); when the
     ///   configured period is already `Month` it equals `window_start_ms`
     ///   and this arm is a no-op. This is what keeps a `Month → Day`
@@ -328,7 +328,7 @@ pub trait SpendLedger: Send + Sync {
     /// Every returned [`Spent::period_end_ms`] is `None`, exactly as it is
     /// out of [`Self::spent_for`] / [`Self::total_for`]: this trait has no
     /// notion of period *length*, only period *start* — only a caller who
-    /// knows the configured [`crate::config::types::policies::SpendPeriod`]
+    /// knows the configured `crate::config::types::policies::SpendPeriod`
     /// (the handler) can resolve the end instant.
     fn principals_in(&self, period_start_ms: i64) -> anyhow::Result<Vec<(Principal, Spent)>>;
 }
@@ -369,7 +369,7 @@ struct LedgerState {
 /// `spend::sqlite::SqliteSpendLedger` at boot instead, before the gateway
 /// serves its first request.
 ///
-/// Both maps live in a single [`LedgerState`] under one `Mutex`, not two
+/// Both maps live in a single `LedgerState` under one `Mutex`, not two
 /// `Mutex<HashMap>` fields: a row insert and its index insert must be one
 /// critical section, or a concurrent `total_for`/`principals_in` could
 /// observe one map updated and not the other — and two locks would also
@@ -676,7 +676,7 @@ pub fn update_policy(policy: crate::config::types::policies::SpendPolicy) -> boo
 ///
 /// ⚠️ That default is precisely the round-7 indistinguishable read: it is the
 /// right value to return and it says nothing about whether boot got here. Ask
-/// [`global_policy_slot`]`().outcome()` for that — never this function.
+/// `global_policy_slot``().outcome()` for that — never this function.
 pub fn current_policy() -> crate::config::types::policies::SpendPolicy {
     GLOBAL_POLICY
         .load()
@@ -778,7 +778,7 @@ pub fn principal_from_metadata(meta: &HashMap<String, String>) -> Principal {
 /// this function exists to rule out.
 ///
 /// Reads the process-wide policy and ledger ([`current_policy`],
-/// [`global_ledger`]) and delegates to [`check_with`], which takes both
+/// [`global_ledger`]) and delegates to `check_with`, which takes both
 /// explicitly and carries the actual logic — see that function's doc for
 /// why the split exists.
 #[must_use]

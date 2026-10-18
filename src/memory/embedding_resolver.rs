@@ -72,7 +72,7 @@ impl ResolutionReason {
     }
 }
 
-/// Outcome of resolving [`EmbeddingSettings`] into a concrete provider choice.
+/// Outcome of resolving `EmbeddingSettings` into a concrete provider choice.
 ///
 /// Borrows the chosen config from the settings it was resolved against, so the
 /// caller clones what it needs before the settings lock is released.

@@ -4,22 +4,19 @@
 //!
 //! # Layout
 //!
-//! - [`permissions`] — pure permission bitfield audit. No I/O, no
+//! - `permissions` — pure permission bitfield audit. No I/O, no
 //!   network; safe to call from anywhere that holds a bot-permission
 //!   bitfield (tests, the startup audit, the gateway-time permission
 //!   check line 2 will add).
-//! - [`startup_audit`] — translate a [`PermissionAudit`] into the
+//! - [`startup_audit`] — translate a `PermissionAudit` into the
 //!   shape the global audit pipeline understands
 //!   ([`crate::security::audit::AuditEntry`]). One
 //!   `AuthorityChange` row per guild at healthy / degraded
-//!   [`HealthStatus`]; one `ExecBlocked` row at critical
-//!   [`HealthStatus`]. The discord channel's `start()` (line 2's
+//!   `HealthStatus`; one `ExecBlocked` row at critical
+//!   `HealthStatus`. The discord channel's `start()` (line 2's
 //!   responsibility) calls [`startup_audit::for_config`] for each
 //!   configured guild and feeds the rows through
 //!   [`crate::security::audit::SecurityAuditLog::log`].
-//!
-//! [`HealthStatus`]: permissions::HealthStatus
-//! [`PermissionAudit`]: permissions::PermissionAudit
 
 pub mod audit_hooks;
 pub mod startup_audit;

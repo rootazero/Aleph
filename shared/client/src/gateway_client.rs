@@ -59,7 +59,7 @@ impl GatewayClient {
     /// Left `None` by every caller today, and that is deliberate rather than an
     /// oversight: this client is reached through `aleph-server gateway call`,
     /// which by construction talks to the server on the same machine, and
-    /// [`crate::tls::connector_for`] already finds that server's own
+    /// `crate::tls::connector_for` already finds that server's own
     /// certificate for a loopback URL with no configuration at all. The setter
     /// exists so a future non-loopback caller is a one-line change instead of a
     /// rediscovery of this whole problem.

@@ -66,9 +66,9 @@ pub trait ScreenCapability: Send + Sync {
     async fn launch_app(&self, app_name: &str) -> Result<()>;
 
     /// Move a window so its top-left corner sits at `(x, y)` in global
-    /// screen coordinates. `window_id` is the id returned by [`window_list`].
+    /// screen coordinates. `window_id` is the id returned by `window_list`.
     ///
-    /// Default stub returns [`DesktopError::NotImplemented`]; platform
+    /// Default stub returns `DesktopError::NotImplemented`; platform
     /// implementations override it.
     async fn move_window(&self, window_id: u64, x: i32, y: i32) -> Result<()> {
         let _ = (window_id, x, y);
@@ -76,9 +76,9 @@ pub trait ScreenCapability: Send + Sync {
     }
 
     /// Resize a window to `width` × `height` pixels. `window_id` is the id
-    /// returned by [`window_list`].
+    /// returned by `window_list`.
     ///
-    /// Default stub returns [`DesktopError::NotImplemented`]; platform
+    /// Default stub returns `DesktopError::NotImplemented`; platform
     /// implementations override it.
     async fn resize_window(&self, window_id: u64, width: u32, height: u32) -> Result<()> {
         let _ = (window_id, width, height);

@@ -73,7 +73,7 @@ pub fn with_persistent() -> Vec<ApprovalDecisionType> {
 
 /// The set a **tool confirmation** card may offer.
 ///
-/// `rule_id` is [`GateRule::id`](crate::tools::scoped::gate_chain) — the stable
+/// `rule_id` is `GateRule::id` — the stable
 /// token naming which rule stopped the call — and `caller_is_operator` is the
 /// requesting turn's tier. See the module docs for why those two, and only
 /// those two, decide it.

@@ -44,7 +44,7 @@
 //! previously wired only into `TraceSink`, and the run's output escaped in the
 //! clear down the `EventEmitter` leg — one masked copy plus one clear copy is
 //! not redaction. So every byte written here goes through the same
-//! [`SecretMasker`](crate::exec::masker::SecretMasker) the two existing legs
+//! `SecretMasker` the two existing legs
 //! share, unconditionally: an artifact that outlives the process cannot be
 //! gated on the run's attendedness, because the *reader* is a later process.
 //!
@@ -579,7 +579,7 @@ pub fn record_activity(request_id: &str, text: &str) {
 
 /// Record a terminal outcome. The tombstone stays on disk for the retention
 /// window **and** stays in the index, so this id keeps answering for exactly as
-/// long as its record exists — see [`INDEX`].
+/// long as its record exists — see `INDEX`.
 pub fn record_settled(request_id: &str, outcome: &str, final_text: &str) {
     let Some(dir) = store_dir() else { return };
     if !final_text.trim().is_empty() {
@@ -687,7 +687,7 @@ fn addressable(record: &PersistedRun, scope: Option<&str>) -> bool {
 /// directory reads only the event log, which — because `SubagentSpawned` is
 /// emitted *after* the spawner takes its concurrency permit — cannot see a
 /// child that died while still queued, even though the sidecar recorded its
-/// start before the task was spawned. Scoped by the same [`addressable`]
+/// start before the task was spawned. Scoped by the same `addressable`
 /// predicate as `lookup`: an enumeration face that answered more broadly than
 /// the by-id face would be a way to discover ids it then refuses to read.
 #[must_use]

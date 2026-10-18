@@ -88,7 +88,7 @@ const ENDPOINT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 ///
 /// Every valued flag uses the `=` form so it is ONE token. That is not style:
 /// the orphan sweep matches whole argv elements
-/// ([`super::process::argv_names_dir`] — a substring scan kills the
+/// (`super::process::argv_names_dir` — a substring scan kills the
 /// neighbouring profile's browser, and macOS `sysinfo::cmd()` bleeds
 /// environment words into argv), so `--storage-dir=<dir>` as one token is what
 /// makes an obscura orphan reapable at all.
@@ -116,7 +116,7 @@ const ENDPOINT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 ///
 /// # `extra_args` LEAD, and the switches this launch depends on follow them
 ///
-/// The same contract [`super::chromium::ChromiumLaunchSpec::argv`] states, for
+/// The same contract `super::chromium::ChromiumLaunchSpec::argv` states, for
 /// the same reason and carried over deliberately rather than rediscovered
 /// (判据 §16): a duplicated switch is resolved by the parser, and whichever way
 /// it resolves it, the operator's copy must not be the one that can win. This
@@ -138,7 +138,7 @@ const ENDPOINT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 ///   Chromium habit, which reach this engine now that `driver = cdp` is the
 ///   default and `resolved_engine` pins on `driver` alone — are NOT enumerated
 ///   here. obscura's own argument parser rejects them, the child exits
-///   non-zero before answering `/json/version`, and [`launch_with`] reports
+///   non-zero before answering `/json/version`, and `launch_with` reports
 ///   that as `LaunchFailed{stage: "obscura-exit"}` carrying obscura's own
 ///   usage text out of the log tail. That refusal has ONE author (obscura),
 ///   names the offending token in the engine's own words, and cannot go stale
@@ -233,7 +233,7 @@ fn reserved_flag_in(extra_args: &[String]) -> Option<&'static str> {
 ///
 /// The window between the drop and obscura's own bind is real, and it is
 /// closed on the far side rather than here: a loser gets `Address already in
-/// use` and exits 1, which [`launch_with`] reports as
+/// use` and exits 1, which `launch_with` reports as
 /// `LaunchFailed{stage: "obscura-exit"}` carrying that text.
 pub fn reserve_port() -> Result<u16, BrowserError> {
     let listener =
@@ -253,7 +253,7 @@ pub fn reserve_port() -> Result<u16, BrowserError> {
 }
 
 /// What an OS-level listener probe learned. Three states, not two, for the
-/// same reason [`super::process::ArgvProbe`] has three: "I could not look" and
+/// same reason `super::process::ArgvProbe` has three: "I could not look" and
 /// "nobody is there" authorise opposite actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PortOwner {

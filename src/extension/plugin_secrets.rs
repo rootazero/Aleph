@@ -21,7 +21,7 @@
 //! |---|---|---|
 //! | `publish_plugin_settings` → `PluginLoader` | runtime | the WASM guest / MCP child needs the real value |
 //! | `hooks::executor` → `plugin_settings_env` | runtime | the hook subprocess needs the real value |
-//! | slash-command inline shell → `plugin_settings_env` | **stored, secrets removed** | whoever sends the `/command` picks its arguments, and its output goes into the model's context ([`SettingsForm::WithoutSecrets`]) |
+//! | slash-command inline shell → `plugin_settings_env` | **stored, secrets removed** | whoever sends the `/command` picks its arguments, and its output goes into the model's context (`SettingsForm::WithoutSecrets`) |
 //! | `plugin_manage(config_get / show)` | **stored** | this text goes into the model's context |
 //!
 //! Resolving inside `plugin_settings` itself would have been one line and

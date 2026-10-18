@@ -93,7 +93,7 @@ impl MemoryMode {
 
 /// The memory dial as offered to a user surface, in display order.
 ///
-/// Twin of [`crate::config::types::policies::builtin_tiers`] /
+/// Twin of `crate::config::types::policies::builtin_tiers` /
 /// `builtin_modes` / [`crate::agents::thinking::builtin_think_levels`], and it
 /// rides the same response for the same reason: a surface that hard-codes the
 /// id set is a surface that drifts from the one the server accepts.

@@ -4,7 +4,7 @@
 //!
 //! Mid-loop steering appends the user's message to the live session log and
 //! the running loop reads it *at its next turn boundary*
-//! ([`crate::gateway::execution_engine::steering`]). That boundary is normally
+//! (`crate::gateway::execution_engine::steering`). That boundary is normally
 //! milliseconds away — except when the turn's Act phase is sitting inside a
 //! tool that is deliberately asleep:
 //!
@@ -72,7 +72,7 @@
 //!
 //! A level flag ("this session has un-consumed user input") needs a *consume*
 //! edge, and the only observable one is the next `AssistantMessage`. That is
-//! the boundary [`count_pending_steering`] already uses, and it is an
+//! the boundary `count_pending_steering` already uses, and it is an
 //! approximation: a steer that lands while the provider call is in flight is
 //! marked consumed by that call's assistant turn even though its prompt was
 //! built before the steer existed. For the burst cap that costs one turn of
@@ -127,7 +127,7 @@
 //! # Why the injector is the producer, and not the append seam
 //!
 //! The lane's burst-drain edge
-//! ([`crate::gateway::execution_engine::wake_lane_if_burst_drained`]) is fired
+//! (`crate::gateway::execution_engine::wake_lane_if_burst_drained`) is fired
 //! from the projector's "an event was appended" observer, because its question
 //! — *did an assistant turn happen?* — has many producers (harness run, fast
 //! path, simple engine) and naming them would be a list that rots.
@@ -153,11 +153,10 @@
 //! not the point where it arrives.
 //!
 //! "Exactly one producer" is a claim, so it is pinned by a source-level census
-//! ([`tests::note_steer_has_exactly_one_production_call_site`]) rather than by
+//! (`tests::note_steer_has_exactly_one_production_call_site`) rather than by
 //! this paragraph: a second one turns the sentence above from true into a
 //! silent divergence, and the test goes red by name.
 //!
-//! [`count_pending_steering`]: crate::gateway::execution_engine::steering
 //! [`BusyInputMode::Interrupt`]: crate::gateway::execution_engine::BusyInputMode
 
 use std::collections::HashMap;

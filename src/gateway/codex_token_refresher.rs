@@ -142,7 +142,7 @@ impl CodexTokenRefresher {
     /// provider now carries a renewed token.
     ///
     /// Idempotent and cheap to call spuriously: if there is no token or no
-    /// refresh token, [`try_refresh`] returns `false` and nothing is swapped.
+    /// refresh token, `try_refresh` returns `false` and nothing is swapped.
     pub async fn refresh_and_swap(&self) -> bool {
         let refreshed =
             try_refresh(&self.oauth_state, &self.config, &self.vault, PROVIDER_NAME).await;
@@ -203,7 +203,7 @@ impl CodexTokenRefresher {
     }
 
     /// Spawn the proactive background refresh loop. Ticks every minute and
-    /// refreshes once the token is within [`REFRESH_MARGIN_SECS`] of expiry.
+    /// refreshes once the token is within `REFRESH_MARGIN_SECS` of expiry.
     pub fn spawn_background(self: Arc<Self>) {
         tokio::spawn(async move {
             loop {

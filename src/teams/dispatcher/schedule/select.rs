@@ -68,7 +68,7 @@ pub fn orphan_reset_status(task: &CoordTask) -> CoordTaskStatus {
 }
 
 /// Pure predicate: should `task` be reaped as a zombie given the current
-/// running set, wall-clock, and TTL? Extracted from [`TeamDispatcher::reclaim_zombies`]
+/// running set, wall-clock, and TTL? Extracted from `TeamDispatcher::reclaim_zombies`
 /// so the decision logic can be exercised without spinning up a full
 /// dispatcher.
 ///
@@ -76,7 +76,7 @@ pub fn orphan_reset_status(task: &CoordTask) -> CoordTaskStatus {
 /// process isn't running, have a recorded `started_at`, and whose elapsed
 /// time exceeds the task's **effective** zombie threshold. A `zombie_ttl_secs`
 /// of 0 disables detection (matches the runtime fast-path in
-/// [`TeamDispatcher::reclaim_zombies`]).
+/// `TeamDispatcher::reclaim_zombies`).
 ///
 /// The effective threshold is `max(zombie_ttl_secs, per-task timeout)`. The
 /// global config already guarantees `zombie_ttl_secs >= task_timeout_secs` so a

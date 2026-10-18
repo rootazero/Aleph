@@ -27,7 +27,7 @@
 //! Keyed by [`UsageOrigin::key`] — `mcp:<server_id>` / `plugin:<plugin_id>`.
 //! **Builtins are deliberately not recorded**: nobody uninstalls `file_read`,
 //! and 159 always-present rows would be pure noise (R10 — zero consumers). That
-//! exclusion is expressed in the type, not in a filter: [`LoopTool::usage_origin`]
+//! exclusion is expressed in the type, not in a filter: `LoopTool::usage_origin`
 //! returns `None` for a builtin, so a builtin call pays one `Option::is_none`
 //! and never touches the disk.
 //!

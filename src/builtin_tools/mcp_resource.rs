@@ -268,7 +268,7 @@ pub struct McpResourceEntry {
     /// Server id this resource belongs to.
     pub server: String,
     /// Opaque, server-qualified id ready for `mcp_read_resource` — pass
-    /// verbatim; do not construct or edit it (see [`qualified_id`] on the
+    /// verbatim; do not construct or edit it (see `qualified_id` on the
     /// doubled server segment).
     pub uri: String,
     /// Human-readable resource name.
@@ -282,7 +282,7 @@ pub struct McpResourceEntry {
 /// Output from `mcp_list_resources`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpListResourcesOutput {
-    /// Discovered resources (capped at [`MAX_RESOURCE_ENTRIES`]).
+    /// Discovered resources (capped at `MAX_RESOURCE_ENTRIES`).
     pub resources: Vec<McpResourceEntry>,
     /// Number of entries returned.
     pub count: usize,
@@ -293,7 +293,7 @@ pub struct McpListResourcesOutput {
 
 /// Discovery counterpart to [`McpReadResourceTool`]: lists the resources every
 /// server this run may see advertises, so the model knows what it can read. Each entry's
-/// `uri` is an opaque, server-qualified id built by [`qualified_id`] — the exact
+/// `uri` is an opaque, server-qualified id built by `qualified_id` — the exact
 /// form [`McpReadResourceTool`] parses — so the model copies it verbatim into
 /// `mcp_read_resource` with no path guessing (the gap that used to push it to a
 /// raw `cat`). Capability-gated by the MCP tool bridge alongside the read tool.
@@ -438,7 +438,7 @@ pub struct McpResourceTemplateEntry {
 /// Output from `mcp_list_resource_templates`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpListResourceTemplatesOutput {
-    /// Discovered templates (capped at [`MAX_RESOURCE_ENTRIES`]).
+    /// Discovered templates (capped at `MAX_RESOURCE_ENTRIES`).
     pub templates: Vec<McpResourceTemplateEntry>,
     /// Number of entries returned.
     pub count: usize,
@@ -452,7 +452,7 @@ pub struct McpListResourceTemplatesOutput {
 /// concrete resources, so [`McpListResourcesTool`] returns empty for them and
 /// the model would dead-end into a shell `cat`. This surfaces the templates so
 /// the model can fill a parameter and read via [`McpReadResourceTool`]. Unlike
-/// concrete resources there is no [`qualified_id`] doubling — the template is a
+/// concrete resources there is no `qualified_id` doubling — the template is a
 /// raw pattern; the model constructs a single-prefixed `<server>:<filled uri>`,
 /// exactly the form the reader's colon-split parser expects. Mirrors codex's
 /// `list_mcp_resource_templates`. Capability-gated by the MCP tool bridge

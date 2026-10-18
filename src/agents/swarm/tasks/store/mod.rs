@@ -5,15 +5,15 @@
 //! query time from unresolved dependency edges.
 //!
 //! ## Layout
-//! - [`helpers`] — `now_epoch`, `db_err`, `summarize`
-//! - [`row_decode`] — `read_task_row`, `load_dependencies`, `derive_status`, `load_task`
-//! - [`schema`] — DDL migration (sync, runs under the mutex lock)
-//! - [`crud`] — create / get / update / list / delete task rows
-//! - [`deps`] — dependency edges and newly-unblocked queries
-//! - [`locks`] — task lock acquire / release / stale-release
-//! - [`runs`] — task-run lifecycle and run reviews
-//! - [`comments`] — task comment append / list
-//! - [`journal`] — per-task and per-team journals
+//! - `helpers` — `now_epoch`, `db_err`, `summarize`
+//! - `row_decode` — `read_task_row`, `load_dependencies`, `derive_status`, `load_task`
+//! - `schema` — DDL migration (sync, runs under the mutex lock)
+//! - `crud` — create / get / update / list / delete task rows
+//! - `deps` — dependency edges and newly-unblocked queries
+//! - `locks` — task lock acquire / release / stale-release
+//! - `runs` — task-run lifecycle and run reviews
+//! - `comments` — task comment append / list
+//! - `journal` — per-task and per-team journals
 //! - this module — `SqliteCoordTaskStore` + the thin `CoordTaskStore` trait
 //!   impl that delegates to the topic submodules above
 
@@ -54,7 +54,7 @@ pub struct SqliteCoordTaskStore {
 
 impl SqliteCoordTaskStore {
     /// Create a new store wrapping the given connection.
-    /// Call [`migrate`] before using the store.
+    /// Call `migrate` before using the store.
     pub fn new(conn: Connection) -> Self {
         Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -186,7 +186,7 @@ impl SqliteCoordTaskStore {
         }
     }
 
-    /// Run schema migration (creates tables + indexes). See [`schema::migrate`]
+    /// Run schema migration (creates tables + indexes). See `schema::migrate`
     /// for the full sync body; this is a thin async wrapper that owns the
     /// `tokio::sync::Mutex` lock.
     pub async fn migrate(&self) -> crate::error::Result<()> {

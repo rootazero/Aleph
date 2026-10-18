@@ -118,7 +118,7 @@ fn ensure_dir_at(dir: &Path) -> Result<()> {
 ///
 /// **Concurrency caveat.** `save_at` is *not* safe for two callers racing on
 /// the same `manifest.name`: both writers pick distinct temp paths
-/// (`{pid}.{AtomicU64 seq}.tmp` via [`unique_tmp_path`]) so the writes do not
+/// (`{pid}.{AtomicU64 seq}.tmp` via `unique_tmp_path`) so the writes do not
 /// collide on the temp side, but `fs::rename(tmp, final)` is POSIX-atomic
 /// *last-writer-wins*, and both writers report `Ok(())`. The earlier writer's
 /// content is silently overwritten by the later one.
@@ -190,7 +190,7 @@ fn write_text_at(dir: &Path, name: &str, ext: &str, body: &str) -> Result<PathBu
     Ok(final_path)
 }
 
-/// Convenience: [`write_text_at`] anchored to [`workflow_dir`].
+/// Convenience: `write_text_at` anchored to [`workflow_dir`].
 pub fn write_text(name: &str, ext: &str, body: &str) -> Result<PathBuf> {
     write_text_at(&workflow_dir(), name, ext, body)
 }

@@ -15,7 +15,7 @@
 //!
 //! The filtered rows are a [`Memo`] read by both the renderer and the keyboard
 //! handler, and the highlight moves only through
-//! [`crate::components::picker_nav::step_highlight`]. Before that, ↓ bumped an
+//! `crate::components::picker_nav::step_highlight`. Before that, ↓ bumped an
 //! unbounded counter and every *reader* clamped it: the lit row and the row
 //! Enter fired always agreed (both clamped to the last), so nothing ever
 //! mis-fired — but after pressing ↓ past the end, ↑ had to be pressed just as

@@ -2,8 +2,8 @@
 //!
 //! ## Layout
 //! - this module — `MoaView` (preset cards + global `save_traces` toggle)
-//! - [`options`] — pure model-option dedup logic (unit-tested)
-//! - [`preset_editor`] — `MoaPresetEditor` form for creating/editing one preset
+//! - `options` — pure model-option dedup logic (unit-tested)
+//! - `preset_editor` — `MoaPresetEditor` form for creating/editing one preset
 
 mod options;
 mod preset_editor;

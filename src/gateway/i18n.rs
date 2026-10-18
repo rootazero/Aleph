@@ -228,7 +228,7 @@ pub enum Msg<'a> {
 /// carried a second, localized one — so the Panel showed Chinese under
 /// `language = "en"`, an expired API key was reported as "just retry" (the
 /// engine had no auth bucket), and the engine's naive `contains("connection")`
-/// matched `disconnection_policy` (exactly the foot-gun [`contains_phrase`]
+/// matched `disconnection_policy` (exactly the foot-gun `contains_phrase`
 /// was written to avoid).
 ///
 /// `Eq` is deliberately absent (only `PartialEq`): [`SpendExhausted`](Self::SpendExhausted)
@@ -322,7 +322,7 @@ impl ReceiptKind {
 /// or network signature here means every provider/model in the chain was tried
 /// and the failure is genuinely transient.
 ///
-/// Matching is whole-token via [`contains_phrase`]; substring matching would
+/// Matching is whole-token via `contains_phrase`; substring matching would
 /// let `disconnection_policy` read as a network outage.
 #[must_use]
 pub fn classify_error_text(error: &str) -> ReceiptKind {

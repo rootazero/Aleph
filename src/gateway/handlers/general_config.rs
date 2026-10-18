@@ -75,7 +75,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
 /// Update general configuration.
 ///
 /// The body is merged onto the section, not assigned over it — see
-/// [`json_merge`] for why. That also removed the former `preserved_browser`
+/// `json_merge` for why. That also removed the former `preserved_browser`
 /// carve-out: `browser` was one field someone noticed and fixed by
 /// enumeration, and the merge preserves every unmentioned field, including the
 /// ones nobody has added yet.

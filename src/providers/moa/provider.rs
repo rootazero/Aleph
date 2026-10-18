@@ -222,7 +222,7 @@ impl MoaProvider {
     ///   is then persisted and replayed for the rest of the conversation;
     /// * **cadence** — the side-channel call has its own view signature, so it
     ///   consumes a cadence slot AND overwrites this run's cached advice. Under
-    ///   [`MoaFanout::UserTurn`] / [`MoaFanout::EveryN`] the next REAL turn then
+    ///   `MoaFanout::UserTurn` / `MoaFanout::EveryN` the next REAL turn then
     ///   reuses advice about how to write a summary.
     ///
     /// Callers that are not the user's turn take this chain instead. It is the

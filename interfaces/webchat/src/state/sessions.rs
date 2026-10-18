@@ -414,7 +414,7 @@ impl SessionMap {
         self.route.with_untracked(|m| m.get(run_id).copied())
     }
 
-    /// Reactive read of the double-bind witness — see [`Self::running`].
+    /// Reactive read of the double-bind witness — see `Self::running`.
     ///
     /// **Not** the answer to "is this session running": that is
     /// [`Self::is_running_session_key`], server-authoritative and re-based on
@@ -507,7 +507,7 @@ impl SessionMap {
     /// server may not have written yet.
     ///
     /// Pass a set taken from the server in the SAME breath (the
-    /// `run_concurrency` response), not [`Self::server_running`]: that signal
+    /// `run_concurrency` response), not `Self::server_running`: that signal
     /// may still hold the pre-disconnect snapshot at the moment this runs.
     pub fn settle_runs_absent_from(&self, live: &HashSet<String>) -> Vec<(String, ConvId)> {
         let doomed: Vec<(String, ConvId)> = self.route.with_untracked(|routes| {
@@ -594,7 +594,7 @@ impl SessionMap {
     }
 
     /// Reactive read: current count of server-authoritative running sessions VISIBLE TO THIS USER
-    /// (see [`Self::server_running`]) — sole entry point for the sidebar bottom "active" counter.
+    /// (see `Self::server_running`) — sole entry point for the sidebar bottom "active" counter.
     ///
     /// Reads the same `server_running` signal as the per-row red dot [`Self::is_running_session_key`], so
     /// the two are always consistent: any `RunningSetChanged` event refreshes the count and dots together, preventing

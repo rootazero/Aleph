@@ -780,7 +780,7 @@ fn member_visible_permissions_value(cfg: &Config) -> Result<Value, serde_json::E
 ///
 /// Returns the execution tier, the built-in tier presets, and — for a caller
 /// who may see them — the global per-tool overrides from `config.policies`.
-/// A member gets [`member_visible_permissions_value`] instead; see that
+/// A member gets `member_visible_permissions_value` instead; see that
 /// function and the carve-out comment in `method_admin` for why this method is
 /// readable by a member at all.
 pub async fn handle_get_tool_permissions(

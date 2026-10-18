@@ -18,7 +18,7 @@
 //! Attribution caveat: the metering channel is agent-labelled, not
 //! fold-labelled — one compaction emits one `compactor:<agent>` usage row
 //! with no fold id on it. A row is therefore attributed to a fold by time
-//! proximity ([`ATTRIBUTION_BEFORE_SECS`] before / [`ATTRIBUTION_AFTER_SECS`]
+//! proximity (`ATTRIBUTION_BEFORE_SECS` before / `ATTRIBUTION_AFTER_SECS`
 //! after the fold's timestamp; the summarizer call completes just before the
 //! `FoldRecorded` row is written). Two folds inside one attribution window
 //! share the charge. That is an acknowledged approximation, documented here

@@ -851,7 +851,7 @@ impl BackgroundAgentTracker {
     /// Park until background subagent `request_id` finishes, or until `timeout`
     /// elapses — whichever comes first. Unlike a `check_status` poll (which
     /// costs the parent a full LLM turn per check) this sleeps on the
-    /// [`completion`](Self::completion) notifier and only re-checks when *some*
+    /// `completion` notifier and only re-checks when *some*
     /// agent finishes, so it burns no CPU while waiting and returns the result
     /// the instant it lands. Mirrors `builtin_tools::process_registry::wait`.
     ///
@@ -896,7 +896,7 @@ impl BackgroundAgentTracker {
 
     /// Park until *any* subagent in `request_ids` finishes, or until `timeout`
     /// elapses — the fan-out first-completion primitive (codex `wait_agent`
-    /// parity). Sleeps on the shared [`completion`](Self::completion) notifier
+    /// parity). Sleeps on the shared `completion` notifier
     /// (which wakes on every completion) and re-checks the whole set, so it
     /// costs no CPU while waiting and returns the instant the first result
     /// lands.

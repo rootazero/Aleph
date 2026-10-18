@@ -1,7 +1,7 @@
 //! Presets override types for ~/.aleph/presets.toml
 //!
 //! These types represent user overrides for built-in provider and generation presets.
-//! All fields are Option<T> so users only need to specify the fields they want to change.
+//! All fields are Option`&lt;T&gt;` so users only need to specify the fields they want to change.
 //! Missing fields are left as None and the built-in defaults are used instead.
 
 use serde::Deserialize;

@@ -31,7 +31,7 @@
 //! other's projection, and per-test unique project ids do **not** help: the
 //! second `publish` drops the first test's project outright, not merely its
 //! members. Every test that reaches a store write therefore serialises on
-//! [`TEST_GUARD`].
+//! `TEST_GUARD`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};

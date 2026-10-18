@@ -359,7 +359,7 @@ pub struct AbandonReport {
     /// The crashed run's counters, from the same reduction the repair used.
     pub progress: RunProgress,
     /// Text of the last non-empty assistant message in the log, truncated to
-    /// [`LAST_ASSISTANT_CHARS`]. `None` when the run never said anything.
+    /// `LAST_ASSISTANT_CHARS`. `None` when the run never said anything.
     pub last_assistant: Option<String>,
 }
 

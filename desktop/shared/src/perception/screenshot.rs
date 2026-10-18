@@ -155,12 +155,12 @@ fn primary_index(monitors: &[xcap::Monitor]) -> Result<usize> {
 /// Capture a screenshot, optionally cropped to a **global-space** region.
 ///
 /// A paramless capture takes the primary monitor. A region is captured from the
-/// display it actually overlaps (see [`resolve_region_target`]) — its
+/// display it actually overlaps (see `resolve_region_target`) — its
 /// coordinates are in the global screen space, the same space clicks are issued
 /// in, not offsets into the primary monitor.
 ///
 /// The image is encoded as PNG and returned as a base64-encoded [`Screenshot`]
-/// carrying the display's [`coordinate_scale`], so a consumer never has to
+/// carrying the display's `coordinate_scale`, so a consumer never has to
 /// re-derive (and mis-derive) the points-to-pixels ratio.
 ///
 /// # Errors
@@ -246,7 +246,7 @@ pub fn capture_screen_png() -> Result<Vec<u8>> {
 /// available on a given platform are filled with sensible defaults (e.g.
 /// empty string for `name`, `1.0` for `scale_factor`).
 ///
-/// `scale_factor` is the display's [`coordinate_scale`] — pixels per unit of the
+/// `scale_factor` is the display's `coordinate_scale` — pixels per unit of the
 /// space this process's geometry is reported in — not the raw DPI ratio. Two
 /// consumers multiply `width` by it (the normalized-coordinate viewport in
 /// `coord_resolve::resolve_viewport`) and use it to place overlay marks
@@ -342,7 +342,7 @@ pub fn take_screenshot_display(
 /// application instead of the whole desktop, so nothing else on screen leaks
 /// into the transcript, and an occluded or background window is still legible.
 ///
-/// The returned [`WindowShot`] carries the window's origin and size in the
+/// The returned `WindowShot` carries the window's origin and size in the
 /// global coordinate space alongside the pixels. Without that, a crop is a
 /// targeting regression — the model would reason in window pixels and click in
 /// global ones.

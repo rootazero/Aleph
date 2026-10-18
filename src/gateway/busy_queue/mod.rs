@@ -296,7 +296,7 @@ pub fn notify_slot_free(session_key: &str) {
 ///
 /// So the window is closed on the level rather than the edge: `Lane::drain_epoch`
 /// counts every drain regardless of marks, and the waiter compares it across
-/// its attempt ([`TicketGuard::drain_epoch`]). Guarded by
+/// its attempt (`TicketGuard::drain_epoch`). Guarded by
 /// `deliver::tests::a_drain_that_races_the_mark_does_not_park_the_deferred_steer`.
 pub fn mark_awaiting_burst_drain(session_key: &str, run_id: &str) {
     let mut map = lock();
@@ -669,7 +669,7 @@ impl TicketGuard {
     ///
     /// Fails **open** (`0`) when this ticket is no longer in its lane —
     /// withdrawn by `mark_admitted`, dropped, or the lane garbage-collected —
-    /// the same posture as [`Self::is_front`] and [`Self::drain_epoch`]. `0`
+    /// the same posture as [`Self::is_front`] and `Self::drain_epoch`. `0`
     /// renders as "about to start", and whatever happens next (`RunAccepted`
     /// or `RunError`) overwrites that phase, so a stale open answer costs one
     /// frame, never a stuck UI.

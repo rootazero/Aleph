@@ -6,7 +6,7 @@
 //! opentelemetry-otlp + tonic/gRPC) is one of the heaviest dependency trees in
 //! the ecosystem and would violate redline R3 (core minimalism) for what is,
 //! for Aleph, a correlation feature: the daemon already persists its own
-//! execution traces ([`crate::resilience::database::traces`]) and logs through
+//! execution traces (`crate::resilience::database::traces`) and logs through
 //! `tracing`.
 //!
 //! What this gives us instead, at near-zero cost:

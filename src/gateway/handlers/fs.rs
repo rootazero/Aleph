@@ -12,7 +12,7 @@
 //!   the agent will run in, not a stray path from their laptop.
 //!
 //! Safety surface: every traversal/mutation is gated by
-//! [`ProjectsConfig::allowed_roots`]. A path that doesn't canonicalise
+//! `ProjectsConfig::allowed_roots`. A path that doesn't canonicalise
 //! into one of those roots' subtrees returns `-32600` and never touches
 //! `fs::read_dir` / `fs::create_dir`.
 //!

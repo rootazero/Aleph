@@ -470,6 +470,23 @@ test-loom:
 # Run full logic review suite (proptest + loom)
 test-logic: test-proptest test-loom
 
+# Run the Task9 modularization import guard. The integration test refuses to
+# shell out to Cargo from inside the test process (by design — see the comment
+# at the top of tests/modularization_import_guards.rs) and instead reads
+# `cargo metadata --format-version 1 --locked` from a path supplied via the
+# ALEPH_TASK9_METADATA_JSON env var. CI's "Prepare guarded full Cargo
+# metadata" step does this in Python before running the integration tests;
+# locally we mirror the same invocation, drop the snapshot into /tmp, and
+# hand the test the path. Not chained into `test-all`: the metadata cost
+# (~1s + 7.8 MB) only earns its keep when this guard is the actual suspect.
+test-modularization:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    metadata_path="/tmp/aleph-task9-metadata.json"
+    cargo metadata --format-version 1 --locked > "$metadata_path"
+    ALEPH_TASK9_METADATA_JSON="$metadata_path" \
+        cargo test -p alephcore --test modularization_import_guards --no-fail-fast
+
 # Run all tests (core + desktop + proptest + shared crates)
 test-all: test test-desktop-all test-proptest test-shared test-session-manager check-phase5 check-wiring
 

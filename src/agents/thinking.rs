@@ -50,7 +50,7 @@ pub const THINK_LEVEL_SESSION_KEY: &str = "think_level";
 
 /// The reasoning-depth ladder as offered to a user surface, shallow → deep.
 ///
-/// Same contract as [`crate::config::types::policies::builtin_tiers`] and
+/// Same contract as `crate::config::types::policies::builtin_tiers` and
 /// `builtin_modes`: core ships ids, the surface writes the words. Rides
 /// `config.get_tool_permissions` next to those two, because a composer that
 /// needs three dials should not need three fetches — and because a client that

@@ -1,6 +1,6 @@
 //! Resource-scope-aware concurrency claims for parallel tool dispatch.
 //!
-//! The harness parallel fast path ([`crate::harness::agent`]) needs to decide,
+//! The harness parallel fast path (`crate::harness::agent`) needs to decide,
 //! for a batch of tool calls the LLM emitted in one turn, whether they can run
 //! concurrently without observing each other's side effects. Historically that
 //! decision was a single per-tool boolean (`concurrent_safe`): a batch was

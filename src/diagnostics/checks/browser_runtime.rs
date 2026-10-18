@@ -39,7 +39,7 @@
 //! gate. It used to tell an operator that "with neither driver runnable the
 //! `browser_*` tools are withheld" — a claim about `tools::probes::browser`
 //! written from memory, which stopped being true when that gate grew a third
-//! question. It now quotes the gate's own [`GATE_REQUIREMENTS`] and only makes
+//! question. It now quotes the gate's own `GATE_REQUIREMENTS` and only makes
 //! the claim when the gate actually makes it (判据 §16 — the twin gets the fix
 //! carried over, not a private re-wording).
 

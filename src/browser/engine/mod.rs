@@ -230,7 +230,7 @@ impl EngineHandle {
     /// connection.
     ///
     /// `pub`, not `pub(crate)`, and NOT split into two cfg'd bodies: a seam
-    /// that parks a handle ([`registry::EngineRegistry::insert_for_test`]) is
+    /// that parks a handle (`registry::EngineRegistry::insert_for_test`) is
     /// useless to a caller that cannot build one, and the
     /// `--features test-helpers --test '*'` integration tests are a different
     /// crate. Two bodies would be two answers to "how is a handle assembled",

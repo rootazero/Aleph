@@ -77,7 +77,7 @@ pub trait HeartbeatExecutionAdapter: Send + Sync {
     ///
     /// `granted` is the fire-time authority verdict the timer resolved
     /// before the L1 probe (`Granted::legacy` for an unowned task or when no
-    /// users store is installed). It travels to [`heartbeat_run_metadata`],
+    /// users store is installed). It travels to `heartbeat_run_metadata`,
     /// the only thing that reads it.
     async fn execute_heartbeat(
         &self,

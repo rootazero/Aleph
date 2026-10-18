@@ -20,8 +20,8 @@ use super::resource::ResourceRegistry;
 /// Opaque state shared by the issuer RPCs and the dedicated viewer route.
 /// Construction remains in the core composition root, not the I/O builder.
 /// Without an installed backend/state, all issuer RPCs deny generically.
-/// `decide` additionally requires a lifecycle (see [`Self::new_with_lifecycle`]);
-/// a state built by [`Self::new`] issues/revokes as before but denies decisions.
+/// `decide` additionally requires a lifecycle (see `Self::new_with_lifecycle`);
+/// a state built by `Self::new` issues/revokes as before but denies decisions.
 pub struct BrowserViewerIssuerState {
     pub(crate) grants: ViewerGrantStore,
     resources: ResourceRegistry,

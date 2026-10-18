@@ -70,8 +70,8 @@ pub fn render_strategy_summary(s: &Strategy) -> String {
 /// user-editable) and `StrategyPointerLayer` only passes this render through —
 /// it sits in `prompt_contract::CONDITIONALLY_SILENT`, so the per-layer byte
 /// ratchet measures it as 0 B no matter how large the list gets. The bound
-/// lives here, in the producer: at most [`GUARDRAIL_PROMPT_MAX_ITEMS`] lines
-/// of [`GUARDRAIL_PROMPT_MAX_CHARS`] chars each, with an elision footer naming
+/// lives here, in the producer: at most `GUARDRAIL_PROMPT_MAX_ITEMS` lines
+/// of `GUARDRAIL_PROMPT_MAX_CHARS` chars each, with an elision footer naming
 /// the hidden count so a capped list never reads as complete.
 #[must_use]
 pub fn render_guardrails_only(s: &Strategy) -> String {

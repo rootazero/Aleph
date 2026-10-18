@@ -255,7 +255,7 @@ impl LeakDetector {
     /// Only the `(siphash, byte length)` fingerprint is stored — never the
     /// plaintext, matching the contract of
     /// [`crate::secrets::injection::render_with_secrets`] ("with hashes, never
-    /// plaintext"). Secrets shorter than [`MIN_INJECTED_MATCH_LEN`] are not
+    /// plaintext"). Secrets shorter than `MIN_INJECTED_MATCH_LEN` are not
     /// tracked for substring matching: a 7-byte window over prose produces
     /// false positives, and short values are covered by the pattern rules.
     pub fn register_injected(&mut self, secrets: &[InjectedSecret]) {

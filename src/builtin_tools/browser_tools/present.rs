@@ -155,7 +155,7 @@ impl From<LifecycleError> for PresentError {
     }
 }
 
-/// Thin presentation front-end over the shared [`BrowserLiveLifecycle`], which
+/// Thin presentation front-end over the shared `BrowserLiveLifecycle`, which
 /// is the only owner of registry transition + grant revocation + event emission
 /// and shares the SAME stores as the viewer issuer/backend. The config seam
 /// supplies its existing event bus; absent bus denies publication.

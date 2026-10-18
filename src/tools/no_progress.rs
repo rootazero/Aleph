@@ -19,7 +19,7 @@
 //! This module closes that gap, mapped onto Aleph's redlines:
 //!
 //! - **Precision via the idempotency SSOT.** Only tools passing
-//!   [`is_idempotent_builtin_name`](crate::tools::retry::is_idempotent_builtin_name)
+//!   `is_idempotent_builtin_name`
 //!   (pure reads — no writes, sends, or remote mutation) are considered. A
 //!   tool whose result is *meant* to change between calls (a write, a clock,
 //!   a queue poll) is never flagged, so legitimate progressing loops are not
@@ -39,7 +39,7 @@
 //! - Not a persistence change: computed fresh from the visible event tail on
 //!   every turn, never written back to the session log.
 //! - Not a `PromptLayer`: per-turn dynamic aggregation belongs in the
-//!   per-turn message vector path ([`crate::harness::agent::prompt`]), same as
+//!   per-turn message vector path (`crate::harness::agent::prompt`), same as
 //!   [`attempt_summary::render_run_summary`](crate::tools::attempt_summary::render_run_summary).
 //!
 //! ## Output shape

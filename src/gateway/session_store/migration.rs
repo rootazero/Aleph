@@ -24,7 +24,7 @@ pub fn migration_needed(base_dir: &Path) -> bool {
 /// `session_dir(key)` form, renaming each to the canonical name.
 ///
 /// The file backend names every session dir by sanitizing its key
-/// ([`crate::gateway::session_store::file_backend::sanitize_key_for_dir`]).
+/// (`crate::gateway::session_store::file_backend::sanitize_key_for_dir`).
 /// macOS keeps `:`; Windows replaces `:*?"<>|` with `_`. Copying a `~/.aleph`
 /// data dir across platforms (or a transfer tool transliterating chars illegal
 /// on the target FS) leaves dirs whose names no longer resolve here, so history

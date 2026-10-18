@@ -20,7 +20,7 @@ use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 
 /// Per-provider probe deadline. It is applied inside
-/// [`probe_provider_bounded`], which is the only way to reach [`probe_provider`]
+/// [`probe_provider_bounded`], which is the only way to reach `probe_provider`
 /// from outside this module — so every call site inherits it by construction
 /// and no list of call sites has to be kept correct here. A hung endpoint must
 /// not stall any of them.
@@ -142,7 +142,7 @@ async fn probe_provider(label: &str, provider_config: ProviderConfig) -> ProbeOu
     }
 }
 
-/// [`probe_provider`] wrapped in the shared [`PROBE_TIMEOUT`] deadline.
+/// `probe_provider` wrapped in the shared [`PROBE_TIMEOUT`] deadline.
 ///
 /// A timeout is reported as an ordinary failed probe (clear `error`, no
 /// latency) so callers need no `tokio::time::timeout` boilerplate of their

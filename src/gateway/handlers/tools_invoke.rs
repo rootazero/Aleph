@@ -108,7 +108,7 @@ where
 
 /// [`handle_invoke`] plus the canonical `ToolHandlerRegistry` the terminal
 /// observation capabilities are registered on. With `Some`, the canonical
-/// terminal names dispatch through [`invoke_canonical`]; with `None` (test
+/// terminal names dispatch through `invoke_canonical`; with `None` (test
 /// mode / legacy callers) terminal observations fail closed without falling
 /// back to the raw `registry`. Non-terminal tools retain their existing path.
 pub async fn handle_invoke_with_canonical<R>(

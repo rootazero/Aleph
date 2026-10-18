@@ -17,7 +17,7 @@
 //! `add`, `create_blank` and `bind_workspace` are three of the four that
 //! CHOOSE a directory. Since P2 (Task 7) that column is the default working
 //! directory of every run in the room, so all three go through
-//! [`require_directory_choice`] — the same config-tier predicate the per-turn
+//! `require_directory_choice` — the same config-tier predicate the per-turn
 //! `project_root` override uses. Adding a sixth writer without a gate reopens
 //! "register a folder, then chat in it", a two-step path to an arbitrary
 //! server directory with both steps legal.
@@ -54,7 +54,7 @@
 //! metadata key). Do not read that list as exhaustive — read the rule:
 //!
 //! - a new writer of `workspace_path` that CHOOSES a directory owes
-//!   [`require_directory_choice`];
+//!   `require_directory_choice`;
 //! - a new SOURCE of `workspace_override` owes a gate at its own choice point,
 //!   because this line will faithfully catalogue whatever it produces.
 //!
@@ -91,8 +91,8 @@
 //! ## The single admission point
 //!
 //! Every handler that takes a caller-supplied project id goes through
-//! [`gate_project`] BEFORE touching anything else, and owner-level operations
-//! additionally through [`require_owner`]. Do not write
+//! `gate_project` BEFORE touching anything else, and owner-level operations
+//! additionally through `require_owner`. Do not write
 //! `project.owner_user_id == caller` at a call site — that is the second
 //! derivation `gateway::visibility` exists to prevent, and it would miss both
 //! the fail-closed and the no-oracle halves.
@@ -136,7 +136,7 @@ use crate::sync_primitives::Arc;
 /// it is an `Option` rather than the pre-P2 `path: String` that spelled
 /// "unbound" as `""`.
 ///
-/// When it is set, [`render_project`] runs it through
+/// When it is set, `render_project` runs it through
 /// [`crate::utils::paths::display_string`]. The stored value comes out of
 /// `std::fs::canonicalize`, so on Windows it carries the `\\?\`
 /// extended-length prefix — which is right for the filesystem layer and wrong
@@ -422,7 +422,7 @@ pub struct AddParams {
 /// fixed `OWNER_USER_ID` constant rather than to whichever caller happens to
 /// be asking (see that method's doc for the query this claim depends on).
 ///
-/// Gated by [`require_directory_choice`]: the row this writes carries a
+/// Gated by `require_directory_choice`: the row this writes carries a
 /// `workspace_path`, which since P2 becomes a run's cwd.
 pub async fn handle_add(
     request: JsonRpcRequest,
@@ -617,9 +617,9 @@ pub struct BindWorkspaceParams {
 /// then defaults its working directory to it — which is why this needs BOTH
 /// gates:
 ///
-/// - [`require_owner`] — redirecting where the whole room works is an owner
+/// - `require_owner` — redirecting where the whole room works is an owner
 ///   decision, not a member's. `handle_create`'s doc has said so since Task 3.
-/// - [`require_directory_choice`] — naming a server-side path at all is
+/// - `require_directory_choice` — naming a server-side path at all is
 ///   config-tier, exactly as it is for a per-turn `project_root`.
 ///
 /// Absolute-ness, existence and canonicalisation are the store's
@@ -1148,7 +1148,7 @@ pub async fn handle_workspace_list(
 
 /// Handle `projects.workspace.read`.
 ///
-/// Text only, capped at [`WORKSPACE_READ_MAX_BYTES`]. A binary file is
+/// Text only, capped at `WORKSPACE_READ_MAX_BYTES`. A binary file is
 /// refused rather than lossily decoded: this feeds a text preview, and
 /// replacement characters would misrepresent the file contents as damaged.
 pub async fn handle_workspace_read(

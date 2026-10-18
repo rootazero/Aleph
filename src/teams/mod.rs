@@ -57,7 +57,7 @@ use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 /// deactivated principal owns, not the teams visible to the admin running it.
 /// Both fields are private to this module, so that store never leaves
 /// `teams`: a holder can only ask the owner-filtered pause and count in
-/// [`background`] — never `list_teams` / `get_team` / `update_team` past
+/// `background` — never `list_teams` / `get_team` / `update_team` past
 /// [`ScopedTeamStore`]. Built with `TeamTaskStores::new`.
 #[derive(Clone)]
 pub struct TeamTaskStores {

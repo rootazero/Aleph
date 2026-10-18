@@ -1,4 +1,4 @@
-//! Scheduling logic for the [`TeamDispatcher`](super::TeamDispatcher).
+//! Scheduling logic for the `TeamDispatcher`.
 //!
 //! `dispatch_once` is the single tick of the dumb loop: reconcile stale state,
 //! select schedulable tasks, claim and launch them. It contains **no

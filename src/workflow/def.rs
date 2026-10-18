@@ -36,11 +36,11 @@ pub struct WorkflowDef {
 /// template (which has no `kind` field) deserialises unchanged, and an agent
 /// step serialises without a `kind` key (byte-identical on the wire).
 ///
-/// **Collect is a marker, not a payload carrier.** A [`Collect`] step runs no
+/// **Collect is a marker, not a payload carrier.** A `Collect` step runs no
 /// agent; it is the workflow's own primitive that waits for a list of
 /// upstream steps to settle and reduces their outputs into a single
 /// deliverable. The actual `collect_from` and `reduce` configuration lives
-/// on [`WorkflowStepDef`](super::WorkflowStepDef) — keeping the variant a
+/// on `WorkflowStepDef` — keeping the variant a
 /// unit keeps `WorkflowStepKind` `Copy`, which every match site across
 /// `compile` / `manifest` / the workflow tool relies on, and keeps the wire
 /// shape `{"kind": "collect", "collect_from": [...], "reduce": "concat"}`
@@ -58,7 +58,7 @@ pub enum WorkflowStepKind {
     Clarify,
     /// Reduce a list of upstream steps' outputs into one deliverable.
     /// `collect_from` and `reduce` are carried on
-    /// [`WorkflowStepDef`](super::WorkflowStepDef); see
+    /// `WorkflowStepDef`; see
     /// [`crate::workflow::compile`] for the materialisation rules.
     Collect,
 }

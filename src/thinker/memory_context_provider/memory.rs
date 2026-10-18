@@ -54,7 +54,7 @@ impl MemoryContextProvider {
     /// session is active (retrieval then excludes nothing).
     ///
     /// `available_tokens` is the context-budget-aware headroom for memory this
-    /// turn (see [`effective_memory_budget`]). Pass `None` to use the full
+    /// turn (see `effective_memory_budget`). Pass `None` to use the full
     /// configured budget (legacy behaviour / no `[context_budget]`).
     pub async fn build_memory_user_message(
         &self,

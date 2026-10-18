@@ -1,5 +1,5 @@
 //! Per-phase run tallies used by the `status` rendering in
-//! [`summarize_phases`](crate::builtin_tools::workflow_tool::summarize_phases).
+//! `summarize_phases`.
 //!
 //! This is an internal accumulator — never exposed on the wire. Kept separate
 //! from the wire DTOs ([`super::dto`]) because nothing outside this file

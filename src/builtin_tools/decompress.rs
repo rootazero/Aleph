@@ -13,7 +13,7 @@
 //! The restored text rides the ordinary tool-result channel — no transient
 //! injection path, no turn-prefix edit (spec §3.1b architecture decision). It
 //! therefore MUST be in the read family
-//! ([`crate::tools::result_processing::is_read_family`]): offloading a
+//! (`crate::tools::result_processing::is_read_family`): offloading a
 //! restoration result would be circular ("the only way back from an offloaded
 //! read is another read"), so Layer 2 gives it no budget and
 //! `read_backstop_tokens` is the ceiling.

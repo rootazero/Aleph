@@ -1,6 +1,6 @@
 //! `PromptMode` — controls which layers participate in prompt assembly.
 //!
-//! Used by [`PromptLayer::supports_mode`] to filter layers at assembly time,
+//! Used by `PromptLayer::supports_mode` to filter layers at assembly time,
 //! enabling lightweight prompts for token-constrained scenarios.
 //!
 //! # Do not auto-select this to save money
@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// The pipeline can be asked to produce a Full, Compact, or Minimal
 /// prompt.  Each layer declares which modes it supports via
-/// [`PromptLayer::supports_mode`]; the pipeline skips layers that
+/// `PromptLayer::supports_mode`; the pipeline skips layers that
 /// return `false` for the active mode.
 ///
 /// Serializes to lowercase (`"full"` / `"compact"` / `"minimal"`) so it can be

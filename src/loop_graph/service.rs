@@ -212,7 +212,7 @@ pub fn watcher_is_pokeable(watcher_id: &str) -> bool {
 }
 
 /// Does this node have a victory-claim moment at all — i.e. is there a place in
-/// the codebase that calls [`notify_node_settled`] for it?
+/// the codebase that calls `notify_node_settled` for it?
 ///
 /// The other half of [`watcher_is_pokeable`], and it was missing. That one asks
 /// "can this WATCHER be woken"; this asks "does the WATCHED thing ever announce
@@ -495,7 +495,7 @@ pub async fn notify_team_settled(team_id: &str) -> bool {
 /// belongs to the channel push, not the poke), so here `false` is
 /// informational — the watcher's periodic cadence backstops.
 ///
-/// Pokes every id in [`workflow_node_ids`] — the raw stamped name AND the
+/// Pokes every id in `workflow_node_ids` — the raw stamped name AND the
 /// sanitised name the user actually pairs on.
 pub async fn notify_workflow_settled(template_name: &str) -> bool {
     let mut earned = true;

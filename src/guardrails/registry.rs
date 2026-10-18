@@ -6,7 +6,7 @@
 //! `Sanitize` rewrites the payload and the *rewritten* payload is what the
 //! next guardrail in the chain sees, so a sanitize-then-block chain cannot
 //! leak. Every `Warn` reason is collected (deduplicated) along the way, and
-//! [`settle_chain`] turns the accumulated state into the one returned
+//! `settle_chain` turns the accumulated state into the one returned
 //! decision. `disable_all()` flips an `AtomicBool` so every evaluation
 //! short-circuits to `Allow` — the high-risk runtime rollback knob from
 //! master spec § Stage 5.

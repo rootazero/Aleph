@@ -709,7 +709,7 @@ pub trait CoordTaskStore: Send + Sync {
     /// Record the start of a new execution attempt. Returns the assigned run id.
     async fn start_task_run(&self, task_id: &str, agent_id: &str) -> crate::error::Result<String>;
 
-    /// Finish a run started via [`start_task_run`]. No-op when `run_id` is empty.
+    /// Finish a run started via `start_task_run`. No-op when `run_id` is empty.
     async fn finish_task_run(
         &self,
         run_id: &str,

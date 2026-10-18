@@ -2,7 +2,7 @@
 //!
 //! A plugin's servers have two faces — the count on its `plugins.list` row and
 //! the spawn in `lifecycle.rs::mount_parsed` — and both come from the list
-//! [`parse_declared_servers`] returns: the manifest adapters wrap each entry as
+//! `parse_declared_servers` returns: the manifest adapters wrap each entry as
 //! a `CapabilityDeclaration::McpServer`; the row counts them and the mount
 //! spawns exactly those capabilities — both only when the plugin's kind
 //! `starts_mcp_servers()` (`lifecycle.rs::build_record` applies that one gate
@@ -70,14 +70,14 @@
 //! `${CLAUDE_PLUGIN_ROOT}` / `${ALEPH_PLUGIN_ROOT}` (the plugin directory) and
 //! `${CLAUDE_PLUGIN_DATA}` / `${ALEPH_PLUGIN_DATA}` (its persistent data
 //! directory, created by the mount just before a server that names it is
-//! started — [`provision_data_dir`]) are expanded in `command`, `args`,
+//! started — `provision_data_dir`) are expanded in `command`, `args`,
 //! `url`, `env` and `headers` — by `PluginVars::expand`, the subsystem's one
 //! expander, once, so the containment check below and the spawn see the same
 //! string.
 //!
 //! # Which program a stdio server runs
 //!
-//! [`resolve_command`] answers it once for both faces:
+//! `resolve_command` answers it once for both faces:
 //! - a bare name (`node`, `npx`, `uvx`, `python3`) is kept as written and
 //!   looked up on `PATH` at spawn;
 //! - an absolute path not written with a `_PLUGIN_ROOT` variable is kept as

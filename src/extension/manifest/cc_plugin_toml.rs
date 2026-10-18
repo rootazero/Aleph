@@ -90,7 +90,7 @@ pub struct CcPluginToml {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum CcPluginAuthorToml {
-    /// Simple string format: "Name <email>"
+    /// Simple string format: "Name `&lt;email&gt;`"
     String(String),
     /// Object format with optional fields
     Object {
@@ -112,7 +112,7 @@ impl From<CcPluginAuthorToml> for AuthorInfo {
     }
 }
 
-/// Aleph-specific extensions inside [aleph] section
+/// Aleph-specific extensions inside \[aleph\] section
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 #[derive(Default)]

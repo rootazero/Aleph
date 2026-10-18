@@ -21,7 +21,7 @@
 //! dial does not. Core resolves depth as request > session > *no directive at
 //! all*, so clearing that override leaves the provider on its own default.
 //! Rendering it as "follow global" would name a setting that does not exist,
-//! which is why [`Dial::global`] returns `None` for `Think` and the
+//! which is why `Dial::global` returns `None` for `Think` and the
 //! clear-the-override row uses different copy.
 
 use leptos::prelude::*;

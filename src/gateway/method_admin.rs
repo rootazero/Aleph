@@ -24,8 +24,8 @@
 //! method name `.register(` but register into a different table, not the
 //! JSON-RPC `HandlerRegistry`. That sweep produced **74 method families**.
 //! Every one of them has a ruling in this file: a family is admin iff it
-//! prefix-matches [`ADMIN_PREFIXES`] and is not listed in
-//! [`MEMBER_CARVE_OUTS`]; every other family is open, and the non-obvious
+//! prefix-matches `ADMIN_PREFIXES` and is not listed in
+//! `MEMBER_CARVE_OUTS`; every other family is open, and the non-obvious
 //! open rulings are written out below. There is no second table anywhere.
 //! The sweep is no longer prose: `gateway::method_census` (round-5 ⑥) runs
 //! it as a test — scraping the same patterns, erroring on receivers it does

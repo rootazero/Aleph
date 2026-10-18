@@ -102,7 +102,7 @@ pub(crate) fn is_promote(metadata: &std::collections::HashMap<String, String>) -
 /// `/new`. A client identifies a side question's traffic by the **run id** the
 /// gateway handed back from its own `agent.run` call.
 ///
-/// Guarded by [`tests::the_core_side_name_is_the_protocol_crate_s_type`],
+/// Guarded by `tests::the_core_side_name_is_the_protocol_crate_s_type`,
 /// which is a type-identity check rather than a text scan: re-adding a local
 /// `struct BtwTurn` here shadows the re-export and stops that test compiling.
 pub use aleph_protocol::btw::BtwTurn;

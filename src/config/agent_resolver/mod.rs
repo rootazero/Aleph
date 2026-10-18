@@ -113,8 +113,8 @@ pub struct ResolvedAgent {
     pub allowed_links: Option<Vec<String>>,
 
     /// Users who may start a run as this agent (None or empty = everyone).
-    /// Carried verbatim from [`AgentDefinition::allowed_users`]; the rule that
-    /// reads it is [`agent_admits_user`](crate::config::types::agent_admits_user).
+    /// Carried verbatim from `AgentDefinition::allowed_users`; the rule that
+    /// reads it is `agent_admits_user`.
     pub allowed_users: Option<Vec<String>>,
 
     /// Per-agent tool permission overrides
@@ -481,7 +481,7 @@ fn resolve_user_path(path: &Path) -> PathBuf {
 /// it invariably drops the configured half. Anything that *creates* or
 /// *archives* an agent's directories must agree with this function, since it
 /// is what rebuilds every agent after a restart; see
-/// [`crate::config::agent_manager::provisioning_roots`], which is how the
+/// `crate::config::agent_manager::provisioning_roots`, which is how the
 /// tools reach it.
 #[must_use]
 pub fn workspace_root_for(defaults: &AgentDefaults) -> PathBuf {

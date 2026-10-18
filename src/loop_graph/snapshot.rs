@@ -189,7 +189,7 @@ impl SnapshotStore {
     }
 
     /// Capture the current state of `agent_id`'s graph under `label`.
-    /// `label` is truncated to [`LABEL_MAX_CHARS`]; pass a short, meaningful
+    /// `label` is truncated to `LABEL_MAX_CHARS`; pass a short, meaningful
     /// name (the audit log will reference it).
     pub fn capture(&self, graph: &LoopGraphStore, agent_id: &str, label: &str) -> Result<i64> {
         let label = if label.chars().count() > LABEL_MAX_CHARS {

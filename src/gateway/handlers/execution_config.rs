@@ -33,7 +33,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
 ///    body over the section rebuilt the other ten from their defaults and
 ///    `save_incremental` wrote that to disk: raising the run timeout silently
 ///    reset `max_runs_global`, `max_concurrent_subagents` and
-///    `mid_turn_steering`. See [`super::general_config::json_merge`]. Widening
+///    `mid_turn_steering`. See `super::general_config::json_merge`. Widening
 ///    the Panel DTO is NOT the fix — that re-arms the trap for field #13.
 /// 2. **`execution` is a live section, so persisting it is only half the
 ///    write.** `reload_impact::LIVE_SECTIONS` declares it live and
@@ -42,7 +42,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
 ///    so a cap raised here landed on disk and the running `ConcurrencyLimiter`
 ///    kept admitting at the old value for the rest of the process — under a
 ///    `{"success": true}`. The verdict is reported *verified*
-///    ([`crate::config::classify_verified`]), so a process where the handles
+///    (`crate::config::classify_verified`), so a process where the handles
 ///    were never installed downgrades to `restart` instead of claiming a poke
 ///    that did not happen.
 pub async fn handle_update(

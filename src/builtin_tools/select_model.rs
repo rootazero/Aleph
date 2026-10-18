@@ -3,7 +3,7 @@
 //! The "A layer" of AI dynamic routing: lets the main-loop LLM choose the model
 //! for the rest of the conversation in one inference, rather than a separate
 //! routing model deciding for it (which would violate R7/R9). The pick is
-//! recorded in [`session_model_handle`](crate::providers::session_model_handle)
+//! recorded in `session_model_handle`
 //! and applied at the next run's construction (`harness_bridge`), where it
 //! wraps the chosen provider in a `ModelOverrideProvider` to stamp the model.
 //!

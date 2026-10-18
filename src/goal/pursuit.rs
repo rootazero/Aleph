@@ -155,7 +155,7 @@ fn objective_block(goal: &Goal) -> String {
 /// Iteration-aware: this continuation is the `(continuations_used + 1)`-th
 /// autonomous step. The pace (`N/max`) is surfaced so the model can self-budget
 /// (R9 — intelligence in the prompt), together with the remaining wall-clock and
-/// token budget (see [`render_quota`]). On the FINAL allowed iteration it
+/// token budget (see `render_quota`). On the FINAL allowed iteration it
 /// switches to a wrap-up prompt (hermes "grace call" parity) so the model
 /// concludes gracefully instead of being cut mid-thought when the next hook
 /// stops it. `tokens_now` / `now_ms` may be 0 when unavailable — the
@@ -375,7 +375,7 @@ pub fn wait_parked(goal: &Goal, now_ms: u64) -> Option<WaitPark> {
 /// Continuation prompt for a pursuit resuming from a wait barrier — states
 /// WHY it parked and that the wake condition arrived, so the model reassesses
 /// instead of blindly continuing (R9). `cause` names the wake ("the wait
-/// elapsed" / "task '<id>' settled (completed)").
+/// elapsed" / "task '`&lt;id&gt;`' settled (completed)").
 #[must_use]
 pub fn wait_resume_prompt(goal: &Goal, cause: &str) -> String {
     let lessons = render_lessons(goal);

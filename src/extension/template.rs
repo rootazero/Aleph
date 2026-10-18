@@ -80,7 +80,7 @@ pub(crate) fn inline_commands(content: &str) -> Vec<(Range<usize>, &str)> {
 const ARGUMENTS_VAR: &str = "ARGUMENTS";
 
 /// The variable naming a skill's own directory: exported to a skill's inline
-/// commands ([`InlineSite::skill_dir`]), and — spelled [`SKILL_DIR_TOKEN`] —
+/// commands ([`InlineSite::skill_dir`]), and — spelled `SKILL_DIR_TOKEN` —
 /// expanded as text in a skill's prose (`skill::preprocess`).
 pub const SKILL_DIR_VARIABLE: &str = "ALEPH_SKILL_DIR";
 
@@ -261,10 +261,10 @@ pub struct InlineSite<'a> {
 /// they reach the shell through the environment only; on Windows `cmd`
 /// cannot expand `${…}`, so they — and nothing else — are substituted into
 /// the line: the plugin's by the one derivation a command hook uses
-/// ([`plugin_shell_line`]), then the skill's directory.
+/// (`plugin_shell_line`), then the skill's directory.
 ///
 /// The daemon's environment is cleared first, except what a shell and its
-/// programs need ([`INHERITED_ENV`]) — unlike a plugin command hook, which
+/// programs need (`INHERITED_ENV`) — unlike a plugin command hook, which
 /// inherits all of it: an inline command's arguments are picked by whoever
 /// sends the
 /// `/command`, and its output is read by the model. On top of that, the

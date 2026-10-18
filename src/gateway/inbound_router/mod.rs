@@ -333,7 +333,7 @@ impl InboundMessageRouter {
     }
 
     /// Wire the trusted A/B scope lifecycle. While the inbound router is
-    /// the only place that opens a [`PublicApprovalScope`] for an
+    /// the only place that opens a `PublicApprovalScope` for an
     /// incoming public SMS, this single hook lets the binary inject
     /// the same `OperatorControl` used by the JSON-RPC handlers
     /// (registered through

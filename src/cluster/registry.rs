@@ -21,7 +21,7 @@ use crate::cluster::ReverseRpcChannel;
 /// field is a placeholder for the node's self-declared JSON schema; it is
 /// stored verbatim, surfaced in `environments.list` / `node_list`, and
 /// preserved across reconnect. **It is NOT validated against `args`** — the
-/// allowlist ([`CommandTable`]) is the only authoritative gate on the
+/// allowlist (`CommandTable`) is the only authoritative gate on the
 /// node side, and the center passes `args` straight through to the command's
 /// `run`. Every shipped node command declares `{"type":"object"}` with no
 /// `properties`, so the field is informational today.

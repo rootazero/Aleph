@@ -20,7 +20,7 @@
 //!
 //! `Expired` is also what a REFUSED blob path produces, and there are three
 //! ways to be refused — the file is gone, it is outside the store root, or it
-//! was written for a different call. See [`resolve_source`] for why a marker
+//! was written for a different call. See `resolve_source` for why a marker
 //! read back out of a log needs all three; none of them is allowed to become
 //! "here are some bytes" (判据 §8).
 //!

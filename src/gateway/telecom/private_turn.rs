@@ -5,7 +5,7 @@
 //! request (`request_private_lookup`) **and** the owner enabled
 //! `[telecom_private_read]` (a driver is wired and the trusted operator
 //! control plane is installed). The sequence, all under the binding's
-//! admission permit and [`ScopeGuard`]:
+//! admission permit and `ScopeGuard`:
 //!
 //! 1. Approval A: request a read of the one opened source (owner memory,
 //!    read-only search) for the exact query; tell the caller once, with a
