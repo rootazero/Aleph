@@ -230,114 +230,18 @@ impl HarnessRunner for AgentHarnessRunner {
             }
             None => llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?,
         };
-        // Step 3-MoA: a session MoA activation supersedes the directive/brain
-        // pick — the MoaProvider facade fans advisors out and lets the
-        // preset's aggregator act. `take_for_run` consumes a one-shot pref
-        // atomically (the single restore point: success, error and cancel
-        // paths all leave no state). Fail-soft: an unusable preset logs and
-        // falls back to the normal chain — the conversation never breaks.
-        // Spec: docs/superpowers/specs/2026-07-05-moa-continuous-advisory-port-design.md
-        let mut moa_active = false;
-        let mut moa_aggregator_identity: Option<(String, String)> = None;
-        // The acting model without the fan-out, for the run's NON-turn calls
-        // (history summarization). See `MoaProvider::acting_chain` for why a
-        // side channel that goes through the facade is wrong three ways at once.
-        let mut moa_acting_chain: Option<Arc<dyn crate::providers::AiProvider>> = None;
-        let llm: Arc<dyn crate::providers::AiProvider> =
-            match crate::providers::session_moa_handle::take_for_run(&session_pref_key) {
-                Some(pref) => {
-                    let moa_cfg = crate::providers::moa::get_moa_config();
-                    match crate::providers::moa::try_build_for_run(
-                        &pref,
-                        moa_cfg.as_ref(),
-                        &self.named_providers,
-                        // rust-doctor-disable-next-line excessive-clone
-                        trace_sink.clone(),
-                    ) {
-                        Ok(moa) => {
-                            moa_active = true;
-                            moa_aggregator_identity = Some(moa.aggregator_identity());
-                            moa_acting_chain = Some(moa.acting_chain());
-                            Arc::new(moa)
-                        }
-                        Err(reason) => {
-                            // Round-2 B5: a one-shot consumed by a build that
-                            // never engaged MoA is refilled — an empty slot OR
-                            // the displaced-sticky undo (restore_one_shot's CAS
-                            // re-stacks the one-shot over a reinstated sticky;
-                            // see its doc) — and the failure is surfaced to the
-                            // panel via the activation-failure advisor event
-                            // (count == 0).
-                            if pref.one_shot {
-                                crate::providers::session_moa_handle::restore_one_shot(
-                                    &session_pref_key,
-                                    // rust-doctor-disable-next-line excessive-clone
-                                    pref.clone(),
-                                );
-                            }
-                            if let Some(sink) = trace_sink.as_ref() {
-                                sink.on_trace(
-                                    &crate::harness::trace::LoopTraceEvent::MoaAdvisor {
-                                        index: 0,
-                                        count: 0,
-                                        label: format!(
-                                            "moa:{}",
-                                            pref.preset.as_deref().unwrap_or("<default>")
-                                        ),
-                                        text: String::new(),
-                                        error: Some(format!(
-                                            "MoA not activated: {reason}; run continues on the normal model"
-                                        )),
-                                    },
-                                );
-                            }
-                            tracing::warn!(
-                                reason = %reason,
-                                "MoA activation unusable; run proceeds on the normal provider chain"
-                            );
-                            llm
-                        }
-                    }
-                }
-                None => llm,
-            };
         // Stage J-pre: wrap the root provider with MeteringProvider so every
         // LLM call emits a LoopTraceEvent::ProviderUsage event labelled with
-        // the agent that actually spent the tokens. The trace_sink is available
-        // here (per-run, passed in from the gateway) and flows into the same
-        // sink as all other harness trace events.
-        //
-        // This label was hardcoded to "root". Team member tasks run through
-        // THIS path too (teams/dispatcher → ExecutionEngine → orchestrator →
-        // here), so every member's spend was filed under "root" — and
-        // `aggregate_usage_by_agents` filters `agent_id IN (member ids)`, so
-        // the `teams.usage` RPC, the `team_usage` tool and the Panel Usage view
-        // found zero rows for real member spend. `spec.agent` is the same value
-        // already handed to the VESR OutcomeObserver below.
+        // the agent that actually spent the tokens.
         let llm: Arc<dyn crate::providers::AiProvider> = Arc::new(
             // rust-doctor-disable-next-line excessive-clone
             crate::providers::MeteringProvider::new(llm, trace_sink.clone(), spec.agent.clone()),
         );
-        // The run's provider for calls that are NOT the user's turn. Identical
-        // to `llm` in the normal case; when MoA is armed it is the aggregator
-        // alone, metered under the same agent so side-channel spend is still
-        // attributed. Only the advisory fan-out is dropped.
-        let side_channel_llm: Arc<dyn crate::providers::AiProvider> = match moa_acting_chain {
-            Some(acting) => Arc::new(crate::providers::MeteringProvider::new(
-                acting,
-                // rust-doctor-disable-next-line excessive-clone
-                trace_sink.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                spec.agent.clone(),
-            )),
-            // rust-doctor-disable-next-line excessive-clone
-            None => llm.clone(),
-        };
-        // Remember the provider name so transient error classification below
-        // can attach it to FlowError::Transient (Gateway's outer retry loop
-        // reads this to call `report_outcome(&provider_name, ...)`).
+        // Non-turn calls use the same metered provider as the user's turn.
+        let side_channel_llm = llm.clone();
+        // Preserve the final provider-chain name for dynamic gauge fallback,
+        // cost attribution, and transient error classification below.
         let provider_name = llm.name().to_string();
-
         // Step 4: convert String → SessionId. Serialized SessionKeys parse
         // directly; otherwise treat the incoming string as an ephemeral id
         // under `spec.agent` so orchestrator ↔ harness session identity stays
@@ -437,7 +341,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // record a model id no catalog has ever heard of — a resume would then
         // "recover" a model that never existed, which is worse than recording
         // nothing (判据 #17: a wrong label costs more than a missing one).
-        let dynamic_route = moa_active || routing_model_id == "(dynamic)";
+        let dynamic_route = routing_model_id == "(dynamic)";
         let serving_hint: Option<String> = dynamic_route
             .then(|| llm.serving_model_hint().map(std::borrow::Cow::into_owned))
             .flatten();
@@ -451,26 +355,9 @@ impl HarnessRunner for AgentHarnessRunner {
             // rust-doctor-disable-next-line excessive-clone
             routing_model_id.clone()
         };
-        // Provider id that keys the cost estimate, resolved with the same
-        // precedence as `gauge_model` above. `provider_name` (= `llm.name()`)
-        // is NOT usable here: every production `llm` is a `FailoverProvider`
-        // (optionally wrapped in Metering/ModelOverride, which delegate
-        // `name()`), so it is the literal `"failover"` — a key the price table
-        // does not know, which made `pricing::estimate` return
-        // `CostStatus::Unknown` ($0.00) on EVERY run. VESR's observer already
-        // dodges this trap (routing/observer.rs: "never the FailoverProvider
-        // wrapper name"); the pricing call just never got the same treatment.
-        //
-        // MoA supersedes the directive for the PROVIDER half exactly as it does
-        // for the model half above. Without this the pair is mismatched — the
-        // pre-MoA provider key next to the aggregator's model — and
-        // `pricing::estimate` answers `CostStatus::Unknown` ($0.00) while
-        // `FlowOutcome.serving_provider` names a provider that never served a
-        // token. Round-2 B8 made exactly this correction for VESR; the cost /
-        // serving pair never got it, because only `gauge_model` was branched.
-        // Same single source as VESR: `moa_aggregator_identity`.
+        // Provider id that keys the cost estimate. Prefer the explicit routing
+        // directive, then the provider's serving hint, and finally its wrapper name.
         let cost_provider: String = acting_provider_id(
-            moa_aggregator_identity.as_ref().map(|(p, _)| p.as_str()),
             routing_provider_id.as_deref(),
             llm.serving_provider_hint().as_deref(),
             &provider_name,
@@ -814,23 +701,10 @@ impl HarnessRunner for AgentHarnessRunner {
         // observer. v1.1 (b) captures them via their OWN OutcomeObserver wrapped
         // at the spawn seam (subagent_spawner::spawn) — each run records under
         // its own agent_id; no cross-agent leakage.
-        // Round-2 B8: when MoA is active the run's acting model is the
-        // preset's aggregator — record THAT into routing experience, not the
-        // pre-MoA directive/pin (which never served a token this run).
-        // Round-3 F4: attributing a MoA-assisted success to the SOLO aggregator
-        // model is deliberate — the aggregator is this run's actual executor;
-        // the advisor-guidance uplift is not modeled separately in routing
-        // experience (known, accepted attribution choice — metering is exact).
-        let (vesr_model_id, vesr_provider_id): (String, String) = match &moa_aggregator_identity {
-            // rust-doctor-disable-next-line excessive-clone
-            Some((p, m)) => (m.clone(), p.clone()),
-            None => (
-                // rust-doctor-disable-next-line excessive-clone
-                routing_model_id.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                routing_provider_id.clone().unwrap_or_default(),
-            ),
-        };
+        let (vesr_model_id, vesr_provider_id): (String, String) = (
+            routing_model_id.clone(),
+            routing_provider_id.clone().unwrap_or_default(),
+        );
         let trace_sink = match (trace_sink, self.routing_store.as_ref()) {
             (Some(parent), Some(store)) => {
                 Some(std::sync::Arc::new(crate::routing::OutcomeObserver::new(
@@ -1626,28 +1500,12 @@ fn effective_model_directive(
 /// The provider key the run's cost estimate and `FlowOutcome.serving_provider`
 /// are keyed on, in the same precedence as `gauge_model`.
 ///
-/// 1. **MoA aggregator** — when MoA is armed the preset's aggregator IS the
-///    acting model, so it owns BOTH halves of the identity. Branching only the
-///    model half (which is what the code did) leaves a mismatched pair — the
-///    pre-MoA provider key next to the aggregator's model — and
-///    `pricing::estimate` answers `CostStatus::Unknown` ($0.00) while the
-///    outcome names a provider that never served a token. Reachable whenever a
-///    MoA run also carries a directive: an agent `provider_hint`, or a per-turn
-///    pick from the composer pill. Round-2 B8 made this correction for VESR;
-///    this is the same fact, read by the other two consumers.
-/// 2. **routing directive** — the pin the run resolved (select_model / hint).
-/// 3. **serving hint** — the dynamic chain answering which provider it serves.
-/// 4. **provider name** — last resort. NOT usable earlier: every production
-///    chain is a `FailoverProvider` (Metering/ModelOverride delegate `name()`),
-///    so this is the literal `"failover"`, a key the price table does not know.
 fn acting_provider_id(
-    moa_aggregator: Option<&str>,
     routing_directive: Option<&str>,
     serving_hint: Option<&str>,
     provider_name: &str,
 ) -> String {
-    moa_aggregator
-        .or(routing_directive)
+    routing_directive
         .or(serving_hint)
         .unwrap_or(provider_name)
         .to_string()
@@ -1902,37 +1760,17 @@ mod acting_provider_tests {
     use super::acting_provider_id;
 
     #[test]
-    fn the_moa_aggregator_owns_both_halves_of_the_identity() {
-        // Agent pins `openai`, user arms a MoA preset whose aggregator is
-        // anthropic. The gauge already reported the aggregator's MODEL; if the
-        // provider half stayed `openai` the pair is unpriceable ($0.00) and the
-        // outcome credits a provider that served nothing.
+    fn the_directive_still_wins_then_the_serving_hint() {
         assert_eq!(
-            acting_provider_id(
-                Some("anthropic"),
-                Some("openai"),
-                Some("openai"),
-                "failover"
-            ),
-            "anthropic"
-        );
-    }
-
-    #[test]
-    fn without_moa_the_directive_still_wins_then_the_serving_hint() {
-        assert_eq!(
-            acting_provider_id(None, Some("openai"), Some("kimi"), "failover"),
+            acting_provider_id(Some("openai"), Some("kimi"), "failover"),
             "openai"
         );
-        assert_eq!(
-            acting_provider_id(None, None, Some("kimi"), "failover"),
-            "kimi"
-        );
+        assert_eq!(acting_provider_id(None, Some("kimi"), "failover"), "kimi");
     }
 
     #[test]
     fn the_wrapper_name_is_the_last_resort_only() {
-        assert_eq!(acting_provider_id(None, None, None, "failover"), "failover");
+        assert_eq!(acting_provider_id(None, None, "failover"), "failover");
     }
 }
 

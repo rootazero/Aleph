@@ -237,13 +237,6 @@ impl BuiltinToolRegistry {
         );
         reg(
             tools,
-            "moa",
-            crate::builtin_tools::moa_manage::MoaManageTool::DESCRIPTION,
-            <crate::builtin_tools::moa_manage::MoaManageTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::moa_manage::MoaManageArgs>("moa"),
-        );
-        reg(
-            tools,
             "desktop",
             DesktopTool::DESCRIPTION,
             <DesktopTool as AlephTool>::MAX_RESULT_TOKENS,

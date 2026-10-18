@@ -126,23 +126,6 @@ pub struct ListModelsOutput {
     pub models: Vec<ModelEntry>,
     /// Human-readable summary (counts + current default + the `all` hint).
     pub message: String,
-    /// MoA advisory presets selectable via `select_model` with model
-    /// "moa:`&lt;name&gt;`" (enabled presets only).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub moa_presets: Vec<MoaPresetSummary>,
-}
-
-/// A `[moa]` preset surfaced on the same discovery pass as models — the model
-/// can choose "switch to MoA preset X" via `select_model { model: "moa:X" }`
-/// exactly as it would choose a plain model id.
-#[derive(Debug, Clone, Serialize)]
-pub struct MoaPresetSummary {
-    pub name: String,
-    /// Advisor slots as "provider:model" labels.
-    pub advisors: Vec<String>,
-    /// Aggregator (acting model) as "provider:model".
-    pub aggregator: String,
-    pub is_default: bool,
 }
 
 /// LLM-facing model catalog. Holds optional handles injected at registry
@@ -389,7 +372,6 @@ impl crate::tools::AlephTool for ListModelsTool {
                 ok: false,
                 models: Vec::new(),
                 message: "Model catalog unavailable: no config handle.".to_string(),
-                moa_presets: Vec::new(),
             });
         };
 
@@ -565,36 +547,6 @@ impl crate::tools::AlephTool for ListModelsTool {
                 .then_with(|| a.model.cmp(&b.model))
         });
 
-        // MoA presets ride the same discovery surface (round-2 E3): the model
-        // can offer "switch to MoA preset X" with select_model "moa:X".
-        let moa_presets: Vec<MoaPresetSummary> = crate::providers::moa::get_moa_config()
-            .map(|cfg| {
-                // Iterate entries directly so the invariant that "name
-                // came from the iterator" is held in the loop itself
-                // rather than via an `expect` on a second `HashMap::get`
-                // call. A rehash between the two lookups (e.g. if the
-                // map ever became a `DashMap` or similar) would defeat
-                // the type-system guarantee and the `expect` would be a
-                // silent panicking spot.
-                let mut entries: Vec<(&String, &crate::config::types::moa::MoaPreset)> =
-                    cfg.presets.iter().filter(|(_, p)| p.enabled).collect();
-                entries.sort_by(|a, b| a.0.cmp(b.0));
-                entries
-                    .into_iter()
-                    .map(|(name, p)| MoaPresetSummary {
-                        name: name.clone(),
-                        advisors: p
-                            .advisors
-                            .iter()
-                            .map(|s| format!("{}:{}", s.provider, s.model))
-                            .collect(),
-                        aggregator: format!("{}:{}", p.aggregator.provider, p.aggregator.model),
-                        is_default: cfg.default_preset.as_deref() == Some(name.as_str()),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
         let default_label = match &default_provider {
             Some(p) => format!("current default provider: '{p}'"),
             None => "no default provider set".to_string(),
@@ -610,12 +562,6 @@ impl crate::tools::AlephTool for ListModelsTool {
                 "Pass all=true to also see unconfigured presets."
             }
         );
-        if !moa_presets.is_empty() {
-            message.push_str(&format!(
-                " {} MoA preset(s) available — select with model \"moa:<name>\".",
-                moa_presets.len()
-            ));
-        }
         if args.refresh {
             // Say how many providers actually answered. Silence here would let
             // "I refreshed and this is everything" stand for "every provider I
@@ -637,7 +583,6 @@ impl crate::tools::AlephTool for ListModelsTool {
             ok: true,
             models,
             message,
-            moa_presets,
         })
     }
 }

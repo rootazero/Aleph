@@ -289,11 +289,6 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires per-agent agent_id (injected at construction)
     },
     BuiltinToolDefinition {
-        name: "moa",
-        description: <crate::builtin_tools::moa_manage::MoaManageTool as crate::tools::AlephTool>::DESCRIPTION,
-        requires_config: true, // needs injected config + patcher handles
-    },
-    BuiltinToolDefinition {
         name: "vault_store",
         description: <crate::builtin_tools::vault_store::VaultStoreTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires SharedTokenManager
@@ -1267,9 +1262,6 @@ pub fn create_tool_boxed(
         // self_config requires the per-agent agent_id, injected at construction time
         // in BuiltinToolRegistry — cannot be created standalone here.
         "self_config" => None,
-        // moa requires the shared Config handle + ConfigPatcher, injected at
-        // boot — constructed in the builder, same pattern as self_config.
-        "moa" => None,
         // list_models needs the injected config + vault handles (provider/credential
         // state), bound at BuiltinToolRegistry construction — not standalone here.
         "list_models" => None,
@@ -3769,7 +3761,6 @@ mod tests {
         ("loop_graph", 8235),
         ("media", 1045),
         ("media_send", 946),
-        ("moa", 2871),
         ("node_file", 896),
         ("node_invoke", 825),
         ("node_invoke_many", 960),

@@ -74,7 +74,6 @@ pub mod load_stats;
 pub mod message;
 pub mod metadata;
 pub mod metering;
-pub mod moa;
 pub mod mock;
 pub mod model_behaviors;
 pub mod model_catalog;
@@ -95,7 +94,6 @@ pub mod route_handle;
 pub mod route_observe;
 pub mod route_policy;
 pub mod route_witness;
-pub mod session_moa_handle;
 pub mod session_model_handle;
 pub mod think_level_provider;
 

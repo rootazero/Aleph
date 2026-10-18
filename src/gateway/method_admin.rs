@@ -247,9 +247,7 @@ const ADMIN_PREFIXES: &[&str] = &[
     "runtimes.", // sandbox/runtime capability install (list/refresh/install).
     // --- Agent-persona / shared config (server-global, not per-user) ---
     "identity.", // agent SOUL.md / persona file admin (get/set/clear/list).
-    "moa.",      // shared mixture-of-agents presets (save/delete/setDefault/…) —
-    // matches `moa` in method_authz.rs's OPERATOR_TOOLS.
-    "acp.", // agent-client-protocol integration presets/config.
+    "acp.",      // agent-client-protocol integration presets/config.
     // --- Scheduled automation: cross-checked against method_authz.rs's
     // tool-tier gate, which already treats mutation here as operator-only
     // (`cron_manage`, `heartbeat_{create,update,delete,toggle}` are all
@@ -758,7 +756,6 @@ mod tests {
             "runtimes.install",
             // agent / persona config
             "identity.set",
-            "moa.savePreset",
             "acp.create",
             // scheduled automation (fix round — method_authz.rs cross-check)
             "cron.create",

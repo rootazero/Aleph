@@ -148,11 +148,6 @@ impl Lane {
             // group chat left the task strip permanently empty and the durable
             // thread unloadable while the message history rendered fine.
             "teams.chat.thread" | "teams.list_tasks" | "teams.list_templates" => Some(Self::Query),
-            // moa.listPresets returns a read-only `[moa]` config snapshot. The
-            // `.listPresets` suffix doesn't match the Query heuristic's `.list`,
-            // so classify it explicitly — keeps this hot read off the Mutate
-            // lane and out of idempotency guarding.
-            "moa.listPresets" => Some(Self::Query),
             // Both feed the artifacts pane's reading surface and neither writes
             // anything: `fs.read_file` backs the workspace-file preview,
             // `artifacts.read_text` backs the attachment preview beside it. The

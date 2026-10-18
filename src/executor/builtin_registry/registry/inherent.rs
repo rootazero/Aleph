@@ -36,7 +36,7 @@ impl BuiltinToolRegistry {
         }
     }
 
-    /// Late-bind a `ConfigPatcher` into `self_config` and `moa_manage` tools.
+    /// Late-bind a `ConfigPatcher` into the `self_config` tool.
     ///
     /// `ConfigPatcher` is built by `register_agent_handlers` *after* the
     /// `BuiltinToolRegistry`, so the constructor cannot see it. Without this
@@ -51,8 +51,7 @@ impl BuiltinToolRegistry {
     /// allow late binding through `&self`.
     pub fn set_config_patcher(&self, patcher: Arc<crate::config::patcher::ConfigPatcher>) {
         self.self_config_tool.set_patcher(Arc::clone(&patcher));
-        self.moa_manage_tool.set_patcher(Arc::clone(&patcher));
-        tracing::info!("ConfigPatcher late-bound into self_config + moa tools");
+        tracing::info!("ConfigPatcher late-bound into self_config tool");
     }
 
     /// Late-bind the `ConfigChanged` broadcast hook into the `self_config` tool.

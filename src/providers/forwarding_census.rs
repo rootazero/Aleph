@@ -134,7 +134,6 @@ fn the_census_sees_the_known_decorators() {
         "MeteringProvider",
         "ThinkLevelProvider",
         "ModelOverrideProvider",
-        "MoaProvider",
         "ScopedToolService",
         "McpScopedToolService",
         "AllowlistToolService",

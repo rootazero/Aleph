@@ -1,9 +1,8 @@
 /// Provider error classification for advisory/observability consumers.
 ///
 /// This module classifies errors into transient (retriable) vs permanent
-/// categories. Its production consumers are the MoA advisor health tracker
-/// (`moa/advisor_health.rs`) and gateway event surfaces (`ModelInfo`) — the
-/// failover engine itself does *not* read these types; its retry/migrate
+/// categories. Its production consumers are gateway event surfaces (`ModelInfo`);
+/// the failover engine itself does not read these types; its retry/migrate
 /// decisions are classified in `llm_retry` + `failover/decision.rs`.
 use serde::{Deserialize, Serialize};
 

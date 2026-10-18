@@ -71,8 +71,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) hooks_manage_tool: crate::builtin_tools::HooksManageTool,
     /// Self-config tool instance (identity files + config.toml access)
     pub(crate) self_config_tool: crate::builtin_tools::self_config::SelfConfigTool,
-    /// Moa-manage tool instance (session MoA activation + preset CRUD)
-    pub(crate) moa_manage_tool: crate::builtin_tools::moa_manage::MoaManageTool,
     /// List-models tool instance (LLM-facing model discovery: capability + cost)
     pub(crate) list_models_tool: crate::builtin_tools::list_models::ListModelsTool,
     /// Runtime-manage tool instance (external runtime ledger: list + install)

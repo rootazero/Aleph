@@ -74,7 +74,6 @@ const OPERATOR_TOOLS: &[&str] = &[
     // matches on the tool NAME, and a chat-tier run that wants to know what is
     // installed has `doctor`, which is open.
     "runtime_manage",
-    "moa",
     // Cluster: driving remote execution arms. Local `bash` is deliberately open
     // to chat tier, but the fleet is a different blast radius — one call reaches
     // every machine the center owns, and `node_file` moves bytes across that

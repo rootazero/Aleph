@@ -14,7 +14,7 @@ use super::types::{
     failure_kind, AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView, CreateParams,
     DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams, ModelsRefreshResult,
     ModelsRefreshRow, ProviderGetResult, ProviderHealthResult, ProviderHealthRow, ProviderInfo,
-    ProviderListResult, RosterModel, SetDefaultParams, TestParams, TestResult, UpdateParams,
+    ProviderListResult, SetDefaultParams, TestParams, TestResult, UpdateParams,
 };
 use crate::config::{Config, ProviderConfig};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
@@ -1365,72 +1365,6 @@ pub async fn handle_catalog(
         CatalogView::Available => item.has_api_key,
         CatalogView::All => true,
     });
-
-    // Round-2 E3: MoA presets ride the picker as a pseudo-provider row.
-    // Selecting one sends model_override {provider:"moa", model:<preset>},
-    // which chat.send's `apply_moa_selector_semantics` intercept
-    // (`src/gateway/handlers/agent.rs`) converts into a session MoA
-    // activation — wired into both the Simulated-fallback path
-    // (`AgentRunManager::start_run`) and the real-`ExecutionEngine` path
-    // (`handle_chat_send_with_engine`, `src/bin/aleph-server/server_init.rs`,
-    // since the Task 18 fix that closed the gap where a real deployment
-    // silently ignored this pick). Appended AFTER the view retain: this
-    // synthetic row is always shown when presets exist (it has no
-    // credential of its own).
-    if let Some(moa_cfg) = crate::providers::moa::get_moa_config() {
-        let mut names: Vec<String> = moa_cfg
-            .presets
-            .iter()
-            .filter(|(_, p)| p.enabled)
-            .map(|(n, _)| n.clone())
-            .collect();
-        names.sort();
-        if !names.is_empty() {
-            let default_model = moa_cfg
-                .default_preset
-                .clone()
-                .filter(|d| names.contains(d))
-                .unwrap_or_else(|| names[0].clone());
-            items.push(CatalogEntry {
-                id: "moa".to_string(),
-                display_name: "Mixture of Agents".to_string(),
-                default_model,
-                base_url: "moa://virtual".to_string(),
-                protocol: "moa".to_string(),
-                color: "#8b5cf6".to_string(),
-                homepage: None,
-                notes: Some(
-                    "MoA advisory presets — selecting one activates advisor fan-out \
-                     for this session"
-                        .to_string(),
-                ),
-                signup_url: None,
-                aliases: Vec::new(),
-                modalities: vec!["chat".to_string()],
-                models: names.clone(),
-                has_api_key: true,
-                verified: true,
-                enabled: true,
-                is_default: false,
-                auth_kind: AuthKind::ApiKey,
-                // Virtual multiplexer, not a reachable host — conservatively
-                // "cloud" like any other absent/unparseable base_url.
-                endpoint: "cloud".to_string(),
-                requires_explicit_model: false,
-                // Virtual multiplexer: nothing to ask for a model listing.
-                discoverable: false,
-                // `RosterModel::new` leaves the reference data absent, which is
-                // the honest answer here: a preset *name* is not a vendor model
-                // id, so no window, price or vendor lifecycle applies to it. (A
-                // preset whose *slots* name retired models is caught where
-                // those slots are resolved, not here.)
-                roster: names
-                    .into_iter()
-                    .map(|n| RosterModel::new(n, ModelSource::Configured))
-                    .collect(),
-            });
-        }
-    }
 
     JsonRpcResponse::success(
         request.id,

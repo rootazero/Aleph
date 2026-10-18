@@ -168,21 +168,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let parser = self.command_parser.read().await.clone()?;
         let parsed = parser.parse_async(trimmed).await?;
 
-        // `moa` stays surface-specific, as it was before this convergence and
-        // for the reason recorded then: `/moa <prompt>` is rewritten into a
-        // plain prompt earlier in `execute()` and never arrives here, while a
-        // bare `/moa` must reach the LLM so it can be mapped onto the tool's
-        // structured action schema — the fast path's generic argument mapping
-        // cannot deserialize it. Checked against the canonical
-        // `command_name`, so an alias cannot slip past it.
-        //
-        // (`/loop` and `/goal` are excluded too, but inside
-        // `serialize_parsed_command` via `is_continuation_driven_slash`, so
-        // that exclusion is shared with the router rather than repeated here.)
-        if parsed.command_name == "moa" {
-            return None;
-        }
-
         let mode_json = crate::gateway::inbound_router::serialize_parsed_command(&parsed)?;
         info!(
             "[Engine] Slash command resolved: /{} ({:?})",
@@ -236,48 +221,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         match mode_type {
             "direct_tool" => {
-                // `/moa <prompt>` arriving through a channel: the inbound
-                // router's command parser already classified this as
-                // tool_id "moa" with the prompt as `args`, before this run
-                // was constructed. Unlike the Panel/CLI path (handled at the
-                // `try_resolve_slash_command` call site), `request` here is
-                // an immutable borrow — the raw "/moa ..." text still
-                // reaches the agent loop as `request.input` on fallthrough.
-                // What matters for the one-shot semantics is that MoA is
-                // armed BEFORE the run is constructed, which holds either
-                // way: Fallthrough always routes to the full agent loop,
-                // constructed further down the same `execute()` call.
-                if mode["tool_id"].as_str() == Some("moa") {
-                    let args = mode["args"].as_str().unwrap_or("");
-                    // Mirrors the guard in `execute.rs`'s Panel/CLI intercept: if
-                    // `args` is itself a slash command, do not arm MoA — a nested
-                    // command can resolve as its own fast path before run
-                    // construction, so `take_for_run` never consumes the pref and
-                    // it leaks into the user's next turn.
-                    if !args.is_empty() && !args.trim_start().starts_with('/') {
-                        let key = request.session_key.to_key_string();
-                        // Round-3 F3: operator gate (mirror the `moa` tool).
-                        if crate::tools::turn_context::role_is_operator(
-                            request.metadata.get("caller_role").map(String::as_str),
-                        ) {
-                            // Round-3 F1: single arm source (one-shot).
-                            if let Err(msg) =
-                                crate::providers::moa::activation::arm_one_shot(&key, None)
-                            {
-                                crate::builtin_tools::notify_tool_result("moa", &msg, false);
-                            }
-                        } else {
-                            crate::builtin_tools::notify_tool_result(
-                                "moa",
-                                "MoA advisory requires operator; running normally.",
-                                false,
-                            );
-                        }
-                    }
-                    return Err(ExecutionError::Fallthrough {
-                        reason: "moa one-shot".to_string(),
-                    });
-                }
                 // The log the dispatch is journaled into: the process-wide
                 // slot's handle. Resolved HERE, in the dispatcher, so the one
                 // arm that executes anything takes the service as a parameter

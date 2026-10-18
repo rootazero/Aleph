@@ -45,20 +45,6 @@ fn bounded_objective(input: &str) -> String {
     }
 }
 
-/// Round-2 B7: decide the rewritten input for a channel-path `/moa` one-shot
-/// fallthrough. Returns `Some(prompt)` only when the input parses as a
-/// `/moa <prompt>` one-shot AND the prompt is not itself a slash command —
-/// exactly the condition under which the arming site
-/// (`slash_command.rs`'s "moa" arm / this file's Panel-CLI intercept) arms
-/// MoA. A slash remainder (e.g. `/moa /help`) was never armed, and unlike the
-/// Panel/CLI path the channel path has no second slash-resolution pass after
-/// the fast path — stripping would hand the LLM a bare `/help` as literal
-/// turn text — so the input is left untouched (`None`).
-fn moa_fallthrough_input(original: &str) -> Option<String> {
-    let prompt = crate::providers::moa::parse_one_shot_command(original)?;
-    (!prompt.trim_start().starts_with('/')).then(|| prompt.to_string())
-}
-
 /// Move a stamped `/btw` request onto its own session, and hand back the main
 /// session it was asked from.
 ///
@@ -659,47 +645,6 @@ where
         if request.input.trim().starts_with('/')
             && !request.metadata.contains_key(SLASH_COMMAND_MODE_KEY)
         {
-            // `/moa <prompt>` one-shot (hermes semantics): arm MoA for THIS run
-            // and let the prompt run as a normal turn. The argument is ALWAYS a
-            // prompt, never a preset name. Bare `/moa` falls through to the LLM
-            // (parse_one_shot_command returns None; `moa` stays fast-path-excluded
-            // below so the LLM maps it onto the tool's structured schema). State
-            // is written here, before `try_resolve_slash_command` and well before
-            // the run is constructed further down this function.
-            if let Some(prompt) = crate::providers::moa::parse_one_shot_command(&request.input) {
-                // If the remainder is ITSELF a slash command (e.g. `/moa /help`),
-                // do not arm MoA: after the rewrite below, `try_resolve_slash_command`
-                // can resolve it as its own fast path that returns before run
-                // construction, so `take_for_run` never consumes the pref and it
-                // leaks into the user's next turn. Still strip the `/moa ` prefix
-                // so the inner command resolves exactly as if typed directly.
-                if !prompt.trim_start().starts_with('/') {
-                    let key = request.session_key.to_key_string();
-                    // Round-3 F3: mirror the operator gate on the `moa` tool
-                    // (method_authz). A non-operator (chat-tier channel) may
-                    // not arm advisory via `/moa`; the prompt still runs as a
-                    // normal turn (prefix stripped below).
-                    if crate::tools::turn_context::role_is_operator(
-                        request.metadata.get("caller_role").map(String::as_str),
-                    ) {
-                        // Round-3 F1: single arm source (one-shot). `None`
-                        // preset = the config default; clears the model slot.
-                        if let Err(msg) =
-                            crate::providers::moa::activation::arm_one_shot(&key, None)
-                        {
-                            crate::builtin_tools::notify_tool_result("moa", &msg, false);
-                        }
-                    } else {
-                        crate::builtin_tools::notify_tool_result(
-                            "moa",
-                            "MoA advisory requires operator; running normally.",
-                            false,
-                        );
-                    }
-                }
-                request.input = prompt.to_string();
-            }
-
             // Safety net for producers that never pass through a handler —
             // cron jobs, heartbeat, team dispatch, `sessions_send`, A2A,
             // goal/loop continuations — and so cannot stamp before the busy
@@ -849,23 +794,6 @@ where
                     // Skills/custom commands need LLM processing — fall through
                     // to the agent loop.
                     //
-                    // Round-2 B7: a `/moa <prompt>` arriving through a channel
-                    // reaches this fallthrough with the RAW "/moa ..." text
-                    // still in request.input (the channel-path intercept can't
-                    // mutate its borrow). Strip the prefix here — mirroring
-                    // the Panel/CLI intercept — so the LLM sees the prompt,
-                    // not the command. The strip is gated to exactly the arm
-                    // condition (parse succeeds AND the prompt is not itself
-                    // slash-prefixed, see `moa_fallthrough_input`): a slash
-                    // remainder like `/moa /help` was never armed, and the
-                    // channel path has no later slash-resolution pass, so its
-                    // input stays untouched instead of degrading to a bare
-                    // `/help` as literal turn text.
-                    if reason == "moa one-shot" {
-                        if let Some(prompt) = moa_fallthrough_input(&request.input) {
-                            request.input = prompt;
-                        }
-                    }
                     warn!(
                         run_id = %run_id,
                         reason = %reason,
@@ -2517,35 +2445,6 @@ mod naked_loop_planner_tests {
         let out = bounded_objective(&long);
         assert_eq!(out.chars().count(), 4000);
         assert!(out.is_char_boundary(out.len()));
-    }
-}
-
-#[cfg(test)]
-mod moa_fallthrough_input_tests {
-    use super::moa_fallthrough_input;
-
-    #[test]
-    fn moa_fallthrough_input_semantics() {
-        // Plain one-shot: strip the `/moa ` wrapper, keep the whole remainder
-        // as the prompt (hermes-pinned: the arg is ALWAYS a prompt).
-        assert_eq!(
-            moa_fallthrough_input("/moa write a poem"),
-            Some("write a poem".to_string())
-        );
-        assert_eq!(
-            moa_fallthrough_input("/moa preset hello"),
-            Some("preset hello".to_string())
-        );
-        // Nested slash remainder was never armed (round-1 guard, `185119c8e`)
-        // and the channel path has no later slash resolution — leave the
-        // input untouched.
-        assert_eq!(moa_fallthrough_input("/moa /help"), None);
-        // Bare `/moa` (no prompt) falls through to the LLM unchanged.
-        assert_eq!(moa_fallthrough_input("/moa"), None);
-        assert_eq!(moa_fallthrough_input("/moa   "), None);
-        // Non-moa input is never rewritten.
-        assert_eq!(moa_fallthrough_input("hello"), None);
-        assert_eq!(moa_fallthrough_input("/moab x"), None);
     }
 }
 

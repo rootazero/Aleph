@@ -336,15 +336,12 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     let mut named_providers = provider_chain.agent_overrides.clone();
     // `agent_overrides` deliberately omits the primary provider (it is the head
     // of the default chain, not a separate pin). But consumers that resolve a
-    // provider BY KEY — `select_model(provider=…)`, `BrainRef::Strict`, and
-    // MoA preset slots (`try_build_for_run` resolves each advisor/aggregator
-    // against this map) — must be able to name the primary too. Without this
-    // entry, a MoA preset whose slots use the default provider (the most common
-    // shape) fails activation with "provider '<primary>' is not configured/
-    // keyed" and silently falls back to the plain chain. Map the primary key to
-    // the default chain (whose head IS the primary); other consumers already
-    // fell through to the same chain when the key missed, so this only closes
-    // the MoA gap without changing their behavior. Found in round-2 runtime QA.
+    // provider BY KEY — `select_model(provider=…)` and `BrainRef::Strict` — must
+    // be able to name the primary too. Without this entry, a provider selection
+    // using the default provider key fails with "provider '<primary>' is not
+    // configured/keyed" and silently falls back to the plain chain. Map the
+    // primary key to the default chain (whose head IS the primary); other
+    // consumers already fell through to the same chain when the key missed.
     if !primary_provider_key.is_empty() {
         named_providers
             .entry(primary_provider_key.to_string())
@@ -370,17 +367,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         );
         std::sync::Arc::new(alephcore::routing::RoutingRecall::new(store, availability))
     });
-
-    // MoA: publish the [moa] section to the process-global handle so run
-    // construction (runner_impl Step 3-MoA) and the `moa` tool read live
-    // presets. The tool re-stores after successful config patches (hot
-    // reload, mirroring route_handle).
-    alephcore::providers::moa::store_moa_config(config.moa.clone());
-    if let Some(moa) = &config.moa {
-        for err in moa.validation_errors() {
-            tracing::warn!(error = %err, "[moa] config validation");
-        }
-    }
 
     // Cheap-tier summarization provider, built once and used twice: by the
     // per-run compactor (via `AgentHarnessRunner.cheap_provider`, below) and by
