@@ -115,6 +115,7 @@ fn open_url(url: &str) -> std::io::Result<()> {
 /// `rundll32` command line above can't be subverted by a URL whose contents
 /// carry cmd-special characters. Anything that wouldn't appear in a normal
 /// http(s) URL (notably `"`, `^`, `` ` ``, newline, NUL) is rejected.
+#[cfg(target_os = "windows")]
 fn is_safe_panel_url(url: &str) -> bool {
     let rest = match url
         .strip_prefix("https://")

@@ -67,6 +67,12 @@ enum Replace {
     /// `stop`.
     Stop,
     /// `pause`.
+    ///
+    /// Reserved for a dedicated test case (paused-loop control flow); the
+    /// current matrix exercises PauseResume/FieldUpdate/Stop instead, so the
+    /// standalone-pause case stays unwritten. The `apply` arm is kept so the
+    /// missing test only has to add construction, not edit the dispatch.
+    #[allow(dead_code)]
     Pause,
     /// `pause` then `resume`: the SAME loop incarnation (same creator origin).
     PauseResume,

@@ -3021,7 +3021,7 @@ mod tests {
         // Negative rows: present, deliberately empty.
         for model in ["gpt-5.4-mini", "gpt-5.4-nano"] {
             assert_eq!(
-                lookup_tiers("openai", model).as_ref().map(Vec::as_slice).map(<[_]>::len),
+                lookup_tiers("openai", model).as_deref().map(<[_]>::len),
                 Some(0),
                 "{model}: must be explicitly flat, not reached by the gpt-5.4 tier"
             );
@@ -3129,8 +3129,7 @@ mod tests {
                                                                      // so the broad `claude-sonnet-4` beta row can never reach it.
         assert_eq!(
             lookup_tiers("anthropic", "claude-sonnet-4-6")
-                .as_ref()
-                .map(Vec::as_slice)
+                .as_deref()
                 .map(<[_]>::len),
             Some(0)
         );

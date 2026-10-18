@@ -411,21 +411,6 @@ impl ChannelRegistry {
         }
     }
 
-    /// The channel's own declared outbound delivery policy.
-    ///
-    /// `None` when the channel is not registered. That is deliberately not
-    /// `Automatic`: an unregistered channel has no declaration to honour, and
-    /// the callers keep their pre-existing behaviour for it instead of
-    /// guessing a policy.
-    pub(crate) async fn outbound_delivery_policy(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Option<OutboundDeliveryPolicy> {
-        let handle = self.get(channel_id).await?;
-        let channel = handle.read().await;
-        Some(channel.outbound_delivery_policy())
-    }
-
     /// List all channels.
     ///
     /// **Audit fix**: the previous implementation iterated `HashMap::values`
@@ -2268,7 +2253,7 @@ mod tests {
         registry
             .register(Box::new(FlakyChannel::new(0, false, new_attempts.clone())))
             .await;
-        assert_eq!(store.is_explicit_only_channel(id.as_str()).unwrap(), false);
+        assert!(!store.is_explicit_only_channel(id.as_str()).unwrap());
         let fresh = OutboundMessage::text("c", "fresh-body");
         let EnqueueOutcome::Queued(n) =
             store.enqueue_fresh(id.as_str(), &fresh, "down", 0).unwrap()
@@ -2289,9 +2274,8 @@ mod tests {
             .await;
         assert!(attempt.replay_refused);
         assert_eq!(explicit_attempts.load(Ordering::SeqCst), 0);
-        assert_eq!(
-            store.is_explicit_only_channel(id.as_str()).unwrap(),
-            false,
+        assert!(
+            !store.is_explicit_only_channel(id.as_str()).unwrap(),
             "a stale handle has no authority to reclassify the channel id"
         );
         assert_eq!(

@@ -876,7 +876,7 @@ impl DeliveryStore {
         if payload.len() > self.config.max_payload_bytes {
             let bytes = payload.len();
             Self::insert_dead_letter(
-                &conn,
+                conn,
                 self.config.max_queue_len,
                 DeadLetterInsert {
                     channel_id,

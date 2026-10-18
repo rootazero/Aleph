@@ -326,7 +326,7 @@ async fn ephemeral_session(
     migrate_add_session_events(&conn).map_err(|e| internal(e.to_string()))?;
     let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
     let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
-    let sid = SessionKey::ephemeral(&format!("telecom-public-{run_id}"));
+    let sid = SessionKey::ephemeral(format!("telecom-public-{run_id}"));
     session
         .attach(sid.clone())
         .await

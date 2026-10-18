@@ -471,9 +471,7 @@ impl SmsRelayTransport {
         if still_reserved {
             state.connecting_generation = None;
         }
-        if let Err(error) = result {
-            return Err(error);
-        }
+        result?;
         if !still_reserved || state.next_generation != generation {
             // An explicit disconnect or a newer reservation invalidated this
             // attempt; never resurrect the old lease on a late peer response.
@@ -1192,23 +1190,12 @@ pub struct InMemorySmsPeer {
 }
 
 #[cfg(test)]
+#[derive(Default)]
 struct InMemorySmsPeerState {
     connected_generation: Option<u64>,
     outcomes: std::collections::VecDeque<Result<TelecomOutcome, SmsTransportError>>,
     submissions: Vec<PendingSmsOperation>,
     generations: Vec<u64>,
-}
-
-#[cfg(test)]
-impl Default for InMemorySmsPeerState {
-    fn default() -> Self {
-        Self {
-            connected_generation: None,
-            outcomes: std::collections::VecDeque::new(),
-            submissions: Vec::new(),
-            generations: Vec::new(),
-        }
-    }
 }
 
 #[cfg(test)]

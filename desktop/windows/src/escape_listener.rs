@@ -380,6 +380,7 @@ mod tests {
     /// path returns `Err`) and the assertion core is exercised on CI's
     /// windows-latest job.
     #[test]
+    #[allow(clippy::needless_return)]
     fn listener_ptr_is_zeroed_after_stop_and_between_cycles() {
         let esc = WindowsEscapeListener::new();
         if esc.start().is_err() {

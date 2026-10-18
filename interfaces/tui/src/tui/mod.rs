@@ -28,7 +28,7 @@ mod tool_output;
 mod widgets;
 
 use std::future::Future;
-use std::io::{self, Write};
+use std::io;
 use std::pin::Pin;
 use std::time::Duration;
 
