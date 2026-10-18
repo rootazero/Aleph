@@ -59,6 +59,38 @@ Wayland **刻意没有** X11 EWMH 那样的跨合成器窗口协议。所以：
 
 ## 3. 装什么
 
+### 桌面应用凭证存储 / Desktop credential storage
+
+原生桌面应用需要当前用户的 D-Bus 会话中有可用、已解锁的 Secret Service（`org.freedesktop.secrets`）。Arch 的精简桌面环境可能没有预装；Ubuntu/Debian 桌面若已有兼容提供者，沿用现有服务即可。以下是缺少提供者时的一种安装方式，**不要同时启动多个提供者**。
+
+The native desktop app requires an available, unlocked Secret Service in the user's D-Bus session. Minimal Arch desktops may lack one; keep an existing compatible provider on Ubuntu/Debian. Install a provider only when missing, and run just one provider per session.
+
+```sh
+# Arch Linux
+sudo pacman -S --needed gnome-keyring libsecret
+
+# Ubuntu / Debian (only if a compatible provider is missing)
+sudo apt install gnome-keyring libsecret-tools
+
+# In the graphical user's session, if the desktop did not start it automatically
+gnome-keyring-daemon --start --components=secrets
+
+# Check that the session bus has a Secret Service owner
+gdbus call --session --dest org.freedesktop.DBus \
+  --object-path /org/freedesktop/DBus \
+  --method org.freedesktop.DBus.NameHasOwner org.freedesktop.secrets
+```
+
+预期返回 `(true,)`；这只证明服务存在，尚需在桌面会话中解锁密钥环。服务不可访问时会显示安全凭证存储错误；可访问但没有此服务器的凭证时，允许免凭证访问的本机连接会进入欢迎引导，可继续使用或输入一次性配对码。两种情况不能混为一谈，不应删除凭证或使用明文存储绕过。
+
+Expect `(true,)`; bus ownership alone does not prove that the keyring is unlocked. An inaccessible service is a storage error. An accessible store with no entry permits the welcome flow only after the local Gateway authorizes a credentialless connection. Pairing remains optional for that connection; no plaintext credential fallback is used.
+
+### 系统托盘库弃用提示 / System tray library deprecation
+
+Arch 的 `libayatana-appindicator 0.6.1` 可能在启动时输出 `libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code.`。这是系统托盘依赖的非致命弃用提示。当前 `tray-icon 0.23.1` 使用 `libappindicator-sys 0.9.0`，后者加载 `libayatana-appindicator3.so.1` 或 `libappindicator3.so.1`；它没有新 GLib 库的加载分支。迁移需要兼容的上游绑定与打包依赖，并验证 Ubuntu/Debian。不要通过替换系统库软链接或屏蔽全部 GTK 警告处理。
+
+Arch's `libayatana-appindicator 0.6.1` may emit this nonfatal deprecation warning at startup. The current `tray-icon 0.23.1` uses `libappindicator-sys 0.9.0`, whose loader supports the existing Ayatana/AppIndicator 3 library names. Migrating requires compatible upstream bindings, packaging dependencies, and Ubuntu/Debian validation. Replacing system library symlinks or suppressing all GTK warnings does not resolve the dependency migration.
+
 ### 最小可用（X11）
 
 ```sh

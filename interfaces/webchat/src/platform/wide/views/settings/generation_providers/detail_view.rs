@@ -188,7 +188,8 @@ pub(super) fn ProviderDetailView(
                     saving.set(false);
                     action_error.set(Some(
                         crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                            format!("Save failed: {e}")
+                            t_string!(i18n, settings.generation.save_failed, error = e.to_string())
+                                .to_string()
                         }),
                     ));
                 }
@@ -255,7 +256,12 @@ pub(super) fn ProviderDetailView(
                     deleting.set(false);
                     action_error.set(Some(
                         crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                            format!("Delete failed: {e}")
+                            t_string!(
+                                i18n,
+                                settings.generation.delete_failed,
+                                error = e.to_string()
+                            )
+                            .to_string()
                         }),
                     ));
                 }
@@ -282,7 +288,12 @@ pub(super) fn ProviderDetailView(
                         setting_default.set(false);
                         action_error.set(Some(
                             crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                                format!("Set default failed: {e}")
+                                t_string!(
+                                    i18n,
+                                    settings.generation.set_default_failed,
+                                    error = e.to_string()
+                                )
+                                .to_string()
                             }),
                         ));
                     }
