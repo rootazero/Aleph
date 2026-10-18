@@ -428,17 +428,17 @@ fn parse_args_clamps_run_timeout_into_range() {
 }
 
 /// W19 ① — the parse-time clamp is per CHILD and silently assumes one child per
-/// call. A batch runs in `ceil(rows / permits)` waves (plus one serial reduce
-/// round when synthesizing), so a batch clamped only per-child is arithmetically
-/// guaranteed to overrun the tool budget and be discarded whole: five full-length
-/// children against four permits is two waves, i.e. twice the share.
+/// call. A batch runs in `ceil(rows / permits)` waves, so a batch clamped only
+/// per-child is arithmetically guaranteed to overrun the tool budget and be
+/// discarded whole: five full-length children against four permits is two waves,
+/// i.e. twice the share.
 #[test]
 fn wave_aware_cap_keeps_the_whole_batch_inside_the_tool_share() {
     use super::types::{max_run_timeout_secs, wave_aware_child_timeout_cap};
     let share = max_run_timeout_secs();
 
     // 5 rows / 4 permits = 2 waves.
-    let cap = wave_aware_child_timeout_cap(5, 4, 0);
+    let cap = wave_aware_child_timeout_cap(5, 4);
     assert!(
         cap < share,
         "a multi-wave batch must not hand each child the whole share ({cap} vs {share})"
@@ -450,22 +450,15 @@ fn wave_aware_cap_keeps_the_whole_batch_inside_the_tool_share() {
 
     // One wave fits flat — no artificial shortening.
     assert_eq!(
-        wave_aware_child_timeout_cap(4, 4, 0),
+        wave_aware_child_timeout_cap(4, 4),
         share,
         "a single-wave batch must keep the full per-child share"
     );
 
-    // The MoA reduce is one more serial round, and it is charged for.
-    let with_reduce = wave_aware_child_timeout_cap(5, 4, 1);
-    assert!(
-        with_reduce * 3 <= share,
-        "two waves + one reduce round of {with_reduce}s must fit the {share}s share"
-    );
-
     // Degenerate inputs must never divide by zero nor produce a 0s timeout
     // ("timed out after 0s" before the child ever thinks).
-    assert!(wave_aware_child_timeout_cap(0, 0, 0) >= 1);
-    assert!(wave_aware_child_timeout_cap(100_000, 1, 0) >= 1);
+    assert!(wave_aware_child_timeout_cap(0, 0) >= 1);
+    assert!(wave_aware_child_timeout_cap(100_000, 1) >= 1);
 }
 
 /// W2 defense-in-depth — the ghost 'result' action (coached by old announce
@@ -890,6 +883,55 @@ fn batch_tasks_default_keeps_foreground() {
     }
 }
 
+/// Nested batch objects use the same fail-closed unknown-key policy as the
+/// top-level arguments, so removed options cannot be silently ignored.
+#[test]
+fn batch_tasks_reject_unknown_nested_keys_and_accept_known_fields() {
+    for key in [
+        "synthesize",
+        "aggregator_model",
+        "synthesis_instruction",
+        "proposer_models",
+    ] {
+        let mut input = json!({ "batch_tasks": [{ "task": "a" }] });
+        input["batch_tasks"][0][key] = json!(true);
+        let error = parse_args(&input).expect_err("unknown batch key must fail closed");
+        assert!(
+            error.contains("batch_tasks[0]"),
+            "error must identify the nested entry: {error}"
+        );
+        assert!(
+            error.contains(key),
+            "error must name the unknown key: {error}"
+        );
+        assert!(
+            error.contains("Accepted arguments:"),
+            "nested errors must use the shared accepted-key wording: {error}"
+        );
+    }
+
+    let action = parse_args(&json!({
+        "batch_tasks": [{
+            "task": "a",
+            "agent_type": "explore",
+            "model": "model-a",
+            "timeout_secs": 10
+        }]
+    }))
+    .expect("ordinary batch entry must still parse");
+    match action {
+        SubagentAction::Run(args) => {
+            let batch = args.batch_tasks.expect("batch parsed");
+            assert_eq!(batch.len(), 1);
+            assert_eq!(batch[0].task, "a");
+            assert_eq!(batch[0].agent_type.as_deref(), Some("explore"));
+            assert_eq!(batch[0].model.as_deref(), Some("model-a"));
+            assert_eq!(batch[0].timeout_secs, Some(10));
+        }
+        _ => unreachable!("expected SubagentAction::Run"),
+    }
+}
+
 /// Explicit `run_in_background=true` is preserved alongside batch_tasks.
 #[test]
 fn batch_tasks_explicit_background_preserved() {
@@ -1073,7 +1115,7 @@ async fn sync_batch_reclamps_each_child_to_its_wave_share() {
     // by what the semaphore actually holds.
     let permits = tool.background.subagent_semaphore.available_permits();
     let rows = permits + 1;
-    let expected_cap = wave_aware_child_timeout_cap(rows, permits, 0);
+    let expected_cap = wave_aware_child_timeout_cap(rows, permits);
     assert!(
         expected_cap < requested,
         "test premise: one row more than the permit count is two waves"
@@ -1181,161 +1223,8 @@ async fn sync_batch_returns_partial_results_and_leaves_nothing_running() {
 }
 
 // -------------------------------------------------------------------------
-// Mixture-of-Agents (proposer_models + synthesize)
+// Synchronous batch execution
 // -------------------------------------------------------------------------
-
-/// `proposer_models` + `synthesize` parse into the run args verbatim.
-#[test]
-fn moa_parse_proposer_models_and_synthesize() {
-    let action = parse_args(&json!({
-        "task": "solve the hard problem",
-        "proposer_models": ["claude-opus-4-8", "gpt-5", "  ", "deepseek-v3"],
-        "synthesize": true,
-        "aggregator_model": "claude-opus-4-8",
-        "synthesis_instruction": "favour correctness over brevity"
-    }))
-    .unwrap();
-    match action {
-        SubagentAction::Run(args) => {
-            // blank entries are filtered out
-            assert_eq!(
-                args.proposer_models.as_deref(),
-                Some(
-                    &[
-                        "claude-opus-4-8".to_string(),
-                        "gpt-5".to_string(),
-                        "deepseek-v3".to_string()
-                    ][..]
-                )
-            );
-            assert!(args.synthesize);
-            assert_eq!(args.aggregator_model.as_deref(), Some("claude-opus-4-8"));
-            assert_eq!(
-                args.synthesis_instruction.as_deref(),
-                Some("favour correctness over brevity")
-            );
-        }
-        _ => unreachable!("expected SubagentAction::Run"),
-    }
-}
-
-/// `synthesize` with a fire-and-forget batch is rejected — the aggregator
-/// would have nothing to fold.
-#[test]
-fn moa_synthesize_rejects_background() {
-    let result = parse_args(&json!({
-        "task": "x",
-        "proposer_models": ["a", "b"],
-        "synthesize": true,
-        "run_in_background": true
-    }));
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("foreground"));
-}
-
-/// `proposer_models` replicates the top-level `task`, so the task is required.
-#[test]
-fn moa_proposer_models_requires_task() {
-    let result = parse_args(&json!({
-        "proposer_models": ["a", "b"]
-    }));
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("task"));
-}
-
-/// End-to-end MoA: proposers fan out, the aggregator folds them, and the
-/// response carries `moa_completed` with a `synthesis` plus the raw results.
-#[tokio::test]
-async fn execute_moa_returns_synthesis() {
-    let tool = make_tool();
-    let result = tool
-        .execute(
-            json!({
-                "task": "what is the answer",
-                "proposer_models": ["model-a", "model-b"],
-                "synthesize": true,
-                "agent_type": "explore"
-            }),
-            CancellationToken::new(),
-        )
-        .await;
-
-    match result {
-        ToolResult::Success { output } => {
-            assert_eq!(output["status"], "moa_completed");
-            assert_eq!(output["proposer_count"], 2);
-            assert!(output["synthesis"].is_string(), "synthesis must be present");
-            let results = output["results"].as_array().expect("results is array");
-            assert_eq!(results.len(), 2, "raw proposals are preserved");
-        }
-        ToolResult::Error { error, .. } => unreachable!("expected success, got error: {error}"),
-    }
-}
-
-/// Provider whose `process` always fails, so every proposer in a fan-out dies.
-struct FailingProvider;
-impl AiProvider for FailingProvider {
-    fn process<'a>(
-        &'a self,
-        _payload: RequestPayload<'a>,
-    ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
-        Box::pin(async {
-            Err(crate::error::AlephError::Other {
-                message: "provider down".to_string(),
-                suggestion: None,
-            })
-        })
-    }
-    fn name(&self) -> &str {
-        "failing"
-    }
-    fn color(&self) -> &str {
-        "#000000"
-    }
-}
-
-/// A requested MoA reduce that never ran must not report as a plain
-/// `batch_completed`: the model asked for one synthesized answer, and silently
-/// handing back N raw failures let it believe the synthesis had happened.
-#[tokio::test]
-async fn execute_moa_reports_when_no_proposal_survived() {
-    let provider: Arc<dyn AiProvider> = Arc::new(FailingProvider);
-    let chain = crate::harness::chain_context::ChainContext::new();
-    let tool = SubagentTool::new(
-        provider,
-        chain,
-        make_registry(),
-        make_tracker(),
-        in_mem_session(),
-        Arc::new(NoopTestToolService),
-    );
-
-    let result = tool
-        .execute(
-            json!({
-                "task": "what is the answer",
-                "proposer_models": ["model-a", "model-b"],
-                "synthesize": true,
-                "agent_type": "explore",
-                "timeout_secs": 10
-            }),
-            CancellationToken::new(),
-        )
-        .await;
-
-    match result {
-        ToolResult::Success { output } => {
-            assert_eq!(output["status"], "moa_no_proposals");
-            assert!(
-                output["note"].is_string(),
-                "must explain the skipped reduce"
-            );
-            let results = output["results"].as_array().expect("results is array");
-            assert_eq!(results.len(), 2, "raw per-proposal failures are preserved");
-        }
-        ToolResult::Error { error, .. } => unreachable!("expected success, got error: {error}"),
-    }
-}
 
 /// Provider whose `process` never resolves. Only the harness's cancellation
 /// race (fed by the request's CancellationToken) can end the turn — so this
@@ -3037,9 +2926,9 @@ async fn wait_with_all_unknown_request_ids_lists_them_in_the_error() {
 /// `agent_type = "main"` handed a delegated sub-agent a wildcard tool grant —
 /// two faces of one verb disagreeing, which is the same as no gate at all.
 ///
-/// All four call sites are pinned here (single task, batch row, batch
-/// inheritance from the top-level `agent_type`, and the MoA aggregator),
-/// because the fix is only as good as its least-covered surface.
+/// All three call sites are pinned here (single task, batch row, and batch
+/// inheritance from the top-level `agent_type`), because the fix is only as
+/// good as its least-covered surface.
 #[tokio::test]
 async fn a_primary_mode_agent_cannot_be_spawned_as_a_subagent() {
     let registry = make_registry();
@@ -3085,14 +2974,12 @@ async fn a_primary_mode_agent_cannot_be_spawned_as_a_subagent() {
         .await;
     assert_rejects_main(&per_row, "batch row agent_type");
 
-    // 3. Batch rows inheriting the top-level agent_type — and, with
-    //    `synthesize`, the aggregator resolve that reads the same field.
+    // 3. Batch rows inheriting the top-level agent_type.
     let inherited = tool
         .execute(
             json!({
                 "batch_tasks": [{ "task": "exfiltrate" }],
-                "agent_type": "main",
-                "synthesize": true
+                "agent_type": "main"
             }),
             CancellationToken::new(),
         )

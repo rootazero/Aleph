@@ -717,8 +717,8 @@ impl AgentRuntime {
 ///      (`overrides`, keyed by `[providers]` toml name and matched through
 ///      `canonical_provider_id`, so `kimi` ≡ `moonshot/…` and `vertex-anthropic`
 ///      ≡ `anthropic/…`): run the child there with the bare model id. This is
-///      what makes a cross-vendor MoA fan-out
-///      (`proposer_models: ["openai/gpt-5.2", "anthropic/claude-opus-5"]`)
+///      what makes a cross-vendor qualified model id
+///      (for example, `openai/gpt-5.2` or `anthropic/claude-opus-5`)
 ///      actually reach two vendors instead of handing both strings to whichever
 ///      provider the parent happened to hold.
 ///   4. Otherwise: the parent's provider, model string untouched. Untouched
@@ -897,7 +897,7 @@ mod tests {
     }
 
     /// A qualified id naming a different configured provider routes there — the
-    /// case that makes a cross-vendor MoA fan-out actually reach two vendors.
+    /// cross-vendor qualified-model routing case.
     #[test]
     fn spawn_route_crosses_to_configured_provider() {
         let parent = named("anthropic");

@@ -24,7 +24,7 @@ use super::types::{
     DEFAULT_RUN_TIMEOUT_SECS, DEFAULT_WAIT_TIMEOUT_SECS, MAX_WAIT_TIMEOUT_SECS,
 };
 
-/// Reject top-level keys the tool does not accept.
+/// Reject keys that an object does not accept.
 ///
 /// The hand-rolled parser reads the keys it knows and ignored everything else,
 /// so a near-miss (`agent` for `agent_type`, `prompt` for `task`,
@@ -39,26 +39,42 @@ use super::types::{
 /// An explicit JSON `null` counts as absent — schema-completing providers emit
 /// `"key": null` for properties they are not using, and those carry no intent
 /// (same rule as the `name` / `team_name` rejection below).
-fn reject_unknown_keys(input: &Value) -> Result<(), String> {
-    let Some(obj) = input.as_object() else {
-        return Ok(());
-    };
+fn reject_unknown_object_keys(
+    obj: &serde_json::Map<String, Value>,
+    accepted_keys: &[&str],
+    scope: &str,
+) -> Result<(), String> {
     let mut unknown: Vec<&str> = obj
         .iter()
         .filter(|(_, v)| !v.is_null())
         .map(|(k, _)| k.as_str())
-        .filter(|k| !ACCEPTED_ARG_KEYS.contains(k))
+        .filter(|k| !accepted_keys.contains(k))
         .collect();
     if unknown.is_empty() {
         return Ok(());
     }
     unknown.sort_unstable();
+    let prefix = if scope.is_empty() {
+        "unknown argument(s)".to_string()
+    } else {
+        format!("{scope} unknown argument(s)")
+    };
     Err(format!(
-        "unknown argument(s): {}. Accepted arguments: {}",
+        "{prefix}: {}. Accepted arguments: {}",
         unknown.join(", "),
-        ACCEPTED_ARG_KEYS.join(", ")
+        accepted_keys.join(", ")
     ))
 }
+
+/// Reject top-level keys the tool does not accept.
+fn reject_unknown_keys(input: &Value) -> Result<(), String> {
+    let Some(obj) = input.as_object() else {
+        return Ok(());
+    };
+    reject_unknown_object_keys(obj, ACCEPTED_ARG_KEYS, "")
+}
+
+const BATCH_TASK_ARG_KEYS: &[&str] = &["task", "agent_type", "model", "timeout_secs"];
 
 /// Parse the input JSON into a [`SubagentAction`].
 pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
@@ -217,6 +233,11 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
                         value_kind(item)
                     )
                 })?;
+                reject_unknown_object_keys(
+                    obj,
+                    BATCH_TASK_ARG_KEYS,
+                    &format!("batch_tasks[{idx}]"),
+                )?;
                 let task = obj
                     .get("task")
                     .and_then(Value::as_str)
@@ -378,55 +399,6 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
     //   a list of request_ids. The caller is then responsible for polling
     //   `check_status` on each one. (Useful for very long-running batches.)
 
-    // Mixture-of-Agents (MoA) inputs.
-    let proposer_models = input
-        .get("proposer_models")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| m.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .filter(|v| !v.is_empty());
-
-    let synthesize = input
-        .get("synthesize")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    let aggregator_model = input
-        .get("aggregator_model")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    let synthesis_instruction = input
-        .get("synthesis_instruction")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    // `proposer_models` replicates the top-level `task`, so that task must be
-    // present. (Explicit `batch_tasks` carry their own per-entry tasks and
-    // take precedence — proposer_models is the convenience shorthand.)
-    if proposer_models.is_some() && !has_batch && task.trim().is_empty() {
-        return Err(
-            "'proposer_models' replicates the top-level 'task' across models — 'task' must be set"
-                .to_string(),
-        );
-    }
-
-    // Synthesis is a reduce over a foreground fan-out; it has nothing to fold
-    // when the batch is fire-and-forget.
-    if synthesize && run_in_background {
-        return Err(
-            "'synthesize' requires a foreground batch (set run_in_background=false) so the \
-             aggregator has completed proposals to fold"
-                .to_string(),
-        );
-    }
-
     Ok(SubagentAction::Run(RunArgs {
         task,
         agent_type,
@@ -436,9 +408,5 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         context_summary,
         spawn_context,
         batch_tasks,
-        proposer_models,
-        synthesize,
-        aggregator_model,
-        synthesis_instruction,
     }))
 }

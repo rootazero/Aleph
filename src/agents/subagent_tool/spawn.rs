@@ -72,8 +72,7 @@ impl SubagentTool {
     /// finished (every spawn site calls `.cancel()` on the returned token after
     /// the child run completes). Without that second arm the watcher would park
     /// on `harness.cancelled()` until process exit on the normal-completion
-    /// path, leaking one task per subagent spawn (amplified by batch / MoA
-    /// fan-out).
+    /// path, leaking one task per subagent spawn (amplified by batch fan-out).
     pub(super) fn cancel_for_child_with(&self, harness: &CancellationToken) -> CancellationToken {
         let token = self.cancel_for_child();
         if harness.is_cancelled() {

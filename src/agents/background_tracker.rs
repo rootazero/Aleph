@@ -364,7 +364,7 @@ pub struct SubagentSnapshot {
     /// for stable JSON output). Idle sessions are omitted.
     pub running_per_session: Vec<SessionRunning>,
     /// Running registrations that are *presence-only* (sync fan-out
-    /// seams, MoA aggregators, team-chat members). Excluded from the
+    /// seams, team-chat members). Excluded from the
     /// `subagent` tool's enumeration faces by design.
     pub presence_only_total: usize,
     /// Finished entries still retrievable via `check_status` / `wait`
@@ -617,7 +617,7 @@ impl BackgroundAgentTracker {
 
     /// Remove a running entry WITHOUT recording a completed outcome. Backs the
     /// running-only registrations ([`RunningRegistration`]): sync fan-out seams
-    /// (subagent sync batch / MoA, `team_delegate`, team-chat member runs)
+    /// (subagent sync batch, `team_delegate`, team-chat member runs)
     /// deliver their results inline at the call seam, so a completed entry
     /// would only pollute `list` / `check_status` and hand the proactive
     /// announce an already-delivered result. Wakes `wait` parkers so a waiter
@@ -1414,11 +1414,11 @@ impl Default for BackgroundAgentTracker {
 
 /// RAII *running-only* registration.
 ///
-/// Sync fan-out seams (subagent sync batch / MoA aggregator, `team_delegate`,
-/// team-chat member runs) deliver their results inline to the caller, so they
-/// must never retain a completed tracker entry (no re-delivery via `list` /
-/// `check_status`, no proactive announce). What they DO need is presence in
-/// the running set while in flight, so:
+/// Sync fan-out seams (subagent sync batch, `team_delegate`, team-chat member
+/// runs) deliver their results inline to the caller, so they must never retain a
+/// completed tracker entry (no re-delivery via `list` / `check_status`, no
+/// proactive announce). What they DO need is presence in the running set while
+/// in flight, so:
 ///
 ///   * the gateway Interrupt demote guard
 ///     ([`session_has_running`](BackgroundAgentTracker::session_has_running))
@@ -2488,9 +2488,9 @@ mod tests {
         );
         let _reg = RunningRegistration::register(
             tracker.clone(),
-            "moa-proposal".into(),
+            "sync-child".into(),
             CancellationToken::new(),
-            "MoA proposal".into(),
+            "sync batch child".into(),
             SpawnMeta::default(),
         );
         let listed: Vec<String> = tracker
