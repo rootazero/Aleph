@@ -155,7 +155,7 @@ pub fn window_list() -> Result<Vec<WindowInfo>> {
 ///
 /// # Errors
 ///
-/// Propagates [`backend`]'s selection failure and the backend's own dispatch
+/// Propagates `backend`'s selection failure and the backend's own dispatch
 /// failure; returns [`DesktopError::WindowFailed`] when the window did not
 /// become active within the wait, or when the outcome could not be read back.
 pub fn focus_window(window_id: u64) -> Result<()> {

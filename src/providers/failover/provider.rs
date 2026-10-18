@@ -235,7 +235,7 @@ pub struct RouteStep {
     /// **skips it while a later candidate remains** (the last candidate is
     /// always attempted — the ceiling defers, it never starves).
     ///
-    /// Derived through [`CandidatePlan::rate_deferred`], the same helper the
+    /// Derived through `CandidatePlan::rate_deferred`, the same helper the
     /// walk's gate calls.
     pub rate_sidelined: bool,
     /// Whether the health registries currently sideline it: circuit open and
@@ -243,7 +243,7 @@ pub struct RouteStep {
     /// above — the walk **skips it while a later candidate remains**, and
     /// attempts it anyway when it is the last one.
     ///
-    /// Derived from [`FailoverProvider::sidelined_providers`], the read-only
+    /// Derived from `FailoverProvider::sidelined_providers`, the read-only
     /// twin of the walk's breaker and pacing gates (it must not spend the
     /// `Open → HalfOpen` probe that a real dial spends).
     pub health_sidelined: bool,
@@ -256,7 +256,7 @@ pub struct RouteStep {
 /// halves — the header (mode, strategy, pins, ceilings) and the order — and a
 /// concurrent `route_config.update` between two separate loads would publish a
 /// header naming one strategy next to an order produced under another. Same
-/// rule, one level up, as [`CandidatePlan::route`].
+/// rule, one level up, as `CandidatePlan::route`.
 pub struct RoutePreview {
     /// The dial order, gates included.
     pub steps: Vec<RouteStep>,
@@ -508,7 +508,7 @@ impl FailoverProvider {
     /// request, instead of the boot-time static snapshot. Set by
     /// `build_failover_chain` only for an *auto-derived* global chain (no
     /// operator `[fallback_provider].chain`), so runtime provider add/remove is
-    /// reflected without a restart. See [`Self::derive_fallbacks_live`].
+    /// reflected without a restart. See `Self::derive_fallbacks_live`.
     #[must_use]
     pub const fn with_live_fallback_derivation(mut self) -> Self {
         self.derive_fallbacks_live = true;
@@ -912,7 +912,7 @@ impl FailoverProvider {
     /// candidate in dial order, plus the route generation they were ordered
     /// from ([`RoutePreview`]).
     ///
-    /// Read-only twin of [`candidates`](Self::candidates) — same function, same
+    /// Read-only twin of `candidates` — same function, same
     /// route snapshot, same gates — so `route_status` cannot report an order the
     /// walk would not produce. Answering "why did it pick that provider / why is
     /// my pin not leading / did the strategy take effect" needs the *result* of
@@ -923,9 +923,9 @@ impl FailoverProvider {
     /// no `Open → HalfOpen` breaker transition (that belongs to a real dial).
     ///
     /// Both skip flags are DERIVED from the plan the walk would use — the rate
-    /// one through [`CandidatePlan::rate_deferred`] (the walk's own gate calls
+    /// one through `CandidatePlan::rate_deferred` (the walk's own gate calls
     /// the same helper) and the health one from the set
-    /// [`sidelined_providers`](Self::sidelined_providers) computed for that
+    /// `sidelined_providers` computed for that
     /// plan. Restating either condition here is what made the preview describe
     /// a chain the walk does not walk.
     ///
@@ -1059,12 +1059,12 @@ impl FailoverProvider {
     /// [`preview_order`](Self::preview_order)'s answer).
     ///
     /// Rendered as `route_status`'s `fallback_chain`. It is derived from
-    /// [`fallback_nodes`](Self::fallback_nodes) — the same materialisation the
+    /// `fallback_nodes` — the same materialisation the
     /// walk uses — so the two faces of the snapshot cannot state two tiers or
     /// two ladders for one provider.
     ///
     /// ⚠️ Residual, deliberately open: the tier comes from
-    /// [`node_tier`](Self::node_tier), whose catalog is the BOOT `[providers]`
+    /// `node_tier`](Self::node_tier), whose catalog is the BOOT `[providers`
     /// picture. A provider registered after boot has no entry and reads
     /// [`EndpointTier::Cloud`] on *both* faces — agreeing, and both possibly
     /// wrong, for an on-machine endpoint added at runtime. Closing it means

@@ -27,7 +27,7 @@ use crate::sync_primitives::Arc;
 /// Every dependency the agent-management toolset could possibly need.
 ///
 /// Construction is intentionally permissive — every field except the runtime
-/// [`runtime_registry`] and the [`store`] is `Option`-tagged. Tests, embedded
+/// `runtime_registry` and the `store` is `Option`-tagged. Tests, embedded
 /// hosts, and minimal servers wire only what they need; production wires it
 /// all.
 #[derive(Clone)]

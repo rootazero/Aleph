@@ -9,7 +9,7 @@
 //!
 //! Both are ONE HTML file that opens offline in any browser, with every image
 //! and document embedded as a `data:` URI. They share their shell, policy and
-//! typography through [`page`]; only the middle differs.
+//! typography through `page`; only the middle differs.
 //!
 //! # Why there is no JavaScript in the output
 //!
@@ -64,14 +64,14 @@ pub struct ExportDocument {
     /// before display.
     pub provenance: String,
     /// The deliverable itself, as Markdown. Rendered through the sanitizing
-    /// pipeline in [`markdown`], never emitted raw.
+    /// pipeline in `markdown`, never emitted raw.
     pub markdown: String,
 }
 
 /// One conversation turn as it should appear in the export.
 ///
 /// `text` is Markdown; it is rendered through the sanitizing pipeline in
-/// [`markdown`], never emitted raw.
+/// `markdown`, never emitted raw.
 #[derive(Debug, Clone)]
 pub struct ExportMessage {
     /// Speaker label (`user`, `assistant`, …). Escaped before display.

@@ -18,8 +18,8 @@
 //! PATH walk over the enriched search path and a `--version` call. No network,
 //! no download.
 //!
-//! Both are bounded by [`RESOLVE_TIMEOUT`], and a probe that does not answer
-//! in time produces [`crate::diagnostics::check::unknown_finding`]
+//! Both are bounded by `RESOLVE_TIMEOUT`, and a probe that does not answer
+//! in time produces `crate::diagnostics::check::unknown_finding`
 //! (`src/diagnostics/check.rs:214`) — the house style for "this check could
 //! not determine its own subject" (`Severity::Warning`, titled `"<subject>
 //! unknown"`, spelled once so unknown keeps meaning the same severity

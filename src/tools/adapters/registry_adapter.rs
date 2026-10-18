@@ -516,7 +516,7 @@ impl<R: ToolRegistry + ?Sized + 'static> LoopTool for RegistryToolAdapter<R> {
 /// shared `ToolRegistry`. Only active tools are included.
 ///
 /// Where a shell call lands is NOT decided here — see the note above
-/// [`RegistryToolAdapter`] on the removed `working_dir` injection.
+/// `RegistryToolAdapter` on the removed `working_dir` injection.
 pub fn build_tool_adapters_from_tools<R: ToolRegistry + ?Sized + 'static>(
     tool_registry: Arc<R>,
     unified_tools: &[UnifiedTool],

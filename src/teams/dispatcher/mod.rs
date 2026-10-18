@@ -89,7 +89,7 @@ pub struct DispatcherConfig {
     ///
     /// Note: even with the hard cap disabled (`0`), the scheduler still applies
     /// **load-balanced round-robin** across owners so freed slots prefer the
-    /// least-busy agent — see [`select_schedulable`](super::schedule::select_schedulable).
+    /// least-busy agent — see `select_schedulable`.
     pub max_per_owner: usize,
     /// Default number of times a task whose attempt fails (cleanly `Failed` or
     /// `Timeout`) is automatically re-dispatched before being marked terminally

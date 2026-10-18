@@ -2,13 +2,13 @@
 //!
 //! ## Layout
 //! - this module — list / cards / category tabs + the main `GenerationProvidersView`
-//! - [`picker`] — the "add a provider" disclosure and the panel/picker
+//! - `picker` — the "add a provider" disclosure and the panel/picker
 //!   partition. The 44 presets used to render as cards behind five tabs, which
 //!   put 14 of them in front of an operator looking for the one they had set up
-//! - [`detail_view`] — `ProviderDetailView` for a configured provider
-//! - [`preset_setup`] — `PresetSetupPanel` for unconfigured presets
-//! - [`add_custom`] — `AddCustomProviderPanel` for non-preset providers
-//! - [`settings_panel`] — `GenerationSettingsPanel` (thresholds + routing)
+//! - `detail_view` — `ProviderDetailView` for a configured provider
+//! - `preset_setup` — `PresetSetupPanel` for unconfigured presets
+//! - `add_custom` — `AddCustomProviderPanel` for non-preset providers
+//! - `settings_panel` — `GenerationSettingsPanel` (thresholds + routing)
 
 mod add_custom;
 mod detail_view;

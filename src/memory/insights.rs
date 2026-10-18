@@ -16,7 +16,7 @@
 //!
 //! [`aggregate_tool_usage`] (admin RPC) and [`aggregate_tool_failures`] (the
 //! nightly `tool_failure_distill` dream stage) both fold the same rows through
-//! the same [`fold_window`] core and the same [`fetch_tool_invocation_rows`]
+//! the same `fold_window` core and the same `fetch_tool_invocation_rows`
 //! read. The failure path only *adds* verbatim evidence samples on top of the
 //! counts — it deliberately does not compute a second set of statistics, so
 //! "how often did `bash` fail" cannot have two answers in this repo. The two

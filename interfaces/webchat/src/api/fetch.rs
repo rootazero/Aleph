@@ -18,7 +18,7 @@ pub struct FetchBackendEntry {
     pub has_api_key: bool,
     #[serde(default)]
     pub verified: bool,
-    /// True for providers that reuse the [search] config (firecrawl).
+    /// True for providers that reuse the \[search\] config (firecrawl).
     #[serde(default)]
     pub shares_search: bool,
 }

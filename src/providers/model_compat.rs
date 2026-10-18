@@ -1,18 +1,16 @@
 //! Per-model `ModelCompat` resolution helper.
 //!
-//! Adapters resolve the operator-declared [`ModelDef::compat`] for the model
+//! Adapters resolve the operator-declared `ModelDef::compat` for the model
 //! they are about to call, and let each `Some` field override the adapter's
 //! built-in heuristic. `None` (or no matching `ModelDef`) leaves the heuristic
 //! untouched — request behaviour is byte-identical to before this wiring
 //! existed.
-//!
-//! [`ModelDef::compat`]: crate::config::types::provider::ModelDef::compat
 
 use crate::config::types::provider::{ModelCompat, ModelDef};
 
-/// Resolve the [`ModelCompat`] for `model` from a provider's `model_defs`.
+/// Resolve the `ModelCompat` for `model` from a provider's `model_defs`.
 ///
-/// Matches on the exact [`ModelDef::id`] — the same join key
+/// Matches on the exact `ModelDef::id` — the same join key
 /// [`ModelRecord::resolve`] uses. Returns `None` when no `ModelDef` matches
 /// `model`, or when the matched def declares no `compat` block.
 ///

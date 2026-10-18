@@ -44,9 +44,9 @@
 //!
 //! ## One walk, two key sources
 //!
-//! [`walk_chain`] is the whole algorithm; [`SignerSource`] is the only thing
+//! `walk_chain` is the whole algorithm; `SignerSource` is the only thing
 //! that varies. The live path resolves keys from `security.db`
-//! ([`Keyring`]); [`export`](super::export) resolves them from the keys
+//! (`Keyring`); [`export`](super::export) resolves them from the keys
 //! embedded in a portable document, so an exported chain is checked by
 //! **exactly the same code** off-box. A second copy of a security check is how
 //! the divergence between them gets shipped.

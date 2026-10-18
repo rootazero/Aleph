@@ -36,7 +36,7 @@ const RETRY_DELAY: Duration = Duration::from_millis(100);
 ///
 /// A tool qualifies iff re-running with identical input has no observable
 /// side effect. The answer delegates to the read-only allowlist
-/// ([`crate::tools::adapters::registry_adapter::READ_ONLY_TOOLS`]): read-only
+/// (`crate::tools::adapters::registry_adapter::READ_ONLY_TOOLS`): read-only
 /// ⇒ idempotent, and today no builtin is idempotent-but-mutating, so one
 /// maintained list serves both the concurrency claim and this retry gate.
 ///

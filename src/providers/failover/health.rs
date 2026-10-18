@@ -81,7 +81,7 @@ impl FailoverHealth {
     /// whether an entry existed.
     ///
     /// The operator's escape hatch from a `Permanent` trip. A revoked key opens
-    /// the breaker on the *first* strike with the full [`MAX_COOLDOWN`] window
+    /// the breaker on the *first* strike with the full `MAX_COOLDOWN` window
     /// (`super::MAX_COOLDOWN`, 10 minutes), which is right while the key is
     /// still revoked and wrong the moment it is rotated: without this, "Test
     /// connection" probes the provider successfully, reports green, and the next
@@ -198,7 +198,7 @@ impl ModelCooldown {
     /// Snapshot every `(provider, model)` pair still inside its cooldown
     /// window as `(provider, model, remaining_secs)`, sorted. Expired entries
     /// are omitted — same strict `until > now` reading as
-    /// [`is_cooling`](Self::is_cooling). Diagnostic only — feeds the
+    /// `is_cooling`. Diagnostic only — feeds the
     /// `route_status` snapshot.
     pub async fn snapshot(&self) -> Vec<(String, String, u64)> {
         let now = Instant::now();
@@ -278,7 +278,7 @@ impl ProviderCooldown {
 
     /// Snapshot every provider still inside its pacing window as
     /// `(provider, remaining_secs)`, name-sorted. Expired entries are omitted
-    /// — same strict `until > now` reading as [`remaining`](Self::remaining).
+    /// — same strict `until > now` reading as `remaining`.
     /// Diagnostic only — feeds the `route_status` snapshot.
     pub async fn snapshot(&self) -> Vec<(String, u64)> {
         let now = Instant::now();

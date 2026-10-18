@@ -86,7 +86,7 @@ pub enum DistillOutcome {
     /// Dropped before apply because the referenced path was not in the
     /// candidate set the LLM was shown (anti-hallucination guard).
     FilteredNonCandidate,
-    /// Dropped before apply because the [`skill_gate`] rejected it on a
+    /// Dropped before apply because the `skill_gate` rejected it on a
     /// format / semantic / safety check (Spec 5). The `error` field on the
     /// record carries the reason.
     FilteredInvalid,

@@ -6,9 +6,9 @@
 //! `AssistantMessage` per Think step, so calls and rows are 1:1. The session
 //! row's counters are the fold of those same events (`session::usage_fold`),
 //! accumulated once per run when its `AssistantRunMeta` lands — see
-//! [`fold_run_bill`] — or, for a run that finished but whose meta never
+//! `fold_run_bill` — or, for a run that finished but whose meta never
 //! reached the log, when a whole-session heal synthesizes that stamp
-//! ([`synthesize_missing_stamps`]).
+//! (`synthesize_missing_stamps`).
 //!
 //! The observer itself is **non-blocking**: `on_appended` enqueues the event
 //! onto an mpsc channel and returns immediately.
@@ -16,7 +16,7 @@
 //! # Nothing is dropped
 //!
 //! Back-pressure (`Full`) and a stopped drain (`Closed`) no longer lose the
-//! row. Both record the event's `seq` in [`MessageProjector::missed`] — seqs
+//! row. Both record the event's `seq` in `MessageProjector::missed` — seqs
 //! only, because the payload is already durable in `session_events`, which
 //! stays the single source of truth — and the next heal pass re-reads those
 //! events from the log and projects them. `Closed` additionally calls

@@ -11,7 +11,7 @@
 //! # Failure handling
 //!
 //! Each failure is classified by [`llm_retry`](crate::providers::llm_retry) —
-//! the shared error classifier — into one [`Decision`]:
+//! the shared error classifier — into one `Decision`:
 //!
 //! - **transient** (network blip, 529 overloaded) → retried in place a few
 //!   times with backoff, then treated as a provider-level failure;
@@ -178,7 +178,7 @@ pub struct FailoverConfig {
     /// Same-candidate retries on a transient error before the chain advances.
     pub max_retries: u32,
     /// Initial circuit-breaker cooldown. Doubles on each `HalfOpen` probe
-    /// failure, capped at [`MAX_COOLDOWN`].
+    /// failure, capped at `MAX_COOLDOWN`.
     pub unhealthy_cooldown: Duration,
 }
 

@@ -201,7 +201,7 @@ const NO_MICROPHONE_MESSAGE: &str =
 /// Begin an open-ended native recording via the desktop bridge.
 ///
 /// Returns `{}` on success. When native capture is unavailable, the error
-/// message is the [`NATIVE_AUDIO_UNAVAILABLE`] sentinel so the Panel falls back
+/// message is the `NATIVE_AUDIO_UNAVAILABLE` sentinel so the Panel falls back
 /// to browser capture.
 pub async fn handle_record_start(
     request: JsonRpcRequest,

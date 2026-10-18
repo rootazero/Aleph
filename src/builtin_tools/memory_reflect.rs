@@ -101,7 +101,7 @@ impl MemoryReflectTool {
     /// partition `main`.
     ///
     /// Composed by the CALLER — before this method ever runs, and therefore
-    /// before the `tokio::spawn` inside [`Self::reflect_and_file`] — because
+    /// before the `tokio::spawn` inside `Self::reflect_and_file` — because
     /// `project_scope::session_write_id` reads the ambient scope off a
     /// task-local (`scope::current_scope`) that a spawned task cannot see.
     /// `ReflectOpts.agent_id` still resolves from `acting_agent_id` (the BASE

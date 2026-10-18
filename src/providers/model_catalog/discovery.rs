@@ -16,7 +16,7 @@
 //! credentials and endpoints Aleph already has.
 //!
 //! The scaffolding for it was already here and dead: `ProviderPreset`'s
-//! `models_url` field, [`ProviderPreset::resolve_models_url`] and the
+//! `models_url` field, `ProviderPreset::resolve_models_url` and the
 //! `supports_health_check` opt-out had **no production consumer** — one unit
 //! test each. Under R10 that is a CUT-or-CONNECT decision; this is the CONNECT.
 //!
@@ -129,7 +129,7 @@ pub enum DiscoveryError {
     /// The endpoint answered with something that is not a model listing.
     #[error("model listing at {url} had an unrecognised shape")]
     Shape { url: String },
-    /// The round trip exceeded [`REQUEST_TIMEOUT`].
+    /// The round trip exceeded `REQUEST_TIMEOUT`.
     #[error("model listing at {url} timed out")]
     Timeout { url: String },
 }
@@ -141,7 +141,7 @@ pub enum DiscoveryError {
 /// the config lock itself — it stays a leaf.
 ///
 /// Concurrent refreshes for the same provider are single-flighted (see
-/// [`REFRESH_LOCKS`]): the loser of the race serves the winner's fresh
+/// `REFRESH_LOCKS`): the loser of the race serves the winner's fresh
 /// listing. On failure the caller decides whether to fall back to
 /// [`cached_models`] (stale snapshot beats no snapshot — pi's
 /// snapshot-recovery shape); this function itself reports the error.

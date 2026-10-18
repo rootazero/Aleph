@@ -32,7 +32,7 @@ pub struct RepairReport {
     /// child's post-split span is the meta-less one), and the process dying
     /// between `RunFinished` and the meta. Carries the `run_id` alone (the
     /// gauge is unknown and is never written as zeros). Only a
-    /// `WholeSession` pass writes these — see [`super::run_span::synthesize_missing_stamps`].
+    /// `WholeSession` pass writes these — see `super::run_span::synthesize_missing_stamps`.
     pub stamps_synthesized: usize,
     /// Of the stamps above (re-applied or synthesized), how many also
     /// accumulated the run's spend. A stamp that found the row already

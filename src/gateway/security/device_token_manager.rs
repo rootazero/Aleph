@@ -121,7 +121,7 @@ impl DeviceTokenManager {
     /// and the `devices` table is one flat namespace shared with cluster nodes.
     /// `upsert_device`'s ON CONFLICT deliberately does not rewrite `device_type`
     /// — so pairing onto an existing non-Panel row would leave the row typed
-    /// `node`/NULL while [`Self::issue_device_token`] minted a working operator
+    /// `node`/NULL while `Self::issue_device_token` minted a working operator
     /// token, producing a credential that [`Self::list_panel_devices`] hides and
     /// that `revoke_all_panel_devices` (hence `gateway.token.rotate`) cannot
     /// reach. That is the same shape as the 2026-07-17 "revoked device

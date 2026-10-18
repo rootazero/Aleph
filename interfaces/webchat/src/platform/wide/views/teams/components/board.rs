@@ -1,7 +1,7 @@
 //! `KanbanBoard` — responsive column layout grouping tasks by stored status.
 //!
 //! The column list, tones, and status→label mapping all come from
-//! [`board_columns`], so the board and the stats chip bar can never drift.
+//! `board_columns`, so the board and the stats chip bar can never drift.
 //! Every stored `CoordTaskStatus` maps to exactly one column so no task is
 //! silently dropped (`unsatisfiable` folds into Blocked).
 //!

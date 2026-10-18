@@ -103,7 +103,7 @@ fn form_to_trigger_condition(s: &str) -> Value {
     }
 }
 
-/// Inverse of [`form_to_trigger_condition`] for prefilling the editor from a
+/// Inverse of `form_to_trigger_condition` for prefilling the editor from a
 /// task's stored `TriggerCondition`.
 pub fn trigger_condition_to_form(v: &Value) -> String {
     match v.get("type").and_then(|k| k.as_str()).unwrap_or("Always") {

@@ -56,7 +56,7 @@ const EMPTY_SESSION_DIR: &str = "_";
 /// path component.
 ///
 /// Shared with the media cache so both agree on where a session's files live —
-/// see [`SESSION_KEY_ENCODE_SET`] for the guarantees this provides.
+/// see `SESSION_KEY_ENCODE_SET` for the guarantees this provides.
 #[must_use]
 pub fn encode_session_key(session_key: &str) -> String {
     let encoded = utf8_percent_encode(session_key, SESSION_KEY_ENCODE_SET).to_string();

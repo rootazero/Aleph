@@ -1,7 +1,7 @@
 //! Embedded PTY terminal handlers.
 //!
 //! JSON-RPC surface over the [`crate::gateway::pty`] subsystem. Most of these
-//! handlers are stateless — they reach the process-global [`pty::manager`]
+//! handlers are stateless — they reach the process-global `pty::manager`
 //! accessor (the same pattern user-hooks admin uses) so no boot-time closure
 //! wiring is needed. The gateway event bus is attached to the manager once in
 //! `GatewayServer::build_router`; live output is streamed to subscribers on the
@@ -311,7 +311,7 @@ pub async fn handle_input(request: JsonRpcRequest) -> JsonRpcResponse {
 ///
 /// A server-held screen makes multi-client sharing free, and the moment a
 /// second client attaches, something has to decide the one size the PTY
-/// actually gets — see [`PtyManager::note_viewport`]. The viewport is keyed
+/// actually gets — see `PtyManager::note_viewport`. The viewport is keyed
 /// on the real transport-level connection id
 /// ([`caller_identity::CALLER_CONN_ID`](crate::gateway::caller_identity::CALLER_CONN_ID)),
 /// never a caller-supplied one: `client_id` is a value the caller picks, and
@@ -381,7 +381,7 @@ pub async fn handle_close(request: JsonRpcRequest) -> JsonRpcResponse {
 /// methods take, and the shipped Panel adopts the first live entry it finds
 /// as its own view's session. Unfiltered, a second operator's terminal view
 /// silently joined the first one's shell — scrollback restored, keystrokes
-/// delivered. The addressed methods carry the same predicate ([`require_owned`])
+/// delivered. The addressed methods carry the same predicate (`require_owned`)
 /// rather than trusting this one, because a list that hides an id is not a
 /// gate on the id.
 ///

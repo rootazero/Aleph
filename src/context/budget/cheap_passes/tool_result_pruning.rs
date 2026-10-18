@@ -74,7 +74,7 @@ const STRUCTURED_TARGET_BUDGET_TOKENS: usize = 200;
 ///
 /// Keeps the newest `fresh_tail_count` messages untouched (positional —
 /// see the note in `prepare`). For older `ToolResult` blocks at or above
-/// [`PRUNE_THRESHOLD_TOKENS`], replaces the content with
+/// `PRUNE_THRESHOLD_TOKENS`, replaces the content with
 /// `"[pruned tool_result: <tool_name>, ~<N> tokens — <hint>]"`. Skips when the
 /// placeholder wouldn't actually save tokens.
 ///

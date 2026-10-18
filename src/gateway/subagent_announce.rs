@@ -36,7 +36,7 @@ const FALLBACK: &str = "result remains available via the subagent tool's list ac
 /// background subagent into its parent session.
 ///
 /// Registration is **awaited**, not spawned — see
-/// [`announce_delivery::subscribe`], which owns that invariant for both
+/// `announce_delivery::subscribe`, which owns that invariant for both
 /// announcers. Boot broadcasts a `SubAgentCompleted` of its own right after
 /// this call (the restart-orphan notice from `agents::background_persistence`),
 /// and a subscriber that is merely *scheduled* is a subscriber that is not

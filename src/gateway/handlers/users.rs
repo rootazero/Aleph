@@ -12,12 +12,12 @@
 //! so a store-only write would leave live connections stale indefinitely:
 //!
 //! - Deactivation (`users.update { status: "deactivated" }`) revokes every
-//!   live device bound to that user through [`revoke_device_and_kick`], the
+//!   live device bound to that user through `revoke_device_and_kick`, the
 //!   exact pipeline `gateway.devices.revoke` uses — same store write, same
 //!   `DeviceRevoked` event, same demote-before-kick order. See that function's
 //!   doc in `gateway_devices.rs` for why it isn't duplicated here.
 //! - A role change (`users.update { role }`) re-stamps those same connections
-//!   in place via [`restamp_live_connections`] — promotion and demotion both,
+//!   in place via `restamp_live_connections` — promotion and demotion both,
 //!   except for connections already walled at `"guest"` (see that function).
 
 use std::collections::HashMap;
@@ -93,14 +93,12 @@ pub struct UserDeactivationKick {
     pub browser_viewer_grants: BrowserViewerGrantRevocation,
 }
 
-/// Opaque, cheaply clonable slot for the browser live [`ViewerGrantStore`].
+/// Opaque, cheaply clonable slot for the browser live `ViewerGrantStore`.
 /// The users handler is built before the browser live runtime is installed,
 /// so the gateway owns one slot, hands clones to the deactivation kick, and
 /// binds the runtime's store into it at install time. A re-install replaces
 /// the bound store, matching `set_browser_viewer_backend`, so the issuer RPCs
 /// and deactivation never act on different stores.
-///
-/// [`ViewerGrantStore`]: crate::browser::live::grant::ViewerGrantStore
 #[derive(Clone, Default)]
 pub struct BrowserViewerGrantRevocation {
     slot: Arc<std::sync::RwLock<Option<crate::browser::live::grant::ViewerGrantStore>>>,
@@ -450,10 +448,10 @@ pub use aleph_protocol::users::UserUpdateParams as UpdateParams;
 /// the system always keeps at least one admin.
 ///
 /// `status="deactivated"` additionally revokes every live device bound to
-/// this user via [`revoke_device_and_kick`] (best-effort per device — a
+/// this user via `revoke_device_and_kick` (best-effort per device — a
 /// revoke failure is logged, not surfaced as a whole-request failure, since
 /// the status write already succeeded) **and** burns the principal's
-/// outstanding bootstrap tickets via [`burn_outstanding_bootstrap_tickets`],
+/// outstanding bootstrap tickets via `burn_outstanding_bootstrap_tickets`,
 /// so a ticket minted before the sweep cannot pair a brand-new device after
 /// it.
 pub async fn handle_update(

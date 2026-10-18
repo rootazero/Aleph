@@ -9,7 +9,7 @@ pub struct CatalogFilter {
     pub kind: Option<ExtensionKind>,
     pub category: Option<ExtensionCategory>,
     pub source_id: Option<String>,
-    /// Free-text query, applied by [`matches_query`] after the indexed columns
+    /// Free-text query, applied by `matches_query` after the indexed columns
     /// have narrowed the rows.
     pub query: Option<String>,
 }

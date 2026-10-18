@@ -11,7 +11,7 @@ use super::stt::{SttConfig, SttSource};
 /// `Static` exactly as before. Returns `None` when no usable provider exists.
 ///
 /// `vocabulary` is the rendered `[voice] vocabulary` hint
-/// ([`VoiceSection::vocabulary_hint`](crate::config::types::voice_local::VoiceSection::vocabulary_hint)),
+/// (`VoiceSection::vocabulary_hint`),
 /// carried onto every config in the source — primary *and* fallback — so a
 /// degradation hop does not silently lose the user's proper nouns.
 ///

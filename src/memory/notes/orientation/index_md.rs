@@ -2,7 +2,7 @@
 //!
 //! Grouping: by category (`BTree` alphabetical). One line per note:
 //!
-//!   - [[category/filename]] — <summary> (updated YYYY-MM-DD)
+//!   - [[category/filename]] — `&lt;summary&gt;` (updated YYYY-MM-DD)
 //!
 //! Summary source (three-tier fallback):
 //!   1. First bullet line of the body (≤ 80 chars)

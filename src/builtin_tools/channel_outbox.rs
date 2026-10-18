@@ -105,7 +105,7 @@ pub struct DeadLetterEntry {
     pub channel_id: String,
     /// Opaque conversation id it was addressed to.
     pub conversation_id: String,
-    /// First [`PREVIEW_CHARS`] characters of the message text.
+    /// First `PREVIEW_CHARS` characters of the message text.
     pub preview: String,
     /// Delivery attempts made before it was retired.
     pub attempts: u32,

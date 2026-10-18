@@ -643,7 +643,7 @@ impl ExecApprovalManager {
     /// `true` if the request was found and resolved. A session-level grant
     /// additionally cascades to every other live pending record in the same
     /// session carrying the same `grant_key` — and so does a `Deny` (see
-    /// [`Self::cascade_to_identical_cards`]); the return value only reports the
+    /// `Self::cascade_to_identical_cards`); the return value only reports the
     /// addressed record.
     pub fn resolve(
         &self,
@@ -936,7 +936,7 @@ impl ExecApprovalManager {
     /// owner approval, or `None` when the id is operator-only, unknown, already
     /// resolved, expired, or carries no originator (non-channel/legacy record).
     /// `None` is NOT operator authorization: channel callers must check
-    /// [`Self::is_operator_approval`] and use [`Self::resolve_for_channel`].
+    /// `Self::is_operator_approval` and use `Self::resolve_for_channel`.
     ///
     /// The channel button-callback gate
     /// ([`ManagerCallbackSink::handle_callback`](crate::approval::callback_sink))
@@ -971,7 +971,7 @@ impl ExecApprovalManager {
     /// snapshot's end, or addressing an entry that is no longer live,
     /// re-lists (and re-snapshots) instead of guessing.
     ///
-    /// Liveness ([`PendingEntry::is_live`]) is what keeps the ordering honest:
+    /// Liveness (`PendingEntry::is_live`) is what keeps the ordering honest:
     /// a cancelled run leaves an entry whose waiter is gone but whose `sender`
     /// is still `Some`, and being the oldest it would otherwise win this pick
     /// and swallow the approval meant for the card the user is actually
@@ -1136,7 +1136,7 @@ impl ExecApprovalManager {
 
     /// Get snapshot of a pending approval
     ///
-    /// Consults [`PendingEntry::is_live`] so a consumer that asks "is this
+    /// Consults `PendingEntry::is_live` so a consumer that asks "is this
     /// id still pending?" never sees a record whose sender is gone, whose
     /// deadline has passed, or whose `decision` is set. `list_pending` is
     /// the only path that may return a still-pending roster to a panel;
@@ -1160,7 +1160,7 @@ impl ExecApprovalManager {
     /// `tool_call_id`) at least gets a stable, meaningful sequence rather than
     /// hash order that reshuffles between calls.
     ///
-    /// Entries whose waiter is gone ([`PendingEntry::is_live`]) are skipped: a
+    /// Entries whose waiter is gone (`PendingEntry::is_live`) are skipped: a
     /// Panel that reconnects must not render a card for a cancelled run, whose
     /// resolution can never reach anyone.
     #[must_use]

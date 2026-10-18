@@ -113,7 +113,7 @@ impl MemoryExtensionRegistry {
     /// `McpMemoryExtension`), sharing one `Arc` so both lists hold the same
     /// (already bound at mount) extension.
     ///
-    /// Same dedup contract as [`register`]: rejects when an extension with
+    /// Same dedup contract as `register`: rejects when an extension with
     /// the same `name()` is already registered.
     pub fn register_mcp(
         &self,
@@ -136,7 +136,7 @@ impl MemoryExtensionRegistry {
     /// and, if it was MCP-backed, from the typed side-table. Returns whether
     /// anything was removed.
     ///
-    /// The inverse of [`register`] / [`register_mcp`]; the plugin lifecycle
+    /// The inverse of `register` / `register_mcp`; the plugin lifecycle
     /// calls it from the `memory_extension` effect's disposer. Until it
     /// existed a `[memory]` extension outlived its plugin's disable and kept
     /// routing hooks to a transient MCP server that had already been removed.

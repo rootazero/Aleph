@@ -143,7 +143,7 @@ pub trait BrowserBackend: Send + Sync {
     /// Wait until `condition` holds on the tab, within `timeout_ms`.
     /// Returns `Ok(false)` on timeout — an absent condition is an answer, not
     /// an error. The default impl polls `evaluate` with a JS probe (see
-    /// [`super::wait_probe`]); backends with a native wait primitive override
+    /// `super::wait_probe`); backends with a native wait primitive override
     /// the arms they support (Chrome `DevTools` MCP overrides `Text`).
     ///
     /// A real shared default, not a capability stub: the managed Playwright

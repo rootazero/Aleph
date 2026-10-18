@@ -1,9 +1,9 @@
 //! Crash durability for the busy-input wait lane.
 //!
-//! The lane registry ([`super::lanes`]) is process memory: a `HashMap` behind
-//! a `OnceLock`, nothing on disk, and a [`super::TicketGuard`] carries no
+//! The lane registry (`super::lanes`) is process memory: a `HashMap` behind
+//! a `OnceLock`, nothing on disk, and a `super::TicketGuard` carries no
 //! payload — the full `RunRequest` lives only in the two spawn closures
-//! ([`super::spawn`] for Panel/CLI, `inbound_router::executor` for channels).
+//! (`super::spawn` for Panel/CLI, `inbound_router::executor` for channels).
 //! A daemon that died mid-queue therefore resumed the *interrupted run* (via
 //! `ResumeCoordinator`) while every message queued behind it vanished without
 //! a trace: the `Rejected`/`TimedOut`/`Purged` receipts are emitted by the
@@ -20,22 +20,22 @@
 //! * layout `<dir>/run-<run_id>/state.json`, atomically rewritten via
 //!   [`crate::utils::atomic_io::write_atomic`] — once at enqueue, once at the
 //!   terminal tombstone;
-//! * a two-phase [`QueuedPhase`]: `Queued` → `Settled`. A tombstone is a
+//! * a two-phase `QueuedPhase`: `Queued` → `Settled`. A tombstone is a
 //!   state rewrite, never a deletion — a mechanism that only records "it
 //!   finished" cannot tell "it never ran" from "it ran and the write was
 //!   lost";
 //! * a 7-day retention sweep of settled entries **at boot only** (per-write
 //!   would turn every enqueue into an O(entries) stat storm);
-//! * persistence is **opt-in**: until [`init`] runs, every entry point is a
+//! * persistence is **opt-in**: until `init` runs, every entry point is a
 //!   zero-I/O no-op, so tests, the CLI and every non-daemon embedding behave
 //!   exactly as they did before.
 //!
 //! # The four tombstone arms, and why admission is one of them
 //!
-//! A record closes at: [`super::mark_admitted`] (the message became a run —
+//! A record closes at: `super::mark_admitted` (the message became a run —
 //! its *own* lifecycle and the resume coordinator take over from here),
-//! [`super::purge`] / [`super::cancel_queued_run`] (explicit stop), and the
-//! spawn seam's terminal [`super::DeliveryOutcome`] (covers `TimedOut`, plus
+//! `super::purge` / `super::cancel_queued_run` (explicit stop), and the
+//! spawn seam's terminal `super::DeliveryOutcome` (covers `TimedOut`, plus
 //! `Executed(Err)` for an attempt the gate refused without ever admitting).
 //! Admission — not completion — is the right "it left the queue" edge: the
 //! window between admission and completion is owned by the run's own crash
@@ -50,7 +50,7 @@
 //! # Reinjection preserves the lane invariants for free
 //!
 //! Boot reinjection re-enters through the ordinary arrival path —
-//! [`super::register_run`] + [`super::deliver_with_ticket`] — so the survivor
+//! `super::register_run` + `super::deliver_with_ticket` — so the survivor
 //! gets a *fresh* ticket with a fresh monotonic `enqueued_at`. No original
 //! timestamp is restored, and none is needed: the interrupt-burst predicate
 //! (`steering::interrupt_targets_an_unseen_run`) compares the ticket's
@@ -61,7 +61,7 @@
 //!
 //! # What is deliberately NOT persisted
 //!
-//! * Inline attachment bytes beyond [`MAX_INLINE_ATTACHMENT_BYTES`]: the
+//! * Inline attachment bytes beyond `MAX_INLINE_ATTACHMENT_BYTES`: the
 //!   whole record is skipped (with a `warn`) rather than written truncated —
 //!   a reinjected message that silently lost its images is a lie of the same
 //!   kind this module exists to remove. Reference-style attachments
@@ -280,7 +280,7 @@ fn write_entry(root: &std::path::Path, entry: &JournalEntry) -> std::io::Result<
 /// — nothing to persist, the sender already heard no).
 ///
 /// Returns `false` (and logs `warn`) when the inline attachment bytes exceed
-/// [`MAX_INLINE_ATTACHMENT_BYTES`] — the record is skipped whole rather than
+/// `MAX_INLINE_ATTACHMENT_BYTES` — the record is skipped whole rather than
 /// written degraded.
 pub fn record_enqueued(payload: QueuedRunPayload) -> bool {
     let Some(root) = store_dir() else {
@@ -355,7 +355,7 @@ fn settle_entry(run_id: &str, reason: SettleReason, detail: Option<String>) {
 
 /// Survivors to re-deliver at boot: every still-`Queued` record, oldest first.
 ///
-/// Also sweeps settled entries older than [`SETTLED_RETENTION`] — the one
+/// Also sweeps settled entries older than `SETTLED_RETENTION` — the one
 /// place deletion happens, so the tombstone history survives long enough to
 /// answer "what happened to my message" without growing the journal forever.
 ///

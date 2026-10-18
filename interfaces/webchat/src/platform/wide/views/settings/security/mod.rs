@@ -7,13 +7,13 @@
 //! - Real-time updates via config events
 //!
 //! ## Layout
-//! - [`gateway`] — `NetworkAccessSection` (gateway bind scope)
-//! - [`outbound`] — `OutboundSecuritySection`
-//! - [`shell`] — `ShellSecuritySection`
-//! - [`pii_rules`] — custom PII rule editor + section wrapper
-//! - [`secrets`] — `SecretProtectionSection`
-//! - [`pii_section`] — Search-side PII toggles
-//! - [`sandbox`] — sandbox rate-limit + bucket cards
+//! - `gateway` — `NetworkAccessSection` (gateway bind scope)
+//! - `outbound` — `OutboundSecuritySection`
+//! - `shell` — `ShellSecuritySection`
+//! - `pii_rules` — custom PII rule editor + section wrapper
+//! - `secrets` — `SecretProtectionSection`
+//! - `pii_section` — Search-side PII toggles
+//! - `sandbox` — sandbox rate-limit + bucket cards
 //! - this module — `SecurityView` entry point + shared `validate_regex` helper
 
 mod gateway;

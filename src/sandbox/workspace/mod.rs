@@ -17,7 +17,7 @@
 //! sibling command writing in the same session workspace can swap a component
 //! of the approved path for a symlink while the card sits on someone's screen.
 //! So if — and only if — step 3 actually awaited a human, containment is
-//! re-established by [`revalidate_cwd_containment`] before step 4 uses the
+//! re-established by `revalidate_cwd_containment` before step 4 uses the
 //! path.
 
 use std::collections::{HashMap, HashSet};

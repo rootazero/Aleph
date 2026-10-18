@@ -138,7 +138,7 @@ impl MarketplaceManager {
         result
     }
 
-    /// Alias for [`all_marketplaces`] — convenient for serialising back to config.
+    /// Alias for `all_marketplaces` — convenient for serialising back to config.
     #[must_use]
     pub fn list(&self) -> HashMap<String, MarketplaceConfig> {
         self.all_marketplaces()

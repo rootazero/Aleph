@@ -222,7 +222,7 @@ impl ClientScreen {
     /// shared by every session, so a screen that trusted its caller to
     /// pre-filter would read another session's `seq` as a gap in its own.
     ///
-    /// `rows`/`cols` are clamped to at least 1, same as [`resize`](Self::resize) —
+    /// `rows`/`cols` are clamped to at least 1, same as `resize` —
     /// a screen with a zero dimension cannot address any row, and a caller
     /// that has not learned real geometry yet (e.g. a placeholder before the
     /// first `finish_attach`) should not be able to construct one by

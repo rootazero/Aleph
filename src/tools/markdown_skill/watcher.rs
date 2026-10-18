@@ -61,7 +61,7 @@ impl SkillWatcher {
     /// * `skills_dir` - Directory to watch for SKILL.md files
     /// * `config` - Watcher configuration
     ///
-    /// The reload callback is passed to [`run()`] when starting the event loop.
+    /// The reload callback is passed to `run()` when starting the event loop.
     pub fn new(skills_dir: impl AsRef<Path>, config: SkillWatcherConfig) -> Result<Self> {
         let skills_dir = skills_dir.as_ref().to_path_buf();
 

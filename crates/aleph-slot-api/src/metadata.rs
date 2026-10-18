@@ -238,7 +238,7 @@ pub enum ToolSource {
     },
 
     /// User-defined custom command from config.toml
-    /// These are [[rules]] entries with ^/ prefix patterns.
+    /// These are [\[rules\]] entries with ^/ prefix patterns.
     Custom {
         /// Index in the rules array for reference
         rule_index: usize,
@@ -649,7 +649,7 @@ pub struct UnifiedTool {
     pub parameters_schema: Option<Value>,
 
     /// Per-result token budget the tool declares
-    /// ([`crate::tools::AlephTool::MAX_RESULT_TOKENS`]), stamped at
+    /// (`crate::tools::AlephTool::MAX_RESULT_TOKENS`), stamped at
     /// registration and carried by `RegistryToolAdapter` to the Layer-2
     /// resolver. `None` = the global default. Runtime-only: it is not part of
     /// the tool's wire description, so it is never serialized.
@@ -690,11 +690,11 @@ pub struct UnifiedTool {
     pub icon: Option<String>,
 
     /// Usage example for documentation
-    /// e.g., "/search <query>", "/mcp <tool> [params]"
+    /// e.g., "/search `&lt;query&gt;`", "/mcp `&lt;tool&gt;` \[params\]"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<String>,
 
-    /// Parameter hint for UI display (e.g., "[topic]", "<name>")
+    /// Parameter hint for UI display (e.g., "\[topic\]", "`&lt;name&gt;`")
     /// Shown inline next to command name in completion dropdowns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub param_hint: Option<String>,

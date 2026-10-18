@@ -47,7 +47,7 @@
 //! Being the mandatory chokepoint for that (the guard at the bottom of this
 //! file admits no exceptions) makes it the only place that sees *both* halves
 //! of a message — the caller's framing and the server's — which is why the
-//! stutter [`framed_once`] removes can only be removed here.
+//! stutter `framed_once` removes can only be removed here.
 
 use aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE;
 use leptos_i18n::I18nContext;

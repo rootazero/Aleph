@@ -470,7 +470,7 @@ impl SecurityAuditLog {
         Self::new_with_policy(buffer_size, false)
     }
 
-    /// [`new`] plus the fail-closed knob — see the `block_on_full` field.
+    /// `new` plus the fail-closed knob — see the `block_on_full` field.
     #[must_use]
     pub fn new_with_policy(
         buffer_size: usize,
@@ -510,7 +510,7 @@ impl SecurityAuditLog {
     }
 
     /// `detail` is sanitised here, at the chokepoint every production entry
-    /// flows through, rather than at each producer — see [`sanitize_detail`].
+    /// flows through, rather than at each producer — see `sanitize_detail`.
     ///
     /// Async because of `block_on_full`: with the knob off (default) this is
     /// a `try_send` that completes immediately; with it on, a full channel

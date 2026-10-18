@@ -124,7 +124,7 @@ impl RouteObservability {
     /// Recompute `config_problems` for a hot-applied `[route]` config and
     /// publish them as one atomic swap (the same RCU idiom the route handle
     /// uses for the config itself). Called from the `route` arm of
-    /// [`config::live_apply::apply_live_sections`](crate::config::live_apply::apply_live_sections),
+    /// `config::live_apply::apply_live_sections`,
     /// alongside the route handle's store — so EVERY hot `[route]` write
     /// republishes it (`route_config.update`, the `update_config` tool /
     /// `config.patch` RPC, `ConfigPatcher::rollback`, `config.reload`) and the

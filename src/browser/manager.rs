@@ -40,7 +40,7 @@ static LIVE_MANAGER: Mutex<Option<Weak<ProfileManager>>> = Mutex::new(None);
 /// Returns `true` when it landed. `false` means no manager is published (a CLI
 /// process, a test, or before boot wired one up) and the caller must NOT report
 /// the change as live — the same honest-downgrade contract as
-/// [`crate::config::live_apply::apply_live_sections`], whose `route` arm this
+/// `crate::config::live_apply::apply_live_sections`, whose `route` arm this
 /// mirrors: a process-global handle, poked from wherever the config write lands,
 /// and a no-op that says so when it is absent.
 ///
@@ -619,7 +619,7 @@ impl ProfileManager {
     /// measures, which is the rule `playwright_launch::LaunchPolicy`'s own doc
     /// states.
     ///
-    /// The engine it answers is the **live** one — [`Self::live_engine`], which
+    /// The engine it answers is the **live** one — `Self::live_engine`, which
     /// a runtime override can move — while `request_from`'s `configured`
     /// argument stays the **config's**. Those are two facts and this is the one
     /// place both are needed at once: the request must carry the data dir of
@@ -877,7 +877,7 @@ impl ProfileManager {
     /// 4. write the target (a failure here kills the *target*; the source is
     ///    untouched and still the profile's handle)
     /// 5. `replace` — one locked swap, so no window exists in which the profile
-    ///    has no engine — and then [`Self::adopt_engine`], so the config and
+    ///    has no engine — and then `Self::adopt_engine`, so the config and
     ///    the registry agree about which engine this profile is on
     /// 6. stop the displaced source
     ///
@@ -1235,7 +1235,7 @@ impl ProfileManager {
     /// settings (判据 §1 — the comment was the lying half).
     ///
     /// What is still deferred is the SESSION-level sweep:
-    /// [`Self::idle_managed_profiles`] filters on `driver == Managed`, so a
+    /// `Self::idle_managed_profiles` filters on `driver == Managed`, so a
     /// `Cdp` profile is never selected. **An idle CDP engine is therefore not
     /// torn down until the daemon exits**, and after the flip that is every
     /// install's `default` profile: its `idle_timeout_secs` is a setting with

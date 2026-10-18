@@ -16,7 +16,7 @@
 //!   `existing_note_path` / `old_note_path` come straight from the LLM
 //!   prompt and need their own guard.
 //!
-//! Rejected actions are recorded with [`DistillOutcome::FilteredInvalid`]
+//! Rejected actions are recorded with `DistillOutcome::FilteredInvalid`
 //! and never reach the indexer.
 
 use crate::memory::dreaming::distill_action::DistillAction;

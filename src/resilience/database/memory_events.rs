@@ -34,7 +34,7 @@ impl StateDatabase {
     /// SQLite's statement-level lock and never collide.
     ///
     /// Callers that need the post-insert `seq` must re-read via
-    /// [`get_memory_events_for_fact_unscoped`] (or [`get_memory_event_latest_seq`]);
+    /// `get_memory_events_for_fact_unscoped` (or `get_memory_event_latest_seq`);
     /// the append path itself does not surface it.
     pub async fn append_memory_event(
         &self,

@@ -155,7 +155,7 @@ fn expand_configured_path(raw: &str) -> String {
 }
 
 impl CronConfig {
-    /// Expand the database path (resolve `~`). See [`expand_configured_path`].
+    /// Expand the database path (resolve `~`). See `expand_configured_path`.
     #[must_use]
     pub fn expand_db_path(&self) -> String {
         expand_configured_path(&self.db_path)

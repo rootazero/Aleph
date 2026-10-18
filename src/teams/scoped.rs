@@ -3,7 +3,7 @@
 //! [`ScopedTeamStore`] decorates a [`TeamStore`] so that a team belonging to a
 //! different user is indistinguishable from a team that does not exist: reads
 //! return `None` / drop the row, and addressed writes return the store's own
-//! [`team_not_found`] error verbatim.
+//! `team_not_found` error verbatim.
 //!
 //! # Why a decorator and not a check per call site
 //!

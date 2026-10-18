@@ -128,10 +128,10 @@ impl StreamingController {
     /// Record that an edit was rejected by the channel's rate limiter.
     ///
     /// Widens the debounce interval — honoring `retry_after` when the channel
-    /// supplied one, otherwise doubling — capped at [`MAX_BACKOFF_INTERVAL`].
+    /// supplied one, otherwise doubling — capped at `MAX_BACKOFF_INTERVAL`.
     /// The rejected attempt counts as the most recent edit so the next poll
     /// waits the full (now wider) interval instead of retrying immediately.
-    /// After [`MAX_FLOOD_STRIKES`] consecutive rejections, mid-stream edits are
+    /// After `MAX_FLOOD_STRIKES` consecutive rejections, mid-stream edits are
     /// suppressed and the controller falls back to a single final flush.
     pub fn record_edit_throttled(&mut self, retry_after: Option<Duration>) {
         self.flood_strikes = self.flood_strikes.saturating_add(1);

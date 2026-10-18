@@ -228,7 +228,7 @@ pub fn retain_visible_owned_commands(
 /// path's `slash_owner_admits` (`execution_engine/slash_command.rs`) and
 /// `/help`'s `render_command_help` (`inbound_router/command_handler.rs`). A
 /// fourth face calls this rather than re-spelling it; tests pass their own
-/// closures. The body is [`owner_visible_via`] on the process global.
+/// closures. The body is `owner_visible_via` on the process global.
 pub fn manager_backed_owner_visible() -> impl Fn(&str, &VisibilityCtx) -> bool {
     |owner: &str, ctx: &VisibilityCtx| {
         owner_visible_via(

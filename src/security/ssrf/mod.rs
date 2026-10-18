@@ -77,7 +77,7 @@ pub(crate) fn validate_scheme(url: &Url) -> Result<(), SsrfError> {
 /// rebinding window between validation and `reqwest`'s own resolver. Returns
 /// `(Url, None)` for IP-literal URLs and for `policy.enabled == false`;
 /// hostname URLs return `(Url, Some(SocketAddr))` whose address has been
-/// verified against the policy via [`super::dns::resolve_and_validate`].
+/// verified against the policy via `super::dns::resolve_and_validate`.
 pub async fn validate_url_with_pinned(
     url_str: &str,
     policy: &SsrfPolicy,

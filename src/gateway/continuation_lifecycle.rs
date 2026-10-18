@@ -214,7 +214,7 @@ pub(crate) async fn retire_side_session_now(
     }
 }
 
-/// Fire-and-forget [`retire_side_session_now`], for the surfaces that must not
+/// Fire-and-forget `retire_side_session_now`, for the surfaces that must not
 /// wait on it.
 ///
 /// Use this for a conversation whose key stops being the one `/btw` derives
@@ -235,7 +235,7 @@ pub(crate) async fn retire_side_session_now(
 /// which calls it) from outside a runtime panics with "there is no reactor
 /// running". Every caller today is an `async fn` on the gateway runtime; a new
 /// synchronous caller must either be on one or use
-/// [`retire_side_session_now`] directly.
+/// `retire_side_session_now` directly.
 pub fn retire_side_session(
     old_key: &SessionKey,
     cause: &str,

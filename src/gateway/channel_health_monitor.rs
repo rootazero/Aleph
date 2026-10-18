@@ -17,7 +17,7 @@
 //! - `check_secs = 0` disables the monitor (config sentinel).
 //! - The restart decision reads *intent* ([`DesiredChannelState`]) alongside
 //!   live status, because status alone cannot tell an operator-stopped channel
-//!   from a dead socket — see [`should_restart`], which documents why keying on
+//!   from a dead socket — see `should_restart`, which documents why keying on
 //!   `status == Error` alone made this monitor a no-op for exactly the
 //!   long-lived socket channels it was written for.
 //! - A healthy-but-idle channel (no traffic, still `Connected`) is **never**
@@ -154,7 +154,7 @@ impl RestartLimiter {
     }
 }
 
-/// Handle to a running channel health monitor. Mirrors [`MemoryMonitor`]:
+/// Handle to a running channel health monitor. Mirrors `MemoryMonitor`:
 /// dropping it does not stop the task — call [`ChannelHealthMonitor::shutdown`].
 #[derive(Debug)]
 pub struct ChannelHealthMonitor {

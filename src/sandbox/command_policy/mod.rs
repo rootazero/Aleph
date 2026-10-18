@@ -46,7 +46,7 @@
 //! `WorkspaceSandbox::execute` → `hooks.run_before()` path with zero changes to
 //! the execution pipeline. A `Block` decision returns
 //! [`SandboxHookResult::Deny`], which the workspace turns into a
-//! [`SandboxError::Other`] (surfaced to the model as a clear refusal).
+//! `SandboxError::Other` (surfaced to the model as a clear refusal).
 
 pub mod config;
 pub mod normalize;
@@ -318,7 +318,7 @@ impl CommandPolicy {
 /// path) on a fresh line. Non-UTF-8 stdin is skipped — the OS sandbox covers
 /// binary payloads; the policy is a text-pattern filter.
 ///
-/// Output is capped at [`MAX_SCAN_BYTES`] * 2 so a sandboxed command cannot
+/// Output is capped at `MAX_SCAN_BYTES` * 2 so a sandboxed command cannot
 /// make this function allocate O(stdin.len()) just to feed
 /// [`CommandPolicy::evaluate`], which itself only consumes a
 /// `2 * MAX_SCAN_BYTES`-byte window (head/mid/tail). Pre-truncating here

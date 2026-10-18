@@ -17,7 +17,7 @@
 //!
 //! ## Colour mapping (Obsidian preset palette)
 //!
-//! [`status_color`] is the single source — it was duplicated here as a table
+//! `status_color` is the single source — it was duplicated here as a table
 //! that listed 5 of the 10 statuses, i.e. a second, stale statement of one
 //! fact. Read the function.
 
@@ -239,7 +239,7 @@ fn compute_layers<'a>(
 // ---------------------------------------------------------------------------
 
 /// Reverse of [`tasks_to_canvas`]. Converts a JSON Canvas document into a
-/// list of [`NewCoordTask`]s ready for [`CoordTaskStore::create_task`].
+/// list of [`NewCoordTask`]s ready for `CoordTaskStore::create_task`.
 ///
 /// Only `Text` nodes become tasks. Other node kinds (`File`/`Link`/`Group`)
 /// are skipped — they are visual aids, not work units. Edges become

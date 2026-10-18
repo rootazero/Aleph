@@ -24,7 +24,7 @@
 //! that leak.
 //!
 //! `bind` and `unbind` are therefore in [`method_admin::ADMIN_METHODS`];
-//! `list` stays open and is narrowed to the roster by [`gate_project`], so a
+//! `list` stays open and is narrowed to the roster by `gate_project`, so a
 //! member can see where their room lives without being able to move it.
 //!
 //! The admin gate lives upstream, at `process_request`'s single chokepoint —
@@ -413,7 +413,7 @@ pub async fn handle_bind(
 ///
 /// # It deliberately does NOT check room visibility, unlike `bind`
 ///
-/// [`handle_bind`] runs [`gate_project`]; this does not, and cannot: it is
+/// [`handle_bind`] runs `gate_project`; this does not, and cannot: it is
 /// addressed by CONVERSATION (`channel_id`, `peer_kind`, `peer_id`) and carries
 /// no project id for a gate to gate on. The only way to add one would be to
 /// resolve the owning room and refuse on it. Read cold, the asymmetry looks
@@ -435,7 +435,7 @@ pub async fn handle_bind(
 ///    taken from.
 ///
 /// Access control for this verb is the admin gate in
-/// [`method_admin::ADMIN_METHODS`], pinned separately. Nothing leaks either:
+/// `method_admin::ADMIN_METHODS`, pinned separately. Nothing leaks either:
 /// the response is `{unbound: bool}`, and that bool answers an operator-only
 /// question anyway.
 ///
@@ -540,7 +540,7 @@ pub async fn handle_unbind(
     JsonRpcResponse::success(request.id, json!(ChannelUnbindResult { unbound }))
 }
 
-/// `projects.channel.list` — open, narrowed to the roster by [`gate_project`].
+/// `projects.channel.list` — open, narrowed to the roster by `gate_project`.
 pub async fn handle_list(request: JsonRpcRequest, store: Arc<ProjectStore>) -> JsonRpcResponse {
     let params: ChannelListParams = match parse_params(&request) {
         Ok(p) => p,

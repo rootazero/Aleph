@@ -109,7 +109,7 @@ void main() {
 /// Edge vertex shader: evaluates a gentle quadratic Bézier arc tessellated into
 /// SEGMENTS steps, with endpoint taper so the ribbon visually welds into the star
 /// core. Per-instance: the two endpoints (a_pos_a/a_pos_b) and their colors
-/// (a_color_a/a_color_b). Per-vertex: a_corner = (along ∈ [0,1], side ∈ {-1,+1}).
+/// (a_color_a/a_color_b). Per-vertex: a_corner = (along ∈ \[0,1\], side ∈ {-1,+1}).
 pub const EDGE_VERT: &str = r#"#version 300 es
 precision highp float;
 layout(location=0) in vec2 a_corner;   // (along 0..1, side -1/+1)

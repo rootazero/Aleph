@@ -15,7 +15,7 @@
 //! * an optional **inline keyboard**, a tappable shortcut for channels that
 //!   render one. The callback payload is `clarify:<1-based index>`, byte-identical
 //!   to what a user typing that number produces, so
-//!   [`crate::clarification::session::interpret_reply`] stays the single
+//!   `crate::clarification::session::interpret_reply` stays the single
 //!   interpreter for both.
 
 use super::{ClarificationOption, ClarificationQuestion};

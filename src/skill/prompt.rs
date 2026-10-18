@@ -210,7 +210,7 @@ pub fn build_skills_prompt_xml(skills: &[&SkillManifest]) -> String {
 /// 1. **Full** (`<name>` + `<description>` + `<when>`) while the char budget
 ///    allows — the first entry is always admitted even if it alone exceeds the
 ///    cap.
-/// 2. **Compact** ([`render_skill_fragment_compact`]: `<name>` + `<when>`, the
+/// 2. **Compact** (`render_skill_fragment_compact`: `<name>` + `<when>`, the
 ///    description elided) for every remaining entry. Compact fragments are
 ///    **not** char-gated: once the char budget is spent on descriptions, the
 ///    rest of the library still appears in cheap name-only form so it stays

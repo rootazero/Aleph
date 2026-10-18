@@ -150,7 +150,7 @@ fn unwrap_tagged_block(text: &str, tag: &str) -> Option<String> {
 
 /// Build the summarization prompt shared by in-place compaction
 /// ([`super::compactor::ContextCompactor::compact`]) and the session-split seed
-/// path ([`super::compactor::ContextCompactor::summarize_slice`]).
+/// path (`super::compactor::ContextCompactor::summarize_slice`).
 ///
 /// `focus`, when present, is the user's current active task — the most recent
 /// user request still driving the conversation. The summary is then biased to
@@ -281,7 +281,7 @@ pub fn prepend_user_instructions(prompt: &str, instructions: Option<&str>) -> St
 ///
 /// Used when a compaction window already carries a prior `[Context Summary]` —
 /// the cache extension-merge in
-/// [`super::compactor::ContextCompactor::reapply_cached`] and the persisted-seed
+/// `super::compactor::ContextCompactor::reapply_cached` and the persisted-seed
 /// re-compaction in [`super::compactor::ContextCompactor::compact`]. Feeding the
 /// prior summary *explicitly* — rather than burying it inline in the transcript
 /// and asking for a fresh summary — preserves its structure across cycles (items

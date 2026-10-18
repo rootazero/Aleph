@@ -55,7 +55,7 @@ pub struct BrowserRecordArgs {
     #[serde(default)]
     pub recording_id: Option<String>,
     /// `start`: output file; the extension chooses the codec. Default: a
-    /// managed path under ~/.aleph/recordings/<profile>/.
+    /// managed path under ~/.aleph/recordings/`&lt;profile&gt;`/.
     #[serde(default)]
     pub path: Option<String>,
     /// `start`: frames-per-second cap (1-60, default 10).

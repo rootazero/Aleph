@@ -8,7 +8,7 @@
 //!
 //! Currently exported:
 //!
-//! * [`make_handler_with_indexer`] \u2014 a `MemoryCommandHandler` wired
+//! * `make_handler_with_indexer` \u2014 a `MemoryCommandHandler` wired
 //!   to a real on-disk `NoteIndexer` + a `StateDatabase` so callers
 //!   can exercise the dual-write path (event log + filesystem
 //!   projection) and the reconciler's divergence detection without

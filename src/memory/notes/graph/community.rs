@@ -12,7 +12,7 @@
 //! designed to cure. Such a partition is an artifact, not a cluster, and it
 //! fragments everything downstream that trusts a community to be one connected
 //! region: `note_graph_query community`, dream synthesis grouping, and the
-//! canvas centroid gravity. [`refine_connected`] splits each Louvain community
+//! canvas centroid gravity. `refine_connected` splits each Louvain community
 //! into its connected components so every emitted community is provably
 //! internally connected — a no-op on already-connected communities (the common
 //! case), so it never worsens a good partition.

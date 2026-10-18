@@ -148,7 +148,7 @@ fn main() {
         println!("cargo:warning=Building Panel UI via trunk...");
 
         match Command::new("trunk")
-            .args(&["build", "--release"])
+            .args(["build", "--release"])
             .current_dir(control_plane_dir)
             .status()
         {

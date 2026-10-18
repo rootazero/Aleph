@@ -8,7 +8,7 @@
 //! written by `readiness::write_readiness` from `lifecycle.rs`; it never re-derives.
 //!
 //! Registered by the two daemon faces only (`doctor` tool, `diagnostics.run`)
-//! through [`DiagnosticEngine::with_plugins_activated_check`]; the cold
+//! through `DiagnosticEngine::with_plugins_activated_check`; the cold
 //! `aleph-server doctor` has no extension manager and must not pretend the
 //! plugin set is clean — hence UNKNOWN when the handle is absent.
 

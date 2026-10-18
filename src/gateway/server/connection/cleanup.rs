@@ -5,7 +5,7 @@
 //! close, idle-timeout close, normal socket end, …). Everything that must
 //! run exactly once per connection — deregistering the node, removing
 //! presence, releasing subscriptions, freeing the PTY viewport lock,
-//! cancelling in-flight reverse-RPC calls — lives in [`run_cleanup`].
+//! cancelling in-flight reverse-RPC calls — lives in `run_cleanup`.
 //!
 //! Called from the orchestrator (`connection/mod.rs::handle_connection`)
 //! via a single call site after the loop breaks.

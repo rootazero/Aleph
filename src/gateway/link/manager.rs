@@ -86,7 +86,7 @@ const MAX_EXPANDED_ENV_LEN: usize = 4096;
 /// * Array values are expanded element-by-element.
 /// * All other value types are returned unchanged.
 ///
-/// **Bounds**: an expanded value larger than [`MAX_EXPANDED_ENV_LEN`] bytes
+/// **Bounds**: an expanded value larger than `MAX_EXPANDED_ENV_LEN` bytes
 /// is rejected (the original `${env.…}` string is kept and a warning is
 /// logged). A `link.yaml` referencing a multi-megabyte environment variable
 /// would otherwise silently embed the whole blob into a link config —

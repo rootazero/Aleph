@@ -458,7 +458,7 @@ impl ScratchpadTool {
     /// Attach the human-gate handles used by `request_approval`.
     ///
     /// Same pair `ask_user` holds, and deliberately the same
-    /// [`crate::clarification::ask`] path: a plan gate that grew its own
+    /// `crate::clarification::ask` path: a plan gate that grew its own
     /// delivery ladder would be a second answer to "how do we reach the human",
     /// and the second answer is always the one that misses the next transport.
     #[must_use]

@@ -39,7 +39,7 @@ const OPENAI_COLOR: &str = "#10a37f";
 ///
 /// # Returns
 ///
-/// A configured `ClaudeProvider` wrapped in Arc<dyn AiProvider>
+/// A configured `ClaudeProvider` wrapped in Arc`&lt;dyn AiProvider&gt;`
 pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, ProviderFactoryError> {
     // Read API key from environment
     let api_key = env::var("ANTHROPIC_API_KEY")
@@ -115,7 +115,7 @@ pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
 ///
 /// # Returns
 ///
-/// A configured `OpenAI` provider wrapped in Arc<dyn AiProvider>
+/// A configured `OpenAI` provider wrapped in Arc`&lt;dyn AiProvider&gt;`
 pub fn create_openai_provider_from_env() -> Result<Arc<dyn AiProvider>, ProviderFactoryError> {
     // Read API key from environment
     let api_key = env::var("OPENAI_API_KEY")

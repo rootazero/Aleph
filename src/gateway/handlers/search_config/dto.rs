@@ -11,7 +11,7 @@ pub struct SearchBackendDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_id: Option<String>,
     /// `SearXNG` only — comma-separated upstream engines to pin (e.g. "bing").
-    /// Maps to [`crate::config::types::SearchBackendConfig::engines`].
+    /// Maps to `crate::config::types::SearchBackendConfig::engines`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engines: Option<String>,
     /// Reported on get (never echoes the secret); ignored on update.
@@ -19,7 +19,7 @@ pub struct SearchBackendDto {
     pub has_api_key: bool,
     #[serde(default)]
     pub verified: bool,
-    /// Mirrors [`crate::config::types::SearchBackendConfig::allow_private_upstream`].
+    /// Mirrors `crate::config::types::SearchBackendConfig::allow_private_upstream`.
     ///
     /// On this face because this face is where `base_url` is SET, and for
     /// SearXNG it is required. Without it, a self-hosted instance added

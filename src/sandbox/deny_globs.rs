@@ -56,7 +56,7 @@ const MAX_DENY_READ_WALK_ENTRIES: usize = 500_000;
 ///   [`PathBuf`] keeps the native separator for the ACL API.
 /// - **Subtree-pruning**: when a directory itself matches, it is reported and
 ///   not descended into — the deny ACE is inheritable and covers the subtree.
-/// - **Bounded**: at most [`MAX_DENY_READ_WALK_ENTRIES`] entries are inspected.
+/// - **Bounded**: at most `MAX_DENY_READ_WALK_ENTRIES` entries are inspected.
 ///
 /// Cross-platform on purpose so the resolution logic unit-tests on macOS /
 /// Linux dev boxes; only the Windows ACE stamper consumes the result.

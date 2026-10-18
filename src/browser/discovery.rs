@@ -48,7 +48,7 @@ fn env_override() -> Option<PathBuf> {
 ///
 /// Search order:
 /// 1. `ALEPH_CHROME_PATH` env var — explicit user override
-/// 2. Platform-specific default installation paths (see [`platform_paths`])
+/// 2. Platform-specific default installation paths (see `platform_paths`)
 /// 3. `PATH` lookup via `which` for common names
 ///
 /// Returns the first existing path found, or [`BrowserError::ChromiumNotFound`].

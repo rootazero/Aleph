@@ -85,7 +85,7 @@ enum Inbound {
 ///
 /// Deliberately a *view*, not a mirror of the server's carrier: only the two
 /// fields every consumer needs, read leniently off the `Value` for the same
-/// reason [`classify_frame`] reads its envelope that way — the server-side
+/// reason `classify_frame` reads its envelope that way — the server-side
 /// struct carries fields this client has no use for (`timestamp`,
 /// `state_version`), and a strict mirror would zero this plane the day one of
 /// them changes shape.
@@ -434,7 +434,7 @@ impl AlephClient {
     ///
     /// # Errors
     ///
-    /// The socket could not be opened within [`RECONNECT_TIMEOUT`], TLS
+    /// The socket could not be opened within `RECONNECT_TIMEOUT`, TLS
     /// negotiation failed, or the handshake was refused. The client is left
     /// disconnected and the caller may try again.
     pub async fn reconnect(&self, config: &CliConfig) -> CliResult<()> {
@@ -1020,7 +1020,7 @@ impl AlephClient {
     /// would go on reporting what a socket that no longer exists was granted,
     /// and a reconnect is exactly when the answer can differ (a gateway
     /// restarted with a different posture, or a connection that came back
-    /// walled). Both handshake paths write it through [`Self::set_role`], so
+    /// walled). Both handshake paths write it through `Self::set_role`, so
     /// there is one writer and no second copy to disagree.
     #[must_use]
     pub fn role(&self) -> String {

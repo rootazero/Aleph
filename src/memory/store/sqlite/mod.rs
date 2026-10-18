@@ -300,7 +300,7 @@ impl SqliteMemoryBackend {
     /// `offset` skips the first N rows of the `created_at DESC` ordering,
     /// enabling stable server-side pagination for the dashboard.
     ///
-    /// The `WHERE` clause comes from [`raw_where`], shared with
+    /// The `WHERE` clause comes from `raw_where`, shared with
     /// [`Self::count_raw_memories`] so list and count cannot drift.
     pub fn get_raw_memories_dashboard(
         &self,
@@ -364,7 +364,7 @@ impl SqliteMemoryBackend {
     /// Count user-facing raw memory entries under the same filter the
     /// dashboard list uses.
     ///
-    /// Shares [`raw_where`] with [`Self::get_raw_memories_dashboard`]: pass the
+    /// Shares `raw_where` with [`Self::get_raw_memories_dashboard`]: pass the
     /// same `(agent_id, query)` and the count is guaranteed to describe exactly
     /// that list. Excludes `tool_invocation` telemetry.
     pub fn count_raw_memories(

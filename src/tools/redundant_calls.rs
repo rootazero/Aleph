@@ -49,7 +49,7 @@
 //! - Not a persistence change: computed fresh from the visible event tail every
 //!   turn, never written back to the session log.
 //! - Not a `PromptLayer`: per-turn dynamic aggregation belongs in the per-turn
-//!   message vector path ([`crate::harness::agent::prompt`]), same as the other
+//!   message vector path (`crate::harness::agent::prompt`), same as the other
 //!   three notices.
 //! - Not a completion judgment: it states a resource fact (this exact call,
 //!   re-run N times, is not changing its result) and a doctrine; the model

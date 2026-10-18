@@ -367,7 +367,7 @@ pub fn write_identity_file(
 /// above blocked the runtime. The duplication let the MEMORY.md deprecation
 /// message drift and the size cap drift (`MAX_FILE_CONTENT_SIZE` was a
 /// local constant in `self_config.rs` with the same value but no shared
-/// test). They now share [`validate_identity_write`] and the file-write
+/// test). They now share `validate_identity_write` and the file-write
 /// body, so a future drift would have to land twice.
 pub async fn write_identity_file_async(
     agent_dir: &Path,

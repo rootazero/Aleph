@@ -121,7 +121,7 @@ pub fn merge_catalogs(presets: FlowSet, user: FlowSet) -> FlowSet {
 /// equality assertion between them is tautological, so the property worth
 /// pinning is that nobody grows a third, hand-rolled composition.
 ///
-/// Holds [`CATALOG_LOCK`] across the full composition so concurrent reloads
+/// Holds `CATALOG_LOCK` across the full composition so concurrent reloads
 /// cannot interleave (caller A reads presets while caller B reads
 /// presets + user, then A replaces last with its empty-user set and wipes
 /// B's catalog). Callers should treat the returned `FlowSet` as the value

@@ -3,10 +3,10 @@
 //! Supports runtime dynamic harness registration and unregistration.
 //!
 //! ## Layout
-//! - [`persistence`] — disk persistence + `wire_persistence` boot helper
-//! - [`session_key`] — `SessionKey` + path canonicalization
-//! - [`harness_admin`] — harness CRUD / queries / hooks / `restore_sessions` / `list_sessions`
-//! - [`lifecycle`] — `ensure_session` / `prompt` / `cancel` / control RPCs / `shutdown_*`
+//! - `persistence` — disk persistence + `wire_persistence` boot helper
+//! - `session_key` — `SessionKey` + path canonicalization
+//! - `harness_admin` — harness CRUD / queries / hooks / `restore_sessions` / `list_sessions`
+//! - `lifecycle` — `ensure_session` / `prompt` / `cancel` / control RPCs / `shutdown_*`
 //! - this module — struct definitions + `SessionSnapshot` + `Default` impl
 
 mod harness_admin;

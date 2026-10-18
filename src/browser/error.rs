@@ -70,7 +70,7 @@ pub fn engine_unavailable(engine: Engine, tried: impl fmt::Display) -> BrowserEr
 /// when the CLI is the thing that is missing. `engine_unavailable` cannot
 /// tell the two causes apart from a `Display`; only the caller that tried to
 /// locate the CLI knows which one happened. **That caller is
-/// [`super::chromium_resolve::resolve_binary`]'s third route**, which is where
+/// `super::chromium_resolve::resolve_binary`'s third route**, which is where
 /// the lookup lives and which therefore owns this subject; it was
 /// `chromium.rs`'s eager call until W5 moved it, and this sentence named the
 /// old site for as long as it took someone to read it.
@@ -81,7 +81,7 @@ pub fn engine_unavailable(engine: Engine, tried: impl fmt::Display) -> BrowserEr
 /// The install hint keeps exactly one author per cause: this function is the
 /// only place that builds THIS hint, same as [`engine_unavailable`] is the
 /// only place that builds the ordinary one, and both defer the actual remedy
-/// sentence to [`super::chromium_resolve::PLAYWRIGHT_CLI_MISSING_REMEDY`]
+/// sentence to `super::chromium_resolve::PLAYWRIGHT_CLI_MISSING_REMEDY`
 /// rather than typing it out here a second time.
 pub fn engine_unavailable_no_launcher(tried: impl fmt::Display) -> BrowserError {
     let install_hint = format!(

@@ -9,7 +9,7 @@
 //!
 //! Layers:
 //! - [`session`]: a single PTY (`portable-pty` master/child) + reader thread.
-//! - [`manager`]: the process-global bounded session registry + event-bus sink.
+//! - `manager`: the process-global bounded session registry + event-bus sink.
 //!
 //! Handlers live in `gateway::handlers::pty` (`pty.spawn/input/resize/close/list/attach`).
 //! Operator-only, on both the RPC and event faces — see the module doc on

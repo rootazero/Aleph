@@ -73,7 +73,7 @@ pub struct WebFetchArgs {
 pub struct WebFetchResult {
     /// The fetched URL
     pub url: String,
-    /// Page title extracted from <title> tag
+    /// Page title extracted from `&lt;title&gt;` tag
     pub title: Option<String>,
     /// Main text content extracted from the page
     pub content: String,

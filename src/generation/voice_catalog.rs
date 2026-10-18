@@ -1,7 +1,7 @@
 //! Single join point for TTS voice catalogs.
 //!
 //! Every speech provider already owns its voice list as `static_voice_list()`
-//! (and returns the same list from the [`GenerationProvider::list_voices`]
+//! (and returns the same list from the `GenerationProvider::list_voices`
 //! trait method). What was missing was one place that maps a *`provider_type`*
 //! to that list, so callers who only hold config — the Settings RPC
 //! (`generation_providers.voices`) — could reach it without hand-maintaining a

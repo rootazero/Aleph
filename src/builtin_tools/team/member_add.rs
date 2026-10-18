@@ -66,7 +66,7 @@ pub struct TeamMemberAddTool {
     store: Arc<dyn TeamStore>,
     registry: Arc<AgentRegistry>,
     /// Fallback actor for calls made outside a turn scope. The live identity
-    /// comes from [`acting_agent_id`] — see [`Self::actor`].
+    /// comes from [`acting_agent_id`] — see `Self::actor`.
     pub current_agent_id: String,
 }
 

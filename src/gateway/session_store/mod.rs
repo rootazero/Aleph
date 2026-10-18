@@ -80,7 +80,7 @@ pub trait SessionStore: Send + Sync {
     /// `before` is a cursor: only messages *strictly older* than that instant
     /// are admitted, and with a `limit` the most recent `limit` of those,
     /// oldest-first. `None` admits everything, making the window identical to
-    /// [`get_history`].
+    /// `get_history`.
     ///
     /// The cursor is an INSTANT, not a number. It used to be an `i64`
     /// documented as unix seconds, and the store it is compared against holds
@@ -91,7 +91,7 @@ pub trait SessionStore: Send + Sync {
     /// majority of a real install's rows and returned nothing at all for its
     /// largest sessions, which a client can only read as "you have reached the
     /// beginning". A type the caller cannot spell in the wrong unit is the fix;
-    /// the comparison itself goes through [`stamp_millis`].
+    /// the comparison itself goes through `stamp_millis`.
     ///
     /// **The transcript's order is the order its rows were recorded**, on every
     /// backend: `messages.id` on SQLite (`INTEGER PRIMARY KEY AUTOINCREMENT`),
@@ -170,10 +170,6 @@ pub trait SessionStore: Send + Sync {
     /// half the work it used to do (the count parsed the whole transcript, then
     /// the window parsed it again). SQL-backed stores override it to push both
     /// down, and must take their connection ONCE so the pair stays atomic.
-    ///
-    /// [`get_history`]: SessionStore::get_history
-    /// [`MessageRecord::timestamp`]: crate::gateway::session_store::types::MessageRecord::timestamp
-    /// [`stamp_millis`]: crate::gateway::session_store::types::stamp_millis
     async fn history_page(
         &self,
         key: &SessionKey,
@@ -295,7 +291,7 @@ pub trait SessionStore: Send + Sync {
     /// is a property of the method rather than a rule each caller has to
     /// remember. A DM has one human on the far side and no roster to grant
     /// visibility to. Implementors: check this with
-    /// [`require_conversation_key`] rather than re-deriving the match, so the
+    /// `require_conversation_key` rather than re-deriving the match, so the
     /// property has one author across every backend, not one per
     /// implementor.
     ///

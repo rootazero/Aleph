@@ -556,7 +556,7 @@ impl ProtocolAdapter for OpenAiProtocol {
     ///
     /// Endpoint-blind hook (the trait signature carries no `base_url`), so it
     /// assumes the first-party `OpenAI` host. The hot path in `build_request`
-    /// instead calls [`normalize_openai_model_id`] directly with the configured
+    /// instead calls `normalize_openai_model_id` directly with the configured
     /// `base_url`, which preserves the `openai/` slug on aggregators.
     fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {
         crate::providers::protocols::openai_common::model_id::normalize_openai_model_id(

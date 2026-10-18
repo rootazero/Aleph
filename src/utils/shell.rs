@@ -139,7 +139,7 @@ impl ShellKind {
     /// The `(args, stdin)` pair for running `script` under this shell. The
     /// program itself is [`ResolvedShell::program`].
     ///
-    /// The PowerShell arms wrap the script in [`PS_PROLOGUE`] / [`PS_EPILOGUE`]
+    /// The PowerShell arms wrap the script in `PS_PROLOGUE` / `PS_EPILOGUE`
     /// joined with **newlines, never `;`** — a script whose last line is a `#`
     /// comment would swallow a `;`-joined epilogue and silently lose the exit
     /// code (pinned by `trailing_comment_cannot_swallow_the_epilogue`).
@@ -155,7 +155,7 @@ impl ShellKind {
     ///
     /// The stdin form is `-Command -`, and it is the same contract, not a
     /// second one. MEASURED: `cmd /c exit 3` + the epilogue exits **3** through
-    /// stdin exactly as through `-Command <literal>`, and with [`PS_PROLOGUE`]
+    /// stdin exactly as through `-Command <literal>`, and with `PS_PROLOGUE`
     /// the stdin child reports code page 65001 (both pinned by
     /// `qa/winshell/run.sh exit` and `… encoding`). Encoding is not a
     /// discriminator either way — measured, both forms inherit the parent
@@ -403,7 +403,7 @@ fn cmd_shell() -> Option<ResolvedShell> {
 /// it is the one shell whose behaviour matches its cross-platform
 /// documentation (5.1 aliases `curl`/`wget` to `Invoke-WebRequest`, so scripts
 /// written for a POSIX-ish shell misbehave in ways that read as our bug).
-/// Unix takes the first `bash` the OS sandbox can run ([`locate_runnable`]).
+/// Unix takes the first `bash` the OS sandbox can run (`locate_runnable`).
 pub fn resolve() -> &'static ResolvedShell {
     AGENT_SHELL.get_or_init(|| {
         #[cfg(windows)]
@@ -465,13 +465,13 @@ static PYTHON3: OnceLock<ResolvedInterpreter> = OnceLock::new();
 /// `"python3"` was hardcoded for every platform, and on Windows that is the
 /// wrong name: python.org ships `python.exe` and the `py` launcher, and the
 /// only `python3` most Windows boxes have on `PATH` is the Store alias, which
-/// exits 49 without running anything ([`is_windows_apps_alias`]). So
+/// exits 49 without running anything (`is_windows_apps_alias`). So
 /// `code_exec{language:"python"}` reported a failure for a Python that was
 /// never started.
 ///
 /// Windows order is `py -3` (the official launcher, and the one name that
 /// stays right across installs) → `python` → `python3`. Unix takes the first
-/// `python3` the OS sandbox can run ([`locate_runnable`]). When nothing
+/// `python3` the OS sandbox can run (`locate_runnable`). When nothing
 /// resolves we fall back to `python3` rather than inventing a new error: the
 /// caller then gets exactly the "not found" it got before, instead of a
 /// message that only this round would explain.

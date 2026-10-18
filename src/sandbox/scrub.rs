@@ -85,9 +85,9 @@ pub fn scrub_secrets_bytes<'a>(bytes: &'a [u8], injected: &[InjectedSecret]) -> 
 /// number of characters removed.
 ///
 /// This is the **byte-path** twin of the content path's
-/// [`strip_invisible_chars`](crate::security::unicode_guard::strip_invisible_chars):
+/// `strip_invisible_chars`:
 /// it defers to the same
-/// [`is_invisible_char`](crate::security::unicode_guard::is_invisible_char) SSOT,
+/// `is_invisible_char` SSOT,
 /// so sandbox command *output* neutralizes the exact same catalog the input path
 /// does — zero-width, the Trojan-Source bidi override / isolate family, the
 /// U+E0000 tag block (ASCII smuggling), invisible-math, marks, and the rest —

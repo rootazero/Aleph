@@ -137,7 +137,7 @@ pub enum ReleaseError {
         actual: String,
         bytes: usize,
         /// What an operator should look at first, chosen by
-        /// [`digest_mismatch_advice`] from whether a mirror is configured at
+        /// `digest_mismatch_advice` from whether a mirror is configured at
         /// all. With a mirror it names that mirror's key; without one it says
         /// so, rather than handing the operator a conditional about a knob
         /// they never set.
@@ -146,7 +146,7 @@ pub enum ReleaseError {
     /// The asset is over **this installer's own** ceiling — the number this
     /// code chose, which no response can raise.
     ///
-    /// `ceiling` is [`MAX_ASSET_BYTES`] at every construction site, and that is
+    /// `ceiling` is `MAX_ASSET_BYTES` at every construction site, and that is
     /// the whole point of the variant: it used to be reachable with
     /// `ceiling: declared.min(MAX_ASSET_BYTES)`, so the real 76 MB asset
     /// rendered "over this installer's 76038298-byte ceiling" when the
@@ -169,7 +169,7 @@ pub enum ReleaseError {
     /// **Deliberately not exercised by a test, and the reason is ordering, not
     /// cost.** Extraction runs *after* verification — `verify_sha256` then
     /// `spawn_blocking(extract_one)` in [`install_release`] — so a member that
-    /// expands past the ceiling can only reach [`copy_member_capped`] inside an
+    /// expands past the ceiling can only reach `copy_member_capped` inside an
     /// archive that **hashes to the digest `api.github.com` published**. An
     /// attacker-supplied decompression bomb cannot get here at all unless the
     /// API itself served it, and that is exactly the case this module's
@@ -271,7 +271,7 @@ pub struct AssetMeta {
     pub digest: String,
     /// The declared byte length. **Bounds memory, not authenticity** — it
     /// arrives in the same document as `digest`, so it is exactly as
-    /// trustworthy as that document, and [`MAX_ASSET_BYTES`] is the bound it
+    /// trustworthy as that document, and `MAX_ASSET_BYTES` is the bound it
     /// cannot raise.
     pub size: u64,
 }
@@ -283,7 +283,7 @@ pub struct AssetMeta {
 /// characters. None of them may degrade into "install it anyway".
 ///
 /// A missing or unreadable `size` is **not** fatal — it costs the derived
-/// bound, not the integrity check — so it falls back to [`MAX_ASSET_BYTES`],
+/// bound, not the integrity check — so it falls back to `MAX_ASSET_BYTES`,
 /// which is the bound that was always going to be enforced anyway.
 pub fn asset_meta(release: &serde_json::Value, asset: &str) -> Result<AssetMeta, ReleaseError> {
     let assets = release
@@ -723,7 +723,7 @@ impl ReleaseSource {
     /// may not supply the checksum.
     ///
     /// `the_checksum_host_never_follows_the_mirror` is the falsifier: point
-    /// `api_host` at [`configured_host`] and it goes red with a mirror set.
+    /// `api_host` at `configured_host` and it goes red with a mirror set.
     #[must_use]
     pub fn for_runtime(runtime: &str) -> Self {
         Self {

@@ -174,7 +174,7 @@ pub struct SpawnRequest<'a> {
     /// The parent transcript a `context=fork` spawn copies from, captured once
     /// per tool call by the caller. Required when `spawn_context` is
     /// [`crate::agents::SpawnContext::Fork`]; ignored otherwise. See
-    /// [`fork::ForkSource`] for why the caller captures it rather than the
+    /// `fork::ForkSource` for why the caller captures it rather than the
     /// spawner.
     pub fork_source: Option<fork::ForkSource>,
     /// Strict isolation mode (P3 Stage H). `None` = inherit parent's
@@ -192,7 +192,7 @@ pub struct SpawnRequest<'a> {
     /// byte-identical.
     pub session_mode: Option<crate::config::types::policies::SessionMode>,
     /// The caller's stable handle for this child, when it has one. Becomes the
-    /// child's ephemeral session id (see [`ephemeral_for`]), which is what makes
+    /// child's ephemeral session id (see `ephemeral_for`), which is what makes
     /// the durable `SubagentSpawned` / `SubagentReturned` pair addressable by
     /// the id the caller already holds.
     ///
@@ -1291,7 +1291,7 @@ fn ephemeral_for(agent_id: &str, request_id: Option<&str>) -> SessionKey {
     }
 }
 
-/// Public face of the background half of [`ephemeral_for`]: the session key a
+/// Public face of the background half of `ephemeral_for`: the session key a
 /// background child's transcript persists under. The tracker stamps this into
 /// `SubagentNode.child_session` so clients receive the address instead of
 /// re-deriving its shape — a client-side derivation would be a second source
@@ -1303,8 +1303,8 @@ pub fn background_child_session_key(agent_id: &str, request_id: &str) -> Session
 
 /// Prefix for a **background** child's session key, whose suffix is the
 /// caller's `request_id`. Single source shared by the minting side
-/// ([`ephemeral_for`]) and the recovery side
-/// ([`crate::agents::subagent_tool::recovery`]); two literals would be two
+/// (`ephemeral_for`) and the recovery side
+/// (`crate::agents::subagent_tool::recovery`); two literals would be two
 /// answers to one question.
 pub const SUBAGENT_BG_CHILD_PREFIX: &str = "sub-bg-";
 

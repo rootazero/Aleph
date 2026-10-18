@@ -1,6 +1,6 @@
 //! Live, hot-swappable local/cloud route state.
 //!
-//! The `[route]` mode ([`crate::config::types::RouteMode`]) is read once at boot
+//! The `[route]` mode (`crate::config::types::RouteMode`) is read once at boot
 //! into the [`FailoverProvider`](crate::providers::failover::FailoverProvider).
 //! A config edit alone never reaches the already-built chain — nothing rebuilds
 //! it on `config.reload`. This handle closes that gap: a single process-global,

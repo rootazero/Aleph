@@ -79,7 +79,7 @@ const ARIA_ROLES: &[(&str, Role)] = &[
 /// token is not a reason to throw away what the tag already said.
 ///
 /// The two normalisations — trim and ASCII-lowercase — are here rather than in
-/// [`ARIA_ROLES`], so the table holds one spelling of each token and the
+/// `ARIA_ROLES`, so the table holds one spelling of each token and the
 /// function owns the folding.
 #[must_use]
 pub fn role_from_aria(token: &str) -> Option<Role> {

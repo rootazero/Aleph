@@ -86,7 +86,7 @@ pub struct CcPluginJson {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum CcPluginAuthor {
-    /// Simple string format: "Name <email> (url)"
+    /// Simple string format: "Name `&lt;email&gt;` (url)"
     String(String),
     /// Object format
     Object {

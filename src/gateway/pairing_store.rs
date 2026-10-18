@@ -178,7 +178,7 @@ impl SqlitePairingStore {
     /// Override the pairing-code expiry window (seconds). `0` disables expiry.
     ///
     /// Test-only knob today: production always uses
-    /// [`DEFAULT_PAIRING_EXPIRY_SECS`]. This used to point at a
+    /// `DEFAULT_PAIRING_EXPIRY_SECS`. This used to point at a
     /// `RoutingConfig::pairing_code_expiry_secs` setting that nothing read and
     /// that has since been removed — if an operator-facing TTL is wanted, it
     /// needs a real config field wired to this method, not a doc comment.
@@ -247,7 +247,7 @@ impl SqlitePairingStore {
         Ok(())
     }
 
-    /// Re-runs [`Self::migrate_approved_senders_user_id`] against the
+    /// Re-runs `Self::migrate_approved_senders_user_id` against the
     /// already-open connection. Idempotent. Construction (`new`/`in_memory`)
     /// already runs the migration once, so production code never needs to
     /// call this explicitly — it exists so tests can exercise the adoption

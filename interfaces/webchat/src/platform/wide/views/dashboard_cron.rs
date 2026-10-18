@@ -12,7 +12,7 @@ use std::collections::HashMap;
 const SPARK_CELLS: usize = 12;
 const MAX_VISIBLE_JOBS: usize = 8;
 
-/// Render up to [`MAX_VISIBLE_JOBS`] cron jobs, each followed by a 12-cell
+/// Render up to `MAX_VISIBLE_JOBS` cron jobs, each followed by a 12-cell
 /// success/fail history sparkline (newest on the right).
 #[component]
 #[must_use]

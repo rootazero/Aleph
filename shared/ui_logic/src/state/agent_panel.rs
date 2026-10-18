@@ -45,7 +45,7 @@ pub fn attention_rank(state: RuntimeAgentState) -> u8 {
 ///
 /// `Unknown` gets its own glyph and never `Idle`'s: "I cannot tell what this
 /// agent is doing" must not render as "nothing is happening here" (判据 §8).
-/// [`super::agent_panel_parity::glyphs_are_distinct_and_unknown_is_not_idle`]
+/// `super::agent_panel_parity::glyphs_are_distinct_and_unknown_is_not_idle`
 /// pins that, plus distinctness across all four.
 #[must_use]
 pub const fn state_glyph(state: RuntimeAgentState) -> &'static str {

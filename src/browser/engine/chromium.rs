@@ -13,8 +13,8 @@
 //! The second consequence is ownership: under `attach --cdp`, `playwright-cli
 //! close` disconnects and leaves the browser running (measured: 9 Chrome
 //! processes before and after, endpoint still serving, page still on its URL).
-//! So the browser's life is ours to end, which is what [`ChromiumChild`] and
-//! [`reap_orphans`] are for.
+//! So the browser's life is ours to end, which is what `ChromiumChild` and
+//! `reap_orphans` are for.
 //!
 //! Moved here from `chromium_launch.rs` when the second engine arrived. What
 //! stayed behind in `super::process` is what both engines need; what is here
@@ -425,7 +425,7 @@ impl ChromiumChild {
 /// reissued.
 ///
 /// **Not a second way to obtain an endpoint.** Every launch still goes through
-/// [`ChromiumChild::spawn`] and the `DevToolsActivePort` file; this type
+/// `ChromiumChild::spawn` and the `DevToolsActivePort` file; this type
 /// re-packages the result and nothing else. (Compare `ChromiumChild::from_parts`'
 /// doc, which refuses a second endpoint source.)
 ///

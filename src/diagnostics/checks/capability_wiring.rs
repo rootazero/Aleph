@@ -99,7 +99,7 @@
 //! it as unreachable.
 //!
 //! The tag stays regardless of this severity change — see
-//! [`TAG_WIRING_UNKNOWN`]'s doc — because `Warning` is shared with
+//! `TAG_WIRING_UNKNOWN`'s doc — because `Warning` is shared with
 //! `core/config-parse`, `core/duplicate-instance`, and this check's own
 //! `IndistinguishableDefault`/`ConsumerDecides` booted-branch holes; severity
 //! alone still cannot tell a consumer "the check could not run at all" from

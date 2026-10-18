@@ -16,14 +16,14 @@
 //! Nothing was ever mis-fired, so no test and no bug report could have found
 //! it; it simply read as a dead key.
 //!
-//! [`step_highlight`] is therefore the only thing in this crate that moves a
+//! `step_highlight` is therefore the only thing in this crate that moves a
 //! highlight, and it clamps **on write**. A caller may still clamp on read (a
 //! list can shrink between the keypress and the render), but because both
 //! clamps are this one function they cannot disagree.
 //!
 //! # The scroll well
 //!
-//! [`publish_more_below`] answers "does this list continue below the fold",
+//! `publish_more_below` answers "does this list continue below the fold",
 //! which is the only thing the bottom fade is allowed to depend on. The fade is
 //! conditional rather than permanent because an affordance that says "there is
 //! more below" while sitting at the end of a list is worse than none: a reader

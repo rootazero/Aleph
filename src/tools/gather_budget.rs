@@ -5,7 +5,7 @@
 //! ## Why this exists
 //!
 //! [`attempt_summary`](crate::tools::attempt_summary) catches repeated
-//! *failures* ("3 search calls 429'd → climb the ladder"). [`no_progress`]
+//! *failures* ("3 search calls 429'd → climb the ladder"). `no_progress`
 //! catches byte-identical *idempotent* repeats. Neither sees the failure
 //! mode that actually burns runs: a model that makes 150+ **successful**
 //! `search`/`web_fetch` calls with slightly varying queries and a sentence
@@ -20,7 +20,7 @@
 //! out over a long run. This signal is *dynamic*: it surfaces the live call
 //! count ("you have made 47 `search/web_fetch` calls this run"), which is far
 //! harder to ignore than always-present prose — the same rationale that makes
-//! [`attempt_summary`] a per-turn message rather than a [`PromptLayer`].
+//! `attempt_summary` a per-turn message rather than a `PromptLayer`.
 //!
 //! Mirrors the industry pattern: opensquilla's `max_web_search_calls_per_turn`
 //! budget + its pre-cap "provide the best concise final answer from the work
@@ -73,7 +73,7 @@ const GATHER_TOOLS: &[&str] = &["search", "web_fetch"];
 pub const GATHER_BUDGET_THRESHOLD: usize = 12;
 
 /// Count gather-tool calls in `events` that actually **returned data** — a
-/// `ToolCallRequested` naming a [`GATHER_TOOLS`] entry which was later resolved
+/// `ToolCallRequested` naming a `GATHER_TOOLS` entry which was later resolved
 /// by a `ToolResult` rather than a `ToolError`.
 ///
 /// Counting bare requests instead was a lie with teeth. The notice this feeds

@@ -71,7 +71,7 @@ use alephcore::Config;
 /// set, `select_model(provider=…)` validates nothing and silently substitutes
 /// the default chain, which is the defect its own doc records.
 ///
-/// Safe to call after a partial install: [`CapabilitySlot::decline`] is
+/// Safe to call after a partial install: `CapabilitySlot::decline` is
 /// first-writer-wins, so it is a no-op on anything already stamped `Installed`.
 pub(in crate::commands::start) fn decline_orchestrator_slots(because: &'static str) {
     alephcore::gateway::i18n::decline_locale(because);

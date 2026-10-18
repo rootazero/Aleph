@@ -7,7 +7,7 @@
 //! whole file — turning "offloaded but un-retrievable" into "offloaded and
 //! precisely queryable".
 //!
-//! See [`content_index`] for the FTS5 implementation.
+//! See `content_index` for the FTS5 implementation.
 
 mod content_index;
 

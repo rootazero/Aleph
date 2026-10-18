@@ -4,7 +4,7 @@
 //! UI copy, retry policy, and the lite-shell handoff. Pure + host-testable —
 //! no wasm, no Leptos. Browsers report almost every WebSocket failure as
 //! close code 1006, so classification keys off *which stage* failed plus the
-//! `needs_token` verdict and known close reasons ([`AUTH_KICK_REASONS`]),
+//! `needs_token` verdict and known close reasons (`AUTH_KICK_REASONS`),
 //! never on the close code alone.
 
 use super::connector::ConnectionError;
@@ -29,7 +29,7 @@ pub enum ConnectionFailure {
     /// must never be collapsed into [`Self::Unreachable`].
     Rejected { detail: String },
     /// `connect` RPC reported `needs_token`, or the server closed us with an
-    /// auth kick ([`AUTH_KICK_REASONS`]) → re-authorize at the login wall.
+    /// auth kick (`AUTH_KICK_REASONS`) → re-authorize at the login wall.
     AuthRequired,
     /// A previously-healthy connection dropped → transient, auto-reconnect.
     Dropped { detail: String },

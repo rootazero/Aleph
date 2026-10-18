@@ -295,7 +295,7 @@ impl AgentRegistry {
     ///   1. Exact match via [`Self::lookup_with_overlay`] — project overlays
     ///      and custom file-defined ids always win and behave identically to
     ///      before; case-sensitive, no aliasing.
-    ///   2. On miss, canonicalize the selector ([`normalize_agent_alias`]:
+    ///   2. On miss, canonicalize the selector (`normalize_agent_alias`:
     ///      trim + lowercase + alias table) and retry the lookup once.
     ///
     /// On a full registry + alias miss, a third pass consults the

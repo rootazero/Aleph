@@ -51,7 +51,7 @@ pub enum AuditKind {
     /// was received and forwarded to the inbound router.
     UpdateReceived { update_id: i64, kind_label: String },
     /// An outbound send was attempted. `outcome` is "succeeded" or
-    /// "failed: <reason>".
+    /// "failed: `&lt;reason&gt;`".
     SendAttempted {
         message_id_kind: String,
         outcome: String,

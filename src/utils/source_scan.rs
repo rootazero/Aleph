@@ -42,8 +42,8 @@
 /// `trim_start().starts_with("#[cfg(test)]")` scan over `lines[i]` — not by
 /// lexing. So a line whose TEXT begins with `#[cfg(test)]` but which is
 /// really string-literal or comment-block payload is read as a live
-/// attribute, and [`end_of_item`] is then started on the following line
-/// with a fresh [`LexState`] that does not inherit the enclosing
+/// attribute, and `end_of_item` is then started on the following line
+/// with a fresh `LexState` that does not inherit the enclosing
 /// string/comment state — which can discard the whole tail of a file. This
 /// is the under-see direction (a guard silently approves what it cannot
 /// see), and it predates this module: it is not something this round
@@ -810,7 +810,7 @@ enum Payloads {
 /// on such a line, because it treats both the same way on purpose.
 ///
 /// That makes `in_str` a correctness input here, not a detail of brace
-/// counting — which is why [`LexState`] lexes raw strings properly (see
+/// counting — which is why `LexState` lexes raw strings properly (see
 /// its doc). A spurious `in_str == true` at line start does not balance
 /// out the way a brace desync does: it KEEPS every line until the state
 /// resyncs, feeding comment text to ~36 census guards as if it were code.
@@ -895,7 +895,7 @@ pub fn production_code_text(path: &std::path::Path, src: &str) -> String {
 /// `src` reduced to the code a compiler would see: comment text removed,
 /// and the *payload* of every string, byte-string, C-string, raw-string and
 /// char literal removed too, each literal leaving a delimiter sentinel in
-/// place (see [`code_only`]). Line structure is preserved.
+/// place (see `code_only`). Line structure is preserved.
 ///
 /// # Why a census wants this and not just [`strip_comment_lines`]
 ///
@@ -913,7 +913,7 @@ pub fn production_code_text(path: &std::path::Path, src: &str) -> String {
 /// `src/group_chat/channel.rs`), after which the "inside a literal" region
 /// runs to the end of the scanned text and swallows every subsequent line
 /// into blanks. That is the silent-approval direction: a guard reports a
-/// clean scan of text it never looked at. [`LexState`] lexes raw strings
+/// clean scan of text it never looked at. `LexState` lexes raw strings
 /// properly, which is why this composition is safe where that one is not.
 #[must_use]
 pub fn code_text(src: &str) -> String {

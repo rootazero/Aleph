@@ -289,7 +289,7 @@ impl ConfigApprovalPolicy {
     ///   action that creates the file. The curated map is the documented intent
     ///   and keeps read-only browser motion usable while still routing
     ///   state-changing and egress verbs through approval.
-    /// - **File present but unreadable or unparseable** → [`Self::safe_default`],
+    /// - **File present but unreadable or unparseable** → `Self::safe_default`,
     ///   every action escalates to `Ask`. A corrupt or unreadable policy must
     ///   never silently resolve to something *weaker* than what the operator
     ///   wrote, and unlike absence this state is visible and fixable.

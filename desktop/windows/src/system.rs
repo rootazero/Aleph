@@ -203,7 +203,7 @@ impl SystemCapability for WindowsSystem {
     /// `name` is now the executable's `FileDescription` ("Google Chrome") with
     /// the file stem as fallback, and `bundle_id` is the full executable path —
     /// Windows' closest analogue to a bundle id, and what makes `app:
-    /// "chrome.exe"` resolvable. See [`aleph_desktop::win_window`].
+    /// "chrome.exe"` resolvable. See `aleph_desktop::win_window`.
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>> {
         #[cfg(windows)]
         {

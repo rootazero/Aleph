@@ -26,7 +26,7 @@ pub struct ReloadReport {
 
 /// Reload the flow catalog (presets + `flow_dir/*.toml`) into the live
 /// Orchestrator. Safe to call at any time; the orchestrator uses an
-/// `ArcSwap<FlowSet>` so in-flight dispatches keep their Arc<FlowSpec>
+/// `ArcSwap<FlowSet>` so in-flight dispatches keep their Arc`&lt;FlowSpec&gt;`
 /// snapshot.
 pub async fn handle_flow_reload(
     orchestrator: Arc<Orchestrator>,

@@ -11,7 +11,7 @@
 //! Two differences from `route` are load-bearing:
 //!
 //! 1. **The vault travels with the handle.**
-//!    [`crate::config::types::SearchBackendConfig::api_key`] is
+//!    `crate::config::types::SearchBackendConfig::api_key` is
 //!    `skip_serializing` — a patched `Config` never carries search keys, so
 //!    rebuilding a registry from `cfg` alone would silently drop every
 //!    credential (the factory skips key-less backends, and the swap would
@@ -19,7 +19,7 @@
 //!    response). The handle keeps the [`SharedTokenManager`] `Arc` boot was
 //!    handed and re-resolves `search:<name>` keys at apply time, mirroring
 //!    the boot hydration in `commands/start/mod.rs` ("Search backends:
-//!    vault key \"search:<name>\"").
+//!    vault key \"search:`&lt;name&gt;`\"").
 //! 2. **Rebuild failure keeps the old registry.** [`SearchHandle::apply_config`]
 //!    returns `false` when the new registry could not be computed (a vault
 //!    read error), leaving the previous generation serving and letting

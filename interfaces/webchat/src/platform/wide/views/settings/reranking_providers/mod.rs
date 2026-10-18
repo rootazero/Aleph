@@ -2,8 +2,8 @@
 //!
 //! ## Layout
 //! - this module — top-level `RerankingProvidersView` + shared `RERANK_PRESETS`
-//! - [`detail_panel`] — `ProviderDetailPanel` for preset selection
-//! - [`add_custom`] — `AddCustomProviderPanel` for vLLM-compatible custom endpoints
+//! - `detail_panel` — `ProviderDetailPanel` for preset selection
+//! - `add_custom` — `AddCustomProviderPanel` for vLLM-compatible custom endpoints
 
 mod add_custom;
 mod detail_panel;

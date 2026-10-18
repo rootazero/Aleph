@@ -44,7 +44,7 @@ struct Tracked {
 }
 
 /// What Aleph last knew about one tab's IDENTITY, as opposed to its
-/// activity ([`Tracked`]) — the two answer different questions and a tab can
+/// activity (`Tracked`) — the two answer different questions and a tab can
 /// be idle-but-present or fresh-but-gone.
 ///
 /// Both fields are `Option` because the discovery points know different

@@ -360,7 +360,7 @@ impl SlidingWindow {
 /// Concurrent sliding-window rate limiter.
 ///
 /// Thread-safe via [`DashMap`]; each unique `(identity, scope)` pair gets
-/// its own [`SlidingWindow`].
+/// its own `SlidingWindow`.
 pub struct RateLimiter {
     config: RateLimitConfig,
     windows: DashMap<RateLimitKey, SlidingWindow>,

@@ -88,7 +88,7 @@ impl DesktopTool {
     ///
     /// Left at its default, an untargeted click on a platform that could have
     /// delivered it in the background is refused instead of moving the user's
-    /// cursor — see [`native`] for why that refusal is fail-closed rather than a
+    /// cursor — see `native` for why that refusal is fail-closed rather than a
     /// silent fallback.
     #[must_use]
     pub fn with_allow_global_pointer(mut self, allow: bool) -> Self {

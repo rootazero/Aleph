@@ -48,7 +48,7 @@
 //!   ⚠️ The fallback arm is therefore live exactly when the cross-check below
 //!   fails twice, and **what that costs is now the whole text of the page, not
 //!   a few boxless elements.** With every `computed` at `None`,
-//!   [`cascade_effective_styles`] finds no parent flags to hand down; only
+//!   `cascade_effective_styles` finds no parent flags to hand down; only
 //!   elements are asked for a box, so every TEXT node falls to
 //!   `rect.is_some()` = false and `render_text` drops each one
 //!   (`render.rs:114`), alongside the boxless-but-visible elements. The honest
@@ -56,7 +56,7 @@
 //!   the good path and the degraded path differ by every string on the page
 //!   (判据 §17 — a wrong label costs more than a missing one, and
 //!   "conservative" was the wrong label for this). Reachable: one open shadow
-//!   root makes the element counts disagree (see [`walk`]'s shadow branch),
+//!   root makes the element counts disagree (see `walk`'s shadow branch),
 //!   which is a disagreement no retry can fix. obscura returns none today, so
 //!   this is a live path on a future build rather than on this one — which is
 //!   why it is written down. It is still the direction to fail in, and it is
@@ -178,7 +178,7 @@ pub const DEFAULT_BOX_CONCURRENCY: usize = 16;
 /// true of every one of them.
 ///
 /// **`cursor` is not an answer about the cascade on this engine, and the doc on
-/// [`cascade_effective_styles`] says what it is instead** — read that before
+/// `cascade_effective_styles` says what it is instead** — read that before
 /// spending `cursor_pointer` for anything beyond the one OR arm that reads it.
 ///
 /// `pub` so a prober runs the same string the fetcher runs; two copies would

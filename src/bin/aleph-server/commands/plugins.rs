@@ -223,7 +223,7 @@ pub async fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error
 /// `alephcore::extension::plugin_state`.
 ///
 /// No-lock path (Spec C): this only touches the plugin config document, and
-/// [`PluginsConfig::save`] is an atomic temp+rename. A running daemon re-reads
+/// `PluginsConfig::save` is an atomic temp+rename. A running daemon re-reads
 /// the file on its next `load_all`.
 ///
 /// "Is this an installed plugin?" is answered by the same read-only walk a
@@ -317,7 +317,7 @@ pub async fn handle_plugin_install(
     Ok(())
 }
 
-/// Build a [`MarketplaceManager`] from the marketplace entries in `config.toml`.
+/// Build a `MarketplaceManager` from the marketplace entries in `config.toml`.
 fn build_marketplace_manager(
 ) -> Result<alephcore::extension::marketplace::MarketplaceManager, Box<dyn std::error::Error>> {
     use alephcore::extension::marketplace::MarketplaceManager;

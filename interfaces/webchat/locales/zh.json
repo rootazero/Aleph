@@ -2555,7 +2555,10 @@
     "title": "外观",
     "subtitle": "调整主题、强调色、字号、圆角与紧凑度。所有设置保存在本机浏览器，立即生效。",
     "reset": "恢复默认",
-    "popover_title": "主题"
+    "popover_title": "主题",
+    "theme_picker_aria": "面板主题",
+    "theme_hint": "/theme 系统 | 明亮 | 暗黑",
+    "close_aria": "关闭"
   },
   "command_palette": {
     "group_diagnostics": "诊断",

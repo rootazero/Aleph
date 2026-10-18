@@ -81,7 +81,7 @@ impl Default for SearchParams {
 /// Note search belongs to `graph.search`; keep it there.
 ///
 /// The response carries `total`, the row count under the *same* `(agent_id,
-/// query)` filter as `memories` (via [`MemoryBackend::count_raw_memories`]),
+/// query)` filter as `memories` (via `MemoryBackend::count_raw_memories`),
 /// not the whole-store total. The panel's pager sizes itself from this field;
 /// a store-wide total would leave "next" enabled past the last match once a
 /// query narrows the list — the B4 phantom-page bug, resurrected for the
@@ -628,7 +628,7 @@ pub async fn handle_list_corrections(
 /// therefore empty on every install that had anything to show.
 ///
 /// `agent_id` on the wire stays the BASE id (that is what the agent picker
-/// holds), and the resolution is [`MemoryContextProvider::resolve_storage_id`]
+/// holds), and the resolution is `MemoryContextProvider::resolve_storage_id`
 /// — the same call `get_or_load_curated_store` makes, so the ledger the Panel
 /// shows belongs to the store whose entries are above it. Resolving here rather
 /// than in the client keeps composition on the server, where it cannot be

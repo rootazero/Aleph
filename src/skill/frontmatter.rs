@@ -6,7 +6,7 @@
 //! |---|---|---|
 //! | [`crate::skill::manifest`] | `~/.aleph/skills`, `~/.agents/skills`, `~/.claude/skills`, project dirs, **and every active plugin's `<root>/skills`** | `SkillManifest` |
 //! | [`crate::extension::manifest::parsers`] | `{plugin_dir}/skills/*/SKILL.md`, `{plugin_dir}/commands/*.md` | `SkillRegistration` |
-//! | [`crate::tools::markdown_skill::parser`] | whatever `skills.install` names | `AlephSkillSpec` |
+//! | `crate::tools::markdown_skill::parser` | whatever `skills.install` names | `AlephSkillSpec` |
 //!
 //! Their *destinations* are three different concepts and are deliberately NOT
 //! merged (see the module docs on each). What they were doing three times, and
@@ -21,7 +21,7 @@
 //!   on its line. That one is correct, so it is the one that survives here.
 //!
 //! [`split`] is that implementation, extracted so there is one answer. The
-//! YAML call after it is shared the same way: [`parse_frontmatter_yaml`] is
+//! YAML call after it is shared the same way: `parse_frontmatter_yaml` is
 //! what `skill::manifest` and `extension::manifest::parsers` both parse the
 //! block with, so neither drops a file over YAML syntax the other retries.
 //! (Their field types still differ: a typed field one of them has can still
@@ -29,7 +29,7 @@
 //!
 //! # `allowed-tools:`
 //!
-//! [`read_allowed_tools`] is the single reader of the [`ALLOWED_TOOLS_KEY`]
+//! `read_allowed_tools` is the single reader of the [`ALLOWED_TOOLS_KEY`]
 //! frontmatter block's shapes, and [`normalize_allowed_tools`] is the skill
 //! policy on top of it. They live here rather than in `manifest.rs` so the
 //! key's spelling and the lenient shape-handling that spelling requires cannot
@@ -221,7 +221,7 @@ fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
 ///
 /// The *shape* is lenient, and so, for a skill, are the *names*: registration,
 /// where a real tool registry can say which names exist, maps each entry
-/// through [`pregrant_tool_name`] and drops, with a warn, what grants nothing
+/// through `pregrant_tool_name` and drops, with a warn, what grants nothing
 /// (`tool_metadata::registry::registration`). The skill keeps its slash
 /// command; only a plugin command's list is refused over an unknown name.
 ///
@@ -241,7 +241,7 @@ fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
 ///
 /// A **sequence** that comes out empty — `allowed-tools: []` — is a
 /// declaration: `Some(vec![])`. On a plugin command
-/// [`crate::gateway::execution_engine::slash_skill_scope`] enforces it as
+/// `crate::gateway::execution_engine::slash_skill_scope` enforces it as
 /// deny-all: the slash command can call no tool except what the run attaches
 /// itself (`subagent`, and the disclosure / deferral meta-tools
 /// `get_tool_schema` / `tool_search` when those are on).
@@ -267,7 +267,7 @@ fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
 ///
 /// # This is the *skill* policy
 ///
-/// The shapes are read by [`read_allowed_tools`]; this function is what a
+/// The shapes are read by `read_allowed_tools`; this function is what a
 /// skill makes of the two it cannot use. A plugin command's `allowed-tools`
 /// and a plugin agent's `tools` read the same shapes and answer those two
 /// with deny-all instead (`extension::manifest::parsers::restrict_tool_list`):

@@ -17,7 +17,7 @@
 //!
 //! Autonomous-dispatch callers may opt into wrapping each member task in a
 //! fresh detached-HEAD git worktree so concurrent workers cannot corrupt each
-//! other's index. The [`WorktreeHandle`](crate::sandbox::WorktreeHandle) is
+//! other's index. The `WorktreeHandle` is
 //! held in [`execute_member_task`]'s scope and torn down via RAII — explicit
 //! `cleanup()` on the happy path, `Drop` safety-net on panic / timeout /
 //! abort. Isolation is best-effort: outside a git repository we silently

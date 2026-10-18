@@ -232,7 +232,7 @@ impl TurnEnvelope {
     }
 }
 
-/// Sub-agent binding carried by [`TurnEnvelope::parent`]. Newtype so a future
+/// Sub-agent binding carried by `TurnEnvelope::parent`. Newtype so a future
 /// field added here (parent_cwd, parent_model) can land without breaking the
 /// public struct shape — a tuple of `String`s is not forward-compatible.
 #[derive(Debug, Clone, PartialEq, Eq)]

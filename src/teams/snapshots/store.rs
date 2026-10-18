@@ -8,7 +8,7 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 
 /// SQLite-backed snapshot persistence. Shares the connection with
-/// [`crate::agents::swarm::tasks::SqliteCoordTaskStore`]; both operate on
+/// `crate::agents::swarm::tasks::SqliteCoordTaskStore`; both operate on
 /// `coord_team_snapshots` rows in the same database file.
 pub struct SqliteSnapshotStore {
     conn: Arc<Mutex<Connection>>,

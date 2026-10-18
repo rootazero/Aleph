@@ -31,7 +31,7 @@
 //! capacity+TTL hygiene): a TTL sweep on EVERY `set` (an abandoned compact
 //! session set used to linger forever under the old size threshold, because
 //! live sessions re-write their own entry on every dispatch and so never
-//! crossed it), and a hard [`MAX_ENTRIES`] ceiling that evicts the oldest
+//! crossed it), and a hard `MAX_ENTRIES` ceiling that evicts the oldest
 //! entries. Live sessions re-write their entry on every inbound message, so
 //! reaping a stale entry can never break a live voice turn — the next
 //! dispatch simply re-inserts it before the harness bridge reads.

@@ -36,7 +36,7 @@ pub struct ComputerUseLock {
 impl ComputerUseLock {
     /// Create a new lock handle for `session_id`.
     ///
-    /// The lock is **not** acquired yet — call [`acquire`] to take it.
+    /// The lock is **not** acquired yet — call `acquire` to take it.
     pub fn new(session_id: impl Into<String>) -> Self {
         let lock_path = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))

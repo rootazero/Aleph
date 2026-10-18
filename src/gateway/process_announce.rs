@@ -56,7 +56,7 @@ const FALLBACK: &str = "output remains available via bash's poll action";
 /// background job into the session that started it.
 ///
 /// Registration is **awaited**, not spawned — see
-/// [`announce_delivery::subscribe`]. `process_journal::init_and_announce` runs
+/// `announce_delivery::subscribe`. `process_journal::init_and_announce` runs
 /// its boot handback right after this, and a subscriber that is merely
 /// *scheduled* is a subscriber that is not listening yet (§9).
 pub async fn spawn_process_announce(

@@ -118,9 +118,9 @@ const FALLBACK_MIRRORS: &[Mirror] = &[
 /// mirrors when the configured provider chain is exhausted.
 ///
 /// Holds:
-/// - A shared `reqwest::Client` (30s connect timeout via [`build_client`]).
+/// - A shared `reqwest::Client` (30s connect timeout via `build_client`).
 /// - A per-mirror cool-down map so a 0-result / error mirror is silenced
-///   for [`MIRROR_COOLDOWN`] instead of being hammered on every call.
+///   for `MIRROR_COOLDOWN` instead of being hammered on every call.
 ///
 /// Cool-downs are **per-process**; restarting `aleph-server` clears them.
 /// That is the intentional behaviour: a stale cool-down should not

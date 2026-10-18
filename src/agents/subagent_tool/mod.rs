@@ -12,10 +12,10 @@
 //! `run_in_background`.
 //!
 //! ## Layout
-//! - [`types`] — `SubagentAction` / `RunArgs` / `BatchTask`
-//! - [`parse`] — JSON → `SubagentAction`
-//! - [`spawn`] — `cancel_for_child*` + `spawn_background` + `build_runtime`
-//! - [`loop_tool`] — `impl LoopTool for SubagentTool` (execute pipeline)
+//! - `types` — `SubagentAction` / `RunArgs` / `BatchTask`
+//! - `parse` — JSON → `SubagentAction`
+//! - `spawn` — `cancel_for_child*` + `spawn_background` + `build_runtime`
+//! - `loop_tool` — `impl LoopTool for SubagentTool` (execute pipeline)
 //! - this module — `SubagentTool` struct + `new` + every `with_*` builder
 
 mod loop_tool;

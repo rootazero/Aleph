@@ -146,7 +146,7 @@ impl PromptBuilder {
     /// per-child facts after the breakpoint, where they cost only themselves.
     ///
     /// Concatenating the two parts reproduces
-    /// [`Self::build_system_prompt`] byte-for-byte under any budget that does
+    /// `Self::build_system_prompt` byte-for-byte under any budget that does
     /// not bite, because `stable_layers_come_before_dynamic` guarantees the
     /// zones do not interleave. The budgets differ only when one does bite:
     /// here the stable prefix is a protected floor (trimming it would defeat

@@ -1,4 +1,4 @@
-//! Concrete [`ToolHealthProbe`] implementations.
+//! Concrete `ToolHealthProbe` implementations.
 //!
 //! Probes live here so they remain decoupled from `tools::handlers` (which
 //! owns the executor-side `ToolHandler`) and from

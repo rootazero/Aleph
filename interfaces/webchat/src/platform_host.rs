@@ -7,7 +7,7 @@
 //! (see the spec, section 3.2). Duplicating that fallback here would be a
 //! second implementation of the same decision.
 //!
-//! Sibling of [`crate::platform::wide::views::voice::audio::is_native_shell`],
+//! Sibling of `crate::platform::wide::views::voice::audio::is_native_shell`,
 //! which reads `data-shell` the same way and for the same reason: these facts
 //! are declared by the host, not derived in WASM, where `cfg(target_os)` is
 //! always `unknown`.

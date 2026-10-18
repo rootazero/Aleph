@@ -18,7 +18,7 @@ const PICK_RINGS: u32 = 4;
 /// Indices are into `pos`, which the caller keeps aligned with its node list.
 ///
 /// Overlapping candidates are resolved by RING first, then by depth: the pick
-/// radius is divided into [`PICK_RINGS`] concentric bands, and among candidates
+/// radius is divided into `PICK_RINGS` concentric bands, and among candidates
 /// in the same band the frontmost (smallest NDC z) wins.
 ///
 /// The banding is what makes the depth term real. Comparing raw `(dist², z)`

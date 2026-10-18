@@ -13,7 +13,7 @@
 //! [`crate::gateway::pty::PtyManager`] is the same shape for terminal
 //! sessions, and its shells are the same kind of orphan a `SIGKILL`ed daemon
 //! leaves behind, so its rows live here too — under their own key
-//! ([`JobRecord::pty_session_id`]) and their own read face ([`lookup_pty`]),
+//! ([`JobRecord::pty_session_id`]) and their own read face (`lookup_pty`),
 //! never on a bash face.
 //!
 //! This module is the sidecar that closes that gap. Its shape is deliberately
@@ -49,7 +49,7 @@
 //! and so is a PTY session's shell. The bash child is spawned with
 //! `kill_on_drop(true)`, so an orderly teardown reaps it — but a `SIGKILL`ed
 //! daemon never drops anything, and the child can outlive it. So
-//! [`record_child`] / [`record_pty_child`] stamp the row with the child's pid
+//! `record_child` / `record_pty_child` stamp the row with the child's pid
 //! and creation time once the driver has the child (the third write), and at
 //! boot [`probe_liveness`] asks the OS whether that exact process — same pid,
 //! same creation time — still exists. The answer lands on the
@@ -64,9 +64,9 @@
 //!
 //! **2. Newlines are preserved.** `background_persistence::mask_line` collapses
 //! newlines because it stores single-line progress notes. A stdout trail must
-//! not be flattened, so [`append_block`] masks **per line** and writes one
+//! not be flattened, so `append_block` masks **per line** and writes one
 //! trail line per output line (keeping the 4000-char per-line cap), and
-//! [`read_trail`] rebuilds the line structure on the way back out.
+//! `read_trail` rebuilds the line structure on the way back out.
 //!
 //! ## What is (and is not) in the trail
 //!
@@ -78,8 +78,8 @@
 //! * `partial.txt` is a **rewritten-in-place** capture of the job's live tail,
 //!   for the population `output.txt` structurally cannot serve — a job that was
 //!   killed, or one whose daemon died under it. It is written by
-//!   [`record_partial`], and only ever with text that has cleared
-//!   [`crate::builtin_tools::partial_output::gate`], i.e. the exact floor
+//!   `record_partial`, and only ever with text that has cleared
+//!   `crate::builtin_tools::partial_output::gate`, i.e. the exact floor
 //!   `bash`'s own `poll` enforces. That is what makes persisting a PRE-scrub
 //!   ring safe: **nothing reaches this directory that a live `poll` would have
 //!   refused**, so "restart the daemon" is not a way around the poll refusal.
@@ -88,10 +88,10 @@
 //! append-only file fed by two producers double-counts — the finished-path
 //! bytes would land on top of the live windows that already carried them. A
 //! rewritten file has no such failure mode, and costs nothing the reader would
-//! have seen anyway: [`read_trail`] only ever returns the last
-//! [`OUTPUT_TAIL_BYTES`], which is exactly what the live ring holds.
+//! have seen anyway: `read_trail` only ever returns the last
+//! `OUTPUT_TAIL_BYTES`, which is exactly what the live ring holds.
 //!
-//! [`read_trail`] prefers `output.txt` and falls back to `partial.txt`, marking
+//! `read_trail` prefers `output.txt` and falls back to `partial.txt`, marking
 //! the fallback so the renderer can say "this is a mid-run snapshot, not a
 //! result". A row with neither still says so explicitly rather than showing an
 //! empty string.
@@ -103,7 +103,7 @@
 //! caller. The fix is a monotonic high-water allocator, not a uuid (the model
 //! re-types this id in every poll) and not a display-id/durable-key pair (two
 //! ids for one thing hides the collision instead of solving it):
-//! [`reserve_id`] persists a whole block of ids **before** the registry hands
+//! `reserve_id` persists a whole block of ids **before** the registry hands
 //! one out, and [`init_and_reconcile`] seeds the registry's allocator above
 //! every id the journal has ever reserved. Allocating N and *then* persisting
 //! the mark would reuse N after a crash in between — the same bug one layer
@@ -381,7 +381,7 @@ pub struct JobRecord {
     /// Owning session label — the exact string `bash_exec::session_label()`
     /// renders, so an id stays addressable by the same caller after a restart.
     /// On a Pty row, the `created_by` user the session was spawned for.
-    /// Never empty: [`record_spawn`] / [`record_pty_spawn`] refuse to journal
+    /// Never empty: `record_spawn` / `record_pty_spawn` refuse to journal
     /// an unowned job, because a persisted row with no owner is readable by
     /// every later caller (the fail-open leak
     /// `background_persistence::addressable` was already fixed for).
@@ -395,7 +395,7 @@ pub struct JobRecord {
     /// Unix ms at which the row reached `Settled` / `Interrupted`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_ms: Option<u64>,
-    /// [`Verdict::label`] for a `Settled` row.
+    /// `Verdict::label` for a `Settled` row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     /// Exit code, for a job that completed naturally.
@@ -420,7 +420,7 @@ pub struct JobRecord {
     /// 0/30/120s while the session is busy. A daemon that dies inside those two
     /// and a half minutes leaves a `Settled` row nobody was told about, and the
     /// promise the spawn receipt makes is withdrawn in silence with the result
-    /// sitting on disk. [`take_undelivered_settled`] is the reader.
+    /// sitting on disk. `take_undelivered_settled` is the reader.
     ///
     /// A **count of attempts, not a receipt** — the same split the sub-agent
     /// sidecar's `announce_attempts` makes, for the same reason: only the
@@ -438,7 +438,7 @@ pub struct JobRecord {
     /// The boot that actually delivered this completion, as that boot's
     /// wall-clock ms. `None` means nobody has been told yet.
     ///
-    /// Written only by [`record_announced`], and only after the broadcast it
+    /// Written only by `record_announced`, and only after the broadcast it
     /// describes has returned — never in advance of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub announced_boot: Option<u64>,
@@ -450,7 +450,7 @@ pub struct JobRecord {
     /// Bash row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pty_session_id: Option<String>,
-    /// OS pid of the child, written by [`record_child`] once the driver has
+    /// OS pid of the child, written by `record_child` once the driver has
     /// it. `None` until then — and forever on a row whose daemon died in the
     /// gap between the intent write and the child's arrival, which is why the
     /// boot probe can only run on rows that carry one.
@@ -517,7 +517,7 @@ pub struct RecoveredJob {
 /// the words.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TombstoneReport {
-    /// The [`settled_label`] word for the row: `exited_during_restart` /
+    /// The `settled_label` word for the row: `exited_during_restart` /
     /// `still_running_unattached` / `interrupted_by_restart_liveness_unknown`.
     pub kind: &'static str,
     /// The sentence about the process: who started it, what the OS said, and
@@ -559,7 +559,7 @@ impl TombstoneReport {
 ///
 /// No arm spells "fail": a restart is a fact about the previous server
 /// process, never about the command (the module doc's first paragraph). The
-/// third arm says exactly which of the two things [`tombstone_for`] folds
+/// third arm says exactly which of the two things `tombstone_for` folds
 /// into `None` happened — no pid was recorded (nothing was asked), or the
 /// probe ran and could not answer — and neither is spelled as an exit.
 #[must_use]
@@ -677,7 +677,7 @@ pub fn tombstone_report(job: &RecoveredJob) -> Option<TombstoneReport> {
 /// half has no ordering dependency on any event subscriber. It does claim the
 /// second recovered population on the way past: a row that reached `Settled`
 /// with no `announced_boot` is a completion whose notice died with the
-/// previous daemon, and [`take_undelivered_settled`] hands those to
+/// previous daemon, and `take_undelivered_settled` hands those to
 /// [`init_and_announce`], which is the half that does have an ordering
 /// dependency.
 ///
@@ -730,7 +730,7 @@ const CREATION_TIME_TOLERANCE_MS: u64 = 2_000;
 /// process as `Run`, so that arm never fires there), or it started at another
 /// time — a recycled pid is a different process. Reads the creation time
 /// through the same refresh [`crate::utils::process_alive::process_start_time`]
-/// uses, so the value [`record_child`] stored and the value compared here are
+/// uses, so the value `record_child` stored and the value compared here are
 /// one derivation.
 ///
 /// Never signals: the answer is recorded on the row, and the orphan is left
@@ -910,7 +910,7 @@ fn index_by_kind(
 ///
 /// One event per job rather than one per session, unlike the sub-agent orphan
 /// sweep: that one groups because a crash orphans a whole fan-out at once,
-/// while this population is bounded by [`ANNOUNCE_HANDBACK_MAX_AGE_MS`] and by
+/// while this population is bounded by `ANNOUNCE_HANDBACK_MAX_AGE_MS` and by
 /// the per-session running cap — the jobs that settled in the couple of minutes
 /// a daemon spent dying inside the retry ladder.
 pub async fn init_and_announce(dir: PathBuf) -> usize {

@@ -61,7 +61,7 @@ pub const DEFAULT_PENDING_CAPACITY: usize = 64;
 /// Minimum representable capacity. `Invalidated` + replacement `Snapshot` are
 /// delivered as ONE atomic pair, so a consumer needs room for at least two
 /// events; a capacity of `1` cannot represent a valid invalidation and is
-/// rejected (debug-asserted in [`ConsumerState::new`]).
+/// rejected (debug-asserted in `ConsumerState::new`).
 pub const MIN_PENDING_CAPACITY: usize = 2;
 
 /// Process-wide projection host installed by the real server bootstrap.
@@ -92,7 +92,7 @@ pub(crate) const fn projection_host_slot() -> &'static dyn SlotStatus {
 /// `entries` and `owner_generations` share identical id membership (an entry
 /// is exposed iff its id still has a live ownership binding under the scope's
 /// visibility). The registry cut (`entries` + `registry_cursor` +
-/// `registry_closed`) comes from ONE [`RegistrySnapshot`](crate::tools::registry::RegistrySnapshot)
+/// `registry_closed`) comes from ONE `RegistrySnapshot`
 /// load; the owner cut (`owner_generations`) from ONE ownership-tree
 /// acquisition. The two cuts are independent authority domains and are not
 /// jointly atomic — callers needing cross-authority ordering use the

@@ -6,12 +6,12 @@
 //! underlying registry.
 //!
 //! ## Layout
-//! - [`traits`] — public extension points (`ToolDefinitionRewriter`)
-//! - [`builder`] — `new` + every `with_*` + small shape/helper utilities
-//! - [`gate_chain`] — the ordered rule chain that decides (and NAMES) what gates a call
-//! - [`dispatch`] — execute pipeline (`execute_inner` + hook seams + Layer-2 + sanitize)
-//! - [`artifact_harvest`] — settles `_media` tool output into the artifact store
-//! - [`ledger`] — what the signed operation ledger records at this chokepoint
+//! - `traits` — public extension points (`ToolDefinitionRewriter`)
+//! - `builder` — `new` + every `with_*` + small shape/helper utilities
+//! - `gate_chain` — the ordered rule chain that decides (and NAMES) what gates a call
+//! - `dispatch` — execute pipeline (`execute_inner` + hook seams + Layer-2 + sanitize)
+//! - `artifact_harvest` — settles `_media` tool output into the artifact store
+//! - `ledger` — what the signed operation ledger records at this chokepoint
 //! - this module — `ScopedToolService` struct + `ToolService` trait impl
 
 // `pub(crate)` for one reason: the slash-command fast path bypasses

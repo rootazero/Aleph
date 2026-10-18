@@ -48,7 +48,7 @@
 //! `win_bare_root!`).
 //!
 //! So the matching copy carries **every** reading, newline-joined, and a rule
-//! matches if any one of them matches (see [`append_views`]):
+//! matches if any one of them matches (see `append_views`):
 //!
 //! * the **POSIX view** — `\` folded as an escape (`d\d` → `dd`);
 //! * the **native view** — `\` preserved as a path separator (`C:\Windows`
@@ -148,7 +148,7 @@ static ENCODED_COMMAND_RE: Lazy<Regex> = Lazy::new(|| {
 /// Returns [`Cow::Borrowed`] when `text` contains none of the targeted tricks
 /// (the common case — agent commands are usually plain), so a clean command
 /// costs only a scan, not an allocation. Otherwise returns every view produced
-/// by [`append_views`], newline-joined.
+/// by `append_views`, newline-joined.
 #[must_use]
 pub fn normalize_for_matching(text: &str) -> Cow<'_, str> {
     if is_plain(text) {

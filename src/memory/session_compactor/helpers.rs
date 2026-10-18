@@ -133,7 +133,7 @@ impl SessionCompactor {
     /// Store raw conversation chunk for post-compression semantic recovery.
     ///
     /// `agent_id` must be the same resolved id under which `post_turn_compress`
-    /// writes the d0/d1/d2 summaries (see [`Self::count_valid_facts_at_depth`]).
+    /// writes the d0/d1/d2 summaries (see `Self::count_valid_facts_at_depth`).
     /// This used to hardcode `"default"`, which dropped every raw chunk into the
     /// default agent's scope — `compress_to_notes` then drained them under the
     /// WRONG agent and sedimented another agent's conversation into the default

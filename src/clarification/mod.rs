@@ -108,7 +108,7 @@ pub struct ClarificationQuestion {
     pub multi_select: bool,
     /// The answer is a credential. Load-bearing, not cosmetic: a secret
     /// question is never handed to a third-party channel transport (see
-    /// [`ask`]), and rich clients mask the input.
+    /// `ask`), and rich clients mask the input.
     pub secret: bool,
 }
 
@@ -207,7 +207,7 @@ impl ClarificationRequest {
     /// Borrow the questions vector as a slice.
     ///
     /// The slice is never empty — the constructors guarantee at least one.
-    /// Internal callers that need a strict guarantee use [`Self::first`]
+    /// Internal callers that need a strict guarantee use `Self::first`
     /// (which still applies a debug assertion).
     #[must_use]
     pub fn questions(&self) -> &[ClarificationQuestion] {

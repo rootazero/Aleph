@@ -31,13 +31,13 @@
 //! [`crate::spend::check`], which does the same for the same reason:
 //! `policy` is hot-reloadable via `spend::update_policy`, so it must never
 //! be snapshotted once (at registration time, say) rather than read live.
-//! It then delegates immediately to [`handle_query_with`], which takes
+//! It then delegates immediately to `handle_query_with`, which takes
 //! those two facts as plain parameters.
 //!
-//! Every test in this module calls [`handle_query_with`], never
+//! Every test in this module calls `handle_query_with`, never
 //! [`handle_query`] — same split, same reason, as
-//! [`crate::spend::check`]/[`crate::spend::check_with`] and
-//! [`crate::gateway::execution_engine::run_loop::deny_if_over_spend`]/
+//! [`crate::spend::check`]/`crate::spend::check_with` and
+//! `crate::gateway::execution_engine::run_loop::deny_if_over_spend`/
 //! `admission_result_for`: this crate's tests share one binary
 //! (`cargo test --lib`), and `crate::spend`'s two process-global
 //! `OnceLock`s would otherwise race whichever other test in that binary

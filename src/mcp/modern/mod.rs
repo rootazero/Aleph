@@ -12,7 +12,7 @@
 //! for the life of the connection, and speaks the matching dialect. This module
 //! owns everything specific to the modern shape; the legacy path is untouched
 //! and still lives in [`crate::mcp::protocol`] (`InitializeParams`) plus the
-//! session handling in [`crate::mcp::transport::http`].
+//! session handling in `crate::mcp::transport::http`.
 //!
 //! Submodules:
 //! - [`discover`] — the `server/discover` RPC, used both to learn a server's

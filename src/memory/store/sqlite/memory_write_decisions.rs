@@ -181,7 +181,7 @@ impl SqliteMemoryBackend {
     /// Read an agent's most recent write decisions, newest first.
     ///
     /// `subject_filter` is a literal substring match over the stored excerpt
-    /// (escaped through the shared [`super::escape_like`], so a user asking
+    /// (escaped through the shared `super::escape_like`, so a user asking
     /// about "100%" does not match every row).
     pub fn recent_write_decisions(
         &self,

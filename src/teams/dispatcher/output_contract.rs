@@ -53,7 +53,7 @@ pub enum SchemaOutcome {
     /// Final text parsed as JSON but violated the schema.
     SchemaMismatch {
         /// Concatenated validation errors (one per failure, instance-path
-        /// annotated). Bounded by [`MAX_VALIDATION_ERRORS`] so a wildly bad
+        /// annotated). Bounded by `MAX_VALIDATION_ERRORS` so a wildly bad
         /// document does not turn the retry hint into a megabyte.
         reason: String,
     },

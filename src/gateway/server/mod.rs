@@ -80,7 +80,7 @@ pub struct ConnectionState {
     /// (`"operator"` / `"guest"`). Resolved at the `connect` handshake from the
     /// device tier (loopback ⇒ operator; remote ⇒ persisted per-device tier,
     /// default chat) and read per-request by the WS dispatch gate. Defaulted by
-    /// loopback in [`ConnectionState::new`] so the pre-handshake `connect` frame
+    /// loopback in `ConnectionState::new` so the pre-handshake `connect` frame
     /// and any probe path behave safely.
     pub caller_role: String,
     /// The paired Panel device this session authenticated as, latched at the
@@ -254,7 +254,7 @@ pub struct GatewaySharedState {
     /// The JSON-RPC middleware chain, built **once** at server construction and
     /// cloned per connection. Building it per-connection (the previous
     /// behaviour) re-ran [`MiddlewareChain::new`], which reinstalls the global
-    /// [`RequestStateRegistry`] — so every new connection wiped the
+    /// `RequestStateRegistry` — so every new connection wiped the
     /// request-lifecycle counters that `/metrics` reads and undercounted
     /// in-flight requests from other connections. A single shared chain keeps
     /// those metrics monotonic and drops a per-connect allocation.
@@ -827,7 +827,7 @@ impl GatewayServer {
         self.audit_log = Some(log);
     }
 
-    /// A clone of the installed [`SecurityAuditLog`], for boot-time wiring
+    /// A clone of the installed `SecurityAuditLog`, for boot-time wiring
     /// that hands a *handler* its own sender rather than reading it off the
     /// connection (`trace.list` / `trace.get` record cross-user content reads
     /// — see `handlers::trace_replay`). `None` before

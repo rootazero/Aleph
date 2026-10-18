@@ -783,7 +783,7 @@ impl MemoryCommandHandler {
 
     /// The most recent `ReconcileReport` produced either by a direct
     /// `reconcile_once` call or by the background daemon spawned via
-    /// [`spawn_reconciler_daemon`]. `None` until the first scan has
+    /// `spawn_reconciler_daemon`. `None` until the first scan has
     /// completed.
     #[must_use]
     pub fn last_reconcile_report(&self) -> Option<ReconcileReport> {
@@ -794,7 +794,7 @@ impl MemoryCommandHandler {
     }
 
     /// Spawn a background task that periodically calls `reconcile_once`
-    /// and stores each report in [`last_reconcile_report`].
+    /// and stores each report in `last_reconcile_report`.
     ///
     /// Off by default — `MemoryCommandHandler::new` does not start the
     /// daemon. Operator opt-in is required because the scan walks the
@@ -877,7 +877,7 @@ async fn run_one_tick(
 ///
 /// A non-empty `missing_files` or `stale_files` indicates the event log
 /// and notes filesystem have diverged — most often because
-/// [`MemoryCommandHandler::project_to_notes`] failed after the event
+/// `MemoryCommandHandler::project_to_notes` failed after the event
 /// append had already committed. The report is the operator-facing
 /// surface for the divergence; replay/repair is out of scope for this
 /// type.

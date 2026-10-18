@@ -81,7 +81,7 @@ pub enum ContentBlock {
     /// Responses); `None` for unsigned reasoning. `earlier_turn` says the block
     /// belongs to a user turn before the current one. Whether a block is sent,
     /// and how, is decided per target by
-    /// [`ReasoningReplay`](crate::ai_reasoning::ReasoningReplay)
+    /// `ReasoningReplay`
     /// — not by whoever builds the message list.
     Thinking {
         thinking: String,
@@ -413,8 +413,8 @@ pub fn transform_messages(
 /// the last line of defence.
 ///
 /// Two directions, mapping codex's `context_manager/normalize.rs`:
-/// 1. [`remove_orphan_tool_results`] — drop results whose call is gone.
-/// 2. [`ensure_tool_results_present`] — synthesize an error result for each
+/// 1. `remove_orphan_tool_results` — drop results whose call is gone.
+/// 2. `ensure_tool_results_present` — synthesize an error result for each
 ///    unanswered call, inserted *immediately after* its assistant message so the
 ///    call→result adjacency the API mandates is preserved.
 ///

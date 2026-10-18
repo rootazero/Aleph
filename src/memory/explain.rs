@@ -11,7 +11,7 @@
 //! helpers as writers).
 //!
 //! What survives is what is actually read: the projection
-//! [`crate::memory::events::TimeTraveler::explain_fact`] builds from
+//! `crate::memory::events::TimeTraveler::explain_fact` builds from
 //! `memory_events` and `memory_timeline` renders. Agent accountability is a
 //! different concern entirely and lives in [`crate::identity`].
 

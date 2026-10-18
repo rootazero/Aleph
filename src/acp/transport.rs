@@ -38,7 +38,7 @@ pub struct StdioTransport {
 }
 
 impl StdioTransport {
-    /// Like [`new`](Self::new) but wires an [`IncomingHandler`] so agent→client
+    /// Like `new`](Self::new) but wires an [`IncomingHandler` so agent→client
     /// requests received mid-prompt are answered instead of dropped.
     #[must_use]
     pub fn with_handler(

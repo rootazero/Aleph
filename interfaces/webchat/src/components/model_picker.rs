@@ -22,10 +22,10 @@
 //! ## Keyboard walk
 //!
 //! The popover is two levels deep on screen (a provider heading, then its
-//! model ids) and one level deep to the keyboard: [`walk_targets`] flattens it
+//! model ids) and one level deep to the keyboard: `walk_targets` flattens it
 //! into the rows ↑/↓ can actually land on, with `Default` at index 0 because
 //! that is where it is drawn. The highlight moves only through
-//! [`step_highlight`], shared with the settings disclosure and the ⌘K palette.
+//! `step_highlight`, shared with the settings disclosure and the ⌘K palette.
 //!
 //! The flattening is why the provider loop is a plain `map` and not `<For>`:
 //! a row's flat index depends on how many models every *preceding* provider

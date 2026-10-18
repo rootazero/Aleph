@@ -21,7 +21,7 @@ pub struct Relation {
     /// taxonomy — R7 LLM sovereignty). E.g. "`works_at`", "colleague".
     #[serde(rename = "type")]
     pub rel_type: String,
-    /// LLM-judged edge confidence in [0,1]; defaults to 1.0 when absent.
+    /// LLM-judged edge confidence in \[0,1\]; defaults to 1.0 when absent.
     #[serde(default = "default_relation_confidence")]
     pub confidence: f32,
 }

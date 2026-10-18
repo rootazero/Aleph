@@ -90,7 +90,7 @@ pub struct SearchHit {
     pub title: String,
     /// A short excerpt of the body around the match.
     pub snippet: String,
-    /// The whole chunk — up to [`DEFAULT_CHUNK_LINES`] lines of the indexed
+    /// The whole chunk — up to `DEFAULT_CHUNK_LINES` lines of the indexed
     /// text. `ctx_search` returns this, not the snippet: a ~14-token excerpt
     /// tells the model *where* the match is but not what it says, and the only
     /// other way to read the section was a `file_read` whose offset it had to
@@ -175,7 +175,7 @@ impl ContentIndex {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Chunk `text` into ~[`DEFAULT_CHUNK_LINES`]-line sections and index them
+    /// Chunk `text` into ~`DEFAULT_CHUNK_LINES`-line sections and index them
     /// under `source`, owned by `session_id`. `title_hint` seeds synthesized
     /// titles for chunks whose first line is blank. Returns how many sections
     /// were written plus title previews for the first few (for the model-facing
@@ -275,7 +275,7 @@ impl ContentIndex {
     /// same line. For queries with ≥2 distinct terms, a pure post-fusion pass
     /// boosts each candidate by how tightly its body clusters the matched terms
     /// (smallest word-span covering the most distinct terms) and how many it
-    /// covers — see [`proximity_relevance`]. The boost is bounded so it reorders
+    /// covers — see `proximity_relevance`. The boost is bounded so it reorders
     /// near-ties without letting proximity override a decisive RRF lead.
     /// Single-term queries skip the pass entirely, leaving RRF order byte-for-
     /// byte unchanged.

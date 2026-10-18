@@ -127,7 +127,7 @@ pub struct ListModelsOutput {
     /// Human-readable summary (counts + current default + the `all` hint).
     pub message: String,
     /// MoA advisory presets selectable via `select_model` with model
-    /// "moa:<name>" (enabled presets only).
+    /// "moa:`&lt;name&gt;`" (enabled presets only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub moa_presets: Vec<MoaPresetSummary>,
 }

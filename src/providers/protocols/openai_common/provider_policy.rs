@@ -145,7 +145,7 @@ impl PayloadPolicy {
     ///
     /// Each `Some` field overrides the corresponding capability flag; `None`
     /// (or no `compat` at all) leaves the endpoint heuristic untouched. This is
-    /// the [`ModelCompat`] wiring point for the OpenAI-compatible protocols:
+    /// the `ModelCompat` wiring point for the OpenAI-compatible protocols:
     /// [`PayloadPolicy::apply`] / [`PayloadPolicy::apply_to_schema`] already
     /// consult these flags, so overriding them here flows through to
     /// request/schema building without further plumbing.

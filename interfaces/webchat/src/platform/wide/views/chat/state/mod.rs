@@ -234,7 +234,7 @@ pub struct RunCost {
 /// provider without prompt caching, or a run that never got that far).
 ///
 /// This answers "did the prefix hold?" and is deliberately NOT core's
-/// [`AgentUsageTotal::cache_hit_ratio`], which answers the different question
+/// `AgentUsageTotal::cache_hit_ratio`, which answers the different question
 /// "what share of the prompt came from cache" over `input + cache_read`.
 /// Creation tokens are the misses here precisely because a stable prefix would
 /// have made them reads.
@@ -708,7 +708,7 @@ pub struct ChatState {
     pub flush_pulse: RwSignal<u32>,
     /// Pulse signal that asks the composer to run the doctor + LLM-repair
     /// flow (G1, `f` hotkey): each bump increments by 1. Bumped by the global
-    /// keydown listener via [`HotkeyState`]; the composer seeds a diagnostic
+    /// keydown listener via `HotkeyState`; the composer seeds a diagnostic
     /// instruction and routes it through the normal send pipeline. Ephemeral,
     /// like `retry_pulse` — excluded from [`SessionSnapshot`].
     pub repair_pulse: RwSignal<u32>,
@@ -837,7 +837,7 @@ pub struct ChatState {
     /// `shared_ui_logic::state::chat_scroll` for the consumer and the bugs that
     /// cost.
     ///
-    /// Deliberately not folded into [`Self::next_msg_id`], which is an id
+    /// Deliberately not folded into `Self::next_msg_id`, which is an id
     /// allocator shared with `archive_active_plan`: a plan capsule retiring
     /// into the transcript is not a send.
     pub sends: RwSignal<u64>,

@@ -167,7 +167,7 @@ pub fn decline_global_tool_result_store(because: &'static str) {
 /// Read the process-wide `ToolResultStore`, if installed.
 ///
 /// ⚠️ `None` says nothing about whether boot reached this slot. Ask
-/// [`global_tool_result_store_slot`]`().outcome()` for that.
+/// `global_tool_result_store_slot``().outcome()` for that.
 #[inline]
 pub fn global_tool_result_store() -> Option<Arc<ToolResultStore>> {
     GLOBAL_STORE.get().cloned()
@@ -421,17 +421,17 @@ impl ToolResultStore {
     /// checked against `target`, the resolved path.
     ///
     /// * **Containment** — against the store **base** directory, not
-    ///   [`Self::blob_dir`]: blobs live in per-session subdirectories under the
+    ///   `Self::blob_dir`: blobs live in per-session subdirectories under the
     ///   base, so checking against one handle's `blob_dir()` would reject every
     ///   other session's legitimate blob. Canonicalizing both sides is what
     ///   stops `<root>/../../etc/hosts` from passing the prefix test.
-    /// * **Session** — [`Self::blob_dir_is_in_read_scope`], because containment
+    /// * **Session** — `Self::blob_dir_is_in_read_scope`, because containment
     ///   against the base admits every session's blobs and the call binding
     ///   below is only a name prefix. This is the gate that carries the trust
     ///   boundary this module's readers actually have: `trace.tool_output`
     ///   loads the event log per session key, so a marker it followed must
     ///   resolve inside that session's own blob directory (or an earlier epoch
-    ///   of it — [`Self::read_scope_keys`] owns that definition, and this gate
+    ///   of it — `Self::read_scope_keys` owns that definition, and this gate
     ///   reuses it rather than restating it).
     /// * **Ownership** — [`blob_belongs_to_call`], because a session directory
     ///   holds every call of that session. Read that function's doc for
@@ -605,7 +605,7 @@ impl ToolResultStore {
 
     /// BM25-search tool output previously offloaded **by this session** —
     /// including earlier epochs of the same base session key (see
-    /// [`Self::read_scope_keys`]). Returns up to `limit` hits, most relevant
+    /// `Self::read_scope_keys`). Returns up to `limit` hits, most relevant
     /// first. Empty when nothing is indexed or the index is unavailable —
     /// never errors out to the caller.
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
@@ -619,7 +619,7 @@ impl ToolResultStore {
     }
 
     /// [`Self::search`] over the sections of one indexed output — the one
-    /// indexed under `source` (a [`source_label`]) — ranked among themselves.
+    /// indexed under `source` (a `source_label`) — ranked among themselves.
     ///
     /// `None` when the index is unavailable or the query failed: "no section
     /// matched" is an answer only a working index can give, so a failure is
@@ -640,7 +640,7 @@ impl ToolResultStore {
 
     /// Number of indexed sections readable by this handle — its own session
     /// plus earlier epochs of the same base key (see
-    /// [`Self::read_scope_keys`]). `0` when the index is empty or unavailable.
+    /// `Self::read_scope_keys`). `0` when the index is empty or unavailable.
     pub fn indexed_sections(&self) -> usize {
         let Some(idx) = self.index() else {
             return 0;
@@ -760,7 +760,7 @@ impl ToolResultStore {
     }
 
     /// Async front door — hands the blocking I/O to the runtime's blocking
-    /// pool. See [`Self::purge_all_sync`] for the rationale (sync-blocking-on-
+    /// pool. See `Self::purge_all_sync` for the rationale (sync-blocking-on-
     /// Tokio at the gate-trip edge, which stalls every sibling in the
     /// harness's parallel batch).
     ///
@@ -864,7 +864,7 @@ pub fn extract_persisted_ref(text: &str) -> Option<&str> {
 /// private `parse_marker_path`, a `marker_path` helper in this file's own
 /// tests, two `#[cfg(test)]` splitters in `browser_tools` (`exec.rs`,
 /// `snapshot.rs`), and (nearly) a sixth in `gateway::handlers::tool_output` —
-/// each re-stating the literal prefix that [`PERSISTED_REF_PREFIX`] already
+/// each re-stating the literal prefix that `PERSISTED_REF_PREFIX` already
 /// owns. (The first count taken was "three": 判据 §6 — a miscount always runs
 /// short, and the two `#[cfg(test)]` copies are what a grep for the *function
 /// name* cannot see.) The marker is written by
@@ -961,7 +961,7 @@ pub fn extract_persisted_path(text: &str) -> Option<&str> {
 /// blobs into false `Expired`.
 ///
 /// What actually closes the reachable half is
-/// [`ToolResultStore::blob_dir_is_in_read_scope`]: the gap only matters across
+/// `ToolResultStore::blob_dir_is_in_read_scope`: the gap only matters across
 /// sessions, and that gate is derived from what the reader already holds. A
 /// short id still collides inside one session's own directory, where every
 /// blob is already in that model's context anyway.
@@ -1241,7 +1241,7 @@ pub(crate) fn source_label(tool_name: &str, tool_call_id: &str) -> String {
     format!("{tool_name}:{}", short_call_id(tool_call_id))
 }
 
-/// The tool named in a `source` label written by [`source_label`], or `None`
+/// The tool named in a `source` label written by `source_label`, or `None`
 /// when the label names no tool.
 ///
 /// Splits at the FIRST `:`. The call-id half may itself contain one (Kimi-style

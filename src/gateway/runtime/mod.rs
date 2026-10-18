@@ -16,7 +16,7 @@
 //! Every timestamp in this module — [`RuntimeAgentEntry::updated_at`] on the
 //! wire and `pending_idle_since` internally — is **unix epoch milliseconds**,
 //! and `now` is a parameter rather than a call to the clock. One unit, one
-//! source: [`IDLE_HOLD_MS`] is 700 ms, which does not survive a round trip
+//! source: `IDLE_HOLD_MS` is 700 ms, which does not survive a round trip
 //! through seconds, and a struct carrying two units is the shape judgment §12
 //! names. Production passes `chrono::Utc::now().timestamp_millis()` from the
 //! flush loop; tests pass literals and never sleep.
@@ -249,7 +249,7 @@ impl RuntimeAgents {
     /// built only when an agent was identified — with no agent the engine
     /// discards it unread, so building it first was an allocation the size of
     /// the visible grid, per session, per frame, thrown away. Counted by
-    /// [`visible_text_count`] and guarded by
+    /// `visible_text_count` and guarded by
     /// `tests::identify_runs_before_the_screen_text_is_built`.
     ///
     /// # The rest of the inputs
@@ -258,7 +258,7 @@ impl RuntimeAgents {
     /// `frame_produced` says whether the screen actually changed — reaching
     /// this function is NOT evidence of that, because `flush_session` also
     /// re-samples on a foreground-program change, and only a real frame may
-    /// end a quiet mark ([`TableEntry::last_frame_at`]).
+    /// end a quiet mark (`TableEntry::last_frame_at`).
     /// `process_exited` is the session's
     /// `is_closed()`: a session killed but not yet reaped by its reader thread
     /// is still in the registry for up to one flush tick, and reporting it as
@@ -557,7 +557,7 @@ impl RuntimeAgents {
     }
 
     /// Believe every held working -> plain-idle observation that is now at
-    /// least [`IDLE_HOLD_MS`] old. Returns the session ids that flipped.
+    /// least `IDLE_HOLD_MS` old. Returns the session ids that flipped.
     ///
     /// Called once per flush tick from `pty::manager::start_flush_loop`,
     /// AFTER the per-session pass. That ticker already runs every

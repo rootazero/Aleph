@@ -5,7 +5,7 @@
 //! Filtering is client-side because the browse view fetches the whole catalog
 //! once and then filters instantly as chips change; the server has no trust
 //! facet. Its free-text search (`hub::cache::matches_query`, which the
-//! `hub_catalog_search` tool uses) covers the same fields as [`matches`] here —
+//! `hub_catalog_search` tool uses) covers the same fields as `matches` here —
 //! keep the two in step if either grows a field.
 use crate::api::extensions::ExtensionEntry;
 

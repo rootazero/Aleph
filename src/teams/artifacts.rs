@@ -295,7 +295,7 @@ pub struct SqliteArtifactStore {
 
 impl SqliteArtifactStore {
     /// Create a new store wrapping the given connection.
-    /// Call [`migrate`] before using the store.
+    /// Call `migrate` before using the store.
     pub fn new(conn: Connection) -> Self {
         Self {
             conn: Arc::new(Mutex::new(conn)),

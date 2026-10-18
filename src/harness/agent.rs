@@ -266,7 +266,7 @@ impl AgentHarness {
     }
 
     /// Per-component token breakdown. Granular complement to
-    /// [`total_tokens`] — surfaces cache hit ratio and reasoning-token
+    /// `total_tokens` — surfaces cache hit ratio and reasoning-token
     /// spend that the single sum hides.
     pub fn token_breakdown(&self) -> TokenBreakdown {
         self.token_breakdown

@@ -10,14 +10,14 @@
 //! complete last.
 //!
 //! Rules
-//! - [`seed_run_origin`] has exactly TWO production callers, each seeding from
+//! - `seed_run_origin` has exactly TWO production callers, each seeding from
 //!   a request's own typed `telecom_public`: the gateway-side
 //!   `execution_engine::run_loop::with_request_scope`, and the harness-side
 //!   `orchestrator::dispatch` spawn (a `tokio::spawn` drops the task-local, so
 //!   the harness task re-seeds it from `FlowRequest::telecom_public`). A census
 //!   test pins this.
 //! - [`CarriedAttribution`](crate::scope::CarriedAttribution) is the only user
-//!   of [`capture_carry`] / [`reestablish_carry`], so every spawn that already
+//!   of `capture_carry` / `reestablish_carry`, so every spawn that already
 //!   carries scope / author carries the origin too.
 //! - A bare `tokio::spawn` loses the task-local (same class as scope and room
 //!   author). A reader then sees "unseeded", which is reported as `None`

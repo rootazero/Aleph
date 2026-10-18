@@ -34,7 +34,7 @@ pub struct XmppConfig {
     #[serde(default = "default_port")]
     pub port: u16,
 
-    /// MUC rooms to join (e.g., ["room@conference.example.com"])
+    /// MUC rooms to join (e.g., `["room@conference.example.com"]`)
     #[serde(default)]
     pub muc_rooms: Vec<String>,
 

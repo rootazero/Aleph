@@ -101,7 +101,7 @@ impl AdapterRegistry {
     /// Try each adapter in priority order; return the first successful parse.
     ///
     /// Every adapter's output passes through
-    /// [`expand_plugin_variables`](Self::expand_plugin_variables) here rather
+    /// `expand_plugin_variables` here rather
     /// than inside each adapter: a new adapter inherits the expansion instead
     /// of having to be told about it, which is the failure mode that left
     /// `${CLAUDE_PLUGIN_ROOT}` unexpanded in every skill body ever parsed.

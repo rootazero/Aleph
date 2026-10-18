@@ -101,7 +101,7 @@ pub fn is_active_admin(
     }
 }
 
-/// Whether `actor` may reconfigure `project` — [`manageable_given`] with the
+/// Whether `actor` may reconfigure `project` — `manageable_given` with the
 /// admin escalation resolved. What the owner-level gates enforce AND what
 /// `ProjectRow.manageable` reports; one function so the two cannot disagree.
 #[must_use]
@@ -128,7 +128,7 @@ pub const OWNER_REMOVAL_REFUSAL: &str = "cannot remove the project owner from it
 /// nobody — not even the org admin who could archive it. Hand the room over
 /// first (an admin operation), then remove.
 ///
-/// **Target-based, deliberately not caller-based.** [`manageable_given`] answers a
+/// **Target-based, deliberately not caller-based.** `manageable_given` answers a
 /// question about the CALLER and returns `true` for `actor: None`, the
 /// unattributed run every spawned tool call is. A caller-shaped spelling of
 /// this rule would therefore leave that arm open on the one mutation that can

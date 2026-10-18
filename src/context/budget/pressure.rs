@@ -98,7 +98,7 @@ fn looks_like_code(text: &str) -> bool {
 }
 
 /// Default chars-per-token ratio for English prose. Used as the prose anchor by
-/// [`detect_content_ratio`] and as the implicit baseline for [`estimate_tokens_smart`].
+/// `detect_content_ratio` and as the implicit baseline for [`estimate_tokens_smart`].
 pub const DEFAULT_PROSE_RATIO: f64 = 3.5;
 /// Chars-per-token ratio for CJK-dominant text (denser per character).
 const CJK_RATIO: f64 = 1.5;
@@ -213,8 +213,8 @@ pub fn chars_for_token_budget(sample: &str, budget_tokens: usize) -> usize {
 /// A tool producer that must size its own output against the result budget has
 /// to measure the string the budget is actually enforced against, and that is
 /// **not** its own payload: `Value::to_string()` emits compact single-line JSON,
-/// so [`looks_like_code`] sees one line containing `{`, scores a 1.0 indicator
-/// ratio, and charges [`CODE_RATIO`] — *unconditionally, whatever the payload
+/// so `looks_like_code` sees one line containing `{`, scores a 1.0 indicator
+/// ratio, and charges `CODE_RATIO` — *unconditionally, whatever the payload
 /// is*. Sizing a window with [`chars_for_token_budget`] on the raw content
 /// therefore over-allocates by 1.4x for prose or CSV (3.5 vs 2.5) and the
 /// enforcement step downstream then cuts the difference out of the middle.
@@ -278,10 +278,10 @@ fn push_part(buf: &mut String, part: &str) {
 /// Blocks split into three accounting classes instead of being flattened into
 /// one prose-anchored string (the old `text_content()` path):
 ///
-/// - **Prose** ([`ContentBlock::Text`] + [`ContentBlock::Thinking`]): estimated
+/// - **Prose** (`ContentBlock::Text` + `ContentBlock::Thinking`): estimated
 ///   via [`estimate_tokens_aware`] at the caller's `prose_ratio`, so CJK/code
 ///   density still applies inside natural-language blocks.
-/// - **Tool-result text** (a [`ContentBlock::Json`] whose value is a string —
+/// - **Tool-result text** (a `ContentBlock::Json` whose value is a string —
 ///   what every successful tool result is by the time it reaches the prompt):
 ///   charged as the text the model is sent, [`value_as_model_text`], through
 ///   the same content-aware [`estimate_tokens_aware`] Layer 2 measured it with
@@ -290,8 +290,8 @@ fn push_part(buf: &mut String, part: &str) {
 ///   wrong for most of it, and the detector already picks code, CJK or prose.
 ///   (It used to be charged as `value.to_string()`: a quoted, escaped copy at
 ///   the code anchor, which is not what goes on the wire.)
-/// - **Structured** (a non-string [`ContentBlock::Json`] + [`ContentBlock::ToolCall`]
-///   `name`+`arguments`): estimated at the denser [`CODE_RATIO`] anchor. JSON is
+/// - **Structured** (a non-string `ContentBlock::Json` + `ContentBlock::ToolCall`
+///   `name`+`arguments`): estimated at the denser `CODE_RATIO` anchor. JSON is
 ///   symbol-dense (`{`, `"`, `:`, `,`) and tokenizes ~like source, but the old
 ///   path charged it at the 3.5 prose ratio — `looks_like_code` misses pure JSON
 ///   (braces only bookend it), so it never tripped the code ratio. Agentic loops
@@ -299,10 +299,10 @@ fn push_part(buf: &mut String, part: &str) {
 ///   sensor systematically *under-report* pressure on exactly the tool-heavy
 ///   turns, firing compaction late. CJK *inside* structured values still gets
 ///   CJK density because the code ratio is only the non-CJK anchor.
-/// - **Image** ([`ContentBlock::Image`]): a flat [`IMAGE_TOKENS_ESTIMATE`] per
+/// - **Image** (`ContentBlock::Image`): a flat `IMAGE_TOKENS_ESTIMATE` per
 ///   block. `text_content()` omits images, so without this a multi-megabyte
 ///   screenshot counted as **zero tokens** and vision contexts under-reported
-///   pressure by ~[`IMAGE_TOKENS_ESTIMATE`] per image.
+///   pressure by ~`IMAGE_TOKENS_ESTIMATE` per image.
 ///
 /// A message with no structured or image blocks (ordinary chat: text/thinking
 /// only) is byte-identical to the old

@@ -198,7 +198,7 @@ pub enum SessionMode {
     Chat,
     /// Multi-step productivity work. The default, and the identity partition
     /// for every family but one: the `browser_*` satellites defer here too
-    /// (see [`BROWSER_RESIDENT_CORE`]), because 26 listed browser tools charge
+    /// (see `BROWSER_RESIDENT_CORE`), because 26 listed browser tools charge
     /// every request ~8.9 KB for a capability most turns never touch. Nothing
     /// else about an unconfigured install's surface changed.
     #[default]
@@ -286,7 +286,7 @@ impl SessionMode {
     /// (`[tools] defer_mcp_tools`).
     ///
     /// One rule is mode-independent: the browser satellites
-    /// ([`is_browser_satellite`]) defer everywhere. It is stated ahead of the
+    /// (`is_browser_satellite`) defer everywhere. It is stated ahead of the
     /// per-mode tables instead of being copied into each of them, so the
     /// family's resident core is named in exactly one place.
     #[must_use]

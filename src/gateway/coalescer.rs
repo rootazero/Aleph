@@ -86,7 +86,7 @@ struct CoalesceBuffer {
 
 /// Concurrent message coalescer.
 ///
-/// Call [`push`] for every inbound message, then periodically call [`tick`]
+/// Call `push` for every inbound message, then periodically call `tick`
 /// (e.g. every 50-100 ms) to collect merged results.
 pub struct MessageCoalescer {
     buffers: DashMap<String, CoalesceBuffer>,

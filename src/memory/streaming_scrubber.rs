@@ -32,7 +32,7 @@
 //! if !tail.is_empty() { emit(&tail); }
 //! ```
 //!
-//! Re-entrancy: create a fresh instance per turn, or call [`Self::reset`].
+//! Re-entrancy: create a fresh instance per turn, or call `Self::reset`.
 //!
 //! Scope
 //! -----

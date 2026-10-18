@@ -750,7 +750,7 @@ impl<S: NoteStore> NoteIndexer<S> {
 
     /// Write RAW markdown content to a note file verbatim, then sync the index.
     ///
-    /// Unlike [`write_note`], this does NOT reconstruct the file from a
+    /// Unlike `write_note`, this does NOT reconstruct the file from a
     /// `KnowledgeNote` (which is lossy — `to_markdown` only re-emits frontmatter
     /// plus bullet facts plus a `Related:` line, dropping prose / headings /
     /// code blocks). The caller-supplied `content` is the full markdown

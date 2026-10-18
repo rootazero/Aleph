@@ -87,7 +87,7 @@ pub struct Config {
     #[serde(default)]
     pub mcp: McpConfig,
     /// Unified tools configuration (Phase 1 refactor: combines tools + mcp)
-    /// If present, takes precedence over legacy [tools] and [mcp] sections
+    /// If present, takes precedence over legacy \[tools\] and \[mcp\] sections
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unified_tools: Option<UnifiedToolsConfig>,
     /// Phase 2 `ToolService` runtime tunables (timeouts, per-tool overrides)
@@ -99,7 +99,7 @@ pub struct Config {
     #[serde(default)]
     pub sandbox: crate::sandbox::SandboxConfig,
     /// Agent task orchestration configuration (renamed from cowork)
-    /// Supports both [agent] and [cowork] sections for backward compatibility
+    /// Supports both \[agent\] and \[cowork\] sections for backward compatibility
     // (removed: `[agent]` section — see config-002 in the 2026-08-17 wire audit.
     //  CoworkConfigToml/FileOpsConfigToml/CodeExecConfigToml were parsed and
     //  validated but had no production consumer; the validator's only check

@@ -314,7 +314,7 @@ impl MediaCache {
     ///
     /// # Why this returns the error instead of degrading
     ///
-    /// It used to answer every failure with [`Self::url_only_attachment`] and
+    /// It used to answer every failure with `Self::url_only_attachment` and
     /// leave the reason in a `warn!`. That made three different problems —
     /// an undecodable `data:` URL, a path outside the media root, a 404 —
     /// indistinguishable to every caller, and the *reason* is precisely what

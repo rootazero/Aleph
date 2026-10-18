@@ -20,7 +20,7 @@ use std::collections::HashMap;
 pub enum DeliveryStatus {
     Delivered,
     /// A delivery was asked for and did not arrive. This is a **failure of the
-    /// run**, not a footnote to it — see [`delivery_failed`].
+    /// run**, not a footnote to it — see `delivery_failed`.
     NotDelivered,
     /// No delivery was asked for: no target configured, no text to send, or the
     /// agent deliberately stayed silent. Distinct from `NotDelivered` precisely

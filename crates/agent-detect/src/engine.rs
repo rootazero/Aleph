@@ -281,7 +281,7 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
 /// cannot express, so porting it would be a second derivation of a decision
 /// that already has one (判据 §1 / §9).
 ///
-/// The name -> argv[0] -> argv-token order is upstream's
+/// The name -> argv\[0\] -> argv-token order is upstream's
 /// `normalized_process_name` (`:359-395`), narrowed the same way: upstream's
 /// runtime-specific argv walkers each existed for a shape Aleph had no
 /// producer for.
@@ -290,7 +290,7 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
 /// retired the ranking note above. The embedded terminal's Windows default
 /// became `pwsh` and the shell tool's became `pwsh` / `cmd` (`utils::shell`),
 /// so Aleph now produces the `cmd /c` and PowerShell hand-off shapes itself:
-/// [`windows_shell`] reads them and they are no longer "upstream only".
+/// `windows_shell` reads them and they are no longer "upstream only".
 /// Cursor's bundled-node layout still has no producer here and is still left
 /// upstream — the sentence survives for exactly one of its original three.
 #[must_use]

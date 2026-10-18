@@ -499,7 +499,7 @@ impl ExtensionManager {
     /// Install a non-default owner trust policy. The next
     /// [`Self::load_all`] / [`Self::reload`] call uses the new policy to
     /// gate `Workspace` and `Global` plugins (Bundled/Config always pass).
-    /// Pass [`OwnerTrustPolicy::permissive`] to revert to the legacy
+    /// Pass `OwnerTrustPolicy::permissive` to revert to the legacy
     /// "load every plugin" behaviour.
     pub fn set_owner_trust_policy(&self, policy: crate::extension::plugin_trust::OwnerTrustPolicy) {
         *self

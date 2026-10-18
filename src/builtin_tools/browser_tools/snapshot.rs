@@ -215,7 +215,7 @@ pub struct BrowserSnapshotOutput {
     pub snapshot: Option<String>,
     pub truncated: bool,
     /// Refs the model can act on in the body it was handed — not the page
-    /// total. See [`render_snapshot_message`].
+    /// total. See `render_snapshot_message`.
     pub ref_count: usize,
     /// Which page this tree came from. `None` when the driver could not say,
     /// which is a different fact from "the page has no URL".

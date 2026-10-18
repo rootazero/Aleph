@@ -11,7 +11,7 @@
 //!     console, leaving the user with no recovery affordance.
 //!
 //! Once `has_connected_once` latches true, the gate disengages permanently
-//! for this session — runtime drops are handled by [`ServiceBlockingGate`].
+//! for this session — runtime drops are handled by `ServiceBlockingGate`.
 
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};

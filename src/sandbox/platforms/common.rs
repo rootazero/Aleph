@@ -86,13 +86,13 @@ pub fn wsl_version() -> Option<u32> {
 /// number of bytes elided from the middle (the marker text is not counted).
 ///
 /// Tiny budgets (`< MIN_HEAD_TAIL_CAP`) and degenerate splits fall back to the
-/// original head-only truncation — see [`truncate_head_only`].
+/// original head-only truncation — see `truncate_head_only`.
 ///
 /// **Contiguity is a precondition, not a detail.** This is only reachable for a
 /// stream that fit entirely inside the drain's head buffer; a stream that
 /// overflowed it already has a gap in the middle, and splicing a second gap
 /// into it would make the one marker report a number that is not the whole
-/// truth. That case is [`Drained::assemble`]'s, which owns both fragments and
+/// truth. That case is `Drained::assemble`'s, which owns both fragments and
 /// emits exactly one marker over the exact total.
 #[must_use]
 pub fn truncate_output(buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
@@ -366,7 +366,7 @@ where
 ///
 /// On timeout: kills the child explicitly (so we don't rely on the
 /// caller's `kill_on_drop` flag firing later), drains the reader tasks
-/// for up to [`KILL_DRAIN_TIMEOUT`], and returns
+/// for up to `KILL_DRAIN_TIMEOUT`, and returns
 /// `SandboxError::Timeout { elapsed_ms, partial_stdout, partial_stderr }`.
 /// Partial buffers may be empty if a grandchild was holding the pipes
 /// open longer than the drain budget.

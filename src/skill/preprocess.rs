@@ -18,7 +18,7 @@
 //!
 //! A skill's `` !`cmd` `` is the same thing as a plugin command's, and runs
 //! under the same three rules (`extension::inline_shell`):
-//! - **which text** is a command: [`inline_commands`], on the body as
+//! - **which text** is a command: `inline_commands`, on the body as
 //!   written, before anything is expanded — never rescanned;
 //! - **what the shell parses**: the text as written. `${ALEPH_SKILL_DIR}`
 //!   (and, in a plugin's skill, the plugin's path variables) reach it through
@@ -87,7 +87,7 @@ pub enum PreprocessError {
     /// via snippet stdout. The string lists the findings (`file: pattern`).
     #[error("inline-shell expansion introduced guarded content: {0}")]
     GuardedExpansion(String),
-    /// Accumulated snippet stdout blew past [`MAX_TOTAL_SNIPPET_OUTPUT_BYTES`].
+    /// Accumulated snippet stdout blew past `MAX_TOTAL_SNIPPET_OUTPUT_BYTES`.
     #[error("inline-shell expansion exceeds the {max}-byte aggregate stdout cap ({size} bytes)")]
     ExpansionTooLarge { size: usize, max: usize },
 }
@@ -136,7 +136,7 @@ impl SkillPreprocessContext {
 /// after template expansion alone.
 ///
 /// The expanded body is re-scanned by the install-time content guard before
-/// it is returned (see [`guard_expanded_body`]); a body that trips the guard
+/// it is returned (see `guard_expanded_body`); a body that trips the guard
 /// or the aggregate expansion cap is an error, not a partial result.
 pub async fn preprocess_skill_content(
     content: &str,
@@ -182,7 +182,7 @@ fn guard_expanded_body(body: &str) -> Result<(), PreprocessError> {
 }
 
 /// Replace `${ALEPH_SKILL_DIR}` tokens in `content` — prose, never an inline
-/// command's text ([`expand_inline_shell`] hands this only the stretches
+/// command's text (`expand_inline_shell` hands this only the stretches
 /// between commands).
 ///
 /// Returns the input borrowed and unchanged when no resolvable token is
@@ -273,12 +273,12 @@ async fn expand_inline_shell(
 
 /// A skill's inline-command runner: the consent entry a command answers to
 /// is `(owner, skill, text)` under [`SKILL_INLINE_EVENT`], bound to the
-/// skill's directory ([`InlineConsent`]); an approved one runs through the
+/// skill's directory (`InlineConsent`); an approved one runs through the
 /// production builder ([`inline_shell_command`]) in the skill's directory,
 /// `ALEPH_SKILL_DIR` naming it, `CLAUDE_PROJECT_DIR` the run's directory,
 /// and — for a plugin's skill — the plugin's path variables and its settings
 /// minus every secret (the command face's `plugin_settings_env` call), with
-/// the command face's timeout and output cap ([`run_inline_process`]). A
+/// the command face's timeout and output cap (`run_inline_process`). A
 /// command whose script consent cannot bind — named through any variable but
 /// `$ALEPH_SKILL_DIR` — is never filed or run
 /// ([`ShellHookConsent::unbindable_script_word`]): its approval would be of a

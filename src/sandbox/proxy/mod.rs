@@ -23,7 +23,7 @@
 //! - **Windows**: replaces the `UnsupportedPolicy` hard-fail. `AppContainer`
 //!   already grants `INetwork` for non-`None` policies; loopback is enabled
 //!   in the same profile path.
-//! - **Linux**: Phase B ([`netns_bridge`]) closes the gap. `--unshare-net`
+//! - **Linux**: Phase B (`netns_bridge`) closes the gap. `--unshare-net`
 //!   still strips loopback inside the netns, but a Unix-domain socket is a
 //!   filesystem object that crosses the boundary when bind-mounted in. A host
 //!   bridge forwards that UDS to the managed proxy, and `sandbox-init` runs a

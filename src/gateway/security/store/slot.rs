@@ -59,8 +59,8 @@ pub fn install_users_store(store: Arc<SecurityStore>) {
 ///
 /// RPC handlers never read this slot (they are handed the store), so they
 /// keep using the fallback exactly as before. Only the two readers of
-/// [`users_authority`] see the mark: the fire-time resolver answers
-/// `Unknown` (not `Gone`) for anyone but the owner, and [`multi_user`] answers
+/// `users_authority` see the mark: the fire-time resolver answers
+/// `Unknown` (not `Gone`) for anyone but the owner, and `multi_user` answers
 /// `true` — a table that lost its rows is no evidence of a single-user
 /// install (判据 §8, §15).
 pub fn install_degraded_users_store(store: Arc<SecurityStore>, reason: String) {

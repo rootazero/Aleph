@@ -92,7 +92,7 @@ pub struct EngineSidecar {
     /// `None` until the endpoint is known. The record is written immediately
     /// after the process is spawned — before the endpoint is known — so a
     /// cancelled or crashed launch still leaves a reapable record (round-1
-    /// review finding F2); [`reap_orphans`] never reads this field, it decides
+    /// review finding F2); `reap_orphans` never reads this field, it decides
     /// on `pid` + `data_dir` + `engine` alone. `None` means "I do not know
     /// yet" and must never be rendered as a usable endpoint.
     pub http_url: Option<String>,
@@ -655,7 +655,7 @@ pub(crate) fn reap_orphans_now() -> ReapOutcome {
 /// The live handle to a launched process, shared and reap-once.
 ///
 /// A named type rather than the spelling repeated at each site (R69): it
-/// appears in [`Launched`], [`try_reap`] and [`terminate`], and Task 16's
+/// appears in [`Launched`], `try_reap` and [`terminate`], and Task 16's
 /// obscura launcher is a fourth. Four spellings of one type is four places to
 /// disagree about whether the mutex is poison-tolerant.
 ///
@@ -780,7 +780,7 @@ pub struct Launched {
     ///
     /// A pid alone cannot do that: `std::process::Child` is the only thing
     /// that can `wait()`, and a child killed without a wait stays a zombie for
-    /// the daemon's whole life (see [`try_reap`]). It travels with the launch
+    /// the daemon's whole life (see `try_reap`). It travels with the launch
     /// rather than in a side map keyed by pid, which would reintroduce the pid
     /// recycling window the sweep's argv check exists to close.
     ///
@@ -818,7 +818,7 @@ pub struct Launched {
 ///   `launched.sidecar_path` only after a `true`, so answering `false` here
 ///   would strand a record on every second shutdown, and a stranded record is
 ///   an orphan the next boot's sweep will try to kill by a recycled pid.
-/// * **`Ok(true)` after [`try_reap`].** The child exited AND was waited on —
+/// * **`Ok(true)` after `try_reap`.** The child exited AND was waited on —
 ///   two facts, and only the pair is safe to report (判据 §4). A signal alone
 ///   is not a death.
 /// * **`Ok(false)` at the deadline.** Still there. The handle is deliberately
@@ -883,8 +883,8 @@ pub async fn terminate(launched: &Launched, grace: Duration) -> Result<bool, Bro
 /// exits.
 ///
 /// This does not leave the crash-recovery case out. A pid recovered from the
-/// sidecar registry after a restart is killed by [`reap_orphans`] →
-/// [`kill_by_pid`], which never goes through this trait; and such a process
+/// sidecar registry after a restart is killed by `reap_orphans` →
+/// `kill_by_pid`, which never goes through this trait; and such a process
 /// was orphaned by a *dead* parent, so init/launchd reaps it and there is no
 /// zombie for anyone to wait on. Two paths, each complete, neither able to
 /// answer the other's question.

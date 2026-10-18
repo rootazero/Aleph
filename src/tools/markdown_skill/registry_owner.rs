@@ -207,7 +207,7 @@ impl MarkdownSkillRegistryOwner {
     /// the owner back at its default state (no registry, no handles, a fresh
     /// empty scope). The caller drives `scope.dispose().await` — outside the
     /// owner lock — to actually run the disposers and inspect the resulting
-    /// [`ToolDisposeReport`]. Because `dispose` is generation-guarded and
+    /// `ToolDisposeReport`. Because `dispose` is generation-guarded and
     /// idempotent, a stale handle left by an earlier replacement is a
     /// harmless no-op. Repeated calls return an empty scope (idempotent).
     pub fn take_shutdown(&mut self) -> ToolRegistrationScope {

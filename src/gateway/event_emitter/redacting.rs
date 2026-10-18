@@ -3,7 +3,7 @@
 //! # Why this exists
 //!
 //! An unattended run already had a redaction gate:
-//! [`UnattendedRedactingSink`] wraps the `TraceSink`. But a run's output leaves
+//! `UnattendedRedactingSink` wraps the `TraceSink`. But a run's output leaves
 //! the engine down **two** legs, and only one of them is a `TraceSink`:
 //!
 //! * the trace leg — persistence, the scratchpad channel progress push, and the
@@ -45,8 +45,6 @@
 //!
 //! Attended runs are not wrapped, so their path is byte-identical to before and
 //! pays no regex scan.
-//!
-//! [`UnattendedRedactingSink`]: crate::gateway::execution_engine::UnattendedRedactingSink
 
 use std::sync::Arc;
 

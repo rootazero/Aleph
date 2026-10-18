@@ -13,7 +13,7 @@
 //!   returned an empty string as if the clipboard were empty.
 //!
 //! This module fixes both by choosing the candidate order from
-//! [`super::session`] (the actual session type, not spawn luck) and by checking
+//! `super::session` (the actual session type, not spawn luck) and by checking
 //! every exit status.
 //!
 //! # Read vs write asymmetry (deliberate)

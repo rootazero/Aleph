@@ -131,7 +131,7 @@ impl ToolHandler for BuiltinHandler {
 }
 
 /// A `ToolHandler` whose `invoke` and `definition` are sourced from a
-/// `ToolRegistry` lookup keyed by [`name`](Self::name).
+/// `ToolRegistry` lookup keyed by `name`.
 ///
 /// Phase-2-era `BuiltinHandler` wraps an `AlephToolDyn` directly; the agent
 /// loop's new tool path resolves tools through `ToolRegistry` (the same
@@ -280,7 +280,7 @@ impl ToolHandler for BuiltinRegistryRouter {
 /// `ToolRegistry::execute_tool` so they pick up the same descriptor /
 /// revision accounting as every other tool the agent loop sees.
 ///
-/// Re-exported from [`crate::mcp::tool_bridge`] rather than re-typed: the
+/// Re-exported from `crate::mcp::tool_bridge` rather than re-typed: the
 /// bridge owns these names as its single source of truth, and a second list
 /// here is the exact "two copies of the same fact" drift this project's
 /// redlines forbid. The bridge's `pub(crate)` constants are visible here

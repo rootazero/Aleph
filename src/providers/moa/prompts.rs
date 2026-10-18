@@ -178,7 +178,7 @@ pub const ADVISORY_GUIDANCE_MARKER: &str = "[Mixture of Agents advisory context]
 
 /// Whether `text` carries an [`ADVISORY_GUIDANCE_MARKER`] block.
 ///
-/// `contains`, not `starts_with`: [`attach_guidance`] merges into a trailing
+/// `contains`, not `starts_with`: `attach_guidance` merges into a trailing
 /// user turn when there is one, so the marker can sit after the user's own
 /// prompt in the same text block. Both shapes are "these bytes differ next
 /// turn", which is the only question the caller is asking.

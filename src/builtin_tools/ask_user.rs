@@ -7,7 +7,7 @@
 //!
 //! Everything about *reaching* the human — routability, the headless refusal,
 //! the channel → event-bus delivery ladder, the secret rule, the wait — lives
-//! in [`crate::clarification::ask`], shared with the `scratchpad` plan-approval
+//! in `crate::clarification::ask`, shared with the `scratchpad` plan-approval
 //! gate. What is left here is this tool's own job: its argument schema, the
 //! normalisation of what a model actually emits, and the shape of the answer it
 //! gets back.

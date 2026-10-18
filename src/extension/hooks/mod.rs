@@ -19,7 +19,7 @@
 //!
 //! # Command-hook decision contract
 //!
-//! ONE function, [`derive_decision`], turns a command hook's `(exit code,
+//! ONE function, `derive_decision`, turns a command hook's `(exit code,
 //! stdout, stderr)` into a decision. Exit `2` blocks with stderr as the
 //! reason (Claude Code's most common hook idiom); exit `0` reads stdout in
 //! one of two ways — a JSON decision object (`json_output`, Claude-Code /
@@ -560,7 +560,7 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
 /// Every spelling of the plugin-root path variable.
 ///
 /// One list for the three places that must agree on it: the text
-/// substitution ([`substitute_path_variables`]), the variables a command
+/// substitution (`substitute_path_variables`), the variables a command
 /// hook's environment carries ([`command_hook_invocation`]) and the
 /// `aleph-server hooks test` metacharacter gate, which does not count a reference
 /// to one as shell syntax. A spelling substituted but not exported would
@@ -656,7 +656,7 @@ pub(crate) fn plugin_shell_line(command: &str, plugin_root: Option<&Path>, owner
 /// action's prompt, an Http action's URL and header values.
 ///
 /// Supported variables:
-/// - the path variables of [`substitute_path_variables`] (`${PLUGIN_ROOT}`
+/// - the path variables of `substitute_path_variables` (`${PLUGIN_ROOT}`
 ///   and its spellings, the `_DATA` pair), replaced first;
 /// - `$ARGUMENTS` / `${ARGUMENTS}` - Tool arguments (JSON)
 /// - `$TOOL_INPUT` / `${TOOL_INPUT}` - Tool input content
@@ -666,7 +666,7 @@ pub(crate) fn plugin_shell_line(command: &str, plugin_root: Option<&Path>, owner
 ///
 /// Everything after the first bullet is DATA — model-controlled tool input,
 /// or policy text that quotes identifiers in backticks. A Command action
-/// never gets it spliced in: it receives [`substitute_path_variables`] on
+/// never gets it spliced in: it receives `substitute_path_variables` on
 /// Windows and no substitution at all on unix, and each data variable is
 /// exported as an environment variable of the same name, which `sh` expands
 /// as data (`"$ARGUMENTS"`) rather than parsing as source. Splicing it made

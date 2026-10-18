@@ -160,7 +160,7 @@ impl CapabilityChangeStream {
         true
     }
 
-    /// Resync after an [`Invalidated`] event using a fresh snapshot + delta.
+    /// Resync after an `Invalidated` event using a fresh snapshot + delta.
     ///
     /// This is a pure value state machine; it never reads or writes a store.
     /// Steps:
@@ -170,7 +170,7 @@ impl CapabilityChangeStream {
     /// 3. Drop surviving entries whose `(id, revision)` already appears in
     ///    `self.changes` — the subscriber has already seen them. Dedup also
     ///    collapses duplicates within the accepted tail.
-    /// 4. Push one [`Invalidated`] followed by the surviving delta in input
+    /// 4. Push one `Invalidated` followed by the surviving delta in input
     ///    order.
     /// 5. Advance `committed_cursor` to
     ///    `max(old, snapshot.committed_cursor, accepted cursors)`. The cursor

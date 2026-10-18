@@ -173,12 +173,12 @@ async fn is_silent_truncated_overflow(
 ///   the rescue — reusing its one-shot cap, trace, and budget plumbing.
 /// - **Silent** (one-shot pre-pass): `MaxTokens` + zero output + a usage
 ///   report whose prompt alone already meets/exceeds the budget (see
-///   [`is_silent_truncated_overflow`]). Same overflow, but the provider
+///   `is_silent_truncated_overflow`). Same overflow, but the provider
 ///   reported it as a successful `length` stop instead of an error.
 ///
 /// The explicit shape loops; the silent shape is checked at most ONCE per
 /// drain call. That asymmetry is what keeps the drain finite:
-/// [`reactive_fit_and_retry`] never returns `Ok(ContextWindowExceeded)`, but
+/// `reactive_fit_and_retry` never returns `Ok(ContextWindowExceeded)`, but
 /// it CAN legitimately return another silent-shape response (an `Ok` whose
 /// stop reason is `MaxTokens`) — re-detecting that shape would re-enter the
 /// rescue forever. After the one rescue pass, a still-silent response falls
@@ -258,7 +258,7 @@ pub async fn drain_context_overflow<H: RescueHost>(
 ///
 /// When the compactor is not wired, the rescue cap is already exhausted, the
 /// compactor itself fails, or the retried call still overflows, fall through to
-/// [`reactive_fit_and_retry`]'s deterministic floor — a full context window must
+/// `reactive_fit_and_retry`'s deterministic floor — a full context window must
 /// not end the run (never-break).
 pub async fn try_reactive_compact_and_retry<H: RescueHost>(
     host: &H,

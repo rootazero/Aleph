@@ -1,11 +1,11 @@
 //! Local/cloud route-mode configuration RPC handlers.
 //!
-//! Exposes the `[route]` section ([`ModelRouteConfig`]) to the panel:
+//! Exposes the `[route]` section (`ModelRouteConfig`) to the panel:
 //! `route_config.get` returns the live mode plus a tier-classified view of the
 //! configured providers (so the UI can show *which* providers each mode will
 //! target without re-deriving locality in WASM); `route_config.update` writes
 //! the new mode, persists it, and **hot-applies it through
-//! [`live_apply::apply_live_sections`](crate::config::live_apply::apply_live_sections)**
+//! `live_apply::apply_live_sections`**
 //! — the same executor `config.patch`, `ConfigPatcher::rollback` and
 //! `config.reload` run, so the running failover chain *and* `route_status`'s
 //! `config_problems` both see the new config, and the next prompt routes the

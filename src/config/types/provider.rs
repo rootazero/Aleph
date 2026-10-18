@@ -375,7 +375,7 @@ pub struct ProviderConfig {
     /// currently honored only by the Anthropic protocol adapter.
     #[serde(default)]
     pub stream_idle_timeout_secs: Option<u64>,
-    /// Prompt cache retention policy. See [`CacheRetention`] for the
+    /// Prompt cache retention policy. See `CacheRetention` for the
     /// per-protocol mapping — it is honored on the Anthropic protocol (1h
     /// `ttl` on the official endpoint) *and* on official `OpenAI` endpoints
     /// (`prompt_cache_retention: "24h"` on Chat and Responses).
@@ -509,7 +509,7 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub effort: Option<String>,
 
-    /// Server-side context editing (Anthropic). See [`ServerContextEditing`].
+    /// Server-side context editing (Anthropic). See `ServerContextEditing`.
     #[serde(default)]
     pub server_context_editing: ServerContextEditing,
 

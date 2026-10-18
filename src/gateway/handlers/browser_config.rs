@@ -248,7 +248,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
 ///
 /// The response reports, per group, whether the change is already in force or
 /// waits on a restart — and the SSRF verdict is *verified*, not declared. That
-/// is [`crate::config::live_apply::classify_verified`]'s rule applied to a
+/// is `crate::config::live_apply::classify_verified`'s rule applied to a
 /// handle that module does not own: the SSRF policy hot-applies only when a
 /// `ProfileManager` has published itself
 /// ([`crate::browser::manager::apply_policy_live`]), and in a process where

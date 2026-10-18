@@ -28,7 +28,7 @@ pub struct GalaxyNode {
     pub category: String,
     pub link_count: u32,
     pub pos: Vec3,
-    /// Base RGB in [0,1] (category color, pre-HDR-boost, recency-scaled).
+    /// Base RGB in \[0,1\] (category color, pre-HDR-boost, recency-scaled).
     pub color: [f32; 3],
     /// Louvain community id (`None` on a cold graph cache). Drives spatial
     /// clustering (community centroid gravity in `ForceLayout`).

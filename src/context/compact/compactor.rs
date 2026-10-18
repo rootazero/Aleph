@@ -109,7 +109,7 @@ pub struct CompactorConfig {
     /// Whether to fall back to deterministic truncation on LLM failure (default: true).
     pub fallback_to_truncation: bool,
     /// Token budget for a single summarizer-input call (window selection and
-    /// extend-merge). Defaults to [`SUMMARIZER_INPUT_TOKEN_BUDGET`] (48k);
+    /// extend-merge). Defaults to `SUMMARIZER_INPUT_TOKEN_BUDGET` (48k);
     /// production wiring derives it from the summarizer model's own window
     /// (`ContextBudgetConfig::summarizer_input_budget`), so a narrow-window
     /// cheap/aux model cannot be fed more transcript than it can hold.

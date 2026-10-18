@@ -121,7 +121,7 @@ pub struct KnowledgeNote {
     /// source-of-truth contract held for the body and not for the header.
     ///
     /// Never contains a key in
-    /// [`parsing::KNOWN_FRONTMATTER_KEYS`]; empty for notes whose header this
+    /// `parsing::KNOWN_FRONTMATTER_KEYS`; empty for notes whose header this
     /// layer fully models, which then serialize byte-for-byte as before.
     #[serde(default)]
     pub extra_frontmatter: ExtraFrontmatter,

@@ -46,7 +46,7 @@ const DEFAULT_INTERVAL_SECS: u64 = 6 * 3600;
 /// so this controls how far back the cosine-similarity check looks.
 const DEFAULT_DEDUP_RETENTION_SECS: u64 = 14 * 86_400;
 
-/// Configuration for the periodic [[reaper]] daemon.
+/// Configuration for the periodic [\[reaper\]] daemon.
 ///
 /// All fields have `serde(default)` so older config files (which never knew
 /// about this section) deserialize unchanged.

@@ -109,7 +109,7 @@ impl VisionBridge {
     ///
     /// `want_description` gates the (potentially networked) multimodal call;
     /// OCR is always attempted because it is offline and cheap. Results are
-    /// cached for [`Self::ttl`]; a fresh cache hit returns immediately without
+    /// cached for `Self::ttl`; a fresh cache hit returns immediately without
     /// touching any provider.
     pub async fn augment(
         &self,

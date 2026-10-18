@@ -11,7 +11,7 @@
 //!    not-found, never a conflict (the revision would be an existence oracle).
 //!    The refusal is byte-identical to a missing id
 //!    ([`projects`](super::projects) `project_not_found` precedent): both go
-//!    through [`gate_canvas`], which fails closed on a store error too.
+//!    through `gate_canvas`, which fails closed on a store error too.
 //! 2. **One error throat.** Store failures reach the wire only through
 //!    [`canvas_error::respond`] (three-way split + `REVISION_CONFLICT`); the
 //!    source guard in `canvas_error.rs` pins it.
@@ -34,7 +34,7 @@
 //! fills `asset_base` with `/canvas-asset/<cap>/<canvas_id>` — the byte
 //! route the Panel resolves `<image href>` against
 //! (`server::canvas_asset_route`). Minting happens strictly AFTER
-//! [`gate_canvas`] admitted the caller: the capability is a portable copy of
+//! `gate_canvas` admitted the caller: the capability is a portable copy of
 //! that visibility verdict, valid for its TTL. `canvas.create` deliberately
 //! leaves `asset_base: None` — a brand-new canvas has no assets, and the
 //! Panel's open path goes through `canvas.get` anyway.

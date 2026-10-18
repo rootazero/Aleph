@@ -12,7 +12,7 @@
 //! - **Read-only**: never calls `upsert_*` / `delete_*`. The store is the
 //!   writer; this is a reader.
 //! - **Bounded traversals**: walks carry an explicit hard ceiling
-//!   ([`MAX_TRAVERSAL_STEPS`] = 1024, independent of node count) so an
+//!   (`MAX_TRAVERSAL_STEPS` = 1024, independent of node count) so an
 //!   accidental cycle errors out instead of running forever. (An earlier
 //!   draft of this comment described the bound as "node count plus one";
 //!   the implementation has always been the fixed ceiling.)
@@ -61,7 +61,7 @@ pub struct NodeSubgraph {
     /// Edges whose `from_id == node.id`. Same pairing.
     pub outgoing: Vec<(GraphEdge, GraphNode)>,
     /// All `OwnsReference` ancestors (governors-of-governors-of-…), bounded
-    /// by [`MAX_TRAVERSAL_STEPS`]. Empty if the chain does not reach `Root`.
+    /// by `MAX_TRAVERSAL_STEPS`. Empty if the chain does not reach `Root`.
     pub ancestor_chain: Vec<GraphNode>,
     /// All `OwnsReference` descendants (children-of-children-of-…), same
     /// bound.

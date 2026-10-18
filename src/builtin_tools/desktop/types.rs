@@ -320,7 +320,7 @@ pub struct DesktopArgs {
 
     /// Postconditions for the `verify_state` action — AX-tree predicates that
     /// are ANDed and polled until they hold (stably) or the window elapses.
-    /// See [`StatePredicate`]. Ignored by every other action.
+    /// See `StatePredicate`. Ignored by every other action.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expect: Vec<StatePredicate>,
 

@@ -62,7 +62,7 @@ where
 }
 
 /// Deserializer for the optional models field (used by
-/// `GenerationProviderConfig`). Accepts String, Vec<String>, or null/missing;
+/// `GenerationProviderConfig`). Accepts String, Vec`&lt;String&gt;`, or null/missing;
 /// an empty vec is a value, not an error.
 ///
 /// Re-exported from `aleph_protocol` rather than implemented here. That same

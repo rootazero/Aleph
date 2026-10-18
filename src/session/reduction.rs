@@ -63,7 +63,7 @@ pub enum LogContradiction {
     /// `seq` decreased between two adjacent records. REJECT.
     OutOfOrderSlice { at_seq: EventSeq },
     /// A slice handed to [`reduce_disposition`] carries an event that bears on
-    /// no disposition (see [`is_disposition_bearing`]). REJECT — a raw log
+    /// no disposition (see `is_disposition_bearing`). REJECT — a raw log
     /// passed by mistake almost always ends on the dangling
     /// `ToolCallRequested`, which would read as `Clean`.
     NonMarkerInMarkerSlice { seq: EventSeq },
@@ -438,7 +438,7 @@ pub(crate) fn is_disposition_bearing(event: &SessionEvent) -> bool {
 
 /// The server-authored origin of an unanswered seed, read back for resume.
 ///
-/// `bearing` is a disposition-bearing sequence (see [`is_disposition_bearing`])
+/// `bearing` is a disposition-bearing sequence (see `is_disposition_bearing`)
 /// in `seq` order and `user_seq` the `user_seq` of a
 /// [`RunDisposition::Unanswered`] reduced from it. Returns the
 /// `telecom_provenance` of the [`SessionEvent::SeedProvenance`] whose
@@ -482,7 +482,7 @@ pub fn unanswered_seed_provenance(
 /// The one derivation of "is this interrupted, or is someone left waiting".
 ///
 /// `markers` is a disposition-bearing sequence in `seq` order (see
-/// [`is_disposition_bearing`]): the run markers straight from
+/// `is_disposition_bearing`): the run markers straight from
 /// `SessionEventStore::load_run_markers` — which cannot say `Unanswered`,
 /// and is the list face's honest ceiling — or markers plus the message tail
 /// the coordinator reads past the last `RunFinished`, or the bearing

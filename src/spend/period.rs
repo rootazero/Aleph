@@ -2,7 +2,7 @@
 //!
 //! [`period_start_ms`] / [`period_end_ms`] answer "which window is this
 //! spend event in": the half-open `[start, end)` millisecond range a
-//! [`SpendPeriod`] resolves to around a given instant. The ledger keys rows
+//! `SpendPeriod` resolves to around a given instant. The ledger keys rows
 //! by [`period_start_ms`] and the spend verdict uses both to decide whether
 //! a principal is still inside their ceiling for the period containing
 //! "now".

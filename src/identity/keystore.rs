@@ -1,8 +1,8 @@
 //! Per-agent Ed25519 signing keys.
 //!
 //! **Wiring, not new crypto.** The keypair primitives
-//! ([`generate_keypair`](crate::gateway::security::crypto::generate_keypair),
-//! [`sign_message`](crate::gateway::security::crypto::sign_message),
+//! (`generate_keypair`,
+//! `sign_message`,
 //! [`verify_signature`](crate::gateway::security::crypto::verify_signature),
 //! [`DeviceFingerprint`]) have shipped in `gateway::security::crypto` since the
 //! device-auth work but had **no production consumer** — the `devices.public_key`

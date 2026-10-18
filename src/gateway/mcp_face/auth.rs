@@ -7,7 +7,7 @@
 //! [`AuthRefusal`].
 //!
 //! The wall rule is deliberately borrowed from
-//! [`wall_admits`](crate::gateway::server::connection::auth::wall_admits) so
+//! `wall_admits` so
 //! any future change to that predicate propagates here automatically.
 
 use crate::gateway::handlers::connect::{
@@ -141,7 +141,7 @@ pub fn authorize(
 
 /// Build the shared-token validator used in production.
 ///
-/// Delegates to [`SharedTokenManager::global_validate`], the ONE derivation of
+/// Delegates to `SharedTokenManager::global_validate`, the ONE derivation of
 /// "is this the shared gateway token". The WebSocket `connect` arm calls that
 /// function directly at both of its dispatch stations, so this closure is not a
 /// third copy of the predicate — it is the same predicate behind an

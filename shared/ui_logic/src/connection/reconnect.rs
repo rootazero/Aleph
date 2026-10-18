@@ -31,7 +31,7 @@ impl ReconnectStrategy {
         Some(delay)
     }
 
-    /// Like [`next_delay`], but shaves a deterministic *downward* fraction off
+    /// Like `next_delay`, but shaves a deterministic *downward* fraction off
     /// the delay to avoid every client re-connecting in lockstep after a server
     /// restart. `jitter_permille` is 0..=1000 (0 = no jitter, 100 = minus 10%).
     /// Only ever reduces the delay, so it can never exceed the backoff ceiling.

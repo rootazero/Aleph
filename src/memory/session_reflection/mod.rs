@@ -15,7 +15,7 @@
 //! prompt. A reflection lesson competes for retrieval like any other note —
 //! deliberately, since nothing distilled it against a user correction.
 //!
-//! Gating (driven by [`ReflectionConfig`], an opt-in feature, default off):
+//! Gating (driven by `ReflectionConfig`, an opt-in feature, default off):
 //!   - `enabled`          — master switch (the only default-off flag: the
 //!     open-loop sub-flags default on, so flipping `enabled` alone lights the
 //!     whole lessons + open-loops pipeline).

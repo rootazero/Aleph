@@ -1,5 +1,5 @@
 //! Bridge adapter: turns a [`ReplayRequest`] into a [`ReplayPermit`] backed by
-//! one frozen [`RegistrySnapshot`], and runs the prepared handler on invoke.
+//! one frozen `RegistrySnapshot`, and runs the prepared handler on invoke.
 //!
 //! `prepare` is the fail-closed eligibility gate (contract C4/C5/C6): it
 //! refuses on `effective_input == None`, on a missing stored identity, on a

@@ -124,7 +124,7 @@ pub async fn handle_create(
 /// ```
 ///
 /// Params are optional as a whole — a request with none is the default view —
-/// so this cannot go through [`parse_params`], which requires them. A malformed
+/// so this cannot go through `parse_params`, which requires them. A malformed
 /// `include_archived` is refused rather than defaulted: silently narrowing the
 /// question would answer with something indistinguishable from an empty result.
 pub async fn handle_list(

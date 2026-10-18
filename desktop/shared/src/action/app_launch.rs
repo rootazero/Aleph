@@ -19,8 +19,8 @@ use crate::error::Result;
 ///
 /// # Errors
 ///
-/// - [`DesktopError::InputFailed`] if the application cannot be launched.
-/// - [`DesktopError::NotImplemented`] on unsupported platforms.
+/// - `DesktopError::InputFailed` if the application cannot be launched.
+/// - `DesktopError::NotImplemented` on unsupported platforms.
 pub fn launch_app(app_name: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -99,8 +99,8 @@ pub fn launch_app(app_name: &str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - [`DesktopError::InputFailed`] if the application cannot be found or terminated.
-/// - [`DesktopError::NotImplemented`] on unsupported platforms.
+/// - `DesktopError::InputFailed` if the application cannot be found or terminated.
+/// - `DesktopError::NotImplemented` on unsupported platforms.
 pub fn quit_app(app_name: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {

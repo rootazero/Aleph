@@ -131,7 +131,7 @@ use crate::sync_primitives::Arc;
 
 /// Create a mock provider for testing
 ///
-/// Returns an Arc<dyn AiProvider> wrapping a `MockProvider` with a default response.
+/// Returns an Arc`&lt;dyn AiProvider&gt;` wrapping a `MockProvider` with a default response.
 /// This is useful for testing services that require an `AiProvider`.
 #[must_use]
 pub fn create_mock_provider() -> Arc<dyn AiProvider> {

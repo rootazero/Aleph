@@ -13,7 +13,7 @@
 //!
 //! `reasoning_text` is a single active-run signal (reset at each run start and
 //! cleared on `clear`), so this panel represents the current/last turn's
-//! reasoning — mounted once at the tail of [`super::messages::MessageList`].
+//! reasoning — mounted once at the tail of `super::messages::MessageList`.
 
 use super::state::{ChatPhase, ChatState};
 use crate::i18n::{t_string, use_i18n};

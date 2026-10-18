@@ -12,7 +12,7 @@
 //!
 //! ## Why a cell and not a re-resolution
 //!
-//! [`crate::gateway::execution_engine::turn_permissions`] resolves the tier
+//! `crate::gateway::execution_engine::turn_permissions` resolves the tier
 //! **once per turn**, before the harness starts, and hands it to the
 //! `ScopedToolService` the whole turn is dispatched through. Re-resolving
 //! per call would mean a session-store read on the hot path and, worse, two
@@ -25,7 +25,7 @@
 //! ## Who may flip it
 //!
 //! Only [`crate::builtin_tools::scratchpad`]'s `request_approval` action, and
-//! only after [`crate::clarification::ask`] returned a human's `approved`.
+//! only after `crate::clarification::ask` returned a human's `approved`.
 //! That path already fails closed with no approval transport and on unattended
 //! runs, so "the model releases its own gate" is never reachable without a
 //! person on the other end. The release also writes through to the session

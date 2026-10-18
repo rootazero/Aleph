@@ -185,7 +185,7 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     /// scalar-coercion pass is retried once: the model frequently emits a
     /// JSON string where the schema declares a scalar (`{"count": "5"}` for
     /// an integer field), which would otherwise burn a whole turn on an
-    /// otherwise-correct call. See [`coerce_scalar_args`] for the (deliberately
+    /// otherwise-correct call. See `coerce_scalar_args` for the (deliberately
     /// conservative) recovery rules. The borrowed `&args` deserialize keeps the
     /// happy path allocation-free while leaving `args` available for recovery.
     async fn call_json(&self, args: Value) -> Result<Value> {

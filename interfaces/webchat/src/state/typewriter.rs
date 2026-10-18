@@ -130,7 +130,7 @@ impl TypewriterClock {
     /// not a render input — re-render is driven by [`tick`](Self::tick), so
     /// touching it reactively would be a spurious self-dependency.
     ///
-    /// Creating a cursor also sweeps stale ones out (see [`STALE_CURSOR_MS`]).
+    /// Creating a cursor also sweeps stale ones out (see `STALE_CURSOR_MS`).
     #[must_use]
     pub fn advance_for(&self, id: &str, total: usize, now: f64, cps: u32, instant: bool) -> usize {
         let prev = self.reveals.with_untracked(|m| m.get(id).copied());
@@ -170,7 +170,7 @@ impl TypewriterClock {
     /// deliberately outlives the stream — so "follow the bottom" cannot be
     /// driven off transcript changes alone. Cursors are dropped by
     /// [`Self::finish`] the frame a bubble catches up and swept by
-    /// [`prune_stale`] when one is abandoned, so an empty map really is
+    /// `prune_stale` when one is abandoned, so an empty map really is
     /// "nothing is animating" rather than "nothing has animated recently".
     ///
     /// Untracked on purpose: the map is written through `update_untracked`, so
@@ -367,8 +367,8 @@ fn lag_floor(total: usize, cps: u32) -> usize {
 /// to `now` without banking budget, so a following content pause (tool call /
 /// model stall) resumes smoothly instead of dumping.
 ///
-/// The step is taken at `cps` flat and then held above [`lag_floor`], so the
-/// sweep trails the arrived text by at most [`MAX_REVEAL_LAG_SECS`] however
+/// The step is taken at `cps` flat and then held above `lag_floor`, so the
+/// sweep trails the arrived text by at most `MAX_REVEAL_LAG_SECS` however
 /// fast the model produces.
 #[must_use]
 pub fn advance_reveal(prev: Reveal, total: usize, now: f64, cps: u32, instant: bool) -> Reveal {

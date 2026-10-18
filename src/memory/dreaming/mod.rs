@@ -495,7 +495,7 @@ pub(crate) fn now_timestamp() -> i64 {
 /// Record user activity for `DreamDaemon` idle tracking.
 ///
 /// This is the sensor half of the daemon's "yield to the user" machinery — the
-/// consumer half ([`DreamDaemon::check_and_run`]'s idle precondition and the
+/// consumer half (`DreamDaemon::check_and_run`'s idle precondition and the
 /// per-stage activity check in [`DreamPipeline::run`]) is inert without it.
 /// It was exactly that for a while: the 2026-08-08 severed-wire audit cut the
 /// whole apparatus because this function had zero callers, the same-day

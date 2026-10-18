@@ -29,7 +29,7 @@ pub struct IrcConfig {
     #[serde(default)]
     pub password: Option<String>,
 
-    /// IRC channels to join (e.g., ["#aleph", "#test"])
+    /// IRC channels to join (e.g., `["#aleph", "#test"]`)
     pub channels: Vec<String>,
 
     /// Use TLS (recommended; default false to preserve legacy plaintext deployments)

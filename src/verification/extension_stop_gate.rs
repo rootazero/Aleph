@@ -21,7 +21,7 @@
 //!
 //! Anti-wedge bound: a hook that vetoes every stop would otherwise churn the
 //! loop until `max_loops`. Consecutive vetoes are counted per session and
-//! suppressed past [`MAX_CONSECUTIVE_STOP_VETOES`] (hermes bounds its
+//! suppressed past `MAX_CONSECUTIVE_STOP_VETOES` (hermes bounds its
 //! `pre_verify` nudges the same way, default 3). Hooks can see they already
 //! fired via the `STOP_HOOK_ACTIVE` env / payload flag (codex's
 //! `stop_hook_active`), so a well-written hook self-limits before the bound.

@@ -79,7 +79,7 @@ pub struct SkillManageArgs {
     /// create: one-line description of what the skill does and when to use it.
     #[serde(default)]
     pub description: Option<String>,
-    /// create: optional trigger hint rendered as the <when> element in the prompt index.
+    /// create: optional trigger hint rendered as the `&lt;when&gt;` element in the prompt index.
     #[serde(default)]
     pub when_to_use: Option<String>,
     /// create: markdown body (instructions). edit: the full SKILL.md including frontmatter.

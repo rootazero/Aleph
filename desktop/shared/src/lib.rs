@@ -13,7 +13,7 @@
 //! - [`PermissionCapability`] — TCC permission detection and request
 //! - [`MediaCapability`] — camera / audio device capture
 //! - [`AccessibilityCapability`] — AX tree queries (macOS AX, Windows UIA, Linux AT-SPI2)
-//! - [`PowerCapability`] — sleep inhibition (via the `power()` accessor)
+//! - `PowerCapability` — sleep inhibition (via the `power()` accessor)
 //!
 //! This crate holds the capability *contracts* plus the implementation that
 //! is shared across platforms. Shared does not mean API-free: where one crate

@@ -64,7 +64,7 @@ pub struct ModelRecord {
 
 impl ModelRecord {
     /// Join the reference tables for one `(provider, model)` pair, then
-    /// layer `model_def` (operator-declared, from [`ProviderConfig::model_defs`])
+    /// layer `model_def` (operator-declared, from `ProviderConfig::model_defs`)
     /// on top as the highest-priority override.
     ///
     /// `base_url` is the provider's configured or preset endpoint; `None`

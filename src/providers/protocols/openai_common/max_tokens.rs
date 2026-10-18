@@ -8,7 +8,7 @@
 //! The Responses protocol is unaffected — it uses `max_output_tokens`.
 //!
 //! Operators can override the heuristic via
-//! [`crate::config::types::provider::ModelCompat::uses_max_completion_tokens`].
+//! `crate::config::types::provider::ModelCompat::uses_max_completion_tokens`.
 //! An explicit `Some(true)` forces `max_completion_tokens` regardless of
 //! model name (e.g. a vendor-emulating OpenAI reasoner that does not match
 //! our prefix list); `Some(false)` forces `max_tokens` on a model that
@@ -25,12 +25,12 @@ pub fn uses_max_completion_tokens(model: &str) -> bool {
     m.starts_with("o1-") || m.starts_with("o3-") || m.starts_with("o4-") || m.starts_with("gpt-5")
 }
 
-/// Like [`uses_max_completion_tokens`], but consults a [`ModelCompat`]
+/// Like [`uses_max_completion_tokens`], but consults a `ModelCompat`
 /// override first. `Some(v)` from the compat block wins unconditionally;
 /// `None` (or no compat at all) falls through to the name-prefix heuristic.
 ///
 /// Use this from request builders that already have a resolved
-/// [`ModelCompat`] in hand — it keeps the override lookup single-sourced
+/// `ModelCompat` in hand — it keeps the override lookup single-sourced
 /// with the existing [`PayloadPolicy`] compat wiring rather than re-running
 /// `model_compat_for` at the call site.
 ///

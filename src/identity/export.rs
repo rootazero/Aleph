@@ -19,7 +19,7 @@
 //! ## What verifying one proves — and what it does not
 //!
 //! [`verify_export`] runs **the same walk as the live verifier**
-//! ([`walk_chain`]), differing only in where public keys come from. So a clean
+//! (`walk_chain`), differing only in where public keys come from. So a clean
 //! report means what a clean `verify` means: no row was edited, reordered,
 //! deleted from the middle or signed by a key the chain does not itself
 //! introduce.
@@ -324,13 +324,13 @@ impl ExportedRecord {
 /// The document's signature over itself — see the module doc.
 ///
 /// Covers the canonical JSON of the document **with this field removed**
-/// ([`export_preimage`]), so the envelope never has to sign its own bytes.
+/// (`export_preimage`), so the envelope never has to sign its own bytes.
 /// `default` + `skip_serializing_if` keeps documents exported before signing
 /// existed parseable — they land as `None` and verify with the same verdicts
 /// they always did, the absence reported rather than smoothed over.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportSignature {
-    /// Always [`EXPORT_SIGNATURE_SCHEME`] today; anything else is malformed,
+    /// Always `EXPORT_SIGNATURE_SCHEME` today; anything else is malformed,
     /// not a negotiation.
     pub scheme: String,
     /// Fingerprint of the agent's active key at export time. Resolved against

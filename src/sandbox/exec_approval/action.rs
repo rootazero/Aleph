@@ -215,7 +215,7 @@ pub fn summarize_call(name: &str, input: &Value) -> String {
 /// distinct secrets to one placeholder, so a summary-derived key would let an
 /// "allow session" on one credential authorize a call carrying another.
 ///
-/// The input is *canonicalized* before hashing ([`canonical_args`]): key order
+/// The input is *canonicalized* before hashing (`canonical_args`): key order
 /// is already `BTreeMap`-normalized (`serde_json` has no `preserve_order` here),
 /// explicit `null`s are dropped, and advisory non-identity keys (the model's
 /// free-text `justification`) are dropped. Without those, a model could mint a

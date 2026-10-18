@@ -114,11 +114,11 @@ pub struct AgentUpdateOutput {
     /// the live registry, everything else is durable-but-deferred — so this
     /// sentence is composed from *what actually landed on this call*, not from
     /// the section's static classification. The two hint texts still come from
-    /// [`ReloadImpact`] rather than literals here, so a reword moves this
+    /// `ReloadImpact` rather than literals here, so a reword moves this
     /// surface with the config tools instead of stranding it.
     ///
     /// The downgrade direction is the point, and it mirrors
-    /// [`config::live_apply::classify_verified`](crate::config::live_apply::classify_verified):
+    /// `config::live_apply::classify_verified`:
     /// a `Live` claim is only made when the registry write returned `true`. A
     /// REVOCATION that reports success and does not take effect is the one
     /// failure this whole field exists to prevent, and "the runtime was there

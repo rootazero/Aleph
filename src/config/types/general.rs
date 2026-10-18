@@ -25,11 +25,11 @@ pub struct GeneralConfig {
     pub browser: crate::browser::profile::BrowserSystemConfig,
     /// Global fallback provider chain.
     /// When the default provider fails with a transient error (rate limit, timeout),
-    /// these providers are tried in order. Names must match keys in [providers].
+    /// these providers are tried in order. Names must match keys in \[providers\].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback_providers: Vec<String>,
     /// Session store backend: `"file"` (default, see
-    /// [`default_session_store_backend`]) or `"sqlite"`. The doc used to name
+    /// `default_session_store_backend`) or `"sqlite"`. The doc used to name
     /// `"sqlite"` as the default while the function two lines down returned
     /// `"file"`, which made every reasoning about an accidental reset of this
     /// key read as a no-op.

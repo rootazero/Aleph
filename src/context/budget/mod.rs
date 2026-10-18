@@ -496,7 +496,7 @@ impl ContextBudget {
     /// Evaluate context pressure before a turn and return a directive.
     ///
     /// `tool_schema_tokens` is the token cost of the tool schema sent to the
-    /// provider — see [`ContextPressure::compute`].
+    /// provider — see `ContextPressure::compute`.
     pub fn before_turn(
         &mut self,
         messages: &[UnifiedMessage],
@@ -586,7 +586,7 @@ impl ContextBudget {
     ///
     /// Re-computes pressure on the post-compaction message list and compares it
     /// to the snapshot saved by [`ContextBudget::before_turn`]. If pressure
-    /// dropped by at least [`COMPACTION_EFFECTIVE_DROP`] of the budget the
+    /// dropped by at least `COMPACTION_EFFECTIVE_DROP` of the budget the
     /// compaction worked — reset the circuit breaker so it re-arms. Otherwise
     /// the breaker keeps its count, so a run of ineffective compactions still
     /// escalates to a session split (and, once splits are exhausted,

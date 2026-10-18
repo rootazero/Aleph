@@ -5,7 +5,7 @@
 //! lines — all of `builtin_tools/browser_tools/mod.rs`'s existing budget
 //! machinery works because a node is a line, which is why this round needs no
 //! second budget derivation. A name carrying a newline would break all three
-//! at once, so every string that reaches a line goes through [`capped`] and
+//! at once, so every string that reaches a line goes through `capped` and
 //! then [`quote`].
 //!
 //! **Every page-controlled string is quoted** (ruling R40). A page that could
@@ -15,7 +15,7 @@
 //! quoted: **six R40 sites**, numbered `Site N of 6` below.
 //!
 //! There are **seven** `quote` CALL SITES in this file's production code, and
-//! one of them is deliberately not one of R40's: [`unreached_line`]
+//! one of them is deliberately not one of R40's: `unreached_line`
 //! quotes an unplaceable document's frame id, which the ENGINE mints rather
 //! than the page. It is quoted anyway because it reaches a line the model
 //! parses and quoting costs nothing — but counting it among R40's
@@ -259,9 +259,9 @@ fn node_lines(state: &PageState, selected: &[usize]) -> Vec<String> {
 /// the two are iterated to a fixed point — the reserve grows by exactly the
 /// section's measured size each round, the omitted set only grows as the cut
 /// retreats, and the section's own caps bound the growth, so the loop
-/// converges in a handful of rounds ([`RESERVE_ITER_MAX`] is the fail-closed
+/// converges in a handful of rounds (`RESERVE_ITER_MAX` is the fail-closed
 /// backstop, not an expectation). The body never drops below
-/// [`OMITTED_MIN_BODY_CHARS`] for the section's sake: below that, a hint
+/// `OMITTED_MIN_BODY_CHARS` for the section's sake: below that, a hint
 /// that crowds out the page it describes is a bad trade and the plain cut is
 /// the honest answer.
 ///

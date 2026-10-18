@@ -304,7 +304,7 @@ pub enum SessionIdentity {
     /// carve-out: a live browser page is the principal's own work), the
     /// binding's `run_id` resolves (via the run index) to the binding's
     /// `session_key` (a forged or stale pairing denies), and the caller may
-    /// see that session ([`EventVisibilityIndex::session_admits`]).
+    /// see that session (`EventVisibilityIndex::session_admits`).
     ByBrowserLiveScope {
         user_id: String,
         session_key: String,
@@ -753,7 +753,7 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
     })
 }
 
-/// [`classify`] with the delivery default applied: an unrecognized topic is
+/// `classify` with the delivery default applied: an unrecognized topic is
 /// `Global` (fail-open at classification), matching
 /// `EventScopeGuard::can_receive`'s own "no rule matched → unguarded"
 /// default, so a topic not yet reviewed keeps its pre-Task-8 delivery
@@ -905,7 +905,7 @@ impl EventVisibilityIndex {
     /// a run's end — no `run_complete`, therefore no cost/token summary, no
     /// `settle_run`, and a composer stuck "busy" until reload (2026-08-09
     /// real-machine QA). A finished run's entry costs one slot in a cache
-    /// that is FIFO-capped at [`MAX_TRACKED_RUNS`] on its own, and run ids
+    /// that is FIFO-capped at `MAX_TRACKED_RUNS` on its own, and run ids
     /// are never reused, so ageing out is the whole lifecycle it needs.
     pub async fn note_frame(&self, topic: &str, data: Option<&Value>) {
         // Only `stream.*` frames describe a run. Team topics carry a
@@ -960,7 +960,7 @@ impl EventVisibilityIndex {
     /// exact twin of `visibility::session_visible` / `session_visible_to`, and
     /// for the same reason: one body, two ways of naming the actor.
     ///
-    /// The role is read here rather than at the [`EventScopeGuard`] term
+    /// The role is read here rather than at the `EventScopeGuard` term
     /// because that term keys on the topic PREFIX and this decision depends on
     /// the PAYLOAD (see [`SessionIdentity::OperatorOnly`]). Production always
     /// calls this one — the delivery loop already holds the connection's
@@ -1085,7 +1085,7 @@ impl EventVisibilityIndex {
     /// object — when this caller must receive a narrowed copy, and `None` for
     /// every other topic, which is one string compare and lets the delivery
     /// loop forward the bytes it already holds untouched. Only
-    /// [`RUNNING_SET_TOPIC`] has an arm; see the module doc for why that frame
+    /// `RUNNING_SET_TOPIC` has an arm; see the module doc for why that frame
     /// is `Global` and still not deliverable verbatim.
     ///
     /// Two properties this must keep, both of which look safe to break:
@@ -1099,7 +1099,7 @@ impl EventVisibilityIndex {
     ///    for the rest of the connection. Hence a payload rewrite here and no
     ///    new `false` in `event_admits`.
     /// 2. **An element whose owner cannot be resolved is DROPPED, never passed
-    ///    through.** [`Self::session_admits`] already fails closed on a
+    ///    through.** `Self::session_admits` already fails closed on a
     ///    malformed key, an absent row and a store error; applying it per
     ///    element inherits that rule rather than re-deriving it. A walled
     ///    connection (`caller_user: None`) resolves nothing and therefore

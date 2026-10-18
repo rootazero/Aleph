@@ -97,7 +97,7 @@ use std::sync::OnceLock;
 ///
 /// [`effective_token`] returns `None` for it, because the four *badge*
 /// surfaces suppress it entirely — a marker on every finished run is noise.
-/// It still has a row in [`LABELS`]: the two *receipt* surfaces
+/// It still has a row in `LABELS`: the two *receipt* surfaces
 /// (`aleph exec`'s footer, `aleph watch`'s feed) print a status word on every
 /// line including the clean one, and giving them the word here is what stops
 /// "完成" from being hard-coded twice in a crate with no i18n of its own.

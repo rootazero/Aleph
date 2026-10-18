@@ -42,7 +42,7 @@
 //! literal and recompile — there is no runtime config knob.
 //!
 //! The table is sectioned by **vendor**, but models are routinely served by
-//! somebody other than their vendor. [`lookup_rates`] therefore tries the
+//! somebody other than their vendor. `lookup_rates` therefore tries the
 //! provider id first and falls back to the vendor named by the *model* id,
 //! tagging which one answered via [`RateBasis`]. Without that fallback every
 //! aggregator, cloud reseller and private relay priced as `Unknown` — and
@@ -53,8 +53,8 @@
 //!
 //! Some vendors charge a premium once a prompt crosses an input-token
 //! threshold (Gemini 2.5 Pro and Claude Sonnet's 1M-context beta both step
-//! up at 200K). [`PRICE_TABLE`] holds the base rate; the parallel
-//! [`TIER_TABLE`] holds the >threshold overrides. [`estimate`] picks the
+//! up at 200K). `PRICE_TABLE` holds the base rate; the parallel
+//! `TIER_TABLE` holds the >threshold overrides. [`estimate`] picks the
 //! tier from the prompt's input size, so long-context runs are no longer
 //! billed at the (≈2x cheaper) base rate. Flat-priced models skip the tier
 //! lookup entirely and stay byte-identical.
@@ -68,7 +68,7 @@ use crate::providers::model_catalog::prefix_matches;
 /// Estimated USD cost for a single agent run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CostEstimate {
-    /// Cost in USD. `0.0` when [`status`] is `Unknown`.
+    /// Cost in USD. `0.0` when `status` is `Unknown`.
     pub usd: f64,
     /// Confidence band — see [`CostStatus`].
     pub status: CostStatus,
@@ -77,7 +77,7 @@ pub struct CostEstimate {
     /// Model identifier the table was queried with (e.g. `"claude-sonnet-4-6"`).
     pub model: String,
     /// Which table the rates came from — see [`RateBasis`]. `None` when
-    /// [`status`] is `Unknown` (no rates were found at all).
+    /// `status` is `Unknown` (no rates were found at all).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub basis: Option<RateBasis>,
 }

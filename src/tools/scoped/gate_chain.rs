@@ -3,7 +3,7 @@
 //!
 //! [`super::dispatch`] used to answer that question with a bare disjunction:
 //!
-//! ```ignore
+//! ```text
 //! if self.inner.requires_confirmation(name)
 //!     || self.is_permission_ask(name)
 //!     || self.tier_asks_for_arguments(name, input) { … }

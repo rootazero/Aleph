@@ -65,7 +65,7 @@ impl TaskReadArtifactTool {
 
     /// Wire the optional coord task store and current agent id so the
     /// ownership gate can look up the task's team_id and verify the
-    /// caller is a member. Mirrors [`TaskSubmitTool::with_team_store`].
+    /// caller is a member. Mirrors `TaskSubmitTool::with_team_store`.
     #[must_use]
     pub fn with_team_store(
         mut self,

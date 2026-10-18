@@ -116,11 +116,11 @@ pub struct CodeCheckOutput {
     pub error_count: usize,
     /// Number of `warning`-severity diagnostics.
     pub warning_count: usize,
-    /// Normalised diagnostics, capped at [`MAX_DIAGNOSTICS`].
+    /// Normalised diagnostics, capped at `MAX_DIAGNOSTICS`.
     pub diagnostics: Vec<Diagnostic>,
     /// Tail of the raw combined stdout+stderr, for cases the parser missed.
     pub raw_tail: String,
-    /// `true` when diagnostics were dropped to satisfy [`MAX_DIAGNOSTICS`].
+    /// `true` when diagnostics were dropped to satisfy `MAX_DIAGNOSTICS`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
 }

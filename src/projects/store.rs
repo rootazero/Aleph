@@ -73,7 +73,7 @@ impl ProjectStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
     /// Stable identifier, `p-<uuid simple>`. The `p-` prefix is load-bearing:
-    /// [`crate::memory::project_scope::SCOPED_FAMILIES`] and
+    /// `crate::memory::project_scope::SCOPED_FAMILIES` and
     /// `gateway::visibility::partition_visible` both key on it to tell a
     /// project partition from the legacy `proj-` directory family (note
     /// `"proj-…"` does not start with `"p-"`, so the two cannot collide).
@@ -330,7 +330,7 @@ impl ProjectStore {
     /// therefore not a failed migration.
     ///
     /// Writes `project_members`, so it ends its closure with
-    /// [`Self::republish_roster_locked`] like every other roster mutation.
+    /// `Self::republish_roster_locked` like every other roster mutation.
     /// This is `pub`, and until 2026-08-07 it was the one roster-mutating
     /// method whose projection depended on what the caller did NEXT — it
     /// happened to be correct only because [`Self::migrate`] calls
@@ -577,15 +577,15 @@ impl ProjectStore {
     /// # A room can be claimed two ways — this guard must see both
     ///
     /// `current_session_key` is only ONE of the two claim sources
-    /// [`Self::room_claiming`] recognises ([`ClaimSource::ExplicitClaim`]).
-    /// The other, [`ClaimSource::BoundConversation`], is a row in
+    /// `Self::room_claiming` recognises (`ClaimSource::ExplicitClaim`).
+    /// The other, `ClaimSource::BoundConversation`, is a row in
     /// `project_channel_bindings` — and [`Self::bind_conversation`] never
     /// touches `current_session_key` at all, it only checks the project is
     /// `status = 'active'`. So a room bound to a channel conversation but
     /// never claimed by a Panel session (the common shape for a
     /// channel-created room) passed the old single-arm guard: its binding row
     /// survives (`BINDING_DDL` declares no FK, no cascade), and
-    /// `project_for_conversation` keeps answering [`Self::room_claiming`]'s
+    /// `project_for_conversation` keeps answering `Self::room_claiming`'s
     /// arm 2 for a project id that no longer exists — a binding orphaned
     /// permanently, unlistable on any surface (`bindings_for` is
     /// per-project). The second arm below closes that: it names
@@ -715,7 +715,7 @@ impl ProjectStore {
     ///
     /// Get-or-create, atomic: the conditional `UPDATE … WHERE
     /// current_session_key IS NULL` and the read-back run in one
-    /// [`Self::with_conn`] closure, so two members opening the room at the same
+    /// `Self::with_conn` closure, so two members opening the room at the same
     /// moment converge — the loser adopts the winner's key instead of forking a
     /// second conversation. Returns the effective key, which is `candidate`
     /// only when this call is the one that claimed it.
@@ -935,9 +935,9 @@ impl ProjectStore {
 
     /// The room a conversation belongs to, if any.
     ///
-    /// Sibling of [`Self::project_for_session_key`]: both answer "which room
+    /// Sibling of `Self::project_for_session_key`: both answer "which room
     /// owns this turn" and both must stay a cheap indexed lookup, because
-    /// [`Self::room_claiming`] calls them on every run.
+    /// `Self::room_claiming` calls them on every run.
     ///
     /// `channel_id` and `peer_id` are normalized the same way
     /// [`Self::bind_conversation`] normalizes them before storing. A caller
@@ -1309,7 +1309,7 @@ impl ProjectStore {
     /// Look up the CURRENT CALLER's project bound to `path`.
     ///
     /// Scoped to the caller on purpose: path binding is unique per owner, not
-    /// globally (see [`workspace_uniqueness_ddl`]), so a global lookup here
+    /// globally (see `workspace_uniqueness_ddl`), so a global lookup here
     /// would hand one user another user's room.
     pub fn find_by_path(&self, path: &Path) -> Result<Option<Project>, ProjectError> {
         self.find_by_path_for(path, crate::scope::ambient_owner().as_deref())
@@ -1319,7 +1319,7 @@ impl ProjectStore {
     /// [`Self::add_for`] for why a spawned caller must use this.
     ///
     /// The absence-resolution below must agree with
-    /// [`workspace_uniqueness_ddl`]'s: that index resolves a NULL
+    /// `workspace_uniqueness_ddl`'s: that index resolves a NULL
     /// `owner_user_id` to the constant [`OWNER_USER_ID`], not to whichever
     /// caller happens to be asking, and the old query here bound the SAME
     /// `?2` parameter into both `COALESCE` slots — `COALESCE(owner_user_id,

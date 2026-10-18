@@ -9,7 +9,7 @@
 //! This module provides the type-level distinction and the pure conversion
 //! math. The actual viewport lookup (which display, what dimensions) is the
 //! caller's responsibility — typically resolved against
-//! [`crate::DisplayInfo`] from [`ScreenCapability::display_list`].
+//! [`crate::DisplayInfo`] from `ScreenCapability::display_list`.
 
 use serde::{Deserialize, Serialize};
 

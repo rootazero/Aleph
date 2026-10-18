@@ -9,7 +9,7 @@
 /// `team_delegate`, `message_send`, `team_status`, `task_submit`) takes
 /// `team_id` as a required argument. If the leader is only told the team
 /// *name*, it passes the name as the id and every call fails with
-/// "Team '<name>' not found" — the team is never actually orchestrated and
+/// "Team '`&lt;name&gt;`' not found" — the team is never actually orchestrated and
 /// members are never reached.
 #[must_use]
 pub fn build(

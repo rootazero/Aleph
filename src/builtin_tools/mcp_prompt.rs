@@ -174,7 +174,7 @@ pub struct McpPromptEntry {
     /// Server id this prompt belongs to.
     pub server: String,
     /// Opaque, server-qualified id ready for `mcp_get_prompt` — pass verbatim;
-    /// do not construct or edit it (see [`super::mcp_resource::qualified_id`]
+    /// do not construct or edit it (see `super::mcp_resource::qualified_id`
     /// on the doubled server segment).
     pub name: String,
     /// Prompt description, when the server supplied one.
@@ -186,7 +186,7 @@ pub struct McpPromptEntry {
 /// Output from `mcp_list_prompts`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpListPromptsOutput {
-    /// Discovered prompts (capped at [`MAX_PROMPT_ENTRIES`]).
+    /// Discovered prompts (capped at `MAX_PROMPT_ENTRIES`).
     pub prompts: Vec<McpPromptEntry>,
     /// Number of entries returned.
     pub count: usize,
@@ -198,7 +198,7 @@ pub struct McpListPromptsOutput {
 /// Discovery counterpart to [`McpGetPromptTool`]: lists the prompt templates
 /// every server this run may see advertises, so the model knows what it can fetch. Each
 /// entry's `name` is an opaque, server-qualified id built by
-/// [`super::mcp_resource::qualified_id`] — the exact form [`McpGetPromptTool`]
+/// `super::mcp_resource::qualified_id` — the exact form [`McpGetPromptTool`]
 /// parses. Capability-gated by the MCP tool bridge alongside the get-prompt tool.
 pub struct McpListPromptsTool {
     servers: VisibleServers,

@@ -5,7 +5,7 @@ use serde_json::json;
 
 /// List all registered marketplaces (including built-in).
 ///
-/// Built from [`MarketplaceListResult`] rather than a `json!` literal: serde
+/// Built from `MarketplaceListResult` rather than a `json!` literal: serde
 /// ignores unknown keys on the way in, so a test that only *parses* a real
 /// response is structurally blind to whatever else is on the wire. Constructing
 /// from the contract type makes over-sending a compile error instead of an

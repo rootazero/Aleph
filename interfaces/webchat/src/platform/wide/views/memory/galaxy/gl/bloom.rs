@@ -7,7 +7,7 @@
 //! wrapper in Rust frees a ~40-byte JS handle, NOT the multi-MB GPU allocation
 //! behind it — that only happens on an explicit `gl.delete_*`. A `Drop` impl
 //! cannot do it either (Drop has no way to reach the GL context), so teardown is
-//! EXPLICIT: [`FboTex::delete`] / [`BloomPipeline::destroy`]. Do not "fix" this
+//! EXPLICIT: `FboTex::delete` / [`BloomPipeline::destroy`]. Do not "fix" this
 //! back to `Drop`.
 
 use web_sys::{
@@ -182,7 +182,7 @@ impl BloomPipeline {
     /// teardown path, before dropping the `BloomPipeline`; the pipeline is
     /// unusable afterwards.
     ///
-    /// Covers the same leak class as [`FboTex::delete`] for the objects that
+    /// Covers the same leak class as `FboTex::delete` for the objects that
     /// `resize` does NOT recreate (the three programs and the shared VAO).
     pub fn destroy(&self, gl: &Gl) {
         self.scene.delete(gl);

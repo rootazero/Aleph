@@ -13,7 +13,7 @@
 //! connection — the WS login wall refuses every non-`connect` method to an
 //! unauthorized caller, so no extra per-method gate is needed.
 //!
-//! Revocation is immediate, not deferred to the next handshake: [`revoke_device_and_kick`]
+//! Revocation is immediate, not deferred to the next handshake: `revoke_device_and_kick`
 //! writes the store revoke, then (only when that write actually revoked
 //! something) downgrades the device's live sessions to the login wall and
 //! publishes `DeviceRevoked` to close their sockets — demote-before-kick, see
@@ -254,7 +254,7 @@ pub async fn handle_devices_list(
 /// Response: `{ "revoked": bool, "device_id": "device-…" }` — `revoked` is
 /// `false` when the id is unknown, already revoked, or is not a Panel device
 /// (e.g. a cluster node). The store write and the live-session kick both
-/// happen inside [`revoke_device_and_kick`] before this handler responds, so
+/// happen inside `revoke_device_and_kick` before this handler responds, so
 /// `revoked: true` means the device is already gone by the time the caller
 /// sees the reply.
 pub async fn handle_devices_revoke(

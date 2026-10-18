@@ -34,7 +34,7 @@ pub struct GraphEdge {
     pub to: String,
     /// LLM-chosen relation verb; `None` for a plain wikilink.
     pub rel_type: Option<String>,
-    /// Edge confidence in [0,1]; wikilinks default to 1.0.
+    /// Edge confidence in \[0,1\]; wikilinks default to 1.0.
     pub confidence: f32,
 }
 

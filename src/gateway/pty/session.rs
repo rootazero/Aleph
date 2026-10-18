@@ -364,7 +364,7 @@ impl PtySession {
     /// Three acquisitions, none overlapping, and the screen lock is not among
     /// them:
     /// 1. the foreground lock, to ask the gate;
-    /// 2. the master lock, inside [`Self::terminal_leader`], for one
+    /// 2. the master lock, inside `Self::terminal_leader`, for one
     ///    `tcgetpgrp` ioctl and nothing else;
     /// 3. the foreground lock again, to fold the outcome in.
     ///

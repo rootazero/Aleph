@@ -7,9 +7,9 @@
 //! `path = "{category}/{title}"` within each agent.
 //!
 //! Split into:
-//! - [`helpers`]: free helper functions (`row_to_entry`, hashing, provenance
+//! - `helpers`: free helper functions (`row_to_entry`, hashing, provenance
 //!   encoding, disk loading, edge collection).
-//! - [`store_impl`]: the single indivisible `impl NoteStore for
+//! - `store_impl`: the single indivisible `impl NoteStore for
 //!   SqliteMemoryBackend` block (cannot be split across files).
 
 mod helpers;

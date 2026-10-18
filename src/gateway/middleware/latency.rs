@@ -8,7 +8,7 @@
 //! observability (p50/p90/p99 via `histogram_quantile`) without a new
 //! measurement path or any external dependency.
 //!
-//! A single process-wide instance is installed by [`MiddlewareChain`] at
+//! A single process-wide instance is installed by `MiddlewareChain` at
 //! startup (mirroring the global request-state registry) so both the writer
 //! (`MetricsService`) and the reader (`/metrics`) reach the same counters.
 

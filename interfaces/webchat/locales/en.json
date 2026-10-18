@@ -2555,7 +2555,10 @@
     "title": "Appearance",
     "subtitle": "Theme, accent, text size, corner radius and density. Stored in this browser and applied instantly.",
     "reset": "Reset to defaults",
-    "popover_title": "Theme"
+    "popover_title": "Theme",
+    "theme_picker_aria": "Panel theme",
+    "theme_hint": "/theme system | light | dark",
+    "close_aria": "Close"
   },
   "command_palette": {
     "group_diagnostics": "Diagnostics",

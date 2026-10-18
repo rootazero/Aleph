@@ -4,7 +4,7 @@
 //! Historical note: this file used to host a `McpRegistrar` struct for a
 //! two-phase `batch_register` write path, then nothing plugin-shaped at all
 //! while a boot-time sync on `ExtensionManager` did the registration inline
-//! from the loader's `.mcp.json` mirror. [`register_transient_servers`] is the plugin path now: it is the
+//! from the loader's `.mcp.json` mirror. `register_transient_servers` is the plugin path now: it is the
 //! `mcp_server` effect `lifecycle.rs::mount` records, and its disposer is what
 //! `unmount` runs. `McpScope` below is the per-agent (sub-agent) scope and is
 //! unrelated to plugin mounting.
@@ -163,7 +163,7 @@ impl McpScope {
     /// eagerly + in parallel via `futures::future::try_join_all`.
     ///
     /// Each successfully-spawned inline server has its `tools/list` queried
-    /// and the entries are converted to [`ToolRegistration`] (named
+    /// and the entries are converted to `ToolRegistration` (named
     /// `<server>:<tool>`, `plugin_id = "inline:<server>"`); the snapshot is
     /// stored on the scope so [`Self::tools`] can surface them without an
     /// async re-query. A server that fails to list (e.g. an old MCP server

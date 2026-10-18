@@ -48,7 +48,7 @@ pub(crate) fn ThemeCommandPicker(
     let i18n = use_i18n();
     view! {
         <Show when=move || open.get()>
-            <div class="absolute bottom-full inset-x-0 mb-2 z-50 rounded-xl border border-border bg-surface-overlay p-3 flex flex-wrap items-center gap-2" role="dialog" aria-label="Panel theme">
+            <div class="absolute bottom-full inset-x-0 mb-2 z-50 rounded-xl border border-border bg-surface-overlay p-3 flex flex-wrap items-center gap-2" role="dialog" aria-label=t_string!(i18n, appearance.theme_picker_aria)>
                 <span>{move || t_string!(i18n, appearance.popover_title).to_string()}</span>
                 {ThemeMode::ALL.into_iter().enumerate().map(|(index, mode)| view! {
                     <button class=move || if selected.get() == index { "px-3 py-2 rounded-lg bg-primary text-white" } else { "px-3 py-2 rounded-lg hover:bg-surface-sunken" } on:click=move |_| {
@@ -57,9 +57,9 @@ pub(crate) fn ThemeCommandPicker(
                     }>{move || mode.label(i18n)}</button>
                 }).collect::<Vec<_>>()}
                 <Show when=move || invalid.get()>
-                    <span class="text-text-secondary">"/theme system | light | dark"</span>
+                    <span class="text-text-secondary">{t_string!(i18n, appearance.theme_hint).to_string()}</span>
                 </Show>
-                <button aria-label="Close" on:click=move |_| open.set(false)>"×"</button>
+                <button aria-label=t_string!(i18n, appearance.close_aria) on:click=move |_| open.set(false)>"×"</button>
             </div>
         </Show>
     }

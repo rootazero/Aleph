@@ -1,7 +1,7 @@
 //! `NotificationsState` — UI-only projection over `DashboardState.alerts`.
 //!
 //! The data layer already aggregates server-side alerts in
-//! [`DashboardState::alerts`] via the `alerts.**` topic subscription. What's
+//! `DashboardState::alerts` via the `alerts.**` topic subscription. What's
 //! missing is an aggregate UI surface — a bell with a count badge and a
 //! popover listing every active alert. This module holds the small piece of
 //! UI-private state that surface needs (open/closed, locally-dismissed keys)

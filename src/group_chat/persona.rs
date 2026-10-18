@@ -16,7 +16,7 @@ pub struct PersonaRegistry {
 }
 
 impl PersonaRegistry {
-    /// Build a registry from a slice of [`PersonaConfig`].
+    /// Build a registry from a slice of `PersonaConfig`.
     ///
     /// Each config is converted to a [`Persona`] and indexed by its `id`.
     /// If duplicate IDs exist, the last one wins.

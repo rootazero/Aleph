@@ -2,7 +2,7 @@
 //!
 //! Mirrors the HTTP `/v1/admin/secrets` surface so thin clients can
 //! manage vault entries without going through the policy/HTTP layer.
-//! All operations route through [`SharedTokenManager`] just like the
+//! All operations route through `SharedTokenManager` just like the
 //! HTTP path — the auth token still acts as the AES-GCM master key.
 //!
 //! RPCs:

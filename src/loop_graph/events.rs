@@ -167,7 +167,7 @@ impl TopologyEventBus {
     /// Clone the inner lag counter so a subscriber task can record lags
     /// without holding the bus itself (which would keep the Sender alive
     /// past every other send site and prevent the bounded channel from
-    /// closing — see [`spawn_event_persister`] tests).
+    /// closing — see `spawn_event_persister` tests).
     /// Counter is incremented by subscribers via `Arc::fetch_add` when they
     /// observe a `RecvError::Lagged(n)`; future audit-warning consumers can
     /// read it by re-cloning. Resetting is intentionally not provided.

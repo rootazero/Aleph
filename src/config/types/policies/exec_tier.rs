@@ -226,11 +226,11 @@ pub enum ExecTier {
     ///    `custom["exec_tier"]` carrier already is.
     ///
     /// Deliberately NOT offerable as the install-wide `[policies] exec_tier`
-    /// default — see [`builtin_tiers`] vs [`session_tiers`]. A global `plan`
+    /// default — see `builtin_tiers` vs `session_tiers`. A global `plan`
     /// would have nothing to hand back to when a plan is approved.
     ///
-    /// Carve-outs: [`HUMAN_CONTACT_TOOLS`] (asking the user is how planning
-    /// resolves what exploration cannot) and [`PLAN_REACHABLE_TOOLS`] (the plan
+    /// Carve-outs: `HUMAN_CONTACT_TOOLS` (asking the user is how planning
+    /// resolves what exploration cannot) and `PLAN_REACHABLE_TOOLS` (the plan
     /// file plus the handoff that leaves this tier, and read-only delegation,
     /// which runs through this very gate).
     ///
@@ -319,7 +319,7 @@ impl ExecTier {
 
     /// The stricter of two tiers — the composition rule for a ceiling.
     ///
-    /// Same shape as [`restrictive_min`] one level up: composing permissions
+    /// Same shape as `restrictive_min` one level up: composing permissions
     /// may only ever tighten, so a ceiling cannot accidentally grant.
     #[must_use]
     pub const fn most_restrictive(a: Self, b: Self) -> Self {
@@ -366,7 +366,7 @@ impl ExecTier {
     }
 
     /// `true` when this *call* must ask because of its arguments, whatever the
-    /// name-keyed rules said. See [`DESTRUCTIVE_FILE_OPS`].
+    /// name-keyed rules said. See `DESTRUCTIVE_FILE_OPS`.
     ///
     /// Two layers, and the difference matters:
     ///
@@ -418,7 +418,7 @@ impl ExecTier {
     ///
     /// # Why this cannot be a tier rule
     ///
-    /// [`self_config_touches_the_gate`] exists because "write the override,
+    /// `self_config_touches_the_gate` exists because "write the override,
     /// then act freely" is two legal steps whose composition equals the gated
     /// one-step write. It was written as an `Auto`-only rule, which left the
     /// composition open on the tier where it is cheapest: under `Full` the
@@ -432,7 +432,7 @@ impl ExecTier {
     /// `Ask` and `Auto` reach the same call through their own rules, so this
     /// changes the gated set at `Full` only. It is deliberately narrow: it does
     /// not fire for `self_config` generally, only for a write whose path
-    /// intersects [`GATE_DECIDING_CONFIG_PATHS`].
+    /// intersects `GATE_DECIDING_CONFIG_PATHS`.
     ///
     /// An explicit `[policies.tool_permissions]` entry still stands it down
     /// (`ScopedToolServiceBuilder::explicitly_named`) — that entry is a
@@ -471,7 +471,7 @@ impl ExecTier {
     /// actually gates — so a change to the enforcement rule and its description
     /// cannot drift apart. Model-facing prompt text is always English (unlike a
     /// user-surface label, which follows the reader's locale — see
-    /// [`TierPreset`]).
+    /// `TierPreset`).
     #[must_use]
     pub const fn approval_prompt_line(self) -> &'static str {
         match self {

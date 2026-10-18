@@ -54,7 +54,7 @@ pub struct AlephPluginToml {
     pub services: Vec<ServiceSection>,
     #[serde(default)]
     pub capabilities: CapabilitiesSection,
-    /// Optional [memory] section — declares which memory extension hooks this plugin implements.
+    /// Optional \[memory\] section — declares which memory extension hooks this plugin implements.
     #[serde(default)]
     pub memory: Option<MemoryManifestSection>,
 }

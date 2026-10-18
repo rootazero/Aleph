@@ -69,7 +69,7 @@ pub struct ChannelBinding {
 /// Normalize a channel or peer id the same way a live [`SessionKey`] does.
 ///
 /// The only `&str -> normalized String` conversion `ProjectStore`'s binding
-/// methods use — calls [`sanitize_component`] directly rather than
+/// methods use — calls `sanitize_component` directly rather than
 /// reimplementing it, so the write path (an operator naming a conversation)
 /// and the read path (a `SessionKey` derived from an inbound message via
 /// [`conversation_of`]) cannot drift apart. See the module doc for why they

@@ -20,7 +20,7 @@
 //! correct the provider section), never a mechanical doctor repair. Findings
 //! carry a `fix_hint` routing to those tools.
 //!
-//! Registered only via [`DiagnosticEngine::with_runtime_checks`]
+//! Registered only via `DiagnosticEngine::with_runtime_checks`
 //! (`super::super`) — the offline `default_registry()` stays path-only so
 //! `aleph-server doctor` keeps working without network access.
 

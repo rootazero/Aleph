@@ -790,7 +790,7 @@ const ORG_SHARED_PREFIXES: &[&str] = &[];
 
 /// `OrgShared` entries carry a one-line reason at the point they're listed,
 /// keyed by the exact method or by the family prefix
-/// ([`ORG_SHARED_PREFIXES`]).
+/// (`ORG_SHARED_PREFIXES`).
 pub const ORG_SHARED_REASONS: &[(&str, &str)] = &[];
 
 #[must_use]

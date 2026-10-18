@@ -14,7 +14,7 @@
 //!    `TeamDispatcher::subscribe_task_events`) and wakes any goal parked on
 //!    the settling task.
 //! 2. **Restarts** kill the sleeping timer task and may swallow a settle
-//!    event: [`Self::rearm_parked_goals`] runs once at boot — re-arming
+//!    event: `Self::rearm_parked_goals` runs once at boot — re-arming
 //!    claimed timers with their remaining delay (the stored pending marker IS
 //!    the `confirm_fire` key, so the CAS still holds), claiming never-claimed
 //!    timer barriers, and re-checking task barriers against the live
@@ -29,7 +29,7 @@
 //!    park written from the FAILURE arm (`block_goal_on_failure`'s transient
 //!    park) therefore has no waker at all — and the park clears
 //!    `pending_continuation_ms`, so no in-flight timer survives it either.
-//!    [`Self::sweep_once`] closes that by treating an elapsed, unclaimed timer
+//!    `Self::sweep_once` closes that by treating an elapsed, unclaimed timer
 //!    barrier exactly like a settled task barrier. Bounded lateness (one sweep
 //!    interval) instead of "until someone happens to type in that session".
 //!
