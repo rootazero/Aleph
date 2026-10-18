@@ -182,7 +182,6 @@ impl ToolHandler for BuiltinRegistryRouter {
     }
 
     fn definition(&self) -> ToolDefinition {
-        use crate::ToolSource as CatalogSource;
         match self.inner.get_tool(&self.name) {
             Some(unified) => {
                 // Same resolution chain as `BuiltinHandler`: declared → table
@@ -200,20 +199,13 @@ impl ToolHandler for BuiltinRegistryRouter {
                 // this router for tools the agent loop already has registered.
                 // The MCP source variant carries the server id; projecting it
                 // here means the harness can read the origin straight from the
-                // definition without a second lookup.
-                let source = match &unified.source {
-                    CatalogSource::Builtin => ToolSource::Builtin,
-                    CatalogSource::Mcp { server } => ToolSource::Mcp {
-                        server_id: server.clone(),
-                    },
-                    CatalogSource::Plugin { plugin_id } => ToolSource::Extension {
-                        plugin_id: plugin_id.clone(),
-                    },
-                    CatalogSource::Skill { id, plugin_id } => ToolSource::Extension {
-                        plugin_id: plugin_id.clone().unwrap_or_else(|| id.clone()),
-                    },
-                    CatalogSource::Native | CatalogSource::Custom { .. } => ToolSource::Builtin,
-                };
+                // definition without a second lookup. The six-arm mapping
+                // lives in `aleph-slot-api` since P0 Task 2 (approved
+                // caller-gate C) so this router and every other projector
+                // share one derivation.
+                let source = aleph_slot_api::metadata::project_metadata_source_to_descriptor(
+                    &unified.source,
+                );
                 ToolDefinition {
                     name: self.name.clone(),
                     description: unified.description.clone(),
@@ -233,7 +225,7 @@ impl ToolHandler for BuiltinRegistryRouter {
                     // come from the same source the registry itself uses.
                     metadata: ToolDefinitionMetadata {
                         hidden_from_llm: false,
-                        requires_approval: unified.requires_confirmation,
+                        requires_approval: unified.requires_confirmation(),
                         tags: Vec::new(),
                         idempotent,
                         max_duration_ms: Some(max_duration_ms),
@@ -332,7 +324,12 @@ pub async fn register_builtin_routers(
             Arc::clone(&tool_registry),
         ));
         let descriptor = ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
-        match registry.register(descriptor, handler) {
+        // Capture the producer's actual result budget in the same admission as
+        // the handler and descriptor. A missing metadata entry remains None.
+        let max_result_tokens = tool_registry
+            .get_tool(&name)
+            .and_then(|tool| tool.max_result_tokens);
+        match registry.register_with_result_budget(descriptor, handler, max_result_tokens) {
             Ok(handle) => scope.track(handle),
             Err(e) => {
                 // Partial registration: roll back everything this call has
@@ -532,6 +529,125 @@ mod builtin_handler_tests {
                 async move { value.ok_or_else(|| crate::error::AlephError::tool_not_found(&name)) },
             )
         }
+    }
+
+    struct BudgetToolRegistry {
+        tools: HashMap<String, crate::tool_metadata::UnifiedTool>,
+        results: HashMap<String, serde_json::Value>,
+    }
+
+    impl crate::executor::ToolRegistry for BudgetToolRegistry {
+        fn get_tool(&self, name: &str) -> Option<&crate::tool_metadata::UnifiedTool> {
+            self.tools.get(name)
+        }
+
+        fn execute_tool(
+            &self,
+            tool_name: &str,
+            _arguments: serde_json::Value,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<serde_json::Value>> + Send + '_>>
+        {
+            let value = self.results.get(tool_name).cloned();
+            let name = tool_name.to_string();
+            Box::pin(
+                async move { value.ok_or_else(|| crate::error::AlephError::tool_not_found(&name)) },
+            )
+        }
+    }
+
+    fn budget_tool(
+        name: &str,
+        max_result_tokens: Option<usize>,
+    ) -> crate::tool_metadata::UnifiedTool {
+        let mut tool = crate::tool_metadata::UnifiedTool::new(
+            format!("builtin:{name}"),
+            name,
+            "test builtin",
+            crate::tool_metadata::ToolSource::Builtin,
+        );
+        tool.max_result_tokens = max_result_tokens;
+        tool
+    }
+
+    #[tokio::test]
+    async fn register_builtin_routers_captures_declared_result_budget() {
+        let registry = ToolHandlerRegistry::new();
+        let mut tools = HashMap::new();
+        tools.insert(
+            "budgeted_builtin".to_string(),
+            budget_tool("budgeted_builtin", Some(17)),
+        );
+        let tool_registry: Arc<dyn ToolRegistry> = Arc::new(BudgetToolRegistry {
+            tools,
+            results: HashMap::new(),
+        });
+
+        let scope = register_builtin_routers(
+            &registry,
+            tool_registry,
+            vec!["budgeted_builtin".to_string()],
+        )
+        .await
+        .expect("registration should succeed");
+        let snapshot = registry.snapshot_state();
+        assert_eq!(
+            snapshot
+                .entry("budgeted_builtin")
+                .expect("registered entry")
+                .max_result_tokens,
+            Some(17)
+        );
+        assert!(scope.dispose().await.all_ok());
+    }
+
+    #[tokio::test]
+    async fn register_builtin_routers_preserves_none_and_missing_result_budget() {
+        let registry = ToolHandlerRegistry::new();
+        let mut tools = HashMap::new();
+        tools.insert(
+            "unbudgeted_builtin".to_string(),
+            budget_tool("unbudgeted_builtin", None),
+        );
+        let tool_registry: Arc<dyn ToolRegistry> = Arc::new(BudgetToolRegistry {
+            tools,
+            results: HashMap::new(),
+        });
+        let scope = register_builtin_routers(
+            &registry,
+            Arc::clone(&tool_registry),
+            vec!["unbudgeted_builtin".to_string()],
+        )
+        .await
+        .expect("registration should succeed");
+        assert_eq!(
+            registry
+                .snapshot_state()
+                .entry("unbudgeted_builtin")
+                .expect("registered entry")
+                .max_result_tokens,
+            None
+        );
+        assert!(scope.dispose().await.all_ok());
+
+        let missing_registry = ToolHandlerRegistry::new();
+        let missing_scope = register_builtin_routers(
+            &missing_registry,
+            Arc::new(MockToolRegistry {
+                results: HashMap::new(),
+            }),
+            vec!["missing_metadata_builtin".to_string()],
+        )
+        .await
+        .expect("registration should succeed without metadata");
+        assert_eq!(
+            missing_registry
+                .snapshot_state()
+                .entry("missing_metadata_builtin")
+                .expect("registered entry")
+                .max_result_tokens,
+            None
+        );
+        assert!(missing_scope.dispose().await.all_ok());
     }
 
     /// The six MCP-bridge capability names are registered by the MCP bridge

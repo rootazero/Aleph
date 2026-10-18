@@ -540,9 +540,10 @@ impl ClarificationManager {
         expected_request_id: Option<&str>,
     ) -> bool {
         let mut pending = self.pending.write().await;
-        if pending.get(session_key).is_none_or(|entry| {
-            expected_request_id.is_some_and(|id| id != entry.request_id)
-        }) {
+        if pending
+            .get(session_key)
+            .is_none_or(|entry| expected_request_id.is_some_and(|id| id != entry.request_id))
+        {
             return false;
         }
         let Some(mut entry) = pending.remove(session_key) else {

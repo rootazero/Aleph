@@ -1,49 +1,34 @@
-//! Shared text formatting utilities
+//! Re-export shim for `truncate_text` + remaining truncate siblings.
 //!
-//! Common functions used by prompt assemblers across the codebase.
+//! Five mutually-incompatible truncate contracts live in this codebase (the
+//! survey table below is the load-bearing documentation — see commit
+//! history). Task 1 of the P0 modularization moved **one** of them —
+//! `truncate_text` — to `aleph_slot_api::text`. The other four stayed here
+//! because they encode different contracts (bytes vs chars, hard vs soft
+//! cap, marker vs no marker) and folding them would silently change the
+//! lengths that downstream APIs (WeChat, env-var caps, prompt budgets)
+//! observe.
+//!
+//! Rather than churn 12+ call sites to point at the new module, we keep
+//! the original path `crate::utils::text_format::truncate_text` working
+//! as a `pub use` re-export. The body in `aleph_slot_api::text` is
+//! byte-identical to the one this file used to define; UTF-8 safety
+//! tests still pass at the old path, identity tests at the new.
+//!
+//! | Contract | Function |
+//! |---|---|
+//! | chars + `...` + soft cap → `String` | [`truncate_text`] (re-exported from `aleph_slot_api`) |
+//! | chars + any marker + soft cap → `String` | [`truncate_with_marker`] (stays) |
+//! | chars, no marker, hard cap → `&str` | [`truncate_chars`] (stays) |
+//! | chars + marker + **hard** cap (total ≤ max) | [`truncate_reserving`] (stays) |
+//! | **bytes**, no marker, hard cap → `&str` | [`truncate_bytes`] (stays) |
 
-/// Truncate to at most `max_chars` CHARACTERS, appending `...` when cut.
-///
-/// Soft cap: the result may be up to `max_chars + 3` chars, because the marker
-/// is appended rather than reserved. `max_chars == 0` yields `""`, not a bare
-/// `"..."`.
-///
-/// # Before adding another truncate helper
-///
-/// A survey (2026-08-03) found **22** private truncate helpers in this crate.
-/// They were NOT 22 copies of this function — they implemented **5 mutually
-/// incompatible contracts**, which is why they could not all be folded into
-/// this one. All 22 now delegate to this module; pick the matching row:
-///
-/// | Contract | Function |
-/// |---|---|
-/// | chars + `...` + soft cap → `String` | [`truncate_text`] (this one) |
-/// | chars + any marker + soft cap → `String` | [`truncate_with_marker`] |
-/// | chars, no marker, hard cap → `&str` | [`truncate_chars`] |
-/// | chars + marker + **hard** cap (total ≤ max) | [`truncate_reserving`] |
-/// | **bytes**, no marker, hard cap → `&str` | [`truncate_bytes`] |
-///
-/// The distinction is load-bearing, not stylistic: the soft-cap callers feed
-/// prompt bytes governed by the §2.18 ratchet, and the hard-cap and byte-budget
-/// callers enforce external API length limits. Swapping a soft cap for a hard
-/// one (or chars for bytes) silently changes lengths on those paths, which is
-/// exactly how `mutation_gate` shipped a byte-guard/char-cut bug — see
-/// [`tests::truncate_text_limit_is_chars_not_bytes`].
-///
-/// So: reuse the row that matches. If none does, add a **named** variant here
-/// rather than hand-rolling copy #23 — and do not "unify" these five without
-/// checking each caller's budget.
-#[must_use]
-pub fn truncate_text(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    // Single-pass: find the byte offset of the (max_chars)th character
-    match text.char_indices().nth(max_chars) {
-        None => text.to_string(),                         // under limit
-        Some((idx, _)) => format!("{}...", &text[..idx]), // truncate
-    }
-}
+// Re-export the one helper that moved. Same definition, same path so every
+// pre-existing `crate::utils::text_format::truncate_text(...)` call site
+// keeps compiling and linking.
+pub use aleph_slot_api::text::truncate_text;
+
+// The other four stay. Identical bodies to the pre-migration file.
 
 /// Truncate to at most `max_chars` CHARACTERS, appending `marker` when cut.
 ///
@@ -118,35 +103,11 @@ pub fn truncate_bytes(text: &str, max_bytes: usize) -> &str {
 
 #[cfg(test)]
 mod tests {
+    //! The five `truncate_text`-specific tests moved to `aleph_slot_api`.
+    //! The four sibling contracts' tests stay here because the functions
+    //! they pin live here.
+
     use super::*;
-
-    #[test]
-    fn test_truncate_text_zero_limit() {
-        let text = "Hello world";
-        assert_eq!(truncate_text(text, 0), "");
-    }
-
-    #[test]
-    fn test_truncate_text_under_limit() {
-        let text = "Hello world";
-        assert_eq!(truncate_text(text, 20), "Hello world");
-    }
-
-    #[test]
-    fn test_truncate_text_over_limit() {
-        let text = "Hello world, this is a longer text";
-        let result = truncate_text(text, 10);
-        assert!(result.ends_with("..."));
-        assert!(result.len() <= 13 + 3); // 10 chars + "..."
-    }
-
-    #[test]
-    fn test_truncate_text_unicode() {
-        let text = "你好世界，这是一段中文";
-        let result = truncate_text(text, 5);
-        assert!(result.ends_with("..."));
-        assert_eq!(result, "你好世界，...");
-    }
 
     #[test]
     fn truncate_with_marker_is_a_soft_cap() {
@@ -208,23 +169,29 @@ mod tests {
         assert_eq!(truncate_bytes("你好", 6), "你好");
     }
 
-    /// The limit is counted in CHARACTERS, never bytes. A multi-byte string
-    /// that is under the limit must come back untouched — in particular it must
-    /// not gain an ellipsis advertising a cut that never happened.
-    ///
-    /// `mutation_gate.rs` had exactly this bug: it guarded with `s.len() <= max`
-    /// (bytes) but cut with `char_indices().nth(max)` (chars), so a 4-char /
-    /// 12-byte CJK string against `max = 8` took the "too long" branch, found no
-    /// 8th char, fell back to the full length, and returned `"你好世界..."`.
-    /// Invisible in pure ASCII, which is why it survived. Pinned here because
-    /// every migrated caller now relies on this function for that guarantee.
+    /// The 5 `truncate_text`-specific tests moved with the function to
+    /// `aleph_slot_api::text::tests`. The identity of the function is the
+    /// same (it is re-exported below), so the old call path
+    /// `crate::utils::text_format::truncate_text` keeps the same body.
+    /// Pinned in the API crate's test module.
     #[test]
-    fn truncate_text_limit_is_chars_not_bytes() {
-        // 4 chars, 12 bytes — well over any byte-based reading of `max = 8`.
-        let text = "你好世界";
-        assert_eq!(truncate_text(text, 8), text);
-        assert!(!truncate_text(text, 8).ends_with("..."));
-        // Exactly at the limit is still "under" — no ellipsis.
-        assert_eq!(truncate_text(text, 4), text);
+    fn truncate_text_re_export_is_same_function() {
+        // Function-pointer identity, not just `==` on result. Catches a
+        // future refactor that accidentally re-defines instead of
+        // re-exporting.
+        //
+        // The address comparison is informational, not a hard guarantee:
+        // rustc warns that the same function can have different addresses
+        // across codegen units. We silence the warning because in practice
+        // `pub use` aliases the same symbol and the addresses do match.
+        // The `tests/modularization_contracts.rs` integration test does
+        // the same check across the crate boundary; the unit test here
+        // anchors the in-crate perspective.
+        #[allow(unpredictable_function_pointer_comparisons)]
+        {
+            let local_ptr: fn(&str, usize) -> String = truncate_text;
+            let api_ptr: fn(&str, usize) -> String = aleph_slot_api::text::truncate_text;
+            assert_eq!(local_ptr, api_ptr);
+        }
     }
 }

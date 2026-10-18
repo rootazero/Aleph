@@ -149,13 +149,17 @@ proptest! {
         let auto = to_metadata_form(&defs);
         let manual: Vec<MetadataToolDefinition> = defs
             .iter()
-            .map(|d| MetadataToolDefinition {
-                name: d.name.clone(),
-                description: d.description.clone(),
-                parameters: d.input_schema.clone(),
-                requires_confirmation: false,
-                category: ToolCategory::Builtin,
-                strict: false,
+            // `MetadataToolDefinition` is `#[non_exhaustive]` in
+            // `aleph-slot-api` since P0 Task 2: no struct literals across
+            // the crate boundary. `new` defaults `requires_confirmation` /
+            // `strict` to false, matching the old literal exactly.
+            .map(|d| {
+                MetadataToolDefinition::new(
+                    d.name.clone(),
+                    d.description.clone(),
+                    d.input_schema.clone(),
+                    ToolCategory::Builtin,
+                )
             })
             .collect();
         prop_assert_eq!(auto.len(), manual.len());

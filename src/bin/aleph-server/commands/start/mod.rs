@@ -230,7 +230,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Plugins are now installed via marketplace: `aleph plugin marketplace update && aleph plugin install <name>`
 
-    initialize_extension_manager(args.daemon).await;
+    let ownership_tree = Arc::new(OwnershipTree::new());
+    initialize_extension_manager(args.daemon, Arc::clone(&ownership_tree)).await;
 
     // Shared MCP-target ToolHandlerRegistry. The Phase 2 facade chain
     // (`build_tool_service`, `PermissionLayer`, `TimeoutLayer`, etc.) was
@@ -265,7 +266,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .ok()
             .as_deref(),
     );
-    let ownership_tree = Arc::new(OwnershipTree::new());
     let projection_host = ProjectionHost::mount_with_diagnostics(
         (*tool_registry_phase2).clone(),
         Arc::clone(&ownership_tree),

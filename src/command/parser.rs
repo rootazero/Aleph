@@ -119,7 +119,7 @@ impl CommandParser {
             crate::extension::visibility::catalog_owner(&resolved.tool).map(str::to_owned);
         let command_name = resolved.tool.name.clone();
         let tool_id = resolved.tool.id.clone();
-        let context = tool_to_command_context(resolved.tool);
+        let context = tool_to_command_context(resolved.tool)?;
 
         Some(ParsedCommand {
             source_type,
@@ -155,8 +155,14 @@ impl CommandParser {
 ///
 /// Takes the tool by value so every context field moves instead of cloning;
 /// the caller clones `name`/`id` up front for `ParsedCommand`.
-fn tool_to_command_context(tool: UnifiedTool) -> CommandContext {
-    match tool.source {
+///
+/// Returns `None` for a metadata `ToolSource` variant this crate does not
+/// know: the enum is `#[non_exhaustive]` since the P0 Task 2 move to
+/// `aleph-slot-api`, and silently folding an unknown source into
+/// `Builtin` would route it through the wrong execution path. Fail-closed
+/// instead (approved caller-gate ruling).
+fn tool_to_command_context(tool: UnifiedTool) -> Option<CommandContext> {
+    Some(match tool.source {
         ToolSource::Builtin | ToolSource::Native => CommandContext::Builtin {
             tool_name: tool.name,
         },
@@ -191,7 +197,10 @@ fn tool_to_command_context(tool: UnifiedTool) -> CommandContext {
             // so every plugin slash command failed with a hard execution error.
             tool_name: tool.id,
         },
-    }
+        // `ToolSource` is `#[non_exhaustive]` and lives in another crate:
+        // refuse to guess a context for a variant added after this match.
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

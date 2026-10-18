@@ -29,6 +29,8 @@ mod widgets;
 
 use std::future::Future;
 use std::io;
+#[cfg(windows)]
+use std::io::Write;
 use std::pin::Pin;
 use std::time::Duration;
 

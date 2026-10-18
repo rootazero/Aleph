@@ -278,13 +278,6 @@ impl ScopedToolService {
         // canonical name the registry will actually execute.
         let resolved = self.inner.resolve(name);
         let canonical = resolved.map(|t| t.name().to_string());
-        // Provenance for the usage sidecar, taken here because this is the one
-        // place the tool object is in scope. `None` for every builtin — see
-        // `LoopTool::usage_origin`. Resolving it up front (rather than after
-        // the call) also means a tool that gets unregistered mid-dispatch —
-        // an MCP server disconnecting — is still attributed to the server it
-        // actually ran on.
-        let usage_origin = resolved.and_then(LoopTool::usage_origin).map(|o| o.key());
         let name: &str = canonical.as_deref().unwrap_or(name);
 
         // Request projection is an ACL/visibility surface, never a callable
@@ -297,61 +290,44 @@ impl ScopedToolService {
             if is_subagent || self.inner.is_request_local(name) {
                 None
             } else if let Some(projection) = resolved {
-                if matches!(
-                    projection.usage_origin(),
-                    Some(crate::tools::usage::UsageOrigin::Plugin(_))
-                ) {
-                    // Only unrelated Plugin compatibility bypasses canonical
-                    // proof. A collision/source replacement must not resurrect it.
-                    if let Some(entry) = registry.resolve_entry(name) {
-                        if !matches!((&entry.descriptor.source, projection.usage_origin()),
-                            (crate::tools::service::ToolSource::Extension { plugin_id }, Some(crate::tools::usage::UsageOrigin::Plugin(id))) if plugin_id == id)
-                        {
-                            return Err(ToolError::PermissionDenied {
-                                name: name.into(),
-                                reason:
-                                    "Plugin projection collides with a different canonical source"
-                                        .into(),
-                            });
-                        }
+                let mut entry = registry
+                    .resolve_entry(name)
+                    .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
+                let projected = projection.capability_descriptor().ok_or_else(|| {
+                    ToolError::PermissionDenied {
+                        name: name.into(),
+                        reason: "noncanonical production projection cannot dispatch".into(),
                     }
-                    None
-                } else {
-                    let mut entry = registry
-                        .resolve_entry(name)
-                        .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
-                    let projected = projection.capability_descriptor().ok_or_else(|| {
-                        ToolError::PermissionDenied {
-                            name: name.into(),
-                            reason: "noncanonical production projection cannot dispatch".into(),
-                        }
-                    })?;
-                    if projected.source != entry.descriptor.source {
-                        return Err(ToolError::PermissionDenied { name: name.into(), reason: "canonical source changed; rebuild the request visibility projection".into() });
-                    }
-                    if let Some(visible) = &self.visible_mcp_servers {
-                        if matches!(&entry.descriptor.source, crate::tools::service::ToolSource::Mcp { server_id } if !visible(server_id))
-                        {
-                            return Err(ToolError::PermissionDenied {
-                                name: name.into(),
-                                reason: "canonical MCP server is not visible to this request"
-                                    .into(),
-                            });
-                        }
-                        if let Some(bound) = entry.handler.bind_visible_servers(visible) {
-                            entry.handler = bound;
-                        }
-                    } else if matches!(
-                        &entry.descriptor.source,
-                        crate::tools::service::ToolSource::Mcp { .. }
-                    ) {
+                })?;
+                if projected.source != entry.descriptor.source {
+                    return Err(ToolError::PermissionDenied {
+                        name: name.into(),
+                        reason:
+                            "canonical source changed; rebuild the request visibility projection"
+                                .into(),
+                    });
+                }
+                if let Some(visible) = &self.visible_mcp_servers {
+                    if matches!(&entry.descriptor.source, crate::tools::service::ToolSource::Mcp { server_id } if !visible(server_id))
+                    {
                         return Err(ToolError::PermissionDenied {
                             name: name.into(),
-                            reason: "canonical MCP visibility is not bound".into(),
+                            reason: "canonical MCP server is not visible to this request".into(),
                         });
                     }
-                    Some(entry)
+                    if let Some(bound) = entry.handler.bind_visible_servers(visible) {
+                        entry.handler = bound;
+                    }
+                } else if matches!(
+                    &entry.descriptor.source,
+                    crate::tools::service::ToolSource::Mcp { .. }
+                ) {
+                    return Err(ToolError::PermissionDenied {
+                        name: name.into(),
+                        reason: "canonical MCP visibility is not bound".into(),
+                    });
                 }
+                Some(entry)
             } else {
                 return Err(ToolError::NotFound { name: name.into() });
             }
@@ -360,6 +336,15 @@ impl ScopedToolService {
             // run_loop refuses a missing store before either service is built.
             None
         };
+        // Usage provenance is derived after canonical capture. A captured
+        // entry owns the handler that actually runs; only descriptorless
+        // uncaptured request-local/subagent/fixture or descriptorless
+        // compatibility paths retain the legacy LoopTool origin.
+        let usage_origin = match captured.as_ref() {
+            Some(entry) => crate::tools::usage::origin_from_source(&entry.descriptor.source),
+            None => resolved.and_then(LoopTool::usage_origin),
+        }
+        .map(|origin| origin.key());
         let fixture_descriptor = self
             .canonical_registry
             .is_none()
@@ -900,6 +885,14 @@ impl ScopedToolService {
                 name: name.to_string(),
             }),
             target => {
+                // Capture the result budget from the same admitted target that
+                // will be invoked. Canonical `None` is authoritative and must
+                // not fall back to a stale request-local projection hint.
+                let explicit = match &target {
+                    RoutingTarget::Canonical(entry) => entry.max_result_tokens,
+                    _ => self.inner.max_result_tokens_for(name),
+                };
+
                 // One-shot retry: if the inner Loop tool returned
                 // `retryable: true` (mapped to `ToolError::Transport` in
                 // `tool_result_to_output`), the helper sleeps 100ms and
@@ -945,7 +938,9 @@ impl ScopedToolService {
                         crate::tools::retry::execute_with_one_shot_backoff(idempotent, invoke).await
                     };
                 match raw_outcome {
-                    Ok(output) => Ok(self.apply_layer_two(name, output, deadline).await),
+                    Ok(output) => Ok(self
+                        .apply_layer_two_with_budget(name, output, deadline, explicit)
+                        .await),
                     // Attribute anything that came back after the run was
                     // stopped to the stop, whatever the tool said. The tool
                     // adapters that detect mid-execution cancel (`RegistryToolAdapter`,
@@ -1861,11 +1856,12 @@ impl ScopedToolService {
     /// ingress pass (`tool_output::ingress::clean_for_ingress`); the
     /// persist/truncate half is `result_processing::apply_result_budget`,
     /// which sees the ingress outcome verbatim.
-    async fn apply_layer_two(
+    async fn apply_layer_two_with_budget(
         &self,
         name: &str,
         mut out: ToolOutput,
         deadline: std::time::Instant,
+        explicit: Option<usize>,
     ) -> ToolOutput {
         // Rescue any inline image payload (e.g. a `desktop` screenshot) into the
         // out-of-band metadata channel BEFORE the structured value is flattened
@@ -1914,7 +1910,6 @@ impl ScopedToolService {
             return out;
         }
 
-        let explicit = self.inner.max_result_tokens_for(name);
         let budget = crate::tools::result_processing::resolve_result_budget(name, explicit);
 
         // Per-call file name suffix, so concurrent calls to the same tool do
@@ -2030,6 +2025,18 @@ impl ScopedToolService {
 
         out.value = Value::String(processed.text);
         out
+    }
+
+    #[cfg(test)]
+    async fn apply_layer_two(
+        &self,
+        name: &str,
+        out: ToolOutput,
+        deadline: std::time::Instant,
+    ) -> ToolOutput {
+        let explicit = self.inner.max_result_tokens_for(name);
+        self.apply_layer_two_with_budget(name, out, deadline, explicit)
+            .await
     }
 
     /// Run the ingress clean ([`clean_for_ingress`]) over `value`, moving the

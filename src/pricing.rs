@@ -152,1360 +152,1362 @@ struct PriceTier {
 /// `model_prefix` that prefix-matches wins. Order more-specific prefixes
 /// before broader catch-alls. Sources are vendor pricing pages as of
 /// 2026-07; refresh by bumping the literals here and recompiling.
-static PRICE_TABLE: LazyLock<Vec<(&'static str, Vec<Rates>)>> = LazyLock::new(|| vec![
-    (
-        "anthropic",
-        vec![
-            Rates {
-                // Generation-5 flagship.
-                model_prefix: "claude-fable-5",
-                input_per_mtok: Some(10.0),
-                output_per_mtok: Some(50.0),
-                cache_read_per_mtok: Some(1.0),
-                cache_creation_per_mtok: Some(12.50),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Mythos 5 shares Fable 5's rate card.
-                model_prefix: "claude-mythos-5",
-                input_per_mtok: Some(10.0),
-                output_per_mtok: Some(50.0),
-                cache_read_per_mtok: Some(1.0),
-                cache_creation_per_mtok: Some(12.50),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Opus 5 — supersedes the (now retired) Opus 4.8 at the same
-                // $5/$25 the 4.5+ line moved to.
-                model_prefix: "claude-opus-5",
-                input_per_mtok: Some(5.0),
-                output_per_mtok: Some(25.0),
-                cache_read_per_mtok: Some(0.50),
-                cache_creation_per_mtok: Some(6.25),
-                reasoning_per_mtok: None,
-            },
-            // Opus 4.5+ dropped to $5/$25; the broad `claude-opus-4`
-            // fallback below keeps the 4.0/4.1-era $15/$75.
-            Rates {
-                model_prefix: "claude-opus-4-8",
-                input_per_mtok: Some(5.0),
-                output_per_mtok: Some(25.0),
-                cache_read_per_mtok: Some(0.50),
-                cache_creation_per_mtok: Some(6.25),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "claude-opus-4-7",
-                input_per_mtok: Some(5.0),
-                output_per_mtok: Some(25.0),
-                cache_read_per_mtok: Some(0.50),
-                cache_creation_per_mtok: Some(6.25),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "claude-opus-4-6",
-                input_per_mtok: Some(5.0),
-                output_per_mtok: Some(25.0),
-                cache_read_per_mtok: Some(0.50),
-                cache_creation_per_mtok: Some(6.25),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "claude-opus-4-5",
-                input_per_mtok: Some(5.0),
-                output_per_mtok: Some(25.0),
-                cache_read_per_mtok: Some(0.50),
-                cache_creation_per_mtok: Some(6.25),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "claude-opus-4",
-                input_per_mtok: Some(15.0),
-                output_per_mtok: Some(75.0),
-                cache_read_per_mtok: Some(1.50),
-                cache_creation_per_mtok: Some(18.75),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Sonnet 5 (current default). $2/$10 was announced as
-                // introductory pricing through 2026-08-31; Anthropic's pricing
-                // page now states it **is the standard price** and that the
-                // scheduled 2026-09-01 rise to $3/$15 "will not occur". The
-                // row previously carried $3/$15 on the opposite reading — the
-                // premise of that comment was withdrawn by the vendor, not by
-                // us. Cache columns are the published 5m-write ($2.50) and
-                // cache-hit ($0.20) figures, not multiples of the base.
-                model_prefix: "claude-sonnet-5",
-                input_per_mtok: Some(2.0),
-                output_per_mtok: Some(10.0),
-                cache_read_per_mtok: Some(0.20),
-                cache_creation_per_mtok: Some(2.50),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "claude-sonnet-4",
-                input_per_mtok: Some(3.0),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: Some(0.30),
-                cache_creation_per_mtok: Some(3.75),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "claude-haiku-4-5",
-                input_per_mtok: Some(1.0),
-                output_per_mtok: Some(5.0),
-                cache_read_per_mtok: Some(0.10),
-                cache_creation_per_mtok: Some(1.25),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "claude-haiku-4",
-                input_per_mtok: Some(0.80),
-                output_per_mtok: Some(4.0),
-                cache_read_per_mtok: Some(0.08),
-                cache_creation_per_mtok: Some(1.0),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Older 3.x rates as fallback for the family.
-                model_prefix: "claude-3",
-                input_per_mtok: Some(3.0),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: Some(0.30),
-                cache_creation_per_mtok: Some(3.75),
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    (
-        "openai",
-        vec![
-            // GPT-5 family (openclaw catalog). Dotted specifics precede the
-            // broad `gpt-5` fallback. 5.6 is the current default.
-            //
-            // The 5.6 tiers are NOT flat-rated, and they are not multiples of
-            // the flagship either — each tier carries its own published quote.
-            // These rows used to hold `flagship / 2` and `flagship / 5`, which
-            // is where the 25% (Terra) and 5x (Luna) over-estimates came from.
-            // Capabilities can share one `gpt-5.6` row because the shape is
-            // identical; rates cannot, and these two must precede `gpt-5.6` or
-            // they would silently bill at the flagship rate.
-            // `codex-mini-latest` (OpenAI's cheapest reasoning model) — not
-            // aliased to any existing prefix, so it needs its own row ahead of
-            // the broad `gpt-5` fallback (which would bill it 2x high).
-            Rates {
-                model_prefix: "codex-mini-latest",
-                input_per_mtok: Some(1.0),
-                output_per_mtok: Some(4.0),
-                cache_read_per_mtok: Some(0.10),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "gpt-5.6-terra",
-                input_per_mtok: Some(2.0),
-                output_per_mtok: Some(12.0),
-                cache_read_per_mtok: Some(0.20),
-                cache_creation_per_mtok: Some(2.50),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "gpt-5.6-luna",
-                input_per_mtok: Some(0.20),
-                output_per_mtok: Some(1.20),
-                cache_read_per_mtok: Some(0.02),
-                cache_creation_per_mtok: Some(0.25),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Covers plain `gpt-5.6` and the `-sol` tier, which share it.
-                model_prefix: "gpt-5.6",
-                input_per_mtok: Some(5.0),
-                output_per_mtok: Some(30.0),
-                cache_read_per_mtok: Some(0.50),
-                cache_creation_per_mtok: Some(6.25),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Pro SKU at 6x the flagship — without this row it fell
-                // through to `gpt-5.5` and billed $5/$30. (models.dev openai,
-                // 2026-08-15.) Retired per `LIFECYCLE_TABLE`; the row stays so
-                // historical runs still price. Must precede `gpt-5.5` (the
-                // prefix-shadow guard enforces it).
-                model_prefix: "gpt-5.5-pro",
-                input_per_mtok: Some(30.0),
-                output_per_mtok: Some(180.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "gpt-5.5",
-                input_per_mtok: Some(5.0),
-                output_per_mtok: Some(30.0),
-                cache_read_per_mtok: Some(0.50),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Pro SKU at 12x the base — without this row it fell through
-                // to `gpt-5.4` and billed $2.50/$15. (models.dev openai,
-                // 2026-08-15.)
-                model_prefix: "gpt-5.4-pro",
-                input_per_mtok: Some(30.0),
-                output_per_mtok: Some(180.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "gpt-5.4-mini",
-                input_per_mtok: Some(0.75),
-                output_per_mtok: Some(4.50),
-                cache_read_per_mtok: Some(0.075),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "gpt-5.4-nano",
-                input_per_mtok: Some(0.20),
-                output_per_mtok: Some(1.25),
-                cache_read_per_mtok: Some(0.02),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "gpt-5.4",
-                input_per_mtok: Some(2.50),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: Some(0.25),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // gpt-5.3-codex and gpt-5.3-chat-latest share one rate.
-                model_prefix: "gpt-5.3",
-                input_per_mtok: Some(1.75),
-                output_per_mtok: Some(14.0),
-                cache_read_per_mtok: Some(0.175),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Pro SKU at 12x the 5.2 base. (models.dev openai, 2026-08-15.)
-                model_prefix: "gpt-5.2-pro",
-                input_per_mtok: Some(21.0),
-                output_per_mtok: Some(168.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Same rate as the 5.3 codex line below it in the family.
-                model_prefix: "gpt-5.2",
-                input_per_mtok: Some(1.75),
-                output_per_mtok: Some(14.0),
-                cache_read_per_mtok: Some(0.175),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // First-gen pro SKU; without this row it fell through to the
-                // broad `gpt-5` row and billed 6x low ($2.50/$15 vs $15/$120).
-                model_prefix: "gpt-5-pro",
-                input_per_mtok: Some(15.0),
-                output_per_mtok: Some(120.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // GPT-5 / 5.1 base rate (models.dev openai, 2026-08-15). The
-                // $2.50/$15 this carried was the 5.4-era rate — 2x high for
-                // the original 5.x generation.
-                model_prefix: "gpt-5",
-                input_per_mtok: Some(1.25),
-                output_per_mtok: Some(10.0),
-                cache_read_per_mtok: Some(0.125),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Retired (see `LIFECYCLE_TABLE`); the row stays so historical
-                // runs still price. Cache reads are $0.275, not the rounded
-                // $0.28 this carried.
-                model_prefix: "o4-mini",
-                input_per_mtok: Some(1.10),
-                output_per_mtok: Some(4.40),
-                cache_read_per_mtok: Some(0.275),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "o3-mini",
-                input_per_mtok: Some(1.10),
-                output_per_mtok: Some(4.40),
-                cache_read_per_mtok: Some(0.55),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "o3-pro",
-                input_per_mtok: Some(20.0),
-                output_per_mtok: Some(80.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "o3-deep-research",
-                input_per_mtok: Some(10.0),
-                output_per_mtok: Some(40.0),
-                cache_read_per_mtok: Some(2.50),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // o3 base was missing entirely — estimates degraded to
-                // Unknown despite the capability table knowing the family.
-                model_prefix: "o3",
-                input_per_mtok: Some(2.0),
-                output_per_mtok: Some(8.0),
-                cache_read_per_mtok: Some(0.50),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "o1-mini",
-                input_per_mtok: Some(3.0),
-                output_per_mtok: Some(12.0),
-                cache_read_per_mtok: Some(1.50),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "o1",
-                input_per_mtok: Some(15.0),
-                output_per_mtok: Some(60.0),
-                cache_read_per_mtok: Some(7.50),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // GPT-4.1 family (1M window, models.dev openai 2026-08-15).
-                // Without these rows every 4.1 id fell through to `gpt-4`
-                // ($30/$60) — a 15x over-estimate for 4.1, 75x for nano.
-                // nano/mini precede the family row.
-                model_prefix: "gpt-4.1-nano",
-                input_per_mtok: Some(0.10),
-                output_per_mtok: Some(0.40),
-                cache_read_per_mtok: Some(0.025),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "gpt-4.1-mini",
-                input_per_mtok: Some(0.40),
-                output_per_mtok: Some(1.60),
-                cache_read_per_mtok: Some(0.10),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "gpt-4.1",
-                input_per_mtok: Some(2.0),
-                output_per_mtok: Some(8.0),
-                cache_read_per_mtok: Some(0.50),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "gpt-4o-mini",
-                input_per_mtok: Some(0.15),
-                output_per_mtok: Some(0.60),
-                cache_read_per_mtok: Some(0.075),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "gpt-4o",
-                input_per_mtok: Some(2.50),
-                output_per_mtok: Some(10.0),
-                cache_read_per_mtok: Some(1.25),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "gpt-4",
-                input_per_mtok: Some(30.0),
-                output_per_mtok: Some(60.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    (
-        "google",
-        vec![
-            Rates {
-                // Gemini 3.1 Pro (current default). $2/$12 for ≤200K input; the
-                // >200K step-up ($4/$18) now lives in `TIER_TABLE`. Must
-                // precede broad `gemini` (flash).
-                model_prefix: "gemini-3.1-pro",
-                input_per_mtok: Some(2.0),
-                output_per_mtok: Some(12.0),
-                cache_read_per_mtok: Some(0.20),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(12.0),
-            },
-            Rates {
-                // Gemini 3.1 Flash-Lite (models.dev google, 2026-08-15).
-                // Without this row it fell through to the broad `gemini`
-                // catch-all at $0.075/$0.30 — 3x/5x low.
-                model_prefix: "gemini-3.1-flash-lite",
-                input_per_mtok: Some(0.25),
-                output_per_mtok: Some(1.50),
-                cache_read_per_mtok: Some(0.025),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(1.50),
-            },
-            Rates {
-                // Gemini 3.7 Flash (models.dev google, 2026-08-15) — newest
-                // flash line; without this row it priced ~5x low on the broad
-                // `gemini` row.
-                model_prefix: "gemini-3.7-flash",
-                input_per_mtok: Some(0.75),
-                output_per_mtok: Some(3.75),
-                cache_read_per_mtok: Some(0.075),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(3.75),
-            },
-            // The Gemini 3.x **flash** tiers are ~20x the 2.0-flash rate the
-            // broad `gemini` row below carries. Without these rows every 3.x
-            // flash id — including the `gemini` preset's own aux model — priced
-            // at $0.075/$0.30, which is not a rounding error: it is the figure
-            // `cost_aware` sorts on and the one a run's cost estimate reports.
-            // `-lite` must precede `-flash`, being a longer prefix of neither.
-            Rates {
-                model_prefix: "gemini-3.6-flash",
-                input_per_mtok: Some(1.50),
-                output_per_mtok: Some(7.50),
-                cache_read_per_mtok: Some(0.15),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(7.50),
-            },
-            Rates {
-                model_prefix: "gemini-3.5-flash-lite",
-                input_per_mtok: Some(0.30),
-                output_per_mtok: Some(2.50),
-                cache_read_per_mtok: Some(0.03),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(2.50),
-            },
-            Rates {
-                model_prefix: "gemini-3.5-flash",
-                input_per_mtok: Some(1.50),
-                output_per_mtok: Some(9.0),
-                cache_read_per_mtok: Some(0.15),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(9.0),
-            },
-            Rates {
-                // `gemini-3-flash-preview` (the aux model). This row used to
-                // hold the 3.x *Pro* rate as a deliberate stand-in ("errs high
-                // rather than 20x low") because no separate rate was published
-                // for the preview id. One is now published, so the stand-in has
-                // nothing left to stand in for: $0.50/$3.00 with $0.05 cache
-                // reads, i.e. the row was 3x high.
-                model_prefix: "gemini-3-flash",
-                input_per_mtok: Some(0.50),
-                output_per_mtok: Some(3.0),
-                cache_read_per_mtok: Some(0.05),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(7.50),
-            },
-            Rates {
-                // Gemini 2.5 Flash-Lite / Flash (models.dev google,
-                // 2026-08-15). `gemini-2.5-flash` is the `gemini` preset's
-                // last fallback rung and previously fell through to the broad
-                // `gemini` row at $0.075/$0.30 — 4x/8x low. `-lite` precedes
-                // `-flash` (longer prefix of the same stem).
-                model_prefix: "gemini-2.5-flash-lite",
-                input_per_mtok: Some(0.10),
-                output_per_mtok: Some(0.40),
-                cache_read_per_mtok: Some(0.01),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(0.40),
-            },
-            Rates {
-                model_prefix: "gemini-2.5-flash",
-                input_per_mtok: Some(0.30),
-                output_per_mtok: Some(2.50),
-                cache_read_per_mtok: Some(0.03),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(2.50),
-            },
-            Rates {
-                model_prefix: "gemini-2.5-pro",
-                input_per_mtok: Some(1.25),
-                output_per_mtok: Some(10.0),
-                cache_read_per_mtok: Some(0.125),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(10.0),
-            },
-            Rates {
-                model_prefix: "gemini-2.0-flash",
-                input_per_mtok: Some(0.075),
-                output_per_mtok: Some(0.30),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(0.30),
-            },
-            Rates {
-                model_prefix: "gemini",
-                input_per_mtok: Some(0.075),
-                output_per_mtok: Some(0.30),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: Some(0.30),
-            },
-        ],
-    ),
-    (
-        "deepseek",
-        // V4 rates from the official pricing page (RMB → USD @ ~7.2). The
-        // legacy deepseek-chat / deepseek-reasoner aliases retire 2026-07-24
-        // and now bill at v4-flash rates. Prior figures were stale V3 and
-        // mis-scaled (v4-pro was ~4x too high, v4-flash cache_read 10x).
-        vec![
-            Rates {
-                // ¥3 in / ¥6 out / ¥0.025 cache-hit.
-                model_prefix: "deepseek-v4-pro",
-                input_per_mtok: Some(0.435),
-                output_per_mtok: Some(0.87),
-                cache_read_per_mtok: Some(0.003_625),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // ¥1 in / ¥2 out / ¥0.02 cache-hit.
-                model_prefix: "deepseek-v4-flash",
-                input_per_mtok: Some(0.14),
-                output_per_mtok: Some(0.28),
-                cache_read_per_mtok: Some(0.0028),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Thinking-mode alias of v4-flash; billed at v4-flash rates.
-                model_prefix: "deepseek-reasoner",
-                input_per_mtok: Some(0.14),
-                output_per_mtok: Some(0.28),
-                cache_read_per_mtok: Some(0.0028),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Broad fallback; deepseek-chat is now the v4-flash
-                // non-thinking alias → same v4-flash rates.
-                model_prefix: "deepseek",
-                input_per_mtok: Some(0.14),
-                output_per_mtok: Some(0.28),
-                cache_read_per_mtok: Some(0.0028),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    (
-        "xai",
-        vec![
-            // Grok 4.x generations: dotted/suffixed specifics precede the
-            // `grok-4` base, which precedes the grok-3-era broad fallback.
-            Rates {
-                // Grok 4.6 / 4.5 (models.dev xai, 2026-08-15). Without these
-                // rows both fell through to the broad `grok` row at
-                // $3/$15 — 1.5x/2.5x high.
-                model_prefix: "grok-4.6",
-                input_per_mtok: Some(2.0),
-                output_per_mtok: Some(6.0),
-                cache_read_per_mtok: Some(0.50),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "grok-4.5",
-                input_per_mtok: Some(2.0),
-                output_per_mtok: Some(6.0),
-                cache_read_per_mtok: Some(0.30),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "grok-4.3",
-                input_per_mtok: Some(1.25),
-                output_per_mtok: Some(2.50),
-                cache_read_per_mtok: Some(0.20),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "grok-4-fast",
-                input_per_mtok: Some(0.20),
-                output_per_mtok: Some(0.50),
-                cache_read_per_mtok: Some(0.05),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            // Grok Code Fast 1 — xAI's coding-tier cheap model (pi-mono
-            // 2026-09, xai + github-copilot both serve it). Same rough
-            // shape as the 4-fast row but a distinct prefix: it would
-            // otherwise bill at the broad `grok-4` rate (12x high). Must
-            // precede `grok-4`.
-            Rates {
-                model_prefix: "grok-code-fast-1",
-                input_per_mtok: Some(0.20),
-                output_per_mtok: Some(1.50),
-                cache_read_per_mtok: Some(0.05),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            // grok-3-mini is the cheap tier, but it used to inherit the
-            // broad `grok` row below — the *flagship* grok-3 rate — which
-            // priced it ~5x its own primary. The cross-table drift guard
-            // (`aux_model_is_not_pricier_than_the_default`) is what
-            // surfaced it: xAI's preset named grok-3-mini as its cheap aux
-            // model while the table billed it at $18/Mtok blended against
-            // grok-4.3's $3.75. xAI's published mini rate is $0.30/$0.50.
-            // Must precede the broader `grok-3` row below (which is its
-            // prefix in `prefix_matches`'s dot/dash-equivalent sense).
-            Rates {
-                model_prefix: "grok-3-mini",
-                input_per_mtok: Some(0.30),
-                output_per_mtok: Some(0.50),
-                cache_read_per_mtok: Some(0.075),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Grok 3 flagship (pi-mono 2026-09, models.dev xai):
-                // $3/$15 — same as the broad `grok` row that follows but
-                // distinct prefix so the canonicalised 3 / 3-mini ids reach
-                // the right shape. Must precede the `grok` broad row.
-                model_prefix: "grok-3",
-                input_per_mtok: Some(3.0),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: Some(0.75),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            // Grok 2 Vision (pi-mono 2026-09, models.dev xai): 8K window +
-            // image input, $5/$15 (same as the grok-2 base below). Must
-            // precede `grok-2` so the canonicalised 2-vision id resolves
-            // its own row instead of the broader grok-2 shape (which
-            // happens to match here, but the vision flag is what's at
-            // stake — see the capability row).
-            Rates {
-                model_prefix: "grok-2-vision",
-                input_per_mtok: Some(5.0),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            // Grok 2 base (pi-mono 2026-09): 131K / 8K, $5/$15. Distinct
-            // from the broad `grok` row's $3/$15 — Grok 2 was the more
-            // expensive flagship. Must precede `grok`.
-            Rates {
-                model_prefix: "grok-2",
-                input_per_mtok: Some(5.0),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "grok",
-                input_per_mtok: Some(3.0),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: Some(0.75),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    (
-        "mistral",
-        vec![
-            // Magistral reasoning family (pi-mono 2026-09, models.dev
-            // mistral): $0.50/$1.50 small + $0.50/$1.80 medium on the small
-            // and medium rungs; both reasoning-on and tool-capable. Must
-            // precede `mistral-large-latest` below, whose $0.50/$1.50 is
-            // coincidentally the same input price but only the Magistral
-            // small row is vision-on.
-            Rates {
-                model_prefix: "magistral-small",
-                input_per_mtok: Some(0.50),
-                output_per_mtok: Some(1.50),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "magistral",
-                input_per_mtok: Some(0.50),
-                output_per_mtok: Some(1.80),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            // Devstral coding family (pi-mono 2026-09): $0.20/$0.60 on the
-            // 262K latest row, $0.10/$0.30 on the smaller 128K tiers. All
-            // distinct prefixes that fall through to the broad `mistral`
-            // rate without their own row. Must precede `mistral`.
-            Rates {
-                model_prefix: "devstral",
-                input_per_mtok: Some(0.20),
-                output_per_mtok: Some(0.60),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            // Codestral (pi-mono 2026-09): $0.30/$0.90 text-only code model.
-            // Distinct from `mistral`'s $0.20/$0.60 (output 1.5x).
-            Rates {
-                model_prefix: "codestral",
-                input_per_mtok: Some(0.30),
-                output_per_mtok: Some(0.90),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            // Ministral 3B/8B (pi-mono 2026-09): $0.10/$0.10 — text-only,
-            // matching the `mistral` broad row by coincidence. Pin the
-            // prefix so the canonicalised id resolves the documented row
-            // ahead of the broad fallback.
-            Rates {
-                model_prefix: "ministral",
-                input_per_mtok: Some(0.10),
-                output_per_mtok: Some(0.10),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            // Pixtral vision family (pi-mono 2026-09): $0.20/$0.20 (large
-            // + 12b). Distinct from the broad `mistral` row so the
-            // vision-on flag and the same-cost doc row stay explicit.
-            Rates {
-                model_prefix: "pixtral",
-                input_per_mtok: Some(0.20),
-                output_per_mtok: Some(0.20),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            // Open-mixtral-8x22B / 8x7B / Open-mistral-7B (pi-mono 2026-09):
-            // all legacy open-weights ids that don't share a prefix with
-            // `mistral-*`. The 7B row's 8K window is the dangerous one
-            // (broad `mistral` over-promises by 16x). Must precede
-            // `mistral-large-latest` below — it doesn't shadow any row, but
-            // listing them up here keeps the open-weights family grouped.
-            Rates {
-                model_prefix: "open-mixtral-8x22b",
-                input_per_mtok: Some(2.0),
-                output_per_mtok: Some(6.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "open-mixtral-8x7b",
-                input_per_mtok: Some(0.60),
-                output_per_mtok: Some(0.60),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "open-mistral-7b",
-                input_per_mtok: Some(0.25),
-                output_per_mtok: Some(0.25),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // The `mistral` preset's *default* — the 2512 snapshot at
-                // $0.50/$1.50 (models.dev mistral, 2026-08-15), NOT the
-                // 2411-era $2/$6 the family row below carries. Every default
-                // run was estimated 4x high. Must precede `mistral-large`.
-                model_prefix: "mistral-large-latest",
-                input_per_mtok: Some(0.50),
-                output_per_mtok: Some(1.50),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "mistral-large",
-                input_per_mtok: Some(2.0),
-                output_per_mtok: Some(6.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Advertised fallback rungs of the `mistral` preset
-                // (models.dev mistral, 2026-08-15). Without these rows both
-                // fell through to the broad family row at $0.20/$0.60 —
-                // 7.5x low for medium, input-side high for small.
-                model_prefix: "mistral-medium-latest",
-                input_per_mtok: Some(1.50),
-                output_per_mtok: Some(7.50),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "mistral-small-latest",
-                input_per_mtok: Some(0.15),
-                output_per_mtok: Some(0.60),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "mistral",
-                input_per_mtok: Some(0.20),
-                output_per_mtok: Some(0.60),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    (
-        "moonshot",
-        vec![
-            // K3 flagship, published USD rates (platform.kimi.ai
-            // /docs/pricing/chat-k3): $3 in / $15 out, $0.30 on a cache hit.
-            // Must precede the broad `kimi` row, which would price it 5x low.
-            //
-            // No `TIER_TABLE` row on purpose: unlike Gemini 2.5/3.1 Pro and
-            // Claude Sonnet, K3 publishes *no* long-context premium above
-            // 200K — the rate is flat across the full 1,048,576-token window.
-            //
-            // Only the *open platform* meters tokens. The Kimi Code
-            // subscription ids are excluded by `QUOTA_BILLED_MODELS` — and
-            // they have to be excluded by name, because three of them
-            // (`kimi-for-coding*`, `kimi-code`) would otherwise be caught by
-            // the broad `kimi` row below.
-            Rates {
-                model_prefix: "kimi-k3",
-                input_per_mtok: Some(3.0),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: Some(0.30),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            // K2.5/K2.6/K2.7 published USD rates (platform.kimi.ai) differ from
-            // the legacy family fallback below. K2.7-code shares K2.6's tier.
-            Rates {
-                // The `-highspeed` SKU is a separate 2x rate (models.dev
-                // moonshotai, 2026-08-15); without this row it billed at the
-                // `kimi-k2.7` base — half price. Must precede it.
-                model_prefix: "kimi-k2.7-code-highspeed",
-                input_per_mtok: Some(1.90),
-                output_per_mtok: Some(8.0),
-                cache_read_per_mtok: Some(0.38),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "kimi-k2.7",
-                input_per_mtok: Some(0.95),
-                output_per_mtok: Some(4.0),
-                cache_read_per_mtok: Some(0.19),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "kimi-k2.6",
-                input_per_mtok: Some(0.95),
-                output_per_mtok: Some(4.0),
-                cache_read_per_mtok: Some(0.16),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "kimi-k2.5",
-                input_per_mtok: Some(0.60),
-                output_per_mtok: Some(3.0),
-                cache_read_per_mtok: Some(0.10),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "kimi",
-                input_per_mtok: Some(0.60),
-                output_per_mtok: Some(2.50),
-                cache_read_per_mtok: Some(0.15),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "moonshot",
-                input_per_mtok: Some(0.60),
-                output_per_mtok: Some(2.50),
-                cache_read_per_mtok: Some(0.15),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    // ── Zhipu / Z.AI ─────────────────────────────────────────────────────
-    // Previously absent even though the alias layer and capability table
-    // already knew the vendor — estimates silently degraded to Unknown.
-    (
-        "zai",
-        vec![
-            // GLM 4.x family (pi-mono 2026-09, zai catalog). All four
-            // 4.x tiers are reasoning models with distinct published rates
-            // (z.ai USD); the vision SKUs (`4.5v`, `4.6v`) are slightly
-            // cheaper than the text siblings on output. Must precede
-            // `glm-5.2-fast` below.
-            Rates {
-                model_prefix: "glm-4.7-flash",
-                input_per_mtok: Some(0.10),
-                output_per_mtok: Some(1.0),
-                cache_read_per_mtok: Some(0.02),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "glm-4.7",
-                input_per_mtok: Some(0.60),
-                output_per_mtok: Some(2.20),
-                cache_read_per_mtok: Some(0.11),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "glm-4.6v",
-                input_per_mtok: Some(0.30),
-                output_per_mtok: Some(0.90),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "glm-4.6",
-                input_per_mtok: Some(0.60),
-                output_per_mtok: Some(2.20),
-                cache_read_per_mtok: Some(0.11),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "glm-4.5v",
-                input_per_mtok: Some(0.20),
-                output_per_mtok: Some(0.60),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "glm-4.5",
-                input_per_mtok: Some(0.35),
-                output_per_mtok: Some(1.10),
-                cache_read_per_mtok: Some(0.06),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // GLM-5.2-Fast — the Fireworks router (`glm-5p2-fast`, an
-                // advertised `fireworks` fallback rung) and Baseten's
-                // `GLM-5.2-Fast` both publish $2.10/$6.60 (models.dev
-                // fireworks-ai + baseten, 2026-08-15); without this row both
-                // billed at the direct-API $1.40/$4.40 below. Must precede
-                // `glm-5.2`.
-                model_prefix: "glm-5.2-fast",
-                input_per_mtok: Some(2.10),
-                output_per_mtok: Some(6.60),
-                cache_read_per_mtok: Some(0.21),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // GLM-5.2 flagship (z.ai USD). Must precede glm-5 / glm-5-turbo.
-                model_prefix: "glm-5.2",
-                input_per_mtok: Some(1.40),
-                output_per_mtok: Some(4.40),
-                cache_read_per_mtok: Some(0.26),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Correction: old row carried GLM-5-Turbo's rate; GLM-5.1 = 1.4/4.4.
-                model_prefix: "glm-5.1",
-                input_per_mtok: Some(1.40),
-                output_per_mtok: Some(4.40),
-                cache_read_per_mtok: Some(0.26),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Precede broad glm-5 so Turbo isn't under-priced at the 5 rate.
-                model_prefix: "glm-5-turbo",
-                input_per_mtok: Some(1.20),
-                output_per_mtok: Some(4.0),
-                cache_read_per_mtok: Some(0.24),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "glm-5",
-                input_per_mtok: Some(1.0),
-                output_per_mtok: Some(3.20),
-                cache_read_per_mtok: Some(0.20),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // GLM-4.x family fallback.
-                model_prefix: "glm",
-                input_per_mtok: Some(0.60),
-                output_per_mtok: Some(2.20),
-                cache_read_per_mtok: Some(0.11),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    // ── Alibaba / Qwen (DashScope) ───────────────────────────────────────
-    (
-        "qwen",
-        vec![
-            // Qwen QwQ — reasoning-tier Qwen, 131K / 16K (pi-mono 2026-09,
-            // groq catalog). Must precede `qwen` so the reasoning-on flag
-            // is correct on QwQ ids; broad `qwen` is reasoning-off.
-            Rates {
-                model_prefix: "qwen-qwq",
-                input_per_mtok: Some(0.30),
-                output_per_mtok: Some(0.60),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "qwen3.6-flash",
-                input_per_mtok: Some(0.029),
-                output_per_mtok: Some(0.287),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "qwen3.6-plus",
-                input_per_mtok: Some(0.115),
-                output_per_mtok: Some(0.688),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "qwen3-max",
-                input_per_mtok: Some(0.359),
-                output_per_mtok: Some(1.434),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    // ── MiniMax ──────────────────────────────────────────────────────────
-    // M2 family flat pricing (MiniMax open-platform pricing, 2026-06). The
-    // `minimax` provider preset previously had no reachable rate, so its runs
-    // always reported `CostStatus::Unknown`; `canonical_provider_id("minimax")`
-    // now resolves, so this section is consulted.
-    (
-        "minimax",
-        vec![
-            Rates {
-                // M3 (current default) — without this row the default id
-                // reports CostStatus::Unknown. Must precede minimax-m2.
+static PRICE_TABLE: LazyLock<Vec<(&'static str, Vec<Rates>)>> = LazyLock::new(|| {
+    vec![
+        (
+            "anthropic",
+            vec![
+                Rates {
+                    // Generation-5 flagship.
+                    model_prefix: "claude-fable-5",
+                    input_per_mtok: Some(10.0),
+                    output_per_mtok: Some(50.0),
+                    cache_read_per_mtok: Some(1.0),
+                    cache_creation_per_mtok: Some(12.50),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Mythos 5 shares Fable 5's rate card.
+                    model_prefix: "claude-mythos-5",
+                    input_per_mtok: Some(10.0),
+                    output_per_mtok: Some(50.0),
+                    cache_read_per_mtok: Some(1.0),
+                    cache_creation_per_mtok: Some(12.50),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Opus 5 — supersedes the (now retired) Opus 4.8 at the same
+                    // $5/$25 the 4.5+ line moved to.
+                    model_prefix: "claude-opus-5",
+                    input_per_mtok: Some(5.0),
+                    output_per_mtok: Some(25.0),
+                    cache_read_per_mtok: Some(0.50),
+                    cache_creation_per_mtok: Some(6.25),
+                    reasoning_per_mtok: None,
+                },
+                // Opus 4.5+ dropped to $5/$25; the broad `claude-opus-4`
+                // fallback below keeps the 4.0/4.1-era $15/$75.
+                Rates {
+                    model_prefix: "claude-opus-4-8",
+                    input_per_mtok: Some(5.0),
+                    output_per_mtok: Some(25.0),
+                    cache_read_per_mtok: Some(0.50),
+                    cache_creation_per_mtok: Some(6.25),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "claude-opus-4-7",
+                    input_per_mtok: Some(5.0),
+                    output_per_mtok: Some(25.0),
+                    cache_read_per_mtok: Some(0.50),
+                    cache_creation_per_mtok: Some(6.25),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "claude-opus-4-6",
+                    input_per_mtok: Some(5.0),
+                    output_per_mtok: Some(25.0),
+                    cache_read_per_mtok: Some(0.50),
+                    cache_creation_per_mtok: Some(6.25),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "claude-opus-4-5",
+                    input_per_mtok: Some(5.0),
+                    output_per_mtok: Some(25.0),
+                    cache_read_per_mtok: Some(0.50),
+                    cache_creation_per_mtok: Some(6.25),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "claude-opus-4",
+                    input_per_mtok: Some(15.0),
+                    output_per_mtok: Some(75.0),
+                    cache_read_per_mtok: Some(1.50),
+                    cache_creation_per_mtok: Some(18.75),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Sonnet 5 (current default). $2/$10 was announced as
+                    // introductory pricing through 2026-08-31; Anthropic's pricing
+                    // page now states it **is the standard price** and that the
+                    // scheduled 2026-09-01 rise to $3/$15 "will not occur". The
+                    // row previously carried $3/$15 on the opposite reading — the
+                    // premise of that comment was withdrawn by the vendor, not by
+                    // us. Cache columns are the published 5m-write ($2.50) and
+                    // cache-hit ($0.20) figures, not multiples of the base.
+                    model_prefix: "claude-sonnet-5",
+                    input_per_mtok: Some(2.0),
+                    output_per_mtok: Some(10.0),
+                    cache_read_per_mtok: Some(0.20),
+                    cache_creation_per_mtok: Some(2.50),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "claude-sonnet-4",
+                    input_per_mtok: Some(3.0),
+                    output_per_mtok: Some(15.0),
+                    cache_read_per_mtok: Some(0.30),
+                    cache_creation_per_mtok: Some(3.75),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "claude-haiku-4-5",
+                    input_per_mtok: Some(1.0),
+                    output_per_mtok: Some(5.0),
+                    cache_read_per_mtok: Some(0.10),
+                    cache_creation_per_mtok: Some(1.25),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "claude-haiku-4",
+                    input_per_mtok: Some(0.80),
+                    output_per_mtok: Some(4.0),
+                    cache_read_per_mtok: Some(0.08),
+                    cache_creation_per_mtok: Some(1.0),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Older 3.x rates as fallback for the family.
+                    model_prefix: "claude-3",
+                    input_per_mtok: Some(3.0),
+                    output_per_mtok: Some(15.0),
+                    cache_read_per_mtok: Some(0.30),
+                    cache_creation_per_mtok: Some(3.75),
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        (
+            "openai",
+            vec![
+                // GPT-5 family (openclaw catalog). Dotted specifics precede the
+                // broad `gpt-5` fallback. 5.6 is the current default.
                 //
-                // The $0.60/$2.40 this used to carry is MiniMax's *over-512K*
-                // step-up, not the base rate, so every M3 run was estimated at
-                // 2x. Aleph has no tier row for it: the base is corrected here
-                // and long M3 prompts are now a documented under-estimate
-                // rather than a blanket over-estimate.
-                model_prefix: "minimax-m3",
-                input_per_mtok: Some(0.30),
-                output_per_mtok: Some(1.20),
-                cache_read_per_mtok: Some(0.06),
-                cache_creation_per_mtok: None,
+                // The 5.6 tiers are NOT flat-rated, and they are not multiples of
+                // the flagship either — each tier carries its own published quote.
+                // These rows used to hold `flagship / 2` and `flagship / 5`, which
+                // is where the 25% (Terra) and 5x (Luna) over-estimates came from.
+                // Capabilities can share one `gpt-5.6` row because the shape is
+                // identical; rates cannot, and these two must precede `gpt-5.6` or
+                // they would silently bill at the flagship rate.
+                // `codex-mini-latest` (OpenAI's cheapest reasoning model) — not
+                // aliased to any existing prefix, so it needs its own row ahead of
+                // the broad `gpt-5` fallback (which would bill it 2x high).
+                Rates {
+                    model_prefix: "codex-mini-latest",
+                    input_per_mtok: Some(1.0),
+                    output_per_mtok: Some(4.0),
+                    cache_read_per_mtok: Some(0.10),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "gpt-5.6-terra",
+                    input_per_mtok: Some(2.0),
+                    output_per_mtok: Some(12.0),
+                    cache_read_per_mtok: Some(0.20),
+                    cache_creation_per_mtok: Some(2.50),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "gpt-5.6-luna",
+                    input_per_mtok: Some(0.20),
+                    output_per_mtok: Some(1.20),
+                    cache_read_per_mtok: Some(0.02),
+                    cache_creation_per_mtok: Some(0.25),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Covers plain `gpt-5.6` and the `-sol` tier, which share it.
+                    model_prefix: "gpt-5.6",
+                    input_per_mtok: Some(5.0),
+                    output_per_mtok: Some(30.0),
+                    cache_read_per_mtok: Some(0.50),
+                    cache_creation_per_mtok: Some(6.25),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Pro SKU at 6x the flagship — without this row it fell
+                    // through to `gpt-5.5` and billed $5/$30. (models.dev openai,
+                    // 2026-08-15.) Retired per `LIFECYCLE_TABLE`; the row stays so
+                    // historical runs still price. Must precede `gpt-5.5` (the
+                    // prefix-shadow guard enforces it).
+                    model_prefix: "gpt-5.5-pro",
+                    input_per_mtok: Some(30.0),
+                    output_per_mtok: Some(180.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "gpt-5.5",
+                    input_per_mtok: Some(5.0),
+                    output_per_mtok: Some(30.0),
+                    cache_read_per_mtok: Some(0.50),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Pro SKU at 12x the base — without this row it fell through
+                    // to `gpt-5.4` and billed $2.50/$15. (models.dev openai,
+                    // 2026-08-15.)
+                    model_prefix: "gpt-5.4-pro",
+                    input_per_mtok: Some(30.0),
+                    output_per_mtok: Some(180.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "gpt-5.4-mini",
+                    input_per_mtok: Some(0.75),
+                    output_per_mtok: Some(4.50),
+                    cache_read_per_mtok: Some(0.075),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "gpt-5.4-nano",
+                    input_per_mtok: Some(0.20),
+                    output_per_mtok: Some(1.25),
+                    cache_read_per_mtok: Some(0.02),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "gpt-5.4",
+                    input_per_mtok: Some(2.50),
+                    output_per_mtok: Some(15.0),
+                    cache_read_per_mtok: Some(0.25),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // gpt-5.3-codex and gpt-5.3-chat-latest share one rate.
+                    model_prefix: "gpt-5.3",
+                    input_per_mtok: Some(1.75),
+                    output_per_mtok: Some(14.0),
+                    cache_read_per_mtok: Some(0.175),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Pro SKU at 12x the 5.2 base. (models.dev openai, 2026-08-15.)
+                    model_prefix: "gpt-5.2-pro",
+                    input_per_mtok: Some(21.0),
+                    output_per_mtok: Some(168.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Same rate as the 5.3 codex line below it in the family.
+                    model_prefix: "gpt-5.2",
+                    input_per_mtok: Some(1.75),
+                    output_per_mtok: Some(14.0),
+                    cache_read_per_mtok: Some(0.175),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // First-gen pro SKU; without this row it fell through to the
+                    // broad `gpt-5` row and billed 6x low ($2.50/$15 vs $15/$120).
+                    model_prefix: "gpt-5-pro",
+                    input_per_mtok: Some(15.0),
+                    output_per_mtok: Some(120.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // GPT-5 / 5.1 base rate (models.dev openai, 2026-08-15). The
+                    // $2.50/$15 this carried was the 5.4-era rate — 2x high for
+                    // the original 5.x generation.
+                    model_prefix: "gpt-5",
+                    input_per_mtok: Some(1.25),
+                    output_per_mtok: Some(10.0),
+                    cache_read_per_mtok: Some(0.125),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Retired (see `LIFECYCLE_TABLE`); the row stays so historical
+                    // runs still price. Cache reads are $0.275, not the rounded
+                    // $0.28 this carried.
+                    model_prefix: "o4-mini",
+                    input_per_mtok: Some(1.10),
+                    output_per_mtok: Some(4.40),
+                    cache_read_per_mtok: Some(0.275),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "o3-mini",
+                    input_per_mtok: Some(1.10),
+                    output_per_mtok: Some(4.40),
+                    cache_read_per_mtok: Some(0.55),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "o3-pro",
+                    input_per_mtok: Some(20.0),
+                    output_per_mtok: Some(80.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "o3-deep-research",
+                    input_per_mtok: Some(10.0),
+                    output_per_mtok: Some(40.0),
+                    cache_read_per_mtok: Some(2.50),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // o3 base was missing entirely — estimates degraded to
+                    // Unknown despite the capability table knowing the family.
+                    model_prefix: "o3",
+                    input_per_mtok: Some(2.0),
+                    output_per_mtok: Some(8.0),
+                    cache_read_per_mtok: Some(0.50),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "o1-mini",
+                    input_per_mtok: Some(3.0),
+                    output_per_mtok: Some(12.0),
+                    cache_read_per_mtok: Some(1.50),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "o1",
+                    input_per_mtok: Some(15.0),
+                    output_per_mtok: Some(60.0),
+                    cache_read_per_mtok: Some(7.50),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // GPT-4.1 family (1M window, models.dev openai 2026-08-15).
+                    // Without these rows every 4.1 id fell through to `gpt-4`
+                    // ($30/$60) — a 15x over-estimate for 4.1, 75x for nano.
+                    // nano/mini precede the family row.
+                    model_prefix: "gpt-4.1-nano",
+                    input_per_mtok: Some(0.10),
+                    output_per_mtok: Some(0.40),
+                    cache_read_per_mtok: Some(0.025),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "gpt-4.1-mini",
+                    input_per_mtok: Some(0.40),
+                    output_per_mtok: Some(1.60),
+                    cache_read_per_mtok: Some(0.10),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "gpt-4.1",
+                    input_per_mtok: Some(2.0),
+                    output_per_mtok: Some(8.0),
+                    cache_read_per_mtok: Some(0.50),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "gpt-4o-mini",
+                    input_per_mtok: Some(0.15),
+                    output_per_mtok: Some(0.60),
+                    cache_read_per_mtok: Some(0.075),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "gpt-4o",
+                    input_per_mtok: Some(2.50),
+                    output_per_mtok: Some(10.0),
+                    cache_read_per_mtok: Some(1.25),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "gpt-4",
+                    input_per_mtok: Some(30.0),
+                    output_per_mtok: Some(60.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        (
+            "google",
+            vec![
+                Rates {
+                    // Gemini 3.1 Pro (current default). $2/$12 for ≤200K input; the
+                    // >200K step-up ($4/$18) now lives in `TIER_TABLE`. Must
+                    // precede broad `gemini` (flash).
+                    model_prefix: "gemini-3.1-pro",
+                    input_per_mtok: Some(2.0),
+                    output_per_mtok: Some(12.0),
+                    cache_read_per_mtok: Some(0.20),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(12.0),
+                },
+                Rates {
+                    // Gemini 3.1 Flash-Lite (models.dev google, 2026-08-15).
+                    // Without this row it fell through to the broad `gemini`
+                    // catch-all at $0.075/$0.30 — 3x/5x low.
+                    model_prefix: "gemini-3.1-flash-lite",
+                    input_per_mtok: Some(0.25),
+                    output_per_mtok: Some(1.50),
+                    cache_read_per_mtok: Some(0.025),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(1.50),
+                },
+                Rates {
+                    // Gemini 3.7 Flash (models.dev google, 2026-08-15) — newest
+                    // flash line; without this row it priced ~5x low on the broad
+                    // `gemini` row.
+                    model_prefix: "gemini-3.7-flash",
+                    input_per_mtok: Some(0.75),
+                    output_per_mtok: Some(3.75),
+                    cache_read_per_mtok: Some(0.075),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(3.75),
+                },
+                // The Gemini 3.x **flash** tiers are ~20x the 2.0-flash rate the
+                // broad `gemini` row below carries. Without these rows every 3.x
+                // flash id — including the `gemini` preset's own aux model — priced
+                // at $0.075/$0.30, which is not a rounding error: it is the figure
+                // `cost_aware` sorts on and the one a run's cost estimate reports.
+                // `-lite` must precede `-flash`, being a longer prefix of neither.
+                Rates {
+                    model_prefix: "gemini-3.6-flash",
+                    input_per_mtok: Some(1.50),
+                    output_per_mtok: Some(7.50),
+                    cache_read_per_mtok: Some(0.15),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(7.50),
+                },
+                Rates {
+                    model_prefix: "gemini-3.5-flash-lite",
+                    input_per_mtok: Some(0.30),
+                    output_per_mtok: Some(2.50),
+                    cache_read_per_mtok: Some(0.03),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(2.50),
+                },
+                Rates {
+                    model_prefix: "gemini-3.5-flash",
+                    input_per_mtok: Some(1.50),
+                    output_per_mtok: Some(9.0),
+                    cache_read_per_mtok: Some(0.15),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(9.0),
+                },
+                Rates {
+                    // `gemini-3-flash-preview` (the aux model). This row used to
+                    // hold the 3.x *Pro* rate as a deliberate stand-in ("errs high
+                    // rather than 20x low") because no separate rate was published
+                    // for the preview id. One is now published, so the stand-in has
+                    // nothing left to stand in for: $0.50/$3.00 with $0.05 cache
+                    // reads, i.e. the row was 3x high.
+                    model_prefix: "gemini-3-flash",
+                    input_per_mtok: Some(0.50),
+                    output_per_mtok: Some(3.0),
+                    cache_read_per_mtok: Some(0.05),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(7.50),
+                },
+                Rates {
+                    // Gemini 2.5 Flash-Lite / Flash (models.dev google,
+                    // 2026-08-15). `gemini-2.5-flash` is the `gemini` preset's
+                    // last fallback rung and previously fell through to the broad
+                    // `gemini` row at $0.075/$0.30 — 4x/8x low. `-lite` precedes
+                    // `-flash` (longer prefix of the same stem).
+                    model_prefix: "gemini-2.5-flash-lite",
+                    input_per_mtok: Some(0.10),
+                    output_per_mtok: Some(0.40),
+                    cache_read_per_mtok: Some(0.01),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(0.40),
+                },
+                Rates {
+                    model_prefix: "gemini-2.5-flash",
+                    input_per_mtok: Some(0.30),
+                    output_per_mtok: Some(2.50),
+                    cache_read_per_mtok: Some(0.03),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(2.50),
+                },
+                Rates {
+                    model_prefix: "gemini-2.5-pro",
+                    input_per_mtok: Some(1.25),
+                    output_per_mtok: Some(10.0),
+                    cache_read_per_mtok: Some(0.125),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(10.0),
+                },
+                Rates {
+                    model_prefix: "gemini-2.0-flash",
+                    input_per_mtok: Some(0.075),
+                    output_per_mtok: Some(0.30),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(0.30),
+                },
+                Rates {
+                    model_prefix: "gemini",
+                    input_per_mtok: Some(0.075),
+                    output_per_mtok: Some(0.30),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(0.30),
+                },
+            ],
+        ),
+        (
+            "deepseek",
+            // V4 rates from the official pricing page (RMB → USD @ ~7.2). The
+            // legacy deepseek-chat / deepseek-reasoner aliases retire 2026-07-24
+            // and now bill at v4-flash rates. Prior figures were stale V3 and
+            // mis-scaled (v4-pro was ~4x too high, v4-flash cache_read 10x).
+            vec![
+                Rates {
+                    // ¥3 in / ¥6 out / ¥0.025 cache-hit.
+                    model_prefix: "deepseek-v4-pro",
+                    input_per_mtok: Some(0.435),
+                    output_per_mtok: Some(0.87),
+                    cache_read_per_mtok: Some(0.003_625),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // ¥1 in / ¥2 out / ¥0.02 cache-hit.
+                    model_prefix: "deepseek-v4-flash",
+                    input_per_mtok: Some(0.14),
+                    output_per_mtok: Some(0.28),
+                    cache_read_per_mtok: Some(0.0028),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Thinking-mode alias of v4-flash; billed at v4-flash rates.
+                    model_prefix: "deepseek-reasoner",
+                    input_per_mtok: Some(0.14),
+                    output_per_mtok: Some(0.28),
+                    cache_read_per_mtok: Some(0.0028),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Broad fallback; deepseek-chat is now the v4-flash
+                    // non-thinking alias → same v4-flash rates.
+                    model_prefix: "deepseek",
+                    input_per_mtok: Some(0.14),
+                    output_per_mtok: Some(0.28),
+                    cache_read_per_mtok: Some(0.0028),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        (
+            "xai",
+            vec![
+                // Grok 4.x generations: dotted/suffixed specifics precede the
+                // `grok-4` base, which precedes the grok-3-era broad fallback.
+                Rates {
+                    // Grok 4.6 / 4.5 (models.dev xai, 2026-08-15). Without these
+                    // rows both fell through to the broad `grok` row at
+                    // $3/$15 — 1.5x/2.5x high.
+                    model_prefix: "grok-4.6",
+                    input_per_mtok: Some(2.0),
+                    output_per_mtok: Some(6.0),
+                    cache_read_per_mtok: Some(0.50),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "grok-4.5",
+                    input_per_mtok: Some(2.0),
+                    output_per_mtok: Some(6.0),
+                    cache_read_per_mtok: Some(0.30),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "grok-4.3",
+                    input_per_mtok: Some(1.25),
+                    output_per_mtok: Some(2.50),
+                    cache_read_per_mtok: Some(0.20),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "grok-4-fast",
+                    input_per_mtok: Some(0.20),
+                    output_per_mtok: Some(0.50),
+                    cache_read_per_mtok: Some(0.05),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                // Grok Code Fast 1 — xAI's coding-tier cheap model (pi-mono
+                // 2026-09, xai + github-copilot both serve it). Same rough
+                // shape as the 4-fast row but a distinct prefix: it would
+                // otherwise bill at the broad `grok-4` rate (12x high). Must
+                // precede `grok-4`.
+                Rates {
+                    model_prefix: "grok-code-fast-1",
+                    input_per_mtok: Some(0.20),
+                    output_per_mtok: Some(1.50),
+                    cache_read_per_mtok: Some(0.05),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                // grok-3-mini is the cheap tier, but it used to inherit the
+                // broad `grok` row below — the *flagship* grok-3 rate — which
+                // priced it ~5x its own primary. The cross-table drift guard
+                // (`aux_model_is_not_pricier_than_the_default`) is what
+                // surfaced it: xAI's preset named grok-3-mini as its cheap aux
+                // model while the table billed it at $18/Mtok blended against
+                // grok-4.3's $3.75. xAI's published mini rate is $0.30/$0.50.
+                // Must precede the broader `grok-3` row below (which is its
+                // prefix in `prefix_matches`'s dot/dash-equivalent sense).
+                Rates {
+                    model_prefix: "grok-3-mini",
+                    input_per_mtok: Some(0.30),
+                    output_per_mtok: Some(0.50),
+                    cache_read_per_mtok: Some(0.075),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Grok 3 flagship (pi-mono 2026-09, models.dev xai):
+                    // $3/$15 — same as the broad `grok` row that follows but
+                    // distinct prefix so the canonicalised 3 / 3-mini ids reach
+                    // the right shape. Must precede the `grok` broad row.
+                    model_prefix: "grok-3",
+                    input_per_mtok: Some(3.0),
+                    output_per_mtok: Some(15.0),
+                    cache_read_per_mtok: Some(0.75),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                // Grok 2 Vision (pi-mono 2026-09, models.dev xai): 8K window +
+                // image input, $5/$15 (same as the grok-2 base below). Must
+                // precede `grok-2` so the canonicalised 2-vision id resolves
+                // its own row instead of the broader grok-2 shape (which
+                // happens to match here, but the vision flag is what's at
+                // stake — see the capability row).
+                Rates {
+                    model_prefix: "grok-2-vision",
+                    input_per_mtok: Some(5.0),
+                    output_per_mtok: Some(15.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                // Grok 2 base (pi-mono 2026-09): 131K / 8K, $5/$15. Distinct
+                // from the broad `grok` row's $3/$15 — Grok 2 was the more
+                // expensive flagship. Must precede `grok`.
+                Rates {
+                    model_prefix: "grok-2",
+                    input_per_mtok: Some(5.0),
+                    output_per_mtok: Some(15.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "grok",
+                    input_per_mtok: Some(3.0),
+                    output_per_mtok: Some(15.0),
+                    cache_read_per_mtok: Some(0.75),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        (
+            "mistral",
+            vec![
+                // Magistral reasoning family (pi-mono 2026-09, models.dev
+                // mistral): $0.50/$1.50 small + $0.50/$1.80 medium on the small
+                // and medium rungs; both reasoning-on and tool-capable. Must
+                // precede `mistral-large-latest` below, whose $0.50/$1.50 is
+                // coincidentally the same input price but only the Magistral
+                // small row is vision-on.
+                Rates {
+                    model_prefix: "magistral-small",
+                    input_per_mtok: Some(0.50),
+                    output_per_mtok: Some(1.50),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "magistral",
+                    input_per_mtok: Some(0.50),
+                    output_per_mtok: Some(1.80),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                // Devstral coding family (pi-mono 2026-09): $0.20/$0.60 on the
+                // 262K latest row, $0.10/$0.30 on the smaller 128K tiers. All
+                // distinct prefixes that fall through to the broad `mistral`
+                // rate without their own row. Must precede `mistral`.
+                Rates {
+                    model_prefix: "devstral",
+                    input_per_mtok: Some(0.20),
+                    output_per_mtok: Some(0.60),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                // Codestral (pi-mono 2026-09): $0.30/$0.90 text-only code model.
+                // Distinct from `mistral`'s $0.20/$0.60 (output 1.5x).
+                Rates {
+                    model_prefix: "codestral",
+                    input_per_mtok: Some(0.30),
+                    output_per_mtok: Some(0.90),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                // Ministral 3B/8B (pi-mono 2026-09): $0.10/$0.10 — text-only,
+                // matching the `mistral` broad row by coincidence. Pin the
+                // prefix so the canonicalised id resolves the documented row
+                // ahead of the broad fallback.
+                Rates {
+                    model_prefix: "ministral",
+                    input_per_mtok: Some(0.10),
+                    output_per_mtok: Some(0.10),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                // Pixtral vision family (pi-mono 2026-09): $0.20/$0.20 (large
+                // + 12b). Distinct from the broad `mistral` row so the
+                // vision-on flag and the same-cost doc row stay explicit.
+                Rates {
+                    model_prefix: "pixtral",
+                    input_per_mtok: Some(0.20),
+                    output_per_mtok: Some(0.20),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                // Open-mixtral-8x22B / 8x7B / Open-mistral-7B (pi-mono 2026-09):
+                // all legacy open-weights ids that don't share a prefix with
+                // `mistral-*`. The 7B row's 8K window is the dangerous one
+                // (broad `mistral` over-promises by 16x). Must precede
+                // `mistral-large-latest` below — it doesn't shadow any row, but
+                // listing them up here keeps the open-weights family grouped.
+                Rates {
+                    model_prefix: "open-mixtral-8x22b",
+                    input_per_mtok: Some(2.0),
+                    output_per_mtok: Some(6.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "open-mixtral-8x7b",
+                    input_per_mtok: Some(0.60),
+                    output_per_mtok: Some(0.60),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "open-mistral-7b",
+                    input_per_mtok: Some(0.25),
+                    output_per_mtok: Some(0.25),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // The `mistral` preset's *default* — the 2512 snapshot at
+                    // $0.50/$1.50 (models.dev mistral, 2026-08-15), NOT the
+                    // 2411-era $2/$6 the family row below carries. Every default
+                    // run was estimated 4x high. Must precede `mistral-large`.
+                    model_prefix: "mistral-large-latest",
+                    input_per_mtok: Some(0.50),
+                    output_per_mtok: Some(1.50),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "mistral-large",
+                    input_per_mtok: Some(2.0),
+                    output_per_mtok: Some(6.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Advertised fallback rungs of the `mistral` preset
+                    // (models.dev mistral, 2026-08-15). Without these rows both
+                    // fell through to the broad family row at $0.20/$0.60 —
+                    // 7.5x low for medium, input-side high for small.
+                    model_prefix: "mistral-medium-latest",
+                    input_per_mtok: Some(1.50),
+                    output_per_mtok: Some(7.50),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "mistral-small-latest",
+                    input_per_mtok: Some(0.15),
+                    output_per_mtok: Some(0.60),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "mistral",
+                    input_per_mtok: Some(0.20),
+                    output_per_mtok: Some(0.60),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        (
+            "moonshot",
+            vec![
+                // K3 flagship, published USD rates (platform.kimi.ai
+                // /docs/pricing/chat-k3): $3 in / $15 out, $0.30 on a cache hit.
+                // Must precede the broad `kimi` row, which would price it 5x low.
+                //
+                // No `TIER_TABLE` row on purpose: unlike Gemini 2.5/3.1 Pro and
+                // Claude Sonnet, K3 publishes *no* long-context premium above
+                // 200K — the rate is flat across the full 1,048,576-token window.
+                //
+                // Only the *open platform* meters tokens. The Kimi Code
+                // subscription ids are excluded by `QUOTA_BILLED_MODELS` — and
+                // they have to be excluded by name, because three of them
+                // (`kimi-for-coding*`, `kimi-code`) would otherwise be caught by
+                // the broad `kimi` row below.
+                Rates {
+                    model_prefix: "kimi-k3",
+                    input_per_mtok: Some(3.0),
+                    output_per_mtok: Some(15.0),
+                    cache_read_per_mtok: Some(0.30),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                // K2.5/K2.6/K2.7 published USD rates (platform.kimi.ai) differ from
+                // the legacy family fallback below. K2.7-code shares K2.6's tier.
+                Rates {
+                    // The `-highspeed` SKU is a separate 2x rate (models.dev
+                    // moonshotai, 2026-08-15); without this row it billed at the
+                    // `kimi-k2.7` base — half price. Must precede it.
+                    model_prefix: "kimi-k2.7-code-highspeed",
+                    input_per_mtok: Some(1.90),
+                    output_per_mtok: Some(8.0),
+                    cache_read_per_mtok: Some(0.38),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "kimi-k2.7",
+                    input_per_mtok: Some(0.95),
+                    output_per_mtok: Some(4.0),
+                    cache_read_per_mtok: Some(0.19),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "kimi-k2.6",
+                    input_per_mtok: Some(0.95),
+                    output_per_mtok: Some(4.0),
+                    cache_read_per_mtok: Some(0.16),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "kimi-k2.5",
+                    input_per_mtok: Some(0.60),
+                    output_per_mtok: Some(3.0),
+                    cache_read_per_mtok: Some(0.10),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "kimi",
+                    input_per_mtok: Some(0.60),
+                    output_per_mtok: Some(2.50),
+                    cache_read_per_mtok: Some(0.15),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "moonshot",
+                    input_per_mtok: Some(0.60),
+                    output_per_mtok: Some(2.50),
+                    cache_read_per_mtok: Some(0.15),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        // ── Zhipu / Z.AI ─────────────────────────────────────────────────────
+        // Previously absent even though the alias layer and capability table
+        // already knew the vendor — estimates silently degraded to Unknown.
+        (
+            "zai",
+            vec![
+                // GLM 4.x family (pi-mono 2026-09, zai catalog). All four
+                // 4.x tiers are reasoning models with distinct published rates
+                // (z.ai USD); the vision SKUs (`4.5v`, `4.6v`) are slightly
+                // cheaper than the text siblings on output. Must precede
+                // `glm-5.2-fast` below.
+                Rates {
+                    model_prefix: "glm-4.7-flash",
+                    input_per_mtok: Some(0.10),
+                    output_per_mtok: Some(1.0),
+                    cache_read_per_mtok: Some(0.02),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "glm-4.7",
+                    input_per_mtok: Some(0.60),
+                    output_per_mtok: Some(2.20),
+                    cache_read_per_mtok: Some(0.11),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "glm-4.6v",
+                    input_per_mtok: Some(0.30),
+                    output_per_mtok: Some(0.90),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "glm-4.6",
+                    input_per_mtok: Some(0.60),
+                    output_per_mtok: Some(2.20),
+                    cache_read_per_mtok: Some(0.11),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "glm-4.5v",
+                    input_per_mtok: Some(0.20),
+                    output_per_mtok: Some(0.60),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "glm-4.5",
+                    input_per_mtok: Some(0.35),
+                    output_per_mtok: Some(1.10),
+                    cache_read_per_mtok: Some(0.06),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // GLM-5.2-Fast — the Fireworks router (`glm-5p2-fast`, an
+                    // advertised `fireworks` fallback rung) and Baseten's
+                    // `GLM-5.2-Fast` both publish $2.10/$6.60 (models.dev
+                    // fireworks-ai + baseten, 2026-08-15); without this row both
+                    // billed at the direct-API $1.40/$4.40 below. Must precede
+                    // `glm-5.2`.
+                    model_prefix: "glm-5.2-fast",
+                    input_per_mtok: Some(2.10),
+                    output_per_mtok: Some(6.60),
+                    cache_read_per_mtok: Some(0.21),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // GLM-5.2 flagship (z.ai USD). Must precede glm-5 / glm-5-turbo.
+                    model_prefix: "glm-5.2",
+                    input_per_mtok: Some(1.40),
+                    output_per_mtok: Some(4.40),
+                    cache_read_per_mtok: Some(0.26),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Correction: old row carried GLM-5-Turbo's rate; GLM-5.1 = 1.4/4.4.
+                    model_prefix: "glm-5.1",
+                    input_per_mtok: Some(1.40),
+                    output_per_mtok: Some(4.40),
+                    cache_read_per_mtok: Some(0.26),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Precede broad glm-5 so Turbo isn't under-priced at the 5 rate.
+                    model_prefix: "glm-5-turbo",
+                    input_per_mtok: Some(1.20),
+                    output_per_mtok: Some(4.0),
+                    cache_read_per_mtok: Some(0.24),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "glm-5",
+                    input_per_mtok: Some(1.0),
+                    output_per_mtok: Some(3.20),
+                    cache_read_per_mtok: Some(0.20),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // GLM-4.x family fallback.
+                    model_prefix: "glm",
+                    input_per_mtok: Some(0.60),
+                    output_per_mtok: Some(2.20),
+                    cache_read_per_mtok: Some(0.11),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        // ── Alibaba / Qwen (DashScope) ───────────────────────────────────────
+        (
+            "qwen",
+            vec![
+                // Qwen QwQ — reasoning-tier Qwen, 131K / 16K (pi-mono 2026-09,
+                // groq catalog). Must precede `qwen` so the reasoning-on flag
+                // is correct on QwQ ids; broad `qwen` is reasoning-off.
+                Rates {
+                    model_prefix: "qwen-qwq",
+                    input_per_mtok: Some(0.30),
+                    output_per_mtok: Some(0.60),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "qwen3.6-flash",
+                    input_per_mtok: Some(0.029),
+                    output_per_mtok: Some(0.287),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "qwen3.6-plus",
+                    input_per_mtok: Some(0.115),
+                    output_per_mtok: Some(0.688),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "qwen3-max",
+                    input_per_mtok: Some(0.359),
+                    output_per_mtok: Some(1.434),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        // ── MiniMax ──────────────────────────────────────────────────────────
+        // M2 family flat pricing (MiniMax open-platform pricing, 2026-06). The
+        // `minimax` provider preset previously had no reachable rate, so its runs
+        // always reported `CostStatus::Unknown`; `canonical_provider_id("minimax")`
+        // now resolves, so this section is consulted.
+        (
+            "minimax",
+            vec![
+                Rates {
+                    // M3 (current default) — without this row the default id
+                    // reports CostStatus::Unknown. Must precede minimax-m2.
+                    //
+                    // The $0.60/$2.40 this used to carry is MiniMax's *over-512K*
+                    // step-up, not the base rate, so every M3 run was estimated at
+                    // 2x. Aleph has no tier row for it: the base is corrected here
+                    // and long M3 prompts are now a documented under-estimate
+                    // rather than a blanket over-estimate.
+                    model_prefix: "minimax-m3",
+                    input_per_mtok: Some(0.30),
+                    output_per_mtok: Some(1.20),
+                    cache_read_per_mtok: Some(0.06),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // The `-highspeed` variants are a separate SKU at 2x the base
+                    // tier, and both `minimax` presets advertise
+                    // `MiniMax-M2.7-highspeed` in their chains — without this row
+                    // it fell through to `minimax-m2` and billed at half. Must
+                    // precede `minimax-m2`.
+                    model_prefix: "minimax-m2.7-highspeed",
+                    input_per_mtok: Some(0.60),
+                    output_per_mtok: Some(2.40),
+                    cache_read_per_mtok: Some(0.06),
+                    cache_creation_per_mtok: Some(0.375),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // M2.7 (the `minimax` presets' aux) publishes cache rates the
+                    // family row below does not (models.dev minimax, 2026-08-15).
+                    // Same base $0.30/$1.20, so this row exists for the cache
+                    // columns. Must precede `minimax-m2`.
+                    model_prefix: "minimax-m2.7",
+                    input_per_mtok: Some(0.30),
+                    output_per_mtok: Some(1.20),
+                    cache_read_per_mtok: Some(0.06),
+                    cache_creation_per_mtok: Some(0.375),
+                    reasoning_per_mtok: None,
+                },
+                // MiniMax-M2.5-highspeed — 2x the M2.5 base (models.dev
+                // minimax, 2026-08-15), same shape as the `-highspeed` rows
+                // above. Must precede `minimax-m2.5`.
+                Rates {
+                    model_prefix: "minimax-m2.5-highspeed",
+                    input_per_mtok: Some(0.60),
+                    output_per_mtok: Some(2.40),
+                    cache_read_per_mtok: Some(0.06),
+                    cache_creation_per_mtok: Some(0.375),
+                    reasoning_per_mtok: None,
+                },
+                // MiniMax-M2.5 — same $0.30/$1.20 as the broad M2 row, but
+                // with cache rates M2.x publishes on its newer snapshots. Must
+                // precede `minimax-m2.1` and `minimax-m2` below.
+                Rates {
+                    model_prefix: "minimax-m2.5",
+                    input_per_mtok: Some(0.30),
+                    output_per_mtok: Some(1.20),
+                    cache_read_per_mtok: Some(0.06),
+                    cache_creation_per_mtok: Some(0.375),
+                    reasoning_per_mtok: None,
+                },
+                // MiniMax-M2.1 — same rate as the broad M2 row; explicit prefix
+                // so the canonicalised M2.1 id resolves the documented row
+                // ahead of the broad fallback.
+                Rates {
+                    model_prefix: "minimax-m2.1",
+                    input_per_mtok: Some(0.30),
+                    output_per_mtok: Some(1.20),
+                    cache_read_per_mtok: Some(0.06),
+                    cache_creation_per_mtok: Some(0.375),
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "minimax-m2",
+                    input_per_mtok: Some(0.30),
+                    output_per_mtok: Some(1.20),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        // ── Baidu ERNIE (Qianfan) ────────────────────────────────────────────
+        // Qianfan publishes in RMB; these are its own USD figures. ERNIE 5.0 (the
+        // multimodal reasoning tier) costs more than 5.1, so 5.1 must precede it
+        // only for readability — the prefixes do not overlap.
+        (
+            "baidu",
+            vec![
+                Rates {
+                    model_prefix: "ernie-5.1",
+                    input_per_mtok: Some(0.591),
+                    output_per_mtok: Some(2.658),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "ernie-5.0",
+                    input_per_mtok: Some(0.886),
+                    output_per_mtok: Some(3.544),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        // ── Volcengine Doubao (Ark) ──────────────────────────────────────────
+        // Previously ABSENT: `canonical_provider_id` had no doubao branch, so every
+        // doubao run reported CostStatus::Unknown. Now wired (alias.rs) + priced.
+        // RMB → USD @ ~7.2; best-effort (Doubao tiers shift often).
+        (
+            "doubao",
+            vec![
+                Rates {
+                    // Seed 2.1 Pro and Seed Evolving share the top tier — 2x the
+                    // Turbo rate the family row below carries, so both need to
+                    // precede it.
+                    model_prefix: "doubao-seed-2-1-pro",
+                    input_per_mtok: Some(0.885),
+                    output_per_mtok: Some(4.427),
+                    cache_read_per_mtok: Some(0.177),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "doubao-seed-evolving",
+                    input_per_mtok: Some(0.885),
+                    output_per_mtok: Some(4.427),
+                    cache_read_per_mtok: Some(0.177),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Doubao-Seed Turbo tier — the published Seed 2.1 Turbo rate,
+                    // and the family default for other Seed ids.
+                    model_prefix: "doubao-seed",
+                    input_per_mtok: Some(0.443),
+                    output_per_mtok: Some(2.214),
+                    cache_read_per_mtok: Some(0.0885),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    // Legacy non-Seed fallback (doubao-1.5-pro-256k etc.).
+                    model_prefix: "doubao",
+                    input_per_mtok: Some(0.11),
+                    output_per_mtok: Some(0.28),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        (
+            // StepFun Step-3.x Flash line. Source: openclaw `stepfun` plugin
+            // catalog (2026-08). `cacheWrite: 0` there means "not billed
+            // separately", recorded as None — not as free.
+            "stepfun",
+            vec![
+                Rates {
+                    model_prefix: "step-3.7-flash",
+                    input_per_mtok: Some(0.2),
+                    output_per_mtok: Some(1.15),
+                    cache_read_per_mtok: Some(0.04),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "step-3.5-flash",
+                    input_per_mtok: Some(0.1),
+                    output_per_mtok: Some(0.3),
+                    cache_read_per_mtok: Some(0.02),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        (
+            // Xiaomi MiMo v2.5. Source: openclaw `xiaomi` plugin catalog
+            // (2026-08). The `-pro` row must precede the family row — `mimo-v2.5`
+            // is a prefix of `mimo-v2.5-pro` and would otherwise underprice the
+            // flagship 3x (the prefix-shadow guard enforces the order).
+            "xiaomi",
+            vec![
+                Rates {
+                    // The `-ultraspeed` SKU (beta) is 3x the pro rate (models.dev
+                    // xiaomi, 2026-08-15); without this row it billed at the pro
+                    // rate. Must precede `mimo-v2.5-pro`, which is its prefix.
+                    model_prefix: "mimo-v2.5-pro-ultraspeed",
+                    input_per_mtok: Some(1.305),
+                    output_per_mtok: Some(2.61),
+                    cache_read_per_mtok: Some(0.0108),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "mimo-v2.5-pro",
+                    input_per_mtok: Some(0.435),
+                    output_per_mtok: Some(0.87),
+                    cache_read_per_mtok: Some(0.0036),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "mimo-v2.5",
+                    input_per_mtok: Some(0.14),
+                    output_per_mtok: Some(0.28),
+                    cache_read_per_mtok: Some(0.0028),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+        (
+            // Meituan LongCat. Source: openclaw `longcat` plugin catalog
+            // (2026-08). Cache write is billed at the input rate.
+            "meituan",
+            vec![Rates {
+                model_prefix: "longcat-2.0",
+                input_per_mtok: Some(0.75),
+                output_per_mtok: Some(2.95),
+                cache_read_per_mtok: Some(0.015),
+                cache_creation_per_mtok: Some(0.75),
                 reasoning_per_mtok: None,
-            },
-            Rates {
-                // The `-highspeed` variants are a separate SKU at 2x the base
-                // tier, and both `minimax` presets advertise
-                // `MiniMax-M2.7-highspeed` in their chains — without this row
-                // it fell through to `minimax-m2` and billed at half. Must
-                // precede `minimax-m2`.
-                model_prefix: "minimax-m2.7-highspeed",
-                input_per_mtok: Some(0.60),
-                output_per_mtok: Some(2.40),
-                cache_read_per_mtok: Some(0.06),
-                cache_creation_per_mtok: Some(0.375),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // M2.7 (the `minimax` presets' aux) publishes cache rates the
-                // family row below does not (models.dev minimax, 2026-08-15).
-                // Same base $0.30/$1.20, so this row exists for the cache
-                // columns. Must precede `minimax-m2`.
-                model_prefix: "minimax-m2.7",
-                input_per_mtok: Some(0.30),
-                output_per_mtok: Some(1.20),
-                cache_read_per_mtok: Some(0.06),
-                cache_creation_per_mtok: Some(0.375),
-                reasoning_per_mtok: None,
-            },
-            // MiniMax-M2.5-highspeed — 2x the M2.5 base (models.dev
-            // minimax, 2026-08-15), same shape as the `-highspeed` rows
-            // above. Must precede `minimax-m2.5`.
-            Rates {
-                model_prefix: "minimax-m2.5-highspeed",
-                input_per_mtok: Some(0.60),
-                output_per_mtok: Some(2.40),
-                cache_read_per_mtok: Some(0.06),
-                cache_creation_per_mtok: Some(0.375),
-                reasoning_per_mtok: None,
-            },
-            // MiniMax-M2.5 — same $0.30/$1.20 as the broad M2 row, but
-            // with cache rates M2.x publishes on its newer snapshots. Must
-            // precede `minimax-m2.1` and `minimax-m2` below.
-            Rates {
-                model_prefix: "minimax-m2.5",
-                input_per_mtok: Some(0.30),
-                output_per_mtok: Some(1.20),
-                cache_read_per_mtok: Some(0.06),
-                cache_creation_per_mtok: Some(0.375),
-                reasoning_per_mtok: None,
-            },
-            // MiniMax-M2.1 — same rate as the broad M2 row; explicit prefix
-            // so the canonicalised M2.1 id resolves the documented row
-            // ahead of the broad fallback.
-            Rates {
-                model_prefix: "minimax-m2.1",
-                input_per_mtok: Some(0.30),
-                output_per_mtok: Some(1.20),
-                cache_read_per_mtok: Some(0.06),
-                cache_creation_per_mtok: Some(0.375),
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "minimax-m2",
-                input_per_mtok: Some(0.30),
-                output_per_mtok: Some(1.20),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    // ── Baidu ERNIE (Qianfan) ────────────────────────────────────────────
-    // Qianfan publishes in RMB; these are its own USD figures. ERNIE 5.0 (the
-    // multimodal reasoning tier) costs more than 5.1, so 5.1 must precede it
-    // only for readability — the prefixes do not overlap.
-    (
-        "baidu",
-        vec![
-            Rates {
-                model_prefix: "ernie-5.1",
-                input_per_mtok: Some(0.591),
-                output_per_mtok: Some(2.658),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "ernie-5.0",
-                input_per_mtok: Some(0.886),
-                output_per_mtok: Some(3.544),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    // ── Volcengine Doubao (Ark) ──────────────────────────────────────────
-    // Previously ABSENT: `canonical_provider_id` had no doubao branch, so every
-    // doubao run reported CostStatus::Unknown. Now wired (alias.rs) + priced.
-    // RMB → USD @ ~7.2; best-effort (Doubao tiers shift often).
-    (
-        "doubao",
-        vec![
-            Rates {
-                // Seed 2.1 Pro and Seed Evolving share the top tier — 2x the
-                // Turbo rate the family row below carries, so both need to
-                // precede it.
-                model_prefix: "doubao-seed-2-1-pro",
-                input_per_mtok: Some(0.885),
-                output_per_mtok: Some(4.427),
-                cache_read_per_mtok: Some(0.177),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "doubao-seed-evolving",
-                input_per_mtok: Some(0.885),
-                output_per_mtok: Some(4.427),
-                cache_read_per_mtok: Some(0.177),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Doubao-Seed Turbo tier — the published Seed 2.1 Turbo rate,
-                // and the family default for other Seed ids.
-                model_prefix: "doubao-seed",
-                input_per_mtok: Some(0.443),
-                output_per_mtok: Some(2.214),
-                cache_read_per_mtok: Some(0.0885),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                // Legacy non-Seed fallback (doubao-1.5-pro-256k etc.).
-                model_prefix: "doubao",
-                input_per_mtok: Some(0.11),
-                output_per_mtok: Some(0.28),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    (
-        // StepFun Step-3.x Flash line. Source: openclaw `stepfun` plugin
-        // catalog (2026-08). `cacheWrite: 0` there means "not billed
-        // separately", recorded as None — not as free.
-        "stepfun",
-        vec![
-            Rates {
-                model_prefix: "step-3.7-flash",
-                input_per_mtok: Some(0.2),
-                output_per_mtok: Some(1.15),
-                cache_read_per_mtok: Some(0.04),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "step-3.5-flash",
-                input_per_mtok: Some(0.1),
-                output_per_mtok: Some(0.3),
-                cache_read_per_mtok: Some(0.02),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    (
-        // Xiaomi MiMo v2.5. Source: openclaw `xiaomi` plugin catalog
-        // (2026-08). The `-pro` row must precede the family row — `mimo-v2.5`
-        // is a prefix of `mimo-v2.5-pro` and would otherwise underprice the
-        // flagship 3x (the prefix-shadow guard enforces the order).
-        "xiaomi",
-        vec![
-            Rates {
-                // The `-ultraspeed` SKU (beta) is 3x the pro rate (models.dev
-                // xiaomi, 2026-08-15); without this row it billed at the pro
-                // rate. Must precede `mimo-v2.5-pro`, which is its prefix.
-                model_prefix: "mimo-v2.5-pro-ultraspeed",
-                input_per_mtok: Some(1.305),
-                output_per_mtok: Some(2.61),
-                cache_read_per_mtok: Some(0.0108),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "mimo-v2.5-pro",
-                input_per_mtok: Some(0.435),
-                output_per_mtok: Some(0.87),
-                cache_read_per_mtok: Some(0.0036),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "mimo-v2.5",
-                input_per_mtok: Some(0.14),
-                output_per_mtok: Some(0.28),
-                cache_read_per_mtok: Some(0.0028),
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-    (
-        // Meituan LongCat. Source: openclaw `longcat` plugin catalog
-        // (2026-08). Cache write is billed at the input rate.
-        "meituan",
-        vec![Rates {
-            model_prefix: "longcat-2.0",
-            input_per_mtok: Some(0.75),
-            output_per_mtok: Some(2.95),
-            cache_read_per_mtok: Some(0.015),
-            cache_creation_per_mtok: Some(0.75),
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        // Perplexity Sonar. Source: models.dev `perplexity` section
-        // (2026-08-15) — the round-3 deferral ("no accepted source") no longer
-        // holds. Longest prefixes first: bare `sonar` is a prefix of every
-        // sibling and would otherwise price them all at $1/$1. Note
-        // `sonar-reasoning` (an advertised fallback rung) has no upstream
-        // entry of its own and resolves to the `sonar` row — recorded here so
-        // the next refresh does not re-discover it.
-        "perplexity",
-        vec![
-            Rates {
-                model_prefix: "sonar-reasoning-pro",
-                input_per_mtok: Some(2.0),
-                output_per_mtok: Some(8.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "sonar-deep-research",
-                input_per_mtok: Some(2.0),
-                output_per_mtok: Some(8.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "sonar-pro",
-                input_per_mtok: Some(3.0),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-            Rates {
-                model_prefix: "sonar",
-                input_per_mtok: Some(1.0),
-                output_per_mtok: Some(1.0),
-                cache_read_per_mtok: None,
-                cache_creation_per_mtok: None,
-                reasoning_per_mtok: None,
-            },
-        ],
-    ),
-]);
+            }],
+        ),
+        (
+            // Perplexity Sonar. Source: models.dev `perplexity` section
+            // (2026-08-15) — the round-3 deferral ("no accepted source") no longer
+            // holds. Longest prefixes first: bare `sonar` is a prefix of every
+            // sibling and would otherwise price them all at $1/$1. Note
+            // `sonar-reasoning` (an advertised fallback rung) has no upstream
+            // entry of its own and resolves to the `sonar` row — recorded here so
+            // the next refresh does not re-discover it.
+            "perplexity",
+            vec![
+                Rates {
+                    model_prefix: "sonar-reasoning-pro",
+                    input_per_mtok: Some(2.0),
+                    output_per_mtok: Some(8.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "sonar-deep-research",
+                    input_per_mtok: Some(2.0),
+                    output_per_mtok: Some(8.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "sonar-pro",
+                    input_per_mtok: Some(3.0),
+                    output_per_mtok: Some(15.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+                Rates {
+                    model_prefix: "sonar",
+                    input_per_mtok: Some(1.0),
+                    output_per_mtok: Some(1.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                },
+            ],
+        ),
+    ]
+});
 
 /// Long-context pricing tiers, parallel to [`PRICE_TABLE`] and keyed the same
 /// way `(provider, model_prefix)`. Kept separate (mirroring
@@ -1514,230 +1516,233 @@ static PRICE_TABLE: LazyLock<Vec<(&'static str, Vec<Rates>)>> = LazyLock::new(||
 /// models with a published >threshold premium appear here. Tiers within an
 /// entry are sorted ascending by `min_input_tokens`; the highest threshold the
 /// prompt has crossed wins. Sources are vendor pricing pages as of 2026-08.
-static TIER_TABLE: LazyLock<Vec<(&'static str, &'static str, Vec<PriceTier>)>> = LazyLock::new(|| vec![
-    (
-        "google",
-        // Gemini 3.1 Pro (current `gemini` preset default, 1M window): the base
-        // row's own comment recorded the >200K step-up ($4/$18) as "left to the
-        // base rate — best-effort". That note predates nothing: it just never
-        // got a tier row, so every long-context run on the *current default*
-        // was billed at half price. Must precede `gemini-2.5-pro` only in
-        // spirit (distinct prefixes); order here is newest-first for reading.
-        "gemini-3.1-pro",
-        vec![PriceTier {
-            min_input_tokens: 200_000,
-            input_per_mtok: Some(4.0),
-            output_per_mtok: Some(18.0),
-            cache_read_per_mtok: Some(0.40),
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: Some(18.0),
-        }],
-    ),
-    (
-        "google",
-        // Gemini 2.5 Pro: prompts over 200K input tokens bill at ~2x.
-        "gemini-2.5-pro",
-        vec![PriceTier {
-            min_input_tokens: 200_000,
-            input_per_mtok: Some(2.50),
-            output_per_mtok: Some(15.0),
-            cache_read_per_mtok: Some(0.25),
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: Some(15.0),
-        }],
-    ),
-    // ── OpenAI GPT-5.4/5.5/5.6 long-context tiers (models.dev openai,
-    // 2026-08-15; recorded 2026-08-13 for this round to adopt) ─────────────
-    // Every 5.4+ flagship id has a 1.05M window with a >272K step-up. The
-    // per-tier rates are NOT multiples of a single base — sol/terra/luna each
-    // carry their own quote, so the three 5.6 rows precede the broad one.
-    (
-        "openai",
-        "gpt-5.6-terra",
-        vec![PriceTier {
-            min_input_tokens: 272_000,
-            input_per_mtok: Some(4.0),
-            output_per_mtok: Some(18.0),
-            cache_read_per_mtok: Some(0.40),
-            cache_creation_per_mtok: Some(5.0),
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        "openai",
-        "gpt-5.6-luna",
-        vec![PriceTier {
-            min_input_tokens: 272_000,
-            input_per_mtok: Some(0.40),
-            output_per_mtok: Some(1.80),
-            cache_read_per_mtok: Some(0.04),
-            cache_creation_per_mtok: Some(0.50),
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        "openai",
-        // Covers plain `gpt-5.6` and `-sol`, which share the flagship quote.
-        "gpt-5.6",
-        vec![PriceTier {
-            min_input_tokens: 272_000,
-            input_per_mtok: Some(10.0),
-            output_per_mtok: Some(45.0),
-            cache_read_per_mtok: Some(1.0),
-            cache_creation_per_mtok: Some(12.50),
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        "openai",
-        "gpt-5.5-pro",
-        vec![PriceTier {
-            min_input_tokens: 272_000,
-            input_per_mtok: Some(60.0),
-            output_per_mtok: Some(270.0),
-            cache_read_per_mtok: None,
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        "openai",
-        "gpt-5.5",
-        vec![PriceTier {
-            min_input_tokens: 272_000,
-            input_per_mtok: Some(10.0),
-            output_per_mtok: Some(45.0),
-            cache_read_per_mtok: Some(1.0),
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        "openai",
-        "gpt-5.4-pro",
-        vec![PriceTier {
-            min_input_tokens: 272_000,
-            input_per_mtok: Some(60.0),
-            output_per_mtok: Some(270.0),
-            cache_read_per_mtok: None,
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        "openai",
-        // Explicitly *not* tiered (empty slice = "flat", same convention as
-        // `claude-sonnet-4-6` below): mini/nano publish no >272K premium, and
-        // without these rows the broad `gpt-5.4` tier would reach them by
-        // prefix and double-bill every long mini/nano prompt.
-        "gpt-5.4-mini",
-        vec![],
-    ),
-    ("openai", "gpt-5.4-nano", vec![]),
-    (
-        "openai",
-        "gpt-5.4",
-        vec![PriceTier {
-            min_input_tokens: 272_000,
-            input_per_mtok: Some(5.0),
-            output_per_mtok: Some(22.50),
-            cache_read_per_mtok: Some(0.50),
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        "minimax",
-        // MiniMax M3: prompts over 512K input tokens bill at 2x (models.dev
-        // minimax, 2026-08-15). Closes the documented under-estimate left by
-        // the 2026-08-13 base-rate correction.
-        "minimax-m3",
-        vec![PriceTier {
-            min_input_tokens: 512_000,
-            input_per_mtok: Some(0.60),
-            output_per_mtok: Some(2.40),
-            cache_read_per_mtok: Some(0.12),
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        "xai",
-        // Grok 4.x: prompts over 200K input tokens bill at 2x (models.dev
-        // xai, 2026-08-15). 4.6/4.5 share the $4/$12 step-up; 4.3 (the
-        // preset default) doubles its own base.
-        "grok-4.6",
-        vec![PriceTier {
-            min_input_tokens: 200_000,
-            input_per_mtok: Some(4.0),
-            output_per_mtok: Some(12.0),
-            cache_read_per_mtok: Some(1.0),
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        "xai",
-        "grok-4.5",
-        vec![PriceTier {
-            min_input_tokens: 200_000,
-            input_per_mtok: Some(4.0),
-            output_per_mtok: Some(12.0),
-            cache_read_per_mtok: Some(0.60),
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        "xai",
-        "grok-4.3",
-        vec![PriceTier {
-            min_input_tokens: 200_000,
-            input_per_mtok: Some(2.50),
-            output_per_mtok: Some(5.0),
-            cache_read_per_mtok: Some(0.40),
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: None,
-        }],
-    ),
-    (
-        "anthropic",
-        // Explicitly *not* tiered, and the empty slice is how that is said:
-        // Anthropic's pricing page states "Claude 4.6 and later models and
-        // Claude Mythos Preview include the full 1M token context window at
-        // standard pricing. (A 900k-token request is billed at the same
-        // per-token rate as a 9k-token request.)"
-        //
-        // This row exists only to keep the broad `claude-sonnet-4` beta row
-        // below from reaching 4.6+ by prefix. `claude-sonnet-5` and the
-        // opus/fable 1M models need no row at all — a miss already means flat.
-        //
-        // Prefix matching cannot say "4.6 and later", so this covers exactly
-        // 4.6: a future `claude-sonnet-4-7` would fall through to the beta row
-        // and silently take the 2x again. Sonnet went 4.6 → 5, so there is no
-        // such id today; if one appears it needs its own line here.
-        // The table previously carried a `claude-sonnet-5` tier that copied the
-        // 4.x beta's 2x/1.5x multipliers onto it, which over-estimated every
-        // long-context run on the current default by roughly 2x.
-        "claude-sonnet-4-6",
-        vec![],
-    ),
-    (
-        "anthropic",
-        // Claude Sonnet 4.x 1M-context beta: prompts over 200K input tokens
-        // bill input/cache at 2x and output at 1.5x. Pre-4.6 only — see the
-        // negative row above.
-        "claude-sonnet-4",
-        vec![PriceTier {
-            min_input_tokens: 200_000,
-            input_per_mtok: Some(6.0),
-            output_per_mtok: Some(22.50),
-            cache_read_per_mtok: Some(0.60),
-            cache_creation_per_mtok: Some(7.50),
-            reasoning_per_mtok: None,
-        }],
-    ),
-]);
+static TIER_TABLE: LazyLock<Vec<(&'static str, &'static str, Vec<PriceTier>)>> =
+    LazyLock::new(|| {
+        vec![
+            (
+                "google",
+                // Gemini 3.1 Pro (current `gemini` preset default, 1M window): the base
+                // row's own comment recorded the >200K step-up ($4/$18) as "left to the
+                // base rate — best-effort". That note predates nothing: it just never
+                // got a tier row, so every long-context run on the *current default*
+                // was billed at half price. Must precede `gemini-2.5-pro` only in
+                // spirit (distinct prefixes); order here is newest-first for reading.
+                "gemini-3.1-pro",
+                vec![PriceTier {
+                    min_input_tokens: 200_000,
+                    input_per_mtok: Some(4.0),
+                    output_per_mtok: Some(18.0),
+                    cache_read_per_mtok: Some(0.40),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(18.0),
+                }],
+            ),
+            (
+                "google",
+                // Gemini 2.5 Pro: prompts over 200K input tokens bill at ~2x.
+                "gemini-2.5-pro",
+                vec![PriceTier {
+                    min_input_tokens: 200_000,
+                    input_per_mtok: Some(2.50),
+                    output_per_mtok: Some(15.0),
+                    cache_read_per_mtok: Some(0.25),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: Some(15.0),
+                }],
+            ),
+            // ── OpenAI GPT-5.4/5.5/5.6 long-context tiers (models.dev openai,
+            // 2026-08-15; recorded 2026-08-13 for this round to adopt) ─────────────
+            // Every 5.4+ flagship id has a 1.05M window with a >272K step-up. The
+            // per-tier rates are NOT multiples of a single base — sol/terra/luna each
+            // carry their own quote, so the three 5.6 rows precede the broad one.
+            (
+                "openai",
+                "gpt-5.6-terra",
+                vec![PriceTier {
+                    min_input_tokens: 272_000,
+                    input_per_mtok: Some(4.0),
+                    output_per_mtok: Some(18.0),
+                    cache_read_per_mtok: Some(0.40),
+                    cache_creation_per_mtok: Some(5.0),
+                    reasoning_per_mtok: None,
+                }],
+            ),
+            (
+                "openai",
+                "gpt-5.6-luna",
+                vec![PriceTier {
+                    min_input_tokens: 272_000,
+                    input_per_mtok: Some(0.40),
+                    output_per_mtok: Some(1.80),
+                    cache_read_per_mtok: Some(0.04),
+                    cache_creation_per_mtok: Some(0.50),
+                    reasoning_per_mtok: None,
+                }],
+            ),
+            (
+                "openai",
+                // Covers plain `gpt-5.6` and `-sol`, which share the flagship quote.
+                "gpt-5.6",
+                vec![PriceTier {
+                    min_input_tokens: 272_000,
+                    input_per_mtok: Some(10.0),
+                    output_per_mtok: Some(45.0),
+                    cache_read_per_mtok: Some(1.0),
+                    cache_creation_per_mtok: Some(12.50),
+                    reasoning_per_mtok: None,
+                }],
+            ),
+            (
+                "openai",
+                "gpt-5.5-pro",
+                vec![PriceTier {
+                    min_input_tokens: 272_000,
+                    input_per_mtok: Some(60.0),
+                    output_per_mtok: Some(270.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                }],
+            ),
+            (
+                "openai",
+                "gpt-5.5",
+                vec![PriceTier {
+                    min_input_tokens: 272_000,
+                    input_per_mtok: Some(10.0),
+                    output_per_mtok: Some(45.0),
+                    cache_read_per_mtok: Some(1.0),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                }],
+            ),
+            (
+                "openai",
+                "gpt-5.4-pro",
+                vec![PriceTier {
+                    min_input_tokens: 272_000,
+                    input_per_mtok: Some(60.0),
+                    output_per_mtok: Some(270.0),
+                    cache_read_per_mtok: None,
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                }],
+            ),
+            (
+                "openai",
+                // Explicitly *not* tiered (empty slice = "flat", same convention as
+                // `claude-sonnet-4-6` below): mini/nano publish no >272K premium, and
+                // without these rows the broad `gpt-5.4` tier would reach them by
+                // prefix and double-bill every long mini/nano prompt.
+                "gpt-5.4-mini",
+                vec![],
+            ),
+            ("openai", "gpt-5.4-nano", vec![]),
+            (
+                "openai",
+                "gpt-5.4",
+                vec![PriceTier {
+                    min_input_tokens: 272_000,
+                    input_per_mtok: Some(5.0),
+                    output_per_mtok: Some(22.50),
+                    cache_read_per_mtok: Some(0.50),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                }],
+            ),
+            (
+                "minimax",
+                // MiniMax M3: prompts over 512K input tokens bill at 2x (models.dev
+                // minimax, 2026-08-15). Closes the documented under-estimate left by
+                // the 2026-08-13 base-rate correction.
+                "minimax-m3",
+                vec![PriceTier {
+                    min_input_tokens: 512_000,
+                    input_per_mtok: Some(0.60),
+                    output_per_mtok: Some(2.40),
+                    cache_read_per_mtok: Some(0.12),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                }],
+            ),
+            (
+                "xai",
+                // Grok 4.x: prompts over 200K input tokens bill at 2x (models.dev
+                // xai, 2026-08-15). 4.6/4.5 share the $4/$12 step-up; 4.3 (the
+                // preset default) doubles its own base.
+                "grok-4.6",
+                vec![PriceTier {
+                    min_input_tokens: 200_000,
+                    input_per_mtok: Some(4.0),
+                    output_per_mtok: Some(12.0),
+                    cache_read_per_mtok: Some(1.0),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                }],
+            ),
+            (
+                "xai",
+                "grok-4.5",
+                vec![PriceTier {
+                    min_input_tokens: 200_000,
+                    input_per_mtok: Some(4.0),
+                    output_per_mtok: Some(12.0),
+                    cache_read_per_mtok: Some(0.60),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                }],
+            ),
+            (
+                "xai",
+                "grok-4.3",
+                vec![PriceTier {
+                    min_input_tokens: 200_000,
+                    input_per_mtok: Some(2.50),
+                    output_per_mtok: Some(5.0),
+                    cache_read_per_mtok: Some(0.40),
+                    cache_creation_per_mtok: None,
+                    reasoning_per_mtok: None,
+                }],
+            ),
+            (
+                "anthropic",
+                // Explicitly *not* tiered, and the empty slice is how that is said:
+                // Anthropic's pricing page states "Claude 4.6 and later models and
+                // Claude Mythos Preview include the full 1M token context window at
+                // standard pricing. (A 900k-token request is billed at the same
+                // per-token rate as a 9k-token request.)"
+                //
+                // This row exists only to keep the broad `claude-sonnet-4` beta row
+                // below from reaching 4.6+ by prefix. `claude-sonnet-5` and the
+                // opus/fable 1M models need no row at all — a miss already means flat.
+                //
+                // Prefix matching cannot say "4.6 and later", so this covers exactly
+                // 4.6: a future `claude-sonnet-4-7` would fall through to the beta row
+                // and silently take the 2x again. Sonnet went 4.6 → 5, so there is no
+                // such id today; if one appears it needs its own line here.
+                // The table previously carried a `claude-sonnet-5` tier that copied the
+                // 4.x beta's 2x/1.5x multipliers onto it, which over-estimated every
+                // long-context run on the current default by roughly 2x.
+                "claude-sonnet-4-6",
+                vec![],
+            ),
+            (
+                "anthropic",
+                // Claude Sonnet 4.x 1M-context beta: prompts over 200K input tokens
+                // bill input/cache at 2x and output at 1.5x. Pre-4.6 only — see the
+                // negative row above.
+                "claude-sonnet-4",
+                vec![PriceTier {
+                    min_input_tokens: 200_000,
+                    input_per_mtok: Some(6.0),
+                    output_per_mtok: Some(22.50),
+                    cache_read_per_mtok: Some(0.60),
+                    cache_creation_per_mtok: Some(7.50),
+                    reasoning_per_mtok: None,
+                }],
+            ),
+        ]
+    });
 
 /// Lower-case the provider id and accept a few common synonyms so callers
 /// can pass the raw provider name from `ProviderConfig` without tagging.

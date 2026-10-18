@@ -1,9 +1,9 @@
 //! `impl GeminiProtocol` — construction and internal helpers.
 
-use crate::agents::thinking::ThinkLevel;
+use crate::agents::thinking::{dispatch_think_level, ThinkLevel};
 use crate::config::ProviderConfig;
 use crate::providers::gemini::{Content, Part, ThinkingConfig};
-use crate::providers::message::UnifiedMessage;
+use crate::providers::message::{dispatch_unified_message, UnifiedMessage};
 use crate::sync_primitives::Arc;
 
 use super::GeminiProtocol;
@@ -57,8 +57,10 @@ impl GeminiProtocol {
     pub(super) fn convert_messages(messages: &[UnifiedMessage]) -> Vec<Content> {
         let mut result = Vec::new();
         for msg in messages {
-            match msg {
-                UnifiedMessage::User { content } => {
+            dispatch_unified_message(
+                msg,
+                &mut result,
+                |result, content| {
                     // rust-doctor-disable-next-line unnecessary-allocation
                     let mut parts = Vec::new();
                     for block in content {
@@ -85,14 +87,14 @@ impl GeminiProtocol {
                     // blocks is skipped entirely rather than padded with a
                     // placeholder. Mirrors hermes/pi's empty-parts guard.
                     if parts.is_empty() {
-                        continue;
+                        return;
                     }
                     result.push(Content {
                         role: Some("user".to_string()),
                         parts,
                     });
-                }
-                UnifiedMessage::Assistant { content } => {
+                },
+                |result, content| {
                     // rust-doctor-disable-next-line unnecessary-allocation
                     let mut parts = Vec::new();
                     for block in content {
@@ -134,23 +136,18 @@ impl GeminiProtocol {
                     // message whose blocks were all dropped (e.g. a pure
                     // Thinking turn) must not become an empty text part.
                     if parts.is_empty() {
-                        continue;
+                        return;
                     }
                     result.push(Content {
                         role: Some("model".to_string()),
                         parts,
                     });
-                }
-                UnifiedMessage::ToolResult {
-                    tool_call_id,
-                    tool_name,
-                    content,
-                    ..
-                } => {
+                },
+                |result, tool_call_id, tool_name, content, _is_error| {
                     // A lone structured-JSON object passes through directly as the
                     // functionResponse payload; text / mixed content is wrapped in
                     // `{"result": ...}` so `response` is always a JSON object.
-                    let response = match content.as_slice() {
+                    let response = match content {
                         [crate::providers::message::ContentBlock::Json { value }]
                             if value.is_object() =>
                         {
@@ -171,10 +168,10 @@ impl GeminiProtocol {
                     let part = Part::FunctionResponse {
                         function_response: crate::providers::gemini::GeminiFunctionResponse {
                             // rust-doctor-disable-next-line excessive-clone
-                            name: tool_name.clone(),
+                            name: tool_name.to_owned(),
                             response,
                             // rust-doctor-disable-next-line excessive-clone
-                            id: Some(tool_call_id.clone()),
+                            id: Some(tool_call_id.to_owned()),
                         },
                     };
                     // Parallel function calling: Gemini requires the number of
@@ -198,8 +195,8 @@ impl GeminiProtocol {
                             parts: vec![part],
                         }),
                     }
-                }
-            }
+                },
+            );
         }
         // Defensive: every message was skipped by the empty-parts guard but the
         // caller did pass messages — send a minimal non-empty user turn instead
@@ -249,14 +246,16 @@ impl GeminiProtocol {
         // Gemini 2.5 models use thinkingBudget; all others use thinkingLevel
         let use_budget = model.contains("gemini-2.5");
         if use_budget {
-            let budget = match level {
-                ThinkLevel::Off => 0,
-                ThinkLevel::Minimal => 500,
-                ThinkLevel::Low => 1000,
-                ThinkLevel::Medium => 2000,
-                ThinkLevel::High => 4000,
-                ThinkLevel::XHigh => 8000,
-            };
+            let budget = dispatch_think_level(
+                level,
+                &mut (),
+                |_| 0,
+                |_| 500,
+                |_| 1000,
+                |_| 2000,
+                |_| 4000,
+                |_| 8000,
+            );
             Some(ThinkingConfig {
                 thinking_budget: Some(budget),
                 thinking_level: None,
@@ -265,12 +264,16 @@ impl GeminiProtocol {
                 include_thoughts: Some(*level != ThinkLevel::Off),
             })
         } else {
-            let level_str = match level {
-                ThinkLevel::Off | ThinkLevel::Minimal => "MINIMAL",
-                ThinkLevel::Low => "LOW",
-                ThinkLevel::Medium => "MEDIUM",
-                ThinkLevel::High | ThinkLevel::XHigh => "HIGH",
-            };
+            let level_str = dispatch_think_level(
+                level,
+                &mut (),
+                |_| "MINIMAL",
+                |_| "MINIMAL",
+                |_| "LOW",
+                |_| "MEDIUM",
+                |_| "HIGH",
+                |_| "HIGH",
+            );
             Some(ThinkingConfig {
                 thinking_budget: None,
                 thinking_level: Some(level_str.into()),

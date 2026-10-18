@@ -3193,14 +3193,14 @@ mod tests {
     /// remote browser-companion addition, measured by this guard on Linux:
     /// 97_420 catalog + 16_612 registry-only + 1_039 injected + 1_944 bridge
     /// + 1_368 canonical. The five new descriptions total 519 B (104
-    /// initiate, 95 answer, 96 hangup, 104 cancel, 120 status); the
-    /// registry-only subtotal is 1 B below the previous measurement. Three
-    /// questions: (1) the own-binding/approval boundary and the distinction
-    /// between cancellation acceptance and cleared playback are not inferable
-    /// from the tool names; (2) argument details remain in the schemas, and
-    /// the descriptions state only the operation and its authority/result
-    /// boundary; (3) no existing tool exposes these telephone lifecycle
-    /// operations.
+    ///   initiate, 95 answer, 96 hangup, 104 cancel, 120 status); the
+    ///   registry-only subtotal is 1 B below the previous measurement. Three
+    ///   questions: (1) the own-binding/approval boundary and the distinction
+    ///   between cancellation acceptance and cleared playback are not inferable
+    ///   from the tool names; (2) argument details remain in the schemas, and
+    ///   the descriptions state only the operation and its authority/result
+    ///   boundary; (3) no existing tool exposes these telephone lifecycle
+    ///   operations.
     ///
     /// 2026-10-07 (#48 browser_companion tool): +194 B, measured by this
     /// guard's Linux ledger after the telephone additions; the delta is the

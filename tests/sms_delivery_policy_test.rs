@@ -522,7 +522,9 @@ impl Channel for VanishingExplicit {
     }
 }
 
-async fn vanishing_fixture(replace: bool) -> (Arc<ChannelRegistry>, Arc<DeliveryStore>, Arc<Sends>) {
+async fn vanishing_fixture(
+    replace: bool,
+) -> (Arc<ChannelRegistry>, Arc<DeliveryStore>, Arc<Sends>) {
     let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
     let registry = Arc::new(ChannelRegistry::new().with_delivery_store(Arc::clone(&store)));
     let sends = Arc::new(Sends::default());
@@ -582,7 +584,11 @@ async fn a_send_to_a_never_registered_channel_keeps_the_legacy_queueing() {
         .await
         .expect_err("not registered");
     assert!(matches!(err, ChannelError::NotConnected(_)));
-    assert_eq!(store.len().unwrap(), 1, "legacy: queued for a later registration");
+    assert_eq!(
+        store.len().unwrap(),
+        1,
+        "legacy: queued for a later registration"
+    );
 }
 
 // ---- I4: retained payload scrub ---------------------------------------------------
@@ -609,8 +615,14 @@ fn assert_letter_scrubbed(l: &alephcore::gateway::delivery_queue::DeadLetter) {
     assert!(l.message.metadata.is_empty());
     // History is not the replay predicate: policy retirement is sticky even
     // when the original Exhausted/Permanent reason was individually safe.
-    assert!(l.retired_by_policy, "row must carry an independent retirement fence");
-    assert!(!l.redrivable(), "a bodyless retired row must never be redriven");
+    assert!(
+        l.retired_by_policy,
+        "row must carry an independent retirement fence"
+    );
+    assert!(
+        !l.redrivable(),
+        "a bodyless retired row must never be redriven"
+    );
 }
 
 #[tokio::test]
@@ -638,9 +650,21 @@ async fn registering_an_explicit_only_channel_promptly_scrubs_old_recognised_row
     for l in &letters {
         assert_letter_scrubbed(l);
     }
-    assert_eq!(letters.iter().filter(|l| l.reason.as_str() == "exhausted").count(), 1,
-        "original historical reason remains, independent of row retirement");
-    assert_eq!(letters.iter().filter(|l| l.reason.as_str() == "explicit_only_retired").count(), 1);
+    assert_eq!(
+        letters
+            .iter()
+            .filter(|l| l.reason.as_str() == "exhausted")
+            .count(),
+        1,
+        "original historical reason remains, independent of row retirement"
+    );
+    assert_eq!(
+        letters
+            .iter()
+            .filter(|l| l.reason.as_str() == "explicit_only_retired")
+            .count(),
+        1
+    );
     // Redrive can neither resurrect the old Exhausted letter nor the retired one.
     let out = registry.redrive_dead_letters(None).expect("store attached");
     assert_eq!(out.moved, 0);

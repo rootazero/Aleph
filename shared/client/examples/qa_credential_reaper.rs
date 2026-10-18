@@ -335,9 +335,9 @@ mod imp {
             _ => return Err(Code::MarkerInvalid),
         };
         if rest.is_empty()
-            || rest
-                .chars()
-                .any(|c| matches!(c, '/' | '?' | '#' | '@' | '\\') || c.is_whitespace() || c.is_control())
+            || rest.chars().any(|c| {
+                matches!(c, '/' | '?' | '#' | '@' | '\\') || c.is_whitespace() || c.is_control()
+            })
         {
             return Err(Code::MarkerInvalid);
         }
@@ -596,13 +596,23 @@ mod imp {
                 check_root_lexical(&t.join("sub").join("aleph-shell-qa-x1"), &t),
                 Err(Code::RootNotTemp)
             );
-            let other = if cfg!(windows) { PathBuf::from(r"C:\Other") } else { PathBuf::from("/other") };
+            let other = if cfg!(windows) {
+                PathBuf::from(r"C:\Other")
+            } else {
+                PathBuf::from("/other")
+            };
             assert_eq!(
                 check_root_lexical(&other.join("aleph-shell-qa-x1"), &t),
                 Err(Code::RootNotTemp)
             );
             // Wrong / production-looking / empty prefix.
-            for leaf in ["aleph-shell-qa-", "aleph-shell-qb-x", "aleph-qa.device-credential.ab", ".aleph", "x"] {
+            for leaf in [
+                "aleph-shell-qa-",
+                "aleph-shell-qb-x",
+                "aleph-qa.device-credential.ab",
+                ".aleph",
+                "x",
+            ] {
                 let r = check_root_lexical(&t.join(leaf), &t);
                 assert!(r.is_err(), "{leaf}");
             }
@@ -623,8 +633,14 @@ mod imp {
 
         #[test]
         fn marker_origin_converts_http_to_ws_only() {
-            assert_eq!(marker_origin_to_ws("http://127.0.0.1:18790").as_deref(), Ok("ws://127.0.0.1:18790"));
-            assert_eq!(marker_origin_to_ws("https://gw.example.com:8443").as_deref(), Ok("wss://gw.example.com:8443"));
+            assert_eq!(
+                marker_origin_to_ws("http://127.0.0.1:18790").as_deref(),
+                Ok("ws://127.0.0.1:18790")
+            );
+            assert_eq!(
+                marker_origin_to_ws("https://gw.example.com:8443").as_deref(),
+                Ok("wss://gw.example.com:8443")
+            );
             for bad in [
                 "",
                 "ws://127.0.0.1:1",
@@ -639,7 +655,11 @@ mod imp {
                 "HTTP://h",
                 "127.0.0.1:1",
             ] {
-                assert_eq!(marker_origin_to_ws(bad), Err(Code::MarkerInvalid), "{bad:?}");
+                assert_eq!(
+                    marker_origin_to_ws(bad),
+                    Err(Code::MarkerInvalid),
+                    "{bad:?}"
+                );
             }
         }
 
@@ -676,17 +696,34 @@ mod imp {
                 Some(Code::GatewayMismatch)
             );
             // wss / http / remote / userinfo / garbage gateways.
-            assert_eq!(target_store("wss://127.0.0.1:1", "wss://127.0.0.1:1", &svc).err(), Some(Code::GatewayInvalid));
-            assert_eq!(target_store("http://127.0.0.1:1", "ws://127.0.0.1:1", &svc).err(), Some(Code::GatewayInvalid));
-            assert_eq!(target_store("ws://u@127.0.0.1:1", "ws://127.0.0.1:1", &svc).err(), Some(Code::GatewayInvalid));
-            assert_eq!(target_store("nonsense", "ws://127.0.0.1:1", &svc).err(), Some(Code::GatewayInvalid));
+            assert_eq!(
+                target_store("wss://127.0.0.1:1", "wss://127.0.0.1:1", &svc).err(),
+                Some(Code::GatewayInvalid)
+            );
+            assert_eq!(
+                target_store("http://127.0.0.1:1", "ws://127.0.0.1:1", &svc).err(),
+                Some(Code::GatewayInvalid)
+            );
+            assert_eq!(
+                target_store("ws://u@127.0.0.1:1", "ws://127.0.0.1:1", &svc).err(),
+                Some(Code::GatewayInvalid)
+            );
+            assert_eq!(
+                target_store("nonsense", "ws://127.0.0.1:1", &svc).err(),
+                Some(Code::GatewayInvalid)
+            );
             assert_eq!(
                 target_store("ws://gw.example.com:80", "ws://gw.example.com:80", &svc).err(),
                 Some(Code::GatewayNotLoopback)
             );
             // The production service can never reach a store.
             assert_eq!(
-                target_store("ws://127.0.0.1:1", "ws://127.0.0.1:1", "aleph-client.device-credential").err(),
+                target_store(
+                    "ws://127.0.0.1:1",
+                    "ws://127.0.0.1:1",
+                    "aleph-client.device-credential"
+                )
+                .err(),
                 Some(Code::GatewayInvalid)
             );
         }
@@ -704,7 +741,9 @@ mod imp {
                 Code::NotDeleted,
             ] {
                 let s = c.as_str();
-                assert!(s.starts_with("E_") && s.bytes().all(|b| b.is_ascii_uppercase() || b == b'_'));
+                assert!(
+                    s.starts_with("E_") && s.bytes().all(|b| b.is_ascii_uppercase() || b == b'_')
+                );
             }
         }
     }

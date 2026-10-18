@@ -708,7 +708,12 @@ impl DeliveryStore {
     /// Fallible durable classification. A genuinely unknown id keeps legacy
     /// behavior; unavailable classification is never replay authority.
     pub fn is_explicit_only_channel(&self, channel_id: &str) -> rusqlite::Result<bool> {
-        if self.policy_failures.lock().unwrap_or_else(|e| e.into_inner()).contains(channel_id) {
+        if self
+            .policy_failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(channel_id)
+        {
             return Err(rusqlite::Error::InvalidQuery);
         }
         Self::has_marker(&self.guard(), channel_id)
@@ -717,7 +722,8 @@ impl DeliveryStore {
     fn has_marker(conn: &Connection, channel_id: &str) -> rusqlite::Result<bool> {
         conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM explicit_only_channels WHERE channel_id = ?1)",
-            params![channel_id], |r| r.get(0),
+            params![channel_id],
+            |r| r.get(0),
         )
     }
 
@@ -730,18 +736,27 @@ impl DeliveryStore {
         channel_id: &str,
         policy: OutboundDeliveryPolicy,
     ) -> rusqlite::Result<()> {
-        let mut failures = self.policy_failures.lock().unwrap_or_else(|e| e.into_inner());
+        let mut failures = self
+            .policy_failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         failures.insert(channel_id.to_string());
         let mut conn = self.guard();
         if policy == OutboundDeliveryPolicy::ExplicitOnly {
-            conn.execute("INSERT OR IGNORE INTO explicit_only_channels(channel_id) VALUES (?1)", params![channel_id])?;
+            conn.execute(
+                "INSERT OR IGNORE INTO explicit_only_channels(channel_id) VALUES (?1)",
+                params![channel_id],
+            )?;
         }
         let tx = conn.transaction()?;
         if policy == OutboundDeliveryPolicy::ExplicitOnly || Self::has_marker(&tx, channel_id)? {
             self.scrub_channel_on(&tx, channel_id)?;
         }
         if policy == OutboundDeliveryPolicy::Automatic {
-            tx.execute("DELETE FROM explicit_only_channels WHERE channel_id = ?1", params![channel_id])?;
+            tx.execute(
+                "DELETE FROM explicit_only_channels WHERE channel_id = ?1",
+                params![channel_id],
+            )?;
         }
         tx.commit()?;
         failures.remove(channel_id);
@@ -770,28 +785,51 @@ impl DeliveryStore {
                 "SELECT id, conversation_id, attempts, created_at, inflight_since
                  FROM outbound_deliveries WHERE channel_id = ?1",
             )?;
-            let rows = stmt.query_map(params![channel_id], |r| Ok((
-                r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?,
-                r.get::<_, u32>(2)?, r.get::<_, i64>(3)?, r.get::<_, Option<i64>>(4)?,
-            )))?;
+            let rows = stmt.query_map(params![channel_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, u32>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                ))
+            })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         for (id, conversation, attempts, created_at, inflight) in rows {
             let conversation = conversation.as_deref().unwrap_or_default();
             let payload = Self::scrubbed_payload(conversation)?;
-            Self::insert_dead_letter(conn, self.config.max_queue_len, DeadLetterInsert {
-                channel_id, conversation_id: conversation, payload: &payload,
-                attempts: attempts.saturating_add(u32::from(inflight.is_some())),
-                last_error: "explicit-only policy: payload retired; historical outcome retained",
-                reason: if inflight.is_some() { DeadLetterReason::UnknownOutcome } else { DeadLetterReason::ExplicitOnlyRetired },
-                created_at, died_at: now_secs(),
-            })?;
-            conn.execute("UPDATE dead_letters SET retired_by_policy = 1 WHERE id = ?1", params![conn.last_insert_rowid()])?;
+            Self::insert_dead_letter(
+                conn,
+                self.config.max_queue_len,
+                DeadLetterInsert {
+                    channel_id,
+                    conversation_id: conversation,
+                    payload: &payload,
+                    attempts: attempts.saturating_add(u32::from(inflight.is_some())),
+                    last_error:
+                        "explicit-only policy: payload retired; historical outcome retained",
+                    reason: if inflight.is_some() {
+                        DeadLetterReason::UnknownOutcome
+                    } else {
+                        DeadLetterReason::ExplicitOnlyRetired
+                    },
+                    created_at,
+                    died_at: now_secs(),
+                },
+            )?;
+            conn.execute(
+                "UPDATE dead_letters SET retired_by_policy = 1 WHERE id = ?1",
+                params![conn.last_insert_rowid()],
+            )?;
             conn.execute("DELETE FROM outbound_deliveries WHERE id = ?1", params![id])?;
         }
         let letters = {
-            let mut stmt = conn.prepare("SELECT id, conversation_id FROM dead_letters WHERE channel_id = ?1")?;
-            let rows = stmt.query_map(params![channel_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)))?;
+            let mut stmt =
+                conn.prepare("SELECT id, conversation_id FROM dead_letters WHERE channel_id = ?1")?;
+            let rows = stmt.query_map(params![channel_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
+            })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         for (id, conversation) in letters {
@@ -844,17 +882,29 @@ impl DeliveryStore {
         last_error: &str,
         next_attempt_at: i64,
     ) -> rusqlite::Result<EnqueueOutcome> {
-        self.enqueue_on(&self.guard(), channel_id, message, last_error, next_attempt_at)
+        self.enqueue_on(
+            &self.guard(),
+            channel_id,
+            message,
+            last_error,
+            next_attempt_at,
+        )
     }
 
     /// Fresh-send classification and persistence share a connection lock,
     /// closing the media-custody/registration race. `enqueue` stays a raw
     /// legacy/import seam, not a policy-authorized send admission.
     pub(crate) fn enqueue_fresh(
-        &self, channel_id: &str, message: &OutboundMessage,
-        last_error: &str, next_attempt_at: i64,
+        &self,
+        channel_id: &str,
+        message: &OutboundMessage,
+        last_error: &str,
+        next_attempt_at: i64,
     ) -> rusqlite::Result<EnqueueOutcome> {
-        let failures = self.policy_failures.lock().unwrap_or_else(|e| e.into_inner());
+        let failures = self
+            .policy_failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if failures.contains(channel_id) {
             return Ok(EnqueueOutcome::PolicyRefused);
         }
@@ -866,8 +916,12 @@ impl DeliveryStore {
     }
 
     fn enqueue_on(
-        &self, conn: &Connection, channel_id: &str, message: &OutboundMessage,
-        last_error: &str, next_attempt_at: i64,
+        &self,
+        conn: &Connection,
+        channel_id: &str,
+        message: &OutboundMessage,
+        last_error: &str,
+        next_attempt_at: i64,
     ) -> rusqlite::Result<EnqueueOutcome> {
         let payload = serde_json::to_string(message)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
@@ -1211,11 +1265,18 @@ impl DeliveryStore {
     /// Replay choke point: row existence, durable policy and attempt stamp are
     /// atomic. This also fences in-memory claims retired by a replacement.
     pub(crate) fn begin_replay(&self, id: i64, channel_id: &str) -> rusqlite::Result<bool> {
-        let failures = self.policy_failures.lock().unwrap_or_else(|e| e.into_inner());
-        if failures.contains(channel_id) { return Ok(false); }
+        let failures = self
+            .policy_failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if failures.contains(channel_id) {
+            return Ok(false);
+        }
         let mut conn = self.guard();
         let tx = conn.transaction()?;
-        if Self::has_marker(&tx, channel_id)? { return Ok(false); }
+        if Self::has_marker(&tx, channel_id)? {
+            return Ok(false);
+        }
         let changed = tx.execute(
             "UPDATE outbound_deliveries SET inflight_since = ?1 WHERE id = ?2 AND channel_id = ?3",
             params![now_secs(), id, channel_id],
@@ -1404,14 +1465,18 @@ impl DeliveryStore {
                     conversation_id: conversation,
                     payload: &scrubbed,
                     attempts,
-                    last_error: "explicit-only policy: payload retired; historical outcome retained",
+                    last_error:
+                        "explicit-only policy: payload retired; historical outcome retained",
                     reason,
                     created_at,
                     died_at,
                 },
             )?;
             tx.execute("DELETE FROM outbound_deliveries WHERE id = ?1", params![id])?;
-            tx.execute("UPDATE dead_letters SET retired_by_policy = 1 WHERE id = ?1", params![tx.last_insert_rowid()])?;
+            tx.execute(
+                "UPDATE dead_letters SET retired_by_policy = 1 WHERE id = ?1",
+                params![tx.last_insert_rowid()],
+            )?;
         }
         tx.commit()
     }
@@ -1507,7 +1572,17 @@ impl DeliveryStore {
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         let mut out = Vec::with_capacity(raw.len());
-        for (channel_id, payload, attempts, last_error, reason, created_at, died_at, retired_by_policy) in raw {
+        for (
+            channel_id,
+            payload,
+            attempts,
+            last_error,
+            reason,
+            created_at,
+            died_at,
+            retired_by_policy,
+        ) in raw
+        {
             if let Ok(message) = serde_json::from_str::<OutboundMessage>(&payload) {
                 out.push(DeadLetter {
                     channel_id,
@@ -1583,8 +1658,11 @@ impl DeliveryStore {
         // `ambiguous`, `unknown_outcome`, or a token this build cannot decode
         // (the decoder reads those as Ambiguous) -- counts as unsafe, so the
         // counters agree with how the rows are actually decoded.
-        let known_safe: Vec<&'static str> = DeadLetterReason::ALL.iter()
-            .filter(|r| r.replay_safe()).map(|r| r.as_str()).collect();
+        let known_safe: Vec<&'static str> = DeadLetterReason::ALL
+            .iter()
+            .filter(|r| r.replay_safe())
+            .map(|r| r.as_str())
+            .collect();
         let known_safe_in = vec!["?"; known_safe.len()].join(",");
         let mut conn = self.guard();
         let tx = conn.transaction()?;
@@ -1671,7 +1749,9 @@ impl DeliveryStore {
         // ?1 is the channel filter, so the token list is numbered from ?2
         // (mixing a bare `?` list after a named `?1` would renumber it).
         let retired_safe_in = (2..known_safe.len() + 2)
-            .map(|i| format!("?{i}")).collect::<Vec<_>>().join(",");
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
         let retired_total: i64 = tx.query_row(
             &format!(
                 "SELECT COUNT(*) FROM dead_letters
@@ -1721,7 +1801,9 @@ async fn drain_once(registry: &ChannelRegistry, store: &DeliveryStore) {
     // Held for the whole pass: claim → deliver → settle must not interleave
     // with the inline flush, which claims from the same unleased table.
     let _gate = store.drain_gate.lock().await;
-    if registry.prepare_delivery_store_on(store).await.is_err() { return; }
+    if registry.prepare_delivery_store_on(store).await.is_err() {
+        return;
+    }
     let cfg = store.config();
     let now = now_secs();
     let due = match store.claim_due(now, cfg.batch) {
@@ -1806,8 +1888,16 @@ async fn deliver_one(
 
     // Policy is enforced on the actual Arc/read guard at the transport choke
     // point. No earlier id-only observation authorizes a replay.
-    let attempt = registry.send_attempt(&channel, &rec.message,
-        AttemptKind::Replay { store, record_id: rec.id }).await;
+    let attempt = registry
+        .send_attempt(
+            &channel,
+            &rec.message,
+            AttemptKind::Replay {
+                store,
+                record_id: rec.id,
+            },
+        )
+        .await;
     if attempt.replay_refused {
         // No generic terminal settlement: it would reintroduce the original
         // claimed body into dead letters after a concurrent privacy scrub.
@@ -1945,7 +2035,9 @@ pub(super) async fn flush_conversation(
     channel_id: &str,
     conversation_id: &str,
 ) {
-    if registry.prepare_delivery_store_on(store).await.is_err() { return; }
+    if registry.prepare_delivery_store_on(store).await.is_err() {
+        return;
+    }
     let cfg = store.config();
     let limit = cfg.inline_flush_max;
     if limit == 0 {
@@ -2204,14 +2296,22 @@ mod tests {
         let path = dir.path().join("delivery.sqlite");
         {
             let s = DeliveryStore::open(&path, cfg()).unwrap();
-            let id = s.enqueue_id("sms", &msg("private-body"), "private-error", now_secs()).unwrap();
-            s.record_dead_letter(id, 2, "private-error", DeadLetterReason::Exhausted).unwrap();
-            s.observe_channel_policy("sms", OutboundDeliveryPolicy::ExplicitOnly).unwrap();
+            let id = s
+                .enqueue_id("sms", &msg("private-body"), "private-error", now_secs())
+                .unwrap();
+            s.record_dead_letter(id, 2, "private-error", DeadLetterReason::Exhausted)
+                .unwrap();
+            s.observe_channel_policy("sms", OutboundDeliveryPolicy::ExplicitOnly)
+                .unwrap();
         }
         let s = DeliveryStore::open(&path, cfg()).unwrap();
         assert!(s.is_explicit_only_channel("sms").unwrap());
-        assert!(!s.is_explicit_only_channel("sms-like-unknown").unwrap(), "no prefix inference");
-        s.observe_channel_policy("sms", OutboundDeliveryPolicy::Automatic).unwrap();
+        assert!(
+            !s.is_explicit_only_channel("sms-like-unknown").unwrap(),
+            "no prefix inference"
+        );
+        s.observe_channel_policy("sms", OutboundDeliveryPolicy::Automatic)
+            .unwrap();
         assert!(!s.is_explicit_only_channel("sms").unwrap());
         let old = s.recent_dead_letters(10).unwrap().remove(0);
         assert_eq!(old.reason, DeadLetterReason::Exhausted, "history retained");
@@ -2221,28 +2321,65 @@ mod tests {
         let out = s.redrive_dead_letters(now_secs(), None).unwrap();
         assert_eq!(out.moved, 0);
         assert_eq!(out.skipped_policy_retired, 1);
-        assert!(matches!(s.enqueue_fresh("sms", &msg("new ordinary"), "down", now_secs()).unwrap(), EnqueueOutcome::Queued(_)));
-        assert_eq!(s.claim_due(now_secs(), 10).unwrap()[0].message.text, "new ordinary");
+        assert!(matches!(
+            s.enqueue_fresh("sms", &msg("new ordinary"), "down", now_secs())
+                .unwrap(),
+            EnqueueOutcome::Queued(_)
+        ));
+        assert_eq!(
+            s.claim_due(now_secs(), 10).unwrap()[0].message.text,
+            "new ordinary"
+        );
     }
 
     #[test]
     fn scrub_failure_rolls_back_all_rows_but_keeps_the_durable_fence() {
         let s = store();
-        let id = s.enqueue_id("sms", &msg("private-body"), "private-error", now_secs()).unwrap();
-        s.guard().execute_batch(
-            "CREATE TRIGGER reject_scrub BEFORE UPDATE ON dead_letters BEGIN
-             SELECT RAISE(ABORT, 'fixture scrub rejected'); END;"
-        ).unwrap();
-        assert!(s.observe_channel_policy("sms", OutboundDeliveryPolicy::ExplicitOnly).is_err());
-        assert_eq!(s.len().unwrap(), 1, "transaction did not partially delete the source");
-        assert!(s.recent_dead_letters(10).unwrap().is_empty(), "insert rolled back too");
-        assert!(s.is_explicit_only_channel("sms").is_err(), "failed observation stays fail closed");
+        let id = s
+            .enqueue_id("sms", &msg("private-body"), "private-error", now_secs())
+            .unwrap();
+        s.guard()
+            .execute_batch(
+                "CREATE TRIGGER reject_scrub BEFORE UPDATE ON dead_letters BEGIN
+             SELECT RAISE(ABORT, 'fixture scrub rejected'); END;",
+            )
+            .unwrap();
+        assert!(s
+            .observe_channel_policy("sms", OutboundDeliveryPolicy::ExplicitOnly)
+            .is_err());
+        assert_eq!(
+            s.len().unwrap(),
+            1,
+            "transaction did not partially delete the source"
+        );
+        assert!(
+            s.recent_dead_letters(10).unwrap().is_empty(),
+            "insert rolled back too"
+        );
+        assert!(
+            s.is_explicit_only_channel("sms").is_err(),
+            "failed observation stays fail closed"
+        );
         assert!(!s.begin_replay(id, "sms").unwrap());
-        assert!(matches!(s.enqueue_fresh("sms", &msg("new private"), "down", now_secs()).unwrap(), EnqueueOutcome::PolicyRefused));
-        let durable: bool = s.guard().query_row("SELECT EXISTS(SELECT 1 FROM explicit_only_channels WHERE channel_id = 'sms')", [], |r| r.get(0)).unwrap();
+        assert!(matches!(
+            s.enqueue_fresh("sms", &msg("new private"), "down", now_secs())
+                .unwrap(),
+            EnqueueOutcome::PolicyRefused
+        ));
+        let durable: bool = s
+            .guard()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM explicit_only_channels WHERE channel_id = 'sms')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert!(durable, "witness committed before scrub transaction");
-        s.guard().execute_batch("DROP TRIGGER reject_scrub").unwrap();
-        s.observe_channel_policy("sms", OutboundDeliveryPolicy::ExplicitOnly).unwrap();
+        s.guard()
+            .execute_batch("DROP TRIGGER reject_scrub")
+            .unwrap();
+        s.observe_channel_policy("sms", OutboundDeliveryPolicy::ExplicitOnly)
+            .unwrap();
         assert!(s.is_empty());
         assert!(s.recent_dead_letters(10).unwrap()[0].retired_by_policy);
     }
@@ -2250,13 +2387,31 @@ mod tests {
     #[test]
     fn marker_lookup_failure_never_authorizes_admission_or_replay() {
         let s = store();
-        let id = s.enqueue_id("ghost", &msg("never replay on unknown storage"), "down", now_secs()).unwrap();
-        s.guard().execute_batch("DROP TABLE explicit_only_channels").unwrap();
+        let id = s
+            .enqueue_id(
+                "ghost",
+                &msg("never replay on unknown storage"),
+                "down",
+                now_secs(),
+            )
+            .unwrap();
+        s.guard()
+            .execute_batch("DROP TABLE explicit_only_channels")
+            .unwrap();
         assert!(s.is_explicit_only_channel("ghost").is_err());
-        assert!(s.enqueue_fresh("ghost", &msg("private"), "down", now_secs()).is_err());
+        assert!(s
+            .enqueue_fresh("ghost", &msg("private"), "down", now_secs())
+            .is_err());
         assert!(s.begin_replay(id, "ghost").is_err());
         assert_eq!(s.len().unwrap(), 1, "no second body admitted");
-        let inflight: Option<i64> = s.guard().query_row("SELECT inflight_since FROM outbound_deliveries WHERE id = ?1", params![id], |r| r.get(0)).unwrap();
+        let inflight: Option<i64> = s
+            .guard()
+            .query_row(
+                "SELECT inflight_since FROM outbound_deliveries WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(inflight, None, "refusal is not a transport attempt");
     }
 
@@ -2264,17 +2419,32 @@ mod tests {
     fn all_row_scrub_preserves_ambiguity_and_fences_a_stale_claim() {
         let s = store();
         let now = now_secs();
-        for reason in [DeadLetterReason::Exhausted, DeadLetterReason::Ambiguous, DeadLetterReason::UnknownOutcome] {
+        for reason in [
+            DeadLetterReason::Exhausted,
+            DeadLetterReason::Ambiguous,
+            DeadLetterReason::UnknownOutcome,
+        ] {
             let mut m = msg("private-body");
-            m.metadata.insert("private".into(), "private-metadata".into());
+            m.metadata
+                .insert("private".into(), "private-metadata".into());
             let id = s.enqueue_id("sms", &m, "private-error", now).unwrap();
-            s.record_dead_letter(id, 2, "private-error", reason).unwrap();
+            s.record_dead_letter(id, 2, "private-error", reason)
+                .unwrap();
         }
-        let inflight = s.enqueue_id("sms", &msg("private-inflight"), "private-error", now).unwrap();
+        let inflight = s
+            .enqueue_id("sms", &msg("private-inflight"), "private-error", now)
+            .unwrap();
         s.mark_inflight(inflight, now).unwrap();
-        let future = s.enqueue_id("sms", &msg("private-future"), "private-error", now + 86400).unwrap();
-        s.observe_channel_policy("sms", OutboundDeliveryPolicy::ExplicitOnly).unwrap();
-        assert_eq!(s.len().unwrap(), 0, "future-due and in-flight rows scrubbed promptly");
+        let future = s
+            .enqueue_id("sms", &msg("private-future"), "private-error", now + 86400)
+            .unwrap();
+        s.observe_channel_policy("sms", OutboundDeliveryPolicy::ExplicitOnly)
+            .unwrap();
+        assert_eq!(
+            s.len().unwrap(),
+            0,
+            "future-due and in-flight rows scrubbed promptly"
+        );
         let letters = s.recent_dead_letters(10).unwrap();
         assert_eq!(letters.len(), 5);
         for letter in &letters {
@@ -2284,10 +2454,26 @@ mod tests {
             assert!(letter.message.metadata.is_empty());
             assert!(!format!("{letter:?}").contains("private-"));
         }
-        assert_eq!(letters.iter().filter(|r| r.reason == DeadLetterReason::UnknownOutcome).count(), 2);
-        assert_eq!(letters.iter().filter(|r| r.reason == DeadLetterReason::Ambiguous).count(), 1);
-        s.observe_channel_policy("sms", OutboundDeliveryPolicy::Automatic).unwrap();
-        assert!(!s.begin_replay(future, "sms").unwrap(), "stale claim cannot survive retirement and id reuse");
+        assert_eq!(
+            letters
+                .iter()
+                .filter(|r| r.reason == DeadLetterReason::UnknownOutcome)
+                .count(),
+            2
+        );
+        assert_eq!(
+            letters
+                .iter()
+                .filter(|r| r.reason == DeadLetterReason::Ambiguous)
+                .count(),
+            1
+        );
+        s.observe_channel_policy("sms", OutboundDeliveryPolicy::Automatic)
+            .unwrap();
+        assert!(
+            !s.begin_replay(future, "sms").unwrap(),
+            "stale claim cannot survive retirement and id reuse"
+        );
         let out = s.redrive_dead_letters(now, Some("sms")).unwrap();
         assert_eq!(out.moved, 0);
         assert_eq!(out.skipped_unsafe, 3);
@@ -2305,7 +2491,8 @@ mod tests {
         let now = now_secs();
         for retired in [0_i64, 1] {
             let id = s.enqueue_id("sms", &msg("private-body"), "e", now).unwrap();
-            s.record_dead_letter(id, 1, "e", DeadLetterReason::Exhausted).unwrap();
+            s.record_dead_letter(id, 1, "e", DeadLetterReason::Exhausted)
+                .unwrap();
             s.guard()
                 .execute(
                     "UPDATE dead_letters SET reason = 'future_unknown', retired_by_policy = ?1 WHERE id = (SELECT MAX(id) FROM dead_letters)",
@@ -2316,18 +2503,32 @@ mod tests {
         let letters = s.recent_dead_letters(10).unwrap();
         assert_eq!(letters.len(), 2);
         for letter in &letters {
-            assert_eq!(letter.reason, DeadLetterReason::Ambiguous, "decoder is conservative");
+            assert_eq!(
+                letter.reason,
+                DeadLetterReason::Ambiguous,
+                "decoder is conservative"
+            );
             assert!(!letter.redrivable());
         }
         for channel in [Some("sms"), None] {
             let out = s.redrive_dead_letters(now, channel).unwrap();
-            assert_eq!(out.moved, 0, "unknown token is never redriven ({channel:?})");
+            assert_eq!(
+                out.moved, 0,
+                "unknown token is never redriven ({channel:?})"
+            );
             assert_eq!(out.skipped_unsafe, 2, "both rows are unsafe ({channel:?})");
-            assert_eq!(out.skipped_policy_retired, 0, "unsafe outranks policy retirement ({channel:?})");
+            assert_eq!(
+                out.skipped_policy_retired, 0,
+                "unsafe outranks policy retirement ({channel:?})"
+            );
             assert_eq!(out.skipped_over_cap, 0);
         }
         assert_eq!(s.stats(now).unwrap().dead_lettered_replayable, 0);
-        assert_eq!(s.recent_dead_letters(10).unwrap().len(), 2, "rows untouched");
+        assert_eq!(
+            s.recent_dead_letters(10).unwrap().len(),
+            2,
+            "rows untouched"
+        );
     }
 
     #[test]

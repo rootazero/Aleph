@@ -41,7 +41,7 @@ use crate::error::{AlephError, Result};
 use crate::providers::adapter::{
     NativeToolCall, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
-use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::providers::message::{dispatch_unified_message, ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -228,8 +228,10 @@ impl OllamaProvider {
         }
 
         for msg in messages {
-            match msg {
-                UnifiedMessage::User { content } => {
+            dispatch_unified_message(
+                msg,
+                &mut out,
+                |out, content| {
                     let text = content
                         .iter()
                         .filter_map(|b| b.as_text())
@@ -247,8 +249,8 @@ impl OllamaProvider {
                         m["images"] = json!(images);
                     }
                     out.push(m);
-                }
-                UnifiedMessage::Assistant { content } => {
+                },
+                |out, content| {
                     let text = content
                         .iter()
                         .filter_map(|b| match b {
@@ -273,10 +275,8 @@ impl OllamaProvider {
                         m["tool_calls"] = json!(tool_calls);
                     }
                     out.push(m);
-                }
-                UnifiedMessage::ToolResult {
-                    tool_name, content, ..
-                } => {
+                },
+                |out, _tool_call_id, tool_name, content, _is_error| {
                     let output = content
                         .iter()
                         .filter_map(ContentBlock::as_model_text)
@@ -287,8 +287,8 @@ impl OllamaProvider {
                         "tool_name": tool_name,
                         "content": output,
                     }));
-                }
-            }
+                },
+            );
         }
 
         out

@@ -186,7 +186,121 @@ impl PluginLoader {
         Ok(())
     }
 
+    /// Capture the opaque identity of the WASM instance this loader
+    /// currently has mounted under `plugin_id`, or `None` when it has none.
+    ///
+    /// The identity names the actual `Arc` in the runtime's map — never a
+    /// name, an export, or a permission string — so an exportless module
+    /// still has one and a caller cannot fabricate one.
+    pub(crate) fn wasm_mount_identity(
+        &self,
+        plugin_id: &str,
+    ) -> Option<crate::extension::runtime::wasm::WasmMountIdentity> {
+        match (
+            self.loaded_plugins.get(plugin_id),
+            self.wasm_runtime.as_ref(),
+        ) {
+            (Some(PluginKind::Wasm), Some(runtime)) => runtime.mounted_instance(plugin_id),
+            _ => None,
+        }
+    }
+
+    /// Remove the WASM mount under `plugin_id` only while both the runtime
+    /// and the kind index still belong to the exact instance `identity` was
+    /// captured from.
+    ///
+    /// The kind index is touched only after the runtime confirms the same
+    /// instance is still mounted, so there is no interval where the index
+    /// entry is removed before the match is known, and a stale identity
+    /// (already unloaded, replaced, or dropped by shutdown) is a successful
+    /// no-op that preserves whatever is mounted now.
+    pub(crate) fn unload_wasm_mount(
+        &mut self,
+        plugin_id: &str,
+        identity: &crate::extension::runtime::wasm::WasmMountIdentity,
+    ) {
+        let Some(runtime) = self.wasm_runtime.as_mut() else {
+            return;
+        };
+        if !runtime.remove_if_current(plugin_id, identity) {
+            return;
+        }
+        if self.loaded_plugins.get(plugin_id) == Some(&PluginKind::Wasm) {
+            self.loaded_plugins.remove(plugin_id);
+        }
+    }
+
     // ===== Tool / Hook / Command Execution =====
+
+    /// Bind an export on the currently mounted WASM plugin instance.
+    // Temporary until the C2 producer adopts this bridge.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn bind_wasm(
+        &self,
+        plugin_id: &str,
+        export: &str,
+    ) -> ExtensionResult<crate::extension::runtime::wasm::WasmBinding> {
+        let kind = self
+            .loaded_plugins
+            .get(plugin_id)
+            .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
+        match kind {
+            PluginKind::Wasm => {
+                let runtime = self.wasm_runtime.as_ref().ok_or_else(|| {
+                    ExtensionError::Runtime("WASM runtime not initialized".to_string())
+                })?;
+                runtime.bind(plugin_id, export)
+            }
+            PluginKind::Mcp | PluginKind::Static => Err(ExtensionError::Runtime(format!(
+                "Plugin kind {kind:?} does not support WASM bindings"
+            ))),
+        }
+    }
+
+    /// Call a previously bound export without accepting a second identity.
+    // Temporary until the C2 producer adopts this bridge.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn call_bound(
+        &self,
+        binding: &crate::extension::runtime::wasm::WasmBinding,
+        args: serde_json::Value,
+    ) -> ExtensionResult<serde_json::Value> {
+        let plugin_id = binding.plugin_id();
+        let kind = self
+            .loaded_plugins
+            .get(plugin_id)
+            .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
+        match kind {
+            PluginKind::Wasm => {
+                let runtime = self.wasm_runtime.as_ref().ok_or_else(|| {
+                    ExtensionError::Runtime("WASM runtime not initialized".to_string())
+                })?;
+                let input = crate::extension::runtime::WasmToolInput {
+                    name: binding.export().to_string(),
+                    arguments: args,
+                };
+                let output = runtime.call_bound(binding, input)?;
+                Self::map_wasm_output(output)
+            }
+            PluginKind::Mcp | PluginKind::Static => Err(ExtensionError::Runtime(format!(
+                "Plugin kind {kind:?} does not support tool calls"
+            ))),
+        }
+    }
+
+    fn map_wasm_output(
+        output: crate::extension::runtime::WasmToolOutput,
+    ) -> ExtensionResult<serde_json::Value> {
+        if output.success {
+            Ok(output.result.unwrap_or(serde_json::Value::Null))
+        } else {
+            Err(ExtensionError::Runtime(
+                output
+                    .error
+                    .unwrap_or_else(|| "Unknown WASM error".to_string()),
+            ))
+        }
+    }
 
     /// Call a tool handler on a loaded plugin.
     ///
@@ -213,15 +327,7 @@ impl PluginLoader {
                     arguments: args,
                 };
                 let output = runtime.call_tool(plugin_id, handler, input)?;
-                if output.success {
-                    Ok(output.result.unwrap_or(serde_json::Value::Null))
-                } else {
-                    Err(ExtensionError::Runtime(
-                        output
-                            .error
-                            .unwrap_or_else(|| "Unknown WASM error".to_string()),
-                    ))
-                }
+                Self::map_wasm_output(output)
             }
             PluginKind::Mcp | PluginKind::Static => Err(ExtensionError::Runtime(format!(
                 "Plugin kind {kind:?} does not support tool calls"
@@ -255,15 +361,7 @@ impl PluginLoader {
                     arguments: event_data,
                 };
                 let output = runtime.call_tool(plugin_id, handler, input)?;
-                if output.success {
-                    Ok(output.result.unwrap_or(serde_json::Value::Null))
-                } else {
-                    Err(ExtensionError::Runtime(
-                        output
-                            .error
-                            .unwrap_or_else(|| "Unknown WASM error".to_string()),
-                    ))
-                }
+                Self::map_wasm_output(output)
             }
             PluginKind::Mcp | PluginKind::Static => Err(ExtensionError::Runtime(format!(
                 "Plugin kind {kind:?} does not support hooks"
@@ -278,7 +376,8 @@ impl PluginLoader {
             self.loaded_plugins.len()
         );
 
-        // WASM runtime cleanup happens automatically when dropped.
+        // Drop the mounted runtime so retained bindings cannot execute through it.
+        self.wasm_runtime = None;
         self.loaded_plugins.clear();
 
         info!("PluginLoader shutdown complete");
@@ -304,6 +403,15 @@ impl Default for PluginLoader {
 /// is what lets the `service` step that follows run the plugin's
 /// `start_handler`, and what puts the module inside the scope's dispose order
 /// instead of beside it.
+///
+/// The effect owns only the instance this call actually mounted: the load
+/// and the identity capture happen under one loader write guard with no
+/// await in between, and the disposer compares that exact instance under the
+/// same guard before removing anything. A duplicate mount keeps the loader's
+/// existing skip semantics and captures no identity, so its disposer is a
+/// successful no-op that can never evict the incumbent; a stale identity
+/// (already unloaded, replaced under the same id, or dropped by shutdown)
+/// disposes as a no-op that preserves whatever is mounted now.
 pub(crate) async fn load_wasm_effect(
     loader: Arc<tokio::sync::RwLock<PluginLoader>>,
     manifest: &PluginManifest,
@@ -313,14 +421,30 @@ pub(crate) async fn load_wasm_effect(
         PluginKind::Wasm,
         "only WASM plugins have a module to load"
     );
-    loader.write().await.load_plugin(manifest)?;
     let plugin_id = manifest.id.clone();
+    let identity = {
+        let mut guard = loader.write().await;
+        // The same predicate `load_plugin` uses to skip a duplicate, checked
+        // under the same guard so the two can never disagree.
+        let skipped_duplicate = guard.is_loaded(&plugin_id);
+        guard.load_plugin(manifest)?;
+        if skipped_duplicate {
+            None
+        } else {
+            let identity = guard.wasm_mount_identity(&plugin_id);
+            debug_assert!(
+                identity.is_some(),
+                "a successful fresh load leaves an instance to capture"
+            );
+            identity
+        }
+    };
     Ok(async_disposer(move || async move {
-        loader
-            .write()
-            .await
-            .unload_plugin(&plugin_id)
-            .map_err(|e| e.to_string())
+        let mut guard = loader.write().await;
+        if let Some(identity) = identity {
+            guard.unload_wasm_mount(&plugin_id, &identity);
+        }
+        Ok(())
     }))
 }
 
@@ -385,9 +509,13 @@ impl Drop for PluginLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::runtime::wasm::tests::guest_fixture::{
+        manifest_with_guest, HANDLER, PAYLOAD_A, PAYLOAD_B,
+    };
     use crate::memory::extensions::manifest::{MemoryHook, MemoryManifestSection};
     use crate::memory::extensions::traits::MemoryExtension;
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
     #[test]
     fn test_plugin_loader_new() {
@@ -460,6 +588,197 @@ mod tests {
         let loader = PluginLoader::new();
         let ids = loader.loaded_plugin_ids();
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn loader_binds_real_guest_and_preserves_legacy_tool_hook_calls() {
+        let directory = TempDir::new().unwrap();
+        let manifest = manifest_with_guest(directory.path(), "loader-a", PAYLOAD_A);
+        let mut loader = PluginLoader::new();
+        loader.load_plugin(&manifest).unwrap();
+
+        let binding = loader.bind_wasm("loader-a", HANDLER).unwrap();
+        assert_eq!(binding.plugin_id(), "loader-a");
+        assert_eq!(binding.export(), HANDLER);
+        assert_eq!(
+            loader.call_bound(&binding, serde_json::json!({})).unwrap(),
+            serde_json::json!("A")
+        );
+        assert_eq!(
+            loader
+                .call_tool("loader-a", HANDLER, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("A")
+        );
+        assert_eq!(
+            loader
+                .execute_hook("loader-a", HANDLER, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("A")
+        );
+    }
+
+    #[test]
+    fn loader_bind_refuses_unknown_export_id_and_wrong_kind() {
+        let directory = TempDir::new().unwrap();
+        let manifest = manifest_with_guest(directory.path(), "loader-export", PAYLOAD_A);
+        let mut loader = PluginLoader::new();
+        loader.load_plugin(&manifest).unwrap();
+
+        assert!(matches!(
+            loader.bind_wasm("loader-export", "missing"),
+            Err(ExtensionError::Runtime(message))
+                if message == "WASM export not found: missing"
+        ));
+        assert!(matches!(
+            loader.bind_wasm("missing", HANDLER),
+            Err(ExtensionError::PluginNotFound(id)) if id == "missing"
+        ));
+        loader
+            .loaded_plugins
+            .insert("static-id".to_string(), PluginKind::Static);
+        assert!(matches!(
+            loader.bind_wasm("static-id", HANDLER),
+            Err(ExtensionError::Runtime(message))
+                if message == "Plugin kind Static does not support WASM bindings"
+        ));
+    }
+
+    #[test]
+    fn loader_unload_reload_refuses_stale_clones_and_returns_b() {
+        let directory_a = TempDir::new().unwrap();
+        let directory_b = TempDir::new().unwrap();
+        let manifest_a = manifest_with_guest(directory_a.path(), "loader-reload", PAYLOAD_A);
+        let manifest_b = manifest_with_guest(directory_b.path(), "loader-reload", PAYLOAD_B);
+        let mut loader = PluginLoader::new();
+        loader.load_plugin(&manifest_a).unwrap();
+        let old = loader.bind_wasm("loader-reload", HANDLER).unwrap();
+        let old_clone = old.clone();
+        loader.unload_plugin("loader-reload").unwrap();
+        assert!(matches!(
+            loader.call_bound(&old, serde_json::json!({})),
+            Err(ExtensionError::PluginNotFound(id)) if id == "loader-reload"
+        ));
+        loader.load_plugin(&manifest_b).unwrap();
+        for binding in [&old, &old_clone] {
+            assert!(matches!(
+                loader.call_bound(binding, serde_json::json!({})),
+                Err(ExtensionError::Runtime(message))
+                    if message == "WASM binding no longer mounted: loader-reload"
+            ));
+        }
+        let fresh = loader.bind_wasm("loader-reload", HANDLER).unwrap();
+        assert_eq!(
+            loader.call_bound(&fresh, serde_json::json!({})).unwrap(),
+            serde_json::json!("B")
+        );
+    }
+
+    #[test]
+    fn loader_shutdown_clears_runtime_and_allows_lazy_restart() {
+        let directory_a = TempDir::new().unwrap();
+        let directory_b = TempDir::new().unwrap();
+        let manifest_a = manifest_with_guest(directory_a.path(), "loader-shutdown", PAYLOAD_A);
+        let manifest_b = manifest_with_guest(directory_b.path(), "loader-shutdown", PAYLOAD_B);
+        let mut loader = PluginLoader::new();
+        loader.set_all_plugin_settings(std::collections::HashMap::from([(
+            "loader-shutdown".to_string(),
+            serde_json::json!({"key": "value"}),
+        )]));
+        loader.load_plugin(&manifest_a).unwrap();
+        let old = loader.bind_wasm("loader-shutdown", HANDLER).unwrap();
+        assert_eq!(
+            loader
+                .call_tool("loader-shutdown", HANDLER, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("A")
+        );
+        loader.shutdown();
+        assert_eq!(loader.loaded_count(), 0);
+        if let Some(runtime) = loader.wasm_runtime.as_ref() {
+            assert!(
+                runtime
+                    .call_bound(
+                        &old,
+                        crate::extension::runtime::WasmToolInput {
+                            name: HANDLER.to_string(),
+                            arguments: serde_json::json!({}),
+                        },
+                    )
+                    .is_err(),
+                "shutdown must not retain an executable old instance"
+            );
+        }
+        assert!(!loader.is_wasm_runtime_active());
+        assert!(matches!(
+            loader.call_bound(&old, serde_json::json!({})),
+            Err(ExtensionError::PluginNotFound(id)) if id == "loader-shutdown"
+        ));
+        assert!(matches!(
+            loader.call_tool("loader-shutdown", HANDLER, serde_json::json!({})),
+            Err(ExtensionError::PluginNotFound(id)) if id == "loader-shutdown"
+        ));
+        assert!(matches!(
+            loader.execute_hook("loader-shutdown", HANDLER, serde_json::json!({})),
+            Err(ExtensionError::PluginNotFound(id)) if id == "loader-shutdown"
+        ));
+        loader.shutdown();
+        assert_eq!(
+            loader.plugin_settings["loader-shutdown"],
+            serde_json::json!({"key": "value"})
+        );
+        loader.load_plugin(&manifest_b).unwrap();
+        assert!(matches!(
+            loader.call_bound(&old, serde_json::json!({})),
+            Err(ExtensionError::Runtime(message))
+                if message == "WASM binding no longer mounted: loader-shutdown"
+        ));
+        let fresh = loader.bind_wasm("loader-shutdown", HANDLER).unwrap();
+        assert_eq!(
+            loader.call_bound(&fresh, serde_json::json!({})).unwrap(),
+            serde_json::json!("B")
+        );
+    }
+
+    #[test]
+    fn loader_mapping_matches_bound_tool_and_hook_outputs() {
+        let cases = [
+            (
+                "loader-null",
+                r#"{"success":true,"result":null,"error":null}"#,
+                Ok(serde_json::Value::Null),
+            ),
+            (
+                "loader-error",
+                r#"{"success":false,"result":null,"error":"guest failure"}"#,
+                Err("guest failure"),
+            ),
+            (
+                "loader-unknown",
+                r#"{"success":false,"result":null,"error":null}"#,
+                Err("Unknown WASM error"),
+            ),
+        ];
+        for (id, payload, expected) in cases {
+            let directory = TempDir::new().unwrap();
+            let manifest = manifest_with_guest(directory.path(), id, payload);
+            let mut loader = PluginLoader::new();
+            loader.load_plugin(&manifest).unwrap();
+            let binding = loader.bind_wasm(id, HANDLER).unwrap();
+            for actual in [
+                loader.call_bound(&binding, serde_json::json!({})),
+                loader.call_tool(id, HANDLER, serde_json::json!({})),
+                loader.execute_hook(id, HANDLER, serde_json::json!({})),
+            ] {
+                match expected.as_ref() {
+                    Ok(value) => assert_eq!(actual.unwrap(), *value),
+                    Err(message) => assert!(matches!(
+                        actual,
+                        Err(ExtensionError::Runtime(actual)) if actual == *message
+                    )),
+                }
+            }
+        }
     }
 
     // ===== Memory extension registration helpers =====
@@ -657,5 +976,262 @@ mod tests {
             .expect("missing file is an error, not a silent skip");
         assert!(err.to_string().contains("WASM file not found"), "{err}");
         assert!(!loader.read().await.is_loaded("qa-missing"));
+    }
+
+    // ===== C2-D: a disposer owns only the instance its effect mounted =====
+
+    #[tokio::test]
+    async fn c2d_owned_disposer_unloads_its_real_guest() {
+        let directory = TempDir::new().unwrap();
+        let manifest = manifest_with_guest(directory.path(), "c2d-owned", PAYLOAD_A);
+        let loader = Arc::new(tokio::sync::RwLock::new(PluginLoader::new()));
+
+        let disposer = load_wasm_effect(Arc::clone(&loader), &manifest)
+            .await
+            .expect("real guest loads");
+        let binding = loader.read().await.bind_wasm("c2d-owned", HANDLER).unwrap();
+        assert_eq!(
+            loader
+                .read()
+                .await
+                .call_bound(&binding, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("A")
+        );
+
+        disposer().await.expect("owned disposer succeeds");
+        let guard = loader.read().await;
+        assert!(!guard.is_loaded("c2d-owned"));
+        assert_eq!(guard.loaded_count(), 0);
+        assert_eq!(guard.get_plugin_kind("c2d-owned"), None);
+        assert!(matches!(
+            guard.call_bound(&binding, serde_json::json!({})),
+            Err(ExtensionError::PluginNotFound(id)) if id == "c2d-owned"
+        ));
+    }
+
+    #[tokio::test]
+    async fn c2d_late_disposer_preserves_same_id_replacement() {
+        let directory_a = TempDir::new().unwrap();
+        let directory_b = TempDir::new().unwrap();
+        let manifest_a = manifest_with_guest(directory_a.path(), "c2d-late", PAYLOAD_A);
+        let manifest_b = manifest_with_guest(directory_b.path(), "c2d-late", PAYLOAD_B);
+        let loader = Arc::new(tokio::sync::RwLock::new(PluginLoader::new()));
+
+        let disposer_a = load_wasm_effect(Arc::clone(&loader), &manifest_a)
+            .await
+            .expect("mount A succeeds");
+        let binding_a = loader.read().await.bind_wasm("c2d-late", HANDLER).unwrap();
+        assert_eq!(
+            loader
+                .read()
+                .await
+                .call_bound(&binding_a, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("A")
+        );
+
+        // The legitimate existing unload path removes A, then a fresh same-id
+        // mount installs B.
+        loader.write().await.unload_plugin("c2d-late").unwrap();
+        let disposer_b = load_wasm_effect(Arc::clone(&loader), &manifest_b)
+            .await
+            .expect("mount B succeeds");
+        let binding_b = loader.read().await.bind_wasm("c2d-late", HANDLER).unwrap();
+        assert_eq!(
+            loader
+                .read()
+                .await
+                .call_bound(&binding_b, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("B")
+        );
+
+        // A's late disposer succeeds without touching B or its index entry.
+        disposer_a()
+            .await
+            .expect("stale disposer is a successful no-op");
+        {
+            let guard = loader.read().await;
+            assert!(guard.is_loaded("c2d-late"));
+            assert_eq!(guard.get_plugin_kind("c2d-late"), Some(PluginKind::Wasm));
+            assert_eq!(guard.loaded_count(), 1);
+            assert_eq!(
+                guard.call_bound(&binding_b, serde_json::json!({})).unwrap(),
+                serde_json::json!("B")
+            );
+            assert!(matches!(
+                guard.call_bound(&binding_a, serde_json::json!({})),
+                Err(ExtensionError::Runtime(message))
+                    if message == "WASM binding no longer mounted: c2d-late"
+            ));
+        }
+
+        // B's own disposer removes B.
+        disposer_b().await.expect("owned disposer succeeds");
+        let guard = loader.read().await;
+        assert!(!guard.is_loaded("c2d-late"));
+        assert_eq!(guard.loaded_count(), 0);
+        assert!(matches!(
+            guard.call_bound(&binding_b, serde_json::json!({})),
+            Err(ExtensionError::PluginNotFound(id)) if id == "c2d-late"
+        ));
+    }
+
+    #[tokio::test]
+    async fn c2d_duplicate_skipped_effect_cannot_unload_incumbent() {
+        let directory_a = TempDir::new().unwrap();
+        let directory_b = TempDir::new().unwrap();
+        let manifest_a = manifest_with_guest(directory_a.path(), "c2d-dup", PAYLOAD_A);
+        let manifest_b = manifest_with_guest(directory_b.path(), "c2d-dup", PAYLOAD_B);
+        let loader = Arc::new(tokio::sync::RwLock::new(PluginLoader::new()));
+
+        let disposer_a = load_wasm_effect(Arc::clone(&loader), &manifest_a)
+            .await
+            .expect("mount A succeeds");
+        // Same id and even a different manifest payload: the loader keeps its
+        // skip semantics, the guest stays A, and this effect owns nothing.
+        let disposer_skipped = load_wasm_effect(Arc::clone(&loader), &manifest_b)
+            .await
+            .expect("a skipped duplicate mount is not an error");
+        let binding = loader.read().await.bind_wasm("c2d-dup", HANDLER).unwrap();
+        assert_eq!(
+            loader
+                .read()
+                .await
+                .call_bound(&binding, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("A"),
+            "the skipped load retains the incumbent guest"
+        );
+
+        disposer_skipped()
+            .await
+            .expect("a disposer that owns nothing succeeds");
+        {
+            let guard = loader.read().await;
+            assert!(guard.is_loaded("c2d-dup"));
+            assert_eq!(guard.get_plugin_kind("c2d-dup"), Some(PluginKind::Wasm));
+            assert_eq!(guard.loaded_count(), 1);
+            assert_eq!(
+                guard.call_bound(&binding, serde_json::json!({})).unwrap(),
+                serde_json::json!("A")
+            );
+        }
+
+        disposer_a()
+            .await
+            .expect("the real owner's disposer unloads");
+        let guard = loader.read().await;
+        assert!(!guard.is_loaded("c2d-dup"));
+        assert_eq!(guard.loaded_count(), 0);
+        assert!(matches!(
+            guard.call_bound(&binding, serde_json::json!({})),
+            Err(ExtensionError::PluginNotFound(id)) if id == "c2d-dup"
+        ));
+    }
+
+    #[tokio::test]
+    async fn c2d_old_disposer_preserves_post_shutdown_replacement() {
+        let directory_a = TempDir::new().unwrap();
+        let directory_b = TempDir::new().unwrap();
+        let manifest_a = manifest_with_guest(directory_a.path(), "c2d-shutdown", PAYLOAD_A);
+        let manifest_b = manifest_with_guest(directory_b.path(), "c2d-shutdown", PAYLOAD_B);
+        let loader = Arc::new(tokio::sync::RwLock::new(PluginLoader::new()));
+
+        let disposer_a = load_wasm_effect(Arc::clone(&loader), &manifest_a)
+            .await
+            .expect("mount A succeeds");
+        let binding_a = loader
+            .read()
+            .await
+            .bind_wasm("c2d-shutdown", HANDLER)
+            .unwrap();
+        assert_eq!(
+            loader
+                .read()
+                .await
+                .call_bound(&binding_a, serde_json::json!({}))
+                .unwrap(),
+            serde_json::json!("A")
+        );
+
+        // Shutdown drops the whole runtime, then the same id mounts again as
+        // B on a fresh runtime.
+        loader.write().await.shutdown();
+        let disposer_b = load_wasm_effect(Arc::clone(&loader), &manifest_b)
+            .await
+            .expect("mount B after shutdown");
+
+        // A's disposer predates the shutdown and must not remove B.
+        disposer_a()
+            .await
+            .expect("stale disposer is a successful no-op");
+        let binding_b = loader
+            .read()
+            .await
+            .bind_wasm("c2d-shutdown", HANDLER)
+            .unwrap();
+        {
+            let guard = loader.read().await;
+            assert!(guard.is_loaded("c2d-shutdown"));
+            assert_eq!(
+                guard.get_plugin_kind("c2d-shutdown"),
+                Some(PluginKind::Wasm)
+            );
+            assert_eq!(guard.loaded_count(), 1);
+            assert_eq!(
+                guard.call_bound(&binding_b, serde_json::json!({})).unwrap(),
+                serde_json::json!("B")
+            );
+            assert!(matches!(
+                guard.call_bound(&binding_a, serde_json::json!({})),
+                Err(ExtensionError::Runtime(message))
+                    if message == "WASM binding no longer mounted: c2d-shutdown"
+            ));
+        }
+
+        disposer_b().await.expect("owned disposer succeeds");
+        let guard = loader.read().await;
+        assert!(!guard.is_loaded("c2d-shutdown"));
+        assert_eq!(guard.loaded_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn c2d_exportless_module_has_owned_cleanup() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("plugin.wasm"), EMPTY_WASM_MODULE).unwrap();
+        let mut manifest = PluginManifest::new(
+            "c2d-exportless".to_string(),
+            "C2D exportless".to_string(),
+            PluginKind::Wasm,
+            PathBuf::from("plugin.wasm"),
+        );
+        manifest.root_dir = tmp.path().to_path_buf();
+        let loader = Arc::new(tokio::sync::RwLock::new(PluginLoader::new()));
+
+        // No handler export exists and identity capture must not invent one:
+        // the effect still owns the mount and its disposer cleans it up.
+        let disposer = load_wasm_effect(Arc::clone(&loader), &manifest)
+            .await
+            .expect("an empty module links");
+        {
+            let guard = loader.read().await;
+            assert!(guard.is_loaded("c2d-exportless"));
+            assert_eq!(
+                guard.get_plugin_kind("c2d-exportless"),
+                Some(PluginKind::Wasm)
+            );
+            assert!(matches!(
+                guard.bind_wasm("c2d-exportless", HANDLER),
+                Err(ExtensionError::Runtime(message))
+                    if message == format!("WASM export not found: {HANDLER}")
+            ));
+        }
+
+        disposer().await.expect("owned disposer succeeds");
+        let guard = loader.read().await;
+        assert!(!guard.is_loaded("c2d-exportless"));
+        assert_eq!(guard.loaded_count(), 0);
     }
 }

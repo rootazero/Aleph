@@ -446,8 +446,18 @@ pub fn orphan_tool_result_note(call_id: &str, tool_name: &str, rendered: &str) -
 /// it. The earlier error — already in the transcript — carries whatever hint
 /// its own kind admits. `tools::error_kind` recognises this cause by equality
 /// (kind `repeated`), so it must stay lowercase.
-pub const CROSS_BATCH_REFUSED_CAUSE: &str = "this exact call already failed earlier in the run \
-     and was not run again; the earlier error stands — read it before deciding what to do next";
+///
+/// ## P0 Task 2: moved to `aleph-slot-api`
+///
+/// The single source of truth is
+/// `aleph_slot_api::error_kind::CROSS_BATCH_REFUSED_CAUSE`. This
+/// re-export keeps every existing
+/// `crate::thinker::nudges::CROSS_BATCH_REFUSED_CAUSE` path
+/// compiling unchanged. The bytes are byte-for-byte identical (the
+/// classifier routes on the string equality), so the dispatch
+/// path's `if cause == CROSS_BATCH_REFUSED_CAUSE` check still
+/// fires.
+pub use aleph_slot_api::error_kind::CROSS_BATCH_REFUSED_CAUSE;
 
 /// Reason carried by the synthetic "deferred" `ToolResult` emitted for each
 /// tool call the cooperative steer checkpoint skipped. Whether a deferred call

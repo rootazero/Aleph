@@ -23,7 +23,7 @@ use crate::capability::ownership::{
 };
 use crate::sync_primitives::Arc;
 use crate::tools::registry::{
-    RegistryChange, RegistryEntry, RegistrySnapshot, ToolHandlerRegistry,
+    RegistryChange, RegistryEntry, RegistryPublication, RegistrySnapshot, ToolHandlerRegistry,
 };
 use std::collections::HashMap;
 use tokio::sync::broadcast::{self, error::TryRecvError};
@@ -141,7 +141,19 @@ impl ZahirFacade {
     #[must_use]
     pub(crate) fn snapshot_entries_in_scope(&self, scope: &Scope) -> FacadeEntriesSnapshot {
         let snap = self.adapter.registry.snapshot_state();
-        self.reconcile_snapshot(&snap);
+        self.snapshot_entries_in_scope_from(scope, &snap)
+    }
+
+    /// Project one already-captured registry cut. Every caller deriving
+    /// multiple scope views from one publication boundary must pass the same
+    /// `RegistrySnapshot` here, so entries, revision, and closed state cannot
+    /// be paired across generations.
+    pub(crate) fn snapshot_entries_in_scope_from(
+        &self,
+        scope: &Scope,
+        snap: &RegistrySnapshot,
+    ) -> FacadeEntriesSnapshot {
+        self.reconcile_snapshot(snap);
 
         let registry_cursor = Cursor(snap.revision());
         let registry_closed = snap.is_closed();
@@ -230,6 +242,24 @@ impl ZahirFacade {
         self.tree.generation(id, &scope.visibility).is_some()
     }
 
+    /// Map one primary publication into a same-cursor capability cohort.
+    pub(super) fn map_registry_publication(
+        &self,
+        publication: RegistryPublication,
+    ) -> (Cursor, Vec<CapabilityChange>) {
+        let cursor = Cursor(publication.revision);
+        let changes = publication
+            .tool_changes
+            .into_iter()
+            .map(|change| {
+                let (member_cursor, change) = self.map_registry_change(change);
+                debug_assert_eq!(member_cursor, cursor);
+                change
+            })
+            .collect();
+        (cursor, changes)
+    }
+
     /// Drain a live registry broadcast into a pure [`CapabilityChangeStream`],
     /// applying the same scope predicate as `describe`.
     ///
@@ -242,19 +272,35 @@ impl ZahirFacade {
         &self,
         scope: &Scope,
         snapshot: CapabilitySnapshot,
-        mut receiver: broadcast::Receiver<RegistryChange>,
+        mut receiver: broadcast::Receiver<RegistryPublication>,
     ) -> CapabilityChangeStream {
         let mut stream = CapabilityChangeStream::from_snapshot(snapshot);
         loop {
             match receiver.try_recv() {
-                Ok(change) => {
-                    let (cursor, change) = self.map_registry_change(change);
-                    // The registry broadcasts changes for ANY tool; honor the
-                    // shared kind / namespace + visibility predicate so an
-                    // out-of-scope tool is never leaked to the subscriber.
-                    if self.change_in_scope(&change, scope) {
-                        let _ = stream.append(cursor, change);
+                Ok(publication) => {
+                    let publication_cursor = Cursor(publication.revision);
+                    // Already-reflected notifications are harmless replay, not
+                    // evidence of a gap. Reject them before checking the live
+                    // head, otherwise a newer head would cause an unnecessary
+                    // invalidation for an event already represented by the
+                    // caller's snapshot/cursor.
+                    if publication_cursor <= stream.committed_cursor {
+                        continue;
                     }
+                    // A later registry cut cannot be labeled as this
+                    // publication's historical delta. Recover from a truthful
+                    // current snapshot instead.
+                    if self.adapter.registry.snapshot_state().revision() > publication.revision {
+                        let fresh = self.describe(scope.clone());
+                        let _ = stream.invalidate_and_resync(fresh, Vec::new());
+                        break;
+                    }
+                    let (cursor, changes) = self.map_registry_publication(publication);
+                    let visible = changes
+                        .into_iter()
+                        .filter(|change| self.change_in_scope(change, scope))
+                        .collect();
+                    let _ = stream.append_cohort(cursor, visible);
                 }
                 Err(TryRecvError::Lagged(_)) => {
                     // Lag: rebuild from a fresh snapshot and mark the stream
@@ -340,7 +386,7 @@ impl Zahir for ZahirFacade {
         // ① subscribe BEFORE snapshot: the receiver exists before the snapshot
         // is read, so the synchronous drain never misses an event that lands in
         // the window between snapshot load and drain.
-        let receiver = self.adapter.registry.subscribe();
+        let receiver = self.adapter.registry.subscribe_publications();
         let snapshot = self.describe(scope.clone());
         // The caller `cursor` is IGNORED: this synchronous snapshot-anchored
         // API has no replay, so there is nothing to resume from. `from_snapshot`
@@ -535,6 +581,42 @@ mod tests {
     }
 
     #[test]
+    fn primary_two_member_publication_projects_as_one_facade_cohort() {
+        let registry = ToolHandlerRegistry::new();
+        let receiver = registry.subscribe_publications();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ZahirFacade::new(registry.clone(), Arc::clone(&tree));
+        let initial = host.describe(scope_all());
+        let (_first, _second) = registry
+            .register_pair_for_test(
+                (
+                    ToolCapabilityDescriptor::from_definition(&fake_def("first"), 0),
+                    Arc::new(fake_handler("first")),
+                ),
+                (
+                    ToolCapabilityDescriptor::from_definition(&fake_def("second"), 0),
+                    Arc::new(fake_handler("second")),
+                ),
+            )
+            .expect("real shared pair transaction");
+        host.reconcile_registry_bindings();
+
+        let stream = host.drain_registry(&scope_all(), initial, receiver);
+        assert_eq!(stream.committed_cursor, Cursor(1));
+        assert_eq!(stream.changes.len(), 2);
+        assert!(stream.changes.iter().all(|change| {
+            matches!(
+                change,
+                CapabilityChange::Registered {
+                    revision: CapabilityRevision(1),
+                    ..
+                }
+            )
+        }));
+        assert_eq!(host.describe(scope_all()).capabilities.len(), 2);
+    }
+
+    #[test]
     fn register_after_construction_is_visible_on_next_describe() {
         let (host, reg, _tree) = host_parts(&["a"]);
         let id_b = tool_id("b");
@@ -705,7 +787,7 @@ mod tests {
         // ① Receiver BEFORE snapshot, exactly like `subscribe`. The receiver is
         // never drained, so the 256-slot ring overflows during the mutation
         // storm below and the next `try_recv` observes `Lagged`.
-        let receiver = reg.subscribe();
+        let receiver = reg.subscribe_publications();
         let snapshot = host.describe(scope_all());
 
         // ② >256 valid registry mutations: each `register` sends one broadcast

@@ -6,9 +6,9 @@
 
 use tracing::debug;
 
-use crate::agents::thinking::ThinkLevel;
+use crate::agents::thinking::{dispatch_think_level, ThinkLevel};
 use crate::providers::adapter::{NativeToolCall, ToolChoice};
-use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::providers::message::{dispatch_unified_message, ContentBlock, UnifiedMessage};
 use crate::providers::protocols::openai_common::tools::{
     desanitize_tool_name as desanitize_tool_name_pub, ensure_properties_recursive,
     sanitize_tool_name as sanitize_tool_name_pub,
@@ -23,8 +23,10 @@ use crate::tool_metadata::ToolDefinition;
 pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
     let mut items = Vec::new();
     for msg in messages {
-        match msg {
-            UnifiedMessage::User { content } => {
+        dispatch_unified_message(
+            msg,
+            &mut items,
+            |items, content| {
                 let has_images = content
                     .iter()
                     .any(|b| matches!(b, ContentBlock::Image { .. }));
@@ -75,8 +77,8 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                         content: MessageContent::Text { content: text },
                     });
                 }
-            }
-            UnifiedMessage::Assistant { content } => {
+            },
+            |items, content| {
                 // Replay encrypted reasoning items captured on a prior turn so a
                 // stateless (`store:false`) reasoning model resumes its
                 // chain-of-thought. The reasoning item must precede the message
@@ -121,12 +123,8 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                         });
                     }
                 }
-            }
-            UnifiedMessage::ToolResult {
-                tool_call_id,
-                content,
-                ..
-            } => {
+            },
+            |items, tool_call_id, _tool_name, content, _is_error| {
                 let output = content
                     .iter()
                     .filter_map(ContentBlock::as_model_text)
@@ -134,11 +132,11 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                     .join("\n");
                 items.push(InputItem::FunctionCallOutput {
                     // rust-doctor-disable-next-line excessive-clone
-                    call_id: tool_call_id.clone(),
+                    call_id: tool_call_id.to_owned(),
                     output,
                 });
-            }
-        }
+            },
+        );
     }
     items
 }
@@ -187,24 +185,26 @@ pub(crate) fn build_reasoning(
     think_level: Option<ThinkLevel>,
     model: &str,
 ) -> Option<ReasoningConfig> {
-    let effort = match think_level {
-        Some(ThinkLevel::Minimal) => "minimal",
-        Some(ThinkLevel::Low) => "low",
-        Some(ThinkLevel::Medium) => "medium",
-        Some(ThinkLevel::High) => "high",
-        Some(ThinkLevel::XHigh) => "xhigh",
+    // No directive at all → leave the provider on its own default. This is
+    // the pre-existing behaviour for every request Aleph has ever sent, and
+    // it must stay: `None` is "nobody chose", not "someone chose off".
+    let level = think_level?;
+    let effort = dispatch_think_level(
+        &level,
+        &mut (),
         // `Off` is a request ("disable reasoning"), not an absence. Omitting the
         // block does NOT disable reasoning on a reasoning model — it selects the
         // server default (`medium`), billed at the output rate. `"none"` is a
         // real value on families that can disable; `clamp_effort` floors it to
         // their cheapest effort on families that cannot. See the twin fix in
         // `openai_chat/proto_impl.rs::map_think_level`.
-        Some(ThinkLevel::Off) => "none",
-        // No directive at all → leave the provider on its own default. This is
-        // the pre-existing behaviour for every request Aleph has ever sent, and
-        // it must stay: `None` is "nobody chose", not "someone chose off".
-        None => return None,
-    };
+        |_| "none",
+        |_| "minimal",
+        |_| "low",
+        |_| "medium",
+        |_| "high",
+        |_| "xhigh",
+    );
     let clamped =
         crate::providers::protocols::openai_common::reasoning_effort::clamp_effort(model, effort)?;
     Some(ReasoningConfig {
@@ -789,10 +789,12 @@ mod tests {
     #[test]
     fn test_build_tools_basic() {
         use crate::ToolCategory;
-        let tools = vec![ToolDefinition {
-            name: "web_search".to_string(),
-            description: "Search the web".to_string(),
-            parameters: serde_json::json!({
+        // `#[non_exhaustive]` since P0 Task 2: build via the constructor
+        // (`new` defaults requires_confirmation/strict to false).
+        let tools = vec![ToolDefinition::new(
+            "web_search",
+            "Search the web",
+            serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"}
@@ -800,10 +802,8 @@ mod tests {
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "title": "SearchParams"
             }),
-            requires_confirmation: false,
-            category: ToolCategory::Builtin,
-            strict: false,
-        }];
+            ToolCategory::Builtin,
+        )];
         let result = build_tools(Some(&tools), false).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].tool_type, "function");
@@ -816,14 +816,9 @@ mod tests {
 
     fn make_tool(name: &str, parameters: serde_json::Value) -> ToolDefinition {
         use crate::ToolCategory;
-        ToolDefinition {
-            name: name.to_string(),
-            description: "test tool".to_string(),
-            parameters,
-            requires_confirmation: false,
-            category: ToolCategory::Builtin,
-            strict: false,
-        }
+        // `#[non_exhaustive]` since P0 Task 2: build via the constructor
+        // (`new` defaults requires_confirmation/strict to false).
+        ToolDefinition::new(name, "test tool", parameters, ToolCategory::Builtin)
     }
 
     #[test]

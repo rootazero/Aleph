@@ -364,9 +364,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
     // Every handle a plugin mount needs, installed before the first
     // `ensure_loaded()` (below) so the first `load_all` mounts each plugin
-    // completely — MCP servers, memory extension, slash entries — instead of
-    // leaving those to a boot-time catch-up task. Order among the three does
-    // not matter; order against the load does (see `boot_order_tests`).
+    // completely — MCP servers, memory extension, slash entries, the
+    // canonical tool handler registry — instead of leaving those to a
+    // boot-time catch-up task. Order among the four does not matter; order
+    // against the load does (see `boot_order_tests`). The registry
+    // attachment is the one fallible install: it refuses a late or
+    // conflicting attachment, and half-attached dispatch authority is worse
+    // than no boot, so its failure aborts startup instead of warn-and-
+    // continuing.
     {
         use alephcore::gateway::handlers::plugins::get_extension_manager;
         if let Ok(ext_manager) = get_extension_manager() {
@@ -375,6 +380,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
             ext_manager.set_memory_registry(memory_ext_registry.clone());
             ext_manager.set_tool_catalog(tool_catalog.clone());
+            ext_manager
+                .set_tool_handler_registry(Arc::clone(&canonical_tools))
+                .await
+                .map_err(|e| {
+                    alephcore::AlephError::config(format!(
+                        "failed to attach the canonical tool handler registry \
+                         to the extension manager: {e}"
+                    ))
+                })?;
         }
     }
 
@@ -2179,7 +2193,7 @@ mod boot_order_tests {
             .filter(|(_, l)| !l.trim_start().starts_with("//"))
     }
 
-    /// The three runtime handles a plugin mount needs must be injected
+    /// The four runtime handles a plugin mount needs must be injected
     /// before BOTH first-load sites in this file: the `ensure_loaded()` in
     /// the real-execution branch (a boot with an AI provider), and the
     /// `init_tool_catalog(` call whose body runs its own `ensure_loaded()` —
@@ -2223,6 +2237,7 @@ mod boot_order_tests {
             "set_mcp_handle(",
             "set_memory_registry(",
             "set_tool_catalog(",
+            "set_tool_handler_registry(",
         ] {
             let at = first(needle);
             if at >= load {

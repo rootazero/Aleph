@@ -322,12 +322,14 @@ fn qa_service_for_nonce(nonce: &str) -> CliResult<String> {
 /// text never echoes the rejected value.
 #[cfg(any(test, feature = "qa-service"))]
 fn validate_qa_service(service: &str) -> CliResult<()> {
-    let ok = service.strip_prefix(QA_SERVICE_PREFIX).is_some_and(|nonce| {
-        (QA_SERVICE_NONCE_MIN..=QA_SERVICE_NONCE_MAX).contains(&nonce.len())
-            && nonce
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    });
+    let ok = service
+        .strip_prefix(QA_SERVICE_PREFIX)
+        .is_some_and(|nonce| {
+            (QA_SERVICE_NONCE_MIN..=QA_SERVICE_NONCE_MAX).contains(&nonce.len())
+                && nonce
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        });
     if ok {
         Ok(())
     } else {
@@ -352,7 +354,9 @@ fn connect_projection(credential: &DeviceCredential) -> CliResult<DeviceConnectC
 fn decode_payload(payload: &str) -> CliResult<DeviceCredential> {
     // The serde error is dropped: it can quote parts of the payload.
     let stored: StoredCredential = serde_json::from_str(payload).map_err(|_| {
-        CliError::Config("the stored device credential is unreadable or has an unknown format".into())
+        CliError::Config(
+            "the stored device credential is unreadable or has an unknown format".into(),
+        )
     })?;
     if stored.version != PAYLOAD_VERSION {
         return Err(CliError::Config(
@@ -613,7 +617,10 @@ mod tests {
         keys.sort();
         assert_eq!(keys, ["device_id", "device_token", "version"]);
         assert_eq!(v["version"], 1);
-        assert_eq!(s.load_for_connect().unwrap(), Some(connect("aleph-dt-SECRET")));
+        assert_eq!(
+            s.load_for_connect().unwrap(),
+            Some(connect("aleph-dt-SECRET"))
+        );
         // Interoperates with the DeviceCredential path.
         assert_eq!(s.load().unwrap().unwrap().device_id(), "dev-1");
         assert!(s.delete_for_connect().unwrap());
@@ -644,7 +651,10 @@ mod tests {
                 s.delete_for_connect().map(|_| ()).unwrap_err(),
             ] {
                 let text = format!("{err} {err:?}");
-                assert!(!text.contains("SECRET") && !text.contains("aleph-dt-NEW"), "{text}");
+                assert!(
+                    !text.contains("SECRET") && !text.contains("aleph-dt-NEW"),
+                    "{text}"
+                );
             }
             assert_eq!(hits.load(Ordering::SeqCst), 0, "{url}: backend was touched");
             assert_eq!(shelf.lock().unwrap().len(), 1);

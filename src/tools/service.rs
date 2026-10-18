@@ -1,297 +1,51 @@
 //! `ToolService` — consumer-side façade over tool dispatch.
 //!
 //! See: docs/superpowers/specs/2026-04-18-tool-service-facade-design.md
+//!
+//! ## P0 Task 2: pure types moved to `aleph-slot-api`
+//!
+//! The pure types this trait operates on (the [`ToolError`] taxonomy, the
+//! [`RefusedBy`] refusal-kind enum, the loop-side [`ToolDefinition`] and
+//! its [`ToolDefinitionMetadata`], the wire [`ToolOutput`] /
+//! [`ToolOutputMetadata`] / [`ToolImage`] shape, and the
+//! [`to_metadata_form`] compatibility projection) live in
+//! `aleph-slot-api` as of P0 Task 2 — they have no `tokio`, no
+//! `alephcore`, no I/O. The trait itself stays here because it
+//! depends on `tokio_util::CancellationToken`, the policy stack, and
+//! the recovery-tool machinery, none of which the API crate is
+//! allowed to reach. This file ends at the trait; the data it
+//! operates on now lives at `aleph_slot_api::tool::*`.
 
 use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use crate::session::events::ToolOutput;
+// Re-exports — keep every existing `crate::tools::service::ToolError` /
+// `crate::tools::service::ToolDefinition` / etc. path compiling
+// unchanged. The single source of truth for the type is
+// `aleph_slot_api::tool::*`; this is a Core-side compatibility alias.
+pub use aleph_slot_api::tool::{
+    to_metadata_form, RefusedBy, ToolDefinition, ToolDefinitionMetadata, ToolError, ToolImage,
+    ToolOutput, ToolOutputMetadata,
+};
 
-#[derive(Debug, thiserror::Error)]
-pub enum ToolError {
-    #[error("tool not found: {name}")]
-    NotFound { name: String },
+// `ToolSource` is the descriptor 3-variant (`Builtin` / `Mcp { server_id }` /
+// `Extension { plugin_id }`). The metadata 6-variant
+// (`crate::tool_metadata::ToolSource` / `aleph_slot_api::metadata::ToolSource`)
+// is a distinct type at a different path. The two are kept distinct on
+// purpose: the descriptor owns canonical capability identity, the metadata
+// owns the projection / panel presentation. Round-tripping the metadata
+// form to a descriptor `ToolSource` is the responsibility of
+// `aleph_slot_api::metadata::project_metadata_source_to_descriptor`, which
+// is a closed six-arm mapping that does NOT default to `Builtin` for
+// unmapped arms.
+pub use aleph_slot_api::descriptor::ToolSource;
 
-    #[error("permission denied for tool {name}: {reason}")]
-    PermissionDenied { name: String, reason: String },
-
-    #[error("invalid input for tool {name}: {cause}")]
-    ValidationFailed { name: String, cause: String },
-
-    #[error("tool {name} execution failed: {cause}")]
-    Execution { name: String, cause: String },
-
-    /// The call was refused before it ran — by a hook, a person, or because
-    /// nobody could be asked ([`RefusedBy`]). A verdict, not a failure: its
-    /// kind is `Permission` whatever `reason` says (a hook's prose, the user's
-    /// own words), so the model gets no route to another tool.
-    ///
-    /// Distinct from `PermissionDenied` for one reason: these refusals do not
-    /// fire the `PermissionDenied` observers (`HookEvent::PermissionDenied`
-    /// documents which refusals do). The rendering's head comes from
-    /// [`RefusedBy::head`], which `error_kind::classify_error_str` reads too.
-    #[error("tool {name} {}: {reason}", .by.head())]
-    Refused {
-        name: String,
-        by: RefusedBy,
-        reason: String,
-    },
-
-    #[error("tool {name} timed out after {elapsed_ms}ms")]
-    Timeout { name: String, elapsed_ms: u64 },
-
-    /// The approval card expired with nobody answering it. Distinct from
-    /// `PermissionDenied` and from a plain `Execution` failure, because nobody
-    /// said no — nobody said anything, and the human may simply be away.
-    /// `DenialLedger::record_denial` already drops a `DenialReason::Timeout`
-    /// for exactly this reason ("an expired card is not a decision"); folding
-    /// the expiry into a non-retryable error one layer up put the permanent ban
-    /// back and told the model the user had refused.
-    #[error(
-        "approval for tool {name} expired after {waited_ms}ms with no response — nobody \
-         answered; the user did not decline this call"
-    )]
-    ApprovalExpired { name: String, waited_ms: u64 },
-
-    #[error("tool {name} transport error: {cause}")]
-    Transport { name: String, cause: String },
-
-    /// The run was cancelled while this call was in flight (or before it was
-    /// polled). Distinct from every other variant for the same reason
-    /// `ApprovalExpired` is: nobody judged the call. Collapsing it into
-    /// `Execution` made `is_retryable` false, which entered the call into the
-    /// harness's cross-batch failure memo — so pressing stop once *banned* that
-    /// exact call for the rest of the run — and handed the model a persistence
-    /// hint telling it to climb the tool ladder because the user had pressed
-    /// stop.
-    #[error("tool {name} was cancelled — the run was stopped, this is not a verdict on the call")]
-    Cancelled { name: String },
-
-    #[error("duplicate tool name: {name}")]
-    Duplicate { name: String },
-
-    /// A [`ToolCapabilityDescriptor`] failed validation before the registry
-    /// could store it. `reason` is the descriptor-layer diagnostic; the write
-    /// is refused fail-closed so an invalid capability never becomes callable.
-    ///
-    /// [`ToolCapabilityDescriptor`]: crate::tools::descriptor::ToolCapabilityDescriptor
-    #[error("invalid tool descriptor for {name}: {reason}")]
-    InvalidDescriptor { name: String, reason: String },
-
-    /// The descriptor does not describe the handler it was paired with — the
-    /// `name` / `source` / schema / safety-flag projection disagreed with the
-    /// handler's own [`definition`](crate::tools::handlers::ToolHandler::definition).
-    /// Refused so a handler can never be resolvable under a contract it does
-    /// not honour.
-    #[error("descriptor mismatch for tool {name}: {reason}")]
-    DescriptorMismatch { name: String, reason: String },
-
-    /// The registry was closed and no longer accepts new registrations or
-    /// replacements. Existing handles stay disposable.
-    #[error("registry closed: cannot register tool {name}")]
-    RegistryClosed { name: String },
-
-    /// A registration handle or change referred to a revision the registry no
-    /// longer holds (the entry was replaced or unregistered in between).
-    #[error("unknown registration revision {revision} for tool {name}")]
-    UnknownRevision { name: String, revision: u64 },
-
-    #[error("{0}")]
-    Other(String),
-}
-
-impl ToolError {
-    /// "This failure was not a verdict on the call itself." Two consumers read
-    /// it, and they want different things from it:
-    ///
-    /// - `tools::retry::execute_with_one_shot_backoff` respins the call
-    ///   (subject to per-tool idempotence). Only `Timeout` / `Transport` can
-    ///   reach it: it lives *below* the approval gate, so an
-    ///   `ApprovalExpired` is returned long before the retry layer is entered
-    ///   and is never silently respun into a second approval card. That helper
-    ///   excludes `Cancelled` explicitly — respinning after `/stop` would sleep
-    ///   the backoff and fail again.
-    /// - the harness's cross-batch failure memo (`agent/act.rs`) refuses to
-    ///   *ban* a call whose error was retryable. An expired approval must not
-    ///   be banned — the human was away, they did not refuse. Neither must a
-    ///   cancelled one: the user stopped the run, they did not judge the call.
-    ///
-    /// For richer, prompt-side classification (rate-limited,
-    /// unauthorized, blocked-by-policy, …) see [`Self::kind`].
-    #[must_use]
-    pub const fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::Timeout { .. }
-                | Self::Transport { .. }
-                | Self::ApprovalExpired { .. }
-                | Self::Cancelled { .. }
-        )
-    }
-
-    /// Coarse, stable taxonomy used to render the LLM-facing routing
-    /// hint in `SessionEvent::ToolError`. Delegates to
-    /// [`crate::tools::error_kind::classify_tool_error`].
-    ///
-    /// This is a strict superset of `is_retryable` — every transient
-    /// variant returns a `kind()` whose `is_transient()` is `true`,
-    /// but the kind further distinguishes "switch source"
-    /// (Unauthorized/BlockedByPolicy) from "switch tool"
-    /// (Timeout/Transport).
-    #[must_use]
-    pub fn kind(&self) -> crate::tools::error_kind::ToolErrorKind {
-        crate::tools::error_kind::classify_tool_error(self)
-    }
-}
-
-/// Who refused a [`ToolError::Refused`] call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefusedBy {
-    /// A BeforeToolCall hook blocked the call (exit 2, `decision: "block"`,
-    /// `block:`).
-    Hook,
-    /// A BeforeToolCall hook — or the hook executor — failed to run, so the
-    /// call was blocked fail-closed. Not a policy verdict: the guard broke.
-    HookFailed,
-    /// A person declined the approval card (a confirmation gate's, or the one
-    /// a hook's `ask:` raised).
-    Person,
-    /// Nobody could be asked: no approval channel, an unattended run, or the
-    /// denial ledger's standing refusal of this exact call.
-    NobodyAsked,
-}
-
-impl RefusedBy {
-    /// Every variant — `error_kind::classify_error_str` recognises a
-    /// rendering by trying each head.
-    pub const ALL: [Self; 4] = [
-        Self::Hook,
-        Self::HookFailed,
-        Self::Person,
-        Self::NobodyAsked,
-    ];
-
-    /// What follows `tool <name> ` in the rendering. The one place a head is
-    /// written; the classifier reads it from here.
-    #[must_use]
-    pub const fn head(self) -> &'static str {
-        match self {
-            Self::Hook => "was refused by a policy hook",
-            Self::HookFailed => "was blocked because a policy hook failed to run (fail-closed)",
-            Self::Person => "was declined",
-            Self::NobodyAsked => "was not authorized",
-        }
-    }
-}
-
-// `ToolSource` now lives in `tools::descriptor` (single definition). This
-// re-export keeps every existing `crate::tools::service::ToolSource` /
-// `crate::tools::ToolSource` path compiling unchanged.
-pub use crate::tools::descriptor::ToolSource;
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ToolDefinitionMetadata {
-    #[serde(default)]
-    pub hidden_from_llm: bool,
-    #[serde(default)]
-    pub requires_approval: bool,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    /// True when re-running this tool with the same input is safe even if
-    /// the previous attempt may have reached the server. Read-only / pure
-    /// query tools (`memory_search`, search, `web_fetch`, `recall_context`) set
-    /// this to true; side-effecting tools (write/exec/send_*) leave it
-    /// false. Consumed by `tools::retry::execute_with_one_shot_backoff` to
-    /// gate retries on `Timeout` / `Transport` errors — non-idempotent
-    /// tools never auto-retry to avoid duplicate side effects.
-    #[serde(default)]
-    pub idempotent: bool,
-    /// Per-tool wall-clock execution budget.
-    ///
-    /// Every definition a production `ToolService` publishes carries one:
-    /// the builders resolve it through `tools::budget::resolve_tool_budget_ms`
-    /// (the tool's own `LoopTool::max_duration_ms` → `BUILTIN_TOOL_BUDGETS_MS`
-    /// → `DEFAULT_TOOL_BUDGET_MS`), so MCP / plugin / skill tools and the ~100
-    /// builtins outside the table are budgeted too. That matters because the
-    /// harness treats an overrun of a *declared* budget as a recoverable tool
-    /// error, and a `None` budget as a run-level stall — an unbudgeted tool
-    /// turned one slow call into an aborted run.
-    ///
-    /// Still `Option` because the type is also the wire form (`#[serde(default)]`
-    /// for legacy JSON) and test doubles need a "says nothing" value.
-    #[serde(default)]
-    pub max_duration_ms: Option<u64>,
-    /// Static "always safe under parallel dispatch" hint, mirroring the
-    /// inner [`crate::tools::runtime::ToolDefinition::concurrent_safe`].
-    /// Tools that mutate shared state (`file_write`, bash, `code_exec`,
-    /// send_*) leave this `false`; pure read-only queries set it `true`.
-    /// The harness uses [`ToolService::call_concurrency_claim`] for the
-    /// authoritative per-call answer at dispatch time, since some tools
-    /// (e.g. `file_ops`) flip based on the operation in their input.
-    #[serde(default)]
-    pub concurrent_safe: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
-    pub source: ToolSource,
-    #[serde(default)]
-    pub metadata: ToolDefinitionMetadata,
-}
-
-impl ToolDefinition {
-    /// Build the callable service form from the canonical descriptor fields.
-    #[must_use]
-    pub fn from_descriptor(
-        descriptor: &crate::tools::descriptor::ToolCapabilityDescriptor,
-    ) -> Self {
-        Self {
-            name: descriptor.name.clone(),
-            description: descriptor.description.clone(),
-            input_schema: descriptor.input_schema.clone(),
-            source: descriptor.source.clone(),
-            metadata: ToolDefinitionMetadata {
-                requires_approval: descriptor.requires_confirmation,
-                idempotent: descriptor.idempotent,
-                concurrent_safe: descriptor.concurrent_safe,
-                max_duration_ms: descriptor.max_duration_ms,
-                ..Default::default()
-            },
-        }
-    }
-
-    /// Project descriptor-owned fields straight to the provider metadata
-    /// shape, WITHOUT fabricating a descriptor.
-    ///
-    /// The loop-side [`ToolDefinition`] carries the same fields the canonical
-    /// descriptor owns — name, description, input schema, source, and
-    /// requires-confirmation — but no revision. Round-tripping through a
-    /// synthetic revision-1 [`ToolCapabilityDescriptor`] (as `to_metadata_form`
-    /// once did) manufactures replay identity that never existed. Map the
-    /// fields directly instead.
-    #[must_use]
-    pub fn to_metadata_definition(&self) -> crate::tool_metadata::ToolDefinition {
-        let category = match &self.source {
-            ToolSource::Builtin => crate::tool_metadata::ToolCategory::Builtin,
-            ToolSource::Mcp { .. } => crate::tool_metadata::ToolCategory::Mcp,
-            ToolSource::Extension { .. } => crate::tool_metadata::ToolCategory::Custom,
-        };
-        crate::tool_metadata::ToolDefinition {
-            name: self.name.clone(),
-            description: self.description.clone(),
-            parameters: self.input_schema.clone(),
-            requires_confirmation: self.metadata.requires_approval,
-            category,
-            strict: false,
-        }
-    }
-}
+// `ToolErrorKind` (and its classifier) live next to `ToolError` in
+// the API crate. Re-exported here for callers that reached it via
+// the Core path. Same single source of truth, same wire surface.
+pub use aleph_slot_api::error_kind::ToolErrorKind;
 
 #[async_trait]
 pub trait ToolService: Send + Sync + 'static {
@@ -389,8 +143,8 @@ pub trait ToolService: Send + Sync + 'static {
         &self,
         _name: &str,
         _input: &serde_json::Value,
-    ) -> crate::tools::concurrency::ConcurrencyClaim {
-        crate::tools::concurrency::ConcurrencyClaim::global()
+    ) -> aleph_slot_api::concurrency::ConcurrencyClaim {
+        aleph_slot_api::concurrency::ConcurrencyClaim::global()
     }
 
     /// Execute a tool call with an opencode-parity `AbortSignal` token.
@@ -439,143 +193,82 @@ pub trait ToolService: Send + Sync + 'static {
     }
 }
 
-/// Compatibility wrapper around [`ToolDefinition::to_metadata_definition`].
-///
-/// Previously this fabricated a revision-1 [`ToolCapabilityDescriptor`] per
-/// definition and projected through it — a lie, because loop-side definitions
-/// carry no revision and revision 1 is not canonical. The projection is now
-/// direct. Kept only because `src/harness/tests/tools_surface.rs` imports it;
-/// new callers should use [`ToolDefinition::to_metadata_definition`] directly.
-///
-/// This is a pure compatibility projection and does not provide canonical
-/// capability identity, authorization, or registry state.
-#[must_use]
-pub fn to_metadata_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::ToolDefinition]> {
-    defs.iter()
-        .map(ToolDefinition::to_metadata_definition)
-        .collect::<Vec<_>>()
-        .into()
-}
+// =============================================================================
+// Smoke tests — the substantive tests for the migrated types live in
+// `aleph-slot-api::tool`, `aleph-slot-api::descriptor`, and
+// `aleph-slot-api::error_kind`. These are the identity / re-export
+// witnesses: they pin that the Core-side path resolves to the SAME type
+// the API side defines, so any consumer that keeps importing through
+// `crate::tools::service::ToolError` (or any other migrated path) still
+// gets the same type-identity guarantee the rest of the crate relies on.
+// =============================================================================
 
 #[cfg(test)]
-mod metadata_form_tests {
+mod re_export_witness_tests {
     use super::*;
-    use crate::tool_metadata::{ToolCategory, ToolDefinition as MetadataToolDefinition};
-    use serde_json::json;
+    use std::any::TypeId;
 
-    fn loop_def(name: &str) -> ToolDefinition {
-        ToolDefinition {
-            name: name.to_string(),
-            description: format!("desc {name}"),
-            input_schema: json!({"type": "object"}),
-            source: ToolSource::Builtin,
-            metadata: ToolDefinitionMetadata::default(),
-        }
-    }
-
-    #[test]
-    fn empty_input_yields_empty_arc() {
-        let out = to_metadata_form(&[]);
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn single_def_converts_field_by_field() {
-        let inputs = vec![loop_def("alpha")];
-        let out = to_metadata_form(&inputs);
-        assert_eq!(out.len(), 1);
-        let d: &MetadataToolDefinition = &out[0];
-        assert_eq!(d.name, "alpha");
-        assert_eq!(d.description, "desc alpha");
-        assert_eq!(d.parameters, json!({"type": "object"}));
-        assert!(!d.requires_confirmation);
-        assert!(matches!(d.category, ToolCategory::Builtin));
-        assert!(!d.strict);
-    }
-
-    #[test]
-    fn projects_mcp_source_and_confirmation_to_provider_metadata() {
-        let mut definition = loop_def("mcp_search");
-        definition.source = ToolSource::Mcp {
-            server_id: "search".into(),
-        };
-        definition.metadata.requires_approval = true;
-        let projected = to_metadata_form(&[definition]);
-        assert_eq!(projected[0].category, ToolCategory::Mcp);
-        assert!(projected[0].requires_confirmation);
-    }
-
-    #[test]
-    fn preserves_order_for_multi_input() {
-        let inputs = vec![loop_def("a"), loop_def("b"), loop_def("c")];
-        let out = to_metadata_form(&inputs);
-        let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, vec!["a", "b", "c"]);
-    }
-
-    #[test]
-    fn to_metadata_definition_maps_without_fabricated_descriptor() {
-        let mut def = loop_def("direct");
-        def.source = ToolSource::Extension {
-            plugin_id: "p".into(),
-        };
-        def.metadata.requires_approval = true;
-        let projected = def.to_metadata_definition();
-        assert_eq!(projected.name, "direct");
-        assert_eq!(projected.parameters, json!({"type": "object"}));
-        assert!(projected.requires_confirmation);
-        assert!(matches!(projected.category, ToolCategory::Custom));
-        assert!(!projected.strict);
-    }
-
-    #[test]
-    fn to_metadata_form_agrees_with_direct_projection() {
-        let defs = vec![loop_def("a"), loop_def("b")];
-        let via_form = to_metadata_form(&defs);
-        let direct: Vec<_> = defs
-            .iter()
-            .map(ToolDefinition::to_metadata_definition)
-            .collect();
-        assert_eq!(via_form.len(), direct.len());
-        for (left, right) in via_form.iter().zip(direct.iter()) {
-            assert_eq!(left.name, right.name);
-            assert_eq!(left.description, right.description);
-            assert_eq!(left.parameters, right.parameters);
-            assert_eq!(left.requires_confirmation, right.requires_confirmation);
-            assert_eq!(left.category, right.category);
-            assert_eq!(left.strict, right.strict);
-        }
-    }
-}
-
-#[cfg(test)]
-mod metadata_tests {
-    use super::*;
-
-    #[test]
-    fn metadata_max_duration_ms_round_trips_through_json() {
-        let original = ToolDefinitionMetadata {
-            hidden_from_llm: false,
-            requires_approval: false,
-            tags: Vec::new(),
-            idempotent: true,
-            max_duration_ms: Some(5_000),
-            concurrent_safe: false,
-        };
-        let serialized = serde_json::to_string(&original).unwrap();
-        let parsed: ToolDefinitionMetadata = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(parsed.max_duration_ms, Some(5_000));
-    }
-
-    #[test]
-    fn metadata_max_duration_ms_defaults_to_none_when_field_absent() {
-        let legacy_json =
-            r#"{"hidden_from_llm":false,"requires_approval":false,"tags":[],"idempotent":false}"#;
-        let parsed: ToolDefinitionMetadata = serde_json::from_str(legacy_json).unwrap();
-        assert_eq!(parsed.max_duration_ms, None);
-        assert!(
-            !parsed.concurrent_safe,
-            "absent concurrent_safe must default to false on legacy JSON",
+    fn assert_same_type<T: 'static, U: 'static>() {
+        assert_eq!(
+            TypeId::of::<T>(),
+            TypeId::of::<U>(),
+            "re-export identity must match the API source"
         );
+    }
+
+    #[test]
+    fn tool_error_is_same_type_as_api_tool_error() {
+        assert_same_type::<ToolError, aleph_slot_api::tool::ToolError>();
+    }
+
+    #[test]
+    fn refused_by_is_same_type_as_api_refused_by() {
+        assert_same_type::<RefusedBy, aleph_slot_api::tool::RefusedBy>();
+    }
+
+    #[test]
+    fn tool_definition_is_same_type_as_api_tool_definition() {
+        assert_same_type::<ToolDefinition, aleph_slot_api::tool::ToolDefinition>();
+    }
+
+    #[test]
+    fn tool_definition_metadata_is_same_type_as_api_tool_definition_metadata() {
+        assert_same_type::<ToolDefinitionMetadata, aleph_slot_api::tool::ToolDefinitionMetadata>();
+    }
+
+    #[test]
+    fn tool_output_is_same_type_as_api_tool_output() {
+        assert_same_type::<ToolOutput, aleph_slot_api::tool::ToolOutput>();
+    }
+
+    #[test]
+    fn tool_output_metadata_is_same_type_as_api_tool_output_metadata() {
+        assert_same_type::<ToolOutputMetadata, aleph_slot_api::tool::ToolOutputMetadata>();
+    }
+
+    #[test]
+    fn tool_image_is_same_type_as_api_tool_image() {
+        assert_same_type::<ToolImage, aleph_slot_api::tool::ToolImage>();
+    }
+
+    #[test]
+    fn tool_source_is_same_type_as_api_descriptor_tool_source() {
+        // The Core-side `crate::tools::service::ToolSource` is the
+        // descriptor 3-variant, NOT the metadata 6-variant. The
+        // single source of truth is `aleph_slot_api::descriptor::ToolSource`;
+        // `aleph_slot_api::tool::ToolSource` is itself a re-export of
+        // it. The two paths and the metadata path all resolve to
+        // distinct types.
+        assert_same_type::<ToolSource, aleph_slot_api::descriptor::ToolSource>();
+        assert_same_type::<ToolSource, aleph_slot_api::tool::ToolSource>();
+        assert!(
+            TypeId::of::<ToolSource>() != TypeId::of::<aleph_slot_api::metadata::ToolSource>(),
+            "descriptor ToolSource and metadata ToolSource must be distinct types"
+        );
+    }
+
+    #[test]
+    fn tool_error_kind_is_same_type_as_api_tool_error_kind() {
+        assert_same_type::<ToolErrorKind, aleph_slot_api::error_kind::ToolErrorKind>();
     }
 }

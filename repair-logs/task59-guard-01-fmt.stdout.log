@@ -1,0 +1,56 @@
+Diff in /Volumes/TBU4/Workspace/Aleph/src/extension/canonical_handler.rs:38:
+ impl ToolHandler for PluginCanonicalHandler {
+     async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
+         let loader = self.loader.read().await;
+[31m-        let value = loader
+(B[m[31m-            .call_bound(&self.binding, input)
+(B[m[31m-            .map_err(|error| ToolError::Execution {
+(B[m[31m-                name: self.registration.name.clone(),
+(B[m[31m-                cause: error.to_string(),
+(B[m[31m-            })?;
+(B[m[32m+        let value =
+(B[m[32m+            loader
+(B[m[32m+                .call_bound(&self.binding, input)
+(B[m[32m+                .map_err(|error| ToolError::Execution {
+(B[m[32m+                    name: self.registration.name.clone(),
+(B[m[32m+                    cause: error.to_string(),
+(B[m[32m+                })?;
+(B[m         Ok(ToolOutput {
+             value,
+             metadata: Default::default(),
+Diff in /Volumes/TBU4/Workspace/Aleph/src/extension/mod.rs:24:
+ //! ```
+
+ pub mod activation_gate;
+[31m-pub mod hooks;
+(B[m mod canonical_handler;
+[32m+pub mod hooks;
+(B[m mod lifecycle;
+ mod loader;
+ pub mod marketplace;
+Diff in /Volumes/TBU4/Workspace/Aleph/src/tools/registry.rs:613:
+                 return Ok(None);
+             }
+             Ok(Some((
+[31m-                CanonicalToolState::from_records_with_declarations(
+(B[m[31m-                    records,
+(B[m[31m-                    declarations,
+(B[m[31m-                ),
+(B[m[32m+                CanonicalToolState::from_records_with_declarations(records, declarations),
+(B[m                 RegistryPublication {
+                     revision,
+                     tool_changes: Vec::new(),
+Diff in /Volumes/TBU4/Workspace/Aleph/src/tools/scoped/dispatch.rs:300:
+                     }
+                 })?;
+                 if projected.source != entry.descriptor.source {
+[31m-                    return Err(ToolError::PermissionDenied { name: name.into(), reason: "canonical source changed; rebuild the request visibility projection".into() });
+(B[m[32m+                    return Err(ToolError::PermissionDenied {
+(B[m[32m+                        name: name.into(),
+(B[m[32m+                        reason:
+(B[m[32m+                            "canonical source changed; rebuild the request visibility projection"
+(B[m[32m+                                .into(),
+(B[m[32m+                    });
+(B[m                 }
+                 if let Some(visible) = &self.visible_mcp_servers {
+                     if matches!(&entry.descriptor.source, crate::tools::service::ToolSource::Mcp { server_id } if !visible(server_id))

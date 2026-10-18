@@ -1,9 +1,9 @@
 //! `impl OpenAiProtocol` — construction and internal helpers.
 
-use crate::agents::thinking::ThinkLevel;
+use crate::agents::thinking::{dispatch_think_level, ThinkLevel};
 use crate::config::ProviderConfig;
 use crate::providers::message::ContentBlock as UCB;
-use crate::providers::message::UnifiedMessage;
+use crate::providers::message::{dispatch_unified_message, UnifiedMessage};
 use crate::providers::openai::types::{OpenAiFunctionCallOut, OpenAiToolCallOut};
 use crate::providers::openai::{
     ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent,
@@ -90,8 +90,10 @@ impl OpenAiProtocol {
         }
 
         for msg in messages {
-            match msg {
-                UnifiedMessage::User { content } => {
+            dispatch_unified_message(
+                msg,
+                &mut result,
+                |result, content| {
                     let has_images = content.iter().any(|b| matches!(b, UCB::Image { .. }));
 
                     if has_images {
@@ -140,8 +142,8 @@ impl OpenAiProtocol {
                             .join("\n");
                         result.push(Message::text("user", text));
                     }
-                }
-                UnifiedMessage::Assistant { content } => {
+                },
+                |result, content| {
                     let text: String = content
                         .iter()
                         .filter_map(|b| match b {
@@ -214,12 +216,8 @@ impl OpenAiProtocol {
                         msg.reasoning_content = reasoning;
                         result.push(msg);
                     }
-                }
-                UnifiedMessage::ToolResult {
-                    tool_call_id,
-                    content,
-                    ..
-                } => {
+                },
+                |result, tool_call_id, _tool_name, content, _is_error| {
                     let output = content
                         .iter()
                         .filter_map(crate::providers::message::ContentBlock::as_model_text)
@@ -227,9 +225,9 @@ impl OpenAiProtocol {
                         .join("\n");
                     // Each ToolResult as separate tool message with required tool_call_id
                     // rust-doctor-disable-next-line excessive-clone
-                    result.push(Message::tool_result(tool_call_id.clone(), output));
-                }
-            }
+                    result.push(Message::tool_result(tool_call_id.to_owned(), output));
+                },
+            );
         }
         result
     }
@@ -260,13 +258,15 @@ impl OpenAiProtocol {
     /// `think_level: None` (nobody said anything) never reaches here at all and
     /// leaves the provider on its own default.
     pub(super) fn map_think_level(level: &ThinkLevel) -> Option<String> {
-        match level {
-            ThinkLevel::Off => Some("none".to_string()),
-            ThinkLevel::Minimal => Some("minimal".to_string()),
-            ThinkLevel::Low => Some("low".to_string()),
-            ThinkLevel::Medium => Some("medium".to_string()),
-            ThinkLevel::High => Some("high".to_string()),
-            ThinkLevel::XHigh => Some("xhigh".to_string()),
-        }
+        dispatch_think_level(
+            level,
+            &mut (),
+            |_| Some("none".to_string()),
+            |_| Some("minimal".to_string()),
+            |_| Some("low".to_string()),
+            |_| Some("medium".to_string()),
+            |_| Some("high".to_string()),
+            |_| Some("xhigh".to_string()),
+        )
     }
 }

@@ -296,6 +296,6 @@ mod tests {
         assert!(!(&W::<TelecomPublicContext>(std::marker::PhantomData)).is_serde());
         assert!(!(&W::<TelecomProvenance>(std::marker::PhantomData)).is_serde());
         assert!(!(&W::<CallerDigest>(std::marker::PhantomData)).is_serde());
-        assert!((&W::<SmsInboundMeta>(std::marker::PhantomData)).is_serde());
+        assert!(W::<SmsInboundMeta>(std::marker::PhantomData).is_serde());
     }
 }

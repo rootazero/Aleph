@@ -803,16 +803,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // (usage origin and result budget) is not represented by this
             // registry entry.
             let mut loop_registry_inner = crate::tools::runtime::LoopToolRegistry::new();
-            let plugin_tools: Vec<_> = allowed_tools
-                .iter()
-                .filter(|tool| {
-                    matches!(
-                        &tool.source,
-                        crate::tool_metadata::ToolSource::Plugin { .. }
-                    )
-                })
-                .cloned()
-                .collect();
             let mut allowed_names: std::collections::BTreeSet<String> =
                 allowed_tools.iter().map(|tool| tool.name.clone()).collect();
 
@@ -845,17 +835,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                 },
                                 &visible,
                                 &mut allowed_names,
-                                |name| {
-                                    self.tool_registry.get_tool(name).and_then(|tool| {
-                                        matches!(
-                                            &tool.source,
-                                            crate::tool_metadata::ToolSource::Native
-                                                | crate::tool_metadata::ToolSource::Builtin
-                                        )
-                                        .then_some(tool.max_result_tokens)
-                                        .flatten()
-                                    })
-                                },
                             );
                             if !joined.is_empty() {
                                 info!(
@@ -895,22 +874,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
             };
 
-            // Plugins intentionally remain on the executor-backed adapter path;
-            // they are not re-created as canonical handlers and therefore keep
-            // their existing usage origin, result budget, and dispatch policy.
-            for adapter in crate::tools::adapters::build_tool_adapters_from_tools(
-                self.tool_registry.clone(),
-                &plugin_tools,
-            ) {
-                let name = adapter.name().to_string();
-                if loop_registry_inner.get(&name).is_none() {
-                    loop_registry_inner.register(adapter);
-                }
-            }
-
-            // `allowed_names` is already complete for the canonical snapshot
-            // and plugin compatibility path. An empty set retains the existing
-            // allow-all meaning used by ScopedToolService.
+            // `allowed_names` is already complete for the canonical snapshot.
+            // An empty set retains the existing allow-all meaning used by
+            // ScopedToolService.
 
             // Register the on-demand schema loader ONLY when progressive
             // disclosure is active. When disabled (core empty / ["*"]), nothing
@@ -1868,41 +1834,17 @@ pub(super) fn join_canonical_tools(
     is_allowed: impl Fn(&str) -> bool,
     visible: &crate::tools::handlers::McpServerFilter,
     allowed_names: &mut std::collections::BTreeSet<String>,
-    budget_lookup: impl Fn(&str) -> Option<usize>,
 ) -> std::collections::BTreeSet<String> {
     let mut mcp_names = std::collections::BTreeSet::new();
     for (name, entry) in snapshot {
         if !is_allowed(name) || registry.get(name).is_some() {
             continue;
         }
-        // Plugin handlers retain their executor-backed compatibility projection
-        // so usage origin and result-budget semantics are not silently lost.
-        if matches!(
-            &entry.descriptor.source,
-            crate::tools::service::ToolSource::Extension { .. }
-        ) {
-            continue;
-        }
         if !mcp_handler_admitted(entry.handler.as_ref(), visible) {
             continue;
         }
-        let handler = entry
-            .handler
-            .bind_visible_servers(visible)
-            .unwrap_or_else(|| Arc::clone(&entry.handler));
         registry.register(Box::new(
-            crate::tools::adapters::McpRegistryTool::from_registry_entry_with_budget(
-                handler,
-                &entry.descriptor,
-                if matches!(
-                    &entry.descriptor.source,
-                    crate::tools::service::ToolSource::Builtin
-                ) {
-                    budget_lookup(name)
-                } else {
-                    None
-                },
-            ),
+            crate::tools::adapters::McpRegistryTool::from_canonical_entry(entry, visible),
         ));
         if !allowed_names.is_empty() {
             allowed_names.insert(name.clone());

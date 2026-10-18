@@ -2435,6 +2435,7 @@ fn canonical_test_entry(name: &str, server: &'static str) -> crate::tools::regis
     crate::tools::registry::RegistryEntry {
         handler,
         descriptor: Arc::new(descriptor),
+        max_result_tokens: None,
     }
 }
 
@@ -2486,6 +2487,7 @@ fn invoking_canonical_test_entry(
     crate::tools::registry::RegistryEntry {
         handler,
         descriptor: Arc::new(descriptor),
+        max_result_tokens: None,
     }
 }
 
@@ -2564,10 +2566,93 @@ fn run_loop_consumes_host_snapshot() {
             None,
         ),
         &mut allowed,
-        |_| None,
     );
     assert_eq!(joined, ["applied".to_string()].into_iter().collect());
     assert!(registry.get("applied").is_some());
+}
+
+#[tokio::test]
+async fn actual_builtin_budget_reaches_canonical_join() {
+    use std::{future::Future, pin::Pin};
+
+    struct MetadataRegistry {
+        tools: std::collections::HashMap<String, crate::tool_metadata::UnifiedTool>,
+    }
+    impl crate::executor::ToolRegistry for MetadataRegistry {
+        fn get_tool(&self, name: &str) -> Option<&crate::tool_metadata::UnifiedTool> {
+            self.tools.get(name)
+        }
+        fn execute_tool(
+            &self,
+            name: &str,
+            _arguments: serde_json::Value,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<serde_json::Value>> + Send + '_>>
+        {
+            let name = name.to_string();
+            Box::pin(async move { Ok(serde_json::json!({"producer": name})) })
+        }
+    }
+    let mut tools = std::collections::HashMap::new();
+    for (name, budget) in [("r0_producer_some", Some(17)), ("r0_producer_none", None)] {
+        let mut tool = crate::tool_metadata::UnifiedTool::new(
+            format!("builtin:{name}"),
+            name,
+            "real producer metadata",
+            crate::tool_metadata::ToolSource::Builtin,
+        );
+        tool.max_result_tokens = budget;
+        tools.insert(name.to_string(), tool);
+    }
+    let producer: Arc<dyn crate::executor::ToolRegistry> = Arc::new(MetadataRegistry { tools });
+    let canonical = crate::tools::registry::ToolHandlerRegistry::new();
+    let cases = [
+        ("r0_producer_some", Some(17)),
+        ("r0_producer_none", None),
+        ("r0_producer_missing", None),
+    ];
+    let scope = crate::tools::handlers::builtin::register_builtin_routers(
+        &canonical,
+        producer,
+        cases.iter().map(|(name, _)| (*name).to_string()),
+    )
+    .await
+    .expect("real producer admission");
+    let snapshot = canonical.snapshot_state();
+    for (name, budget) in cases {
+        assert_eq!(
+            snapshot
+                .entry(name)
+                .expect("actual admitted entry")
+                .max_result_tokens,
+            budget
+        );
+    }
+    let selected = select_canonical_mcp_projection(
+        true,
+        CanonicalMcpHostState::Applied(Arc::new(snapshot.entries().clone())),
+    );
+    let CanonicalMcpProjection::Applied(entries) = selected else {
+        panic!("actual snapshot must be applied")
+    };
+    let mut loop_registry = crate::tools::runtime::LoopToolRegistry::new();
+    let mut allowed = cases.iter().map(|(name, _)| (*name).to_string()).collect();
+    let joined = join_canonical_tools(
+        &entries,
+        &mut loop_registry,
+        |_| true,
+        &visible_mcp_servers(
+            crate::extension::visibility::VisibilityCtx { project_root: None },
+            None,
+        ),
+        &mut allowed,
+    );
+    assert!(joined.is_empty(), "builtin rows do not become MCP names");
+    for (name, budget) in cases {
+        let tool = loop_registry.get(name).expect("actual joined adapter");
+        assert_eq!(tool.max_result_tokens(), budget);
+    }
+    let _report = scope.dispose().await;
+    assert!(canonical.snapshot_state().entries().is_empty());
 }
 
 #[test]
@@ -2608,6 +2693,7 @@ fn canonical_dispatch_filters_unchanged() {
     extension.descriptor = Arc::new(extension_descriptor);
     entries.insert("plugin".to_string(), extension);
     let mut builtin = canonical_test_entry("builtin", "github");
+    builtin.max_result_tokens = Some(17);
     let mut builtin_descriptor = (*builtin.descriptor).clone();
     builtin_descriptor.source = ToolSource::Builtin;
     builtin.descriptor = Arc::new(builtin_descriptor);
@@ -2630,7 +2716,6 @@ fn canonical_dispatch_filters_unchanged() {
         .into_iter()
         .map(str::to_string)
         .collect();
-    let budget_lookups = std::cell::RefCell::new(Vec::new());
     let joined = join_canonical_tools(
         &applied,
         &mut registry,
@@ -2640,18 +2725,27 @@ fn canonical_dispatch_filters_unchanged() {
             None,
         ),
         &mut allowed,
-        |name| {
-            budget_lookups.borrow_mut().push(name.to_string());
-            Some(17)
-        },
     );
     assert!(joined.contains("kept"));
     assert!(!joined.contains("duplicate"));
     assert!(!joined.contains("plugin"));
     assert!(!joined.contains("builtin"));
     assert!(registry.get("kept").is_some());
+    assert_eq!(
+        registry
+            .get("kept")
+            .expect("joined MCP tool")
+            .max_result_tokens(),
+        None
+    );
     assert!(registry.get("builtin").is_some());
-    assert!(budget_lookups.borrow().contains(&"builtin".to_string()));
+    assert_eq!(
+        registry
+            .get("builtin")
+            .expect("joined builtin projection")
+            .max_result_tokens(),
+        Some(17)
+    );
     assert!(!allowed.contains("denied"));
 
     let mut allow_all_registry = crate::tools::runtime::LoopToolRegistry::new();
@@ -2665,7 +2759,6 @@ fn canonical_dispatch_filters_unchanged() {
             None,
         ),
         &mut empty_allowed,
-        |_| None,
     );
     assert!(empty_allowed.is_empty());
     assert!(joined.contains("kept"));
@@ -2713,7 +2806,6 @@ fn revoked_projection_is_not_joined() {
             None,
         ),
         &mut allowed,
-        |_| None,
     );
     assert!(joined.contains("unrelated"));
     assert!(!joined.contains("revoked"));
@@ -2748,7 +2840,6 @@ async fn already_running_invocation_is_not_cut() {
             None,
         ),
         &mut allowed,
-        |_| None,
     );
     assert!(
         registry.get("captured").is_some(),
@@ -2908,7 +2999,6 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
             |_| true,
             &visible,
             &mut allowed,
-            |_| None,
         );
 
         let owned_joined = registry.get("plugin_proj_srv__t").is_some();
@@ -3106,5 +3196,100 @@ async fn the_turn_start_hooks_are_told_the_turns_permission_mode() {
         read(&prompt)["permission_mode"],
         expected,
         "UserPromptSubmit"
+    );
+}
+
+#[test]
+fn project_skill_block_excludes_user_roots_but_keeps_project_skills() {
+    let tmp = tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let project = tmp.path().join("project");
+    let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+        home.join(".aleph"),
+        home.clone(),
+    );
+    anchor(&project);
+    for (root, id) in [
+        (".agents", "global-agents-probe"),
+        (".aleph", "global-aleph-probe"),
+        (".claude", "global-claude-probe"),
+    ] {
+        write_skill(&home.join(root).join("skills").join(id), id, "Global probe");
+    }
+    for (root, id, name) in [
+        (".agents", "local-agents-probe", "Local Agents Probe"),
+        (".aleph", "local-aleph-probe", "Local Aleph Probe"),
+        (".claude", "local-claude-probe", "Local Claude Probe"),
+    ] {
+        write_skill(
+            &project.join(root).join("skills").join(id),
+            name,
+            "Project probe",
+        );
+    }
+
+    let dirs = crate::utils::paths::get_all_skills_dirs(Some(&project)).unwrap();
+    for root in [".agents", ".aleph", ".claude"] {
+        let expected = home.join(root).join("skills").canonicalize().unwrap();
+        assert!(
+            dirs.iter().any(|dir| {
+                dir.canonicalize()
+                    .is_ok_and(|candidate| candidate == expected)
+            }),
+            "premise: discovery must include the existing global {root} skills root"
+        );
+    }
+
+    let block = collect_project_skill_block(&project).expect("project skills advertised");
+    assert!(
+        !block.contains("`global-agents-probe`"),
+        "global .agents skill leaked into the project block:\n{block}"
+    );
+    assert!(!block.contains("`global-aleph-probe`"));
+    assert!(!block.contains("`global-claude-probe`"));
+    for expected in [
+        "`local-agents-probe` — Local Agents Probe:",
+        "`local-aleph-probe` — Local Aleph Probe:",
+        "`local-claude-probe` — Local Claude Probe:",
+    ] {
+        assert!(
+            block.contains(expected),
+            "missing project skill: {expected}\n{block}"
+        );
+    }
+}
+
+#[test]
+fn project_skill_block_none_when_only_global_skills() {
+    let tmp = tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let project = tmp.path().join("project");
+    let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+        home.join(".aleph"),
+        home.clone(),
+    );
+    anchor(&project);
+    for (root, id) in [
+        (".agents", "global-agents-probe"),
+        (".aleph", "global-aleph-probe"),
+        (".claude", "global-claude-probe"),
+    ] {
+        write_skill(&home.join(root).join("skills").join(id), id, "Global probe");
+    }
+
+    let dirs = crate::utils::paths::get_all_skills_dirs(Some(&project)).unwrap();
+    for root in [".agents", ".aleph", ".claude"] {
+        let expected = home.join(root).join("skills").canonicalize().unwrap();
+        assert!(
+            dirs.iter().any(|dir| {
+                dir.canonicalize()
+                    .is_ok_and(|candidate| candidate == expected)
+            }),
+            "premise: discovery must include the existing global {root} skills root"
+        );
+    }
+    assert!(
+        collect_project_skill_block(&project).is_none(),
+        "global skills alone must not produce a project block"
     );
 }

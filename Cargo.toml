@@ -21,6 +21,7 @@ members = [
 
     "crates/agent-detect",
     "crates/aleph-cdp",
+    "crates/aleph-slot-api",
 ]
 
 [workspace.package]
@@ -185,6 +186,12 @@ serde_ignored = "0.1"
 similar = { version = "2", default-features = false, features = ["text"] }
 thiserror = "2.0"
 aleph-protocol = { path = "shared/protocol" }
+# Pure error + UTF-8 text helper authority. The directional dependency is
+# one-way: alephcore → aleph-slot-api. The new crate must NOT take a
+# `path = ".."` back into alephcore, and Task 1 explicitly forbids the
+# reverse edge in `src/utils/text_format.rs` (it becomes a re-export shim,
+# not a second definition).
+aleph-slot-api = { path = "crates/aleph-slot-api" }
 # Screen-text agent-state detection (ported from herdr, Apache-2.0). Consumed
 # by `gateway::runtime`, which samples PTY screens on the diff-frame cadence.
 agent-detect = { path = "crates/agent-detect" }
@@ -390,6 +397,11 @@ path = "src/bin/aleph-server/main.rs"
 bench = false
 
 [dev-dependencies]
+# Task9 independent source import guard only. Never used by normal library code.
+syn = { version = "=2.0.117", default-features = false, features = ["full", "parsing", "printing", "visit"] }
+# Source evidence needs line/column locations; already locked, dev-only.
+proc-macro2 = { version = "=1.0.106", features = ["span-locations"] }
+
 # The same crate as the `[dependencies]` entry above, with the in-process fake
 # CDP peer switched on. `#[cfg(test)]` code in this crate drives the engine
 # registry against it — and that is the ONLY consumer: `browser::testkit` is

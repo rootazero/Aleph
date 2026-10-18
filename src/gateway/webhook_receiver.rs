@@ -35,7 +35,6 @@
 //! - Configurable signature header format (`sha256={hex}`)
 
 use crate::sync_primitives::Arc;
-use async_trait::async_trait;
 use axum::{
     body::Bytes,
     extract::State,
@@ -50,36 +49,11 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use super::channel::{
-    ChannelId, ChannelResult, ChannelStatus, InboundMessage, InboundMessageSender,
-};
+use super::channel::{ChannelId, ChannelStatus, InboundMessageSender};
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Trait for platform-specific webhook handling.
-///
-/// Each channel (`WhatsApp`, Generic Webhook, etc.) implements this trait to:
-/// 1. Verify the incoming request signature
-/// 2. Parse the platform-specific payload into `InboundMessage`(s)
-/// 3. Declare its URL path
-#[async_trait]
-pub trait WebhookHandler: Send + Sync {
-    /// Verify webhook signature (HMAC-SHA256, platform-specific headers, etc.)
-    ///
-    /// Implementations should extract the signature from the appropriate header
-    /// and verify it against the request body using their secret.
-    fn verify(&self, headers: &HeaderMap, body: &[u8]) -> bool;
-
-    /// Parse webhook payload into `InboundMessages`.
-    ///
-    /// A single webhook request may produce multiple messages (e.g., batch delivery).
-    async fn handle(&self, headers: &HeaderMap, body: Bytes) -> ChannelResult<Vec<InboundMessage>>;
-
-    /// URL path for this handler (e.g., "/webhook/whatsapp").
-    ///
-    /// Must start with `/` and be unique across all registered handlers.
-    fn path(&self) -> &str;
-}
+pub use aleph_slot_api::webhook::{WebhookHandler, WEBHOOK_ROUTE_PREFIX};
 
 /// One webhook handler mounted at its own path, paired with the inbound sink
 /// of the channel that owns it.
@@ -105,14 +79,6 @@ pub struct WebhookMount {
     /// the endpoint, not just log a warning.
     pub channel_id: ChannelId,
 }
-
-/// The one path prefix every channel webhook route lives under.
-///
-/// A single constant route (`/webhook/{*rest}`) carries all channel webhook
-/// traffic, so an operator-writable `path` never enters axum's route table.
-/// That is what makes the mount table hot-swappable *and* what removed the
-/// boot-panic failure mode `RESERVED_ROUTE_PREFIXES` used to guard against.
-pub const WEBHOOK_ROUTE_PREFIX: &str = "/webhook";
 
 /// Whether `path` can be reached behind `{WEBHOOK_ROUTE_PREFIX}/{{*rest}}`.
 ///
@@ -397,8 +363,10 @@ async fn webhook_endpoint(
 mod tests {
     use super::*;
     use crate::gateway::channel::{
-        ChannelError, ChannelId, ChannelState, ConversationId, MessageId, UserId,
+        ChannelError, ChannelId, ChannelResult, ChannelState, ConversationId, InboundMessage,
+        MessageId, UserId,
     };
+    use async_trait::async_trait;
     use chrono::Utc;
 
     // --- HMAC signature tests ---

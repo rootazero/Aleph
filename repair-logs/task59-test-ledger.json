@@ -1,0 +1,56 @@
+{
+  "task": "Task59 collision implementation validation",
+  "disposition": "FAIL",
+  "stopped_at_guard": 1,
+  "guards": [
+    {
+      "number": 1,
+      "label": "task59-fmt",
+      "command": "env ALEPH_TASK9_METADATA_JSON=/tmp/aleph-task41-r4-metadata.json python3 -B .superpowers/sdd/2026-10-14-modularization-p0-implementation/guarded-cargo.py --timeout-s 900 task59-fmt -- fmt --all -- --check",
+      "exit_code": 1,
+      "timed_out": false,
+      "descendants_remaining": 0,
+      "elapsed_s": 8.8,
+      "probe_exit": 0,
+      "available_bytes": 5996544000,
+      "required_bytes": 4294967296,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "failed_suites": 0,
+      "test_counts_applicable": false,
+      "status": "failed",
+      "raw_log": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-10-14-modularization-p0-implementation/repair-logs/20261017-164931-task59-fmt.log",
+      "stdout_capture": "/Volumes/TBU4/Workspace/Aleph/repair-logs/task59-guard-01-fmt.stdout.log",
+      "stderr_capture": "/Volumes/TBU4/Workspace/Aleph/repair-logs/task59-guard-01-fmt.stderr.log",
+      "format_violations": [
+        "src/extension/canonical_handler.rs:38",
+        "src/extension/mod.rs:24",
+        "src/tools/registry.rs:613",
+        "src/tools/scoped/dispatch.rs:300"
+      ]
+    }
+  ],
+  "not_run": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "freeze_pre": {
+    "status": "passed",
+    "sha": "bd356f41bf03bc50c84ac9741572be95cffa02df19ece72742fe903d5af239b2",
+    "head": "fac11b6de66b7051f9aa102428170f4fd6c59cfe",
+    "files": 3907
+  },
+  "freeze_post": {
+    "status": "passed",
+    "sha": "bd356f41bf03bc50c84ac9741572be95cffa02df19ece72742fe903d5af239b2",
+    "head": "fac11b6de66b7051f9aa102428170f4fd6c59cfe",
+    "files": 3907
+  }
+}

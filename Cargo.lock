@@ -379,6 +379,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "aleph-slot-api"
+version = "26.9.1"
+dependencies = [
+ "aleph-protocol",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "hex",
+ "http 1.4.1",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sha2",
+ "syn 2.0.117",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "aleph-tui"
 version = "26.9.1"
 dependencies = [
@@ -422,6 +443,7 @@ dependencies = [
  "aleph-desktop-windows",
  "aleph-logging",
  "aleph-protocol",
+ "aleph-slot-api",
  "anyhow",
  "arc-swap",
  "async-imap",
@@ -492,6 +514,7 @@ dependencies = [
  "percent-encoding",
  "portable-pty",
  "printpdf",
+ "proc-macro2",
  "proptest",
  "pulldown-cmark",
  "rand 0.10.1",
@@ -523,6 +546,7 @@ dependencies = [
  "sqlite-vec",
  "strip-ansi-escapes",
  "subtle",
+ "syn 2.0.117",
  "sysinfo",
  "tar",
  "teloxide",

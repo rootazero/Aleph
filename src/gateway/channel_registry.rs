@@ -30,6 +30,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{error, info, warn};
 
+use super::channel::CoreSmsChannelExt;
 use super::channel::{
     Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory, ChannelHealth,
     ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, HealthStatus,

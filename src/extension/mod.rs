@@ -24,6 +24,7 @@
 //! ```
 
 pub mod activation_gate;
+mod canonical_handler;
 pub mod hooks;
 mod lifecycle;
 mod loader;
@@ -97,7 +98,7 @@ use crate::sync_primitives::Arc;
 use crate::sync_primitives::Mutex as StdMutex;
 use crate::sync_primitives::RwLock as StdRwLock;
 use crate::sync_primitives::{AtomicU64, Ordering};
-use hooks::{HookExecutor, ShellHookConsent};
+use hooks::{HookExecutor, HookInput, HookRegistry, ShellHookConsent};
 use manifest::adapter::AdapterRegistry;
 #[allow(unused_imports)]
 use serde::{Deserialize, Serialize}; // for OwnerTrustPolicyConfig
@@ -177,7 +178,7 @@ pub struct ExtensionManager {
     discovery: Arc<DiscoveryManager>,
 
     /// Hook executor
-    hook_executor: Arc<RwLock<HookExecutor>>,
+    hook_executor: Arc<HookRegistry>,
 
     /// Cache state for lazy-loading
     cache_state: Arc<RwLock<CacheState>>,
@@ -267,6 +268,17 @@ pub struct ExtensionManager {
     /// Same injection shape as `mcp_handle` and `memory_registry`, for the
     /// same reason: the manager is behind an `Arc` before the catalog exists.
     tool_catalog: crate::sync_primitives::RwLock<Option<Arc<crate::tool_metadata::ToolCatalog>>>,
+
+    /// The one canonical tool handler registry (`canonical_tools` in
+    /// `agent_init`), so a future producer can publish plugin callables into
+    /// the same dispatch authority the server dispatches through. `None`
+    /// until [`Self::set_tool_handler_registry`] at server boot; CLI/test
+    /// paths leave it unset. Same injection shape as `mcp_handle`,
+    /// `memory_registry` and `tool_catalog`: the manager is behind an `Arc`
+    /// before the registry exists. This is a resource handle, not a mirror
+    /// of callable rows and not a second registration authority.
+    tool_handler_registry:
+        crate::sync_primitives::RwLock<Option<Arc<crate::tools::ToolHandlerRegistry>>>,
 
     /// File watcher for hot-reloading commands/agents/plugins/hooks.json.
     /// `None` until [`Self::start_watcher`] is called (test/CLI paths skip
@@ -379,9 +391,22 @@ impl ExtensionManager {
 
     /// Create a new extension manager
     pub async fn new(config: ExtensionConfig) -> ExtensionResult<Self> {
+        Self::new_with_ownership_tree(
+            config,
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        )
+        .await
+    }
+
+    /// Construct against the runtime's shared owner authority.
+    pub async fn new_with_ownership_tree(
+        config: ExtensionConfig,
+        tree: Arc<crate::capability::ownership::OwnershipTree>,
+    ) -> ExtensionResult<Self> {
         let discovery = Arc::new(DiscoveryManager::new(config.discovery.clone())?);
-        let hook_executor = Arc::new(RwLock::new(
+        let hook_executor = Arc::new(HookRegistry::new_with_ownership_tree(
             HookExecutor::empty().with_consent(ShellHookConsent::shared()),
+            tree,
         ));
         let cache_state = Arc::new(RwLock::new(CacheState::default()));
         let plugin_loader = Arc::new(RwLock::new(PluginLoader::new()));
@@ -429,6 +454,7 @@ impl ExtensionManager {
             memory_registry: crate::sync_primitives::RwLock::new(None),
             mcp_handle: crate::sync_primitives::RwLock::new(None),
             tool_catalog: crate::sync_primitives::RwLock::new(None),
+            tool_handler_registry: crate::sync_primitives::RwLock::new(None),
             watcher: StdMutex::new(None),
             internal_writes: Arc::new(InternalWriteTracker::default()),
             reload_count: AtomicU64::new(0),
@@ -445,6 +471,13 @@ impl ExtensionManager {
     /// Create with default configuration
     pub async fn with_defaults() -> ExtensionResult<Self> {
         Self::new(ExtensionConfig::default()).await
+    }
+
+    /// Default configuration with the supplied runtime owner authority.
+    pub async fn with_defaults_with_ownership_tree(
+        tree: Arc<crate::capability::ownership::OwnershipTree>,
+    ) -> ExtensionResult<Self> {
+        Self::new_with_ownership_tree(ExtensionConfig::default(), tree).await
     }
 
     /// Inject the memory extension registry after construction (Spec 4 Task 11).
@@ -501,6 +534,96 @@ impl ExtensionManager {
     /// registered by its own mount rather than by a boot-time catch-up.
     pub fn set_tool_catalog(&self, catalog: Arc<crate::tool_metadata::ToolCatalog>) {
         *self.tool_catalog.write().unwrap_or_else(|e| e.into_inner()) = Some(catalog);
+    }
+
+    /// Attach the canonical tool handler registry (`canonical_tools` in
+    /// `agent_init`) after construction. Call once at server boot BEFORE the
+    /// first `load_all` (see `agent_init::boot_order_tests`).
+    ///
+    /// Unlike the other resource setters this one is `async` and refuses a
+    /// late first attachment: a future producer reads this handle under the
+    /// lifecycle `load_guard` to publish plugin callables, so attaching it
+    /// after the manager already did meaningful work — a finished discovery
+    /// (`cache_state.loaded`), any plugin registry row, a mounted scope, or
+    /// a loaded plugin runtime — would leave that work with no producer and
+    /// no catch-up here to repair it. The existing `load_guard` is held for
+    /// the whole decision + publication, so the check and the store are one
+    /// atomic step against every lifecycle transition.
+    ///
+    /// Identity is the actual `Arc` allocation, not names/counts/revisions:
+    /// re-attaching the SAME registry is `Ok` even after discovery; attaching
+    /// a DIFFERENT one is refused without replacement — the canonical
+    /// authority cannot be switched on a live manager. On every refusal the
+    /// stored resource is left untouched. No callables are seeded, replayed
+    /// or backfilled here.
+    pub async fn set_tool_handler_registry(
+        &self,
+        registry: Arc<crate::tools::ToolHandlerRegistry>,
+    ) -> ExtensionResult<()> {
+        let _guard = self.load_guard.lock().await;
+
+        // Read + clone under the short std guard, dropped before any await.
+        let existing = self
+            .tool_handler_registry
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(existing) = existing {
+            if Arc::ptr_eq(&existing, &registry) {
+                return Ok(());
+            }
+            return Err(ExtensionError::Runtime(
+                "tool handler registry already attached; the canonical \
+                 authority cannot be replaced with a different Arc on a \
+                 live manager"
+                    .to_string(),
+            ));
+        }
+
+        // First attachment: refuse once the manager has already done
+        // meaningful work without the resource. Each authority is read under
+        // its own lock; no std guard is held across an await. A failed scan
+        // that left no rows, no scopes, no loaded runtime and the cache
+        // still false stays attachable — there is no past-attempt flag.
+        if self.cache_state.read().await.loaded {
+            return Err(ExtensionError::Runtime(
+                "tool handler registry must be attached before the first \
+                 extension load; discovery has already completed"
+                    .to_string(),
+            ));
+        }
+        if !self.plugin_registry.read().await.list_plugins().is_empty() {
+            return Err(ExtensionError::Runtime(
+                "tool handler registry must be attached before the first \
+                 extension load; plugin registry rows already exist"
+                    .to_string(),
+            ));
+        }
+        if !self
+            .scopes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
+        {
+            return Err(ExtensionError::Runtime(
+                "tool handler registry must be attached before the first \
+                 extension load; a plugin scope is already mounted"
+                    .to_string(),
+            ));
+        }
+        if self.plugin_loader.read().await.loaded_count() != 0 {
+            return Err(ExtensionError::Runtime(
+                "tool handler registry must be attached before the first \
+                 extension load; a plugin runtime is already loaded"
+                    .to_string(),
+            ));
+        }
+
+        *self
+            .tool_handler_registry
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(registry);
+        Ok(())
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -816,7 +939,7 @@ impl projection::Views {
     /// files) fresh from disk. Pure derivation — does not touch
     /// `hook_executor`. The one source both hook-install paths read from
     /// (判据 §12); see `Views::after_transition` for how they differ.
-    fn user_hook_configs() -> Vec<HookConfig> {
+    fn user_hook_configs() -> Vec<HookInput> {
         let cwd = std::env::current_dir().ok();
         // App mode: the daemon CWD is meaningless, so also load hooks from
         // every registered project folder. The executor gates each project
@@ -832,67 +955,41 @@ impl projection::Views {
                     .collect()
             })
             .unwrap_or_default();
-        crate::extension::hooks::load_user_hooks(cwd.as_deref(), &project_roots)
+        crate::extension::hooks::load_registered_user_hooks(cwd.as_deref(), &project_roots)
     }
 
-    /// Layer user-level hook configs on top of whatever `hook_executor`
-    /// currently holds, under ONE write lock. Called ALONE by the hot-reload
-    /// watcher on every `hooks.json` change (no `load_guard`, no registry
-    /// involvement), so it must stay atomic on its own: this is an
-    /// incremental swap, not a rebuild — every prior entry tagged with the
-    /// `user:` plugin prefix is dropped, then the freshly-parsed set is
-    /// appended, both under the same guard. Idempotent, so repeat calls never
-    /// leak duplicate registrations.
-    ///
-    /// Not called by `after_transition` — see `Views::after_transition` for
-    /// how that path installs the user layer instead.
+    /// Replace only the trusted user layer, preserving the latest plugin layer.
+    /// Parsing happens off-lock; the registry composes the latest facts under
+    /// its publication gate. Repeated sync never accumulates prior entries.
     pub(crate) async fn sync_user_hooks(&self) {
         let user_hooks = Self::user_hook_configs();
-        let mut executor = self.hook_executor.write().await;
-        let removed = executor.remove_by_plugin_prefix("user:");
-        if user_hooks.is_empty() {
-            if removed > 0 {
-                tracing::info!(removed, "Cleared user-level hook configs");
-            }
-            return;
-        }
         let count = user_hooks.len();
-        for h in user_hooks {
-            executor.add_hook(h);
+        match self.hook_executor.replace_users(user_hooks).await {
+            Ok(()) => tracing::info!(count, "Published user-level hook configs"),
+            Err(error) => tracing::warn!(%error, "User hook publication refused"),
         }
-        tracing::info!(count, removed, "Loaded user-level hook configs");
     }
 
-    /// Derive `HookConfig`s from `PluginRegistry`'s hook registrations and
-    /// add them to the CALLER-OWNED `executor`.
-    ///
-    /// Reads `HookRegistration` entries from the registry and converts them
-    /// to `HookConfig` entries that `HookExecutor` understands. Each hook is
-    /// stamped with the OWNING ROW's `scope_key`: a hook shipped by a
-    /// project-local plugin is visible only inside that project, exactly
-    /// like the plugin itself.
-    ///
-    /// Takes `executor` by `&mut` instead of writing `self.hook_executor`
-    /// directly, so its caller can build a next executor off-lock; see
-    /// `Views::after_transition`.
-    async fn sync_hooks_from_registry(&self, executor: &mut HookExecutor) {
-        let hook_regs: Vec<(HookRegistration, visibility::ScopeKey)> = {
-            let registry = self.plugin_registry.read().await;
-            registry
-                .list_hooks()
-                .into_iter()
-                .filter_map(|hook| {
-                    registry
-                        .get_plugin(&hook.plugin_id)
-                        .filter(|plugin| plugin.status.is_active())
-                        .map(|plugin| (hook.clone(), plugin.scope_key.clone()))
-                })
-                .collect()
-        };
-
-        for (hr, scope_key) in hook_regs {
-            executor.add_hook(hook_config_from_registration(hr, scope_key));
-        }
+    /// Capture declarations and trusted identity from the active owning row
+    /// under the same registry read. Keep the conversion's action, spelling
+    /// and timeout semantics; labels never decide priority authority.
+    async fn sync_hooks_from_registry(&self) -> Vec<HookInput> {
+        let registry = self.plugin_registry.read().await;
+        registry
+            .list_hooks()
+            .into_iter()
+            .filter_map(|hook| {
+                registry
+                    .get_plugin(&hook.plugin_id)
+                    .filter(|plugin| plugin.status.is_active())
+                    .map(|plugin| {
+                        HookInput::plugin(
+                            hook_config_from_registration(hook.clone(), plugin.scope_key.clone()),
+                            plugin,
+                        )
+                    })
+            })
+            .collect()
     }
 
     fn build_active_plugin_tool_index(
@@ -931,7 +1028,7 @@ impl projection::Views {
         (active_tools, scope_keys)
     }
 
-    async fn refresh_active_plugin_tools(&self) {
+    pub(crate) async fn refresh_active_plugin_tools(&self) {
         let (active_tools, scope_keys) = {
             let registry = self.plugin_registry.read().await;
             Self::build_active_plugin_tool_index(&registry)
@@ -2157,5 +2254,293 @@ mod tests {
         manager.mount("p2-off").await.unwrap();
         assert!(indexed(&manager).await, "re-enabled: indexed again");
         assert!(searchable(), "re-enabled: searchable again");
+    }
+
+    // ── C2-R: canonical tool handler registry attachment ─────────────────────
+
+    /// Read the stored registry handle for pointer assertions. Identity is
+    /// the actual `Arc` allocation, so tests compare pointers, never names.
+    fn stored_tool_handler_registry(
+        manager: &ExtensionManager,
+    ) -> Option<Arc<crate::tools::ToolHandlerRegistry>> {
+        manager
+            .tool_handler_registry
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    fn fresh_tool_handler_registry() -> Arc<crate::tools::ToolHandlerRegistry> {
+        Arc::new(crate::tools::ToolHandlerRegistry::new())
+    }
+
+    /// A fresh manager accepts the attachment and stores the exact supplied
+    /// allocation — not a clone of its contents, not a fresh registry.
+    #[tokio::test]
+    async fn tool_handler_registry_fresh_attachment_stores_the_exact_arc() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _cfg) = isolated_manager(tmp.path()).await;
+        assert!(stored_tool_handler_registry(&manager).is_none());
+
+        let registry = fresh_tool_handler_registry();
+        manager
+            .set_tool_handler_registry(Arc::clone(&registry))
+            .await
+            .unwrap();
+        let stored = stored_tool_handler_registry(&manager).expect("attached");
+        assert!(
+            Arc::ptr_eq(&stored, &registry),
+            "the stored handle must be the supplied allocation"
+        );
+    }
+
+    /// Re-attaching the SAME allocation is idempotent — `Ok` even after a
+    /// real (empty) discovery completed, because nothing about the stored
+    /// authority changes.
+    #[tokio::test]
+    async fn tool_handler_registry_same_arc_reattachment_is_ok_after_empty_discovery() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _cfg) = isolated_manager(tmp.path()).await;
+        let registry = fresh_tool_handler_registry();
+        manager
+            .set_tool_handler_registry(Arc::clone(&registry))
+            .await
+            .unwrap();
+
+        // A real empty-directory discovery: the cache is now loaded.
+        manager.ensure_loaded().await.unwrap();
+        assert!(manager.is_loaded().await);
+
+        manager
+            .set_tool_handler_registry(Arc::clone(&registry))
+            .await
+            .unwrap();
+        let stored = stored_tool_handler_registry(&manager).expect("still attached");
+        assert!(Arc::ptr_eq(&stored, &registry));
+    }
+
+    /// A DIFFERENT allocation is refused without replacement — the canonical
+    /// authority cannot be switched on a live manager — and the original
+    /// pointer survives the refusal.
+    #[tokio::test]
+    async fn tool_handler_registry_different_arc_is_refused_and_the_original_is_kept() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _cfg) = isolated_manager(tmp.path()).await;
+        let first = fresh_tool_handler_registry();
+        manager
+            .set_tool_handler_registry(Arc::clone(&first))
+            .await
+            .unwrap();
+
+        let second = fresh_tool_handler_registry();
+        let err = manager
+            .set_tool_handler_registry(Arc::clone(&second))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ExtensionError::Runtime(_)), "got: {err:?}");
+        let stored = stored_tool_handler_registry(&manager).expect("original kept");
+        assert!(
+            Arc::ptr_eq(&stored, &first),
+            "a refused replacement must not overwrite the original"
+        );
+        assert!(!Arc::ptr_eq(&stored, &second));
+    }
+
+    /// A first attachment after a real empty-directory discovery is refused:
+    /// zero plugins does not mean the manager has not started — the loaded
+    /// cache flag is the evidence the first load already ran without the
+    /// resource.
+    #[tokio::test]
+    async fn tool_handler_registry_first_attachment_after_empty_discovery_is_refused() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _cfg) = isolated_manager(tmp.path()).await;
+
+        manager.ensure_loaded().await.unwrap();
+        assert!(manager.is_loaded().await);
+        assert!(manager
+            .get_plugin_registry()
+            .await
+            .list_plugins()
+            .is_empty());
+
+        let err = manager
+            .set_tool_handler_registry(fresh_tool_handler_registry())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ExtensionError::Runtime(_)), "got: {err:?}");
+        assert!(
+            stored_tool_handler_registry(&manager).is_none(),
+            "a refused attachment must leave the resource unset"
+        );
+    }
+
+    /// An attachment queued behind a lifecycle transition must see the state
+    /// that transition created: the setter is polled to `Pending` while the
+    /// `load_guard` is held, a real registry row lands through the existing
+    /// registry authority while still holding the guard, and once the guard
+    /// is released the queued setter must refuse — not slip its publication
+    /// in ahead of the check.
+    #[tokio::test]
+    async fn tool_handler_registry_queued_attachment_is_refused_by_a_transition_while_queued() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _cfg) = isolated_manager(tmp.path()).await;
+
+        let guard = manager.load_guard.lock().await;
+        let mut setter = Box::pin(manager.set_tool_handler_registry(fresh_tool_handler_registry()));
+        assert!(
+            matches!(
+                setter
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop())),
+                Poll::Pending
+            ),
+            "the setter must queue on the held load_guard, not skip past it"
+        );
+
+        // The meaningful state arrives while the attachment is still queued.
+        {
+            let mut registry = manager.get_plugin_registry_mut().await;
+            registry.register_plugin(PluginRecord::new(
+                "queued-row".into(),
+                "Queued Row".into(),
+                PluginKind::Wasm,
+                PluginOrigin::Workspace,
+            ));
+        }
+        drop(guard);
+
+        let err = setter.await.unwrap_err();
+        assert!(matches!(err, ExtensionError::Runtime(_)), "got: {err:?}");
+        assert!(stored_tool_handler_registry(&manager).is_none());
+    }
+
+    /// A first attachment is refused when the registry already holds a
+    /// non-active row — Disabled or Error — even though the cache flag is
+    /// still false: the row is proof a load already confronted real plugins
+    /// without the resource. The resource stays unset on every refusal.
+    #[tokio::test]
+    async fn tool_handler_registry_first_attachment_with_an_existing_row_is_refused() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        for status in [
+            PluginStatus::Disabled,
+            PluginStatus::Error("boom".to_string()),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let (manager, _cfg) = isolated_manager(tmp.path()).await;
+            {
+                let mut registry = manager.get_plugin_registry_mut().await;
+                let mut record = PluginRecord::new(
+                    "existing-row".into(),
+                    "Existing Row".into(),
+                    PluginKind::Wasm,
+                    PluginOrigin::Workspace,
+                );
+                record.status = status.clone();
+                registry.register_plugin(record);
+            }
+            assert!(
+                !manager.is_loaded().await,
+                "{status:?}: the cache flag stays false — only a row exists"
+            );
+
+            let err = manager
+                .set_tool_handler_registry(fresh_tool_handler_registry())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, ExtensionError::Runtime(_)),
+                "{status:?}: got: {err:?}"
+            );
+            assert!(
+                stored_tool_handler_registry(&manager).is_none(),
+                "{status:?}"
+            );
+        }
+    }
+
+    /// A mounted scope is the same proof as a row: a real (empty)
+    /// `EffectScope` in the actual mounted-scope map — the same write
+    /// `lifecycle.rs` performs when a mount completes — refuses a first
+    /// attachment even with the cache flag false.
+    #[tokio::test]
+    async fn tool_handler_registry_first_attachment_with_a_mounted_scope_is_refused() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _cfg) = isolated_manager(tmp.path()).await;
+        manager
+            .scopes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                "mounted".to_string(),
+                effects::EffectScope::new("mounted".to_string()),
+            );
+        assert!(!manager.is_loaded().await);
+
+        let err = manager
+            .set_tool_handler_registry(fresh_tool_handler_registry())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ExtensionError::Runtime(_)), "got: {err:?}");
+        assert!(stored_tool_handler_registry(&manager).is_none());
+    }
+
+    /// A real mounted WASM module is sufficient evidence even when no
+    /// discovery cache, registry row or scope has been published yet.
+    #[tokio::test]
+    async fn tool_handler_registry_first_attachment_with_a_loaded_runtime_is_refused() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _cfg) = isolated_manager(tmp.path()).await;
+        let guest = tempfile::tempdir().unwrap();
+        std::fs::write(guest.path().join("plugin.wasm"), loader::EMPTY_WASM_MODULE).unwrap();
+        let mut manifest = manifest::PluginManifest::new(
+            "c2r-loaded".to_string(),
+            "C2R loaded runtime".to_string(),
+            PluginKind::Wasm,
+            PathBuf::from("plugin.wasm"),
+        );
+        manifest.root_dir = guest.path().to_path_buf();
+        manager
+            .plugin_loader
+            .write()
+            .await
+            .load_plugin(&manifest)
+            .expect("the real empty WASM module links");
+        assert!(!manager.is_loaded().await);
+        assert!(manager
+            .get_plugin_registry()
+            .await
+            .list_plugins()
+            .is_empty());
+        assert!(manager.scopes.lock().unwrap().is_empty());
+        assert_eq!(manager.plugin_loader.read().await.loaded_count(), 1);
+
+        let err = manager
+            .set_tool_handler_registry(fresh_tool_handler_registry())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ExtensionError::Runtime(_)), "got: {err:?}");
+        assert!(stored_tool_handler_registry(&manager).is_none());
+        {
+            let loader = manager.plugin_loader.read().await;
+            assert_eq!(loader.loaded_count(), 1);
+            assert!(loader.is_loaded("c2r-loaded"));
+        }
+        manager
+            .plugin_loader
+            .write()
+            .await
+            .unload_plugin("c2r-loaded")
+            .unwrap();
+        assert_eq!(manager.plugin_loader.read().await.loaded_count(), 0);
     }
 }

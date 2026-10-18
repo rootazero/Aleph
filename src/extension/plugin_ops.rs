@@ -24,6 +24,7 @@ impl ExtensionManager {
         self.ensure_runtime_mounted(plugin_id).await?;
 
         let loader = self.plugin_loader.clone().write_owned().await;
+        self.ensure_plugin_active(plugin_id).await?;
         let plugin_id = plugin_id.to_string();
         let handler = handler.to_string();
         tokio::task::spawn_blocking(move || loader.call_tool(&plugin_id, &handler, args))
@@ -70,6 +71,7 @@ impl ExtensionManager {
         self.ensure_runtime_mounted(plugin_id).await?;
 
         let loader = self.plugin_loader.clone().read_owned().await;
+        self.ensure_plugin_active(plugin_id).await?;
         let plugin_id = plugin_id.to_string();
         let handler = handler.to_string();
         tokio::task::spawn_blocking(move || loader.execute_hook(&plugin_id, &handler, event_data))

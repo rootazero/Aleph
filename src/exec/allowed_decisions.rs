@@ -40,26 +40,7 @@
 
 use super::socket::ApprovalDecisionType;
 
-/// The legacy three-decision set (`Once` / `Always` / `Deny`).
-///
-/// Sole purpose: the serde default for
-/// [`crate::exec::approval::types::CommandApprovalRequest::allowed_decisions`],
-/// so payloads serialized before that field existed deserialize to the
-/// historical (unconstrained) behavior. Byte-stable on purpose — it backfills
-/// *old* payloads, so it must NOT gain the newer `AllowSession` tier. Live
-/// requests build their own set at the render site.
-///
-/// It is **not** the serde default for a pending record's set
-/// ([`session_max`] is): a missing field must never widen what a decision may
-/// become, and this one contains `AllowAlways`.
-#[must_use]
-pub fn full_set() -> Vec<ApprovalDecisionType> {
-    vec![
-        ApprovalDecisionType::AllowOnce,
-        ApprovalDecisionType::AllowAlways,
-        ApprovalDecisionType::Deny,
-    ]
-}
+pub use aleph_slot_api::approval::full_set;
 
 /// Allow-once and deny — for approvals that cannot carry a standing grant at
 /// all (a cluster node's reverse-RPC approval, a route escalation).
@@ -130,19 +111,6 @@ pub const GATE_REMOVAL_RULE: &str = "gate_removal";
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn full_set_stays_three_for_serde_backfill() {
-        // `full_set` is the on-the-wire backfill default for pre-`allowed_decisions`
-        // payloads and must remain the historical three tiers — adding the newer
-        // `AllowSession` here would silently rewrite old payloads.
-        let set = full_set();
-        assert_eq!(set.len(), 3);
-        assert!(set.contains(&ApprovalDecisionType::AllowOnce));
-        assert!(set.contains(&ApprovalDecisionType::AllowAlways));
-        assert!(set.contains(&ApprovalDecisionType::Deny));
-        assert!(!set.contains(&ApprovalDecisionType::AllowSession));
-    }
 
     /// The two conditions, each on its own: this is the production narrowing
     /// scenario `allowed_decisions` exists for.

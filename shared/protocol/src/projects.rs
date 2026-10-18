@@ -348,7 +348,10 @@ mod tests {
             last_used_at: 3,
             manageable: true,
         };
-        let v = serde_json::to_value(ProjectResult { project: row.clone() }).unwrap();
+        let v = serde_json::to_value(ProjectResult {
+            project: row.clone(),
+        })
+        .unwrap();
         let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(keys, vec!["project"]);
         assert_eq!(v["project"]["manageable"], serde_json::json!(true));

@@ -55,8 +55,10 @@ mod executor;
 mod json_output;
 mod matcher;
 mod output_budget;
-#[cfg(test)]
-mod producer_census;
+#[cfg(any(test, feature = "test-helpers"))]
+#[doc(hidden)]
+pub mod producer_census;
+mod registry;
 mod session_facts;
 mod user_settings;
 
@@ -71,9 +73,10 @@ pub use executor::{
 };
 pub(crate) use matcher::{matcher_notice, warn_on_matcher};
 pub use output_budget::{budget_hook_contexts, join_messages};
+pub(crate) use registry::{HookInput, HookRegistry};
 pub use session_facts::{current_transcript_source, with_transcript_source, TranscriptSource};
 pub use user_settings::load_user_hooks;
-pub(crate) use user_settings::{default_kind_for_event, parse_event};
+pub(crate) use user_settings::{default_kind_for_event, load_registered_user_hooks, parse_event};
 
 use crate::extension::types::HookKind;
 use std::collections::HashMap;
@@ -257,6 +260,16 @@ pub struct HookInventoryEntry {
     /// (`command` / `http`): `approved`, `pending`, or `None` when the hook
     /// has no gated action or no consent gate is attached.
     pub consent: Option<String>,
+    /// Stable logical content identity; legacy executors have no trusted metadata.
+    pub hook_id: Option<String>,
+    /// Serialized Core-only trusted producer origin.
+    pub source_identity: Option<serde_json::Value>,
+    pub requested_priority: Option<String>,
+    /// No effective priority exists for a rejected declaration.
+    pub effective_priority: Option<String>,
+    /// `accepted`, `downgraded`, or `rejected`.
+    pub admission: Option<String>,
+    pub admission_reason: Option<String>,
 }
 
 /// Result of a single hook action

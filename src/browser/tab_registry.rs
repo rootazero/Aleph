@@ -320,20 +320,8 @@ impl TabRegistry {
     }
 }
 
-/// One parsed line of a backend `list_tabs` listing.
-///
-/// `selected` carries the driver's own answer to "which tab is active" — the
-/// `" [selected]"` annotation both drivers append. It used to be parsed and
-/// thrown away, which forced every caller to guess "active = last-listed"; a
-/// `switch_tab` falsifies that guess, and the guess is what the post-navigation
-/// audit and the read-time SSRF re-check run on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TabLine {
-    pub id: String,
-    pub url: String,
-    /// The listing marked this line as the driver's currently selected tab.
-    pub selected: bool,
-}
+/// Canonical tab row; listing parsing and identity tracking remain in Core.
+pub use aleph_slot_api::browser::types::TabLine;
 
 /// Split a playwright-cli markdown tab rendering `"[title](url)"` into its
 /// URL. Returns `None` for anything that is not that shape, which is how the

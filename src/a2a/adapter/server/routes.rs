@@ -321,20 +321,24 @@ fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
 
 // --- Helpers ---
 
-/// Extract credentials from HTTP headers
+/// Extract credentials from HTTP headers.
+///
+/// RFC 7235: the auth-scheme is case-insensitive. We match "Bearer" with
+/// `eq_ignore_ascii_case` and require exactly one ASCII space as the
+/// scheme/token delimiter (a tab, NUL, NBSP, leading whitespace, or any
+/// other separator is a hard miss). The token portion is preserved
+/// byte-for-byte — empty remainder and additional leading spaces inside
+/// the token are NOT trimmed/lowercased, since this is a parser, not a
+/// normalizer; callers that need a cleaned token do so downstream. A
+/// successful parse is never a grant of permission; auth verification
+/// happens elsewhere. `x-api-key` is consulted only when no scheme matched,
+/// so the existing Bearer precedence over `x-api-key` is preserved.
 fn extract_credentials(headers: &HeaderMap) -> Credentials {
     if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        // RFC 7235: the auth-scheme is case-insensitive; the space after it is
-        // not, but `strip_prefix` accepts both and the per-character cost is
-        // negligible. Strip the lowercased form to match a token whose header
-        // was written by a peer that spelled the scheme "Bearer " (the typical
-        // client). The "bearer " / "BEARER " / etc. forms collapse to the same
-        // answer here.
-        if let Some(rest) = auth
-            .strip_prefix("Bearer ")
-            .or_else(|| auth.strip_prefix("bearer "))
-        {
-            return Credentials::BearerToken(rest.to_string());
+        if let Some((scheme, token)) = auth.split_once(' ') {
+            if scheme.eq_ignore_ascii_case("Bearer") {
+                return Credentials::BearerToken(token.to_string());
+            }
         }
     }
     if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
@@ -444,6 +448,108 @@ mod tests {
         match extract_credentials(&headers) {
             Credentials::BearerToken(t) => assert_eq!(t, "token1"),
             other => panic!("Expected BearerToken, got {:?}", other),
+        }
+    }
+
+    /// Bounded table: each row pins one observable. The scheme check is
+    /// ASCII-case-insensitive; the token portion is preserved byte-for-byte
+    /// (no trim, no lower); near-misses that the previous lowercased-prefix
+    /// logic silently mis-handled are now explicit no-ops.
+    #[test]
+    fn extract_credentials_bearer_table() {
+        // (header value, expected Credentials variant, expected inner string)
+        let bearer_rows: &[(&str, &str)] = &[
+            ("Bearer abc123", "abc123"),
+            ("bearer xyz789", "xyz789"),
+            ("BEARER upper123", "upper123"),
+            ("bEaReR MiXeD-99", "MiXeD-99"),
+        ];
+        for (header, expected_token) in bearer_rows {
+            let mut headers = HeaderMap::new();
+            headers.insert("authorization", HeaderValue::from_static(header));
+            match extract_credentials(&headers) {
+                Credentials::BearerToken(t) => assert_eq!(t, *expected_token, "row {header:?}"),
+                other => panic!("row {header:?}: expected BearerToken, got {other:?}"),
+            }
+        }
+
+        // Empty remainder is preserved as-is: "Bearer " (trailing space, no
+        // token) splits into ("Bearer", ""), and the parser does not trim.
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearer "));
+        match extract_credentials(&headers) {
+            Credentials::BearerToken(t) => assert_eq!(t, "", "empty remainder preserved"),
+            other => panic!("expected empty BearerToken, got {other:?}"),
+        }
+
+        // Extra internal spaces inside the token are preserved verbatim.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer  two-leading-spaces"),
+        );
+        match extract_credentials(&headers) {
+            Credentials::BearerToken(t) => assert_eq!(t, " two-leading-spaces"),
+            other => panic!("expected inner space preserved, got {other:?}"),
+        }
+
+        // Near-miss: no space between scheme and token. `split_once(' ')`
+        // yields None, so the header is NOT a Bearer credential — it falls
+        // through to `Credentials::None` (no x-api-key present).
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearertoken"));
+        assert!(
+            matches!(extract_credentials(&headers), Credentials::None),
+            "no space → no match (the old `strip_prefix` would also have missed this)"
+        );
+
+        // Near-miss: wrong scheme name. "Bear" is a prefix of "Bearer" but
+        // not the scheme, so it must not match.
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bear token"));
+        assert!(
+            matches!(extract_credentials(&headers), Credentials::None),
+            "wrong scheme name → no match"
+        );
+
+        // Near-miss: leading whitespace before the scheme. RFC 7235 forbids
+        // it, and the single-space delimiter rule refuses to skip it.
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static(" Bearer xyz"));
+        assert!(
+            matches!(extract_credentials(&headers), Credentials::None),
+            "leading space → no match"
+        );
+
+        // Near-miss: tab separator. The new logic keys on exactly one ASCII
+        // space; a tab is a different byte and the header is rejected.
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearer\tx"));
+        assert!(
+            matches!(extract_credentials(&headers), Credentials::None),
+            "tab separator → no match"
+        );
+
+        // Fallback: only x-api-key is set, no authorization. The Bearer arm
+        // does not fire; x-api-key is consulted and returned.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", HeaderValue::from_static("k-only"));
+        match extract_credentials(&headers) {
+            Credentials::ApiKey(k) => assert_eq!(k, "k-only"),
+            other => panic!("expected ApiKey fallback, got {other:?}"),
+        }
+
+        // Precedence: a non-Bearer authorization header must NOT silence
+        // x-api-key. The previous lowercased-prefix logic accidentally did
+        // this for any header that did not start with "Bearer "/"bearer ".
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Negotiate blah"));
+        headers.insert("x-api-key", HeaderValue::from_static("fallback-key"));
+        match extract_credentials(&headers) {
+            Credentials::ApiKey(k) => assert_eq!(k, "fallback-key"),
+            other => {
+                panic!("non-Bearer authorization must fall through to x-api-key, got {other:?}")
+            }
         }
     }
 

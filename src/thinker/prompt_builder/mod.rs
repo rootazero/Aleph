@@ -16,18 +16,7 @@ use super::prompt_budget::TokenBudget;
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability};
 use super::prompt_pipeline::{LayerSize, PromptPipeline};
 
-/// System prompt part with optional cache flag
-///
-/// When using Anthropic's prompt caching, static content can be cached
-/// for improved performance. This struct allows splitting the system
-/// prompt into cacheable and non-cacheable parts.
-#[derive(Debug, Clone)]
-pub struct SystemPromptPart {
-    /// The content of this part
-    pub content: String,
-    /// Whether this part should be cached (for Anthropic)
-    pub cache: bool,
-}
+pub use aleph_slot_api::ai::SystemPromptPart;
 
 /// What one assembled prompt was made of, measured while it was assembled.
 ///

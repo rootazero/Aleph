@@ -212,6 +212,52 @@ impl SmsChannel {
         }
     }
 
+    pub(crate) async fn private_sms_lease(
+        &self,
+        ctx: &crate::gateway::telecom::TelecomPublicContext,
+        recipient: &str,
+    ) -> Option<PrivateSmsLease> {
+        use crate::gateway::telecom::public_context::{CallerDigest, TelecomChannel};
+        let peer = normalize_e164(recipient).ok()?;
+        let p = ctx.provenance();
+        if self.channel_state.status() != ChannelStatus::Connected
+            || self.config.validate().is_err()
+            || p.channel() != TelecomChannel::Sms
+            || p.region() != self.config.region
+            || p.binding_ref() != self.config.binding_ref
+            || *p.caller_digest() != CallerDigest::from_normalized_e164(&peer)
+        {
+            return None;
+        }
+        self.transport.as_ref()?.private_sms_lease(ctx, &peer).await
+    }
+
+    pub(crate) async fn send_private_sms(
+        &self,
+        message: OutboundMessage,
+        lease: &PrivateSmsLease,
+        cancel: &tokio_util::sync::CancellationToken,
+        validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
+    ) -> ChannelResult<crate::gateway::telecom::public_run::ApprovedReplyOutcome> {
+        use crate::gateway::telecom::public_run::ApprovedReplyOutcome;
+        if cancel.is_cancelled() {
+            return Ok(ApprovedReplyOutcome::Cancelled);
+        }
+        let Some(transport) = &self.transport else {
+            return Ok(ApprovedReplyOutcome::Invalid);
+        };
+        if self.channel_state.status() != ChannelStatus::Connected
+            || !lease.matches_channel(&self.config, message.conversation_id.as_str())
+        {
+            return Ok(ApprovedReplyOutcome::Invalid);
+        }
+        let operation = build_pending_operation(&self.config, &message, Utc::now())?;
+        // The common transport submit state machine owns the LAST async fence.
+        transport
+            .submit_private_sms(&operation, lease, cancel, validate)
+            .await
+    }
+
     async fn fail_start(&self, reason: &str) -> ChannelError {
         self.channel_state.set_status(ChannelStatus::Error).await;
         self.channel_state
@@ -223,6 +269,10 @@ impl SmsChannel {
 
 #[async_trait]
 impl Channel for SmsChannel {
+    fn as_any(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(self)
+    }
+
     fn info(&self) -> &ChannelInfo {
         &self.info
     }
@@ -270,52 +320,6 @@ impl Channel for SmsChannel {
             .set_status(ChannelStatus::Disconnected)
             .await;
         Ok(())
-    }
-
-    async fn private_sms_lease(
-        &self,
-        ctx: &crate::gateway::telecom::TelecomPublicContext,
-        recipient: &str,
-    ) -> Option<PrivateSmsLease> {
-        use crate::gateway::telecom::public_context::{CallerDigest, TelecomChannel};
-        let peer = normalize_e164(recipient).ok()?;
-        let p = ctx.provenance();
-        if self.channel_state.status() != ChannelStatus::Connected
-            || self.config.validate().is_err()
-            || p.channel() != TelecomChannel::Sms
-            || p.region() != self.config.region
-            || p.binding_ref() != self.config.binding_ref
-            || *p.caller_digest() != CallerDigest::from_normalized_e164(&peer)
-        {
-            return None;
-        }
-        self.transport.as_ref()?.private_sms_lease(ctx, &peer).await
-    }
-
-    async fn send_private_sms(
-        &self,
-        message: OutboundMessage,
-        lease: &PrivateSmsLease,
-        cancel: &tokio_util::sync::CancellationToken,
-        validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
-    ) -> ChannelResult<crate::gateway::telecom::public_run::ApprovedReplyOutcome> {
-        use crate::gateway::telecom::public_run::ApprovedReplyOutcome;
-        if cancel.is_cancelled() {
-            return Ok(ApprovedReplyOutcome::Cancelled);
-        }
-        let Some(transport) = &self.transport else {
-            return Ok(ApprovedReplyOutcome::Invalid);
-        };
-        if self.channel_state.status() != ChannelStatus::Connected
-            || !lease.matches_channel(&self.config, message.conversation_id.as_str())
-        {
-            return Ok(ApprovedReplyOutcome::Invalid);
-        }
-        let operation = build_pending_operation(&self.config, &message, Utc::now())?;
-        // The common transport submit state machine owns the LAST async fence.
-        transport
-            .submit_private_sms(&operation, lease, cancel, validate)
-            .await
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
@@ -391,7 +395,8 @@ pub(crate) async fn test_private_channel(
     };
     let mut channel = SmsChannel::new("sms-test", config).with_transport(transport.clone());
     channel.start().await.unwrap();
-    let lease = channel
+    use crate::gateway::channel::CoreSmsChannelExt;
+    let lease = (&channel as &dyn Channel)
         .private_sms_lease(&transport::test_private_context(binding), "+15550000001")
         .await
         .unwrap();

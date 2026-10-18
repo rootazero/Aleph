@@ -17,7 +17,6 @@
 //!   The stream is broken and no further deltas should be expected.
 
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, StopReason, TokenUsage};
-use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -27,89 +26,9 @@ use tracing::warn;
 // ProviderDelta
 // =============================================================================
 
-/// A single streaming event emitted by a provider.
-///
-/// Consumers accumulate these events (via [`DeltaCollector`]) or react to them
-/// (via [`DeltaSink`]) to drive streaming UX.
-#[derive(Debug, Clone)]
-pub enum ProviderDelta {
-    /// Incremental text content from the model
-    TextDelta(String),
-    /// Incremental extended-thinking content
-    ThinkingDelta(String),
-    /// Incremental signature for the current thinking block.
-    ///
-    /// Anthropic streams a signed thinking block as multiple `thinking_delta`
-    /// events followed by one or more `signature_delta` events. The collector
-    /// concatenates the signature fragments and stores the result on
-    /// [`ProviderResponse::thinking_signature`].
-    ThinkingSignatureDelta(String),
-    /// A tool call began — provides the id and name.
-    ///
-    /// `signature` carries Gemini 3's `thoughtSignature`: an opaque token the
-    /// model attaches to a `functionCall` part that must be replayed verbatim
-    /// on later turns to keep the model's reasoning chain intact. It is `None`
-    /// for providers that do not sign tool calls (Anthropic, `OpenAI`, older
-    /// Gemini). Gemini delivers a whole `functionCall` in one SSE chunk, so the
-    /// signature is always known at start.
-    ToolCallStart {
-        id: String,
-        name: String,
-        signature: Option<String>,
-    },
-    /// Additional argument JSON fragment for a tool call
-    ToolCallArgDelta { id: String, delta: String },
-    /// Authoritative, complete argument JSON for a tool call.
-    ///
-    /// Some providers (`OpenAI` Responses API) re-send the fully assembled
-    /// arguments in a terminal event (`response.function_call_arguments.done`
-    /// and `response.output_item.done`) in addition to the incremental
-    /// `...arguments.delta` fragments. The streamed fragments can be dropped or
-    /// arrive partial (large argument values truncated mid-stream), leaving the
-    /// accumulated JSON unparseable. When a non-empty authoritative copy
-    /// arrives, the collector replaces the accumulated fragments with it. A
-    /// provider that only streams fragments never emits this, so the behaviour
-    /// is unchanged for them.
-    ToolCallArgsComplete { id: String, arguments: String },
-    /// A tool call's argument stream is complete
-    ToolCallEnd { id: String },
-    /// Token usage statistics (usually the last event before Done)
-    Usage(TokenUsage),
-    /// Stream finished successfully
-    Done(StopReason),
-    /// Provider-level semantic error.
-    ///
-    /// This is a provider-reported error embedded in the stream (e.g. Anthropic error SSE,
-    /// `OpenAI` `response.failed`). The stream *may* continue after this event.
-    /// Contrast with `Result::Err` which signals an infrastructure failure.
-    Error(String),
-}
-
-impl ProviderDelta {
-    /// Whether this delta puts model-authored content into the user's
-    /// transcript as it streams.
-    ///
-    /// Strictly narrower than "carries content". Tool-call deltas
-    /// ([`ToolCallStart`](Self::ToolCallStart),
-    /// [`ToolCallArgDelta`](Self::ToolCallArgDelta), their siblings) and
-    /// [`ThinkingSignatureDelta`](Self::ThinkingSignatureDelta) are structural:
-    /// a live sink folds them away and the user learns of a tool call only once
-    /// it has *executed*, which a truncated one never does.
-    ///
-    /// The set is derived from the only production [`DeltaSink`] —
-    /// `harness::agent::think::CallbackSink`, which forwards a non-empty
-    /// `TextDelta` to `on_delta` and a non-empty `ThinkingDelta` to
-    /// `on_reasoning` and drops every other variant. The empty-string guard is
-    /// part of that derivation, not a nicety: an empty delta forwards nothing,
-    /// so it shows nothing.
-    ///
-    /// ⚠️ Twin: `CallbackSink` still spells this set out itself (`src/harness/`
-    /// is under R10's file/line ratchet, so it cannot be made to call this).
-    /// Whoever next edits either one must edit both.
-    pub(crate) fn is_user_visible(&self) -> bool {
-        matches!(self, Self::TextDelta(t) | Self::ThinkingDelta(t) if !t.is_empty())
-    }
-}
+use aleph_slot_api::ai_delta::collect_response_deltas;
+pub(crate) use aleph_slot_api::ai_delta::replay_response_to_sink;
+pub use aleph_slot_api::ai_delta::{DeltaSink, NoopSink, ProviderDelta};
 
 /// True when the queue holds a terminal delta — a successful [`ProviderDelta::Done`]
 /// or a provider-reported [`ProviderDelta::Error`].
@@ -597,78 +516,8 @@ impl IndexIdTracker {
 }
 
 // =============================================================================
-// DeltaSink
-// =============================================================================
-
-/// Observer for [`ProviderDelta`] events.
-///
-/// Implement this trait to react to streaming deltas (e.g. forwarding to a
-/// WebSocket, updating a UI component, or recording metrics).
-#[async_trait]
-pub trait DeltaSink: Send + Sync {
-    /// Called for each delta as it arrives
-    async fn on_delta(&self, delta: &ProviderDelta);
-}
-
-/// A no-op [`DeltaSink`] that discards all events
-pub struct NoopSink;
-
-#[async_trait]
-impl DeltaSink for NoopSink {
-    async fn on_delta(&self, _delta: &ProviderDelta) {}
-}
-
-// =============================================================================
 // response_to_delta_stream
 // =============================================================================
-
-/// Collect delta events from a completed [`ProviderResponse`].
-///
-/// Emission order:
-/// 1. `ThinkingDelta` (if `thinking` is present)
-/// 2. `TextDelta` (if `text` is present)
-/// 3. For each tool call: `ToolCallStart` → `ToolCallArgDelta` → `ToolCallEnd`
-/// 4. `Usage` (if present)
-/// 5. `Done`
-fn collect_response_deltas(response: ProviderResponse) -> Vec<ProviderDelta> {
-    let mut events = Vec::new();
-
-    if let Some(thinking) = response.thinking {
-        events.push(ProviderDelta::ThinkingDelta(thinking));
-    }
-
-    if let Some(signature) = response.thinking_signature {
-        events.push(ProviderDelta::ThinkingSignatureDelta(signature));
-    }
-
-    if let Some(text) = response.text {
-        events.push(ProviderDelta::TextDelta(text));
-    }
-
-    for tc in response.tool_calls {
-        let args_str = tc.arguments.to_string();
-        events.push(ProviderDelta::ToolCallStart {
-            id: tc.id.clone(),
-            name: tc.name,
-            signature: tc.thought_signature,
-        });
-        if !args_str.is_empty() && args_str != "null" {
-            events.push(ProviderDelta::ToolCallArgDelta {
-                id: tc.id.clone(),
-                delta: args_str,
-            });
-        }
-        events.push(ProviderDelta::ToolCallEnd { id: tc.id });
-    }
-
-    if let Some(usage) = response.usage {
-        events.push(ProviderDelta::Usage(usage));
-    }
-
-    events.push(ProviderDelta::Done(response.stop_reason));
-
-    events
-}
 
 /// Convert a completed [`ProviderResponse`] into a delta stream.
 ///
@@ -682,22 +531,6 @@ pub fn response_to_delta_stream(
         .map(Ok)
         .collect();
     Box::pin(stream::iter(events))
-}
-
-/// Push a finished [`ProviderResponse`] to `sink` as the delta sequence a
-/// streaming provider would have produced.
-///
-/// The safety net behind [`AiProvider::execute_streaming_dyn`]'s default
-/// implementation: a provider or decorator that cannot stream still *delivers*,
-/// so a caller which suppressed its own once-per-turn emit is never left with
-/// nothing to show. Same event order as a live stream, just all at once.
-///
-/// [`AiProvider::execute_streaming_dyn`]: crate::providers::AiProvider::execute_streaming_dyn
-pub(crate) async fn replay_response_to_sink(response: &ProviderResponse, sink: &dyn DeltaSink) {
-    // rust-doctor-disable-next-line excessive-clone
-    for delta in collect_response_deltas(response.clone()) {
-        sink.on_delta(&delta).await;
-    }
 }
 
 /// Same as [`response_to_delta_stream`] but uses [`crate::error::Result`].

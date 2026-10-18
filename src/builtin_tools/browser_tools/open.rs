@@ -280,7 +280,15 @@ mod tests {
     async fn test_browser_open_blocked_domain_list() {
         use crate::browser::network_policy::SsrfConfig;
 
-        let config = BrowserSystemConfig {
+        // Hermetic (authorized cfg(test) fixture repair): hold a tempdir
+        // `$ALEPH_HOME` and pin obscura at a nonexistent path, so the
+        // admitted-URL arm takes the pin-refusal on EVERY host. Without the
+        // guard, a developer ledger with a ready obscura lets
+        // `prepare_engine` LAUNCH a real browser mid-unit-test (the exact
+        // pattern `test_browser_open_allows_public` documents).
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+        let mut config = BrowserSystemConfig {
             policy: SsrfConfig {
                 block_private: false,
                 blocked_domains: vec!["*.evil.com".to_string(), "malware.org".to_string()],
@@ -291,6 +299,12 @@ mod tests {
             },
             ..Default::default()
         };
+        config.obscura.binary_path = Some(
+            home.path()
+                .join("no-obscura-here")
+                .to_string_lossy()
+                .into_owned(),
+        );
 
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserOpenTool::new(manager);
@@ -319,7 +333,8 @@ mod tests {
         assert!(!result.success);
         assert!(result.message.as_ref().unwrap().contains("Blocked"));
 
-        // Should allow normal domains (passes policy, but fails without a running browser)
+        // Should allow normal domains (passes the guard, then fails on the
+        // pinned-missing obscura runtime — never a network refusal).
         let result = tool
             .call(BrowserOpenArgs {
                 url: "https://safe.com".into(),
@@ -328,16 +343,32 @@ mod tests {
             })
             .await
             .unwrap();
-        // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some());
+        let message = result.message.expect("a refusal says why");
+        assert!(
+            message.contains("obscura"),
+            "the refusal must name the engine that could not start: {message}"
+        );
+        assert!(
+            !message.contains("Blocked"),
+            "safe.com passes the guard; a Blocked message would mean the call \
+             never reached the browser: {message}"
+        );
     }
 
     #[tokio::test]
     async fn test_browser_open_allowlist_mode() {
         use crate::browser::network_policy::SsrfConfig;
 
-        let config = BrowserSystemConfig {
+        // Hermetic (authorized cfg(test) fixture repair): hold a tempdir
+        // `$ALEPH_HOME` and pin obscura at a nonexistent path, so the
+        // admitted-URL arm takes the pin-refusal on EVERY host. Without the
+        // guard, a developer ledger with a ready obscura lets
+        // `prepare_engine` LAUNCH a real browser mid-unit-test (the exact
+        // pattern `test_browser_open_allows_public` documents).
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+        let mut config = BrowserSystemConfig {
             policy: SsrfConfig {
                 block_private: false,
                 blocked_domains: vec![],
@@ -348,11 +379,18 @@ mod tests {
             },
             ..Default::default()
         };
+        config.obscura.binary_path = Some(
+            home.path()
+                .join("no-obscura-here")
+                .to_string_lossy()
+                .into_owned(),
+        );
 
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserOpenTool::new(manager);
 
-        // Should allow allowed.com subdomain (passes policy, but fails without a running browser)
+        // Should allow allowed.com subdomain (passes the guard, then fails
+        // on the pinned-missing obscura runtime — never a network refusal).
         let result = tool
             .call(BrowserOpenArgs {
                 url: "http://app.allowed.com/page".into(),
@@ -361,9 +399,17 @@ mod tests {
             })
             .await
             .unwrap();
-        // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some());
+        let message = result.message.expect("a refusal says why");
+        assert!(
+            message.contains("obscura"),
+            "the refusal must name the engine that could not start: {message}"
+        );
+        assert!(
+            !message.contains("Blocked"),
+            "app.allowed.com passes the guard; a Blocked message would mean \
+             the call never reached the browser: {message}"
+        );
 
         // Should block non-allowed domain
         let result = tool

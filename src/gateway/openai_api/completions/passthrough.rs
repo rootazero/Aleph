@@ -27,21 +27,22 @@ pub fn convert_openai_tools(tools: &[Value]) -> Vec<ToolDefinition> {
         .iter()
         .filter_map(|t| {
             let func = t.get("function")?;
-            Some(ToolDefinition {
-                name: func.get("name")?.as_str()?.to_string(),
-                description: func
-                    .get("description")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                parameters: func.get("parameters").cloned().unwrap_or(json!({})),
-                requires_confirmation: false,
-                category: ToolCategory::Custom,
-                strict: func
-                    .get("strict")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
-            })
+            let strict = func
+                .get("strict")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            Some(
+                ToolDefinition::new(
+                    func.get("name")?.as_str()?.to_string(),
+                    func.get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    func.get("parameters").cloned().unwrap_or(json!({})),
+                    ToolCategory::Custom,
+                )
+                .with_strict(strict),
+            )
         })
         .collect()
 }

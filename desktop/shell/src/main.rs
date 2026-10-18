@@ -842,10 +842,14 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         // and the owned root was proven (`monitor_port()` is None otherwise).
         // The root nonce (first-message auth value) is only available after the
         // same root proof; a nonce that fails re-validation means no monitor.
-        if let (Some(port), Some(nonce)) = (qa_root::monitor_port(), qa_root::monitor_auth_nonce()) {
+        if let (Some(port), Some(nonce)) = (qa_root::monitor_port(), qa_root::monitor_auth_nonce())
+        {
             match qa_monitor_script(port, nonce) {
                 Some(script) => builder = builder.initialization_script(&script),
-                None => eprintln!("{}: monitor script refused (invalid nonce)", qa_root::QA_BUILD_MARKER),
+                None => eprintln!(
+                    "{}: monitor script refused (invalid nonce)",
+                    qa_root::QA_BUILD_MARKER
+                ),
             }
         }
     }

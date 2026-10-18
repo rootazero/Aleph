@@ -22,12 +22,12 @@
 //! page-controlled sites would make that list say something it does not mean.
 //!
 //! ⚠️ **The predicate is "production call sites", and a bare `grep -c 'quote('`
-//! is NOT that command** — it answers 9 here, because it also counts this very
-//! sentence, the `pub fn quote(` definition, and a call in the tests. An earlier
-//! version of this paragraph named that grep as the way to reproduce the count,
-//! which is 判据 §18 in one line: a number handed over with a predicate that
-//! does not produce it. The six R40 sites are numbered `Site N of 6` at each
-//! call below, so the list is countable at the sites rather than trusted here.
+//! is NOT that command** — it answers 8 here, because it also counts this very
+//! sentence, and a call in the tests. An earlier version of this paragraph
+//! named that grep as the way to reproduce the count, which is 判据 §18 in
+//! one line: a number handed over with a predicate that does not produce it.
+//! The six R40 sites are numbered `Site N of 6` at each call below, so the
+//! list is countable at the sites rather than trusted here.
 //!
 //! **The budgeted variant is [`render_text_bounded`]**, which owns the cut
 //! itself rather than leaving it to the tool layer's `bound_content`: when the
@@ -639,26 +639,7 @@ fn capped(s: &str, max_chars: usize) -> String {
 /// `accname::normalize` at build time, but an `href` and a `placeholder` arrive
 /// raw, and `\n` in one of those must stay one line without becoming a space
 /// that hides a newline the page put there.
-#[must_use]
-pub fn quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-                out.push_str(&format!("\\u{{{:02x}}}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
+pub use aleph_slot_api::browser::text::quote;
 
 /// The full state as JSON, for `browser_snapshot{format:"json"}`.
 ///

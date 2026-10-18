@@ -70,37 +70,7 @@ const MAX_PERSISTENT: usize = 512;
 /// half-interpreted.
 const DOC_VERSION: u32 = 1;
 
-/// How long a grant lasts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GrantScope {
-    /// The remainder of one conversation, in this process.
-    Session,
-    /// Until revoked, across restarts.
-    Always,
-}
-
-impl GrantScope {
-    /// Stable token for wire payloads, RPC filters and tests.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Session => "session",
-            Self::Always => "always",
-        }
-    }
-
-    /// Parse a wire token. `None` for anything else — an unrecognized scope is
-    /// never treated as the wider one.
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "session" => Some(Self::Session),
-            "always" => Some(Self::Always),
-            _ => None,
-        }
-    }
-}
+pub use aleph_slot_api::approval::GrantScope;
 
 /// One standing authorization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -858,14 +828,6 @@ mod tests {
             s.granted_within(Some("s1"), "fp-a", false),
             Some(GrantScope::Session)
         );
-    }
-
-    #[test]
-    fn scope_tokens_round_trip_and_reject_unknown() {
-        assert_eq!(GrantScope::parse("session"), Some(GrantScope::Session));
-        assert_eq!(GrantScope::parse("always"), Some(GrantScope::Always));
-        assert_eq!(GrantScope::parse("forever"), None);
-        assert_eq!(GrantScope::Always.as_str(), "always");
     }
 
     /// Both tiers hold: the wider one is reported, because that is the one the

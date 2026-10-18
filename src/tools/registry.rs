@@ -16,7 +16,7 @@ use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::sync::Weak;
 
-use arc_swap::ArcSwap;
+use crate::capability::versioned_registry::VersionedRegistry;
 use tokio::sync::{broadcast, Notify};
 
 use crate::session::events::ToolOutput;
@@ -33,6 +33,8 @@ use serde_json::Value;
 pub struct RegistryEntry {
     pub handler: Arc<dyn ToolHandler>,
     pub descriptor: Arc<ToolCapabilityDescriptor>,
+    /// The producer-owned result budget admitted with this handler/descriptor pair.
+    pub max_result_tokens: Option<usize>,
 }
 
 /// Registry-owned invocation boundary. The raw handler is never returned by
@@ -88,7 +90,11 @@ impl ToolHandler for AdmissionHandler {
 }
 
 impl RegistryEntry {
-    fn admitted(handler: Arc<dyn ToolHandler>, descriptor: ToolCapabilityDescriptor) -> Self {
+    fn admitted(
+        handler: Arc<dyn ToolHandler>,
+        descriptor: ToolCapabilityDescriptor,
+        max_result_tokens: Option<usize>,
+    ) -> Self {
         let descriptor = Arc::new(descriptor);
         Self {
             handler: Arc::new(AdmissionHandler {
@@ -96,6 +102,7 @@ impl RegistryEntry {
                 descriptor: Arc::clone(&descriptor),
             }),
             descriptor,
+            max_result_tokens,
         }
     }
 }
@@ -159,61 +166,29 @@ pub enum RegistryChange {
     },
 }
 
-/// Immutable registry state; swapped wholesale under `ArcSwap` so entries,
-/// revision and the closed flag move together.
-#[derive(Clone, Default)]
-struct RegistryState {
-    entries: HashMap<String, RegistryEntry>,
-    revision: u64,
-    closed: bool,
+/// The primary publication emitted once per successful Tool transaction.
+#[derive(Debug, Clone)]
+pub struct RegistryPublication {
+    pub revision: u64,
+    pub tool_changes: Vec<RegistryChange>,
+    pub catalog_changed: bool,
 }
 
-/// Shared inner owned by the registry and referenced weakly by handles, so a
-/// handle never keeps the registry alive.
-struct RegistryShared {
-    inner: ArcSwap<RegistryState>,
-    change_tx: broadcast::Sender<RegistryChange>,
-    /// Serializes state publication with its change-event broadcast.
-    ///
-    /// The `ArcSwap` swap and the corresponding `change_tx.send` are two
-    /// separate steps: without this lock, two concurrent mutations could
-    /// interleave as `swap(rev=2); swap(rev=1); send(rev=1); send(rev=2)`,
-    /// publishing change events out of revision order. Holding this lock
-    /// across both steps guarantees subscribers observe events in the exact
-    /// order revisions were assigned.
-    ///
-    /// A plain `std::sync::Mutex` is sufficient — `broadcast::Sender::send`
-    /// is synchronous and never blocks, so no async mutex is needed. Poisoned
-    /// locks are recovered via `PoisonError::into_inner`: the guarded data is
-    /// only the unit token, and the real state lives behind `ArcSwap`, so
-    /// resuming after a panic in a mutator is safe.
-    mutation_lock: std::sync::Mutex<()>,
-    /// Notification-only close waiter: carries no payload and no revision.
-    ///
-    /// `close()` publishes the `closed` bit under `mutation_lock` and THEN
-    /// calls `notify_waiters()`, so a waiter that observes the wake also
-    /// observes `is_closed() == true`. Observers MUST register a `notified()`
-    /// future BEFORE reading the `closed` bit (register-then-check):
-    ///
-    /// * close-before-check — the bit is already set, read it directly;
-    /// * check-then-close-before-wait — a `Notified` future captures the
-    ///   notify generation AT CREATION and observes later changes when polled,
-    ///   so the already-registered future resolves instead of sleeping forever;
-    /// * multi-waiter — `notify_waiters` (not `notify_one`) wakes every
-    ///   registered observer, none is starved.
-    close_signal: Arc<Notify>,
+fn project_registry_publication(publication: &RegistryPublication) -> Vec<RegistryChange> {
+    publication.tool_changes.clone()
 }
 
-impl RegistryShared {
-    /// Acquire the mutation lock, recovering from a poisoned lock rather than
-    /// unwrapping (production code must not panic on a downstream mutation
-    /// panic).
-    fn lock_mutations(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.mutation_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+impl CallableRecordKey {
+    fn from_descriptor(descriptor: &ToolCapabilityDescriptor) -> Self {
+        Self {
+            source: descriptor.source.clone(),
+            provider_name: descriptor.name.clone(),
+        }
     }
 }
+
+/// Tool state is shared by registry clones and referenced weakly by disposers.
+type RegistryShared = VersionedRegistry<CanonicalToolState, RegistryPublication, RegistryChange>;
 
 /// An idempotent, generation-guarded registration disposer.
 ///
@@ -264,41 +239,158 @@ impl RegistrationHandle {
         let Some(shared) = self.shared.upgrade() else {
             return false;
         };
-        // Hold the mutation lock across state swap + event send so this
-        // dispose's Unregistered event cannot be published out of order
-        // relative to a concurrent mutation's event.
-        let _guard = shared.lock_mutations();
-        let mut disposed = false;
-        let mut new_revision = 0u64;
-        let mut source: Option<ToolSource> = None;
-        shared.inner.rcu(|current| {
-            let Some(entry) = current.entries.get(&self.name) else {
-                return Arc::clone(current);
-            };
-            // Generation guard: a stale handle must not remove a replacement.
-            if entry.descriptor.revision != self.revision {
-                return Arc::clone(current);
-            }
-            let mut next = (**current).clone();
-            next.entries.remove(&self.name);
-            next.revision = current.revision + 1;
-            new_revision = next.revision;
-            source = Some(entry.descriptor.source.clone());
-            disposed = true;
-            Arc::new(next)
-        });
-        if disposed {
-            if let Some(source) = source {
-                let _ = shared.change_tx.send(RegistryChange::Unregistered {
-                    name: self.name.clone(),
-                    revision: new_revision,
-                    source,
-                });
-            }
+        let outcome: Result<Option<()>, std::convert::Infallible> =
+            shared.transact(|current, revision| {
+                let Some(entry) = current.value.entry(&self.name) else {
+                    return Ok(None);
+                };
+                // Generation guard stays in the Tool shell.
+                if entry.descriptor.revision != self.revision {
+                    return Ok(None);
+                }
+                let mut records = current.value.records.clone();
+                records.remove(&CallableRecordKey::from_descriptor(&entry.descriptor));
+                Ok(Some((
+                    current.value.rebuild_records(records),
+                    RegistryPublication {
+                        revision,
+                        tool_changes: vec![RegistryChange::Unregistered {
+                            name: self.name.clone(),
+                            revision,
+                            source: entry.descriptor.source.clone(),
+                        }],
+                        catalog_changed: false,
+                    },
+                    (),
+                )))
+            });
+        match outcome {
+            Ok(result) => result.is_some(),
+            Err(never) => match never {},
         }
-        disposed
     }
 }
+
+// ============================================================================
+// Task59: Plugin Declaration Model
+// ============================================================================
+
+use crate::extension::registry::ToolRegistration;
+use crate::extension::runtime::wasm::WasmBinding;
+use crate::extension::visibility::ScopeKey;
+
+/// A genuine Plugin tool declaration, including those not admitted as callable.
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // Task59 infrastructure, used in Task60 reconciliation
+pub struct PluginToolDeclaration {
+    /// Actual ToolRegistration from manifest
+    pub registration: ToolRegistration,
+    /// Trusted owner from actual PluginRecord
+    pub plugin_id: String,
+    /// Actual ScopeKey from manager registry read
+    pub scope_key: Option<ScopeKey>,
+    /// For supported WASM with export: actual opaque binding
+    pub(crate) binding: Option<WasmBinding>,
+    /// Why this declaration cannot be called (if applicable)
+    pub unavailable: Option<DeclarationUnavailable>,
+    /// Registry revision when admitted
+    pub revision: u64,
+}
+
+/// Why a Plugin declaration is not callable.
+#[derive(Clone, Debug)]
+pub enum DeclarationUnavailable {
+    /// Non-WASM, unsupported runtime
+    NoBackend,
+    /// WASM module exists but export absent
+    MissingExport,
+    /// Status not active
+    PluginDisabled,
+    /// Another Plugin won short-name selection
+    CollisionLoser,
+    /// Builtin/MCP with same provider_name
+    SuppressedByBuiltin,
+}
+
+/// Key for plugin_declarations map: (plugin_id, exact registration name).
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct PluginDeclarationKey {
+    pub plugin_id: String,
+    pub name: String,
+}
+
+/// Canonical tool state: callable records + plugin declarations, published atomically.
+#[derive(Clone, Default)]
+pub struct CanonicalToolState {
+    /// Admitted callable tools (unique provider_name)
+    pub records: HashMap<CallableRecordKey, RegistryEntry>,
+    /// Plugin declarations (including losers and unavailable)
+    pub plugin_declarations: HashMap<PluginDeclarationKey, PluginToolDeclaration>,
+    /// Derived unique callable projection (provider_name → entry)
+    pub callable_projection: Arc<HashMap<String, RegistryEntry>>,
+}
+
+/// Key for callable records: (source, provider_name).
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct CallableRecordKey {
+    pub source: ToolSource,
+    pub provider_name: String,
+}
+
+impl CanonicalToolState {
+    /// Construct a state with unique names and descriptor-consistent keys.
+    pub fn from_records(
+        records: HashMap<CallableRecordKey, RegistryEntry>,
+    ) -> Result<Self, String> {
+        Self::from_records_with_declarations(records, HashMap::new())
+    }
+
+    /// Construct the callable projection and catalog from one validated value.
+    pub fn from_records_with_declarations(
+        records: HashMap<CallableRecordKey, RegistryEntry>,
+        plugin_declarations: HashMap<PluginDeclarationKey, PluginToolDeclaration>,
+    ) -> Result<Self, String> {
+        let mut projection = HashMap::with_capacity(records.len());
+        for (key, entry) in &records {
+            if key != &CallableRecordKey::from_descriptor(&entry.descriptor) {
+                return Err(format!(
+                    "canonical callable key disagrees with descriptor: {}",
+                    key.provider_name
+                ));
+            }
+            if projection.contains_key(&key.provider_name) {
+                return Err(format!(
+                    "duplicate canonical provider name: {}",
+                    key.provider_name
+                ));
+            }
+            projection.insert(key.provider_name.clone(), entry.clone());
+        }
+        Ok(Self {
+            records,
+            plugin_declarations,
+            callable_projection: Arc::new(projection),
+        })
+    }
+
+    fn empty() -> Self {
+        Self::from_records(HashMap::new()).expect("empty canonical state is valid")
+    }
+
+    fn entry(&self, name: &str) -> Option<&RegistryEntry> {
+        self.callable_projection.get(name)
+    }
+
+    /// Callable-only mutations must retain the catalog in the same generation.
+    fn rebuild_records(&self, records: HashMap<CallableRecordKey, RegistryEntry>) -> Self {
+        Self::from_records_with_declarations(records, self.plugin_declarations.clone())
+            .expect("validated callable mutation must preserve canonical key and name invariants")
+    }
+}
+
+// ============================================================================
+// End Task59 declarations
+// ============================================================================
 
 #[derive(Clone)]
 pub struct ToolHandlerRegistry {
@@ -330,14 +422,11 @@ impl ToolDescriptorLookup for ToolHandlerRegistry {
 impl ToolHandlerRegistry {
     #[must_use]
     pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(256);
         Self {
-            shared: Arc::new(RegistryShared {
-                inner: ArcSwap::from_pointee(RegistryState::default()),
-                change_tx: tx,
-                mutation_lock: std::sync::Mutex::new(()),
-                close_signal: Arc::new(Notify::new()),
-            }),
+            shared: Arc::new(VersionedRegistry::new_with_projection(
+                CanonicalToolState::empty(),
+                project_registry_publication,
+            )),
         }
     }
 
@@ -351,55 +440,61 @@ impl ToolHandlerRegistry {
         descriptor: ToolCapabilityDescriptor,
         handler: Arc<dyn ToolHandler>,
     ) -> Result<RegistrationHandle, ToolError> {
-        // Serialize the whole mutation so the revision assigned below and the
-        // change event carrying it are published atomically in order.
-        let _guard = self.shared.lock_mutations();
-        let definition = handler.definition();
+        self.register_with_result_budget(descriptor, handler, None)
+    }
+
+    pub(crate) fn register_with_result_budget(
+        &self,
+        descriptor: ToolCapabilityDescriptor,
+        handler: Arc<dyn ToolHandler>,
+        max_result_tokens: Option<usize>,
+    ) -> Result<RegistrationHandle, ToolError> {
         let name = descriptor.name.clone();
-        let mut outcome: Result<u64, ToolError> = Ok(0);
-        self.shared.inner.rcu(|current| {
+        let revision = self.shared.transact(|current, assigned| {
+            let definition = handler.definition();
             if current.closed {
-                outcome = Err(ToolError::RegistryClosed { name: name.clone() });
-                return Arc::clone(current);
+                return Err(ToolError::RegistryClosed { name: name.clone() });
             }
-            let assigned = current.revision + 1;
             let normalized = ToolCapabilityDescriptor {
                 revision: assigned,
                 ..descriptor.clone()
             };
-            if let Err(e) = normalized.validate() {
-                outcome = Err(ToolError::InvalidDescriptor {
+            normalized
+                .validate()
+                .map_err(|e| ToolError::InvalidDescriptor {
                     name: name.clone(),
                     reason: e.to_string(),
-                });
-                return Arc::clone(current);
-            }
+                })?;
             if !normalized.matches_definition(&definition) {
-                outcome = Err(ToolError::DescriptorMismatch {
+                return Err(ToolError::DescriptorMismatch {
                     name: name.clone(),
                     reason: mismatch_reason(&normalized, &definition),
                 });
-                return Arc::clone(current);
             }
-            if current.entries.contains_key(&name) {
-                outcome = Err(ToolError::Duplicate { name: name.clone() });
-                return Arc::clone(current);
+            if current.value.entry(&name).is_some() {
+                return Err(ToolError::Duplicate { name: name.clone() });
             }
-            let mut next = (**current).clone();
-            next.entries.insert(
-                name.clone(),
-                RegistryEntry::admitted(Arc::clone(&handler), normalized),
+            let mut records = current.value.records.clone();
+            records.insert(
+                CallableRecordKey::from_descriptor(&normalized),
+                RegistryEntry::admitted(Arc::clone(&handler), normalized, max_result_tokens),
             );
-            next.revision = assigned;
-            outcome = Ok(assigned);
-            Arc::new(next)
-        });
-        let revision = outcome?;
-        let _ = self.shared.change_tx.send(RegistryChange::Registered {
-            name: name.clone(),
-            revision,
-            source: descriptor.source,
-        });
+            Ok(Some((
+                current.value.rebuild_records(records),
+                RegistryPublication {
+                    revision: assigned,
+                    tool_changes: vec![RegistryChange::Registered {
+                        name: name.clone(),
+                        revision: assigned,
+                        source: descriptor.source,
+                    }],
+                    catalog_changed: false,
+                },
+                assigned,
+            )))
+        })?;
+        // These shell operations always commit or return a ToolError.
+        let revision = revision.expect("successful registration transaction commits");
         Ok(RegistrationHandle {
             shared: Arc::downgrade(&self.shared),
             name,
@@ -416,53 +511,62 @@ impl ToolHandlerRegistry {
         descriptor: ToolCapabilityDescriptor,
         handler: Arc<dyn ToolHandler>,
     ) -> Result<RegistrationHandle, ToolError> {
-        let _guard = self.shared.lock_mutations();
-        let definition = handler.definition();
+        self.replace_with_result_budget(descriptor, handler, None)
+    }
+
+    pub(crate) fn replace_with_result_budget(
+        &self,
+        descriptor: ToolCapabilityDescriptor,
+        handler: Arc<dyn ToolHandler>,
+        max_result_tokens: Option<usize>,
+    ) -> Result<RegistrationHandle, ToolError> {
         let name = descriptor.name.clone();
-        let mut outcome: Result<u64, ToolError> = Ok(0);
-        self.shared.inner.rcu(|current| {
+        let revision = self.shared.transact(|current, assigned| {
+            let definition = handler.definition();
             if current.closed {
-                outcome = Err(ToolError::RegistryClosed { name: name.clone() });
-                return Arc::clone(current);
+                return Err(ToolError::RegistryClosed { name: name.clone() });
             }
-            if !current.entries.contains_key(&name) {
-                outcome = Err(ToolError::NotFound { name: name.clone() });
-                return Arc::clone(current);
-            }
-            let assigned = current.revision + 1;
+            let Some(incumbent) = current.value.entry(&name) else {
+                return Err(ToolError::NotFound { name: name.clone() });
+            };
             let normalized = ToolCapabilityDescriptor {
                 revision: assigned,
                 ..descriptor.clone()
             };
-            if let Err(e) = normalized.validate() {
-                outcome = Err(ToolError::InvalidDescriptor {
+            normalized
+                .validate()
+                .map_err(|e| ToolError::InvalidDescriptor {
                     name: name.clone(),
                     reason: e.to_string(),
-                });
-                return Arc::clone(current);
-            }
+                })?;
             if !normalized.matches_definition(&definition) {
-                outcome = Err(ToolError::DescriptorMismatch {
+                return Err(ToolError::DescriptorMismatch {
                     name: name.clone(),
                     reason: mismatch_reason(&normalized, &definition),
                 });
-                return Arc::clone(current);
             }
-            let mut next = (**current).clone();
-            next.entries.insert(
-                name.clone(),
-                RegistryEntry::admitted(Arc::clone(&handler), normalized),
+            let mut records = current.value.records.clone();
+            records.remove(&CallableRecordKey::from_descriptor(&incumbent.descriptor));
+            records.insert(
+                CallableRecordKey::from_descriptor(&normalized),
+                RegistryEntry::admitted(Arc::clone(&handler), normalized, max_result_tokens),
             );
-            next.revision = assigned;
-            outcome = Ok(assigned);
-            Arc::new(next)
-        });
-        let revision = outcome?;
-        let _ = self.shared.change_tx.send(RegistryChange::Replaced {
-            name: name.clone(),
-            revision,
-            source: descriptor.source,
-        });
+            Ok(Some((
+                current.value.rebuild_records(records),
+                RegistryPublication {
+                    revision: assigned,
+                    tool_changes: vec![RegistryChange::Replaced {
+                        name: name.clone(),
+                        revision: assigned,
+                        source: descriptor.source,
+                    }],
+                    catalog_changed: false,
+                },
+                assigned,
+            )))
+        })?;
+        // These shell operations always commit or return a ToolError.
+        let revision = revision.expect("successful registration transaction commits");
         Ok(RegistrationHandle {
             shared: Arc::downgrade(&self.shared),
             name,
@@ -476,18 +580,17 @@ impl ToolHandlerRegistry {
     /// This is an exact canonical-name lookup, not dispatch authorization.
     #[must_use]
     pub fn resolve_entry(&self, name: &str) -> Option<RegistryEntry> {
-        let state = self.shared.inner.load();
-        state.entries.get(name).cloned()
+        let state = self.shared.snapshot();
+        state.value.entry(name).cloned()
     }
 
     /// Resolve the live handler for `name`.
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
         self.shared
-            .inner
-            .load()
-            .entries
-            .get(name)
+            .snapshot()
+            .value
+            .entry(name)
             .map(|entry| Arc::clone(&entry.handler))
     }
 
@@ -495,10 +598,9 @@ impl ToolHandlerRegistry {
     #[must_use]
     pub fn descriptor(&self, name: &str) -> Option<Arc<ToolCapabilityDescriptor>> {
         self.shared
-            .inner
-            .load()
-            .entries
-            .get(name)
+            .snapshot()
+            .value
+            .entry(name)
             .map(|entry| Arc::clone(&entry.descriptor))
     }
 
@@ -509,40 +611,72 @@ impl ToolHandlerRegistry {
     /// derived name set.
     #[must_use]
     pub fn unregister(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
-        let _guard = self.shared.lock_mutations();
-        let mut removed: Option<Arc<dyn ToolHandler>> = None;
-        let mut new_revision = 0u64;
-        let mut source: Option<ToolSource> = None;
-        self.shared.inner.rcu(|current| {
-            let Some(entry) = current.entries.get(name) else {
-                return Arc::clone(current);
-            };
-            let mut next = (**current).clone();
-            next.entries.remove(name);
-            next.revision = current.revision + 1;
-            removed = Some(Arc::clone(&entry.handler));
-            new_revision = next.revision;
-            source = Some(entry.descriptor.source.clone());
-            Arc::new(next)
-        });
-        let removed = removed?;
-        if let Some(source) = source {
-            let _ = self.shared.change_tx.send(RegistryChange::Unregistered {
-                name: name.to_string(),
-                revision: new_revision,
-                source,
+        let outcome: Result<Option<Arc<dyn ToolHandler>>, std::convert::Infallible> =
+            self.shared.transact(|current, revision| {
+                let Some(entry) = current.value.entry(name) else {
+                    return Ok(None);
+                };
+                let mut records = current.value.records.clone();
+                records.remove(&CallableRecordKey::from_descriptor(&entry.descriptor));
+                Ok(Some((
+                    current.value.rebuild_records(records),
+                    RegistryPublication {
+                        revision,
+                        tool_changes: vec![RegistryChange::Unregistered {
+                            name: name.to_string(),
+                            revision,
+                            source: entry.descriptor.source.clone(),
+                        }],
+                        catalog_changed: false,
+                    },
+                    Arc::clone(&entry.handler),
+                )))
+            });
+        match outcome {
+            Ok(removed) => removed,
+            Err(never) => match never {},
+        }
+    }
+
+    /// Snapshot of plugin declarations from the same canonical generation.
+    #[must_use]
+    pub fn plugin_declarations_snapshot(
+        &self,
+    ) -> Arc<HashMap<PluginDeclarationKey, PluginToolDeclaration>> {
+        Arc::new(self.shared.snapshot().value.plugin_declarations.clone())
+    }
+
+    /// An owned catalog projection; mutations of the copy do not affect authority.
+    #[must_use]
+    pub fn plugin_declarations(&self) -> HashMap<PluginDeclarationKey, PluginToolDeclaration> {
+        self.shared.snapshot().value.plugin_declarations.clone()
+    }
+
+    /// Task59 compatibility boundary; producer reconciliation is not mounted.
+    ///
+    /// Raw public state must not bypass handler admission. Task60/runtime
+    /// mounting requires separate approval; rejection never publishes a value.
+    pub fn reconcile_plugin_tools(&self, _state: CanonicalToolState) -> Result<(), ToolError> {
+        let current = self.shared.snapshot();
+        if current.closed {
+            return Err(ToolError::RegistryClosed {
+                name: "reconcile_plugin_tools".into(),
             });
         }
-        Some(removed)
+        Err(ToolError::Execution {
+            name: "reconcile_plugin_tools".into(),
+            cause: "plugin producer reconciliation is not mounted".into(),
+        })
     }
 
     /// Frozen handler view (compatibility projection).
     #[must_use]
     pub fn snapshot(&self) -> Arc<HashMap<String, Arc<dyn ToolHandler>>> {
-        let state = self.shared.inner.load();
+        let state = self.shared.snapshot();
         Arc::new(
             state
-                .entries
+                .value
+                .callable_projection
                 .iter()
                 .map(|(name, entry)| (name.clone(), Arc::clone(&entry.handler)))
                 .collect(),
@@ -553,9 +687,9 @@ impl ToolHandlerRegistry {
     /// Recovery adapters must use this instead of pairing independent reads.
     #[must_use]
     pub fn snapshot_state(&self) -> RegistrySnapshot {
-        let state = self.shared.inner.load();
+        let state = self.shared.snapshot();
         RegistrySnapshot {
-            entries: Arc::new(state.entries.clone()),
+            entries: Arc::clone(&state.value.callable_projection),
             revision: state.revision,
             closed: state.closed,
         }
@@ -571,10 +705,11 @@ impl ToolHandlerRegistry {
 
     #[must_use]
     pub fn descriptor_snapshot(&self) -> Arc<HashMap<String, Arc<ToolCapabilityDescriptor>>> {
-        let state = self.shared.inner.load();
+        let state = self.shared.snapshot();
         Arc::new(
             state
-                .entries
+                .value
+                .callable_projection
                 .iter()
                 .map(|(name, entry)| (name.clone(), Arc::clone(&entry.descriptor)))
                 .collect(),
@@ -585,36 +720,18 @@ impl ToolHandlerRegistry {
     /// register / replace / unregister.
     #[must_use]
     pub fn revision(&self) -> u64 {
-        self.shared.inner.load().revision
+        self.shared.revision()
     }
 
     /// Close the registry: stop accepting registrations and replacements.
     /// Existing resolution and disposal continue to work. Idempotent.
     pub fn close(&self) {
-        // Serialize with other mutations so a concurrent register/replace
-        // either fully precedes or fully follows the close, rather than
-        // racing its state swap against the closed flag.
-        let _guard = self.shared.lock_mutations();
-        self.shared.inner.rcu(|current| {
-            if current.closed {
-                return Arc::clone(current);
-            }
-            let mut next = (**current).clone();
-            next.closed = true;
-            Arc::new(next)
-        });
-        // Publish the closed bit first (the rcu swap above), then wake every
-        // registered close waiter. `notify_waiters` is used so multiple
-        // concurrent observers are all released; a `Notified` future captures
-        // the notify generation AT CREATION and observes later changes when
-        // polled, so an observer that checked `is_closed()` before the swap
-        // and is about to await its already-registered future still wakes.
-        self.shared.close_signal.notify_waiters();
+        self.shared.close();
     }
 
     #[must_use]
     pub fn is_closed(&self) -> bool {
-        self.shared.inner.load().closed
+        self.shared.is_closed()
     }
 
     /// A shared, notification-only close signal for observers that must
@@ -626,7 +743,7 @@ impl ToolHandlerRegistry {
     /// event and no revision/cursor change is introduced.
     #[must_use]
     pub(crate) fn close_signal(&self) -> Arc<Notify> {
-        Arc::clone(&self.shared.close_signal)
+        self.shared.close_signal()
     }
 
     /// Subscribe to registry mutation events.
@@ -644,7 +761,125 @@ impl ToolHandlerRegistry {
     /// — never block on this channel.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<RegistryChange> {
-        self.shared.change_tx.subscribe()
+        self.shared.subscribe_projected()
+    }
+
+    /// Subscribe to primary whole-transaction publications for Core consumers.
+    #[must_use]
+    pub(crate) fn subscribe_publications(&self) -> broadcast::Receiver<RegistryPublication> {
+        self.shared.subscribe()
+    }
+
+    /// Register two validated entries in one real shared transaction.
+    ///
+    /// This is test-only so production callers cannot manufacture a bulk
+    /// registration API. It exercises the same descriptor validation,
+    /// admission wrapping, duplicate and closed-state checks as `register`.
+    #[cfg(test)]
+    pub(crate) fn register_pair_for_test(
+        &self,
+        first: (ToolCapabilityDescriptor, Arc<dyn ToolHandler>),
+        second: (ToolCapabilityDescriptor, Arc<dyn ToolHandler>),
+    ) -> Result<(RegistrationHandle, RegistrationHandle), ToolError> {
+        let first_name = first.0.name.clone();
+        let second_name = second.0.name.clone();
+        let revision = self.shared.transact(|current, assigned| {
+            let first_definition = first.1.definition();
+            let second_definition = second.1.definition();
+            if current.closed {
+                return Err(ToolError::RegistryClosed {
+                    name: first_name.clone(),
+                });
+            }
+
+            let first_descriptor = ToolCapabilityDescriptor {
+                revision: assigned,
+                ..first.0.clone()
+            };
+            first_descriptor
+                .validate()
+                .map_err(|e| ToolError::InvalidDescriptor {
+                    name: first_name.clone(),
+                    reason: e.to_string(),
+                })?;
+            if !first_descriptor.matches_definition(&first_definition) {
+                return Err(ToolError::DescriptorMismatch {
+                    name: first_name.clone(),
+                    reason: mismatch_reason(&first_descriptor, &first_definition),
+                });
+            }
+
+            let second_descriptor = ToolCapabilityDescriptor {
+                revision: assigned,
+                ..second.0.clone()
+            };
+            second_descriptor
+                .validate()
+                .map_err(|e| ToolError::InvalidDescriptor {
+                    name: second_name.clone(),
+                    reason: e.to_string(),
+                })?;
+            if !second_descriptor.matches_definition(&second_definition) {
+                return Err(ToolError::DescriptorMismatch {
+                    name: second_name.clone(),
+                    reason: mismatch_reason(&second_descriptor, &second_definition),
+                });
+            }
+
+            if first_name == second_name || current.value.entry(&first_name).is_some() {
+                return Err(ToolError::Duplicate {
+                    name: first_name.clone(),
+                });
+            }
+            if current.value.entry(&second_name).is_some() {
+                return Err(ToolError::Duplicate {
+                    name: second_name.clone(),
+                });
+            }
+
+            let mut records = current.value.records.clone();
+            records.insert(
+                CallableRecordKey::from_descriptor(&first_descriptor),
+                RegistryEntry::admitted(Arc::clone(&first.1), first_descriptor, None),
+            );
+            records.insert(
+                CallableRecordKey::from_descriptor(&second_descriptor),
+                RegistryEntry::admitted(Arc::clone(&second.1), second_descriptor, None),
+            );
+            Ok(Some((
+                current.value.rebuild_records(records),
+                RegistryPublication {
+                    revision: assigned,
+                    tool_changes: vec![
+                        RegistryChange::Registered {
+                            name: first_name.clone(),
+                            revision: assigned,
+                            source: first.0.source,
+                        },
+                        RegistryChange::Registered {
+                            name: second_name.clone(),
+                            revision: assigned,
+                            source: second.0.source,
+                        },
+                    ],
+                    catalog_changed: false,
+                },
+                assigned,
+            )))
+        })?;
+        let revision = revision.expect("successful pair registration commits");
+        Ok((
+            RegistrationHandle {
+                shared: Arc::downgrade(&self.shared),
+                name: first_name,
+                revision,
+            },
+            RegistrationHandle {
+                shared: Arc::downgrade(&self.shared),
+                name: second_name,
+                revision,
+            },
+        ))
     }
 }
 
@@ -724,6 +959,204 @@ mod tests {
                     ..Default::default()
                 },
             }
+        }
+    }
+
+    fn seed_catalog(reg: &ToolHandlerRegistry) -> PluginDeclarationKey {
+        let key = PluginDeclarationKey {
+            plugin_id: "catalog-owner".into(),
+            name: "unavailable-tool".into(),
+        };
+        reg.shared
+            .transact(|current, revision| {
+                let declaration = PluginToolDeclaration {
+                    registration: ToolRegistration {
+                        name: key.name.clone(),
+                        description: "catalog-only declaration".into(),
+                        parameters: serde_json::json!({"type": "object"}),
+                        handler: "missing_export".into(),
+                        plugin_id: key.plugin_id.clone(),
+                    },
+                    plugin_id: key.plugin_id.clone(),
+                    scope_key: None,
+                    binding: None,
+                    unavailable: Some(DeclarationUnavailable::NoBackend),
+                    revision,
+                };
+                let next = CanonicalToolState::from_records_with_declarations(
+                    current.value.records.clone(),
+                    [(key.clone(), declaration)].into(),
+                )
+                .unwrap();
+                Ok::<_, ToolError>(Some((
+                    next,
+                    RegistryPublication {
+                        revision,
+                        tool_changes: Vec::new(),
+                        catalog_changed: true,
+                    },
+                    (),
+                )))
+            })
+            .unwrap()
+            .expect("test catalog seed must commit through the real transaction");
+        key
+    }
+
+    #[test]
+    fn callable_mutations_preserve_catalog_in_the_shared_generation() {
+        let reg = ToolHandlerRegistry::new();
+        let key = seed_catalog(&reg);
+        let frozen = reg.plugin_declarations_snapshot();
+        let expected = format!("{:?}", frozen.get(&key).unwrap());
+        let mut primary = reg.subscribe_publications();
+        let mut legacy = reg.subscribe();
+        let mut revision = 1;
+        let mut assert_catalog = |entry_count: usize, change_count: usize| {
+            revision += 1;
+            let state = reg.shared.snapshot();
+            assert_eq!(state.revision, revision);
+            assert_eq!(state.value.records.len(), entry_count);
+            assert_eq!(state.value.callable_projection.len(), entry_count);
+            assert_eq!(state.value.plugin_declarations.len(), 1);
+            assert_eq!(
+                format!("{:?}", state.value.plugin_declarations.get(&key).unwrap()),
+                expected
+            );
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    reg.plugin_declarations_snapshot().get(&key).unwrap()
+                ),
+                expected
+            );
+            let mut owned = reg.plugin_declarations();
+            assert_eq!(format!("{:?}", owned.remove(&key).unwrap()), expected);
+            assert_eq!(reg.plugin_declarations().len(), 1);
+            let event = primary.try_recv().expect("callable mutation publication");
+            assert_eq!(event.revision, revision);
+            assert!(!event.catalog_changed);
+            assert_eq!(event.tool_changes.len(), change_count);
+            for _ in 0..change_count {
+                let change = legacy.try_recv().expect("legacy callable change");
+                let actual = match change {
+                    RegistryChange::Registered { revision, .. }
+                    | RegistryChange::Replaced { revision, .. }
+                    | RegistryChange::Unregistered { revision, .. } => revision,
+                };
+                assert_eq!(actual, revision);
+            }
+            assert!(matches!(
+                primary.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                legacy.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ));
+        };
+
+        let stale = reg.register(desc("a"), fake("a")).unwrap();
+        assert_catalog(1, 1);
+        let live = reg.replace(desc("a"), fake("a")).unwrap();
+        assert_catalog(1, 1);
+        reg.unregister("a").unwrap();
+        assert_catalog(0, 1);
+        assert!(!stale.dispose());
+        assert!(!live.dispose());
+        let disposable = reg.register(desc("b"), fake("b")).unwrap();
+        assert_catalog(1, 1);
+        assert!(disposable.dispose());
+        assert_catalog(0, 1);
+        reg.register_pair_for_test((desc("c"), fake("c")), (desc("d"), fake("d")))
+            .unwrap();
+        assert_catalog(2, 2);
+        assert_eq!(format!("{:?}", frozen.get(&key).unwrap()), expected);
+    }
+
+    #[test]
+    fn unmounted_reconcile_rejects_raw_state_without_publication_even_when_closed() {
+        let reg = ToolHandlerRegistry::new();
+        seed_catalog(&reg);
+        reg.register(desc("stable"), fake("stable")).unwrap();
+        let mut primary = reg.subscribe_publications();
+        let mut legacy = reg.subscribe();
+        for closed in [false, true] {
+            if closed {
+                reg.close();
+            }
+            let before = reg.shared.snapshot();
+            // Public scaffold fields cannot become an admission bypass.
+            let entry = RegistryEntry {
+                handler: fake("injected"),
+                descriptor: Arc::new(desc("injected")),
+                max_result_tokens: Some(1),
+            };
+            let candidate = CanonicalToolState::from_records(
+                [(CallableRecordKey::from_descriptor(&entry.descriptor), entry)].into(),
+            )
+            .unwrap();
+            let error = reg.reconcile_plugin_tools(candidate).unwrap_err();
+            if closed {
+                assert!(matches!(error, ToolError::RegistryClosed { .. }));
+            } else {
+                assert!(matches!(
+                    error,
+                    ToolError::Execution { cause, .. } if cause.contains("not mounted")
+                ));
+            }
+            let after = reg.shared.snapshot();
+            assert!(Arc::ptr_eq(&before, &after));
+            assert_eq!(before.revision, after.revision);
+            assert_eq!(after.value.plugin_declarations.len(), 1);
+            assert!(after.value.entry("stable").is_some());
+            assert!(after.value.entry("injected").is_none());
+            assert!(matches!(
+                primary.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                legacy.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ));
+        }
+    }
+
+    #[test]
+    fn public_state_constructors_reject_inconsistent_keys_and_duplicate_names() {
+        let entry = RegistryEntry::admitted(fake("same"), desc("same"), None);
+        let valid_key = CallableRecordKey::from_descriptor(&entry.descriptor);
+        let mut other = entry.clone();
+        Arc::make_mut(&mut other.descriptor).source = ToolSource::Extension {
+            plugin_id: "other-owner".into(),
+        };
+        let other_key = CallableRecordKey::from_descriptor(&other.descriptor);
+        let duplicate: HashMap<CallableRecordKey, RegistryEntry> =
+            [(valid_key.clone(), entry.clone()), (other_key, other)].into();
+        let wrong_name = [(
+            CallableRecordKey {
+                provider_name: "wrong".into(),
+                ..valid_key.clone()
+            },
+            entry.clone(),
+        )]
+        .into();
+        let wrong_source = [(
+            CallableRecordKey {
+                source: ToolSource::Extension {
+                    plugin_id: "wrong".into(),
+                },
+                ..valid_key
+            },
+            entry,
+        )]
+        .into();
+        for records in [duplicate, wrong_name, wrong_source] {
+            assert!(CanonicalToolState::from_records(records.clone()).is_err());
+            assert!(
+                CanonicalToolState::from_records_with_declarations(records, HashMap::new())
+                    .is_err()
+            );
         }
     }
 
@@ -903,12 +1336,20 @@ mod tests {
         let mut projection = crate::tools::runtime::LoopToolRegistry::new();
         // Frozen fixture store containing the actual captured, already wrapped
         // pair. Re-registering would assign a new identity and double-wrap it.
-        let frozen = Arc::new(ToolHandlerRegistry::new());
-        frozen.shared.inner.store(Arc::new(RegistryState {
-            entries: [(entry.descriptor.name.clone(), entry.clone())].into(),
-            revision: entry.descriptor.revision,
-            closed: false,
-        }));
+        let frozen = Arc::new(ToolHandlerRegistry {
+            shared: Arc::new(VersionedRegistry::from_snapshot_with_projection(
+                crate::capability::versioned_registry::VersionedSnapshot {
+                    value: {
+                        let key = CallableRecordKey::from_descriptor(&entry.descriptor);
+                        CanonicalToolState::from_records([(key, entry.clone())].into())
+                            .expect("captured admitted fixture has a consistent canonical key")
+                    },
+                    revision: entry.descriptor.revision,
+                    closed: false,
+                },
+                project_registry_publication,
+            )),
+        });
         projection.bind_canonical_registry(frozen, Arc::new(|_| true));
         projection.register(Box::new(
             crate::tools::adapters::McpRegistryTool::from_registry_entry(
@@ -1147,6 +1588,257 @@ mod tests {
         assert!(matches!(err, ToolError::Duplicate { name } if name == "dup"));
     }
 
+    #[tokio::test]
+    async fn pair_helper_emits_one_real_two_member_publication() {
+        let reg = ToolHandlerRegistry::new();
+        let mut rx = reg.subscribe_publications();
+        let mut legacy = reg.subscribe();
+        let (first, second) = reg
+            .register_pair_for_test(
+                (desc("first"), fake("first")),
+                (desc("second"), fake("second")),
+            )
+            .expect("pair transaction");
+        let publication = rx.try_recv().expect("pair publication");
+        assert_eq!(publication.revision, 1);
+        assert!(!publication.catalog_changed);
+        assert_eq!(publication.tool_changes.len(), 2);
+        assert_eq!(first.revision(), 1);
+        assert_eq!(second.revision(), 1);
+        let frozen = reg.snapshot_state();
+        assert_eq!(frozen.revision(), 1);
+        assert_eq!(frozen.entries().len(), 2);
+        assert_eq!(reg.shared.snapshot().value.records.len(), 2);
+        for (change, name) in publication.tool_changes.iter().zip(["first", "second"]) {
+            assert!(matches!(
+                change,
+                RegistryChange::Registered { name: actual, revision: 1, .. } if actual == name
+            ));
+            assert!(matches!(
+                legacy.try_recv().expect("legacy pair member"),
+                RegistryChange::Registered { name: actual, revision: 1, .. } if actual == name
+            ));
+            let entry = frozen.entry(name).expect("admitted pair member");
+            assert_eq!(entry.descriptor.revision, 1);
+            assert!(matches!(
+                entry.handler.invoke(serde_json::json!({})).await,
+                Err(ToolError::PermissionDenied { .. })
+            ));
+            assert_eq!(
+                invoke_captured(entry).await.value,
+                serde_json::json!({"tool": name})
+            );
+        }
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            legacy.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(first.dispose());
+        assert!(second.dispose());
+        assert_eq!(reg.revision(), 3);
+        assert!(reg.shared.snapshot().value.records.is_empty());
+        assert!(reg.snapshot_state().entries().is_empty());
+        for (revision, name) in [(2, "first"), (3, "second")] {
+            let removed = rx.try_recv().expect("cleanup publication");
+            assert_eq!(removed.revision, revision);
+            assert!(!removed.catalog_changed);
+            assert!(matches!(
+                removed.tool_changes.as_slice(),
+                [RegistryChange::Unregistered { name: actual, revision: actual_revision, .. }]
+                    if actual == name && *actual_revision == revision
+            ));
+            assert!(matches!(
+                legacy.try_recv().expect("cleanup legacy member"),
+                RegistryChange::Unregistered { name: actual, revision: actual_revision, .. }
+                    if actual == name && actual_revision == revision
+            ));
+        }
+        assert!(!first.dispose());
+        assert!(!second.dispose());
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            legacy.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn snapshot_projection_reuses_arc_and_rebuild_preserves_admitted_members() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(desc("stable"), fake("stable")).unwrap();
+        let before = reg.snapshot_state();
+        let repeated = reg.snapshot_state();
+        assert!(Arc::ptr_eq(&before.entries, &repeated.entries));
+        assert!(Arc::ptr_eq(&before.entries, &reg.entries_snapshot()));
+        let admitted = reg.resolve_entry("stable").unwrap();
+        let stable = before.entry("stable").unwrap();
+        assert!(Arc::ptr_eq(&stable.handler, &admitted.handler));
+        assert!(Arc::ptr_eq(&stable.descriptor, &admitted.descriptor));
+
+        reg.register(desc("unrelated"), fake("unrelated")).unwrap();
+        let after = reg.snapshot_state();
+        assert!(!Arc::ptr_eq(&before.entries, &after.entries));
+        assert_eq!(before.revision(), 1);
+        assert_eq!(before.entries().len(), 1);
+        assert!(before.entry("unrelated").is_none());
+        assert_eq!(after.revision(), 2);
+        assert_eq!(after.entries().len(), 2);
+        let retained = after.entry("stable").unwrap();
+        assert!(Arc::ptr_eq(&stable.handler, &retained.handler));
+        assert!(Arc::ptr_eq(&stable.descriptor, &retained.descriptor));
+        assert!(Arc::ptr_eq(&after.entries, &reg.snapshot_state().entries));
+    }
+
+    #[test]
+    fn source_changing_replace_removes_actual_key_and_guards_disposal() {
+        let reg = ToolHandlerRegistry::new();
+        let stale = reg.register(desc("provider"), fake("provider")).unwrap();
+        let before = reg.snapshot_state();
+        let old_key =
+            CallableRecordKey::from_descriptor(&before.entry("provider").unwrap().descriptor);
+        let raw: Arc<dyn ToolHandler> = Arc::new(FakeHandler {
+            name: "provider".into(),
+            source: ToolSource::Mcp {
+                server_id: "b2-server".into(),
+            },
+            idempotent: false,
+        });
+        let current = reg
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&raw.definition(), 0),
+                raw,
+            )
+            .unwrap();
+        let after = reg.snapshot_state();
+        let entry = after.entry("provider").unwrap();
+        let new_key = CallableRecordKey::from_descriptor(&entry.descriptor);
+        assert_ne!(old_key, new_key);
+        let state = reg.shared.snapshot();
+        assert_eq!(state.value.records.len(), 1);
+        assert!(!state.value.records.contains_key(&old_key));
+        let stored = state.value.records.get(&new_key).unwrap();
+        assert!(Arc::ptr_eq(&stored.handler, &entry.handler));
+        assert!(Arc::ptr_eq(&stored.descriptor, &entry.descriptor));
+        assert_eq!(after.entries().len(), 1);
+        assert_eq!(entry.descriptor.revision, current.revision());
+        assert_eq!(
+            before.entry("provider").unwrap().descriptor.source,
+            ToolSource::Builtin
+        );
+        assert!(!stale.dispose());
+        assert!(Arc::ptr_eq(&after.entries, &reg.snapshot_state().entries));
+        reg.close();
+        assert!(current.dispose());
+        assert!(reg.shared.snapshot().value.records.is_empty());
+        assert!(reg.snapshot_state().entries().is_empty());
+        assert!(!current.dispose());
+    }
+
+    #[test]
+    fn cross_source_duplicate_preserves_payload_projection_revision_and_silence() {
+        let reg = ToolHandlerRegistry::new();
+        let handle = reg.register(desc("duplicate"), fake("duplicate")).unwrap();
+        let before = reg.shared.snapshot();
+        let frozen = reg.snapshot_state();
+        let mut primary = reg.subscribe_publications();
+        let mut legacy = reg.subscribe();
+        let raw: Arc<dyn ToolHandler> = Arc::new(FakeHandler {
+            name: "duplicate".into(),
+            source: ToolSource::Extension {
+                plugin_id: "b2-plugin".into(),
+            },
+            idempotent: false,
+        });
+        let descriptor = ToolCapabilityDescriptor::from_definition(&raw.definition(), 2);
+        assert!(descriptor.matches_definition(&raw.definition()));
+        descriptor.validate().unwrap();
+        let error = reg.register(descriptor, raw).unwrap_err();
+        assert!(matches!(error, ToolError::Duplicate { name } if name == "duplicate"));
+        let after = reg.shared.snapshot();
+        assert!(Arc::ptr_eq(&before, &after));
+        assert_eq!(after.revision, frozen.revision());
+        assert_eq!(after.closed, before.closed);
+        assert_eq!(after.value.records.len(), 1);
+        assert!(Arc::ptr_eq(
+            &frozen.entries,
+            &after.value.callable_projection
+        ));
+        assert!(matches!(
+            primary.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            legacy.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(handle.dispose());
+    }
+
+    #[tokio::test]
+    async fn old_snapshot_keeps_real_admitted_generation_after_replace_and_teardown() {
+        let reg = ToolHandlerRegistry::new();
+        let raw: Arc<dyn ToolHandler> = Arc::new(RevisionHandler { generation: 1 });
+        let first = reg
+            .register(
+                ToolCapabilityDescriptor::from_definition(&raw.definition(), 0),
+                raw,
+            )
+            .unwrap();
+        let frozen = reg.snapshot_state();
+        let captured = frozen.entry("terminal").unwrap();
+        let next: Arc<dyn ToolHandler> = Arc::new(RevisionHandler { generation: 2 });
+        let second = reg
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&next.definition(), 0),
+                next,
+            )
+            .unwrap();
+        let replaced = reg.snapshot_state();
+        assert!(!Arc::ptr_eq(&frozen.entries, &replaced.entries));
+        assert!(!Arc::ptr_eq(
+            &captured.handler,
+            &replaced.entry("terminal").unwrap().handler
+        ));
+        assert_eq!(frozen.revision(), first.revision());
+        assert_eq!(captured.descriptor.revision, first.revision());
+        assert_eq!(
+            replaced.entry("terminal").unwrap().descriptor.revision,
+            second.revision()
+        );
+        assert!(!first.dispose());
+        reg.close();
+        let removed = reg.unregister("terminal").unwrap();
+        assert!(Arc::ptr_eq(
+            &removed,
+            &replaced.entry("terminal").unwrap().handler
+        ));
+        assert!(!second.dispose());
+        assert!(reg.shared.snapshot().value.records.is_empty());
+        assert!(reg.snapshot_state().entries().is_empty());
+        assert!(!frozen.is_closed());
+        assert!(matches!(
+            captured.handler.invoke(serde_json::json!({})).await,
+            Err(ToolError::PermissionDenied { .. })
+        ));
+        assert_eq!(
+            invoke_captured(captured).await.value,
+            serde_json::json!({"generation": 1})
+        );
+        assert_eq!(
+            invoke_captured(replaced.entry("terminal").unwrap())
+                .await
+                .value,
+            serde_json::json!({"generation": 2})
+        );
+    }
+
     #[test]
     fn unregister_removes() {
         let reg = ToolHandlerRegistry::new();
@@ -1192,6 +1884,238 @@ mod tests {
     /// rewrite, exactly ONE caller succeeds and every other observes
     /// `ToolError::Duplicate`; the snapshot contains a single entry for
     /// the name.
+    #[test]
+    fn primary_publication_projects_to_legacy_and_omits_noops() {
+        let reg = ToolHandlerRegistry::new();
+        let mut primary = reg.subscribe_publications();
+        let mut legacy = reg.subscribe();
+        let handle = reg.register(desc("primary"), fake("primary")).unwrap();
+
+        let publication = primary.try_recv().expect("primary publication");
+        assert_eq!(publication.revision, 1);
+        assert_eq!(publication.tool_changes.len(), 1);
+        assert!(!publication.catalog_changed);
+        assert!(matches!(
+            legacy.try_recv().expect("legacy projection"),
+            RegistryChange::Registered { revision: 1, .. }
+        ));
+
+        assert!(reg.register(desc("primary"), fake("primary")).is_err());
+        assert!(reg.unregister("missing").is_none());
+        assert!(primary.try_recv().is_err());
+        assert!(legacy.try_recv().is_err());
+
+        reg.close();
+        assert!(reg.register(desc("closed"), fake("closed")).is_err());
+        assert!(primary.try_recv().is_err());
+        assert!(handle.dispose());
+        let publication = primary.try_recv().expect("disposer publication");
+        assert_eq!(publication.revision, 2);
+        assert!(matches!(
+            publication.tool_changes.as_slice(),
+            [RegistryChange::Unregistered { revision: 2, .. }]
+        ));
+    }
+
+    #[test]
+    fn register_with_result_budget_commits_one_real_entry_snapshot() {
+        let reg = ToolHandlerRegistry::new();
+        let mut projected = reg.subscribe();
+        let mut publications = reg.subscribe_publications();
+        let handle = reg
+            .register_with_result_budget(desc("budgeted"), fake("budgeted"), Some(17))
+            .expect("budgeted registration");
+
+        let state = reg.snapshot_state();
+        let entry = state.entry("budgeted").expect("registered entry");
+        let resolved = reg.resolve_entry("budgeted").expect("resolved entry");
+        assert_eq!(handle.revision(), 1);
+        assert_eq!(state.revision(), 1);
+        assert_eq!(entry.max_result_tokens, Some(17));
+        assert!(Arc::ptr_eq(&entry.handler, &resolved.handler));
+        assert!(Arc::ptr_eq(&entry.descriptor, &resolved.descriptor));
+        assert!(Arc::ptr_eq(&state.entries, &reg.entries_snapshot()));
+        assert!(matches!(
+            projected.try_recv(),
+            Ok(RegistryChange::Registered { name, revision: 1, .. }) if name == "budgeted"
+        ));
+        assert!(matches!(
+            publications.try_recv(),
+            Ok(RegistryPublication { revision: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn replace_with_result_budget_keeps_old_generation_and_stale_disposer_out() {
+        let reg = ToolHandlerRegistry::new();
+        let old_handle = reg
+            .register_with_result_budget(desc("budgeted"), fake("budgeted"), Some(17))
+            .expect("initial registration");
+        let frozen = reg.snapshot_state();
+        let old = frozen.entry("budgeted").expect("old entry").clone();
+
+        let replacement = reg
+            .replace_with_result_budget(desc("budgeted"), fake("budgeted"), Some(91))
+            .expect("replacement");
+        let current = reg.resolve_entry("budgeted").expect("current entry");
+        let live_handler = reg.resolve("budgeted").expect("current handler");
+        let live_descriptor = reg.descriptor("budgeted").expect("current descriptor");
+
+        assert_eq!(old_handle.revision(), 1);
+        assert_eq!(replacement.revision(), 2);
+        assert_eq!(old.max_result_tokens, Some(17));
+        let frozen_entry = frozen.entry("budgeted").expect("frozen entry retained");
+        assert_eq!(frozen_entry.max_result_tokens, Some(17));
+        assert!(Arc::ptr_eq(&frozen_entry.handler, &old.handler));
+        assert!(Arc::ptr_eq(&frozen_entry.descriptor, &old.descriptor));
+        assert_eq!(current.max_result_tokens, Some(91));
+        assert!(Arc::ptr_eq(&current.handler, &live_handler));
+        assert!(Arc::ptr_eq(&current.descriptor, &live_descriptor));
+        assert!(!Arc::ptr_eq(&old.handler, &current.handler));
+        assert!(!Arc::ptr_eq(&old.descriptor, &current.descriptor));
+        assert!(
+            !old_handle.dispose(),
+            "stale disposer removed the replacement"
+        );
+        assert_eq!(
+            reg.resolve_entry("budgeted").unwrap().max_result_tokens,
+            Some(91)
+        );
+
+        let legacy = reg
+            .replace(desc("budgeted"), fake("budgeted"))
+            .expect("legacy replacement");
+        assert_eq!(legacy.revision(), 3);
+        assert_eq!(
+            reg.resolve_entry("budgeted").unwrap().max_result_tokens,
+            None
+        );
+    }
+
+    #[test]
+    fn rejected_register_and_replace_are_transactional_noops() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register_with_result_budget(desc("seed"), fake("seed"), Some(7))
+            .expect("seed registration");
+        let before = reg.shared.snapshot();
+        let mut projected = reg.subscribe();
+        let mut publications = reg.subscribe_publications();
+
+        macro_rules! assert_noop {
+            ($expected:expr) => {{
+                let after = reg.shared.snapshot();
+                assert!(Arc::ptr_eq(&$expected, &after));
+                assert_eq!(after.revision, $expected.revision);
+                assert_eq!(
+                    after.value.entry("seed").unwrap().max_result_tokens,
+                    Some(7)
+                );
+            }};
+        }
+
+        let duplicate = reg.register_with_result_budget(desc("seed"), fake("seed"), Some(99));
+        assert!(matches!(
+            duplicate,
+            Err(ToolError::Duplicate { name }) if name == "seed"
+        ));
+        assert_noop!(before);
+        assert!(matches!(
+            projected.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            publications.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+
+        let mut invalid = desc("invalid_schema");
+        invalid.schema_version = 0;
+        let invalid_result =
+            reg.register_with_result_budget(invalid, fake("invalid_schema"), Some(99));
+        assert!(matches!(
+            invalid_result,
+            Err(ToolError::InvalidDescriptor { name, .. }) if name == "invalid_schema"
+        ));
+        assert_noop!(before);
+        assert!(matches!(
+            projected.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            publications.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+
+        let mismatch = reg.register_with_result_budget(desc("mismatch"), fake("other"), Some(99));
+        assert!(matches!(
+            mismatch,
+            Err(ToolError::DescriptorMismatch { name, .. }) if name == "mismatch"
+        ));
+        assert_noop!(before);
+        assert!(matches!(
+            projected.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            publications.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+
+        let mut invalid_replacement = desc("seed");
+        invalid_replacement.schema_version = 0;
+        assert!(matches!(
+            reg.replace_with_result_budget(invalid_replacement, fake("seed"), Some(99)),
+            Err(ToolError::InvalidDescriptor { .. })
+        ));
+        assert_noop!(before);
+        assert!(matches!(
+            reg.replace_with_result_budget(desc("seed"), fake("other"), Some(99)),
+            Err(ToolError::DescriptorMismatch { .. })
+        ));
+        assert_noop!(before);
+        assert!(matches!(
+            projected.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            publications.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+
+        reg.close();
+        let closed_before = reg.shared.snapshot();
+        let closed_register =
+            reg.register_with_result_budget(desc("closed"), fake("closed"), Some(99));
+        assert!(matches!(
+            closed_register,
+            Err(ToolError::RegistryClosed { name }) if name == "closed"
+        ));
+        assert_noop!(closed_before);
+        assert!(matches!(
+            projected.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            publications.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+
+        let closed_replace = reg.replace_with_result_budget(desc("seed"), fake("seed"), Some(99));
+        assert!(matches!(
+            closed_replace,
+            Err(ToolError::RegistryClosed { name }) if name == "seed"
+        ));
+        assert_noop!(closed_before);
+        assert!(matches!(
+            projected.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            publications.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
     #[test]
     fn concurrent_register_for_same_name_atomic() {
         use std::sync::Arc;

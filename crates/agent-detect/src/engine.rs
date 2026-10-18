@@ -1164,7 +1164,11 @@ mod tests {
         assert_eq!(
             identify_agent_from_process(
                 "node",
-                &["npm exec claude", "TERM_PROGRAM=Apple_Terminal", "SHELL=/bin/zsh"],
+                &[
+                    "npm exec claude",
+                    "TERM_PROGRAM=Apple_Terminal",
+                    "SHELL=/bin/zsh"
+                ],
             ),
             Some(Agent::Claude),
             "`npx claude`: the leader's own command line names its operand"
@@ -1173,7 +1177,11 @@ mod tests {
         assert_eq!(
             normalized_program_name(
                 "node",
-                &["npm exec claude", "TERM_PROGRAM=Apple_Terminal", "SHELL=/bin/zsh"],
+                &[
+                    "npm exec claude",
+                    "TERM_PROGRAM=Apple_Terminal",
+                    "SHELL=/bin/zsh"
+                ],
             ),
             "claude",
         );
@@ -1220,14 +1228,20 @@ mod tests {
         assert_eq!(
             identify_agent_from_process(
                 "node",
-                &["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"],
+                &[
+                    "node",
+                    "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+                ],
             ),
             Some(Agent::Claude),
         );
         assert_eq!(
             normalized_program_name(
                 "node",
-                &["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"],
+                &[
+                    "node",
+                    "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+                ],
             ),
             "claude-code",
             "the package is what is running; `cli` and `node` are both generic"
@@ -1269,7 +1283,10 @@ mod tests {
         assert_eq!(
             identify_agent_from_process(
                 "node",
-                &["node", "ZSH_AI_PROMPT_EXTEND=Always prefer claude over codex"],
+                &[
+                    "node",
+                    "ZSH_AI_PROMPT_EXTEND=Always prefer claude over codex"
+                ],
             ),
             None,
             "the first operand is the script; a scan would have found `claude`"
@@ -1543,14 +1560,25 @@ mod tests {
         assert_eq!(
             identify_agent_from_process(
                 "powershell",
-                &["powershell.exe", "-NoProfile", "-Command", "claude", "--resume"],
+                &[
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-Command",
+                    "claude",
+                    "--resume"
+                ],
             ),
             Some(Agent::Claude),
         );
         assert_eq!(
             identify_agent_from_process(
                 "powershell",
-                &["powershell.exe", "-NoProfile", "-Command", "claude --resume"],
+                &[
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-Command",
+                    "claude --resume"
+                ],
             ),
             Some(Agent::Claude),
         );
@@ -1609,7 +1637,10 @@ mod tests {
         // `Program`. The hand-off must work on the argv VECTOR, so the path
         // stays one token.
         let argv = &["pwsh", "-File", r"C:\Program Files\thing\claude.ps1"];
-        assert_eq!(identify_agent_from_process("pwsh", argv), Some(Agent::Claude));
+        assert_eq!(
+            identify_agent_from_process("pwsh", argv),
+            Some(Agent::Claude)
+        );
         let program = normalized_program_name("pwsh", argv);
         assert_eq!(program, "claude");
         assert_ne!(program, "Program", "the space in the path is a directory");
@@ -1656,7 +1687,13 @@ mod tests {
         );
         // …and skipping the value must not also skip the script behind it.
         for argv in [
-            &["pwsh", "-ExecutionPolicy", "Bypass", "-File", r"C:\bin\claude.cmd"][..],
+            &[
+                "pwsh",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                r"C:\bin\claude.cmd",
+            ][..],
             // `-ep` is a real alias and NOT a prefix of the long name; it is
             // the fail-closed default that covers it.
             &["pwsh", "-ep", "Bypass", "-File", r"C:\bin\claude.ps1"][..],
@@ -1675,10 +1712,7 @@ mod tests {
         // A base64 blob is not a program name, and this crate does not decode
         // one — `None` is the honest answer.
         assert_eq!(
-            identify_agent_from_process(
-                "pwsh",
-                &["pwsh", "-EncodedCommand", "YwBsAGEAdQBkAGUA"],
-            ),
+            identify_agent_from_process("pwsh", &["pwsh", "-EncodedCommand", "YwBsAGEAdQBkAGUA"],),
             None,
         );
     }
@@ -1751,7 +1785,11 @@ mod tests {
         let ambiguous: Vec<&str> = PS_PROGRAM_PARAMS
             .iter()
             .copied()
-            .filter(|p| PS_VALUE_PARAMS_MEASURED.iter().any(|v| v.starts_with(&p[..1])))
+            .filter(|p| {
+                PS_VALUE_PARAMS_MEASURED
+                    .iter()
+                    .any(|v| v.starts_with(&p[..1]))
+            })
             .collect();
         assert_eq!(
             ambiguous,
@@ -1785,7 +1823,11 @@ mod tests {
         assert_eq!(program_stem("claude.CMD"), "claude");
         assert_eq!(program_stem("/usr/local/bin/claude"), "claude");
         assert_eq!(program_stem("claude.rs"), "claude.rs", "not a shim suffix");
-        assert_eq!(program_stem(".ps1"), ".ps1", "a dot-file is not an empty name");
+        assert_eq!(
+            program_stem(".ps1"),
+            ".ps1",
+            "a dot-file is not an empty name"
+        );
     }
 
     #[test]

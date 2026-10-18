@@ -17,67 +17,7 @@ use crate::browser::network_policy::BrowserSsrfGuard;
 
 use super::{map_cdp_err, CdpBackend};
 
-/// A rule's decision material. `Mock` carries everything `Fetch.fulfillRequest`
-/// needs, so the loop never re-consults the registry between verdict and wire.
-#[derive(Clone, Debug, PartialEq)]
-pub enum RouteKind {
-    Mock {
-        status: u16,
-        headers: Vec<(String, String)>,
-        body: Vec<u8>,
-    },
-    Abort,
-}
-
-/// Who a rule applies to. `Tab` binds the one tab it was added against;
-/// `Profile` serves every tab of ITS profile — never another profile's
-/// (spec §4: "profile 下所有 tab", and a mock that bled across principals
-/// would be an isolation breach, not a feature).
-///
-/// `Serialize` because `RouteRuleInfo` (which carries it) is part of
-/// `browser_network`'s tool output.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RouteScope {
-    Tab,
-    Profile,
-}
-
-/// Everything `route_add` needs beyond WHERE the rule binds (the backend
-/// supplies the profile from its own identity; the call supplies the tab).
-/// Grouped because the trait signature would otherwise be seven positional
-/// parameters wide.
-#[derive(Clone, Debug, PartialEq)]
-pub struct NewRouteRule {
-    pub url_contains: String,
-    pub method: Option<String>,
-    pub kind: RouteKind,
-    pub scope: RouteScope,
-    pub note: Option<String>,
-}
-
-/// What `mock_list` shows. A snapshot struct rather than a borrow so the
-/// registry lock is never held across a read the caller formats.
-///
-/// `Serialize` because this struct IS `browser_network`'s wire answer —
-/// `kind` travels as the label, never the material (the body can be 256 KiB
-/// and the model that listed the rules already knows what it wrote).
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct RouteRuleInfo {
-    pub id: String,
-    pub url_contains: String,
-    pub method: Option<String>,
-    pub kind_label: &'static str,
-    pub scope: RouteScope,
-    pub hits: u64,
-    /// Whether a live interception loop is currently serving this rule. A rule
-    /// whose loop died (session death, engine restart) stays in the table but
-    /// reads `active: false` — present-but-unserved is a fact the model must
-    /// be able to see, not a success we invent (判据 §8).
-    pub active: bool,
-    /// The model's own annotation, carried back verbatim by `mock_list`.
-    pub note: Option<String>,
-}
+pub use aleph_slot_api::browser::routes::{NewRouteRule, RouteKind, RouteRuleInfo, RouteScope};
 
 /// A match verdict plus the material to carry it out. The hit count is
 /// incremented inside `match_lifo` — the verdict and the accounting are one

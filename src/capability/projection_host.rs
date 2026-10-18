@@ -41,7 +41,9 @@ use crate::capability::ownership::{OwnerGeneration, OwnershipChange, OwnershipTr
 use crate::capability::zahir_facade::{FacadeEntriesSnapshot, ZahirFacade};
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
-use crate::tools::registry::{RegistryChange, RegistryEntry, ToolHandlerRegistry};
+use crate::tools::registry::{
+    RegistryEntry, RegistryPublication, RegistrySnapshot, ToolHandlerRegistry,
+};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, Weak};
@@ -204,6 +206,13 @@ impl ConsumerState {
         self.closed.load(Ordering::SeqCst)
     }
 
+    fn last_cursor(&self) -> Cursor {
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .last_cursor
+    }
+
     /// Close this receipt endpoint and explicitly discard pending external
     /// delivery. The default consumer does not use this path: its captured
     /// queue is drained by the real applier before it joins.
@@ -267,13 +276,16 @@ impl ConsumerState {
         self.wake.notify_one();
     }
 
-    /// Enqueue a mapped registry change for an in-scope consumer. A change
-    /// whose cursor is not strictly newer than the last delivered cursor is
-    /// stale (already reflected in a delivered snapshot) and dropped — the
-    /// registry cursor only advances, so delivering it would regress state.
-    /// On overflow the backlog is cleared and replaced with `Invalidated` +
-    /// a fresh snapshot.
-    fn enqueue_change(&self, change: CapabilityChange, cursor: Cursor, replacement: HostSnapshot) {
+    /// Enqueue one whole registry publication cohort. Cursor admission is
+    /// checked once, and a cohort is never partially appended. If the complete
+    /// vector cannot fit, stale pending deltas are replaced by exactly one
+    /// `Invalidated` + truthful replacement `Snapshot` pair.
+    fn enqueue_cohort(
+        &self,
+        changes: Vec<CapabilityChange>,
+        cursor: Cursor,
+        replacement: HostSnapshot,
+    ) {
         let mut q = self
             .queue
             .lock()
@@ -281,14 +293,15 @@ impl ConsumerState {
         if cursor <= q.last_cursor {
             return;
         }
-        if q.items.len() >= self.capacity {
+        if changes.len() > self.capacity.saturating_sub(q.items.len()) {
             q.items.clear();
             q.items.push_back(ProjectionEvent::Invalidated);
             q.items
                 .push_back(ProjectionEvent::Snapshot(replacement.clone()));
             q.last_cursor = replacement.registry_cursor;
         } else {
-            q.items.push_back(ProjectionEvent::Change(change));
+            q.items
+                .extend(changes.into_iter().map(ProjectionEvent::Change));
             q.last_cursor = cursor;
         }
         drop(q);
@@ -532,7 +545,7 @@ impl ProjectionHost {
         let facade = ZahirFacade::new(registry.clone(), Arc::clone(&tree));
         // Subscribe to BOTH live sources BEFORE reading the initial snapshot
         // (subscribe-before-snapshot).
-        let registry_rx = registry.subscribe();
+        let registry_rx = registry.subscribe_publications();
         let ownership_rx = tree.subscribe_changes();
 
         let default_scope = Scope::default();
@@ -627,7 +640,7 @@ impl ProjectionHost {
         capacity: usize,
     ) -> Arc<Self> {
         let facade = ZahirFacade::new(registry.clone(), Arc::clone(&tree));
-        let registry_rx = registry.subscribe();
+        let registry_rx = registry.subscribe_publications();
         let ownership_rx = tree.subscribe_changes();
 
         let default_scope = Scope::default();
@@ -1299,11 +1312,23 @@ fn start_shutdown(inner: &Arc<HostInner>) {
     }
 }
 
-/// Build a fresh [`HostSnapshot`] for `scope` from the live authorities. Only
-/// ever called while holding `publish`, so it observes a quiescent fan-out
-/// boundary (though the two authority cuts are still independent domains).
+/// Build a fresh [`HostSnapshot`] for `scope` from one captured registry cut.
+fn build_snapshot_from_cut(
+    inner: &HostInner,
+    scope: &Scope,
+    registry_cut: &RegistrySnapshot,
+) -> HostSnapshot {
+    HostSnapshot::from_facade(
+        inner
+            .facade
+            .snapshot_entries_in_scope_from(scope, registry_cut),
+    )
+}
+
+/// Capture one registry cut and derive a snapshot from it.
 fn build_snapshot(inner: &HostInner, scope: &Scope) -> HostSnapshot {
-    HostSnapshot::from_facade(inner.facade.snapshot_entries_in_scope(scope))
+    let registry_cut = inner.registry.snapshot_state();
+    build_snapshot_from_cut(inner, scope, &registry_cut)
 }
 
 /// Source worker: the single subscriber to both live streams.
@@ -1316,7 +1341,7 @@ fn build_snapshot(inner: &HostInner, scope: &Scope) -> HostSnapshot {
 async fn source_worker(
     inner: Weak<HostInner>,
     cancel: CancellationToken,
-    mut registry_rx: broadcast::Receiver<RegistryChange>,
+    mut registry_rx: broadcast::Receiver<RegistryPublication>,
     mut ownership_rx: broadcast::Receiver<OwnershipChange>,
 ) {
     let Some(initial_inner) = inner.upgrade() else {
@@ -1350,9 +1375,9 @@ async fn source_worker(
             }
             res = registry_rx.recv() => {
                 match res {
-                    Ok(change) => {
+                    Ok(publication) => {
                         if let Some(inner) = inner.upgrade() {
-                            process_registry_change(&inner, change);
+                            process_registry_publication(&inner, publication);
                         } else {
                             return;
                         }
@@ -1402,9 +1427,26 @@ async fn source_worker(
     }
 }
 
-/// Fan out one registry change to every consumer.
-fn process_registry_change(inner: &HostInner, change: RegistryChange) {
-    let (cursor, cap_change) = inner.facade.map_registry_change(change);
+/// Whether every live consumer already reflects this publication cursor.
+/// Called under `publish`, before taking the consumer-map lock.
+fn publication_already_reflected(inner: &HostInner, cursor: Cursor) -> bool {
+    if !inner.default_consumer.is_closed() && inner.default_consumer.last_cursor() < cursor {
+        return false;
+    }
+    let consumers = inner
+        .consumers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    consumers
+        .by_id
+        .values()
+        .filter(|consumer| !consumer.is_closed())
+        .all(|consumer| consumer.last_cursor() >= cursor)
+}
+
+/// Fan out one primary registry publication to every consumer.
+fn process_registry_publication(inner: &HostInner, publication: RegistryPublication) {
+    let (cursor, changes) = inner.facade.map_registry_publication(publication.clone());
     let _publish = inner
         .publish
         .lock()
@@ -1412,18 +1454,29 @@ fn process_registry_change(inner: &HostInner, change: RegistryChange) {
     if inner.closed.load(Ordering::SeqCst) {
         return;
     }
+    if publication_already_reflected(inner, cursor) {
+        return;
+    }
+
+    // Never label a publication against a later registry cut. Recover with a
+    // single truthful cut, shared by every scope derived below.
+    let registry_cut = inner.registry.snapshot_state();
+    if registry_cut.revision() > cursor.0 {
+        invalidate_all_from_cut(inner, &registry_cut);
+        return;
+    }
 
     // Default consumer: apply a fresh snapshot so run-loop-readable state stays
     // current (the applier drains this queue into `applied`).
     if !inner.default_consumer.is_closed() {
-        let snapshot = build_snapshot(inner, &inner.default_consumer.scope);
+        let snapshot = build_snapshot_from_cut(inner, &inner.default_consumer.scope, &registry_cut);
         if inner.default_consumer.enqueue_snapshot(snapshot) {
             inner.replacement_count.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    // Non-default consumers: deliver the mapped change iff in scope AND newer
-    // than the consumer's last cursor; overflow replaces the backlog.
+    // Non-default consumers receive one whole in-scope cohort. Every
+    // replacement snapshot is derived from the same immutable registry cut.
     let consumers = inner
         .consumers
         .lock()
@@ -1432,10 +1485,13 @@ fn process_registry_change(inner: &HostInner, change: RegistryChange) {
         if consumer.is_closed() {
             continue;
         }
-        if inner.facade.change_in_scope(&cap_change, &consumer.scope) {
-            let replacement = build_snapshot(inner, &consumer.scope);
-            consumer.enqueue_change(cap_change.clone(), cursor, replacement);
-        }
+        let visible = changes
+            .iter()
+            .filter(|change| inner.facade.change_in_scope(change, &consumer.scope))
+            .cloned()
+            .collect();
+        let replacement = build_snapshot_from_cut(inner, &consumer.scope, &registry_cut);
+        consumer.enqueue_cohort(visible, cursor, replacement);
     }
 }
 
@@ -1449,9 +1505,15 @@ fn invalidate_all(inner: &HostInner) {
     if inner.closed.load(Ordering::SeqCst) {
         return;
     }
+    let registry_cut = inner.registry.snapshot_state();
+    invalidate_all_from_cut(inner, &registry_cut);
+}
 
+/// Fan out invalidation snapshots derived from one registry cut. The caller
+/// must hold `publish` and must already have checked the host lifecycle.
+fn invalidate_all_from_cut(inner: &HostInner, registry_cut: &RegistrySnapshot) {
     if !inner.default_consumer.is_closed() {
-        let snapshot = build_snapshot(inner, &inner.default_consumer.scope);
+        let snapshot = build_snapshot_from_cut(inner, &inner.default_consumer.scope, registry_cut);
         // The DEFAULT consumer uses the SAME Invalidated + replacement Snapshot
         // semantics as attached consumers (not a bare Snapshot).
         inner.default_consumer.enqueue_invalidation(snapshot);
@@ -1466,7 +1528,7 @@ fn invalidate_all(inner: &HostInner) {
         if consumer.is_closed() {
             continue;
         }
-        let snapshot = build_snapshot(inner, &consumer.scope);
+        let snapshot = build_snapshot_from_cut(inner, &consumer.scope, registry_cut);
         consumer.enqueue_invalidation(snapshot);
     }
 }
@@ -1480,9 +1542,10 @@ fn deliver_close(inner: &HostInner) {
     if inner.closed.swap(true, Ordering::SeqCst) {
         return;
     }
+    let registry_cut = inner.registry.snapshot_state();
 
     if !inner.default_consumer.is_closed() {
-        let snapshot = build_snapshot(inner, &inner.default_consumer.scope);
+        let snapshot = build_snapshot_from_cut(inner, &inner.default_consumer.scope, &registry_cut);
         inner.default_consumer.enqueue_snapshot(snapshot);
         inner.default_consumer.mark_closed();
     }
@@ -1495,7 +1558,7 @@ fn deliver_close(inner: &HostInner) {
         if consumer.is_closed() {
             continue;
         }
-        let snapshot = build_snapshot(inner, &consumer.scope);
+        let snapshot = build_snapshot_from_cut(inner, &consumer.scope, &registry_cut);
         consumer.enqueue_snapshot(snapshot);
         consumer.mark_closed();
     }
@@ -1604,23 +1667,114 @@ async fn applier_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::approval::{with_call_identity, CallIdentity};
     use crate::capability::backend::TOOL_NAMESPACE;
     use crate::capability::descriptor::{CapabilityId, CapabilityRevision};
-    use crate::capability::ownership::LifetimeScope;
-    use crate::session::events::ToolOutput;
+    use crate::capability::facade::{Reference, ResolveError, Zahir};
+    use crate::capability::ownership::{LifetimeScope, VisibilityScope};
+    use crate::session::events::{ToolOutput, TurnId};
+    use crate::tools::adapters::McpRegistryTool;
     use crate::tools::descriptor::{
         ReplayPolicy, ToolCapabilityDescriptor, ToolKind, SCHEMA_VERSION,
     };
     use crate::tools::handlers::ToolHandler;
-    use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
+    use crate::tools::runtime::LoopToolRegistry;
+    use crate::tools::scoped::ScopedToolService;
+    use crate::tools::service::{
+        ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
+    };
     use async_trait::async_trait;
     use serde_json::Value;
+    use std::sync::atomic::AtomicUsize;
 
     struct FakeHandler {
         name: String,
         description: String,
         source: ToolSource,
         idempotent: bool,
+    }
+
+    struct BlockingHandler {
+        name: String,
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ToolHandler for BlockingHandler {
+        async fn invoke(&self, _input: Value) -> Result<ToolOutput, ToolError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(ToolOutput {
+                value: serde_json::json!({ "tool": self.name }),
+                metadata: Default::default(),
+            })
+        }
+
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: self.name.clone(),
+                description: String::new(),
+                input_schema: serde_json::json!({}),
+                source: ToolSource::Builtin,
+                metadata: ToolDefinitionMetadata::default(),
+            }
+        }
+    }
+
+    enum ProjectionCallError {
+        Resolve(ResolveError),
+        Validate(ResolveError),
+        Dispatch(ToolError),
+    }
+
+    impl std::fmt::Debug for ProjectionCallError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Resolve(e) => f.debug_tuple("Resolve").field(e).finish(),
+                Self::Validate(e) => f.debug_tuple("Validate").field(e).finish(),
+                Self::Dispatch(e) => f.debug_tuple("Dispatch").field(e).finish(),
+            }
+        }
+    }
+
+    async fn invoke_projection_entry(
+        facade: Arc<ZahirFacade>,
+        canonical_registry: Arc<ToolHandlerRegistry>,
+        entry: RegistryEntry,
+        call_id: &str,
+    ) -> Result<ToolOutput, ProjectionCallError> {
+        let reference = Reference {
+            id: tool_id(&entry.descriptor.name),
+            visibility: VisibilityScope::default(),
+        };
+        let lease = facade
+            .resolve(reference)
+            .map_err(ProjectionCallError::Resolve)?;
+        facade
+            .validate_lease(&lease)
+            .map_err(ProjectionCallError::Validate)?;
+
+        let mut projection = LoopToolRegistry::new();
+        projection.bind_canonical_registry(canonical_registry, Arc::new(|_| true));
+        let descriptor = entry.descriptor.clone();
+        projection.register(Box::new(McpRegistryTool::from_registry_entry(
+            entry.handler,
+            &descriptor,
+        )));
+        let service = ScopedToolService::new(Arc::new(projection), Default::default())
+            .with_structured_rpc_transport();
+        with_call_identity(
+            Some(CallIdentity {
+                turn_id: TurnId::nil(),
+                call_id: call_id.to_string(),
+            }),
+            service.execute(&descriptor.name, serde_json::json!({})),
+        )
+        .await
+        .map_err(ProjectionCallError::Dispatch)
     }
 
     #[async_trait]
@@ -1783,7 +1937,7 @@ mod tests {
     /// must atomically replace the stale pending backlog with `Invalidated` +
     /// a fresh replacement `Snapshot` (the SAME all-consumer invalidation
     /// contract `invalidate_all` already uses), never a bare `Snapshot` that
-    /// silently drops the gap. Drives the REAL fan-out (`process_registry_change`)
+    /// silently drops the gap. Drives the REAL fan-out (`process_registry_publication`)
     /// with no await, so on the current-thread runtime neither the source
     /// worker nor the default applier has polled; 64 registrations fill the
     /// default queue past its 64-slot bound (all under the 256-slot broadcast
@@ -1794,11 +1948,12 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         reg.register(desc("base"), fake("base")).unwrap();
         let tree = Arc::new(OwnershipTree::new());
+        let mut primary_rx = reg.subscribe_publications();
         let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
 
-        // Synchronous batch: register 64 tools and drive the real fan-out
-        // directly (the same `process_registry_change` the source worker
-        // invokes). No await => the default applier has not drained yet, so
+        // Synchronous batch: register 64 tools and drive the real primary
+        // publication fan-out directly. No await => the default applier has
+        // not drained yet, so
         // the queue accumulates exactly one snapshot per registration.
         for i in 0..64 {
             let name = format!("t{i}");
@@ -1808,14 +1963,8 @@ mod tests {
                 fake_labeled(&name, &description),
             )
             .unwrap();
-            process_registry_change(
-                &host.inner,
-                RegistryChange::Registered {
-                    name,
-                    revision: (i + 2) as u64,
-                    source: ToolSource::Builtin,
-                },
-            );
+            let publication = primary_rx.try_recv().expect("primary publication");
+            process_registry_publication(&host.inner, publication);
         }
 
         // The default queue must now hold EXACTLY the mandated pair: the stale
@@ -1877,6 +2026,125 @@ mod tests {
             "applied handler"
         );
         assert_eq!(entry.descriptor.description, "v63", "applied descriptor");
+    }
+
+    #[tokio::test]
+    async fn attached_queue_keeps_real_two_member_cohort_together() {
+        let reg = ToolHandlerRegistry::new();
+        let mut primary_rx = reg.subscribe_publications();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let handle = host.attach(Scope::default());
+        let (_first, _second) = reg
+            .register_pair_for_test(
+                (desc("first"), fake("first")),
+                (desc("second"), fake("second")),
+            )
+            .expect("real pair transaction");
+        process_registry_publication(
+            &host.inner,
+            primary_rx.try_recv().expect("primary pair publication"),
+        );
+
+        let q = handle
+            .consumer
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(q.items.len(), 3);
+        assert!(matches!(q.items[0], ProjectionEvent::Snapshot(_)));
+        assert!(matches!(q.items[1], ProjectionEvent::Change(_)));
+        assert!(matches!(q.items[2], ProjectionEvent::Change(_)));
+        assert_eq!(q.last_cursor, Cursor(1));
+    }
+
+    #[tokio::test]
+    async fn full_cohort_overflow_replaces_backlog_without_partial_members() {
+        let reg = ToolHandlerRegistry::new();
+        let mut primary_rx = reg.subscribe_publications();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        let handle = host.attach(Scope::default());
+
+        for i in 0..(DEFAULT_PENDING_CAPACITY - 2) {
+            let id = format!("fill_{i}");
+            reg.register(desc(&id), fake(&id)).unwrap();
+            process_registry_publication(
+                &host.inner,
+                primary_rx.try_recv().expect("primary fill publication"),
+            );
+        }
+        {
+            let q = handle
+                .consumer
+                .queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert_eq!(q.items.len(), DEFAULT_PENDING_CAPACITY - 1);
+        }
+
+        let (_first, _second) = reg
+            .register_pair_for_test(
+                (desc("first"), fake("first")),
+                (desc("second"), fake("second")),
+            )
+            .expect("real pair transaction");
+        process_registry_publication(
+            &host.inner,
+            primary_rx.try_recv().expect("primary pair publication"),
+        );
+
+        let q = handle
+            .consumer
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(q.items.len(), 2);
+        assert!(matches!(q.items[0], ProjectionEvent::Invalidated));
+        let ProjectionEvent::Snapshot(snapshot) = &q.items[1] else {
+            panic!("overflow must end with one replacement snapshot")
+        };
+        assert_eq!(
+            snapshot.registry_cursor,
+            Cursor((DEFAULT_PENDING_CAPACITY - 1) as u64)
+        );
+        assert_eq!(snapshot.entries.len(), DEFAULT_PENDING_CAPACITY);
+        assert!(snapshot.entries.contains_key("first"));
+        assert!(snapshot.entries.contains_key("second"));
+        assert!(q
+            .items
+            .iter()
+            .all(|event| !matches!(event, ProjectionEvent::Change(_))));
+    }
+
+    #[tokio::test]
+    async fn overtaken_publication_resyncs_from_truthful_latest_cut() {
+        let reg = ToolHandlerRegistry::new();
+        let mut primary_rx = reg.subscribe_publications();
+        let tree = Arc::new(OwnershipTree::new());
+        let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+        reg.register(desc("first"), fake("first")).unwrap();
+        reg.register(desc("second"), fake("second")).unwrap();
+        let first_publication = primary_rx.try_recv().expect("first publication");
+        let _second_publication = primary_rx.try_recv().expect("second publication");
+        process_registry_publication(&host.inner, first_publication.clone());
+        // Replaying the already-reflected historical publication must not
+        // trigger another invalidation storm.
+        process_registry_publication(&host.inner, first_publication);
+
+        let q = host
+            .inner
+            .default_consumer
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(q.items.len(), 3);
+        assert!(matches!(q.items[1], ProjectionEvent::Invalidated));
+        let ProjectionEvent::Snapshot(snapshot) = &q.items[2] else {
+            panic!("overtaken publication must end with a snapshot")
+        };
+        assert_eq!(snapshot.registry_cursor, Cursor(2));
+        assert_eq!(snapshot.entries.len(), 2);
     }
 
     #[tokio::test]
@@ -2742,11 +3010,103 @@ mod tests {
             ProjectionEvent::Snapshot(snapshot) => snapshot,
             other => panic!("expected initial snapshot, got {other:?}"),
         };
-        let captured = snapshot.entries.get("a").unwrap().handler.clone();
+        let captured = snapshot.entries.get("a").unwrap().clone();
         assert!(tree.revoke(&tool_id("a")));
+        let error = invoke_projection_entry(
+            Arc::clone(&host.inner.facade),
+            Arc::new(reg.clone()),
+            captured,
+            "revoked",
+        )
+        .await;
+        assert!(matches!(
+            error,
+            Err(ProjectionCallError::Resolve(ResolveError::Revoked))
+        ));
+    }
 
-        let error = captured.invoke(serde_json::json!({})).await.unwrap_err();
-        assert!(matches!(error, ToolError::PermissionDenied { .. }));
+    #[tokio::test]
+    async fn already_running_invocation_is_not_cut() {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let entered = Arc::new(Notify::new());
+            let release = Arc::new(Notify::new());
+            let calls = Arc::new(AtomicUsize::new(0));
+            let reg = ToolHandlerRegistry::new();
+            reg.register(
+                desc("a"),
+                Arc::new(BlockingHandler {
+                    name: "a".into(),
+                    entered: Arc::clone(&entered),
+                    release: Arc::clone(&release),
+                    calls: Arc::clone(&calls),
+                }),
+            )
+            .unwrap();
+            let tree = Arc::new(OwnershipTree::new());
+            let host = ProjectionHost::mount(reg.clone(), Arc::clone(&tree));
+            let mut handle = host.attach(Scope::default());
+            let snapshot = match recv_bounded(&mut handle).await {
+                ProjectionEvent::Snapshot(snapshot) => snapshot,
+                other => panic!("expected initial snapshot, got {other:?}"),
+            };
+            let captured = snapshot.entries.get("a").unwrap().clone();
+            let facade = Arc::clone(&host.inner.facade);
+            let canonical_registry = Arc::new(reg.clone());
+            let reference = Reference {
+                id: tool_id("a"),
+                visibility: VisibilityScope::default(),
+            };
+            let captured_lease = facade.resolve(reference.clone()).unwrap();
+            facade.validate_lease(&captured_lease).unwrap();
+
+            let first = tokio::spawn(invoke_projection_entry(
+                Arc::clone(&facade),
+                Arc::clone(&canonical_registry),
+                captured.clone(),
+                "first",
+            ));
+            tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+                .await
+                .expect("first invocation did not enter the handler");
+
+            assert!(tree.revoke(&tool_id("a")));
+            assert_eq!(
+                facade.validate_lease(&captured_lease),
+                Err(ResolveError::Revoked)
+            );
+            assert_eq!(
+                facade.resolve(reference.clone()),
+                Err(ResolveError::Revoked)
+            );
+
+            let second = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                invoke_projection_entry(
+                    Arc::clone(&facade),
+                    Arc::clone(&canonical_registry),
+                    captured,
+                    "second",
+                ),
+            )
+            .await
+            .expect("second invocation did not fail within bound");
+            assert!(matches!(
+                second,
+                Err(ProjectionCallError::Resolve(ResolveError::Revoked))
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+            release.notify_one();
+            let output = tokio::time::timeout(std::time::Duration::from_secs(5), first)
+                .await
+                .expect("first invocation did not complete within bound")
+                .expect("first invocation task panicked")
+                .expect("first invocation failed");
+            assert_eq!(output.value["tool"], "a");
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        })
+        .await
+        .expect("already-running invocation scenario exceeded its bound");
     }
 
     // ---- Diagnostic hold / close (Task1 fix round) ----
@@ -3303,19 +3663,27 @@ mod tests {
         // meaningful: an implementation that fabricated receipts from the
         // initial state (or from the registry head instead of the actual
         // applied payload) cannot satisfy it.
+        // Serialize causal setup mutations so each publication is applied;
+        // this avoids an incidental overtaken resync before the explicit
+        // production invalidation contract is exercised below.
         reg.unregister("alpha").expect("unregister alpha");
+        let _ = await_snapshot_where(&host, |s| {
+            !s.entries.contains_key("alpha") && s.registry_cursor > initial_cursor
+        })
+        .await;
         reg.register(desc("beta"), fake("beta")).unwrap();
+        let _ = await_snapshot_where(&host, |s| {
+            s.entries.contains_key("beta") && !s.entries.contains_key("alpha")
+        })
+        .await;
         reg.register(desc("gamma"), fake("gamma")).unwrap();
-        // Drain those updates before arming the gate so the queue is
-        // empty when the invalidation pair lands.
         let _ = await_snapshot_where(&host, |s| {
             s.entries.contains_key("gamma") && !s.entries.contains_key("alpha")
         })
         .await;
 
-        // Sanity: the registry-side counter is still zero at this point
-        // (process_registry_change does NOT bump it unless the queue
-        // overflows; the empty-queue register/unregister path never does).
+        // Sanity: causal setup keeps publications current and avoids overflow,
+        // so no replacement has occurred before the explicit invalidation.
         assert_eq!(
             host.inner.replacement_count.load(Ordering::SeqCst),
             0,

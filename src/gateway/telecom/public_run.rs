@@ -744,7 +744,7 @@ mod tests {
     #[tokio::test]
     async fn admitted_live_witness_enables_lookup_but_revocation_discards_runner_or_a_and_history()
     {
-        use crate::gateway::channel::{Channel, OutboundMessage};
+        use crate::gateway::channel::{Channel, CoreSmsChannelExt, OutboundMessage};
         use crate::gateway::interfaces::sms::{
             test_private_channel, transport::test_private_context, SmsChannel,
         };
@@ -777,7 +777,9 @@ mod tests {
                 &self,
                 ctx: &TelecomPublicContext,
             ) -> Option<PrivateSmsLease> {
-                self.0.private_sms_lease(ctx, "+15550000001").await
+                (&self.0 as &dyn Channel)
+                    .private_sms_lease(ctx, "+15550000001")
+                    .await
             }
             async fn send_approved_reply(
                 &self,
@@ -786,7 +788,7 @@ mod tests {
                 cancel: &CancellationToken,
                 validate: &(dyn for<'a> Fn(&'a str) -> bool + Send + Sync),
             ) -> Result<ApprovedReplyOutcome, crate::gateway::channel::ChannelError> {
-                self.0
+                (&self.0 as &dyn Channel)
                     .send_private_sms(
                         OutboundMessage::text("+15550000001", text),
                         lease,

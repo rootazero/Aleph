@@ -1,71 +1,20 @@
-//! Tool Definition Types
+//! Re-export shim — metadata `ToolDefinition` lives in `aleph-slot-api`.
 //!
-//! Contains tool definition for LLM function calling.
+//! The six-field struct (`name` / `description` / `parameters` /
+//! `requires_confirmation` / `category` / `strict`), the
+//! `#[non_exhaustive]` attribute, the `new` constructor, and the
+//! `with_confirmation` / `with_strict` builders all moved to
+//! `aleph_slot_api::metadata::ToolDefinition` as of P0 Task 2.
+//! This file re-exports it so any
+//! `crate::tool_metadata::types::definition::ToolDefinition` path
+//! still compiles.
+//!
+//! Note: this is the *metadata* `ToolDefinition` (provider-facing
+//! schema form). The *loop-side* `ToolDefinition` lives at
+//! `aleph_slot_api::tool::ToolDefinition` (and
+//! `crate::tools::service::ToolDefinition`); the two are distinct
+//! types and are kept apart on purpose — the loop-side form
+//! carries source + idempotence / concurrency metadata, the
+//! metadata form is the panel-rendering shape.
 
-use super::category::ToolCategory;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-/// Tool definition for LLM function calling
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
-    pub requires_confirmation: bool,
-    pub category: ToolCategory,
-    #[serde(default)]
-    pub strict: bool,
-}
-
-impl ToolDefinition {
-    #[allow(deprecated)]
-    pub fn new(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        parameters: Value,
-        category: ToolCategory,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            description: description.into(),
-            parameters,
-            requires_confirmation: false,
-            category,
-            strict: false,
-        }
-    }
-
-    #[must_use]
-    pub const fn with_confirmation(mut self, requires: bool) -> Self {
-        self.requires_confirmation = requires;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_strict(mut self, strict: bool) -> Self {
-        self.strict = strict;
-        self
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn definition_builders_round_trip() {
-        let def = ToolDefinition::new(
-            "search",
-            "Search the web",
-            serde_json::json!({"type": "object"}),
-            ToolCategory::Builtin,
-        )
-        .with_confirmation(true)
-        .with_strict(true);
-        assert_eq!(def.name, "search");
-        assert!(def.requires_confirmation);
-        assert!(def.strict);
-    }
-}
+pub use aleph_slot_api::metadata::ToolDefinition;

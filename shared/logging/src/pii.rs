@@ -279,10 +279,7 @@ mod tests {
             scrubbed.contains(r#""password":"[REDACTED]""#),
             "got: {scrubbed}"
         );
-        assert!(
-            !scrubbed.contains("hunter2supersecret"),
-            "got: {scrubbed}"
-        );
+        assert!(!scrubbed.contains("hunter2supersecret"), "got: {scrubbed}");
     }
 
     #[test]

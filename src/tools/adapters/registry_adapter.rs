@@ -524,7 +524,7 @@ pub fn build_tool_adapters_from_tools<R: ToolRegistry + ?Sized + 'static>(
     let mut adapters: Vec<Box<dyn LoopTool>> = Vec::new();
 
     for tool in unified_tools {
-        if !tool.is_active {
+        if !tool.is_active() {
             continue;
         }
 
@@ -1188,7 +1188,7 @@ mod tests {
         });
 
         let mut inactive = make_unified_tool("disabled", "Should not appear");
-        inactive.is_active = false;
+        inactive.set_active(false);
 
         let tools = vec![make_unified_tool("active", "Active tool"), inactive];
 

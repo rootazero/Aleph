@@ -72,7 +72,7 @@ use std::path::PathBuf;
 
 use tokio::sync::RwLock;
 
-use super::hooks::HookExecutor;
+use super::hooks::HookRegistry;
 use super::visibility::ScopeKey;
 use super::{ExtensionManager, PluginRegistry, ToolRegistration};
 use crate::discovery::DiscoveryManager;
@@ -86,7 +86,7 @@ use crate::sync_primitives::{Arc, AtomicU64, RwLock as StdRwLock};
 /// recomputation when its readiness write changes a plugin's activity.
 #[derive(Clone)]
 pub(super) struct Views {
-    pub(super) hook_executor: Arc<RwLock<HookExecutor>>,
+    pub(super) hook_executor: Arc<HookRegistry>,
     pub(super) plugin_registry: Arc<RwLock<PluginRegistry>>,
     pub(super) discovery: Arc<DiscoveryManager>,
     pub(super) skill_system: crate::skill::SkillSystem,

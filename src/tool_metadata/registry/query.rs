@@ -21,7 +21,7 @@ impl ToolQuery {
     /// Returns all tools where `is_active == true`.
     pub async fn list_all(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
-        tools.values().filter(|t| t.is_active).cloned().collect()
+        tools.values().filter(|t| t.is_active()).cloned().collect()
     }
 
     /// List builtin tools only
@@ -31,7 +31,7 @@ impl ToolQuery {
         let tools = self.tools.read().await;
         let mut builtins: Vec<_> = tools
             .values()
-            .filter(|t| t.is_builtin && t.is_active)
+            .filter(|t| t.is_builtin && t.is_active())
             .cloned()
             .collect();
         builtins.sort_by_key(|t| t.sort_order);
@@ -43,7 +43,7 @@ impl ToolQuery {
     /// Returns all active tools suitable for Settings UI display.
     pub async fn list_all_for_ui(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
-        let mut result: Vec<_> = tools.values().filter(|t| t.is_active).cloned().collect();
+        let mut result: Vec<_> = tools.values().filter(|t| t.is_active()).cloned().collect();
         result.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then(a.name.cmp(&b.name)));
         result
     }
@@ -57,7 +57,7 @@ impl ToolQuery {
         let mut result: Vec<_> = tools
             .values()
             .filter(|t| {
-                t.is_active
+                t.is_active()
                     && (t.visible_channels.is_empty() || t.visible_channels.contains(&channel))
             })
             .cloned()
@@ -186,7 +186,7 @@ impl ToolQuery {
         let mut best: [Option<&UnifiedTool>; 3] = [None, None, None];
 
         for tool in tools.values() {
-            if !tool.is_active {
+            if !tool.is_active() {
                 continue;
             }
             // Lowercase the name once and each alias once.
@@ -254,7 +254,7 @@ impl ToolQuery {
             let tools = self.tools.read().await;
             tools
                 .values()
-                .filter(|t| t.is_active)
+                .filter(|t| t.is_active())
                 .map(|t| {
                     (
                         t.name.clone(),
@@ -308,7 +308,7 @@ impl ToolQuery {
         let tools = self.tools.read().await;
         tools
             .values()
-            .any(|t| t.is_active && t.name.to_lowercase().starts_with(&prefix))
+            .any(|t| t.is_active() && t.name.to_lowercase().starts_with(&prefix))
     }
 
     /// List direct children of a namespace
@@ -321,7 +321,7 @@ impl ToolQuery {
         tools
             .values()
             .filter(|t| {
-                if !t.is_active {
+                if !t.is_active() {
                     return false;
                 }
                 let name_lower = t.name.to_lowercase();
@@ -351,7 +351,7 @@ impl ToolQuery {
     /// 5. Skill (Claude Agent skills)
     pub async fn list_root_commands(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
-        let mut result: Vec<_> = tools.values().filter(|t| t.is_active).cloned().collect();
+        let mut result: Vec<_> = tools.values().filter(|t| t.is_active()).cloned().collect();
 
         // Sort by source priority, then sort_order, then name
         result.sort_by(|a, b| {
@@ -370,7 +370,7 @@ impl ToolQuery {
         tools
             .values()
             .filter(|t| {
-                t.is_active && matches!(&t.source, ToolSource::Mcp { server: s } if s == server)
+                t.is_active() && matches!(&t.source, ToolSource::Mcp { server: s } if s == server)
             })
             .cloned()
             .collect()
@@ -387,7 +387,7 @@ impl ToolQuery {
         let mut results: Vec<_> = tools
             .values()
             .filter(|t| {
-                t.is_active
+                t.is_active()
                     && (t.name.to_lowercase().contains(&query_lower)
                         || t.description.to_lowercase().contains(&query_lower))
             })
@@ -413,6 +413,6 @@ impl ToolQuery {
     /// Get active tool count
     pub async fn active_count(&self) -> usize {
         let tools = self.tools.read().await;
-        tools.values().filter(|t| t.is_active).count()
+        tools.values().filter(|t| t.is_active()).count()
     }
 }

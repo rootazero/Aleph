@@ -463,6 +463,9 @@ pub struct HookExecutor {
     /// disables the gate entirely (the default, so tests run commands freely).
     consent: Option<Arc<ShellHookConsent>>,
     memo_sink: Option<Arc<dyn HookMemoSink>>,
+    /// Metadata follows config insertion order, before any execution/view sort.
+    metadata: Vec<Option<super::registry::HookMetadata>>,
+    rejected: Vec<(HookConfig, super::registry::HookMetadata)>,
 }
 
 impl HookExecutor {
@@ -470,8 +473,11 @@ impl HookExecutor {
     #[must_use]
     pub fn new(hooks: Vec<HookConfig>) -> Self {
         let regex_cache = Self::build_regex_cache(&hooks);
+        let metadata = vec![None; hooks.len()];
         Self {
             hooks,
+            metadata,
+            rejected: Vec::new(),
             command_timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
             regex_cache,
             consent: None,
@@ -524,20 +530,53 @@ impl HookExecutor {
             self.cache_regex(matcher);
         }
         self.hooks.push(hook);
+        self.metadata.push(None);
+    }
+
+    /// Derive a registered immutable projection while preserving shared resources
+    /// and the cache's compile-once behavior. Data is installed as one value.
+    pub(super) fn rebuilt(
+        &self,
+        hooks: Vec<HookConfig>,
+        metadata: Vec<Option<super::registry::HookMetadata>>,
+        rejected: Vec<(HookConfig, super::registry::HookMetadata)>,
+    ) -> Self {
+        debug_assert_eq!(hooks.len(), metadata.len());
+        let mut next = self.clone();
+        next.hooks.clear();
+        next.metadata.clear();
+        next.rejected.clear();
+        for hook in hooks {
+            next.add_hook(hook);
+        }
+        next.metadata = metadata;
+        next.rejected = rejected;
+        next
     }
 
     /// Remove every hook whose `plugin_name` starts with `prefix`.
     ///
-    /// Used by the hot-reload path: user-level hooks loaded from
-    /// `~/.aleph/hooks.json` are tagged `user:global` / `user:project` /
-    /// `user:project-local`, so calling `remove_by_plugin_prefix("user:")`
-    /// drops the prior layer before re-appending the freshly-parsed config —
-    /// preventing duplicate registrations on every hot-reload tick.
+    /// Legacy manually-built executor API. Registered production layers are
+    /// replaced through HookRegistry and never use labels as authority.
     ///
     /// Returns the number of hooks removed.
     pub fn remove_by_plugin_prefix(&mut self, prefix: &str) -> usize {
         let before = self.hooks.len();
-        self.hooks.retain(|h| !h.plugin_name.starts_with(prefix));
+        let mut metadata = self.metadata.drain(..);
+        let mut retained_metadata = Vec::new();
+        self.hooks.retain(|h| {
+            let entry = metadata.next().flatten();
+            if h.plugin_name.starts_with(prefix) {
+                false
+            } else {
+                retained_metadata.push(entry);
+                true
+            }
+        });
+        drop(metadata);
+        self.metadata = retained_metadata;
+        self.rejected
+            .retain(|(h, _)| !h.plugin_name.starts_with(prefix));
         // Regex cache is keyed by matcher, not plugin — entries become
         // harmlessly orphaned, not stale; cleanup on the next compile is
         // sufficient. Re-building the whole cache here would be wasted work.
@@ -1177,16 +1216,17 @@ impl HookExecutor {
         let mut interceptors: Vec<_> = self
             .hooks
             .iter()
-            .filter(|h| h.event == event && h.kind == HookKind::Interceptor)
+            .enumerate()
+            .filter(|(_, h)| h.event == event && h.kind == HookKind::Interceptor)
             .collect();
 
         // Sort by priority (lower value = earlier execution)
-        interceptors.sort_by_key(|h| h.priority.as_i32());
+        interceptors.sort_by_key(|(_, h)| h.priority.as_i32());
 
         let mut current_context = context;
         let visibility = crate::extension::visibility::VisibilityCtx::for_session();
 
-        for hook in interceptors {
+        for (index, hook) in interceptors {
             // Check matcher pattern
             if !self.matches_pattern(hook, &current_context) {
                 continue;
@@ -1209,6 +1249,21 @@ impl HookExecutor {
 
             // Execute all actions for this hook
             for action in &hook.actions {
+                if let Some(reason) = self
+                    .metadata
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .and_then(super::registry::HookMetadata::ownership_unavailable_reason)
+                {
+                    accumulated.blocked = true;
+                    accumulated.denied = true;
+                    accumulated.block_reason = Some(reason.clone());
+                    accumulated.deny_reason = Some(reason);
+                    if let Some(sink) = &self.memo_sink {
+                        sink.record(event, Some(&hook.plugin_name), "blocked").await;
+                    }
+                    return Ok((current_context, accumulated));
+                }
                 let action_result = self
                     .execute_action(
                         action,
@@ -1335,7 +1390,23 @@ impl HookExecutor {
     /// the order hooks would run.
     #[must_use]
     pub fn inventory(&self) -> Vec<super::HookInventoryEntry> {
-        let mut out: Vec<_> = self.hooks.iter().map(|h| self.describe(h)).collect();
+        let mut out: Vec<_> = self
+            .hooks
+            .iter()
+            .enumerate()
+            .map(|(index, hook)| {
+                let mut row = self.describe(hook);
+                if let Some(Some(metadata)) = self.metadata.get(index) {
+                    metadata.decorate(&mut row);
+                }
+                row
+            })
+            .collect();
+        out.extend(self.rejected.iter().map(|(hook, metadata)| {
+            let mut row = self.describe(hook);
+            metadata.decorate(&mut row);
+            row
+        }));
         out.sort_by(|a, b| a.event.cmp(&b.event).then(a.priority.cmp(&b.priority)));
         out
     }
@@ -1385,6 +1456,12 @@ impl HookExecutor {
             reachable,
             issue,
             consent: self.consent_state(hook),
+            hook_id: None,
+            source_identity: None,
+            requested_priority: None,
+            effective_priority: None,
+            admission: None,
+            admission_reason: None,
         }
     }
 
@@ -1426,9 +1503,10 @@ impl HookExecutor {
         let observers: Vec<_> = self
             .hooks
             .iter()
-            .filter(|h| h.event == event && h.kind == HookKind::Observer)
-            .filter(|h| self.matches_pattern(h, context))
-            .filter(|h| self.project_scope_allows(h, &visibility))
+            .enumerate()
+            .filter(|(_, h)| h.event == event && h.kind == HookKind::Observer)
+            .filter(|(_, h)| self.matches_pattern(h, context))
+            .filter(|(_, h)| self.project_scope_allows(h, &visibility))
             .collect();
 
         if observers.is_empty() {
@@ -1444,12 +1522,27 @@ impl HookExecutor {
         // Execute all observers in parallel
         let futures: Vec<_> = observers
             .into_iter()
-            .map(|hook| async move {
+            .map(|(index, hook)| async move {
                 let timeout_override = hook.timeout_secs.map(Duration::from_secs);
                 // Per hook, as in `execute_interceptors`'s twin: the spelling
                 // this hook was registered under.
                 let event_name = hook.event_name();
                 for action in &hook.actions {
+                    if let Some(reason) = self
+                        .metadata
+                        .get(index)
+                        .and_then(Option::as_ref)
+                        .and_then(super::registry::HookMetadata::ownership_unavailable_reason)
+                    {
+                        if let Some(sink) = &self.memo_sink {
+                            sink.record(event, Some(&hook.plugin_name), "error").await;
+                        }
+                        warn!(
+                            "Observer hook action from plugin '{}' refused: {}",
+                            hook.plugin_name, reason
+                        );
+                        return;
+                    }
                     match self
                         .execute_action(
                             action,

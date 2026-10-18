@@ -1913,6 +1913,15 @@ async fn deferred_results_emit_one_tool_result_per_skipped_call() {
     let turn = uuid::Uuid::new_v4();
 
     harness
+        .emit_deferred_tool_results(&sid, turn, &[])
+        .await
+        .expect("empty emit_deferred_tool_results should succeed");
+    assert!(
+        session.snapshot().await.is_empty(),
+        "empty deferred calls must not write events"
+    );
+
+    harness
         .emit_deferred_tool_results(&sid, turn, &calls)
         .await
         .expect("emit_deferred_tool_results should succeed");

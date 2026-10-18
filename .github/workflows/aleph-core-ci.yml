@@ -20,6 +20,9 @@ on:
       - 'desktop/shell/tauri.lite.conf.json'
       - 'scripts/check_panel_dist.mjs'
       - 'scripts/check_webview_baseline.mjs'
+      - 'crates/aleph-slot-api/**'
+      - 'scripts/test-shared.sh'
+      - 'qa/browser_live/check_memory.py'
       - '.github/workflows/aleph-core-ci.yml'
   pull_request:
     paths:
@@ -39,6 +42,10 @@ on:
       - 'desktop/shell/tauri.lite.conf.json'
       - 'scripts/check_panel_dist.mjs'
       - 'scripts/check_webview_baseline.mjs'
+      - 'crates/aleph-slot-api/**'
+      - 'scripts/test-shared.sh'
+      - 'qa/browser_live/check_memory.py'
+      - '.github/workflows/aleph-core-ci.yml'
 
 env:
   CARGO_TERM_COLOR: always
@@ -303,6 +310,29 @@ jobs:
       # server-startup crash hid whatever follows `provider_rpc_probe`
       # alphabetically for this entire release cycle. The exit code is
       # unchanged: any failure still fails the step.
+      - name: Prepare guarded full Cargo metadata
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          subprocess.run([sys.executable, "qa/browser_live/check_memory.py"], check=True)
+
+          metadata_path = Path(os.environ["RUNNER_TEMP"]) / "aleph-task9-metadata.json"
+          with metadata_path.open("w", encoding="utf-8", newline="\n") as metadata_file:
+              subprocess.run(
+                  ["cargo", "metadata", "--format-version", "1", "--locked"],
+                  check=True,
+                  stdout=metadata_file,
+                  text=True,
+                  encoding="utf-8",
+              )
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8", newline="\n") as github_env:
+              github_env.write(f"ALEPH_TASK9_METADATA_JSON={metadata_path}\n")
+
       - name: Run integration tests
         shell: bash
         run: bash scripts/ci_run_with_resource_log.sh cargo test -p alephcore --features test-helpers --test '*' --no-fail-fast

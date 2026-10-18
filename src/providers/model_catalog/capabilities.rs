@@ -1607,38 +1607,7 @@ pub fn binds_thinking_to_prefix(model: &str) -> bool {
         .any(|prefix| prefix_matches(&canon, prefix))
 }
 
-/// Canonical id prefixes of Claude models whose API strips thinking blocks from
-/// turns before the current user turn by itself (Opus 4.1 and earlier, Sonnet
-/// 4.5 and earlier, every Haiku through 4.5 — docs.claude.com context-editing,
-/// "keep only the last turn's thinking" defaults). A closed list of shipped
-/// models: anything newer or unknown preserves prior-turn thinking, which is
-/// what the API does for Opus 4.5+, Sonnet 4.6+ and the Claude 5 family.
-///
-/// Membership only — order does not matter, so no shadow guard applies.
-const STRIPS_PRIOR_TURN_THINKING: &[&str] = &[
-    "claude-3",
-    "claude-opus-4-0",
-    "claude-opus-4-1",
-    "claude-sonnet-4-0",
-    "claude-sonnet-4-5",
-    "claude-haiku-4-5",
-];
-
-/// The 4.0 generation's canonical ids (`claude-opus-4-20250514` loses its date
-/// stamp in canonicalisation). Matched exactly: as prefixes they would swallow
-/// every later 4.x model, which preserves.
-const STRIPS_PRIOR_TURN_THINKING_EXACT: &[&str] = &["claude-opus-4", "claude-sonnet-4"];
-
-/// True when `model`'s API drops thinking from earlier user turns itself, so
-/// sending it is wire weight the model never reads. Unknown models → `false`.
-#[must_use]
-pub fn strips_prior_turn_thinking(model: &str) -> bool {
-    let canon = canonicalize_model_id(model);
-    STRIPS_PRIOR_TURN_THINKING_EXACT.contains(&canon.as_str())
-        || STRIPS_PRIOR_TURN_THINKING
-            .iter()
-            .any(|prefix| prefix_matches(&canon, prefix))
-}
+pub use aleph_slot_api::ai_reasoning::strips_prior_turn_thinking;
 
 /// Conservative context window (tokens) for models absent from the capability
 /// catalogue — keeps the occupancy gauge meaningful for custom / local models

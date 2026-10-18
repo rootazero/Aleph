@@ -260,17 +260,6 @@ pub fn build_pending_operation(
 
 pub use crate::gateway::telecom::SmsInboundMeta;
 
-impl SmsInboundMeta {
-    /// Read back the typed metadata attached by [`convert_inbound`]. Reads
-    /// `InboundMessage::metadata` only; `raw` is not consulted.
-    pub fn from_message(msg: &InboundMessage) -> Option<Self> {
-        msg.metadata.iter().find_map(|m| match m {
-            MessageMeta::Sms(meta) => Some((**meta).clone()),
-            _ => None,
-        })
-    }
-}
-
 /// Unambiguous channel-level message id: `<len(account)>:<account>:<message>`.
 /// The length prefix makes the split unique even if an id contains `:`, so two
 /// provider accounts can never collide on the same provider message id. The

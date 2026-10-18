@@ -6,19 +6,19 @@ use crate::providers::adapter::{ProtocolAdapter, RequestPayload, ToolChoice};
 use crate::providers::delta::ProviderDelta;
 use crate::providers::openai::{OpenAiFunction, OpenAiTool};
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 use futures::StreamExt as _;
 use futures::TryStreamExt;
-use futures::stream::BoxStream;
 use serde_json::json;
 use std::collections::VecDeque;
 use tracing::debug;
 
 use super::sse::parse_chat_sse_event;
-use super::{OpenAiProtocol, sanitize_tool_name};
+use super::{sanitize_tool_name, OpenAiProtocol};
 
 use crate::providers::protocols::openai_common::max_tokens::uses_max_completion_tokens_for;
 use crate::providers::protocols::openai_common::openai_strict_schema::{
-    StrictResult, ensure_openai_tool_envelope, lenient_multi_type_rewrite, normalize_strict_schema,
+    ensure_openai_tool_envelope, lenient_multi_type_rewrite, normalize_strict_schema, StrictResult,
 };
 use crate::providers::protocols::openai_common::provider_policy::build_payload_policy_for_model;
 use crate::providers::protocols::openai_common::response_format::to_chat_response_format;

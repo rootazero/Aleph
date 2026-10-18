@@ -532,10 +532,10 @@ Operations (tagged `operation`):\n\
     /// parser would then have to keep in sync.
     #[must_use]
     pub fn definition(&self) -> crate::ToolDefinition {
-        crate::ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: Self::DESCRIPTION.to_string(),
-            parameters: serde_json::json!({
+        crate::ToolDefinition::new(
+            Self::NAME,
+            Self::DESCRIPTION,
+            serde_json::json!({
                 "type": "object",
                 "properties": {
                     "operation": {
@@ -553,10 +553,8 @@ Operations (tagged `operation`):\n\
                 },
                 "required": ["operation"],
             }),
-            requires_confirmation: false,
-            category: crate::ToolCategory::Builtin,
-            strict: false,
-        }
+            crate::ToolCategory::Builtin,
+        )
     }
 }
 

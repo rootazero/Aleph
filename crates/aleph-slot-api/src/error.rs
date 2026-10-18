@@ -1,0 +1,1007 @@
+//! `AlephError`, `ErrorClass`, `AlephException`, `Result<T>`.
+//!
+//! This is the canonical authority for error types across the Aleph stack.
+//! Lives in `aleph-slot-api` because every other crate (`alephcore`,
+//! panel/wasm, ffi, public SDK) needs to read or construct these values, and
+//! none of them should be the source. `alephcore` re-exports them at its
+//! crate root so existing `crate::error::AlephError`-style imports keep
+//! compiling without a churn PR — see `alephcore::error` for the
+//! re-export shim.
+//!
+//! ## Identity surface (must NOT change without an explicit proposal)
+//!
+//! * 36 `#[error("…")]` Display strings on `AlephError` variants
+//! * 24 named constructors on `impl AlephError`
+//! * 4 methods: `suggestion`, `user_friendly_message`, `class`, `is_transient`
+//! * 5 `From` impls: `serde_json::Error`, `std::io::Error`,
+//!   `AlephError → AlephException`, `String → AlephException`,
+//!   `&str → AlephException`
+//! * `ErrorClass` enum: `Transient | Recoverable | Fixable | Unexpected`
+//! * `AlephException::Error` (single unit variant — UniFFI 0.25 `flat_error`
+//!   workaround)
+//! * `Result<T> = std::result::Result<T, AlephError>`
+//!
+//! The companion golden tests (`tests/error_compat.rs`) pin Display strings,
+//! classification predicates, helper call paths, and From-impl prefixes.
+//!
+//! ## What moved out vs. stayed
+//!
+//! `user_friendly_message` for `MissingInput` used to call
+//! `crate::utils::text_format::truncate_text(message, 100)`. That call now
+//! routes through `crate::text::truncate_text` — same definition, same
+//! body, same 100-character soft cap. The four sibling truncate helpers
+//! (`truncate_with_marker`, `truncate_chars`, `truncate_reserving`,
+//! `truncate_bytes`) remain in `alephcore::utils::text_format` because
+//! their contracts differ — bytes vs chars, hard vs soft cap, marker vs
+//! none — and that survey explicitly refused to fold them.
+
+use thiserror::Error;
+
+use crate::text::truncate_text;
+
+#[derive(Debug, Error)]
+pub enum AlephError {
+    /// Error occurred during clipboard operations
+    #[error("Clipboard error: {message}")]
+    ClipboardError {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// Error occurred during input simulation (keyboard/mouse)
+    #[error("Input simulation error: {message}")]
+    InputSimulationError {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// Error occurred when invoking callbacks
+    #[error("Callback error: {message}")]
+    CallbackError {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// Error occurred during configuration or database operations
+    #[error("Configuration/Database error: {message}")]
+    ConfigError {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// Network error during API calls
+    #[error("Network error: {message}")]
+    NetworkError {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// Authentication error (invalid API key)
+    #[error("Authentication error: {message}")]
+    AuthenticationError {
+        message: String,
+        provider: String,
+        suggestion: Option<String>,
+    },
+
+    /// Rate limit error (too many requests)
+    #[error("Rate limit error: {message}")]
+    RateLimitError {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// Provider-specific error (API returned error)
+    #[error("Provider error: {message}")]
+    ProviderError {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// The upstream answered with a success status but a body that did not
+    /// match its contract (unparseable JSON, an HTML challenge page where
+    /// data was expected). Distinct from `ProviderError` because the lever
+    /// differs: the backend is reachable and answered, it just no longer
+    /// speaks the protocol we parsed — retrying it unchanged will fail the
+    /// same way until the backend (or our parser) changes.
+    #[error("Invalid response: {message}")]
+    InvalidResponse {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// The upstream rejected the request itself — a 4xx other than
+    /// authentication (401/403) or quota (429). Sending the same request
+    /// again will fail the same way; something about the request as shaped
+    /// (a parameter, an option) has to change.
+    #[error("Request rejected: {message}")]
+    RequestRejected {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// Request timeout
+    #[error("Request timed out")]
+    Timeout { suggestion: Option<String> },
+
+    /// No provider available for routing
+    #[error("No provider available")]
+    NoProviderAvailable { suggestion: Option<String> },
+
+    /// Invalid configuration
+    #[error("Invalid configuration: {message}")]
+    InvalidConfig {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// Keychain access error
+    #[error("Keychain error: {message}")]
+    KeychainError {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// Generic error for other cases
+    #[error("Aleph error: {message}")]
+    Other {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// Permission denied: a missing OS grant (Accessibility / Input
+    /// Monitoring — [`Self::permission_denied`] carries that suggestion), an
+    /// upstream 403, or a deliberate policy refusal.
+    #[error("Permission denied: {message}")]
+    PermissionDenied {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// Video transcript extraction error
+    #[error("Video error: {message}")]
+    VideoError {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// File or resource not found
+    #[error("Not found: {0}")]
+    NotFound(String),
+
+    /// I/O operation error
+    #[error("I/O error: {0}")]
+    IoError(String),
+
+    /// Git operation error
+    #[error("Git error: {0}")]
+    GitError(String),
+
+    /// MCP tool not found
+    #[error("MCP tool not found: {0}")]
+    McpToolNotFound(String),
+
+    /// MCP request timeout
+    #[error("MCP request timed out")]
+    McpTimeout,
+
+    /// Native tool not found
+    #[error("Tool not found: {name}")]
+    ToolNotFound {
+        name: String,
+        suggestion: Option<String>,
+    },
+
+    /// Operation was cancelled by user
+    #[error("Operation cancelled")]
+    Cancelled,
+
+    /// Task requires additional user input to complete
+    /// This is returned when an LLM response indicates it cannot proceed
+    /// without more information from the user.
+    #[error("Task '{task_name}' needs additional input: {message}")]
+    MissingInput {
+        task_id: String,
+        task_name: String,
+        message: String,
+    },
+
+    /// Runtime manager error (uv, fnm, yt-dlp, etc.)
+    #[error("Runtime error [{runtime_id}]: {message}")]
+    RuntimeError {
+        message: String,
+        runtime_id: String,
+        suggestion: Option<String>,
+    },
+
+    /// Data corruption or integrity error
+    #[error("Data corruption: {0}")]
+    CorruptData(String),
+
+    /// Channel closed error (internal communication failure)
+    #[error("Channel closed: {0}")]
+    ChannelClosed(String),
+
+    /// Sandbox unavailable error
+    #[error("Sandbox unavailable: {reason}")]
+    SandboxUnavailable { reason: String },
+
+    /// Execution timeout error
+    #[error("Execution timeout after {timeout_secs} seconds")]
+    ExecutionTimeout { timeout_secs: u64 },
+
+    /// Input validation error (content rejected by scanner, schema violation, etc.)
+    #[error("Validation error: {0}")]
+    Validation(String),
+
+    /// ACP harness operation failed with a classified reason.
+    ///
+    /// `code` is the stable wire token from `AcpErrorCode::as_str()`
+    /// (e.g. `"timeout"`, `"session_dead"`, `"auth_required"`). Callers
+    /// (tools, gateway, panel) branch on `code` instead of substring-matching
+    /// the message. `retryable` mirrors acpx's classification.
+    #[error("ACP {code}: {message}")]
+    AcpError {
+        code: String,
+        message: String,
+        retryable: bool,
+    },
+}
+
+impl AlephError {
+    /// Create a clipboard error with a message
+    pub fn clipboard<S: Into<String>>(msg: S) -> Self {
+        Self::ClipboardError {
+            message: msg.into(),
+            suggestion: Some(
+                "Ensure you have copied text or an image before pressing Cmd+~".to_string(),
+            ),
+        }
+    }
+
+    /// Create an input simulation error with a message
+    pub fn input_simulation<S: Into<String>>(msg: S) -> Self {
+        Self::InputSimulationError {
+            message: msg.into(),
+            suggestion: Some("Grant Accessibility permission in System Settings → Privacy & Security → Accessibility".to_string()),
+        }
+    }
+
+    /// Create a callback error with a message
+    pub fn callback<S: Into<String>>(msg: S) -> Self {
+        Self::CallbackError {
+            message: msg.into(),
+            suggestion: Some("This is an internal error. Please restart Aleph.".to_string()),
+        }
+    }
+
+    /// Create a config/database error with a message
+    pub fn config<S: Into<String>>(msg: S) -> Self {
+        Self::ConfigError {
+            message: msg.into(),
+            suggestion: Some("Check your configuration file at ~/.aleph/config.toml".to_string()),
+        }
+    }
+
+    /// Create a network error with a message
+    pub fn network<S: Into<String>>(msg: S) -> Self {
+        Self::NetworkError {
+            message: msg.into(),
+            suggestion: Some("Check your internet connection and try again".to_string()),
+        }
+    }
+
+    /// Create an authentication error with a message and provider
+    pub fn authentication<S: Into<String>, M: Into<String>>(provider: S, msg: M) -> Self {
+        let provider_name = provider.into();
+        let suggestion = format!(
+            "Verify your {provider_name} API key in Settings → Providers → {provider_name}"
+        );
+        Self::AuthenticationError {
+            message: msg.into(),
+            provider: provider_name,
+            suggestion: Some(suggestion),
+        }
+    }
+
+    /// Create a rate limit error with a message
+    pub fn rate_limit<S: Into<String>>(msg: S) -> Self {
+        Self::RateLimitError {
+            message: msg.into(),
+            suggestion: Some("Wait 60 seconds or upgrade your API plan".to_string()),
+        }
+    }
+
+    /// Create a provider error with a message
+    pub fn provider<S: Into<String>>(msg: S) -> Self {
+        Self::ProviderError {
+            message: msg.into(),
+            suggestion: Some(
+                "Try switching to a different AI provider in Settings → Providers".to_string(),
+            ),
+        }
+    }
+
+    /// Create an invalid-response error with a message
+    pub fn invalid_response<S: Into<String>>(msg: S) -> Self {
+        Self::InvalidResponse {
+            message: msg.into(),
+            suggestion: Some(
+                "The service answered but not in the expected format; try a different provider or report a bug".to_string(),
+            ),
+        }
+    }
+
+    /// Create a request-rejected error with a message
+    pub fn request_rejected<S: Into<String>>(msg: S) -> Self {
+        Self::RequestRejected {
+            message: msg.into(),
+            suggestion: Some(
+                "The service refused the request itself; check the parameters being sent"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// Create an invalid config error with a message
+    pub fn invalid_config<S: Into<String>>(msg: S) -> Self {
+        Self::InvalidConfig {
+            message: msg.into(),
+            suggestion: Some(
+                "Edit your configuration in Settings or check ~/.aleph/config.toml".to_string(),
+            ),
+        }
+    }
+
+    /// Create a keychain error with a message
+    pub fn keychain<S: Into<String>>(msg: S) -> Self {
+        Self::KeychainError {
+            message: msg.into(),
+            suggestion: Some("Check Keychain Access permissions in System Settings".to_string()),
+        }
+    }
+
+    /// Create a generic error with a message
+    pub fn other<S: Into<String>>(msg: S) -> Self {
+        Self::Other {
+            message: msg.into(),
+            suggestion: None,
+        }
+    }
+
+    /// Create a permission denied error with a message
+    pub fn permission_denied<S: Into<String>>(msg: S) -> Self {
+        Self::PermissionDenied {
+            message: msg.into(),
+            suggestion: Some("Grant required permissions in System Settings → Privacy & Security → Accessibility and Input Monitoring".to_string()),
+        }
+    }
+
+    /// Create a video transcript extraction error with a message
+    pub fn video<S: Into<String>>(msg: S) -> Self {
+        Self::VideoError {
+            message: msg.into(),
+            suggestion: Some("Check if the video has captions available. Try a different video or ensure you have internet connectivity.".to_string()),
+        }
+    }
+
+    /// Create a video transcript extraction error with a custom suggestion
+    pub fn video_with_suggestion<S: Into<String>, T: Into<String>>(msg: S, suggestion: T) -> Self {
+        Self::VideoError {
+            message: msg.into(),
+            suggestion: Some(suggestion.into()),
+        }
+    }
+
+    /// Get the suggestion for this error, if available
+    ///
+    /// Returns a user-friendly actionable suggestion for how to resolve the error.
+    #[must_use]
+    pub fn suggestion(&self) -> Option<&str> {
+        match self {
+            Self::ClipboardError { suggestion, .. }
+            | Self::InputSimulationError { suggestion, .. }
+            | Self::CallbackError { suggestion, .. }
+            | Self::ConfigError { suggestion, .. }
+            | Self::NetworkError { suggestion, .. }
+            | Self::AuthenticationError { suggestion, .. }
+            | Self::RateLimitError { suggestion, .. }
+            | Self::ProviderError { suggestion, .. }
+            | Self::InvalidResponse { suggestion, .. }
+            | Self::RequestRejected { suggestion, .. }
+            | Self::Timeout { suggestion }
+            | Self::NoProviderAvailable { suggestion }
+            | Self::InvalidConfig { suggestion, .. }
+            | Self::KeychainError { suggestion, .. }
+            | Self::Other { suggestion, .. }
+            | Self::PermissionDenied { suggestion, .. }
+            | Self::VideoError { suggestion, .. }
+            | Self::ToolNotFound { suggestion, .. }
+            | Self::RuntimeError { suggestion, .. } => suggestion.as_deref(),
+            // Simple error types without suggestion field
+            Self::NotFound(_)
+            | Self::IoError(_)
+            | Self::GitError(_)
+            | Self::McpToolNotFound(_)
+            | Self::McpTimeout
+            | Self::Cancelled
+            | Self::MissingInput { .. }
+            | Self::CorruptData(_)
+            | Self::ChannelClosed(_)
+            | Self::SandboxUnavailable { .. }
+            | Self::ExecutionTimeout { .. }
+            | Self::Validation(_)
+            | Self::AcpError { .. } => None,
+        }
+    }
+
+    /// Get a user-friendly error message suitable for display in the UI
+    ///
+    /// This method converts technical error messages into friendly,
+    /// actionable messages that users can understand and act upon.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use aleph_slot_api::AlephError;
+    ///
+    /// let err = AlephError::authentication("OpenAI", "401 Unauthorized");
+    /// let msg = err.user_friendly_message();
+    /// assert!(msg.contains("Authentication"));
+    /// ```
+    #[must_use]
+    pub fn user_friendly_message(&self) -> String {
+        match self {
+            Self::AuthenticationError { .. } => {
+                "Authentication failed. Please check your API key in settings.".to_string()
+            }
+            Self::RateLimitError { .. } => {
+                "Rate limit exceeded. Please try again in a few moments.".to_string()
+            }
+            Self::NetworkError { .. } => {
+                "Network connection failed. Please check your internet connection.".to_string()
+            }
+            Self::Timeout { .. } => {
+                "Request timed out. The AI service is taking too long to respond. Please try again."
+                    .to_string()
+            }
+            Self::NoProviderAvailable { .. } => {
+                "No AI provider is configured. Please configure at least one provider in settings."
+                    .to_string()
+            }
+            Self::InvalidConfig { message, .. } => {
+                format!("Configuration error: {message}. Please check your settings.")
+            }
+            Self::ProviderError { message, .. } => {
+                // Show the actual error message for debugging
+                // Previously we hid 5xx errors, but users need to see what went wrong
+                format!("AI service error: {message}. Please try again.")
+            }
+            Self::InvalidResponse { message, .. } => {
+                format!("The service returned an unexpected response: {message}")
+            }
+            Self::RequestRejected { message, .. } => {
+                format!("The service rejected the request: {message}")
+            }
+            Self::ClipboardError { message, .. } => {
+                format!("Clipboard error: {message}. Please check your system permissions.")
+            }
+            Self::InputSimulationError { message, .. } => {
+                format!(
+                    "Input simulation error: {message}. Please check accessibility permissions."
+                )
+            }
+            Self::ConfigError { message, .. } => {
+                format!("Configuration error: {message}. Please check your settings file.")
+            }
+            Self::KeychainError { message, .. } => {
+                format!("Keychain access error: {message}. Please check your system permissions.")
+            }
+            Self::CallbackError { message, .. } => {
+                format!("Internal error: {message}. Please restart the application.")
+            }
+            Self::Other { message, .. } => {
+                format!("An error occurred: {message}. Please try again.")
+            }
+            Self::PermissionDenied { message, .. } => {
+                format!(
+                    "Permission denied: {message}. Please grant required permissions in System Settings."
+                )
+            }
+            Self::VideoError { message, .. } => {
+                format!(
+                    "Video processing error: {message}. Check if the video has captions available."
+                )
+            }
+            Self::NotFound(path) => {
+                format!("File or resource not found: {path}")
+            }
+            Self::IoError(msg) => {
+                format!("I/O error: {msg}")
+            }
+            Self::GitError(msg) => {
+                format!("Git operation failed: {msg}")
+            }
+            Self::McpToolNotFound(tool) => {
+                format!("MCP tool '{tool}' not found")
+            }
+            Self::McpTimeout => "MCP request timed out. Please try again.".to_string(),
+            Self::ToolNotFound { name, suggestion } => {
+                if let Some(sug) = suggestion {
+                    format!("Tool '{name}' not found. {sug}")
+                } else {
+                    format!("Tool '{name}' not found")
+                }
+            }
+            Self::Cancelled => "Operation cancelled.".to_string(),
+            Self::RuntimeError {
+                message,
+                runtime_id,
+                ..
+            } => {
+                format!(
+                    "Runtime '{runtime_id}' error: {message}. Check Settings → Runtimes for details."
+                )
+            }
+            Self::MissingInput {
+                task_name, message, ..
+            } => {
+                format!(
+                    "任务 '{}' 需要更多信息才能继续执行。请提供所需内容后重试。\n详情: {}",
+                    task_name,
+                    // Truncate message if too long (UTF-8 safe, 100 chars + "...").
+                    truncate_text(message, 100)
+                )
+            }
+            Self::CorruptData(msg) => {
+                format!("Data corruption detected: {msg}. Please try again or restore from backup.")
+            }
+            Self::ChannelClosed(msg) => {
+                format!("Internal communication failed: {msg}. Please restart the application.")
+            }
+            Self::SandboxUnavailable { reason } => {
+                format!("Sandbox unavailable: {reason}. Please check your system configuration.")
+            }
+            Self::ExecutionTimeout { timeout_secs } => {
+                format!(
+                    "Execution timed out after {timeout_secs} seconds. The command took too long to complete."
+                )
+            }
+            Self::Validation(msg) => {
+                format!("Validation failed: {msg}")
+            }
+            Self::AcpError {
+                code,
+                message,
+                retryable,
+            } => {
+                if *retryable {
+                    format!(
+                        "ACP harness error ({code}): {message}. This is usually transient — try again."
+                    )
+                } else {
+                    format!("ACP harness error ({code}): {message}.")
+                }
+            }
+        }
+    }
+
+    /// Create a generic tool error
+    pub fn tool<S: Into<String>>(msg: S) -> Self {
+        Self::Other {
+            message: msg.into(),
+            suggestion: None,
+        }
+    }
+
+    /// Create a tool not found error
+    pub fn tool_not_found<S: Into<String>>(name: S) -> Self {
+        Self::ToolNotFound {
+            name: name.into(),
+            suggestion: None,
+        }
+    }
+
+    /// Create a tool not found error with suggestion
+    pub fn tool_not_found_with_suggestion<S: Into<String>, T: Into<String>>(
+        name: S,
+        suggestion: T,
+    ) -> Self {
+        Self::ToolNotFound {
+            name: name.into(),
+            suggestion: Some(suggestion.into()),
+        }
+    }
+
+    /// Create an invalid input error
+    ///
+    /// Used when user input (IDs, parameters, etc.) fails validation.
+    pub fn invalid_input<S: Into<String>>(msg: S) -> Self {
+        Self::InvalidConfig {
+            message: msg.into(),
+            suggestion: Some("Please check the input values and try again".to_string()),
+        }
+    }
+
+    /// Create a cancelled error
+    ///
+    /// Used when an operation is cancelled by the user via `CancellationToken`.
+    #[must_use]
+    pub const fn cancelled() -> Self {
+        Self::Cancelled
+    }
+
+    /// Create a runtime error with a message
+    pub fn runtime<S: Into<String>, M: Into<String>>(runtime_id: S, msg: M) -> Self {
+        Self::RuntimeError {
+            message: msg.into(),
+            runtime_id: runtime_id.into(),
+            suggestion: Some("Check your network connection and try again. If the problem persists, try manually installing the runtime.".to_string()),
+        }
+    }
+
+    /// Create a runtime error with a custom suggestion
+    pub fn runtime_with_suggestion<S: Into<String>, M: Into<String>, T: Into<String>>(
+        runtime_id: S,
+        msg: M,
+        suggestion: T,
+    ) -> Self {
+        Self::RuntimeError {
+            message: msg.into(),
+            runtime_id: runtime_id.into(),
+            suggestion: Some(suggestion.into()),
+        }
+    }
+
+    /// Create a channel closed error
+    ///
+    /// Used when an internal communication channel is unexpectedly closed.
+    pub fn channel_closed<S: Into<String>>(msg: S) -> Self {
+        Self::ChannelClosed(msg.into())
+    }
+
+    /// Map this error to a stable [`ErrorClass`] for cross-cutting decisions.
+    ///
+    /// The match in this method is intentionally exhaustive **without** a
+    /// wildcard arm so that adding a new `AlephError` variant fails at
+    /// compile time until it is consciously classified. Do not "fix" a
+    /// `non_exhaustive_patterns` error by adding `_ => ErrorClass::Unexpected`
+    /// — pick the variant's true class instead. See [`ErrorClass`] for the
+    /// vocabulary and the Stage 1 design doc
+    /// (`docs/superpowers/specs/2026-05-05-harness-stage1-error-class-plan.md`)
+    /// for the rationale.
+    #[must_use]
+    pub const fn class(&self) -> ErrorClass {
+        match self {
+            // Transient — retry typically resolves
+            Self::NetworkError { .. } => ErrorClass::Transient,
+            Self::RateLimitError { .. } => ErrorClass::Transient,
+            Self::ProviderError { .. } => ErrorClass::Transient,
+            // A body that does not parse is backend-side misbehavior of the
+            // same family as a 5xx: another provider answers fine, and the
+            // same provider may heal (a challenge page is not permanent).
+            Self::InvalidResponse { .. } => ErrorClass::Transient,
+            Self::Timeout { .. } => ErrorClass::Transient,
+            Self::McpTimeout => ErrorClass::Transient,
+            Self::ExecutionTimeout { .. } => ErrorClass::Transient,
+            // Fixable — model can self-correct on next turn
+            Self::AuthenticationError { .. } => ErrorClass::Fixable,
+            // The request as shaped was refused (4xx); reshaping it — other
+            // parameters, another provider — can succeed.
+            Self::RequestRejected { .. } => ErrorClass::Fixable,
+            Self::ToolNotFound { .. } => ErrorClass::Fixable,
+            Self::MissingInput { .. } => ErrorClass::Fixable,
+            Self::Validation(_) => ErrorClass::Fixable,
+            // Recoverable — outer loop or fallback path can recover
+            Self::NoProviderAvailable { .. } => ErrorClass::Recoverable,
+            Self::Cancelled => ErrorClass::Recoverable,
+            // Unexpected — genuine system/data/config error; treat as terminal
+            Self::ClipboardError { .. } => ErrorClass::Unexpected,
+            Self::InputSimulationError { .. } => ErrorClass::Unexpected,
+            Self::CallbackError { .. } => ErrorClass::Unexpected,
+            Self::ConfigError { .. } => ErrorClass::Unexpected,
+            Self::InvalidConfig { .. } => ErrorClass::Unexpected,
+            Self::KeychainError { .. } => ErrorClass::Unexpected,
+            Self::Other { .. } => ErrorClass::Unexpected,
+            Self::PermissionDenied { .. } => ErrorClass::Unexpected,
+            Self::VideoError { .. } => ErrorClass::Unexpected,
+            Self::NotFound(_) => ErrorClass::Unexpected,
+            Self::IoError(_) => ErrorClass::Unexpected,
+            Self::GitError(_) => ErrorClass::Unexpected,
+            Self::McpToolNotFound(_) => ErrorClass::Unexpected,
+            Self::RuntimeError { .. } => ErrorClass::Unexpected,
+            Self::CorruptData(_) => ErrorClass::Unexpected,
+            Self::ChannelClosed(_) => ErrorClass::Unexpected,
+            Self::SandboxUnavailable { .. } => ErrorClass::Unexpected,
+            // ACP harness errors — split by retryable flag. Retryable
+            // (timeout/session_dead/spawn_failed) are Transient; the rest
+            // are Fixable (model can switch harness, request creds, etc.)
+            // mirroring acpx's `NormalizedOutputError.retryable` policy.
+            Self::AcpError { retryable, .. } => {
+                if *retryable {
+                    ErrorClass::Transient
+                } else {
+                    ErrorClass::Fixable
+                }
+            }
+        }
+    }
+
+    /// Whether this error is transient (worth retrying with another provider).
+    ///
+    /// **Note:** This predicate is narrower than [`AlephError::class`]'s
+    /// `ErrorClass::Transient` bucket — it omits `ProviderError` and
+    /// `McpTimeout`. New code should prefer `self.class() == ErrorClass::Transient`
+    /// for retry decisions; this method is retained for backwards compatibility
+    /// with existing call sites that have not yet migrated.
+    #[must_use]
+    pub const fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::RateLimitError { .. }
+                | Self::Timeout { .. }
+                | Self::NetworkError { .. }
+                | Self::ExecutionTimeout { .. }
+        )
+    }
+}
+
+/// Type alias for Results using `AlephError`
+pub type Result<T> = std::result::Result<T, AlephError>;
+
+impl From<serde_json::Error> for AlephError {
+    fn from(err: serde_json::Error) -> Self {
+        Self::IoError(format!("JSON serialization error: {err}"))
+    }
+}
+
+impl From<std::io::Error> for AlephError {
+    fn from(err: std::io::Error) -> Self {
+        Self::IoError(err.to_string())
+    }
+}
+
+/// Simple exception enum for `UniFFI` 0.25 compatibility
+///
+/// `UniFFI` 0.25 has bugs with [Error] enum when variants have associated data (`flat_error` issue).
+/// This simple unit-variant enum works. Error details are passed via callback before throwing.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum AlephException {
+    #[error("An error occurred")]
+    Error,
+}
+
+impl From<AlephError> for AlephException {
+    fn from(_error: AlephError) -> Self {
+        // Note: Error details should be sent via callback before converting
+        // Callers should use the pattern: handler.on_error(msg, suggestion); Err(AlephException::Error)?
+        Self::Error
+    }
+}
+
+impl From<String> for AlephException {
+    fn from(_message: String) -> Self {
+        Self::Error
+    }
+}
+
+impl From<&str> for AlephException {
+    fn from(_message: &str) -> Self {
+        Self::Error
+    }
+}
+
+/// Error classification for cross-cutting decisions (retry, guardrail veto,
+/// verification feedback). Stable vocabulary shared by `HarnessError` and
+/// `AlephError`. Future Stage 5 (Guardrails) and Stage 6 (Verification)
+/// dispatch on these classes rather than enumerating concrete variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorClass {
+    /// Caller-side or environment hiccup — retry typically resolves.
+    /// Examples: network blip, provider 5xx, rate limit, timeout.
+    Transient,
+    /// Outer loop or fallback path can recover (try different provider,
+    /// re-run after user intervention). Not the model's fault.
+    /// Examples: user cancellation, no provider available.
+    Recoverable,
+    /// Model can read the error and self-correct on next turn.
+    /// Examples: tool not found, missing input, schema violation, bad auth.
+    Fixable,
+    /// Genuine system / data / config error; neither retry nor model
+    /// adjustment helps. Treat as terminal.
+    /// Examples: I/O failure, corrupt data, OS permission denied.
+    Unexpected,
+}
+
+#[cfg(test)]
+mod tests {
+    //! Migrated verbatim from `src/error.rs::tests` pre-migration.
+    //! 13 unit tests covering constructors, `Display`, `Debug`,
+    //! `suggestion`, and `user_friendly_message` for the variants that
+    //! have those methods.
+
+    use super::*;
+
+    #[test]
+    fn test_clipboard_error_creation() {
+        let err = AlephError::clipboard("access denied");
+        assert!(matches!(err, AlephError::ClipboardError { .. }));
+        assert_eq!(err.to_string(), "Clipboard error: access denied");
+        assert!(err.suggestion().is_some());
+    }
+
+    #[test]
+    fn test_callback_error_creation() {
+        let err = AlephError::callback("callback failed");
+        assert!(matches!(err, AlephError::CallbackError { .. }));
+        assert_eq!(err.to_string(), "Callback error: callback failed");
+        assert!(err.suggestion().is_some());
+    }
+
+    #[test]
+    fn test_error_display() {
+        let err = AlephError::other("generic error");
+        let display = format!("{}", err);
+        assert_eq!(display, "Aleph error: generic error");
+    }
+
+    #[test]
+    fn test_error_debug() {
+        let err = AlephError::clipboard("test");
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("ClipboardError"));
+    }
+
+    #[test]
+    fn test_network_error() {
+        let err = AlephError::network("connection failed");
+        assert!(matches!(err, AlephError::NetworkError { .. }));
+        assert_eq!(err.to_string(), "Network error: connection failed");
+        assert!(err.suggestion().is_some());
+        assert!(err.suggestion().unwrap().contains("internet"));
+    }
+
+    #[test]
+    fn test_authentication_error() {
+        let err = AlephError::authentication("OpenAI", "invalid API key");
+        assert!(matches!(err, AlephError::AuthenticationError { .. }));
+        assert_eq!(err.to_string(), "Authentication error: invalid API key");
+        assert!(err.suggestion().is_some());
+        assert!(err.suggestion().unwrap().contains("OpenAI"));
+    }
+
+    #[test]
+    fn test_rate_limit_error() {
+        let err = AlephError::rate_limit("too many requests");
+        assert!(matches!(err, AlephError::RateLimitError { .. }));
+        assert_eq!(err.to_string(), "Rate limit error: too many requests");
+        assert!(err.suggestion().is_some());
+        assert!(err.suggestion().unwrap().contains("60 seconds"));
+    }
+
+    #[test]
+    fn test_provider_error() {
+        let err = AlephError::provider("API returned 500");
+        assert!(matches!(err, AlephError::ProviderError { .. }));
+        assert_eq!(err.to_string(), "Provider error: API returned 500");
+        assert!(err.suggestion().is_some());
+    }
+
+    #[test]
+    fn test_timeout_error() {
+        let err = AlephError::Timeout {
+            suggestion: Some("Try again".to_string()),
+        };
+        assert_eq!(err.to_string(), "Request timed out");
+        assert_eq!(err.suggestion(), Some("Try again"));
+    }
+
+    #[test]
+    fn test_no_provider_available() {
+        let err = AlephError::NoProviderAvailable {
+            suggestion: Some("Add a provider".to_string()),
+        };
+        assert_eq!(err.to_string(), "No provider available");
+        assert_eq!(err.suggestion(), Some("Add a provider"));
+    }
+
+    #[test]
+    fn test_invalid_config_error() {
+        let err = AlephError::invalid_config("missing API key");
+        assert!(matches!(err, AlephError::InvalidConfig { .. }));
+        assert_eq!(err.to_string(), "Invalid configuration: missing API key");
+        assert!(err.suggestion().is_some());
+    }
+
+    #[test]
+    fn test_suggestion_method() {
+        let err = AlephError::authentication("Claude", "401");
+        assert!(err.suggestion().is_some());
+        let suggestion = err.suggestion().unwrap();
+        assert!(suggestion.contains("Claude"));
+        assert!(suggestion.contains("Settings"));
+    }
+
+    #[test]
+    fn test_user_friendly_message() {
+        let err = AlephError::authentication("OpenAI", "401 Unauthorized");
+        let msg = err.user_friendly_message();
+        assert!(msg.contains("Authentication"));
+        assert!(msg.contains("API key"));
+    }
+}
+
+#[cfg(test)]
+mod error_class_tests {
+    //! Migrated verbatim from `src/error.rs::error_class_tests` —
+    //! 4 tests pinning the `ErrorClass` mapping for the four reference
+    //! variants named in the doc comments on `AlephError::class`.
+
+    use super::{AlephError, ErrorClass};
+
+    #[test]
+    fn network_error_classifies_as_transient() {
+        let e = AlephError::network("connection reset");
+        assert_eq!(e.class(), ErrorClass::Transient);
+    }
+
+    #[test]
+    fn authentication_error_classifies_as_fixable() {
+        let e = AlephError::authentication("anthropic", "invalid key");
+        assert_eq!(e.class(), ErrorClass::Fixable);
+    }
+
+    #[test]
+    fn cancelled_classifies_as_recoverable() {
+        assert_eq!(AlephError::Cancelled.class(), ErrorClass::Recoverable);
+    }
+
+    #[test]
+    fn corrupt_data_classifies_as_unexpected() {
+        assert_eq!(
+            AlephError::CorruptData("bad blob".into()).class(),
+            ErrorClass::Unexpected
+        );
+    }
+}
+
+#[cfg(test)]
+mod transient_tests {
+    //! Migrated verbatim from `src/error.rs::transient_tests` —
+    //! 2 tests pinning the narrower-than-class `is_transient` predicate.
+    //! Specifically pins that `ProviderError` is **not** transient even
+    //! though `class() == Transient` (the deliberate asymmetry the doc
+    //! comment on `is_transient` calls out).
+
+    use super::*;
+
+    #[test]
+    fn test_transient_errors() {
+        assert!(AlephError::RateLimitError {
+            message: "429".into(),
+            suggestion: None,
+        }
+        .is_transient());
+        assert!(AlephError::Timeout { suggestion: None }.is_transient());
+        assert!(AlephError::NetworkError {
+            message: "connection refused".into(),
+            suggestion: None,
+        }
+        .is_transient());
+    }
+
+    #[test]
+    fn test_permanent_errors() {
+        assert!(!AlephError::AuthenticationError {
+            message: "invalid key".into(),
+            provider: "openai".into(),
+            suggestion: None,
+        }
+        .is_transient());
+        assert!(!AlephError::ProviderError {
+            message: "bad request".into(),
+            suggestion: None,
+        }
+        .is_transient());
+    }
+}

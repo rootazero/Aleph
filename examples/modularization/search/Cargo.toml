@@ -1,0 +1,11 @@
+[package]
+name = "aleph-search-pure-consumer-example"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Build independently of the Core workspace and its feature unification.
+[workspace]
+
+[dependencies]
+aleph-slot-api = { path = "../../../crates/aleph-slot-api" }

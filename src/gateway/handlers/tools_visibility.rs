@@ -56,16 +56,13 @@ pub struct ToolEntry {
 // =============================================================================
 
 /// Extract a (`group_id`, label) pair from a `ToolSource`.
+///
+/// The single definition moved to `aleph-slot-api` in P0 Task 2 (approved
+/// caller-gate C); this re-export keeps the historical
+/// `crate::gateway::handlers::tools_visibility::extract_source` path working.
 #[must_use]
 pub fn extract_source(source: &ToolSource) -> (String, String) {
-    match source {
-        ToolSource::Native => ("native".into(), "Native".into()),
-        ToolSource::Builtin => ("builtin".into(), "Built-in".into()),
-        ToolSource::Mcp { server } => (format!("mcp:{server}"), server.clone()),
-        ToolSource::Skill { id, .. } => (format!("skill:{id}"), id.clone()),
-        ToolSource::Plugin { plugin_id } => (format!("plugin:{plugin_id}"), plugin_id.clone()),
-        ToolSource::Custom { .. } => ("custom".into(), "Custom".into()),
-    }
+    aleph_slot_api::metadata::extract_source(source)
 }
 
 /// Filter tools by source descriptor. Exact match (e.g. `"native"`,

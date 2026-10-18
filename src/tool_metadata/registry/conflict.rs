@@ -17,12 +17,12 @@ use super::types::ToolStorage;
 /// confirmation UI (iMessage). Applied uniformly to every tool registered
 /// through [`ConflictResolver::register_with_conflict_resolution`].
 fn infer_visible_channels(tool: &UnifiedTool) -> Vec<ChannelType> {
-    match tool.safety_level {
+    match tool.safety_level() {
         ToolSafetyLevel::IrreversibleHighRisk => {
             // Dangerous ops only via Panel and CLI
             vec![ChannelType::Panel, ChannelType::Cli]
         }
-        _ if tool.requires_confirmation => {
+        _ if tool.requires_confirmation() => {
             // Tools requiring confirmation excluded from iMessage (no confirmation UI)
             vec![
                 ChannelType::Panel,

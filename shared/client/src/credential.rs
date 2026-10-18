@@ -41,10 +41,7 @@ pub struct DeviceCredential {
 
 impl DeviceCredential {
     /// A long-lived device token previously issued for `device_id`.
-    pub fn device_token(
-        device_id: impl Into<String>,
-        token: impl Into<String>,
-    ) -> CliResult<Self> {
+    pub fn device_token(device_id: impl Into<String>, token: impl Into<String>) -> CliResult<Self> {
         Self::new(device_id.into(), Kind::DeviceToken, token.into())
     }
 
@@ -59,7 +56,9 @@ impl DeviceCredential {
 
     fn new(device_id: String, kind: Kind, secret: String) -> CliResult<Self> {
         if device_id.trim().is_empty() {
-            return Err(CliError::Config("device credential needs a device_id".into()));
+            return Err(CliError::Config(
+                "device credential needs a device_id".into(),
+            ));
         }
         if secret.trim().is_empty() {
             return Err(CliError::Config("device credential secret is empty".into()));
@@ -152,7 +151,10 @@ fn host_is_loopback(after_scheme: &str) -> bool {
     // Fail closed on malformed authorities: a backslash (treated as `/` by
     // WHATWG-style parsers) or an ASCII control char makes the hand-rolled
     // split below disagree with the URL the transport will actually dial.
-    if after_scheme.chars().any(|c| c == '\\' || c.is_ascii_control()) {
+    if after_scheme
+        .chars()
+        .any(|c| c == '\\' || c.is_ascii_control())
+    {
         return false;
     }
     let authority = after_scheme

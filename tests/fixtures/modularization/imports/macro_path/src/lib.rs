@@ -1,0 +1,3 @@
+fn fail() {
+    alephcore::forbidden!();
+}

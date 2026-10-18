@@ -296,8 +296,53 @@ mod tests {
 
     #[tokio::test]
     async fn no_goal_store_is_graceful_noop() {
+        // Keep this global-uninitialized case isolated: Rust's test harness owns
+        // the exact test name, and a child process avoids resetting shared GLOBAL.
+        const CHILD_MARKER: &str = "ALEPH_TEST_GOAL_LESSONS_WITHOUT_STORE";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let test_name = std::thread::current()
+                .name()
+                .expect("Rust test harness must name this test")
+                .to_owned();
+            // The extra process is deliberate: only the child receives the marker.
+            let output =
+                std::process::Command::new(std::env::current_exe().expect("test executable"))
+                    .arg("--exact")
+                    .arg(test_name)
+                    .arg("--nocapture")
+                    .arg("--test-threads=1")
+                    .env(CHILD_MARKER, "1")
+                    .output()
+                    .expect("spawn isolated no-goal-store test process");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let bounded = |text: &str| {
+                let mut chars = text.chars();
+                let prefix: String = chars.by_ref().take(4000).collect();
+                if chars.next().is_some() {
+                    format!("{prefix}… [truncated]")
+                } else {
+                    prefix
+                }
+            };
+            assert!(
+                output.status.success(),
+                "isolated test failed (status {:?}); stdout: {}; stderr: {}",
+                output.status.code(),
+                bounded(&stdout),
+                bounded(&stderr)
+            );
+            assert!(
+                stdout.contains("1 passed; 0 failed"),
+                "child did not run exactly one passing test; stdout: {}",
+                bounded(&stdout)
+            );
+            return;
+        }
+
+        assert!(crate::goal::global().is_none());
         let (_scratch, ctx, _t) = build_ctx().await;
-        let stage = GoalLessonsPromoteStage::default(); // None → global (unset in test)
+        let stage = GoalLessonsPromoteStage::default(); // None → global (isolated child)
         let out = stage.execute(ctx).await.unwrap();
         assert_eq!(out.report.goal_lessons_promoted, 0);
     }

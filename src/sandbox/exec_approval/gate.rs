@@ -16,102 +16,7 @@ pub trait ApprovalRequester: Send + Sync {
     async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApprovalOutcome {
-    /// Approved for this single invocation only.
-    Approved,
-    /// Approved for the remainder of the session ("allow session").
-    /// Treated as approved everywhere; additionally recorded in the grant store
-    /// so the SAME ACTION — same tool, same arguments — is not re-prompted this
-    /// session. A different action of the same tool still asks.
-    ApprovedForSession,
-    /// Approved until revoked, across restarts ("always allow"). Recorded in
-    /// the persistent tier of the grant store.
-    ///
-    /// Only reachable when the approval record's `allowed_decisions` offered
-    /// the tier — [`ApprovalDecisionType::to_outcome_within`] cannot produce it
-    /// otherwise, which is why every decision→outcome call site has to name the
-    /// set it offered.
-    ///
-    /// [`ApprovalDecisionType::to_outcome_within`]: crate::exec::socket::ApprovalDecisionType::to_outcome_within
-    ApprovedAlways,
-    Denied,
-    Timeout,
-    /// Fail-closed because **nobody could be asked** — no approval transport is
-    /// wired, the channel refused or failed the delivery, no route resolves, or
-    /// the run is unattended.
-    ///
-    /// # Why this is not `Denied`
-    ///
-    /// A refusal and the absence of a decision are different facts, and every
-    /// consumer downstream of this enum was reading the first when it was handed
-    /// the second. [`DenialLedger`] makes a `Denied` **sticky for the action for
-    /// the rest of the session** and advances the brute-force breaker; the model
-    /// is told "the user already declined this exact action". None of that is
-    /// true when a Telegram delivery timed out. Three such hiccups paused the
-    /// session, and the sentence the model relayed to the user was a lie about
-    /// something the user never did.
-    ///
-    /// The ledger already draws exactly this line for [`DenialReason::Timeout`]
-    /// ("a timeout is not a decision") — this variant is what lets the same rule
-    /// reach the refusals that arrive labelled as a person's answer. Security
-    /// posture is unchanged: [`Self::is_approved`] is false, so every one of
-    /// these still fails closed.
-    ///
-    /// [`DenialLedger`]: super::denial_ledger::DenialLedger
-    /// [`DenialReason::Timeout`]: super::denial_ledger::DenialReason::Timeout
-    Unavailable,
-}
-
-impl ApprovalOutcome {
-    #[must_use]
-    pub const fn is_approved(&self) -> bool {
-        matches!(
-            self,
-            Self::Approved | Self::ApprovedForSession | Self::ApprovedAlways
-        )
-    }
-
-    /// The scope of the standing grant this outcome creates, if any — the one
-    /// derivation of "how long does this yes last", so a surface cannot record
-    /// a grant at a scope the outcome never carried.
-    ///
-    /// `None` for a one-shot approval and for every refusal.
-    #[must_use]
-    pub const fn grant_scope(&self) -> Option<crate::sandbox::exec_approval::GrantScope> {
-        use crate::sandbox::exec_approval::GrantScope;
-        match self {
-            Self::ApprovedForSession => Some(GrantScope::Session),
-            Self::ApprovedAlways => Some(GrantScope::Always),
-            _ => None,
-        }
-    }
-}
-
-/// A human's answer to an approval request: the outcome, plus any free-text
-/// reason attached to a denial (`/deny <reason>` from a channel, the `reason`
-/// field on `exec.approval.resolve`).
-///
-/// The reason is what turns a bare "denied" into an instruction the model can
-/// act on — hermes ships the same affordance. Requesters whose transport
-/// cannot carry one (buttons, auto-deny policies, test stubs) build the
-/// response via `From<ApprovalOutcome>`, which leaves it `None`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApprovalResponse {
-    pub outcome: ApprovalOutcome,
-    /// Set only when `outcome` is [`ApprovalOutcome::Denied`] and the human
-    /// supplied a reason.
-    pub deny_reason: Option<String>,
-}
-
-impl From<ApprovalOutcome> for ApprovalResponse {
-    fn from(outcome: ApprovalOutcome) -> Self {
-        Self {
-            outcome,
-            deny_reason: None,
-        }
-    }
-}
+pub use aleph_slot_api::approval::{ApprovalOutcome, ApprovalResponse};
 
 pub struct ApprovalGate {
     /// Swappable so boot can construct the gate before the channel registry
@@ -282,13 +187,6 @@ impl ApprovalRequester for ApprovalGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn approval_outcome_is_approved() {
-        assert!(ApprovalOutcome::Approved.is_approved());
-        assert!(!ApprovalOutcome::Denied.is_approved());
-        assert!(!ApprovalOutcome::Timeout.is_approved());
-    }
 
     /// Regression: the gate denies when no requester is wired (the CRITICAL
     /// boot bug), and routes to the requester once `set_requester` installs
