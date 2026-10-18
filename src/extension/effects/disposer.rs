@@ -13,13 +13,11 @@ pub type DisposeOutcome = Result<(), String>;
 pub type Disposer = Box<dyn FnOnce() -> BoxFuture<'static, DisposeOutcome> + Send>;
 
 /// Wrap a synchronous cleanup as a [`Disposer`].
-#[must_use]
 pub fn sync_disposer(f: impl FnOnce() -> DisposeOutcome + Send + 'static) -> Disposer {
     Box::new(move || Box::pin(async move { f() }))
 }
 
 /// Wrap an async cleanup as a [`Disposer`].
-#[must_use]
 pub fn async_disposer<F, Fut>(f: F) -> Disposer
 where
     F: FnOnce() -> Fut + Send + 'static,

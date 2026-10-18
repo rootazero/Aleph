@@ -904,12 +904,18 @@ mod tests {
         let _g = j::test_gate();
         let tmp = tempfile::tempdir().unwrap();
         j::enable_for_test(tmp.path().to_path_buf());
+        // Keep the child alive until its attached pid has been observed.
+        // An immediate `exit 3` can settle the row before the first lookup.
         let (cmd, args) = if cfg!(windows) {
-            ("cmd.exe", vec!["/C".into(), "exit 3".into()])
+            (
+                "cmd.exe",
+                vec!["/C".into(), "set /p QA_PTY_RELEASE= & exit /b 3".into()],
+            )
         } else {
-            ("sh", vec!["-c".into(), "exit 3".into()])
+            ("sh", vec!["-c".into(), "read -r _; exit 3".into()])
         };
-        let sid = PtyManager::new()
+        let mgr = PtyManager::new();
+        let sid = mgr
             .spawn(&SpawnOptions {
                 command: Some(cmd.into()),
                 args,
@@ -918,11 +924,26 @@ mod tests {
             })
             .expect("spawn")
             .session_id;
+        struct CloseSessionOnDrop<'a>(&'a PtyManager, &'a str);
+        impl Drop for CloseSessionOnDrop<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.close(self.1);
+            }
+        }
+        let _cleanup = CloseSessionOnDrop(&mgr, &sid);
         let row = j::lookup_pty(&sid).expect("journaled").record;
         assert!(
-            row.kind == j::JournalKind::Pty && row.pid.is_some(),
+            row.kind == j::JournalKind::Pty
+                && row.phase == j::JobPhase::Running
+                && row.pid.is_some(),
             "{row:?}"
         );
+        let release: &[u8] = if cfg!(windows) {
+            b"release\r\n"
+        } else {
+            b"release\n"
+        };
+        mgr.write(&sid, release).expect("release child");
         let settled = (0..100)
             .find_map(|_| {
                 std::thread::sleep(std::time::Duration::from_millis(100));

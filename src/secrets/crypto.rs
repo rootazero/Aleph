@@ -82,10 +82,9 @@ impl SecretsCrypto {
         let key = self.derive_key(&salt)?;
         let cipher = Aes256Gcm::new_from_slice(key.as_slice())
             .map_err(|e| SecretError::EncryptionFailed(format!("AES init failed: {e}")))?;
-
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("fixed-size nonce");
         let ciphertext = cipher
-            .encrypt(nonce, plaintext.as_bytes())
+            .encrypt(&nonce, plaintext.as_bytes())
             .map_err(|e| SecretError::EncryptionFailed(format!("AES encrypt failed: {e}")))?;
 
         // `key` is `Zeroizing`, so it is wiped on drop here — including the
@@ -107,10 +106,9 @@ impl SecretsCrypto {
         let key = self.derive_key(salt)?;
         let cipher =
             Aes256Gcm::new_from_slice(key.as_slice()).map_err(|_| SecretError::DecryptionFailed)?;
-
-        let nonce = Nonce::from_slice(nonce_bytes);
+        let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("fixed-size nonce");
         let plaintext = cipher
-            .decrypt(nonce, ciphertext)
+            .decrypt(&nonce, ciphertext)
             .map_err(|_| SecretError::DecryptionFailed)?;
 
         // `key` is `Zeroizing` and wipes itself on drop on every path.
@@ -211,11 +209,11 @@ mod tests {
         let salt = [0u8; 32];
         let nonce_bytes = [0u8; 12];
         let key = crypto.derive_key(&salt).unwrap();
-        let cipher = Aes256Gcm::new_from_slice(key.as_slice()).unwrap();
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let cipher = Aes256Gcm::new_from_slice(&key[..]).unwrap();
+        let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("fixed-size nonce");
 
         let plaintext = vec![0xFF, 0xFE];
-        let ciphertext = cipher.encrypt(nonce, plaintext.as_ref()).unwrap();
+        let ciphertext = cipher.encrypt(&nonce, plaintext.as_ref()).unwrap();
 
         let result = crypto.decrypt(&ciphertext, &nonce_bytes, &salt);
         assert!(matches!(result, Err(SecretError::InvalidUtf8)));

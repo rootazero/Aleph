@@ -3,6 +3,7 @@ use super::config_resolver::ResolvedConfig;
 use super::config_v2::TelegramAccountConfig;
 use super::offset::OffsetTracker;
 use crate::sync_primitives::{Arc, AtomicBool};
+use reqwest_legacy as reqwest;
 use teloxide::Bot;
 use tokio::sync::oneshot;
 

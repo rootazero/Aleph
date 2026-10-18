@@ -1578,7 +1578,7 @@ fn parse_nodes(
         // `RawNode`'s doc.
         let mut attrs = Vec::new();
         if let Some(pairs) = doc.nodes.attributes.get(i) {
-            for pair in pairs.chunks_exact(2) {
+            for pair in pairs.as_chunks::<2>().0 {
                 if let (Some(k), Some(v)) =
                     (string_at(strings, pair[0]), string_at(strings, pair[1]))
                 {
@@ -4220,7 +4220,9 @@ mod tests {
             let attrs = doc["nodes"]["attributes"].as_array().expect("attributes[]");
             let Some(node) = attrs.iter().position(|pairs| {
                 pairs.as_array().is_some_and(|p| {
-                    p.chunks_exact(2)
+                    p.as_chunks::<2>()
+                        .0
+                        .iter()
                         .any(|kv| at(&kv[0]) == "id" && at(&kv[1]) == id.to_ascii_lowercase())
                 })
             }) else {
@@ -4290,7 +4292,7 @@ mod tests {
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
-            let Some(opacity) = row.get(index).map(&at) else {
+            let Some(opacity) = row.get(index).map(at) else {
                 continue;
             };
             if !opacity.trim().parse::<f64>().is_ok_and(|o| o <= 0.0) {
@@ -4302,7 +4304,9 @@ mod tests {
                 .and_then(Value::as_array)
                 .and_then(|pairs| {
                     pairs
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .find(|kv| at(&kv[0]) == "id")
                         .map(|kv| at(&kv[1]))
                 })

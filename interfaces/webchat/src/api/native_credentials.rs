@@ -231,7 +231,7 @@ impl AttemptClock {
     pub fn begin(clock: &Arc<Self>) -> Option<AttemptReceipt> {
         let next = clock
             .0
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |c| {
                 (c < u64::MAX - 1).then(|| c + 1)
             })
             .ok()?
@@ -244,11 +244,9 @@ impl AttemptClock {
 
     /// Make every outstanding receipt stale without issuing a new one.
     pub fn invalidate(&self) {
-        let _ = self
-            .0
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| {
-                Some(c.saturating_add(1))
-            });
+        let _ = self.0.try_update(Ordering::SeqCst, Ordering::SeqCst, |c| {
+            Some(c.saturating_add(1))
+        });
     }
 }
 

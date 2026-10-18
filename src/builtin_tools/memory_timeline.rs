@@ -98,7 +98,7 @@ impl MemoryTimelineTool {
             ));
         }
 
-        let args_summary = format!("fact timeline: {}", &fact_id);
+        let args_summary = format!("fact timeline: {}", fact_id);
         notify_tool_start(Self::NAME, &args_summary);
 
         let explanation = self

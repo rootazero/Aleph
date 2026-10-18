@@ -94,12 +94,13 @@ pub async fn load_or_generate(
     }
 }
 
-/// rcgen 0.13 self-signed for the given SANs (each string classified as IP or
+/// Self-signed certificate for the given SANs (each string classified as IP or
 /// DNS by rcgen). Returns PEM cert, PEM key, and the SHA-256 fingerprint hex.
 fn generate_self_signed(sans: &[String]) -> anyhow::Result<(Vec<u8>, Vec<u8>, String)> {
-    let rcgen::CertifiedKey { cert, key_pair } = rcgen::generate_simple_self_signed(sans.to_vec())?;
+    let rcgen::CertifiedKey { cert, signing_key } =
+        rcgen::generate_simple_self_signed(sans.to_vec())?;
     let cert_pem = cert.pem().into_bytes();
-    let key_pem = key_pair.serialize_pem().into_bytes();
+    let key_pem = signing_key.serialize_pem().into_bytes();
     let fp = fingerprint(&cert_pem);
     Ok((cert_pem, key_pem, fp))
 }

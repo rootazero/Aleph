@@ -769,9 +769,7 @@ fn parse_single_agent(
 
     Ok(CapabilityDeclaration::Agent(AgentRegistration {
         name,
-        description: fm
-            .description
-            .and_then(|d| if d.is_empty() { None } else { Some(d) }),
+        description: fm.description.filter(|d| !d.is_empty()),
         content: body,
         model: fm.model,
         tools,

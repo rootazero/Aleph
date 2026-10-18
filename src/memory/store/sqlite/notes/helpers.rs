@@ -68,7 +68,7 @@ pub(crate) fn body_text_sha256(body: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(body.as_bytes());
-    format!("{:x}", h.finalize())
+    hex::encode(h.finalize())
 }
 
 /// Load note markdown content from disk given index metadata and `agent_id`.

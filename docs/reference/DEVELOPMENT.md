@@ -40,7 +40,12 @@ cargo clippy --workspace --all-targets    # 先 just _stage-shell-placeholders�
 
 ## 工具链与版本
 
-- **MSRV = 1.95**（由 `sysinfo 0.39` 决定），在 `Cargo.toml` 的 `[workspace.package]` 与 `[package]` 两处 `rust-version` 声明；根 `rust-toolchain.toml` 钉住具体 stable（当前 `1.96.0`），本地与 CI 自动使用同一工具链——无需 `rustup default` 或 `cargo +<ver>`。抬高 MSRV 时同步更新这两处。
+- **MSRV = 1.99**：工具链与依赖全面升级后，工作区统一采用 Rust 1.99 作为支持基线，在 `Cargo.toml` 的 `[workspace.package]` 与 `[package]` 两处 `rust-version` 声明，Panel 继承工作区声明；根 `rust-toolchain.toml` 钉住已验证的 patch release `1.99.1`，同时安装 `rustfmt`、`clippy` 和 `wasm32-unknown-unknown`。本地与 CI 自动使用同一工具链，无需 `rustup default` 或 `cargo +<ver>`。抬高 MSRV 时同步更新声明与中英文 README。
+  The workspace supports Rust 1.99 and pins the tested Rust 1.99.1 toolchain, including rustfmt, clippy, and the WASM target. Keep the workspace/core MSRV declarations and both READMEs in sync; the Panel inherits the workspace baseline.
+- **Protobuf 编译器**：通信库构建需要 `protoc`，应在 `PATH` 中可用或由 `PROTOC` 指定；先用 `protoc --version` 验证。Arch 安装 `protobuf`，Ubuntu/Debian 安装 `protobuf-compiler`，macOS 安装 Homebrew 的 `protobuf`，Windows 安装 `protoc`（与 CI 配置一致）。
+  Channel-library builds require protoc on PATH or through the PROTOC environment variable. Use the distribution's protobuf compiler package; CI already installs it on all three platforms.
+- **WASM 工具配套**：`wasm-bindgen-cli` 必须与 `Cargo.lock` 中的 `wasm-bindgen` 库版本一致；升级库时同步更新 CLI，再执行 `just wasm`。
+  Match wasm-bindgen-cli to the resolved wasm-bindgen library version before building the production Panel assets.
 - **CalVer `YY.M.D`**（两位年、月/日不补零，如 `26.5.21`；同时是合法 semver 并满足 Windows MSI 约束），每天最多一个版本。**VERSION 文件是唯一版本源**——`build.rs` 读取 → 注入 `ALEPH_VERSION` → 代码用 `env!("ALEPH_VERSION")`；**禁止**硬编码版本号，**禁止** `env!("CARGO_PKG_VERSION")`。Panel System Info、Gateway 版本、MCP/ACP 协议版本、CLI `--version`、release tag 全读它。发版走 `just release YY.M.D` → [RELEASE.md](docs/reference/RELEASE.md)；Windows 构建前置依赖 → [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md)。
 
 ---

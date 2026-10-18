@@ -387,6 +387,7 @@ mod tests {
 
     #[test]
     fn lifecycle() {
+        #[cfg(windows)]
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -467,6 +468,7 @@ mod tests {
     /// side of the same invariant.
     #[test]
     fn is_aborted_after_stop_is_false_and_does_not_panic() {
+        #[cfg(windows)]
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);

@@ -199,7 +199,7 @@ impl SessionSearchTool {
         // the same value is used everywhere downstream.
         let max_results = args.max_results.clamp(1, MAX_SESSION_SEARCH_RESULTS);
 
-        notify_tool_start("session_search", &format!("搜索历史对话: {}", &args.query));
+        notify_tool_start("session_search", &format!("搜索历史对话: {}", args.query));
 
         let mut hits: Vec<SessionSearchHit> = Vec::new();
         // Per-call memo for the P1/P2 transcript gate: both the summary path

@@ -270,7 +270,7 @@ impl FileEditTool {
         use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 
         // Notify start
-        let summary = format!("edit: {}", &args.file_path);
+        let summary = format!("edit: {}", args.file_path);
         notify_tool_start("file_edit", &summary);
 
         // Resolve & validate path (cheap, do it up front so a denied path is

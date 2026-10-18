@@ -5,7 +5,7 @@
 //! Provides Ed25519 key generation/verification and HMAC-SHA256 token signing.
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use hmac::{Hmac, Mac};
+use hmac::{digest::KeyInit, Hmac, Mac};
 use rand::rand_core::UnwrapErr;
 use rand::rngs::SysRng;
 use rand::Rng;

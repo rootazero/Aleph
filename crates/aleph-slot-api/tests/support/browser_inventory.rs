@@ -4,7 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use syn::parse::{Parse, ParseStream};
 use syn::{
-    braced, FnArg, GenericArgument, Item, Pat, PathArguments, ReturnType, Token, TraitItem, Type,
+    braced, FnArg, GenericArgument, Item, Pat, PathArguments, ReceiverKind, ReturnType, Token,
+    TraitItem, Type,
 };
 
 pub const NATIVE_SOURCE: &str = include_str!(concat!(
@@ -152,7 +153,7 @@ pub fn native_methods(source: &str) -> Result<Methods, String> {
             return Err("effect getter must remain synchronous".into());
         }
         if sig.constness.is_some()
-            || sig.unsafety.is_some()
+            || !matches!(&sig.safety, syn::Safety::Default)
             || sig.abi.is_some()
             || !sig.generics.params.is_empty()
             || sig.generics.where_clause.is_some()
@@ -163,10 +164,8 @@ pub fn native_methods(source: &str) -> Result<Methods, String> {
         let mut inputs = sig.inputs.iter();
         match inputs.next() {
             Some(FnArg::Receiver(receiver))
-                if receiver.reference.is_some()
-                    && receiver.reference.as_ref().unwrap().1.is_none()
-                    && receiver.mutability.is_none()
-                    && receiver.colon_token.is_none() => {}
+                if matches!(&receiver.kind, ReceiverKind::Reference(_, None, None))
+                    && receiver.mutability.is_none() => {}
             _ => return Err(format!("expected &self for {name}")),
         }
         let mut parameters = Vec::new();
@@ -486,6 +485,28 @@ mod tests {
         );
         assert!(native_methods("trait BrowserBackend { async fn last_effect_verification(&self) -> Result<Option<EffectVerification>, BrowserError>; }")
             .unwrap_err().contains("synchronous"));
+        assert!(native_methods(
+            "trait BrowserBackend { async unsafe fn x(&self) -> Result<(), BrowserError>; }"
+        )
+        .unwrap_err()
+        .contains("unsupported signature"));
+        for receiver in [
+            "&mut self",
+            "self",
+            "mut self",
+            "self: &Self",
+            "self: Arc<Self>",
+            "&'static self",
+        ] {
+            let source = format!(
+                "trait BrowserBackend {{ async fn x({receiver}) -> Result<(), BrowserError>; }}"
+            );
+            let error = native_methods(&source).unwrap_err();
+            assert!(
+                error.contains("expected &self for x"),
+                "{receiver}: {error}"
+            );
+        }
         assert!(native_methods("trait BrowserBackend { async fn x(&self, value: &mut str) -> Result<(), BrowserError>; }").is_err());
         assert!(native_methods("trait BrowserBackend { async fn x(&self) -> Result<(), BrowserError>; async fn x(&self) -> Result<(), BrowserError>; }")
             .unwrap_err().contains("duplicate"));

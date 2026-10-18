@@ -129,7 +129,7 @@ impl MemoryExploreTool {
         use super::{notify_tool_result, notify_tool_start};
 
         // Notify tool start
-        let args_summary = format!("知识探索: {}", &args.query);
+        let args_summary = format!("知识探索: {}", args.query);
         notify_tool_start(Self::NAME, &args_summary);
 
         // Per-run memory PARTITION: prefer the turn's task-local persona (set by

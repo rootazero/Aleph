@@ -128,7 +128,7 @@ impl CanvasStore {
             )));
         }
 
-        let digest = format!("{:x}", Sha256::digest(bytes));
+        let digest = hex::encode(Sha256::digest(bytes));
         let asset_id = format!("{digest}.{ext}");
 
         // Existence check + write in one critical section (the same

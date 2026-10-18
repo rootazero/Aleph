@@ -19,7 +19,7 @@
 //! **Gateway/Server integration example:**
 //! ```rust,ignore
 //! struct Server {
-//!     protocol_watcher: Option<Debouncer<RecommendedWatcher, FileIdMap>>,
+//!     protocol_watcher: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
 //! }
 //!
 //! impl Server {
@@ -39,8 +39,8 @@
 use crate::error::{AlephError, Result};
 use crate::providers::protocols::{ConfigurableProtocol, ProtocolDefinition, ProtocolRegistry};
 use crate::sync_primitives::Arc;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
+use notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{error, info};
@@ -167,7 +167,7 @@ impl ProtocolLoader {
     /// Example:
     /// ```rust,ignore
     /// struct Server {
-    ///     protocol_watcher: Option<Debouncer<RecommendedWatcher, FileIdMap>>,
+    ///     protocol_watcher: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
     /// }
     ///
     /// impl Server {
@@ -177,7 +177,7 @@ impl ProtocolLoader {
     ///     }
     /// }
     /// ```
-    pub fn start_watching() -> Result<Option<Debouncer<RecommendedWatcher, FileIdMap>>> {
+    pub fn start_watching() -> Result<Option<Debouncer<RecommendedWatcher, RecommendedCache>>> {
         // Get ~/.aleph/protocols path
         let home = std::env::var("HOME")
             .map_err(|e| AlephError::invalid_config(format!("Failed to resolve HOME: {e}")))?;
@@ -204,7 +204,9 @@ impl ProtocolLoader {
     ///
     /// Uses debouncer pattern matching config/watcher.rs and extension/watcher.rs.
     /// Returns Debouncer that must be kept alive by caller.
-    fn start_watching_dir(dir: &Path) -> Result<Option<Debouncer<RecommendedWatcher, FileIdMap>>> {
+    fn start_watching_dir(
+        dir: &Path,
+    ) -> Result<Option<Debouncer<RecommendedWatcher, RecommendedCache>>> {
         let dir = dir.to_path_buf();
         // rust-doctor-disable-next-line excessive-clone
         let dir_for_closure = dir.clone();
@@ -247,7 +249,6 @@ impl ProtocolLoader {
 
         // Watch directory non-recursively
         debouncer
-            .watcher()
             .watch(&dir, RecursiveMode::NonRecursive)
             .map_err(|e| {
                 AlephError::invalid_config(format!("Failed to watch directory {dir:?}: {e}"))

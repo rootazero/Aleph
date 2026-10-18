@@ -540,7 +540,7 @@ impl ConfigPatcher {
 
         let errors: Vec<String> = validator
             .iter_errors(config_json)
-            .map(|e| format!("{} at {}", e, e.instance_path))
+            .map(|e| format!("{} at {}", e, e.instance_path()))
             .collect();
 
         if errors.is_empty() {

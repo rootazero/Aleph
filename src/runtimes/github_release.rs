@@ -491,7 +491,13 @@ fn extract_from_zip(
             archive: label.to_string(),
             detail: format!("cannot read zip entry {i}: {e}"),
         })?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|e| ReleaseError::Archive {
+                archive: label.to_string(),
+                detail: format!("cannot read zip entry {i} name: {e}"),
+            })?
+            .into_owned();
         if !wanted.iter().any(|w| w == &name) {
             continue;
         }
@@ -960,8 +966,7 @@ mod tests {
 
     fn tiny_zip() -> Vec<u8> {
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        let opts: zip::write::FileOptions<'_, ()> =
-            zip::write::FileOptions::default().unix_permissions(0o755);
+        let opts = zip::write::SimpleFileOptions::default().unix_permissions(0o755);
         w.start_file("obscura.exe", opts).unwrap();
         std::io::Write::write_all(&mut w, b"MZ fake windows binary\n").unwrap();
         w.start_file("obscura-worker.exe", opts).unwrap();

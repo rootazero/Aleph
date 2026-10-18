@@ -50,7 +50,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 aleph-protocol = { path = "../../shared/protocol" }
 chrono = { workspace = true }
-tokio = { version = "1.35", default-features = false, features = ["sync"] }
+tokio = { version = "1.53", default-features = false, features = ["sync"] }
 http = "1"
 bytes = "1"
 # Task 7: preserve the pure URL classifier and existing response warnings.
@@ -59,8 +59,8 @@ tracing = "0.1"
 
 [dev-dependencies]
 # Test-only AST census of the native browser trait and local operation declaration.
-syn = { version = "=2.0.117", features = ["full"] }
+syn = { version = "=3.0.9", features = ["full"] }
 serde_json = { workspace = true }
 # `#[tokio::test]` for the broadcast/cancellation round-trip tests — the only
 # async execution the API test suite needs (current-thread runtime).
-tokio = { version = "1.35", default-features = false, features = ["macros", "rt"] }
+tokio = { version = "1.53", default-features = false, features = ["macros", "rt"] }

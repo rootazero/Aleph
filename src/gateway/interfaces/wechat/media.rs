@@ -2,8 +2,8 @@
 //!
 //! Handles downloading media from `WeChat` CDN and decrypting with AES-128-ECB.
 
-use aes::cipher::{array::Array, consts::U16, BlockCipherDecrypt, KeyInit};
-use aes::Aes128;
+use aes_cbc::cipher::{array::Array, consts::U16, BlockCipherDecrypt, KeyInit};
+use aes_cbc::Aes128;
 use reqwest::Client;
 
 const AES_BLOCK_SIZE: usize = 16;
@@ -26,10 +26,13 @@ pub fn aes128_ecb_decrypt(ciphertext: &[u8], key: &[u8; 16]) -> Result<Vec<u8>, 
     let cipher = Aes128::new(&key_array);
 
     let mut plaintext = vec![0u8; ciphertext.len()];
-    for (i, chunk) in ciphertext.chunks_exact(AES_BLOCK_SIZE).enumerate() {
-        let mut block: Array<u8, U16> = chunk
-            .try_into()
-            .map_err(|e| format!("invalid AES block: {e}"))?;
+    for (i, chunk) in ciphertext
+        .as_chunks::<AES_BLOCK_SIZE>()
+        .0
+        .iter()
+        .enumerate()
+    {
+        let mut block: Array<u8, U16> = (*chunk).into();
         cipher.decrypt_block(&mut block);
         plaintext[i * AES_BLOCK_SIZE..(i + 1) * AES_BLOCK_SIZE].copy_from_slice(&block);
     }
@@ -141,7 +144,7 @@ pub async fn download_and_decrypt_media(
 #[allow(deprecated)]
 mod tests {
     use super::*;
-    use aes::cipher::BlockCipherEncrypt;
+    use aes_cbc::cipher::BlockCipherEncrypt;
 
     fn aes128_ecb_encrypt(plaintext: &[u8], key: &[u8; 16]) -> Vec<u8> {
         let padded = pkcs7_pad(plaintext, AES_BLOCK_SIZE);
@@ -149,7 +152,7 @@ mod tests {
         let cipher = Aes128::new(key_array);
 
         let mut ciphertext = Vec::with_capacity(padded.len());
-        for chunk in padded.chunks_exact(AES_BLOCK_SIZE) {
+        for chunk in padded.as_chunks::<AES_BLOCK_SIZE>().0 {
             let mut block = Array::<u8, U16>::clone_from_slice(chunk);
             cipher.encrypt_block(&mut block);
             ciphertext.extend_from_slice(&block);

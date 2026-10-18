@@ -1331,9 +1331,21 @@ mod tests {
         use crate::extension::runtime::wasm::tests::guest_fixture::HANDLER;
         use tokio::sync::oneshot;
 
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
-        let (manager, _) = isolated_manager(tmp.path()).await;
+        // Keep the explicit state root separate from HOME/.aleph's protected config path.
+        let aleph_home = tmp.path().join("aleph-state");
+        std::fs::create_dir_all(&aleph_home).unwrap();
+        // A transition also rescans shared-agent skills, independently of the Claude knob.
+        let _home =
+            crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(&aleph_home, tmp.path());
+        assert_eq!(
+            crate::discovery::agents_home_dir().unwrap(),
+            tmp.path().join(".agents")
+        );
+        let (mut manager, _) = isolated_manager(tmp.path()).await;
+        // The process singleton retains base dirs registered by earlier fixtures.
+        // Exercise the real rescan with only this fixture's owned skill state.
+        manager.skill_system = crate::skill::SkillSystem::new();
         let (row, module_disposer) =
             real_guest_row_and_disposer(&manager, tmp.path(), "c2s-unmount", PluginStatus::Loaded)
                 .await;

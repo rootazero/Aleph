@@ -38,7 +38,7 @@ use super::state_version::StateVersionTracker;
 use crate::providers::protocols::ProtocolLoader;
 use crate::security::headers::SecurityHeadersLayer;
 use notify::RecommendedWatcher;
-use notify_debouncer_full::{Debouncer, FileIdMap};
+use notify_debouncer_full::{Debouncer, RecommendedCache};
 
 /// State for an individual WebSocket connection
 pub struct ConnectionState {
@@ -399,7 +399,7 @@ pub struct GatewayServer {
     /// Protocol file watcher for hot-reload (None if watching disabled/failed).
     /// Held for ownership: dropping the Debouncer stops the watcher.
     #[allow(dead_code)]
-    protocol_watcher: Option<Debouncer<RecommendedWatcher, FileIdMap>>,
+    protocol_watcher: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
     /// Presence tracker for connected device awareness
     pub presence: Arc<PresenceTracker>,
     /// Monotonic version tracker for state change detection

@@ -50,8 +50,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
+use notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 
 use crate::error::AlephError;
 use crate::memory::notes::store::NoteStore;
@@ -73,7 +73,7 @@ const MAX_PATHS_PER_BATCH: usize = 128;
 /// Must be held for as long as the vault should stay reconciled — the debouncer
 /// owns the platform watch handle and the background thread that feeds it.
 pub struct NoteVaultWatcher {
-    _debouncer: Debouncer<RecommendedWatcher, FileIdMap>,
+    _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
 }
 
 /// Where a changed file sits in the note layout.
@@ -240,7 +240,6 @@ where
     .map_err(|e| AlephError::config(format!("note vault watcher: {e}")))?;
 
     debouncer
-        .watcher()
         .watch(&root, RecursiveMode::Recursive)
         .map_err(|e| {
             AlephError::config(format!("note vault watcher: watch {}: {e}", root.display()))

@@ -228,13 +228,11 @@ impl StabilityImageProvider {
         let samples = request.params.n.unwrap_or(1);
 
         // Get style preset - validate if provided
-        let style_preset = request.params.style.clone().and_then(|s| {
-            if is_valid_style_preset(&s) {
-                Some(s)
-            } else {
-                None
-            }
-        });
+        let style_preset = request
+            .params
+            .style
+            .clone()
+            .filter(|s| is_valid_style_preset(s));
 
         StabilityRequest {
             text_prompts,

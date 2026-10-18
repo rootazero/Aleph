@@ -20,15 +20,15 @@ default = ["embedded-core"]
 # Build the panel-only shell with --no-default-features.
 embedded-core = []
 # QA-only (debug builds, lite shell only): confines every shell file write and the
-# WebView2 profile to an owned temp root passed via --qa-root/--qa-nonce, swaps
-# the OS keyring for a process-local in-memory backend and disables host-global
-# side-effect plugins. Never enabled by default; incompatible with embedded-core.
+# WebView2 profile to an owned temp root passed via --qa-root/--qa-nonce, uses an
+# isolated OS-keyring service namespace, and disables host-global side-effect
+# plugins. Never enabled by default; incompatible with embedded-core.
 # `--qa-credential-backend os` additionally files the credential in the real OS
 # keyring under a random QA-only service namespace (aleph-client/qa-service).
 qa-owned-root = ["aleph-client/qa-service"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.7.3", features = [] }
 
 [dependencies]
 aleph-client = { path = "../../shared/client" }
@@ -37,19 +37,19 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 x509-parser = { workspace = true }
 serde = { workspace = true }
-tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
-tauri-plugin-notification = "2"
-tauri-plugin-autostart = "2"
-tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
-tauri-plugin-window-state = "2"
-tauri-plugin-updater = "2"
-tauri-plugin-deep-link = "2"
-tauri-plugin-global-shortcut = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "macros", "sync"] }
+tauri = { version = "2.12.4", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-notification = "2.7.0"
+tauri-plugin-autostart = "2.7.0"
+tauri-plugin-single-instance = { version = "2.5.4", features = ["deep-link"] }
+tauri-plugin-window-state = "2.5.0"
+tauri-plugin-updater = "2.14.0"
+tauri-plugin-deep-link = "2.6.2"
+tauri-plugin-global-shortcut = "2.4.1"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "time", "io-util", "macros", "sync"] }
 # Same TLS stack as shared/client + interfaces/cli (native-tls) — without a TLS
 # feature `connect_async("wss://…")` fails outright, which used to kill desktop
 # notifications for every remote https Gateway.
-tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 # Same native-tls stack tokio-tungstenite already resolves (no new dependency in
 # the lock) — used by the connect-page reachability probe to speak HTTPS to an
 # `https://` Gateway. A plaintext probe of a TLS target gets no HTTP reply and
@@ -67,35 +67,39 @@ url = "2"
 mdns-sd = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-window-vibrancy = "0.5"
+window-vibrancy = "0.8.1"
 
 # Self-signed TLS trust hook for the Panel WKWebView (cert_trust::adapter_macos).
-# objc2 stack pinned to EXACTLY what wry 0.55 resolves so the injected challenge
-# handler's types unify with wry's WKNavigationDelegate — a second, incompatible
-# objc2 stack would not compile. security-framework/core-foundation give safe
-# SecTrust/SecCertificate DER extraction; both already resolve in the workspace lock.
-objc2 = "=0.6.4"
+# wry 0.57 accepts objc2 >=0.6.4, and window-vibrancy 0.8.1 accepts
+# objc2 0.6.x. Pin the highest stable compatible objc2 patch explicitly;
+# objc2-foundation and block2 are likewise the highest versions accepted by
+# wry/window-vibrancy and the direct adapters below.
+objc2 = "=0.6.5"
 objc2-foundation = "=0.3.2"
 block2 = "=0.6.2"
 core-foundation = "0.10"
 security-framework = "3"
 
 # Panel webview microphone grant (voice-input button). Versions pinned to what
-# wry 0.54 already resolves so the platform-webview handle types unify.
+# wry 0.57 already resolves so the platform-webview handle types unify.
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "=2.0.2"
+# deep-link 2.6.2 initializes the two-field ParseOption; rust-ini 0.21.3
+# adds mandatory fields. Remove this compatibility constraint once the
+# plugin supports that API, and verify Linux registration again.
+rust-ini = "=0.21.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-webview2-com = "=0.38.2"
+webview2-com = "=0.39.1"
 # `PWSTR` + the `Interface::cast` trait for the cert_trust::adapter_windows
-# WebView2 hook. Version tracks webview2-com 0.38.2's own `windows`/`windows-core`
-# 0.61 pin so the COM interface + string types unify (already in the workspace lock).
-windows-core = "0.61"
+# WebView2 hook. Version tracks webview2-com 0.39.1 and wry 0.57's own
+# windows-core 0.62 dependency so the COM interface and string types unify.
+windows-core = "0.62"
 
 [dev-dependencies]
 # Not in [workspace.dependencies] (only a root [dependencies] entry there);
 # pinned to match the version root/gateway/tls.rs already resolves.
-rcgen = "0.13"
+rcgen = "0.14"
 # external_link tests share a process-global REMOTE_ORIGIN static; serialise
 # them so parallel test threads don't see each other's writes.
-serial_test = "3.0"
+serial_test = "4.0.1"

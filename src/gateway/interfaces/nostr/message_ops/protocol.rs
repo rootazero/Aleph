@@ -213,7 +213,7 @@ pub fn parse_relay_message(msg: &str) -> Option<RelayMessage> {
 ///
 /// Returns a 64-character hex string of the x-only public key.
 pub fn derive_pubkey(private_key_hex: &str) -> Result<String, String> {
-    use k256::elliptic_curve::sec1::ToEncodedPoint;
+    use k256::elliptic_curve::sec1::ToSec1Point;
     use k256::SecretKey;
 
     let privkey_bytes =
@@ -230,7 +230,7 @@ pub fn derive_pubkey(private_key_hex: &str) -> Result<String, String> {
         .map_err(|e| format!("invalid secp256k1 private key: {e}"))?;
 
     let public_key = secret_key.public_key();
-    let encoded = public_key.to_encoded_point(false); // uncompressed
+    let encoded = public_key.to_sec1_point(false); // uncompressed
 
     // x-only public key: take the x-coordinate (bytes 1..33 of uncompressed point)
     let x_bytes = encoded.x().ok_or("failed to extract x-coordinate")?;
@@ -258,8 +258,11 @@ pub fn sign_event(event: &mut NostrEvent, private_key_hex: &str) -> Result<(), S
         ));
     }
 
-    let signing_key =
-        SigningKey::from_bytes(&privkey_bytes).map_err(|e| format!("invalid signing key: {e}"))?;
+    let privkey_bytes: [u8; 32] = privkey_bytes
+        .try_into()
+        .map_err(|_| "private key must be 32 bytes".to_string())?;
+    let signing_key = SigningKey::from_bytes((&privkey_bytes).into())
+        .map_err(|e| format!("invalid signing key: {e}"))?;
 
     let id_bytes = hex::decode(&event.id).map_err(|e| format!("invalid event id hex: {e}"))?;
 

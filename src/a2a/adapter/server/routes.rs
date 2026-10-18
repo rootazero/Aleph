@@ -232,6 +232,10 @@ async fn stream_resubscribe(
 }
 
 /// Authorize a streaming request, returning an SSE error response on denial.
+#[expect(
+    clippy::result_large_err,
+    reason = "Return the prepared HTTP denial directly without changing the response contract or allocating a second wrapper"
+)]
 async fn authorize_stream(
     state: &Arc<A2AServerState>,
     principal: &A2AAuthPrincipal,

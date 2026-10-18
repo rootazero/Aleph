@@ -551,7 +551,7 @@ fn handle_input_key(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
             // '\r' (Windows Terminal, WSL, plain Terminal.app, SSH): a trailing
             // backslash immediately left of the cursor becomes a newline instead
             // of submitting. Mirrors the Claude Code / hermes-agent convention.
-            let (row, col) = textarea.cursor();
+            let tui_textarea::DataCursor(row, col) = textarea.cursor();
             let ends_with_backslash = col > 0
                 && textarea
                     .lines()

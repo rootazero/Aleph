@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 pub fn sha256_hex(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Return `true` if `s`, emitted unquoted in YAML flow context, would parse

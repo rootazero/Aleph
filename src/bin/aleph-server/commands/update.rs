@@ -194,7 +194,7 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
             use sha2::{Digest, Sha256};
             let mut hasher = Sha256::new();
             hasher.update(&installer_bytes);
-            format!("{:x}", hasher.finalize())
+            hex::encode(hasher.finalize())
         };
         let expected = parse_sha256sums_line(&text, installer_name).ok_or_else(|| {
             format!(

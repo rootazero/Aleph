@@ -346,7 +346,7 @@ fn configured_deny_read_globs() -> &'static [DeniedPath] {
 /// never silently: an unparseable document or a non-string entry is logged as
 /// a warning that names what is *not* being enforced.
 fn parse_deny_read_globs(toml_text: &str) -> Vec<String> {
-    let doc = match toml_text.parse::<toml::Value>() {
+    let doc = match toml::from_str::<toml::Value>(toml_text) {
         Ok(doc) => doc,
         Err(e) => {
             warn!(

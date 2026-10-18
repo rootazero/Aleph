@@ -2344,26 +2344,14 @@ fn decrc_without_a_save_leaves_the_cursor_alone() {
     assert_eq!(s.grid.row_text(0), "abcZ");
 }
 
-/// `title` is fed by whatever the shell prints, cloned into every patch
-/// and serialized to the wire -- so the bound on it is load-bearing, and
-/// it is not ours. `vte::Parser` accumulates OSC payload into an
-/// `ArrayVec<u8, 1024>` under `feature = "no_std"` and into an unbounded
-/// `Vec<u8>` without it; the `is_full()` back-pressure checks are
-/// `#[cfg(feature = "no_std")]`. `no_std` is in vte's DEFAULT feature set
-/// and this crate takes defaults, so today it holds -- measured, not
-/// assumed: 64 MiB of unterminated OSC payload leaves `title` at 1023
-/// bytes.
+/// Shell-controlled titles are copied into every patch and serialized to
+/// the wire. VTE 0.15 uses an unbounded `Vec` with its default `std` feature;
+/// disabling defaults retains `ArrayVec<u8, 1024>` and its `is_full()`
+/// back-pressure. Assert the observed limit so a dependency upgrade or
+/// feature unification cannot silently remove it.
 ///
-/// This test exists because that dependency is invisible at every place
-/// someone would look. A future `vte = { version = "0.14",
-/// default-features = false }`, written for an unrelated reason, would
-/// silently turn `title` into an unbounded accumulator driven by remote
-/// output, and nothing in this file mentions the feature. Here it fails
-/// by name instead.
-///
-/// 64 KiB rather than the 64 MiB used to characterise it: the assertion
-/// only has to separate ~1 KiB from "as much as we fed", and a unit test
-/// should not allocate 64 MiB to say so.
+/// A 64 KiB payload distinguishes the fixed buffer from an accumulator
+/// that retains everything without requiring a large allocation.
 #[test]
 fn an_unterminated_osc_title_cannot_grow_without_bound() {
     const FED: usize = 64 * 1024;
@@ -2383,10 +2371,9 @@ fn an_unterminated_osc_title_cannot_grow_without_bound() {
     );
     assert!(
         len <= 1024,
-        "OSC title accumulator is unbounded -- vte's `no_std` feature was \
-             almost certainly dropped from this crate's dependency, which \
-             removes the `ArrayVec<u8, 1024>` cap and the `is_full()` \
-             back-pressure. `title` is driven by remote output and copied \
-             into every patch. Fed {FED} bytes, title kept {len}"
+        "OSC title accumulator is unbounded -- check whether VTE's `std` \
+             feature was enabled or its ArrayVec cap regressed. `title` is \
+             driven by remote output and copied into every patch. \
+             Fed {FED} bytes, title kept {len}"
     );
 }

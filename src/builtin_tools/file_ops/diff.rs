@@ -153,9 +153,9 @@ fn compute_file_change_by(
     // false-positive window is a diff that finished optimally within
     // microseconds of the deadline; it degrades to `TooLarge`, which is the
     // fail-closed side.
-    let diff = TextDiff::configure()
-        .deadline(deadline)
-        .diff_lines(old, new);
+    let mut diff_config = TextDiff::configure();
+    diff_config.deadline(deadline);
+    let diff = diff_config.diff_lines(old, new);
     if std::time::Instant::now() > deadline {
         return too_large(path, kind, before, after);
     }

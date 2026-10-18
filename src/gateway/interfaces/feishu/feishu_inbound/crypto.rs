@@ -8,7 +8,7 @@
 //! which the config layer *requires* for webhook mode) were silently dropped.
 
 use aes_cbc::Aes256;
-use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+use cbc::cipher::{block_padding::Pkcs7, BlockModeDecrypt, KeyIvInit};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -33,7 +33,7 @@ pub fn decrypt_event(encrypt_key: &str, encrypt_b64: &str) -> Result<String, Str
         .map_err(|e| format!("cipher init failed: {e}"))?;
     let mut buf = ciphertext.to_vec();
     let plaintext = decryptor
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
+        .decrypt_padded::<Pkcs7>(&mut buf)
         .map_err(|e| format!("decrypt failed: {e}"))?;
     String::from_utf8(plaintext.to_vec()).map_err(|e| format!("utf8 decode failed: {e}"))
 }
@@ -63,7 +63,7 @@ pub fn verify_signature(
 mod tests {
     use super::{decrypt_event, verify_signature};
     use aes_cbc::Aes256;
-    use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    use cbc::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
     use sha2::{Digest, Sha256};
 
     type Aes256CbcEnc = cbc::Encryptor<Aes256>;
@@ -73,7 +73,7 @@ mod tests {
         use base64::Engine;
         let key = Sha256::digest(encrypt_key.as_bytes());
         let encryptor = Aes256CbcEnc::new_from_slices(key.as_slice(), iv).unwrap();
-        let ct = encryptor.encrypt_padded_vec_mut::<Pkcs7>(plaintext.as_bytes());
+        let ct = encryptor.encrypt_padded_vec::<Pkcs7>(plaintext.as_bytes());
         let mut blob = iv.to_vec();
         blob.extend_from_slice(&ct);
         base64::engine::general_purpose::STANDARD.encode(blob)

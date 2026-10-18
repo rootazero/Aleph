@@ -78,10 +78,10 @@ impl SlackMessageOps {
         // Handle message_changed subtype: extract inner message
         let subtype = event["subtype"].as_str();
         let (msg_data, _is_edit) = match subtype {
-            Some("message_changed") => match event.get("message") {
-                Some(inner) => (inner, true),
-                None => return None,
-            },
+            Some("message_changed") => {
+                let inner = event.get("message")?;
+                (inner, true)
+            }
             Some(_) => return None, // Skip other subtypes (joins, leaves, etc.)
             None => (event, false),
         };
