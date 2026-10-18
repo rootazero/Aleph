@@ -222,6 +222,25 @@ impl EscapeAbort for WindowsEscapeListener {
                 PostThreadMessageW, UnhookWindowsHookEx, HHOOK, WM_QUIT,
             };
 
+            // Bail out if this instance never started. A `WindowsEscapeListener`
+            // that is dropped without ever calling `start` (the common shape
+            // when it lives as a field of `WindowsPlatform` and the platform
+            // is built but its escape hook is never armed) must NOT clobber
+            // `LISTENER_PTR` — the process-global static is owned by whichever
+            // listener actually published it, and clearing it from an idle
+            // instance makes the active hook's `keyboard_hook_proc` deref a
+            // dangling `ListenerState` on the next Escape keypress. The
+            // per-instance `state` is the source of truth for "did this
+            // listener start": start() fills it; stop() drains it.
+            if self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+            {
+                return;
+            }
+
             if let Some(addr) = self
                 .hook
                 .lock()
@@ -283,11 +302,14 @@ impl EscapeAbort for WindowsEscapeListener {
 }
 
 impl Drop for WindowsEscapeListener {
-    /// Unhook the keyboard hook and clear `LISTENER_PTR`. Without this, a
-    /// listener dropped while still started leaves `LISTENER_PTR` dangling —
-    /// the next Escape keypress would dereference freed memory in
-    /// `keyboard_hook_proc` — and leaks the `HHOOK`. Mirrors the macOS
-    /// `EscapeListener` `Drop` impl.
+    /// Unhook the keyboard hook and clear `LISTENER_PTR` if the listener
+    /// was the one that published it. Without this, a listener dropped while
+    /// still started leaves `LISTENER_PTR` dangling — the next Escape
+    /// keypress would dereference freed memory in `keyboard_hook_proc` —
+    /// and leaks the `HHOOK`. `stop` is a no-op when the listener never
+    /// started, so an idle `WindowsEscapeListener` field on a `WindowsPlatform`
+    /// that is built but never armed does NOT clobber an unrelated active
+    /// listener's pointer. Mirrors the macOS `EscapeListener` `Drop` impl.
     fn drop(&mut self) {
         self.stop();
     }
@@ -349,6 +371,15 @@ mod tests {
         LISTENER_PTR.load(Ordering::SeqCst)
     }
 
+    /// `LISTENER_PTR` is a process-global atomic; tests that touch it must
+    /// not run in parallel, otherwise one test's `start()` would publish
+    /// over another's pre-condition zero, or one test's `stop()` would
+    /// clear another's freshly-published pointer. A local mutex keeps the
+    /// serialization scoped to this module — no new dev-dep, no
+    /// cross-test interference.
+    #[cfg(windows)]
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn create_default() {
         let _esc = WindowsEscapeListener::default();
@@ -356,6 +387,9 @@ mod tests {
 
     #[test]
     fn lifecycle() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let esc = WindowsEscapeListener::new();
         assert!(!esc.is_aborted());
 
@@ -383,6 +417,17 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn listener_ptr_is_zeroed_after_stop_and_between_cycles() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Pin the pre-condition: the process-global pointer must start this
+        // test in the cleared state. A previous test that left the static
+        // non-zero (e.g. forgetting to call `stop`) would otherwise publish
+        // a fresh pointer over a stale one and let `keyboard_hook_proc`
+        // deref freed memory on the next Escape keypress.
+        assert_eq!(listener_ptr_addr(), 0, "must start zeroed");
+
         let esc = WindowsEscapeListener::new();
         if esc.start().is_err() {
             // A Windows session without an available native hook cannot
@@ -391,7 +436,6 @@ mod tests {
         }
         #[cfg(windows)]
         {
-            assert_eq!(listener_ptr_addr(), 0, "must start zeroed");
             assert_ne!(listener_ptr_addr(), 0, "start must publish ptr");
 
             // Repeated start while already started must be a no-op — it
@@ -422,6 +466,9 @@ mod tests {
     /// side of the same invariant.
     #[test]
     fn is_aborted_after_stop_is_false_and_does_not_panic() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let esc = WindowsEscapeListener::new();
         if esc.start().is_err() {
             return;
