@@ -48,6 +48,20 @@ pub struct SessionModelPref {
     pub model: String,
 }
 
+/// A session model preference together with the generation that produced it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionModelSnapshot {
+    pub pref: Option<SessionModelPref>,
+    pub generation: u64,
+}
+
+/// The result of one atomic live-map update.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionModelUpdate {
+    pub pref: Option<SessionModelPref>,
+    pub generation: u64,
+}
+
 /// `identity_meta.custom` key under which a session's model pick is persisted.
 ///
 /// Fourth twin of `EXEC_TIER_SESSION_KEY` / `MODE_SESSION_KEY` /
@@ -64,9 +78,21 @@ pub const MODEL_PIN_SESSION_KEY: &str = "model_pin";
 /// writer that only meant to change the model.
 pub const MODEL_PIN_PROVIDER_SESSION_KEY: &str = "model_pin_provider";
 
-static SESSION_MODELS: OnceLock<RwLock<HashMap<String, SessionModelPref>>> = OnceLock::new();
+/// `identity_meta.custom` key for the generation of a session model pick.
+///
+/// It is kept beside the model and provider keys in the same session metadata
+/// row, so the durable selection and its ordering are one carrier.
+pub const MODEL_PIN_GENERATION_SESSION_KEY: &str = "model_pin_generation";
 
-fn map() -> &'static RwLock<HashMap<String, SessionModelPref>> {
+#[derive(Clone, Debug)]
+struct SessionModelState {
+    pref: Option<SessionModelPref>,
+    generation: u64,
+}
+
+static SESSION_MODELS: OnceLock<RwLock<HashMap<String, SessionModelState>>> = OnceLock::new();
+
+fn map() -> &'static RwLock<HashMap<String, SessionModelState>> {
     SESSION_MODELS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -83,6 +109,17 @@ pub trait SessionPinSink: Send + Sync {
     /// already been updated, so the pin governs *this* process either way; what
     /// a failure costs is durability across a restart.
     fn persist(&self, session_key: &str, pref: Option<&SessionModelPref>);
+
+    /// Persist a pin with its generation. Existing sinks that only understand
+    /// the legacy API remain valid and receive generation zero.
+    fn persist_with_generation(
+        &self,
+        session_key: &str,
+        pref: Option<&SessionModelPref>,
+        _generation: u64,
+    ) {
+        self.persist(session_key, pref);
+    }
 }
 
 /// `FailsClosed`: both readers are `if let Some(sink)` with no `else`
@@ -121,14 +158,34 @@ fn sink() -> Option<&'static std::sync::Arc<dyn SessionPinSink>> {
 /// survives a restart. Both halves happen here because this is the one seam
 /// every writer uses — a caller cannot pick "memory only" by accident.
 pub fn set_session_model(session_key: &str, provider: Option<String>, model: String) {
-    let pref = SessionModelPref { provider, model };
-    map()
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(session_key.to_string(), pref.clone());
+    update_session_model(session_key, Some(SessionModelPref { provider, model }));
+}
+
+/// Atomically update the live selection and return the exact selection and
+/// generation sent to the durable sink.
+pub(crate) fn update_session_model(
+    session_key: &str,
+    pref: Option<SessionModelPref>,
+) -> SessionModelUpdate {
+    let update = {
+        let mut guard = map().write().unwrap_or_else(|e| e.into_inner());
+        let generation = guard
+            .get(session_key)
+            .map_or(0, |state| state.generation)
+            .saturating_add(1);
+        guard.insert(
+            session_key.to_string(),
+            SessionModelState {
+                pref: pref.clone(),
+                generation,
+            },
+        );
+        SessionModelUpdate { pref, generation }
+    };
     if let Some(sink) = sink() {
-        sink.persist(session_key, Some(&pref));
+        sink.persist_with_generation(session_key, update.pref.as_ref(), update.generation);
     }
+    update
 }
 
 /// Install a pin read back from durable storage, **without** disturbing a live
@@ -143,22 +200,57 @@ pub fn set_session_model(session_key: &str, provider: Option<String>, model: Str
 ///
 /// Returns `true` when the pin was installed.
 pub fn hydrate_session_model(session_key: &str, pref: SessionModelPref) -> bool {
+    hydrate_session_model_at_generation(session_key, pref, 0)
+}
+
+/// Install a durable selection only when it is newer than the live state.
+/// Generation zero is the compatibility value for rows written before the
+/// generation key existed.
+pub fn hydrate_session_model_at_generation(
+    session_key: &str,
+    pref: SessionModelPref,
+    generation: u64,
+) -> bool {
     let mut guard = map().write().unwrap_or_else(|e| e.into_inner());
-    if guard.contains_key(session_key) {
+    if guard
+        .get(session_key)
+        .is_some_and(|state| state.generation >= generation)
+    {
         return false;
     }
-    guard.insert(session_key.to_string(), pref);
+    guard.insert(
+        session_key.to_string(),
+        SessionModelState {
+            pref: Some(pref),
+            generation,
+        },
+    );
     true
 }
 
 /// Read the model preference for `session_key`, if one was set this run.
 #[must_use]
 pub fn get_session_model(session_key: &str) -> Option<SessionModelPref> {
+    get_session_model_snapshot(session_key).pref
+}
+
+/// Read the live preference and its ordering generation as one snapshot.
+#[must_use]
+pub fn get_session_model_snapshot(session_key: &str) -> SessionModelSnapshot {
     map()
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .get(session_key)
-        .cloned()
+        .map_or(
+            SessionModelSnapshot {
+                pref: None,
+                generation: 0,
+            },
+            |state| SessionModelSnapshot {
+                pref: state.pref.clone(),
+                generation: state.generation,
+            },
+        )
 }
 
 /// Drop a session's preference (revert to the agent/flow default).
@@ -167,13 +259,7 @@ pub fn get_session_model(session_key: &str) -> Option<SessionModelPref> {
 /// undone by the next run's rehydrate — the pin would come back from the row,
 /// which is worse than never having been clearable.
 pub fn clear_session_model(session_key: &str) {
-    map()
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(session_key);
-    if let Some(sink) = sink() {
-        sink.persist(session_key, None);
-    }
+    update_session_model(session_key, None);
 }
 
 /// The provider keys a `select_model(provider=…)` pin can actually resolve to.
@@ -261,21 +347,26 @@ mod tests {
 
     #[test]
     fn hydrate_fills_an_empty_slot() {
-        // The restart case: the map is cold, the row is the only truth.
-        let key = "test:session:hydrate-cold";
-        clear_session_model(key);
+        // This process-global map may already contain a tombstone for a reused
+        // literal key. Use a fresh key so this test exercises a genuinely cold
+        // slot while `clear_session_model` can keep its stale-row guard.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let key = format!(
+            "test:session:hydrate-cold:{}",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
         assert!(hydrate_session_model(
-            key,
+            &key,
             SessionModelPref {
                 provider: Some("anthropic".to_string()),
                 model: "claude-opus-5".to_string(),
             }
         ));
         assert_eq!(
-            get_session_model(key).map(|p| p.model),
+            get_session_model(&key).map(|p| p.model),
             Some("claude-opus-5".to_string())
         );
-        clear_session_model(key);
+        clear_session_model(&key);
     }
 
     #[test]
@@ -311,6 +402,117 @@ mod tests {
             get_session_model("test:session:b").unwrap().model,
             "model-b"
         );
+        clear_session_model("test:session:a");
+        clear_session_model("test:session:b");
+    }
+
+    #[test]
+    fn generation_is_monotonic_across_update_clear_and_reselect() {
+        let key = "test:session:generation-cycle";
+        clear_session_model(key);
+
+        let first = update_session_model(
+            key,
+            Some(SessionModelPref {
+                provider: Some("openai".to_string()),
+                model: "gpt-5".to_string(),
+            }),
+        );
+        let cleared = update_session_model(key, None);
+        let reselected = update_session_model(
+            key,
+            Some(SessionModelPref {
+                provider: None,
+                model: "claude-opus-5".to_string(),
+            }),
+        );
+
+        assert!(first.generation < cleared.generation);
+        assert!(cleared.generation < reselected.generation);
+        assert_eq!(cleared.pref, None);
+        assert_eq!(get_session_model_snapshot(key).pref, reselected.pref);
+        clear_session_model(key);
+    }
+
+    #[test]
+    fn cold_rehydration_restores_the_durable_generation() {
+        let key = "test:session:generation-cold";
+        clear_session_model(key);
+        let pref = SessionModelPref {
+            provider: Some("anthropic".to_string()),
+            model: "claude-opus-5".to_string(),
+        };
+
+        assert!(hydrate_session_model_at_generation(key, pref.clone(), 41));
+        assert_eq!(
+            get_session_model_snapshot(key),
+            SessionModelSnapshot {
+                pref: Some(pref),
+                generation: 41,
+            }
+        );
+        clear_session_model(key);
+    }
+
+    #[test]
+    fn live_rehydration_cannot_overwrite_a_newer_generation() {
+        let key = "test:session:generation-live";
+        let live = update_session_model(
+            key,
+            Some(SessionModelPref {
+                provider: None,
+                model: "picked-just-now".to_string(),
+            }),
+        );
+
+        assert!(!hydrate_session_model_at_generation(
+            key,
+            SessionModelPref {
+                provider: None,
+                model: "stale-from-disk".to_string(),
+            },
+            live.generation,
+        ));
+        assert_eq!(
+            get_session_model_snapshot(key).pref.unwrap().model,
+            "picked-just-now"
+        );
+        clear_session_model(key);
+    }
+
+    #[test]
+    fn canonical_session_keys_keep_generations_isolated() {
+        let first_key = "agent:main:telegram:dm:user-a";
+        let second_key = "agent:main:telegram:dm:user-b";
+        clear_session_model(first_key);
+        clear_session_model(second_key);
+
+        let first = update_session_model(
+            first_key,
+            Some(SessionModelPref {
+                provider: None,
+                model: "model-a".to_string(),
+            }),
+        );
+        let second = update_session_model(
+            second_key,
+            Some(SessionModelPref {
+                provider: None,
+                model: "model-b".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            get_session_model_snapshot(first_key).pref.unwrap().model,
+            "model-a"
+        );
+        assert_eq!(
+            get_session_model_snapshot(second_key).pref.unwrap().model,
+            "model-b"
+        );
+        assert_ne!(first.pref, second.pref);
+        clear_session_model(first_key);
+        clear_session_model(second_key);
     }
 
     /// The variant is the operator-facing severity of this handle going

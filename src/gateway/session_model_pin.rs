@@ -19,7 +19,8 @@ use tracing::warn;
 use crate::gateway::session_store::types::SessionPatch;
 use crate::gateway::session_store::SessionStore;
 use crate::providers::session_model_handle::{
-    SessionModelPref, SessionPinSink, MODEL_PIN_PROVIDER_SESSION_KEY, MODEL_PIN_SESSION_KEY,
+    SessionModelPref, SessionPinSink, MODEL_PIN_GENERATION_SESSION_KEY,
+    MODEL_PIN_PROVIDER_SESSION_KEY, MODEL_PIN_SESSION_KEY,
 };
 use crate::routing::session_key::SessionKey;
 
@@ -46,6 +47,10 @@ impl StoreBackedPinSink {
     /// alone" — a clear that omitted them would leave the old pin on the row to
     /// be rehydrated by the next run, which is worse than never clearing.
     fn patch_for(pref: Option<&SessionModelPref>) -> SessionPatch {
+        Self::patch_for_at_generation(pref, 0)
+    }
+
+    fn patch_for_at_generation(pref: Option<&SessionModelPref>, generation: u64) -> SessionPatch {
         let (model, provider) = match pref {
             Some(p) => (
                 serde_json::Value::String(p.model.clone()),
@@ -59,6 +64,7 @@ impl StoreBackedPinSink {
             metadata: Some(serde_json::json!({
                 MODEL_PIN_SESSION_KEY: model,
                 MODEL_PIN_PROVIDER_SESSION_KEY: provider,
+                MODEL_PIN_GENERATION_SESSION_KEY: generation.to_string(),
             })),
             ..Default::default()
         }
@@ -67,6 +73,15 @@ impl StoreBackedPinSink {
 
 impl SessionPinSink for StoreBackedPinSink {
     fn persist(&self, session_key: &str, pref: Option<&SessionModelPref>) {
+        self.persist_with_generation(session_key, pref, 0);
+    }
+
+    fn persist_with_generation(
+        &self,
+        session_key: &str,
+        pref: Option<&SessionModelPref>,
+        generation: u64,
+    ) {
         // A key this store cannot address is not an error worth logging every
         // turn: sub-agent and ephemeral keys legitimately pin models on
         // sessions that have no row. The in-memory map still governs them for
@@ -74,7 +89,7 @@ impl SessionPinSink for StoreBackedPinSink {
         let Some(key) = SessionKey::from_key_string(session_key) else {
             return;
         };
-        let patch = Self::patch_for(pref);
+        let patch = Self::patch_for_at_generation(pref, generation);
         let store = Arc::clone(&self.store);
 
         // The caller is a synchronous fn on a path where a store failure must
@@ -131,6 +146,30 @@ mod tests {
     }
 
     #[test]
+    fn a_pick_writes_the_generation_alongside_both_keys() {
+        let patch = StoreBackedPinSink::patch_for_at_generation(
+            Some(&SessionModelPref {
+                provider: Some("anthropic".to_string()),
+                model: "claude-opus-5".to_string(),
+            }),
+            7,
+        );
+        let m = keys(&patch);
+        assert_eq!(m[MODEL_PIN_SESSION_KEY], "claude-opus-5");
+        assert_eq!(m[MODEL_PIN_PROVIDER_SESSION_KEY], "anthropic");
+        assert_eq!(m[MODEL_PIN_GENERATION_SESSION_KEY], "7");
+    }
+
+    #[test]
+    fn a_clear_keeps_the_generation_tombstone() {
+        let patch = StoreBackedPinSink::patch_for_at_generation(None, 8);
+        let m = keys(&patch);
+        assert!(m[MODEL_PIN_SESSION_KEY].is_null());
+        assert!(m[MODEL_PIN_PROVIDER_SESSION_KEY].is_null());
+        assert_eq!(m[MODEL_PIN_GENERATION_SESSION_KEY], "8");
+    }
+
+    #[test]
     fn a_clear_nulls_both_keys_rather_than_omitting_them() {
         let patch = StoreBackedPinSink::patch_for(None);
         let m = keys(&patch);
@@ -138,7 +177,7 @@ mod tests {
         assert!(m[MODEL_PIN_PROVIDER_SESSION_KEY].is_null());
         assert_eq!(
             m.len(),
-            2,
+            3,
             "an omitted key means \"leave it alone\" to both stores — a clear \
              that omitted them would be undone by the next run's rehydrate"
         );
