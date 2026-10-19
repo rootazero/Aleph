@@ -2577,16 +2577,24 @@ mod tests {
             })
         );
 
-        // The exact limit is still a token, not a payload copied into a digest.
+        // The envelope accepts a token at the length limit, but admission
+        // still requires the canonical digest of the actual payload.
         let at_limit = "x".repeat(CONTEXT_FINGERPRINT_MAX_LEN);
+        assert_eq!(validate_fingerprint(&at_limit, "input_fingerprint"), Ok(()));
         let mut boundary = legacy_request();
         boundary.input_fingerprint = Some(at_limit.clone());
         boundary
             .snapshot
             .as_mut()
             .expect("snapshot")
-            .input_fingerprint = at_limit;
-        assert!(boundary.admit(&descriptor, &caller).is_ok());
+            .input_fingerprint = at_limit.clone();
+        assert_eq!(
+            boundary.admit(&descriptor, &caller).err(),
+            Some(ContextContractError::FingerprintMismatch {
+                expected: input_fingerprint(),
+                found: at_limit,
+            })
+        );
     }
 
     // ------------------------------------------------------------------

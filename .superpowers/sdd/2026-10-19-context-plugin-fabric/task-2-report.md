@@ -1,6 +1,6 @@
 # Task 2 implementation report — host grants and registry
 
-Status: implementation and independent review complete; latest combined cargo verification pending. This report does not claim unexecuted tests passed.
+Status: implementation and independent review complete; 26 registry tests and 8 extension capability tests passed. Broader context validation has one unrelated outdated digest assertion, corrected for the next batch.
 
 ## Changes / 变更
 
@@ -17,7 +17,9 @@ Independent reviewer `5a1dc562-b6b9-44b` approved after the descriptor-binding f
 
 Coordinator runs the combined Task 1 follow-up / Task 2 / Task 4 batch with `CARGO_BUILD_JOBS=4 CARGO_PROFILE_DEV_DEBUG=0`. The guard checks MemAvailable >=4GiB before each cargo invocation.
 
-The first compile found E0063 in a fold-ledger test constructor, E0502 when returning an admitted descriptor borrow while appending audit, and E0716 in two temporary audit snapshots. Those have been fixed; the retry is still compiling at this report's creation. Logs are under the same SDD directory (`validation-2-4*.log`). Final results will be appended before acceptance.
+The first compile found E0063 in a fold-ledger test constructor, E0502 when returning an admitted descriptor borrow while appending audit, and E0716 in two temporary audit snapshots. All were corrected.
+
+Final targeted results in the frozen revision: the `context::` batch ran 506 tests, with all 26 `extension::registry::plugin_registry::context::tests` passing. Its only failure was a pre-existing Task 1 digest-boundary assertion made obsolete by recomputing canonical payload hashes. That assertion has been corrected for the next shared batch; this report does not call the entire context batch green. `extension::capability`: 8 passed. A supplemental overly-specific context_tests filter matched 0 tests; those 0 are not counted as verification. The actual 26 registry results are in `validation-2-4.log`.
 
 ## Remaining scope / 未做
 

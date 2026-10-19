@@ -1,6 +1,6 @@
 # Task 4 implementation report — fold ownership
 
-Status: implementation and independent review complete; combined cargo verification pending. No test pass is claimed here.
+Status: implementation and independent review complete; targeted fold/manual/ledger, decompress, diagnostics and event compatibility tests passed. A pre-existing R10 line-count overrun remains assigned to Task 5.
 
 ## Changes / 变更
 
@@ -16,7 +16,11 @@ Independent reviewer `7c41db8e-56ec-459` APPROVED: optional serde compatibility,
 
 ## Verification / 验证
 
-Combined Task 1/2/4 tests run under `CARGO_BUILD_JOBS=4 CARGO_PROFILE_DEV_DEBUG=0` with >=4GiB MemAvailable before each cargo invocation. The first compilation caught an omitted `owner: None` in the fold-ledger test constructor, now fixed. The retry is still compiling; final results will be appended before acceptance.
+Combined validation uses `CARGO_BUILD_JOBS=4 CARGO_PROFILE_DEV_DEBUG=0` and >=4GiB MemAvailable before each cargo invocation. The omitted fold-ledger test constructor was fixed.
+
+Actual results: folds 9 passed, manual compaction 23 passed, fold ledger 5 passed in the context batch; decompression 9 passed; fold economics diagnostics 4 passed; session events 31 passed. The context batch's only failure was the separate Task 1 digest-boundary fixture, corrected for the next shared run.
+
+R10: the exact twelve-file guard passed. The line guard failed at 5570 against CEILING 5545. Running the guard's exact count algorithm over git blobs proved the original baseline `79a2494f6`, Task 1 `c65f50d3a`, Task 2 `a97dc0f52` and Task 4 `b30a9c778` all have 5570 production lines: Task 4 added zero budgeted lines. This pre-existing 25-line overrun is recorded for real scaffolding extraction in Task 5; no ceiling was raised and the guard is not reported green.
 
 ## Remaining scope / 未做
 
