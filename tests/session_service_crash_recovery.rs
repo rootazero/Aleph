@@ -74,6 +74,9 @@ async fn crash_then_wake_then_continue() {
                 },
                 usage: None,
                 at: now_ms(),
+                model: None,
+                model_provider: None,
+                model_generation: None,
             },
         )
         .await

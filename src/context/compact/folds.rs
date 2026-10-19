@@ -317,6 +317,9 @@ mod tests {
             },
             usage: None,
             at: 7,
+            model: None,
+            model_provider: None,
+            model_generation: None,
         };
 
         // A log of ONLY forged markers lists no folds at all.

@@ -1310,6 +1310,9 @@ mod tests {
             content: msg_content("hello"),
             usage: None,
             at: 0,
+            model: None,
+            model_provider: None,
+            model_generation: None,
         }
     }
 
@@ -1323,6 +1326,9 @@ mod tests {
                 ..Default::default()
             }),
             at: 0,
+            model: None,
+            model_provider: None,
+            model_generation: None,
         }
     }
 

@@ -542,6 +542,9 @@ mod tests {
                 },
                 usage: None,
                 at: now_ms(),
+                model: None,
+                model_provider: None,
+                model_generation: None,
             })
         };
         let events: Vec<SessionEventRecord> = vec![
@@ -621,6 +624,9 @@ mod tests {
                 },
                 usage: None,
                 at: now_ms(),
+                model: None,
+                model_provider: None,
+                model_generation: None,
             }),
             mk_record(SessionEvent::ToolCallRequested {
                 identity: None,
@@ -693,6 +699,9 @@ mod tests {
             },
             usage: None,
             at: now_ms(),
+            model: None,
+            model_provider: None,
+            model_generation: None,
         });
 
         let note_present = |events: &[SessionEventRecord]| {
@@ -772,6 +781,9 @@ mod tests {
                 },
                 usage: None,
                 at: now_ms(),
+                model: None,
+                model_provider: None,
+                model_generation: None,
             }),
             mk_record(SessionEvent::ToolCallRequested {
                 identity: None,
@@ -870,6 +882,9 @@ mod tests {
                 },
                 usage: None,
                 at: now_ms(),
+                model: None,
+                model_provider: None,
+                model_generation: None,
             }),
             mk_record(SessionEvent::ToolResult {
                 turn_id: turn,
@@ -960,6 +975,9 @@ mod tests {
                 },
                 usage: None,
                 at: now_ms(),
+                model: None,
+                model_provider: None,
+                model_generation: None,
             }),
             mk_record(SessionEvent::UserMessage {
                 turn_id: turn,
@@ -1004,6 +1022,9 @@ mod tests {
                 },
                 usage: None,
                 at: now_ms(),
+                model: None,
+                model_provider: None,
+                model_generation: None,
             }),
             mk_record(SessionEvent::UserMessage {
                 turn_id: turn,
@@ -1059,6 +1080,9 @@ mod tests {
                 },
                 usage: None,
                 at: now_ms(),
+                model: None,
+                model_provider: None,
+                model_generation: None,
             }),
             mk_record(SessionEvent::UserMessage {
                 turn_id: turn,
@@ -1244,6 +1268,9 @@ mod tests {
                 },
                 usage: None,
                 at: now_ms(),
+                model: None,
+                model_provider: None,
+                model_generation: None,
             }),
             // Deferred result: no ToolCallRequested for "d1" anywhere.
             mk_record(SessionEvent::ToolResult {

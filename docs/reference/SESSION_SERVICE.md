@@ -177,3 +177,11 @@ dm_scope = "main"
 - **迁移断点**：从 `per-peer` 切到 `main` 后，旧的 `agent:<id>:dm:<peer>` 会话停在原地（不迁移），
   新消息走 `agent:<id>:main`，会有一次性上下文断点。
 - 群组消息不受影响，始终按 `Group` 会话隔离。
+
+## 模型热切换与 SessionEvent（Model Hot-Switch，2026-10，Phase M）
+
+`SessionModelProvider` 在每次 `process` / `execute_streaming_dyn` 请求边界读取 `SessionModelSnapshot`（含 `model` + `model_provider`），该快照在本次请求内 immutable，切换在下一次请求边界才生效。`generation` 单调递增；pin 变更写带 generation 前置条件的 durable store，失败 fail-closed 回滚。普通 `sessions.patch` **明确禁止写入 model pin 键**（`knob_validators` 拦截），仅 `select_model` 工具拥有写权限。
+
+`AssistantMessage` 可携带可选 per-call `model` / `provider` / `generation` provenance，支撑 trace 与成本归因。TUI `/model` 与 webchat session picker 都走 gateway `/model` 到 `select_model`；per-turn picker（Panel 模型 pill / `[voice]` 钉）走独立 `FlowRequest.model_directive` 路径，两者分开。
+
+`SessionModelProvider` reads `SessionModelSnapshot` at each request boundary; snapshot is immutable within that request, switch takes effect next request. `generation` is monotonic with conditional durable persistence; stale or conflicting writes cannot overwrite a newer generation. `sessions.patch` rejects model pin keys; only `select_model` may write them. `AssistantMessage` carries optional per-call provenance. TUI `/model` and webchat picker both route to `select_model`; per-turn picker is separate.

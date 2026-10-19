@@ -2017,6 +2017,12 @@ impl AiProvider for FailoverProvider {
             .map(|c| Cow::Owned(c.into_owned()))
     }
 
+    /// This wrapper cannot prove a session target (it knows no generation);
+    /// forward to the live primary, which may.
+    fn last_request_target(&self) -> Option<crate::providers::ResolvedModelTarget> {
+        self.primary.current().last_request_target()
+    }
+
     /// Estimators take the live primary's policy; a failover to another target
     /// is re-projected for that target at its own wire.
     fn reasoning_replay(

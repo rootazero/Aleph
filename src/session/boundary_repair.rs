@@ -1027,6 +1027,9 @@ mod tests {
             },
             usage: None,
             at: 20,
+            model: None,
+            model_provider: None,
+            model_generation: None,
         }
     }
 

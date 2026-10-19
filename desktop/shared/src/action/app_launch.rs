@@ -41,7 +41,6 @@ pub fn launch_app(app_name: &str) -> Result<()> {
     {
         use std::os::windows::ffi::OsStrExt;
         use windows::core::PCWSTR;
-        use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -60,7 +59,7 @@ pub fn launch_app(app_name: &str) -> Result<()> {
         // the call; other pointers are null as documented.
         let hinst = unsafe {
             ShellExecuteW(
-                HWND(std::ptr::null_mut()),
+                None,
                 PCWSTR(verb.as_ptr()),
                 PCWSTR(app.as_ptr()),
                 PCWSTR::null(),
@@ -151,7 +150,8 @@ fn exe_name_matches(exe_path: &str, target: &str) -> bool {
 
 #[cfg(target_os = "windows")]
 fn windows_quit_app(app_name: &str) -> Result<()> {
-    use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM, WPARAM};
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
         PROCESS_QUERY_LIMITED_INFORMATION,
@@ -177,7 +177,7 @@ fn windows_quit_app(app_name: &str) -> Result<()> {
             if pid == 0 {
                 return BOOL(1);
             }
-            let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, BOOL(0), pid) else {
+            let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
                 return BOOL(1);
             };
             let mut buf = [0u16; 512];
@@ -198,7 +198,7 @@ fn windows_quit_app(app_name: &str) -> Result<()> {
 
             let state = &mut *(lparam.0 as *mut EnumState);
             if exe_name_matches(&exe, &state.target) {
-                let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
                 state.closed += 1;
             }
         }

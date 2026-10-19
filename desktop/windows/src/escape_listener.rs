@@ -137,7 +137,7 @@ impl EscapeAbort for WindowsEscapeListener {
                 // to the `'static` `keyboard_hook_proc`; removed again before
                 // this thread exits.
                 match unsafe {
-                    SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), module, 0)
+                    SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), Some(module), 0)
                 } {
                     Ok(hook) => {
                         let tid = unsafe { GetCurrentThreadId() };

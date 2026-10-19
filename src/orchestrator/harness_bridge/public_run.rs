@@ -349,6 +349,9 @@ async fn ephemeral_session(
                 content: content(&past.assistant),
                 usage: None,
                 at,
+                model: None,
+                model_provider: None,
+                model_generation: None,
             },
         ] {
             session

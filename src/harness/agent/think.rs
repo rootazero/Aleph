@@ -998,6 +998,17 @@ impl AgentHarness {
         )
         .await?;
 
+        // Provenance of the ONE LLM call that produced the surviving response:
+        // read the live wrapper's last-request target NOW, immediately after the
+        // final retry/drain future completed, before any further `await` could
+        // interleave another `deps.llm` call. `None` when the provider cannot
+        // prove which model served (plain adapters / no session wrapper).
+        let last_target = self.deps.llm.last_request_target();
+        let (serving_model, serving_provider, serving_generation) = match last_target {
+            Some(t) => (Some(t.model), Some(t.provider), Some(t.generation)),
+            None => (None, None, None),
+        };
+
         // Exit-point reason fidelity. Capture the surviving response's
         // degradation verdicts here — after every bounded recovery loop has
         // had its chance to replace `response`, and before tool-call
@@ -1161,6 +1172,9 @@ impl AgentHarness {
             },
             usage: response.usage.as_ref().map(Into::into),
             at: crate::session::events::now_ms(),
+            model: serving_model,
+            model_provider: serving_provider,
+            model_generation: serving_generation,
         };
         self.deps
             .session
@@ -1524,6 +1538,14 @@ impl AgentHarness {
                 return;
             }
         };
+        // Provenance: capture the grace call's target right after `resp`
+        // settled (same contract as the primary turn — read after the future,
+        // never before, and never faked from a run-level hint).
+        let last_target = self.deps.llm.last_request_target();
+        let (serving_model, serving_provider, serving_generation) = match last_target {
+            Some(t) => (Some(t.model), Some(t.provider), Some(t.generation)),
+            None => (None, None, None),
+        };
         // Account the grace call's billed tokens immediately — the early
         // returns below (empty text, guardrail block) previously skipped the
         // end-of-function accounting entirely, silently dropping a real billed
@@ -1576,6 +1598,9 @@ impl AgentHarness {
             },
             usage: resp.usage.as_ref().map(Into::into),
             at: crate::session::events::now_ms(),
+            model: serving_model,
+            model_provider: serving_provider,
+            model_generation: serving_generation,
         };
         // Token accounting already happened via `account_intermediate_tokens`
         // right after the LLM call, so the early-return paths are counted too.
@@ -1742,6 +1767,9 @@ mod tests {
             },
             usage: None,
             at: now_ms(),
+            model: None,
+            model_provider: None,
+            model_generation: None,
         }
     }
 

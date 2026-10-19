@@ -97,6 +97,7 @@ pub mod route_policy;
 pub mod route_witness;
 pub mod session_moa_handle;
 pub mod session_model_handle;
+pub mod session_model_provider;
 pub mod think_level_provider;
 
 // Re-exports
@@ -123,6 +124,7 @@ pub use ollama::OllamaProvider;
 pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};
 pub use protocols::OpenAiProtocol;
 pub use registry::ProviderRegistry;
+pub use session_model_provider::{ResolvedModelTarget, SessionModelProvider};
 pub use think_level_provider::ThinkLevelProvider;
 
 use crate::config::ProviderConfig;
@@ -313,6 +315,20 @@ pub trait AiProvider: Send + Sync {
     /// `$0.00`) for every run. Wrappers delegate to their live primary;
     /// `HttpProvider` reports its configured key. Default `None` = "unknown".
     fn serving_provider_hint(&self) -> Option<Cow<'_, str>> {
+        None
+    }
+
+    /// The provider/model/generation that actually served the most recent
+    /// request, when the provider can prove it.
+    ///
+    /// `generation` is the session-selection generation the request began
+    /// under (see `session_model_handle::SessionModelSnapshot`), so callers can
+    /// tell a *stale* observation from the current selection. Plain providers
+    /// and most decorators cannot prove a target and return `None`; the
+    /// session-resolution adapter (`SessionModelProvider`) records it at the
+    /// request boundary. Wrappers that do not record their own target forward
+    /// to what they wrap.
+    fn last_request_target(&self) -> Option<ResolvedModelTarget> {
         None
     }
 

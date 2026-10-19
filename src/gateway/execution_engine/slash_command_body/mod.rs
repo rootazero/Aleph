@@ -372,10 +372,10 @@ fn attribute(text: &str) -> String {
 ///   ([`declared_model_pin`](crate::extension::declared_model::declared_model_pin)):
 ///   `inherit`, a blank and the aliases `sonnet` / `opus` / `haiku` pin
 ///   nothing (the agent's model serves the turn); a retired id refuses the
-///   turn, its successor named; any other id is pinned as written (`Raw`).
-///   One no provider serves then fails at the provider, or the fallback walk
-///   serves the turn on another model and says so on every surface
-///   (`helpers::emit_route_correction`) — never silently.
+///   turn, its successor named. A non-retired id must then resolve through the
+///   published selectable roster before it becomes a qualified override; an
+///   unknown, unavailable, unauthenticated, ambiguous, or unpublished model
+///   refuses the turn with the resolver's error.
 pub(super) fn command_model_pin(
     requested: Option<&ModelOverride>,
     declared: Option<&str>,
@@ -383,8 +383,19 @@ pub(super) fn command_model_pin(
     if requested.is_some() {
         return Ok(None);
     }
-    let pin = crate::extension::declared_model::declared_model_pin("command", declared)?;
-    Ok(pin.map(|model| ModelOverride::Raw { model }))
+    let Some(model) = crate::extension::declared_model::declared_model_pin("command", declared)?
+    else {
+        return Ok(None);
+    };
+    let pref = crate::providers::session_model_handle::resolve_selectable_model(None, &model)
+        .map_err(|rejection| rejection.to_string())?;
+    let provider = pref.provider.ok_or_else(|| {
+        "Selectable model resolver returned no provider; model unchanged.".to_string()
+    })?;
+    Ok(Some(ModelOverride::Qualified {
+        provider,
+        model: pref.model,
+    }))
 }
 
 /// Drop a command turn's residue from metadata that is being re-driven as a

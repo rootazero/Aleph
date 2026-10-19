@@ -121,7 +121,6 @@ pub fn open(target: &str) -> Result<()> {
     {
         use std::os::windows::ffi::OsStrExt;
         use windows::core::PCWSTR;
-        use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -142,7 +141,7 @@ pub fn open(target: &str) -> Result<()> {
         // outlive the call; the remaining pointer args are null as documented.
         let hinst = unsafe {
             ShellExecuteW(
-                HWND(std::ptr::null_mut()),
+                None,
                 PCWSTR(verb.as_ptr()),
                 PCWSTR(file.as_ptr()),
                 PCWSTR::null(),

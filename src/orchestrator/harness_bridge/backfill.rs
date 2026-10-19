@@ -94,6 +94,9 @@ pub(crate) async fn backfill_events_from_messages(
                 // to re-bill. Absent, not zero.
                 usage: None,
                 at: msg.timestamp,
+                model: None,
+                model_provider: None,
+                model_generation: None,
             }),
             // "system", "tool", and unknown roles are skipped: backfill only
             // reconstructs the conversation turns the harness replays. Skipped

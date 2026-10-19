@@ -542,6 +542,21 @@ pub trait SessionStore: Send + Sync {
         key: &SessionKey,
         patch: &SessionPatch,
     ) -> Result<bool, SessionStoreError>;
+
+    /// Apply a model pin patch only when its generation is newer than the
+    /// durable generation. Stores that support model pins must override this
+    /// with an atomic compare and merge in their own metadata lock/connection
+    /// boundary. The default fails closed so a store cannot silently bypass
+    /// generation ordering.
+    async fn patch_session_if_model_pin_generation_newer(
+        &self,
+        key: &SessionKey,
+        patch: &SessionPatch,
+        _generation: u64,
+    ) -> Result<bool, SessionStoreError> {
+        let _ = (key, patch);
+        Err(SessionStoreError::Unsupported)
+    }
     async fn get_session_preview(
         &self,
         key: &SessionKey,

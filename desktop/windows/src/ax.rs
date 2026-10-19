@@ -331,9 +331,9 @@ mod imp {
         DEFAULT_MAX_NODES,
     };
     use aleph_protocol::desktop_bridge::methods::screen::Region;
-    use windows::core::BSTR;
+    use windows::core::{BOOL, BSTR};
 
-    use windows::Win32::Foundation::{BOOL, HWND, RECT};
+    use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_MULTITHREADED,

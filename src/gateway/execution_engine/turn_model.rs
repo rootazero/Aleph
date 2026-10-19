@@ -30,7 +30,8 @@ use super::engine::ExecutionEngine;
 use super::RunRequest;
 use crate::executor::ToolRegistry;
 use crate::providers::session_model_handle::{
-    hydrate_session_model, SessionModelPref, MODEL_PIN_PROVIDER_SESSION_KEY, MODEL_PIN_SESSION_KEY,
+    get_session_model_snapshot, hydrate_session_model_at_generation, SessionModelPref,
+    MODEL_PIN_GENERATION_SESSION_KEY, MODEL_PIN_PROVIDER_SESSION_KEY, MODEL_PIN_SESSION_KEY,
 };
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
@@ -42,13 +43,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// costs one metadata read that the sibling resolvers already make.
     pub(super) async fn rehydrate_turn_model_pin(&self, request: &RunRequest) {
         let key_str = request.session_key.to_key_string();
-        if crate::providers::session_model_handle::get_session_model(&key_str).is_some() {
-            return;
-        }
-        let Some(pref) = self.stored_model_pin(&request.session_key).await else {
+        let live = get_session_model_snapshot(&key_str);
+        let Some((pref, generation)) = self.stored_model_pin(&request.session_key).await else {
             return;
         };
-        if hydrate_session_model(&key_str, pref.clone()) {
+        // Generation zero is the compatibility value for old rows. A truly
+        // empty live slot is also generation zero, so it may accept that row.
+        if live.pref.is_some() || (live.generation != 0 && live.generation >= generation) {
+            return;
+        }
+        if hydrate_session_model_at_generation(&key_str, pref.clone(), generation) {
             tracing::debug!(
                 session = %key_str,
                 model = %pref.model,
@@ -66,7 +70,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     async fn stored_model_pin(
         &self,
         session_key: &crate::gateway::router::SessionKey,
-    ) -> Option<SessionModelPref> {
+    ) -> Option<(SessionModelPref, u64)> {
         let store = self.session_manager.as_ref()?;
         let meta = match store.get_metadata(session_key).await {
             Ok(meta) => meta?,
@@ -80,6 +84,27 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let provider =
             crate::gateway::session_snapshot::custom_str(&meta, MODEL_PIN_PROVIDER_SESSION_KEY)
                 .filter(|p| !p.trim().is_empty());
-        Some(SessionModelPref { provider, model })
+        let generation = meta
+            .identity_meta
+            .as_ref()
+            .and_then(|im| im.custom.get(MODEL_PIN_GENERATION_SESSION_KEY))
+            .map(|value| {
+                value
+                    .as_str()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .or_else(|| value.as_u64())
+            });
+        let generation = match generation {
+            None => 0,
+            Some(Some(generation)) => generation,
+            Some(None) => {
+                warn!(
+                    key = %session_key.to_key_string(),
+                    "Invalid stored model pin generation — model pin not restored"
+                );
+                return None;
+            }
+        };
+        Some((SessionModelPref { provider, model }, generation))
     }
 }

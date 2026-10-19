@@ -302,6 +302,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // `self_config` mode switch hot-applies to the very next prompt with no
     // daemon restart (the chain is otherwise built once and never rebuilt).
     let route_handle = alephcore::providers::route_handle::global_route_handle(&config.route);
+    // Publish readiness from the existing constructed registry, not from the
+    // pin chains (which may exist for a provider without usable credentials).
+    let registered_provider_names: std::collections::BTreeSet<String> =
+        default_provider.provider_names().into_iter().collect();
     let provider_chain = alephcore::orchestrator::build_failover_chain(
         config,
         primary_provider_key,
@@ -350,12 +354,30 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
             .entry(primary_provider_key.to_string())
             .or_insert_with(|| default_provider.current());
     }
-    // Publish exactly this key set so `select_model(provider=…)` refuses a name
-    // the run builder would silently substitute the default chain for. Same map,
-    // same moment — the tool's answer and the runtime's lookup cannot diverge.
-    alephcore::providers::session_model_handle::set_pinnable_providers(
-        named_providers.keys().cloned(),
+    // The selector reads an immutable projection of this same routing map and
+    // configured/preset/discovered roster. No publication means no selection.
+    let authentication = alephcore::routing::provider_availability_from_config(
+        config.providers.clone(),
+        Some(shared_token_mgr.clone()),
     );
+    let snapshot =
+        alephcore::providers::session_model_handle::SelectableModelsSnapshot::from_config(
+            config,
+            named_providers.keys().cloned().collect(),
+            &registered_provider_names,
+            |name| {
+                matches!(
+                    authentication(name),
+                    alephcore::routing::recall::ProviderStatus::Available
+                ) || config
+                    .providers
+                    .get(name)
+                    .is_some_and(|pc| pc.protocol() == "ollama")
+                    || (registered_provider_names.contains(name)
+                        && alephcore::gateway::available_provider_from_env() == Some(name))
+            },
+        );
+    alephcore::providers::session_model_handle::publish_selectable_models(snapshot);
 
     let routing_store = match (embedder.clone(), memory_backend.clone()) {
         (Some(embedder), Some(backend)) => Some(std::sync::Arc::new(

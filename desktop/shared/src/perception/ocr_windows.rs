@@ -20,7 +20,7 @@ pub(super) fn windows_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
     let result = engine
         .RecognizeAsync(&bitmap)
         .map_err(|e| DesktopError::OcrFailed(format!("RecognizeAsync failed: {e}")))?
-        .get()
+        .join()
         .map_err(|e| DesktopError::OcrFailed(format!("OCR result async get failed: {e}")))?;
 
     let full_text = result
@@ -58,12 +58,12 @@ fn decode_png_to_bitmap(png_bytes: &[u8]) -> Result<windows::Graphics::Imaging::
     writer
         .StoreAsync()
         .map_err(|e| DesktopError::OcrFailed(format!("StoreAsync failed: {e}")))?
-        .get()
+        .join()
         .map_err(|e| DesktopError::OcrFailed(format!("StoreAsync.get failed: {e}")))?;
     writer
         .FlushAsync()
         .map_err(|e| DesktopError::OcrFailed(format!("FlushAsync failed: {e}")))?
-        .get()
+        .join()
         .map_err(|e| DesktopError::OcrFailed(format!("FlushAsync.get failed: {e}")))?;
 
     // Seek to beginning before decoding.
@@ -77,13 +77,13 @@ fn decode_png_to_bitmap(png_bytes: &[u8]) -> Result<windows::Graphics::Imaging::
             DesktopError::OcrFailed(format!("Stream cast to IRandomAccessStream failed: {e}"))
         })?)
         .map_err(|e| DesktopError::OcrFailed(format!("BitmapDecoder::CreateAsync failed: {e}")))?
-        .get()
+        .join()
         .map_err(|e| DesktopError::OcrFailed(format!("BitmapDecoder async get failed: {e}")))?;
 
     let bitmap = decoder
         .GetSoftwareBitmapAsync()
         .map_err(|e| DesktopError::OcrFailed(format!("GetSoftwareBitmapAsync failed: {e}")))?
-        .get()
+        .join()
         .map_err(|e| DesktopError::OcrFailed(format!("SoftwareBitmap async get failed: {e}")))?;
 
     Ok(bitmap)
@@ -121,7 +121,7 @@ fn extract_lines(result: &windows::Media::Ocr::OcrResult) -> Result<Vec<crate::O
     use crate::OcrLine;
     use windows::Media::Ocr as WinOcr;
 
-    let ocr_lines: windows::Foundation::Collections::IVectorView<WinOcr::OcrLine> = result
+    let ocr_lines: windows_collections::IVectorView<WinOcr::OcrLine> = result
         .Lines()
         .map_err(|e| DesktopError::OcrFailed(format!("Failed to get OCR lines: {e}")))?;
 
@@ -149,7 +149,7 @@ fn merge_word_bounds(line: &windows::Media::Ocr::OcrLine) -> Result<Option<crate
     use crate::BoundingBox;
     use windows::Media::Ocr as WinOcr;
 
-    let words: windows::Foundation::Collections::IVectorView<WinOcr::OcrWord> = line
+    let words: windows_collections::IVectorView<WinOcr::OcrWord> = line
         .Words()
         .map_err(|e| DesktopError::OcrFailed(format!("Failed to get words: {e}")))?;
 

@@ -2,12 +2,36 @@
 //! model pin, the rescue strip, and the two fire sites.
 
 use super::*;
+use crate::config::{Config, ProviderConfig};
 use crate::discovery::DiscoveryConfig;
 use crate::extension::{ExtensionConfig, PluginKind, PluginOrigin, PluginRecord};
 use crate::gateway::agent_instance::AgentInstance;
+use crate::providers::session_model_handle::{
+    with_test_selectable_models, SelectableModelsSnapshot,
+};
+use std::collections::BTreeSet;
 use tempfile::TempDir;
 
 const PLUGIN: &str = "plug";
+
+fn selectable_snapshot(
+    providers: &[(&str, &str)],
+    available: &[&str],
+    authenticated: &[&str],
+) -> SelectableModelsSnapshot {
+    let mut config = Config::default();
+    config.providers.clear();
+    for (name, model) in providers {
+        config
+            .providers
+            .insert((*name).into(), ProviderConfig::test_config(*model));
+    }
+    let routable: BTreeSet<_> = providers.iter().map(|(name, _)| (*name).into()).collect();
+    let available: BTreeSet<_> = available.iter().map(|name| (*name).into()).collect();
+    SelectableModelsSnapshot::from_config(&config, routable, &available, |name| {
+        authenticated.contains(&name)
+    })
+}
 
 /// The unit-test engine (`execution_engine::tests::test_engine`).
 type TestEngine = super::super::engine::ExecutionEngine<
@@ -651,43 +675,81 @@ async fn a_command_renders_only_while_its_plugin_is_active_here() {
     );
 }
 
-#[test]
-fn a_declared_model_pins_this_turn_only_when_the_request_has_none() {
-    let raw = |model: &str| {
-        Some(ModelOverride::Raw {
-            model: model.into(),
+#[tokio::test]
+async fn a_declared_model_pins_this_turn_only_when_the_request_has_none() {
+    let expected = || {
+        Some(ModelOverride::Qualified {
+            provider: "anthropic".into(),
+            model: "claude-sonnet-5".into(),
         })
     };
-    assert_eq!(
-        command_model_pin(None, Some("claude-sonnet-5")),
-        Ok(raw("claude-sonnet-5"))
+    let snapshot = selectable_snapshot(
+        &[("anthropic", "claude-sonnet-5")],
+        &["anthropic"],
+        &["anthropic"],
     );
-    // An id the catalog does not know is pinned as written — as
-    // `select_model` accepts it; the provider then answers for it.
-    assert_eq!(
-        command_model_pin(None, Some("some-new-model")),
-        Ok(raw("some-new-model"))
-    );
-    let user = ModelOverride::Raw {
-        model: "gpt-5".into(),
-    };
-    assert_eq!(
-        command_model_pin(Some(&user), Some("claude-sonnet-5")),
-        Ok(None),
-        "the user's pick wins"
-    );
-    // Claude Code's aliases name no routable id (no alias table): not applied.
-    for declared in ["sonnet", "opus", "haiku", "inherit", "  ", ""] {
+    with_test_selectable_models(Some(snapshot), async {
         assert_eq!(
-            command_model_pin(None, Some(declared)),
-            Ok(None),
-            "{declared:?}"
+            command_model_pin(None, Some("claude-sonnet-5")),
+            Ok(expected())
         );
-    }
-    assert_eq!(command_model_pin(None, None), Ok(None));
-    // A retired id would fail at the provider: refused before the turn runs.
-    let why = command_model_pin(None, Some("deepseek-reasoner")).unwrap_err();
-    assert!(why.contains("retired"), "{why}");
+        let user = ModelOverride::Raw {
+            model: "gpt-5".into(),
+        };
+        assert_eq!(
+            command_model_pin(Some(&user), Some("claude-sonnet-5")),
+            Ok(None),
+            "the user's pick wins"
+        );
+        // Claude Code's aliases name no routable id (no alias table): not applied.
+        for declared in ["sonnet", "opus", "haiku", "inherit", "  ", ""] {
+            assert_eq!(
+                command_model_pin(None, Some(declared)),
+                Ok(None),
+                "{declared:?}"
+            );
+        }
+        assert_eq!(command_model_pin(None, None), Ok(None));
+        // A retired id keeps the existing declared-model refusal and names its successor.
+        let why = command_model_pin(None, Some("deepseek-reasoner")).unwrap_err();
+        assert!(why.contains("retired"), "{why}");
+    })
+    .await;
+
+    let unknown = selectable_snapshot(
+        &[("anthropic", "claude-sonnet-5")],
+        &["anthropic"],
+        &["anthropic"],
+    );
+    with_test_selectable_models(Some(unknown), async {
+        let why = command_model_pin(None, Some("some-new-model")).unwrap_err();
+        assert!(why.contains("Unknown model"), "{why}");
+    })
+    .await;
+
+    let unavailable = selectable_snapshot(&[("offline", "offline-model")], &[], &["offline"]);
+    with_test_selectable_models(Some(unavailable), async {
+        let why = command_model_pin(None, Some("offline-model")).unwrap_err();
+        assert!(why.contains("not currently supported/available"), "{why}");
+    })
+    .await;
+
+    let ambiguous = selectable_snapshot(
+        &[("anthropic", "shared-model"), ("relay", "shared-model")],
+        &["anthropic", "relay"],
+        &["anthropic", "relay"],
+    );
+    with_test_selectable_models(Some(ambiguous), async {
+        let why = command_model_pin(None, Some("shared-model")).unwrap_err();
+        assert!(why.contains("ambiguous"), "{why}");
+    })
+    .await;
+
+    with_test_selectable_models(None, async {
+        let why = command_model_pin(None, Some("claude-sonnet-5")).unwrap_err();
+        assert!(why.contains("publication is unavailable"), "{why}");
+    })
+    .await;
 }
 
 /// Both production steps below the fast path: the real slash envelope in,
@@ -1155,40 +1217,49 @@ async fn a_cancelled_turn_renders_nothing() {
 /// must say so — or a steer on another model folds into this run.
 #[tokio::test]
 async fn the_busy_lane_sees_the_model_a_command_pinned() {
-    let f = Fixture::new("Hi", Some("claude-sonnet-5")).await;
-    let mut request = f.request(f.work.clone()).await;
-    let engine = super::super::tests::test_engine();
-    engine.active_runs.write().await.insert(
-        request.run_id.clone(),
-        super::super::ActiveRun {
-            request: request.clone(),
-            state: super::super::RunState::Running,
-            started_at: chrono::Utc::now(),
-            admitted_at: std::time::Instant::now(),
-            completed_at: None,
-            steps_completed: 0,
-            current_tool: None,
-            cancel_tx: None,
-            seq_counter: crate::sync_primitives::AtomicU64::new(0),
-            chunk_counter: crate::sync_primitives::AtomicU32::new(0),
-        },
+    let snapshot = selectable_snapshot(
+        &[("anthropic", "claude-sonnet-5")],
+        &["anthropic"],
+        &["anthropic"],
     );
-    admit_with(&mut request, &f.manager).await.unwrap();
-    engine.mark_fallen_through(&request.run_id, &request).await;
+    with_test_selectable_models(Some(snapshot), async {
+        let f = Fixture::new("Hi", Some("claude-sonnet-5")).await;
+        let mut request = f.request(f.work.clone()).await;
+        let engine = super::super::tests::test_engine();
+        engine.active_runs.write().await.insert(
+            request.run_id.clone(),
+            super::super::ActiveRun {
+                request: request.clone(),
+                state: super::super::RunState::Running,
+                started_at: chrono::Utc::now(),
+                admitted_at: std::time::Instant::now(),
+                completed_at: None,
+                steps_completed: 0,
+                current_tool: None,
+                cancel_tx: None,
+                seq_counter: crate::sync_primitives::AtomicU64::new(0),
+                chunk_counter: crate::sync_primitives::AtomicU32::new(0),
+            },
+        );
+        admit_with(&mut request, &f.manager).await.unwrap();
+        engine.mark_fallen_through(&request.run_id, &request).await;
 
-    let sibling = super::super::steering::find_busy_sibling(
-        &engine.active_runs,
-        "a-later-message",
-        &request.session_key,
-    )
-    .await
-    .expect("the run is running");
-    assert_eq!(
-        sibling.model_override,
-        Some(ModelOverride::Raw {
-            model: "claude-sonnet-5".into()
-        })
-    );
+        let sibling = super::super::steering::find_busy_sibling(
+            &engine.active_runs,
+            "a-later-message",
+            &request.session_key,
+        )
+        .await
+        .expect("the run is running");
+        assert_eq!(
+            sibling.model_override,
+            Some(ModelOverride::Qualified {
+                provider: "anthropic".into(),
+                model: "claude-sonnet-5".into(),
+            })
+        );
+    })
+    .await;
 }
 
 /// N1. The command's `model:` is pinned before the run is admitted, so the
@@ -1198,34 +1269,43 @@ async fn the_busy_lane_sees_the_model_a_command_pinned() {
 /// nothing here and is refused at admission, after the owner gate.
 #[tokio::test]
 async fn a_commands_model_is_pinned_before_admission() {
-    let sonnet = Some(ModelOverride::Raw {
-        model: "claude-sonnet-5".into(),
-    });
-    let f = Fixture::new("Hi", Some("claude-sonnet-5")).await;
-    let mut request = f.request(f.work.clone()).await;
-    pin_model_with(&mut request, &f.manager).await;
-    assert_eq!(request.model_override, sonnet);
-    admit_with(&mut request, &f.manager).await.unwrap();
-    assert_eq!(request.model_override, sonnet, "admission keeps the pin");
-    assert_eq!(
-        strip(&mut request.metadata, request.model_override.clone()),
-        None,
-        "the pin is the command's, not the user's"
+    let snapshot = selectable_snapshot(
+        &[("anthropic", "claude-sonnet-5")],
+        &["anthropic"],
+        &["anthropic"],
     );
+    with_test_selectable_models(Some(snapshot), async {
+        let sonnet = Some(ModelOverride::Qualified {
+            provider: "anthropic".into(),
+            model: "claude-sonnet-5".into(),
+        });
+        let f = Fixture::new("Hi", Some("claude-sonnet-5")).await;
+        let mut request = f.request(f.work.clone()).await;
+        pin_model_with(&mut request, &f.manager).await;
+        assert_eq!(request.model_override, sonnet);
+        admit_with(&mut request, &f.manager).await.unwrap();
+        assert_eq!(request.model_override, sonnet, "admission keeps the pin");
+        assert_eq!(
+            strip(&mut request.metadata, request.model_override.clone()),
+            None,
+            "the pin is the command's, not the user's"
+        );
 
-    let mut request = f.request(f.work.clone()).await;
-    let user = ModelOverride::Raw {
-        model: "gpt-5".into(),
-    };
-    request.model_override = Some(user.clone());
-    pin_model_with(&mut request, &f.manager).await;
-    assert_eq!(request.model_override, Some(user), "the user's pick wins");
+        let mut request = f.request(f.work.clone()).await;
+        let user = ModelOverride::Raw {
+            model: "gpt-5".into(),
+        };
+        request.model_override = Some(user.clone());
+        pin_model_with(&mut request, &f.manager).await;
+        assert_eq!(request.model_override, Some(user), "the user's pick wins");
 
-    let retired = Fixture::new("Hi", Some("deepseek-reasoner")).await;
-    let mut request = retired.request(retired.work.clone()).await;
-    pin_model_with(&mut request, &retired.manager).await;
-    assert_eq!(request.model_override, None);
-    assert!(admit_with(&mut request, &retired.manager).await.is_err());
+        let retired = Fixture::new("Hi", Some("deepseek-reasoner")).await;
+        let mut request = retired.request(retired.work.clone()).await;
+        pin_model_with(&mut request, &retired.manager).await;
+        assert_eq!(request.model_override, None);
+        assert!(admit_with(&mut request, &retired.manager).await.is_err());
+    })
+    .await;
 }
 
 /// N1's other half: a pin made before admission whose command is then not
@@ -1233,18 +1313,26 @@ async fn a_commands_model_is_pinned_before_admission() {
 /// not run on a model nothing asked for.
 #[tokio::test]
 async fn a_pin_whose_command_is_not_admitted_is_dropped() {
-    let f = Fixture::new("Hi", Some("claude-sonnet-5")).await;
-    let mut request = f.request(f.work.clone()).await;
-    pin_model_with(&mut request, &f.manager).await;
-    assert!(request.model_override.is_some());
-    f.manager
-        .get_plugin_registry_mut()
-        .await
-        .disable_plugin(PLUGIN);
-    admit_with(&mut request, &f.manager).await.unwrap();
-    assert!(!request.metadata.contains_key(ADMITTED_KEY));
-    assert!(!request.metadata.contains_key(MODEL_PIN_KEY));
-    assert_eq!(request.model_override, None);
+    let snapshot = selectable_snapshot(
+        &[("anthropic", "claude-sonnet-5")],
+        &["anthropic"],
+        &["anthropic"],
+    );
+    with_test_selectable_models(Some(snapshot), async {
+        let f = Fixture::new("Hi", Some("claude-sonnet-5")).await;
+        let mut request = f.request(f.work.clone()).await;
+        pin_model_with(&mut request, &f.manager).await;
+        assert!(request.model_override.is_some());
+        f.manager
+            .get_plugin_registry_mut()
+            .await
+            .disable_plugin(PLUGIN);
+        admit_with(&mut request, &f.manager).await.unwrap();
+        assert!(!request.metadata.contains_key(ADMITTED_KEY));
+        assert!(!request.metadata.contains_key(MODEL_PIN_KEY));
+        assert_eq!(request.model_override, None);
+    })
+    .await;
 }
 
 /// N1's fire site, which no behavioural test here reaches (`execute()` cannot

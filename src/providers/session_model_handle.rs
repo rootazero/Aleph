@@ -1,13 +1,13 @@
 //! Process-global per-session model preference.
 //!
-//! The "A layer" of AI dynamic routing (R8): the `select_model` tool lets the
-//! main-loop LLM pick the model for the rest of a conversation. Model binding
-//! happens per-run at `pick_llm` time — once, before the Think→Act loop starts
-//! — so a mid-run pick takes effect at the next *run* (the next user message),
-//! not at the next loop iteration. This handle is that cross-run channel.
+//! Model binding is resolved at each provider request boundary through
+//! `SessionModelProvider`; the live session snapshot is not frozen at run
+//! construction. A selection therefore affects the next request, while the
+//! request already in flight keeps its immutable provider/model target.
 //!
 //! Mirrors [`route_handle`](super::route_handle): a single process-global,
-//! lock-guarded map read at run construction (`harness_bridge`) and written by
+//! lock-guarded map holds the live per-session selection; `SessionModelProvider`
+//! reads that selection at each request boundary and `select_model` updates it.
 //! the tool. Keyed by the canonical `SessionKey` string so the writer (tool,
 //! from `TURN_CONTEXT`) and reader (bridge, from its run key) agree.
 //!
@@ -33,6 +33,11 @@
 //! would have left the other two writing to memory only, each with its own
 //! green unit test.
 
+use tracing::warn;
+
+mod selectable;
+pub use selectable::{ModelSelectionError, SelectableModelsSnapshot};
+
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
@@ -46,6 +51,25 @@ pub struct SessionModelPref {
     pub provider: Option<String>,
     /// Model id to stamp onto every request for this session.
     pub model: String,
+}
+
+/// A session model preference together with the generation that produced it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionModelSnapshot {
+    pub pref: Option<SessionModelPref>,
+    pub generation: u64,
+}
+
+/// The result of one atomic live-map update.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionModelUpdate {
+    pub pref: Option<SessionModelPref>,
+    pub generation: u64,
+    /// Whether the live map changed.
+    pub accepted: bool,
+    /// Whether the update was durably accepted. Legacy synchronous callers may
+    /// leave this false when no async store path is available.
+    pub durable: bool,
 }
 
 /// `identity_meta.custom` key under which a session's model pick is persisted.
@@ -64,9 +88,21 @@ pub const MODEL_PIN_SESSION_KEY: &str = "model_pin";
 /// writer that only meant to change the model.
 pub const MODEL_PIN_PROVIDER_SESSION_KEY: &str = "model_pin_provider";
 
-static SESSION_MODELS: OnceLock<RwLock<HashMap<String, SessionModelPref>>> = OnceLock::new();
+/// `identity_meta.custom` key for the generation of a session model pick.
+///
+/// It is kept beside the model and provider keys in the same session metadata
+/// row, so the durable selection and its ordering are one carrier.
+pub const MODEL_PIN_GENERATION_SESSION_KEY: &str = "model_pin_generation";
 
-fn map() -> &'static RwLock<HashMap<String, SessionModelPref>> {
+#[derive(Clone, Debug)]
+struct SessionModelState {
+    pref: Option<SessionModelPref>,
+    generation: u64,
+}
+
+static SESSION_MODELS: OnceLock<RwLock<HashMap<String, SessionModelState>>> = OnceLock::new();
+
+fn map() -> &'static RwLock<HashMap<String, SessionModelState>> {
     SESSION_MODELS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -75,24 +111,46 @@ fn map() -> &'static RwLock<HashMap<String, SessionModelPref>> {
 /// Implemented in the gateway (the layer that owns the session store) and
 /// installed once at boot, because `providers` must not depend on it. `pref`
 /// is `None` for "the pin was cleared".
+#[async_trait::async_trait]
 pub trait SessionPinSink: Send + Sync {
-    /// Persist the pin for `session_key`, or clear it when `pref` is `None`.
+    /// Persist the pin for `session_key` with its ordering generation, or
+    /// clear it when `pref` is `None`.
     ///
-    /// Best-effort and non-blocking: this is called from synchronous code on a
-    /// path where a store failure must not fail the turn. The in-memory map has
-    /// already been updated, so the pin governs *this* process either way; what
-    /// a failure costs is durability across a restart.
-    fn persist(&self, session_key: &str, pref: Option<&SessionModelPref>);
+    /// This is required so every installed sink receives the generation-aware
+    /// write. A sink cannot accidentally fall back to an unconditional legacy
+    /// persistence path and allow an older spawned task to overwrite newer
+    /// durable state.
+    fn persist_with_generation(
+        &self,
+        session_key: &str,
+        pref: Option<&SessionModelPref>,
+        generation: u64,
+    );
+
+    /// Persist through the async session-store control seam and report whether
+    /// the durable row accepted this generation. Selection control uses this
+    /// method so a failed durable write cannot be reported as success.
+    async fn persist_with_generation_durable(
+        &self,
+        session_key: &str,
+        pref: Option<&SessionModelPref>,
+        generation: u64,
+    ) -> Result<(), String> {
+        let _ = (session_key, pref, generation);
+        Err("durable session pin sink is unsupported".to_string())
+    }
+
+    /// Compatibility entry point for callers that predate generations.
+    /// Legacy writes use generation zero.
+    fn persist(&self, session_key: &str, pref: Option<&SessionModelPref>) {
+        self.persist_with_generation(session_key, pref, 0);
+    }
 }
 
-/// `FailsClosed`: both readers are `if let Some(sink)` with no `else`
-/// ([`set_session_model`], [`clear_session_model`]), so an uninstalled sink
-/// means a pick governs this process and nothing else. Nothing is granted and
-/// nothing durable is falsely claimed — [`install_pin_sink`]'s own doc calls
-/// that "the honest degradation", and it is right about the in-process half.
-///
-/// The part that is dead and silent is the restart: a user who pins a model
-/// gets no signal that the pin will not survive one.
+/// `FailsClosed`: the selectable resolver refuses control selections until a
+/// sink is installed. Legacy in-process setters remain available for
+/// rehydration and compatibility, but they do not make a durable selection
+/// claim when the sink is absent.
 static PIN_SINK: CapabilitySlot<std::sync::Arc<dyn SessionPinSink>> =
     CapabilitySlot::new("providers/session-pin-sink", MissingSemantics::FailsClosed);
 
@@ -104,9 +162,9 @@ pub(crate) const fn pin_sink_slot() -> &'static dyn SlotStatus {
 
 /// Install the durability sink. First call wins (one boot, one sink).
 ///
-/// Absent — tests, pre-boot, embedded uses with no session store — picks stay
-/// in-memory and behave exactly as they did before, which is the honest
-/// degradation: nothing claims to have been saved.
+/// Absent — compatibility setters and isolated tests may still update the
+/// in-memory map, but the production selectable control path refuses to report
+/// success until a session store is installed.
 pub fn install_pin_sink(sink: std::sync::Arc<dyn SessionPinSink>) {
     let _ = PIN_SINK.install(sink);
 }
@@ -115,19 +173,166 @@ fn sink() -> Option<&'static std::sync::Arc<dyn SessionPinSink>> {
     PIN_SINK.get()
 }
 
+/// Whether the production selection seam can preserve a pin across restart.
+/// Tests may install a task-local selectable snapshot without booting the
+/// gateway, but the production resolver must not report success while its
+/// durable sink is absent.
+pub(crate) fn pin_sink_installed() -> bool {
+    sink().is_some()
+}
+
 /// Record the model preference for `session_key`, overwriting any prior pick.
 ///
 /// Writes through to the session row when a sink is installed, so the pick
 /// survives a restart. Both halves happen here because this is the one seam
 /// every writer uses — a caller cannot pick "memory only" by accident.
 pub fn set_session_model(session_key: &str, provider: Option<String>, model: String) {
-    let pref = SessionModelPref { provider, model };
-    map()
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(session_key.to_string(), pref.clone());
-    if let Some(sink) = sink() {
-        sink.persist(session_key, Some(&pref));
+    update_session_model(session_key, Some(SessionModelPref { provider, model }));
+}
+
+/// Atomically update the live selection and return the exact selection and
+/// generation sent to the compatibility sink. The control path uses
+/// `update_session_model_durable` below to await durable acceptance. A
+/// generation at `u64::MAX` is terminal...
+pub(crate) fn update_session_model(
+    session_key: &str,
+    pref: Option<SessionModelPref>,
+) -> SessionModelUpdate {
+    let update = {
+        let mut guard = map().write().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = guard.get(session_key) {
+            if existing.generation == u64::MAX {
+                warn!(
+                    session_key,
+                    "refusing session model update because generation reached u64::MAX"
+                );
+                return SessionModelUpdate {
+                    pref: existing.pref.clone(),
+                    generation: u64::MAX,
+                    accepted: false,
+                    durable: false,
+                };
+            }
+        }
+        let generation = guard.get(session_key).map_or(0, |state| state.generation) + 1;
+        guard.insert(
+            session_key.to_string(),
+            SessionModelState {
+                pref: pref.clone(),
+                generation,
+            },
+        );
+        SessionModelUpdate {
+            pref,
+            generation,
+            accepted: true,
+            durable: sink().is_some(),
+        }
+    };
+    if update.accepted {
+        if let Some(sink) = sink() {
+            sink.persist_with_generation(session_key, update.pref.as_ref(), update.generation);
+        }
+    }
+    update
+}
+
+/// Update the live selection only when its durable session row accepts the
+/// same generation. This is the control path used by `select_model`; the
+/// synchronous compatibility path above remains for legacy internal callers.
+pub(crate) async fn update_session_model_durable(
+    session_key: &str,
+    pref: Option<SessionModelPref>,
+) -> SessionModelUpdate {
+    #[cfg(test)]
+    if TEST_SELECTABLE_MODELS.try_with(|_| true).unwrap_or(false) {
+        let mut update = update_session_model(session_key, pref);
+        update.durable = true;
+        return update;
+    }
+
+    let (previous, update) = {
+        let mut guard = map().write().unwrap_or_else(|e| e.into_inner());
+        let previous = guard.get(session_key).cloned();
+        if previous
+            .as_ref()
+            .is_some_and(|state| state.generation == u64::MAX)
+        {
+            return SessionModelUpdate {
+                pref: previous.and_then(|state| state.pref),
+                generation: u64::MAX,
+                accepted: false,
+                durable: false,
+            };
+        }
+        let generation = previous.as_ref().map_or(0, |state| state.generation) + 1;
+        guard.insert(
+            session_key.to_string(),
+            SessionModelState {
+                pref: pref.clone(),
+                generation,
+            },
+        );
+        (
+            previous,
+            SessionModelUpdate {
+                pref,
+                generation,
+                accepted: true,
+                durable: false,
+            },
+        )
+    };
+
+    let Some(sink) = sink().cloned() else {
+        rollback_session_model(session_key, &previous, update.generation);
+        return SessionModelUpdate {
+            pref: previous.as_ref().and_then(|state| state.pref.clone()),
+            generation: previous.as_ref().map_or(0, |state| state.generation),
+            accepted: false,
+            durable: false,
+        };
+    };
+
+    match sink
+        .persist_with_generation_durable(session_key, update.pref.as_ref(), update.generation)
+        .await
+    {
+        Ok(()) => SessionModelUpdate {
+            durable: true,
+            ..update
+        },
+        Err(error) => {
+            warn!(session_key, %error, "refusing session model update after durable persistence failure");
+            rollback_session_model(session_key, &previous, update.generation);
+            SessionModelUpdate {
+                pref: previous.as_ref().and_then(|state| state.pref.clone()),
+                generation: previous.map_or(0, |state| state.generation),
+                accepted: false,
+                durable: false,
+            }
+        }
+    }
+}
+
+fn rollback_session_model(
+    session_key: &str,
+    previous: &Option<SessionModelState>,
+    generation: u64,
+) {
+    let mut guard = map().write().unwrap_or_else(|e| e.into_inner());
+    if guard
+        .get(session_key)
+        .is_some_and(|state| state.generation == generation)
+    {
+        match previous {
+            Some(state) => {
+                guard.insert(session_key.to_string(), state.clone());
+            }
+            None => {
+                guard.remove(session_key);
+            }
+        }
     }
 }
 
@@ -143,52 +348,72 @@ pub fn set_session_model(session_key: &str, provider: Option<String>, model: Str
 ///
 /// Returns `true` when the pin was installed.
 pub fn hydrate_session_model(session_key: &str, pref: SessionModelPref) -> bool {
+    hydrate_session_model_at_generation(session_key, pref, 0)
+}
+
+/// Install a durable selection only when it is newer than the live state.
+/// Generation zero is the compatibility value for rows written before the
+/// generation key existed.
+pub fn hydrate_session_model_at_generation(
+    session_key: &str,
+    pref: SessionModelPref,
+    generation: u64,
+) -> bool {
     let mut guard = map().write().unwrap_or_else(|e| e.into_inner());
-    if guard.contains_key(session_key) {
+    if guard
+        .get(session_key)
+        .is_some_and(|state| state.generation >= generation)
+    {
         return false;
     }
-    guard.insert(session_key.to_string(), pref);
+    guard.insert(
+        session_key.to_string(),
+        SessionModelState {
+            pref: Some(pref),
+            generation,
+        },
+    );
     true
 }
 
 /// Read the model preference for `session_key`, if one was set this run.
 #[must_use]
 pub fn get_session_model(session_key: &str) -> Option<SessionModelPref> {
+    get_session_model_snapshot(session_key).pref
+}
+
+/// Read the live preference and its ordering generation as one snapshot.
+#[must_use]
+pub fn get_session_model_snapshot(session_key: &str) -> SessionModelSnapshot {
     map()
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .get(session_key)
-        .cloned()
+        .map_or(
+            SessionModelSnapshot {
+                pref: None,
+                generation: 0,
+            },
+            |state| SessionModelSnapshot {
+                pref: state.pref.clone(),
+                generation: state.generation,
+            },
+        )
 }
 
 /// Drop a session's preference (revert to the agent/flow default).
 ///
 /// Clears the durable record too. A clear that only emptied the map would be
-/// undone by the next run's rehydrate — the pin would come back from the row,
-/// which is worse than never having been clearable.
+/// undone by a later request-boundary rehydrate — the pin would come back
+/// from the row, which is worse than never having been clearable.
 pub fn clear_session_model(session_key: &str) {
-    map()
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(session_key);
-    if let Some(sink) = sink() {
-        sink.persist(session_key, None);
-    }
+    update_session_model(session_key, None);
 }
 
-/// The provider keys a `select_model(provider=…)` pin can actually resolve to.
-///
-/// `FailsOpen`, and unlike its neighbour above this one really is a gate.
-/// `builtin_tools::select_model::refuse_unpinnable_provider` opens with
-/// `let known = pinnable_providers()?;` — a `?` on an `Option<..>` returning
-/// `Option<String>`, so "no set published" produces NO REFUSAL. The
-/// consequence is not hypothetical and is written out in the setter's doc
-/// below: `select_model(provider="openai")` on an Anthropic-only deployment
-/// returns `ok: true`, the run silently falls back to the default chain, and
-/// the mis-attributed `(provider, model)` pair is written into the
-/// routing-experience store the model later reads back as verified.
-static PINNABLE_PROVIDERS: CapabilitySlot<std::collections::BTreeSet<String>> =
-    CapabilitySlot::new("providers/pinnable-set", MissingSemantics::FailsOpen);
+/// One live publication for provider keys, model roster, and readiness.
+/// Missing boot publication refuses selection in every build, including tests.
+static PINNABLE_PROVIDERS: CapabilitySlot<RwLock<std::sync::Arc<SelectableModelsSnapshot>>> =
+    CapabilitySlot::new("providers/pinnable-set", MissingSemantics::FailsClosed);
 
 /// The handle above, type-erased for the roster — see
 /// [`crate::spend::global_ledger_slot`] for why this shape.
@@ -196,42 +421,89 @@ pub(crate) const fn pinnable_providers_slot() -> &'static dyn SlotStatus {
     &PINNABLE_PROVIDERS
 }
 
-/// Publish the provider keys the run builder will resolve a pin against.
-///
-/// Registered by the production boot path from the *same map* `harness_bridge`
-/// later looks the pin up in, so the tool's validation and the runtime's
-/// resolution cannot disagree. Without it, `select_model(provider="openai")` on
-/// an Anthropic-only deployment returned `ok: true`, then silently substituted
-/// the default chain at run time — the user got an answer from a different
-/// vendor than the one the tool confirmed, and the mis-attributed
-/// `(provider, model)` pair was written into the routing-experience store the
-/// model later reads back as "verified routing experience".
-///
-/// First call wins (one chain assembly per boot), matching
-/// [`route_observe`](super::route_observe)'s global.
-pub fn set_pinnable_providers(names: impl IntoIterator<Item = String>) {
-    let _ = PINNABLE_PROVIDERS.install(names.into_iter().collect());
+/// Install the boot projection. Reloads swap this same slot's immutable value.
+pub fn publish_selectable_models(snapshot: SelectableModelsSnapshot) {
+    if let Some(handle) = PINNABLE_PROVIDERS.get() {
+        *handle.write().unwrap_or_else(|e| e.into_inner()) = std::sync::Arc::new(snapshot);
+    } else {
+        let _ = PINNABLE_PROVIDERS.install(RwLock::new(std::sync::Arc::new(snapshot)));
+    }
 }
 
-/// Record that boot reached this slot and had nothing to install.
-///
-/// This is one of the repo's three `FailsOpen` handles: with no published set,
-/// `select_model(provider=…)` validates nothing and the paragraph above
-/// describes what follows. Boot installs it from inside
-/// `initialize_orchestrator`, which is gated on a default provider plus a
-/// session service — so a provider-less deployment leaves the gate open and
-/// says nothing. `because` is quoted verbatim to an operator.
+/// Refresh the roster/readiness after an existing live provider reload. The
+/// routable keys remain those actually wired by the run builder at boot.
+/// No boot publication means no permission to install one via a config write.
+pub fn refresh_selectable_models(
+    config: &crate::config::Config,
+    available: &std::collections::BTreeSet<String>,
+    authenticated: impl Fn(&str) -> bool,
+) {
+    let Some(handle) = PINNABLE_PROVIDERS.get() else {
+        return;
+    };
+    let mut guard = handle.write().unwrap_or_else(|e| e.into_inner());
+    *guard = std::sync::Arc::new(SelectableModelsSnapshot::from_config(
+        config,
+        guard.routable.clone(),
+        available,
+        authenticated,
+    ));
+}
+
+/// Record a provider-less boot; selection still fails closed.
 pub fn decline_pinnable_providers(because: &'static str) {
     PINNABLE_PROVIDERS.decline(because);
 }
 
-/// Whether `provider` can be pinned, plus the valid set for the error message.
-///
-/// `None` means "no set was published" (tests, pre-boot) — callers must treat
-/// that as *unvalidated*, never as "nothing is pinnable".
+/// A caller retains one immutable generation while a reload publishes another.
+pub fn selectable_models() -> Option<std::sync::Arc<SelectableModelsSnapshot>> {
+    #[cfg(test)]
+    if let Ok(snapshot) = TEST_SELECTABLE_MODELS.try_with(Clone::clone) {
+        return snapshot;
+    }
+    PINNABLE_PROVIDERS
+        .get()
+        .map(|handle| handle.read().unwrap_or_else(|e| e.into_inner()).clone())
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static TEST_SELECTABLE_MODELS: Option<std::sync::Arc<SelectableModelsSnapshot>>;
+}
+
+/// Explicit task-scoped installation avoids global-test races, including
+/// tests for missing publication. The production path has no bypass.
+#[cfg(test)]
+pub(crate) async fn with_test_selectable_models<T>(
+    snapshot: Option<SelectableModelsSnapshot>,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    TEST_SELECTABLE_MODELS
+        .scope(snapshot.map(std::sync::Arc::new), future)
+        .await
+}
+
 #[must_use]
-pub fn pinnable_providers() -> Option<&'static std::collections::BTreeSet<String>> {
-    PINNABLE_PROVIDERS.get()
+pub fn pinnable_providers() -> Option<std::collections::BTreeSet<String>> {
+    selectable_models().map(|snapshot| snapshot.routable.clone())
+}
+
+/// Resolve before any session or durable state is written. No publication is
+/// an explicit refusal, not a test/preboot bypass.
+pub fn resolve_selectable_model(
+    provider: Option<&str>,
+    model: &str,
+) -> Result<SessionModelPref, ModelSelectionError> {
+    #[cfg(test)]
+    let test_publication = TEST_SELECTABLE_MODELS.try_with(|_| true).unwrap_or(false);
+    #[cfg(not(test))]
+    let test_publication = false;
+    if !test_publication && !pin_sink_installed() {
+        return Err(ModelSelectionError::Unavailable);
+    }
+    selectable_models()
+        .ok_or(ModelSelectionError::Unavailable)?
+        .resolve(provider, model)
 }
 
 #[cfg(test)]
@@ -261,21 +533,26 @@ mod tests {
 
     #[test]
     fn hydrate_fills_an_empty_slot() {
-        // The restart case: the map is cold, the row is the only truth.
-        let key = "test:session:hydrate-cold";
-        clear_session_model(key);
+        // This process-global map may already contain a tombstone for a reused
+        // literal key. Use a fresh key so this test exercises a genuinely cold
+        // slot while `clear_session_model` can keep its stale-row guard.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let key = format!(
+            "test:session:hydrate-cold:{}",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
         assert!(hydrate_session_model(
-            key,
+            &key,
             SessionModelPref {
                 provider: Some("anthropic".to_string()),
                 model: "claude-opus-5".to_string(),
             }
         ));
         assert_eq!(
-            get_session_model(key).map(|p| p.model),
+            get_session_model(&key).map(|p| p.model),
             Some("claude-opus-5".to_string())
         );
-        clear_session_model(key);
+        clear_session_model(&key);
     }
 
     #[test]
@@ -311,6 +588,145 @@ mod tests {
             get_session_model("test:session:b").unwrap().model,
             "model-b"
         );
+        clear_session_model("test:session:a");
+        clear_session_model("test:session:b");
+    }
+
+    #[test]
+    fn generation_is_monotonic_across_update_clear_and_reselect() {
+        let key = "test:session:generation-cycle";
+        clear_session_model(key);
+
+        let first = update_session_model(
+            key,
+            Some(SessionModelPref {
+                provider: Some("openai".to_string()),
+                model: "gpt-5".to_string(),
+            }),
+        );
+        let cleared = update_session_model(key, None);
+        let reselected = update_session_model(
+            key,
+            Some(SessionModelPref {
+                provider: None,
+                model: "claude-opus-5".to_string(),
+            }),
+        );
+
+        assert!(first.generation < cleared.generation);
+        assert!(cleared.generation < reselected.generation);
+        assert_eq!(cleared.pref, None);
+        assert_eq!(get_session_model_snapshot(key).pref, reselected.pref);
+        clear_session_model(key);
+    }
+
+    #[test]
+    fn max_generation_refuses_update_without_changing_live_state() {
+        let key = "test:session:generation-max";
+        let old = SessionModelPref {
+            provider: Some("openai".to_string()),
+            model: "old-model".to_string(),
+        };
+        let new = SessionModelPref {
+            provider: Some("anthropic".to_string()),
+            model: "new-model".to_string(),
+        };
+        map().write().unwrap().insert(
+            key.to_string(),
+            SessionModelState {
+                pref: Some(old.clone()),
+                generation: u64::MAX,
+            },
+        );
+
+        let update = update_session_model(key, Some(new));
+
+        assert!(!update.accepted);
+        assert_eq!(update.generation, u64::MAX);
+        assert_eq!(update.pref, Some(old.clone()));
+        assert_eq!(get_session_model_snapshot(key).pref, Some(old));
+        map().write().unwrap().remove(key);
+    }
+
+    #[test]
+    fn cold_rehydration_restores_the_durable_generation() {
+        let key = "test:session:generation-cold";
+        clear_session_model(key);
+        let pref = SessionModelPref {
+            provider: Some("anthropic".to_string()),
+            model: "claude-opus-5".to_string(),
+        };
+
+        assert!(hydrate_session_model_at_generation(key, pref.clone(), 41));
+        assert_eq!(
+            get_session_model_snapshot(key),
+            SessionModelSnapshot {
+                pref: Some(pref),
+                generation: 41,
+            }
+        );
+        clear_session_model(key);
+    }
+
+    #[test]
+    fn live_rehydration_cannot_overwrite_a_newer_generation() {
+        let key = "test:session:generation-live";
+        let live = update_session_model(
+            key,
+            Some(SessionModelPref {
+                provider: None,
+                model: "picked-just-now".to_string(),
+            }),
+        );
+
+        assert!(!hydrate_session_model_at_generation(
+            key,
+            SessionModelPref {
+                provider: None,
+                model: "stale-from-disk".to_string(),
+            },
+            live.generation,
+        ));
+        assert_eq!(
+            get_session_model_snapshot(key).pref.unwrap().model,
+            "picked-just-now"
+        );
+        clear_session_model(key);
+    }
+
+    #[test]
+    fn canonical_session_keys_keep_generations_isolated() {
+        let first_key = "agent:main:telegram:dm:user-a";
+        let second_key = "agent:main:telegram:dm:user-b";
+        clear_session_model(first_key);
+        clear_session_model(second_key);
+
+        let first = update_session_model(
+            first_key,
+            Some(SessionModelPref {
+                provider: None,
+                model: "model-a".to_string(),
+            }),
+        );
+        let second = update_session_model(
+            second_key,
+            Some(SessionModelPref {
+                provider: None,
+                model: "model-b".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            get_session_model_snapshot(first_key).pref.unwrap().model,
+            "model-a"
+        );
+        assert_eq!(
+            get_session_model_snapshot(second_key).pref.unwrap().model,
+            "model-b"
+        );
+        assert_ne!(first.pref, second.pref);
+        clear_session_model(first_key);
+        clear_session_model(second_key);
     }
 
     /// The variant is the operator-facing severity of this handle going
@@ -340,9 +756,9 @@ mod tests {
         assert!(
             matches!(
                 pinnable_providers_slot().missing(),
-                MissingSemantics::FailsOpen
+                MissingSemantics::FailsClosed
             ),
-            "`providers/pinnable-set` is classified FailsOpen from its consumers; changing that \
+            "`providers/pinnable-set` is classified FailsClosed from its consumers; changing that \
              means re-reading them, not re-typing this line"
         );
     }
