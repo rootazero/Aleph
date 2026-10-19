@@ -486,9 +486,9 @@ fn detect_repo_root(start: &Path) -> Option<PathBuf> {
         if current.join(".git").try_exists().unwrap_or(false) {
             return Some(current.to_path_buf());
         }
-        match current.parent() {
-            Some(parent) => current = parent,
-            None => return None,
+        {
+            let parent = current.parent()?;
+            current = parent;
         }
     }
 }

@@ -3,7 +3,8 @@ use alephcore::sandbox::rate_limit::SandboxRateLimitConfig;
 use alephcore::sandbox::{
     build_sandbox, create_platform_driver_from_config, SandboxCapabilities, SandboxConfig,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
 

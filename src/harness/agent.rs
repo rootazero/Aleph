@@ -186,7 +186,7 @@ impl AgentHarness {
     /// Compare-and-swap, so two concurrent paths can never both rescue.
     pub(super) fn try_reserve_reactive_compact(&self) -> bool {
         self.reactive_compact_attempts
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |spent| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |spent| {
                 (spent < crate::context::compact::rescue::MAX_REACTIVE_COMPACT_ATTEMPTS)
                     .then_some(spent + 1)
             })

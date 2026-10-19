@@ -199,7 +199,8 @@ where
     T: serde::de::DeserializeOwned,
 {
     let mut dead = Vec::new();
-    let value = serde_ignored::deserialize(toml::Deserializer::new(contents), |path| {
+    let deserializer = toml::Deserializer::parse(contents)?;
+    let value = serde_ignored::deserialize(deserializer, |path| {
         let path = render(&path);
         if path.is_empty() {
             return;

@@ -160,7 +160,7 @@ pub fn ModelPicker() -> impl IntoView {
         }
         chat.session_model_pin
             .get()
-            .unwrap_or_else(|| "Default".to_string())
+            .unwrap_or_else(|| t_string!(i18n, model_picker.default_label).to_string())
     };
 
     let select_entry = move |provider: String, model: String| {
@@ -418,8 +418,8 @@ pub fn ModelPicker() -> impl IntoView {
                             }
                         }
                     >
-                        <span class="font-medium">"Default"</span>
-                        <span class="text-text-tertiary text-[10px]">"agent fallback chain"</span>
+                        <span class="font-medium">{t!(i18n, model_picker.default_label)}</span>
+                        <span class="text-text-tertiary text-[10px]">{t!(i18n, model_picker.fallback_chain)}</span>
                     </button>
 
                     // Loading / error / list
@@ -433,7 +433,7 @@ pub fn ModelPicker() -> impl IntoView {
                         } else if let Some(err) = load_error.get() {
                             view! {
                                 <div class="px-2.5 py-3 text-xs text-danger/80 text-center">
-                                    {format!("error: {err}")}
+                                    {t!(i18n, model_picker.load_failed, error = err)}
                                 </div>
                             }.into_any()
                         } else if entries.get().is_empty() {

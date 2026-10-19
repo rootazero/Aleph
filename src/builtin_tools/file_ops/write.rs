@@ -157,7 +157,7 @@ impl AlephTool for FileWriteTool {
     type Output = FileWriteOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let args_summary = format!("write: {}", &args.file_path);
+        let args_summary = format!("write: {}", args.file_path);
         notify_tool_start(Self::NAME, &args_summary);
 
         info!(

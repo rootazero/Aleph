@@ -85,7 +85,6 @@ impl ToolCallTracker {
 /// false (the `OpenAI` default) no usage is sent in the stream at all. When true,
 /// usage is emitted as a dedicated terminal chunk with an empty `choices` array,
 /// after the finish chunk and before `[DONE]` — the shape `OpenAI` SDK clients read.
-#[must_use]
 pub fn provider_deltas_to_sse(
     deltas: BoxStream<'static, anyhow::Result<ProviderDelta>>,
     model: String,

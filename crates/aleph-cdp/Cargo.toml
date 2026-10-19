@@ -14,8 +14,8 @@ description = "Chrome DevTools Protocol transport: one websocket, many sessions,
 # manifest reads like crates/agent-detect/Cargo.toml, which takes every dependency literally.
 # Matching the exact version strings is what keeps one copy of each in the lockfile.
 [dependencies]
-tokio = { version = "1.35", features = ["rt", "sync", "time", "macros", "net", "io-util"] }
-tokio-tungstenite = "0.26"
+tokio = { version = "1.53", features = ["rt", "sync", "time", "macros", "net", "io-util"] }
+tokio-tungstenite = "0.30"
 futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -26,7 +26,7 @@ thiserror = "2.0"
 # dependency is the same defect this manifest refuses `url` for.
 tracing = "0.1"
 # Page.captureScreenshot / Page.printToPDF hand back base64; methods::page returns Vec<u8>.
-base64 = "0.22"
+base64 = "0.23.1"
 
 [features]
 # `FakeCdpServer` lives in src/ rather than tests/ because alephcore's own unit tests drive the
@@ -38,7 +38,7 @@ testkit = []
 
 [dev-dependencies]
 # `io-util` is for the hand-written HTTP GET in tests/smoke.rs that checks /json/version.
-tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "time", "net", "sync", "io-util"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "net", "sync", "io-util"] }
 # Self dev-dependency: turns `testkit` on for this crate's OWN integration tests without a flag,
 # so `cargo test -p aleph-cdp` cannot silently skip a test target. Cargo permits dev-dependency
 # cycles precisely because they do not affect the lib build. See Step 3's fallback if this

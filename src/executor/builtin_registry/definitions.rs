@@ -3212,6 +3212,7 @@ mod tests {
     /// names the managed-companion surface.
     const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 118_577;
     #[test]
+    #[allow(clippy::doc_markdown)]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
             .iter()

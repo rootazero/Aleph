@@ -3,6 +3,7 @@
 //! Structured error types for Signal operations including API errors,
 //! SSE errors, and configuration validation errors.
 
+use reqwest_legacy as reqwest;
 use std::time::Duration;
 
 use thiserror::Error;

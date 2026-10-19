@@ -6,9 +6,9 @@ use crate::sync_primitives::Arc;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{
-    new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer, FileIdMap,
+    new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer, RecommendedCache,
 };
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -50,7 +50,7 @@ impl Default for SkillWatcherConfig {
 
 /// File system watcher for Markdown skills
 pub struct SkillWatcher {
-    _watcher: Debouncer<RecommendedWatcher, FileIdMap>,
+    _watcher: Debouncer<RecommendedWatcher, RecommendedCache>,
     event_rx: mpsc::Receiver<DebouncedEvent>,
 }
 
@@ -98,7 +98,6 @@ impl SkillWatcher {
 
         // Start watching the skills directory
         debouncer
-            .watcher()
             .watch(&skills_dir, RecursiveMode::Recursive)
             .map_err(|e| AlephError::Other {
                 message: format!("Failed to watch directory: {e}"),

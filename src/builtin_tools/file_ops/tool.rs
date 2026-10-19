@@ -81,7 +81,7 @@ impl FileOpsTool {
         };
 
         // Notify tool start with operation details
-        let args_summary = format!("{}: {}", op_name, &args.path);
+        let args_summary = format!("{}: {}", op_name, args.path);
         notify_tool_start(Self::NAME, &args_summary);
 
         info!(

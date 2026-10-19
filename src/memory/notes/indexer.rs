@@ -1411,7 +1411,7 @@ impl<S: NoteStore> NoteIndexer<S> {
 pub(crate) fn sha2_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 #[cfg(test)]

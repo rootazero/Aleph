@@ -58,7 +58,8 @@ pub struct TopLevelWindow {
 /// lives in the list consumers rather than here.
 #[must_use]
 pub fn enumerate_top_level() -> Vec<TopLevelWindow> {
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
         IsWindowVisible,
@@ -387,7 +388,7 @@ fn file_description(exe: &Path) -> Option<String> {
             return None;
         }
         let mut block = vec![0u8; size as usize];
-        GetFileVersionInfoW(PCWSTR(path.as_ptr()), 0, size, block.as_mut_ptr().cast()).ok()?;
+        GetFileVersionInfoW(PCWSTR(path.as_ptr()), None, size, block.as_mut_ptr().cast()).ok()?;
 
         // The description is filed under the executable's own language and code
         // page, which the translation table names. Guessing a fixed one (the

@@ -1495,7 +1495,9 @@ impl NoteStore for SqliteMemoryBackend {
                 return Vec::new();
             }
             let decoded: Vec<f32> = b
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                 .collect();
             if decoded.len() != dim_hint as usize {

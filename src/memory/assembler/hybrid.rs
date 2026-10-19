@@ -485,7 +485,7 @@ fn emit_tracing(env: &MemoryEnvelope, query: &str) {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(query.as_bytes());
-    let query_hash = format!("{:x}", h.finalize());
+    let query_hash = hex::encode(h.finalize());
     let total_tokens: u32 = env.slots.iter().map(|s| s.tokens_used).sum();
     info!(
         target: "memory.assembler",

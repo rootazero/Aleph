@@ -37,6 +37,7 @@ use crate::gateway::channel::{
     SendResult,
 };
 use async_trait::async_trait;
+use reqwest_legacy as reqwest;
 use tokio::sync::watch;
 
 /// Signal channel implementation using the signal-cli REST API.

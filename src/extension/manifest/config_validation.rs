@@ -47,7 +47,7 @@ pub fn validate_config_against_schema(schema: &JsonValue, value: &JsonValue) -> 
 
     validator
         .iter_errors(value)
-        .map(|e| format!("{} at {}", e, e.instance_path))
+        .map(|e| format!("{} at {}", e, e.instance_path()))
         .collect()
 }
 

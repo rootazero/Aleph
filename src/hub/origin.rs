@@ -54,7 +54,7 @@ fn spec_digest(spec: &InstallSpec) -> String {
     let json = serde_json::to_string(spec).unwrap_or_default();
     let mut h = Sha256::new();
     h.update(json.as_bytes());
-    format!("{:x}", h.finalize())
+    hex::encode(h.finalize())
 }
 
 impl InstallOrigin {

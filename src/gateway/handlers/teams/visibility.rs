@@ -44,6 +44,10 @@ pub fn team_not_found(id: Option<Value>, team_id: &str) -> JsonRpcResponse {
 /// Reads through the scoped store, so "invisible" already arrives as `None`.
 /// Fails closed on a store error: a caller must never be let through because
 /// the check itself could not complete (spec §5.4 GC3).
+#[expect(
+    clippy::result_large_err,
+    reason = "The visibility gate returns the existing indistinguishable RPC denial directly without an extra allocation"
+)]
 pub async fn gate_team(
     id: Option<Value>,
     store: &Arc<dyn TeamStore>,
@@ -94,6 +98,10 @@ pub async fn snapshot_team_visible(store: &Arc<dyn TeamStore>, team_id: &str) ->
 /// as "public". Same fail-closed contract as [`gate_team`], and the denial is
 /// keyed on the TASK id the caller supplied — echoing back a team id they
 /// could not see would be the oracle this is preventing.
+#[expect(
+    clippy::result_large_err,
+    reason = "The visibility gate returns the existing indistinguishable RPC denial directly without an extra allocation"
+)]
 pub async fn gate_task(
     id: Option<Value>,
     store: &Arc<dyn TeamStore>,

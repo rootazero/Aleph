@@ -131,6 +131,10 @@ fn addressable(agent_id: &str) -> bool {
 }
 
 /// Resolve the per-scope store, or an error response describing why not.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resolve the store or return its prepared RPC response without changing the response contract or allocating a wrapper"
+)]
 async fn resolve_store(
     request_id: &Option<serde_json::Value>,
     mcp: Option<&Arc<MemoryContextProvider>>,

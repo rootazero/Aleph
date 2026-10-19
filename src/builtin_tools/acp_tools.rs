@@ -74,7 +74,7 @@ impl AlephTool for AcpDelegateTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let args_summary = format!(
             "{}: {}",
-            &args.harness,
+            args.harness,
             crate::utils::text_format::truncate_text(&args.prompt, 80)
         );
         notify_tool_start(Self::NAME, &args_summary);
@@ -190,7 +190,7 @@ impl AlephTool for AcpSwitchTool {
     type Output = AcpSwitchOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let args_summary = format!("Switch to: {}", &args.target);
+        let args_summary = format!("Switch to: {}", args.target);
         notify_tool_start(Self::NAME, &args_summary);
 
         if args.target == "aleph" {
@@ -205,7 +205,7 @@ impl AlephTool for AcpSwitchTool {
         if !self.manager.has_harness(&args.target).await {
             let err_msg = format!(
                 "Unknown agent: '{}'. Valid targets: claude-code, codex, gemini, aleph",
-                &args.target
+                args.target
             );
             notify_tool_result(Self::NAME, &err_msg, false);
             return Err(AlephError::tool(err_msg));

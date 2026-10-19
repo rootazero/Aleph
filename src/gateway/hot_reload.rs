@@ -7,7 +7,7 @@ use crate::sync_primitives::Arc;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use notify::{EventKind, RecursiveMode, Watcher};
+use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::new_debouncer;
 use serde::Deserialize;
 use tokio::sync::{broadcast, RwLock};
@@ -199,7 +199,6 @@ impl ConfigWatcher {
             .ok_or_else(|| ConfigWatcherError::WatcherError("Invalid config path".to_string()))?;
 
         debouncer
-            .watcher()
             .watch(watch_path, RecursiveMode::NonRecursive)
             .map_err(|e| ConfigWatcherError::WatcherError(e.to_string()))?;
 

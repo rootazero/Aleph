@@ -31,11 +31,11 @@ version = "26.9.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/rootazero/Aleph"
-rust-version = "1.95"
+rust-version = "1.99"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # Serialization
@@ -51,7 +51,7 @@ serde_json = "1.0"
 # 1.1 lineage: bare `yes` / `no` / `on` / `off` come back as strings, only
 # `true` / `false` as booleans. `src/skill/manifest.rs` pins that.
 yaml_serde = "0.10"
-toml = "0.8"
+toml = "1.1"
 
 # Error handling
 thiserror = "2.0"
@@ -60,10 +60,10 @@ thiserror = "2.0"
 rusqlite = { version = "0.37", features = ["bundled"] }
 
 # Utilities
-uuid = { version = "1.7", features = ["v4", "serde"] }
-regex = "1.10"
+uuid = { version = "1.28", features = ["v4", "serde"] }
+regex = "1.13"
 chrono = { version = "0.4", features = ["serde"] }
-dirs = "6.0"
+dirs = "7"
 once_cell = "1.19"
 
 # Logging
@@ -73,47 +73,47 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 tracing-appender = "0.2"
 
 # File watching
-notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
-notify-debouncer-full = "0.3"
+notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
+notify-debouncer-full = "0.7"
 
 # Image processing
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "tiff"] }
-base64 = "0.22"
+base64 = "0.23.1"
 
 # Async utilities
 async-trait = "0.1"
 futures = "0.3"
 
 # Archive handling
-zip = "2.2"
+zip = "9"
 flate2 = "1.0"
 tar = "0.4"
 
 # Git operations
-git2 = "0.19"
+git2 = "0.21"
 glob = "0.3"
 
 # System info
 hostname = "0.4"
-whoami = "1.5"
+whoami = "2.1"
 
 # Schema generation
 schemars = "1.2"
 
 # Web scraping
-scraper = "0.22"
+scraper = "0.27"
 url = "2.5"
 
 # Caching
-lru = "0.12"
+lru = "0.18"
 
 # mDNS service discovery
-mdns-sd = "0.20"
+mdns-sd = "0.21"
 
 # Crypto / cert parsing (shared with desktop/shell cert_trust)
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
-x509-parser = "0.17"
+x509-parser = "0.18"
 
 # UniFFI removed - using Gateway WebSocket architecture
 
@@ -123,7 +123,7 @@ x509-parser = "0.17"
 name = "alephcore"
 version.workspace = true
 edition = "2021"
-rust-version = "1.95"
+rust-version = "1.99"
 
 [lib]
 # rlib only. The cdylib half survived the 2026-04 core/Cargo.toml merge but
@@ -171,8 +171,8 @@ disabled-tests = []
 # until the runtime lands.
 plugin-wasm = []
 [dependencies]
-# 1.41: `tokio::task::Id`, `task::try_id`, `AbortHandle::id` are stable from 1.41.0 (used by browser routes, subagent loop_tool, resume_coordinator).
-tokio = { version = "1.41", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }
+# 1.53: current tokio task identity APIs used by browser routes, subagent loop_tool, resume_coordinator.
+tokio = { version = "1.53", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }
 tokio-util = { version = "0.7", features = ["rt", "compat"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -181,9 +181,9 @@ serde = { version = "1.0", features = ["derive"] }
 # so without this a misplaced section is indistinguishable from a working one.
 # Serde-only: its two deps (serde, serde_core) are already in the tree.
 serde_ignored = "0.1"
-# Line-level diffs for the FileChange presentation side-channel. Same 2.x the
+# Line-level diffs for the FileChange presentation side-channel. Same 3.x the
 # Panel already pins — `cargo tree -p alephcore -i similar` must show one copy.
-similar = { version = "2", default-features = false, features = ["text"] }
+similar = { version = "3", default-features = false, features = ["std", "text"] }
 thiserror = "2.0"
 aleph-protocol = { path = "shared/protocol" }
 # Pure error + UTF-8 text helper authority. The directional dependency is
@@ -201,28 +201,31 @@ agent-detect = { path = "crates/agent-detect" }
 aleph-cdp = { path = "crates/aleph-cdp" }
 rusqlite = { version = "0.37", features = ["bundled"] }
 sqlite-vec = "0.1.9"
-uuid = { version = "1.7", features = ["v4", "serde"] }
-regex = "1.10"
+uuid = { version = "1.28", features = ["v4", "serde"] }
+regex = "1.13"
 aho-corasick = "1.1"
 percent-encoding = "2.3"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 ipnet = "2"
 rand = "0.10"
-reqwest = { version = "0.12", features = ["blocking", "json", "multipart", "native-tls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "multipart", "native-tls", "stream", "query", "form", "charset", "http2", "system-proxy"] }
+# Compatibility boundary for reqwest-eventsource and teloxide, both of which
+# expose reqwest 0.12 request/client types. Keep this alias local to those
+# integrations; all other HTTP code uses the 0.13 client above.
+reqwest_legacy = { package = "reqwest", version = "0.12", features = ["json", "stream"] }
 bytes = "1"
 serde_json = "1.0"
-toml = "0.8"
-toml_edit = "0.22"
-dirs = "6.0"
+toml = "1.1"
+toml_edit = "0.25"
+dirs = "7"
 log = "0.4"
 tracing = "0.1"
 libc = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
-notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
-notify-debouncer-full = "0.3"
-user-idle = "0.5"
+notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
+notify-debouncer-full = "0.7"
 shellexpand = "3.1"
 handlebars = "6"
 jsonpath-rust = "1.0"
@@ -236,7 +239,7 @@ futures = "0.3"
 async-stream = "0.3"
 once_cell = "1.19"
 yaml_serde.workspace = true
-zip = "2.2"
+zip = "9"
 # Archive handling for `InstallStrategy::GithubRelease`, which extracts ONE
 # member from a release asset. Pure Rust rather than shelling out to `tar` /
 # `Expand-Archive`: a subprocess adds three failure modes this code does not
@@ -247,7 +250,7 @@ zip = "2.2"
 tar = { workspace = true }
 flate2 = { workspace = true }
 tempfile = "3.8"
-git2 = { version = "0.19", features = ["vendored-openssl"] }
+git2 = { version = "0.21", features = ["vendored-openssl"] }
 glob = "0.3"
 glob-match = "0.2"
 walkdir = "2.5"
@@ -257,88 +260,85 @@ walkdir = "2.5"
 # `.gitignore`s, `.git/info/exclude`, core.excludesFile) is not something a
 # hand-rolled skip-list can express. `file_search/` is its only consumer.
 ignore = "0.4"
-which = "6.0"
+which = "8"
 schemars = "1.2"
-jsonschema = "0.29"
-scraper = "0.22"
-readability = "0.3"
-htmd = "0.1"
+jsonschema = { version = "0.59", default-features = false, features = ["resolve-http", "resolve-file", "tls-ring", "idna"] }
+scraper = "0.27"
+readability = { version = "0.3", default-features = false }
+htmd = "0.5"
 url = "2.5"
 idna = "1"
-lru = "0.12"
-sha2 = "0.10"
-hmac = "0.12"
-jsonwebtoken = "9"
+lru = "0.18"
+sha2 = "0.11"
+hmac = "0.13"
+jsonwebtoken = "11"
 subtle = "2.5"
 hex = "0.4"
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+ed25519-dalek = { version = "3", features = ["rand_core"] }
 siphasher = "1.0"
-aes-gcm = "0.10"
-aes = "0.9"
+aes-gcm = "0.11"
+# AES-256-GCM uses the same AES 0.9 package as the CBC adapter below.
+aes_cbc = { package = "aes", version = "0.9" }
 cipher = "0.5"
-# AES-256-CBC (cipher 0.4 line) for Feishu webhook event decryption — pairs with `cbc`.
-aes_cbc = { package = "aes", version = "0.8" }
-cbc = { version = "0.1", features = ["alloc", "block-padding"] }
-hkdf = "0.12"
+cbc = { version = "0.2", features = ["alloc", "block-padding"] }
+hkdf = "0.13"
 secrecy = { version = "0.10", features = ["serde"] }
 zeroize = { version = "1.8", features = ["derive"] }
-k256 = { version = "0.13", features = ["ecdsa", "schnorr"] }
+k256 = { version = "0.14", features = ["ecdsa", "schnorr"] }
 sha3 = "0.12"
 bincode = "1.3"
 rpassword = "7"
-portable-pty = "0.8"
+portable-pty = "0.9"
 strip-ansi-escapes = "0.2"
-# Already in the dependency tree transitively via strip-ansi-escapes, but a
-# transitive dependency cannot be `use`d directly. Pinned to the version
-# Cargo.lock already carries so this resolves to the same copy, not a second
-# one — verify with `cargo tree -p alephcore -i vte --depth 1`.
-vte = "0.14"
+# VTE 0.15's default `std` feature makes the OSC accumulator an unbounded
+# Vec. Keep the ArrayVec-backed 1024-byte cap for untrusted terminal output;
+# the unterminated-title regression test verifies the effective bound.
+vte = { version = "0.15", default-features = false }
 # Already in the dependency tree transitively via pulldown-cmark and wast, but
 # a transitive dependency cannot be `use`d directly. Pinned to 0.2, the
 # version Cargo.lock already carries, so this resolves to the same copy, not
 # a second one — verify with `cargo tree -p alephcore -i unicode-width`.
 unicode-width = "0.2"
-printpdf = "0.9"
+printpdf = "0.12"
 # Already in the dependency tree transitively via printpdf; pinned to the
 # version Cargo.lock already carries (0.39) with the exact feature set
 # printpdf enables (default off + "time"), so this resolves to the same
 # copy with zero new transitive weight — verify with
 # `cargo tree -p alephcore -i lopdf --depth 1`.
-lopdf = { version = "0.39", default-features = false, features = ["time"] }
-pulldown-cmark = "0.12"
+lopdf = { version = "0.45", default-features = false, features = ["time"] }
+pulldown-cmark = "0.13.4"
 httpdate = "1.0"
-dashmap = "5.5"
+dashmap = "6"
 reqwest-eventsource = "0.6"
 sysinfo = "0.39"
 semver = "1"
 hostname = { workspace = true }
 
 # Certificate parsing
-pem = "3.0"
-x509-parser = "0.17"
+x509-parser = "0.18"
 include_dir = "0.7"
-tokio-tungstenite = "0.26"
+tokio-tungstenite = "0.30"
 futures-util = "0.3"
-clap = { version = "4.4", features = ["derive", "env"] }
-tower-http = { version = "0.6", features = ["fs", "cors", "compression-gzip"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+tower-http = { version = "0.7", features = ["fs", "cors", "compression-gzip"] }
 axum = { version = "0.8", features = ["ws"] }
-axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-rcgen = "0.13"
-if-addrs = "0.13"
+rcgen = "0.14"
+if-addrs = "0.15"
 tower = "0.5"
 mime_guess = "2.0"
 mdns-sd = { workspace = true }
-rust-embed = { version = "8.0", features = ["compression"] }
+rust-embed = { version = "8.13", features = ["compression"] }
 teloxide = { version = "0.17", features = ["macros"] }
-serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model"] }
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "native_tls_backend", "model"] }
 lettre = { version = "0.11", default-features = false, features = ["tokio1-native-tls", "builder", "smtp-transport"] }
-mail-parser = "0.9"
-async-imap = "0.10"
-async-native-tls = "0.5"
-cron = "0.13"
-extism = "1.7"
-inquire = "0.7"
+mail-parser = "0.11"
+async-imap = "0.12"
+async-native-tls = "0.6"
+cron = "0.17"
+extism = "1.41"
+inquire = "0.9"
 loom = { version = "0.7", optional = true }
 whatsapp-rust = { version = "0.5", default-features = false, features = ["tokio-runtime", "tokio-transport", "sqlite-storage"] }
 whatsapp-rust-tokio-transport = "0.5"
@@ -348,12 +348,12 @@ whatsapp-rust-tokio-transport = "0.5"
 # SetProfilePictureResponse (own profile), not the Spec. Bumping
 # whatsapp-rust without re-aligning this dep is a wire-format bug.
 wacore = { version = "=0.5.0", default-features = false }
-matrix-sdk = { version = "0.16", default-features = false, features = ["native-tls", "sqlite"] }
+matrix-sdk = { version = "0.18", default-features = false, features = ["sqlite"] }
 mime = "0.3"
 aleph-logging = { path = "shared/logging" }
 aleph-desktop = { path = "desktop/shared" }
 aleph-client = { path = "shared/client" }
-open = "5.3.3"
+open = "5.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 aleph-desktop-macos = { path = "desktop/macos" }
@@ -398,9 +398,9 @@ bench = false
 
 [dev-dependencies]
 # Task9 independent source import guard only. Never used by normal library code.
-syn = { version = "=2.0.117", default-features = false, features = ["full", "parsing", "printing", "visit"] }
-# Source evidence needs line/column locations; already locked, dev-only.
-proc-macro2 = { version = "=1.0.106", features = ["span-locations"] }
+syn = { version = "=3.0.9", default-features = false, features = ["full", "parsing", "printing", "visit"] }
+# Source evidence needs line/column locations; dev-only.
+proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
 
 # The same crate as the `[dependencies]` entry above, with the in-process fake
 # CDP peer switched on. `#[cfg(test)]` code in this crate drives the engine
@@ -409,10 +409,10 @@ proc-macro2 = { version = "=1.0.106", features = ["span-locations"] }
 # compile it and does not need the fake at all (R84, and see the `test-helpers`
 # feature above, which this note used to contradict).
 aleph-cdp = { path = "crates/aleph-cdp", features = ["testkit"] }
-criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 tempfile = "3.8"
 filetime = "0.2"
-serial_test = "3.0"
+serial_test = "4"
 aleph-protocol = { path = "shared/protocol" }
 # Test-only: `src/tools/presentation_census.rs` calls the REAL `display_name`
 # / `DISPLAY_NAMES` instead of scraping their source. `default-features =
@@ -422,12 +422,12 @@ aleph-protocol = { path = "shared/protocol" }
 # there is no cycle: shared-ui-logic depends on aleph-protocol, never on
 # alephcore.
 shared-ui-logic = { path = "shared/ui_logic", default-features = false }
-proptest = "1.4"
+proptest = "1.12"
 rand = "0.10"
-http-body-util = "0.1"
+http-body-util = "0.1.5"
 wiremock = "0.6"
-insta = "1"
-tokio = { version = "1.41", features = ["test-util"] }
+insta = "1.49"
+tokio = { version = "1.53", features = ["test-util"] }
 
 [[bench]]
 name = "memory_benchmarks_simple"
@@ -693,13 +693,3 @@ strip = false
 opt-level = "z"
 lto = true
 codegen-units = 1
-
-# Patch matrix-sdk with a fork of matrix-sdk-0.16.0 that adds
-# #![recursion_limit = "512"] to crates/matrix-sdk/src/lib.rs.
-# The default 128 overflows when async fn body of Client::sync() is
-# monomorphized in CI Linux release builds (+130 observed). Setting
-# recursion_limit on the consumer crate (alephcore) does NOT propagate
-# to matrix-sdk's compilation — the compiler hint explicitly asks for
-# the attribute on `matrix_sdk` itself — so we vendor the fix via patch.
-[patch.crates-io]
-matrix-sdk = { git = "https://github.com/rootazero/matrix-rust-sdk", branch = "aleph-0.16.0-recursion-fix" }

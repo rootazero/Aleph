@@ -386,7 +386,7 @@ fn find_manifest(plugin_dir: &Path, result: &mut PluginValidation) -> Option<Fou
                 return None;
             }
         };
-        return match content.parse::<toml::Value>() {
+        return match toml::from_str::<toml::Value>(&content) {
             Ok(v) => Some(if preferred {
                 FoundManifest::Preferred(v)
             } else {
@@ -891,9 +891,8 @@ mod tests {
                 manifest_path.exists(),
                 "{template:?} must scaffold the preferred manifest, not the deprecated one"
             );
-            let parsed: toml::Value = std::fs::read_to_string(&manifest_path)
-                .unwrap()
-                .parse()
+            let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+            let parsed: toml::Value = toml::from_str(&manifest)
                 .unwrap_or_else(|e| panic!("{template:?} scaffolded unparseable TOML: {e}"));
             let runtime = parsed
                 .get("aleph")
@@ -1138,7 +1137,13 @@ description = "duplicate"
 
         let file = std::fs::File::open(&output).unwrap();
         let archive = zip::ZipArchive::new(file).unwrap();
-        let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+        let names: Vec<String> = archive
+            .file_names()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .into_iter()
+            .map(|name| name.into_owned())
+            .collect();
         assert!(names.iter().all(|n| !n.contains("node_modules")));
         // But should include other files
         assert!(names.iter().any(|n| n.contains("plugin.toml")));

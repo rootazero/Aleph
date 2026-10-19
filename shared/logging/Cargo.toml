@@ -20,7 +20,7 @@ chrono = "0.4"
 regex = "1.10"
 
 # Home directory resolution
-dirs = "6.0"
+dirs = "7"
 
 [dev-dependencies]
 filetime = "0.2"

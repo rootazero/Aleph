@@ -132,7 +132,7 @@ const fn slot_directive(kind: SlotKind) -> Option<&'static str> {
 fn render_item_markdown(out: &mut String, item: &EnvelopeItem, slot: SlotKind) {
     let layer = cognitive_layer(slot, &item.source).as_str();
     let header = match &item.source {
-        ItemSource::Note { path: _, .. } => {
+        ItemSource::Note { .. } => {
             format!(
                 "## [{}] ({} · updated {})",
                 item.id,

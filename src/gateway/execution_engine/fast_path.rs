@@ -34,6 +34,9 @@ pub(super) struct FastPathJournal {
 }
 
 impl FastPathJournal {
+    /// Test-only convenience constructor: production callers must use
+    /// [`Self::new_with_telecom_public`] so telecom provenance is captured
+    /// from the request context (per PersistedTelecomMarker::capture).
     #[cfg(test)]
     pub(super) fn new(svc: Arc<dyn SessionService>, session: SessionId, tool: &str) -> Self {
         Self::new_with_telecom_public(svc, session, tool, None)

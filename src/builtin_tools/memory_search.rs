@@ -517,7 +517,7 @@ impl MemorySearchTool {
         };
 
         // Notify tool start
-        let args_summary = format!("记忆搜索: {}", &args.query);
+        let args_summary = format!("记忆搜索: {}", args.query);
         notify_tool_start(Self::NAME, &args_summary);
 
         // Defence in depth (audit-2026-08-26 BTT-2): `max_results` is

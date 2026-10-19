@@ -323,7 +323,7 @@ impl Companion {
             use std::sync::atomic::Ordering;
             if self
                 .close_faults
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                 .is_ok()
             {
                 return Err("injected resource close failure".to_owned());
@@ -1057,7 +1057,7 @@ mod tests {
             self.steps.push("tab_close_called");
             let injected = self
                 .close_faults
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                 .is_ok();
             if injected {
                 return Err("tab gone".into());

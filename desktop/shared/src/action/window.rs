@@ -292,7 +292,7 @@ fn windows_focus_window(window_id: u64) -> Result<()> {
     // SAFETY: the handle is validated by `IsWindow` before any state-changing
     // call; all calls are documented Win32 APIs.
     unsafe {
-        if !IsWindow(hwnd).as_bool() {
+        if !IsWindow(Some(hwnd)).as_bool() {
             return Err(DesktopError::WindowFailed(format!(
                 "No window found with id {window_id}"
             )));
@@ -340,7 +340,7 @@ fn windows_hwnd(window_id: u64) -> Result<windows::Win32::Foundation::HWND> {
 
     let hwnd = HWND(window_id as usize as *mut core::ffi::c_void);
     // SAFETY: documented validity check; a stale or forged id answers `false`.
-    if unsafe { IsWindow(hwnd) }.as_bool() {
+    if unsafe { IsWindow(Some(hwnd)) }.as_bool() {
         Ok(hwnd)
     } else {
         Err(DesktopError::WindowFailed(format!(
@@ -402,7 +402,6 @@ fn windows_set_window_pos(
     cy: i32,
     flags: windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS,
 ) -> Result<()> {
-    use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
 
     // SAFETY: `hwnd` was validated by `windows_hwnd`; `SetWindowPos` is a
@@ -411,7 +410,7 @@ fn windows_set_window_pos(
     unsafe {
         SetWindowPos(
             hwnd,
-            HWND::default(),
+            None,
             x,
             y,
             cx,

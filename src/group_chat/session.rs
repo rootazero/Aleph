@@ -149,7 +149,7 @@ impl GroupChatSession {
     pub fn max_no_commit_attempts(&self) -> u32 {
         const MIN: u32 = 4;
         const HARD_CAP: u32 = 16;
-        let from_rounds = self.max_rounds.map_or(8, |c| c);
+        let from_rounds = self.max_rounds.unwrap_or(8);
         from_rounds.clamp(MIN, HARD_CAP)
     }
 

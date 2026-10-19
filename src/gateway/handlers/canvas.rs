@@ -91,6 +91,10 @@ fn canvas_not_found(id: Option<Value>, context: &str, canvas_id: &str) -> JsonRp
 /// honest `Internal` for in-process callers, but the RPC face cannot check
 /// visibility on a document it cannot read, and admitting would be the wrong
 /// direction; the named `warn!` is what keeps the skip loud (§5.23b).
+#[expect(
+    clippy::result_large_err,
+    reason = "The admission gate returns the exact RPC denial response directly without a second allocation"
+)]
 async fn gate_canvas(
     store: &CanvasStore,
     id: Option<Value>,

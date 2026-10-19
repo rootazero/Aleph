@@ -47,9 +47,11 @@ pub async fn send_message(client: &Client, message: OutboundMessage) -> ChannelR
                 let event_id: OwnedEventId = event_id_str.parse().map_err(|e| {
                     ChannelError::SendFailed(format!("Invalid reply event ID: {e}"))
                 })?;
-                content.relates_to = Some(Relation::Reply {
-                    in_reply_to: matrix_sdk::ruma::events::relation::InReplyTo::new(event_id),
-                });
+                content.relates_to = Some(Relation::Reply(
+                    matrix_sdk::ruma::events::relation::Reply::new(
+                        matrix_sdk::ruma::events::relation::InReplyTo::new(event_id),
+                    ),
+                ));
             }
         }
 
@@ -59,7 +61,7 @@ pub async fn send_message(client: &Client, message: OutboundMessage) -> ChannelR
             .map_err(|e| ChannelError::SendFailed(format!("Failed to send message: {e}")))?;
 
         last_result = Some(SendResult {
-            message_id: MessageId::new(response.event_id.to_string()),
+            message_id: MessageId::new(response.response.event_id.to_string()),
             timestamp: Utc::now(),
         });
     }
@@ -87,9 +89,11 @@ async fn send_with_attachments(
                     let event_id: OwnedEventId = event_id_str.parse().map_err(|e| {
                         ChannelError::SendFailed(format!("Invalid reply event ID: {e}"))
                     })?;
-                    content.relates_to = Some(Relation::Reply {
-                        in_reply_to: matrix_sdk::ruma::events::relation::InReplyTo::new(event_id),
-                    });
+                    content.relates_to = Some(Relation::Reply(
+                        matrix_sdk::ruma::events::relation::Reply::new(
+                            matrix_sdk::ruma::events::relation::InReplyTo::new(event_id),
+                        ),
+                    ));
                 }
             }
 
@@ -99,7 +103,7 @@ async fn send_with_attachments(
                 .map_err(|e| ChannelError::SendFailed(format!("Failed to send message: {e}")))?;
 
             last_result = Some(SendResult {
-                message_id: MessageId::new(response.event_id.to_string()),
+                message_id: MessageId::new(response.response.event_id.to_string()),
                 timestamp: Utc::now(),
             });
         }
@@ -119,7 +123,7 @@ async fn send_with_attachments(
             .map_err(|e| ChannelError::SendFailed(format!("Failed to send attachment: {e}")))?;
 
         last_result = Some(SendResult {
-            message_id: MessageId::new(response.event_id.to_string()),
+            message_id: MessageId::new(response.response.event_id.to_string()),
             timestamp: Utc::now(),
         });
     }
@@ -282,7 +286,7 @@ pub async fn edit_message(
         .map_err(|e| ChannelError::SendFailed(format!("Failed to edit message: {e}")))?;
 
     Ok(SendResult {
-        message_id: MessageId::new(response.event_id.to_string()),
+        message_id: MessageId::new(response.response.event_id.to_string()),
         timestamp: Utc::now(),
     })
 }

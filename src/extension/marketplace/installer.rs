@@ -242,7 +242,7 @@ pub fn directory_digest(source_path: &Path) -> Result<String, String> {
         hasher.update(&content);
     }
 
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 // =============================================================================
@@ -403,7 +403,7 @@ mod tests {
         let mut hasher = Sha256::new();
         hasher.update(b"hello.txt");
         hasher.update(b"world");
-        let expected = format!("{:x}", hasher.finalize());
+        let expected = hex::encode(hasher.finalize());
 
         assert!(verify_plugin_integrity(tmp.path(), Some(&expected)).is_ok());
     }
@@ -420,7 +420,7 @@ mod tests {
         let mut hasher = Sha256::new();
         hasher.update(b"sub/f.txt");
         hasher.update(b"x");
-        let expected = format!("{:x}", hasher.finalize());
+        let expected = hex::encode(hasher.finalize());
 
         assert_eq!(directory_digest(tmp.path()).unwrap(), expected);
     }

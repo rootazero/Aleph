@@ -12,8 +12,8 @@
 
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::{Arc, Mutex};
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
+use notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -112,7 +112,7 @@ pub struct ExtensionWatcher {
     /// Callback invoked when extensions change
     callback: ExtensionChangeCallback,
     /// Debounced file watcher (None when stopped)
-    debouncer: Arc<Mutex<Option<Debouncer<RecommendedWatcher, FileIdMap>>>>,
+    debouncer: Arc<Mutex<Option<Debouncer<RecommendedWatcher, RecommendedCache>>>>,
     /// Runtime-data subtrees to exclude. `None` derives the production set
     /// from the path helpers; tests inject a scratch tree.
     excluded_dirs: Option<Vec<PathBuf>>,
@@ -287,7 +287,6 @@ impl ExtensionWatcher {
         for dir in &self.watch_dirs {
             if dir.exists() {
                 debouncer
-                    .watcher()
                     .watch(dir, RecursiveMode::Recursive)
                     .map_err(|e| {
                         AlephError::config(format!(

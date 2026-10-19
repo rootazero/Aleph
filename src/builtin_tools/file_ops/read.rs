@@ -346,7 +346,7 @@ impl AlephTool for FileReadTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 
-        notify_tool_start(Self::NAME, &format!("read: {}", &args.path));
+        notify_tool_start(Self::NAME, &format!("read: {}", args.path));
 
         let path = Path::new(&args.path);
         let output_dir = self.resolve_output_dir().await;

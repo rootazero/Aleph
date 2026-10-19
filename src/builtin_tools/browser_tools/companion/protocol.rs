@@ -17,7 +17,7 @@
 
 use std::net::IpAddr;
 
-use hmac::{Hmac, Mac};
+use hmac::{digest::KeyInit, Hmac, Mac};
 use rand::rand_core::UnwrapErr;
 use rand::rngs::SysRng;
 use rand::Rng;
@@ -225,7 +225,7 @@ impl LaunchCredentials {
     }
 
     fn mac_hex(&self, parts: &[&str]) -> String {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.secret[..])
+        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(&self.secret[..])
             .expect("HMAC accepts any key length");
         for (i, part) in parts.iter().enumerate() {
             if i > 0 {

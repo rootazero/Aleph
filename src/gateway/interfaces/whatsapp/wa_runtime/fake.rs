@@ -141,6 +141,10 @@ impl FakeWaRuntime {
     /// Returns `Err(())` if the timeout elapses before the predicate is
     /// satisfied. Callers should `expect("...")` so the test message
     /// names the predicate that wasn't met.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "This test helper reports whether the supplied predicate was observed before its deadline"
+    )]
     pub async fn wait_for_pairing_state(
         &self,
         pred: impl Fn(&PairingState) -> bool,
@@ -169,6 +173,10 @@ impl FakeWaRuntime {
     /// Returns `Err(())` if the event channel is closed (the
     /// `WhatsAppChannel` has been dropped). Production paths do not need
     /// to handle this — tests should.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "Synthetic event injection preserves the fixture success/failure marker rather than a production error API"
+    )]
     pub async fn emit_qr(&self, code: impl Into<String>) -> Result<(), ()> {
         self.inner
             .event_tx
@@ -186,6 +194,10 @@ impl FakeWaRuntime {
     /// # Errors
     ///
     /// Returns `Err(())` if the event channel is closed.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "Synthetic event injection preserves the fixture success/failure marker rather than a production error API"
+    )]
     pub async fn emit_pair_success(&self) -> Result<(), ()> {
         let pair_success = whatsapp_rust::types::events::PairSuccess {
             id: whatsapp_rust::Jid::new("1234", "s.whatsapp.net"),
@@ -209,6 +221,10 @@ impl FakeWaRuntime {
     /// # Errors
     ///
     /// Returns `Err(())` if the event channel is closed.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "Synthetic event injection preserves the fixture success/failure marker rather than a production error API"
+    )]
     pub async fn emit_disconnected(&self, _reason: impl Into<String>) -> Result<(), ()> {
         self.inner
             .event_tx
@@ -227,6 +243,10 @@ impl FakeWaRuntime {
     /// # Errors
     ///
     /// Returns `Err(())` if the event channel is closed.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "Synthetic event injection preserves the fixture success/failure marker rather than a production error API"
+    )]
     pub async fn emit_text_message(
         &self,
         chat_jid: &str,

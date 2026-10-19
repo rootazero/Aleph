@@ -202,7 +202,7 @@ fn test_agents_toml_round_trip() {
     assert!(
         toml_str.contains("[[agents.list]]"),
         "Expected [[agents.list]] in serialized TOML, got:\n{}",
-        &toml_str[toml_str.find("[agents").unwrap_or(0)..]
+        toml_str[toml_str.find("[agents").unwrap_or(0)..]
             .lines()
             .take(10)
             .collect::<Vec<_>>()

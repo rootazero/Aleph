@@ -303,7 +303,9 @@ fn f32_vec_to_bytes(v: &[f32]) -> Vec<u8> {
 /// Ignores trailing bytes that are not a multiple of 4.
 fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
 }

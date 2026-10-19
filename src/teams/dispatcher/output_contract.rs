@@ -133,7 +133,7 @@ pub fn validate_step_output(task: &CoordTask, final_text: &str) -> SchemaOutcome
     let mut errors = validator.iter_errors(&parsed);
     let first: Vec<String> = (&mut errors)
         .take(MAX_VALIDATION_ERRORS)
-        .map(|e| format!("{} at {}", e, e.instance_path))
+        .map(|e| format!("{} at {}", e, e.instance_path()))
         .collect();
     let has_more = errors.next().is_some();
     drop(errors);

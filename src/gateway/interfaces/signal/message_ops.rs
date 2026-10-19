@@ -12,6 +12,7 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use reqwest::Client;
 use reqwest_eventsource::{Event, EventSource};
+use reqwest_legacy as reqwest;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;

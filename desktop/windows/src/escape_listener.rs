@@ -137,7 +137,7 @@ impl EscapeAbort for WindowsEscapeListener {
                 // to the `'static` `keyboard_hook_proc`; removed again before
                 // this thread exits.
                 match unsafe {
-                    SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), module, 0)
+                    SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), Some(module), 0)
                 } {
                     Ok(hook) => {
                         let tid = unsafe { GetCurrentThreadId() };
@@ -387,6 +387,7 @@ mod tests {
 
     #[test]
     fn lifecycle() {
+        #[cfg(windows)]
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -416,6 +417,7 @@ mod tests {
     /// above covers the non-Windows start path.
     #[cfg(windows)]
     #[test]
+    #[allow(clippy::needless_return)]
     fn listener_ptr_is_zeroed_after_stop_and_between_cycles() {
         let _guard = TEST_LOCK
             .lock()
@@ -466,6 +468,7 @@ mod tests {
     /// side of the same invariant.
     #[test]
     fn is_aborted_after_stop_is_false_and_does_not_panic() {
+        #[cfg(windows)]
         let _guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);

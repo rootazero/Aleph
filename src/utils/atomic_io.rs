@@ -272,7 +272,7 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
 
         let mut handles = vec![];
-        for tag in [b'A', b'B'] {
+        for tag in *b"AB" {
             let lp = lock_path.clone();
             let c = counter.clone();
             let b = barrier.clone();

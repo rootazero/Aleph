@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::Client;
 use reqwest_eventsource::{Event, EventSource};
+use reqwest_legacy as reqwest;
 use tokio::sync::{mpsc, RwLock};
 
 use crate::error::{AlephError, Result};

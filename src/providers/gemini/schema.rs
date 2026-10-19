@@ -404,15 +404,14 @@ fn try_merge_enum(variants: &[Value]) -> Option<(String, Vec<Value>)> {
         let val = if let Some(c) = obj.get("const") {
             // rust-doctor-disable-next-line excessive-clone
             c.clone()
-        } else if let Some(e) = obj.get("enum").and_then(|e| e.as_array()) {
+        } else {
+            let e = obj.get("enum").and_then(|e| e.as_array())?;
             if e.len() == 1 {
                 // rust-doctor-disable-next-line excessive-clone
                 e[0].clone()
             } else {
                 return None;
             }
-        } else {
-            return None;
         };
 
         match common_type {

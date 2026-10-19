@@ -346,7 +346,9 @@ fn walk(
     // CDP ships attributes as a FLAT [name, value, name, value, …] array.
     let attrs: Vec<(String, String)> = node
         .attributes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| (pair[0].clone(), pair[1].clone()))
         .collect();
     let text = if matches!(kind, RawNodeKind::Text) && !node.node_value.is_empty() {
