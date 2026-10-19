@@ -1814,6 +1814,7 @@ mod tests {
                 trigger: "manual-command".to_string(),
                 folded_tokens: 1_000,
                 summary_tokens: 100,
+                owner: None,
                 at: now_ms(),
             },
         ]

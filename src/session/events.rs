@@ -730,6 +730,10 @@ pub enum SessionEvent {
         trigger: String,
         folded_tokens: u64,
         summary_tokens: u64,
+        /// Capability owner that produced the fold. Missing on historical rows
+        /// and therefore interpreted as the builtin owner.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<String>,
         at: Timestamp,
     },
 
@@ -1144,6 +1148,7 @@ pub(crate) mod fixtures {
                     trigger: "manual-command".into(),
                     folded_tokens: 0,
                     summary_tokens: 0,
+                    owner: None,
                     at: 0,
                 },
             ),

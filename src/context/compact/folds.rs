@@ -24,6 +24,19 @@
 
 use crate::session::events::{EventSeq, SessionEvent, Timestamp};
 
+/// Stable owner identity written by the builtin compactor.
+pub const BUILTIN_FOLD_OWNER: &str = "builtin";
+
+/// Core's recovery decision for a fold. A foreign owner is kept explicit so a
+/// future facade can resolve its adapter without silently handing it to the
+/// current owner; the builtin tool may use bounded event-log recovery when no
+/// adapter is mounted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FoldRecoveryRoute {
+    Builtin,
+    ForeignOwner { owner: String },
+}
+
 /// How the fold's summary was produced.
 ///
 /// Closed set — unlike the wire string it parses from, which stays open so a
@@ -126,7 +139,29 @@ pub struct FoldRecord {
     pub folded_tokens: u64,
     /// Estimated tokens of the summary that replaced the span.
     pub summary_tokens: u64,
+    /// Capability owner that produced the fold. `None` is the historical
+    /// spelling for the builtin owner.
+    pub owner: Option<String>,
     pub at: Timestamp,
+}
+
+impl FoldRecord {
+    /// Resolve the durable owner into the Core recovery route.
+    #[must_use]
+    pub fn recovery_route(&self) -> FoldRecoveryRoute {
+        route_fold_recovery(self)
+    }
+}
+
+/// Resolve a fold's durable owner without consulting a second registry.
+#[must_use]
+pub fn route_fold_recovery(fold: &FoldRecord) -> FoldRecoveryRoute {
+    match fold.owner.as_deref() {
+        None | Some(BUILTIN_FOLD_OWNER) => FoldRecoveryRoute::Builtin,
+        Some(owner) => FoldRecoveryRoute::ForeignOwner {
+            owner: owner.to_string(),
+        },
+    }
 }
 
 /// The deterministic fold id for one span of one session:
@@ -177,6 +212,7 @@ pub fn list_folds(session_key: &str, events: &[SessionEvent]) -> Vec<FoldRecord>
                 trigger,
                 folded_tokens,
                 summary_tokens,
+                owner,
                 at,
             } => Some(FoldRecord {
                 fold_id: fold_id.clone(),
@@ -187,6 +223,7 @@ pub fn list_folds(session_key: &str, events: &[SessionEvent]) -> Vec<FoldRecord>
                 trigger: FoldTrigger::from_wire(trigger),
                 folded_tokens: *folded_tokens,
                 summary_tokens: *summary_tokens,
+                owner: owner.clone(),
                 at: *at,
             }),
             SessionEvent::CompactionPerformed {
@@ -203,6 +240,7 @@ pub fn list_folds(session_key: &str, events: &[SessionEvent]) -> Vec<FoldRecord>
                 trigger: FoldTrigger::Legacy,
                 folded_tokens: 0,
                 summary_tokens: 0,
+                owner: None,
                 at: *at,
             }),
             _ => None,
@@ -238,6 +276,7 @@ mod tests {
             trigger: "manual-command".to_string(),
             folded_tokens: 12_000,
             summary_tokens: 800,
+            owner: None,
             at: 42,
         }
     }
@@ -251,6 +290,71 @@ mod tests {
         assert!(json.contains("\"type\":\"fold_recorded\""), "{json}");
         let back: SessionEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(serde_json::to_string(&back).unwrap(), json);
+    }
+
+    #[test]
+    fn legacy_fold_recorded_without_owner_deserializes_as_builtin() {
+        let json = r#"{"type":"fold_recorded","fold_id":"fold_legacy_2","from_seq":2,"to_seq":40,"summary_ref":"turn-of-summary","strategy":"manual","trigger":"manual-command","folded_tokens":12000,"summary_tokens":800,"at":42}"#;
+        let event: SessionEvent = serde_json::from_str(json).unwrap();
+        let SessionEvent::FoldRecorded { owner, .. } = event else {
+            panic!("expected fold record");
+        };
+        assert_eq!(owner, None);
+    }
+
+    #[test]
+    fn owner_none_routes_to_builtin_recovery() {
+        let folds = list_folds(SESSION, &[recorded("fold_builtin", 2, 40)]);
+        assert_eq!(folds[0].owner, None);
+        assert_eq!(route_fold_recovery(&folds[0]), FoldRecoveryRoute::Builtin);
+    }
+
+    #[test]
+    fn mixed_owner_history_keeps_owner_boundaries() {
+        let events = vec![
+            recorded_with_owner("fold_a", 2, 20, Some("plugin-a")),
+            recorded_with_owner("fold_b", 21, 40, Some("plugin-b")),
+        ];
+        let folds = list_folds(SESSION, &events);
+        assert_eq!(
+            folds
+                .iter()
+                .map(|fold| fold.owner.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("plugin-a"), Some("plugin-b"),]
+        );
+        assert_eq!(
+            route_fold_recovery(&folds[0]),
+            FoldRecoveryRoute::ForeignOwner {
+                owner: "plugin-a".to_string(),
+            }
+        );
+        assert_eq!(
+            route_fold_recovery(&folds[1]),
+            FoldRecoveryRoute::ForeignOwner {
+                owner: "plugin-b".to_string(),
+            }
+        );
+    }
+
+    fn recorded_with_owner(
+        fold_id: &str,
+        from_seq: u64,
+        to_seq: u64,
+        owner: Option<&str>,
+    ) -> SessionEvent {
+        SessionEvent::FoldRecorded {
+            fold_id: fold_id.to_string(),
+            from_seq,
+            to_seq,
+            summary_ref: "turn-of-summary".to_string(),
+            strategy: "manual".to_string(),
+            trigger: "manual-command".to_string(),
+            folded_tokens: 12_000,
+            summary_tokens: 800,
+            owner: owner.map(str::to_string),
+            at: 42,
+        }
     }
 
     /// Pre-registry sessions carry only `CompactionPerformed`. They must still
@@ -298,7 +402,24 @@ mod tests {
         assert!(folds[0].from_seq < folds[1].from_seq);
     }
 
-    /// Forgery guard (bili #717, Context Fabric Task 4): assistant text that
+    #[test]
+    fn recorded_owner_wins_over_derived_legacy_for_same_span() {
+        let events = vec![
+            compaction(2, 40),
+            recorded_with_owner("fold_plugin_a", 2, 40, Some("plugin-a")),
+        ];
+        let folds = list_folds(SESSION, &events);
+        assert_eq!(folds.len(), 1);
+        assert_eq!(folds[0].fold_id, "fold_plugin_a");
+        assert_eq!(folds[0].owner.as_deref(), Some("plugin-a"));
+        assert_eq!(
+            route_fold_recovery(&folds[0]),
+            FoldRecoveryRoute::ForeignOwner {
+                owner: "plugin-a".to_string(),
+            }
+        );
+    }
+
     /// merely *claims* a fold happened — a `[Context folded]`-style marker the
     /// model typed itself — must not change the fold view. Compaction is
     /// system-side in Aleph, so confirmation only ever arrives as

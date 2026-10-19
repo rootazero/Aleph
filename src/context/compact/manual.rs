@@ -485,10 +485,8 @@ pub async fn compact_session(
         },
         // The fold-registry record, in the SAME batch as its checkpoint —
         // both land or neither does (Context Fabric spec §3.1a, FL §2.14).
-        // `strategy`/`trigger` name the manual path's one producer this round;
-        // richer origin attribution (model tool vs slash vs RPC) needs the
-        // origin plumbed through `run_manual_compaction`, deferred to the
-        // decompress task.
+        // Manual compaction is a Core builtin producer, so the durable owner
+        // is explicit even though older records use `None` for builtin.
         SessionEvent::FoldRecorded {
             fold_id: crate::context::compact::folds::derive_fold_id(
                 &session_id.to_key_string(),
@@ -505,6 +503,7 @@ pub async fn compact_session(
                 .to_string(),
             folded_tokens: tokens_before as u64,
             summary_tokens: tokens_after as u64,
+            owner: Some(crate::context::compact::folds::BUILTIN_FOLD_OWNER.to_string()),
             at,
         },
     ];
@@ -1331,6 +1330,7 @@ mod tests {
                 summary_ref: f_ref,
                 folded_tokens,
                 summary_tokens,
+                owner,
                 ..
             },
         ) = (&ckpt.event, &fold_ev.event)
@@ -1344,6 +1344,11 @@ mod tests {
         );
         assert_eq!(*folded_tokens, outcome.tokens_before as u64);
         assert_eq!(*summary_tokens, outcome.tokens_after as u64);
+        assert_eq!(
+            owner.as_deref(),
+            Some(crate::context::compact::folds::BUILTIN_FOLD_OWNER),
+            "Core manual compaction records its builtin recovery owner"
+        );
 
         // The registry view over this session lists ONE fold (recorded wins
         // over the legacy derivation for the same span) with Manual provenance.

@@ -226,6 +226,15 @@ pub(crate) async fn decompress_fold_span(
             })?,
     };
 
+    let recovery_note = match fold.recovery_route() {
+        crate::context::compact::folds::FoldRecoveryRoute::Builtin => None,
+        crate::context::compact::folds::FoldRecoveryRoute::ForeignOwner { owner } => Some(
+            format!(
+                "degraded recovery: fold owner '{owner}' is not mounted; Core restored the readable span with bounded builtin recovery"
+            ),
+        ),
+    };
+
     // Page bounds must stay inside the fold's span — a page that reaches
     // past it would render events the fold never folded.
     let start = args.from_seq.unwrap_or(fold.from_seq);
@@ -280,10 +289,12 @@ pub(crate) async fn decompress_fold_span(
             rendered: String::new(),
             truncated: false,
             next_from_seq: None,
-            note: Some(
-                "the fold's span holds no content-bearing events (markers/checkpoints only)"
-                    .to_string(),
-            ),
+            note: recovery_note.or_else(|| {
+                Some(
+                    "the fold's span holds no content-bearing events (markers/checkpoints only)"
+                        .to_string(),
+                )
+            }),
         });
     }
 
@@ -313,7 +324,7 @@ pub(crate) async fn decompress_fold_span(
         rendered: page.join("\n"),
         truncated: next_from_seq.is_some(),
         next_from_seq,
-        note: None,
+        note: recovery_note,
     })
 }
 
@@ -420,6 +431,7 @@ mod tests {
             trigger: "manual-command".to_string(),
             folded_tokens: 500,
             summary_tokens: 50,
+            owner: None,
             at: now_ms(),
         }
     }

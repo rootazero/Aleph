@@ -426,6 +426,7 @@ mod tests {
             trigger: "manual-command".to_string(),
             folded_tokens,
             summary_tokens,
+            owner: None,
             at: at_ms,
         }
     }
