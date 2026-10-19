@@ -74,6 +74,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+pub mod runtime;
+pub use crate::context::budget::preflight::NativePreflightRegistry;
+pub use runtime::{
+    AdmissionOutcome, CompactionOutcome, ContextFabric, ContextFabricBuilder, ContextFabricError,
+    ContextHandler, ContextOwner, PreflightOutcome,
+};
+
+#[cfg(test)]
+mod runtime_task3_tests;
+
 use crate::tools::descriptor::canonicalize_json;
 
 /// The only wire version this module understands.

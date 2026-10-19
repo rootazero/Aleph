@@ -9,9 +9,52 @@
 //! no-op. The trait is `async` only because the pipeline sits on the agent's
 //! async path — implementations are deterministic and make no LLM calls.
 
+use super::cheap_passes::{
+    FileOpSupersedeStage, HistoricalImageStrippingStage, HistoricalUserImageStrippingStage,
+    ToolResultPruningStage,
+};
 use super::ContextPressure;
 use crate::providers::message::UnifiedMessage;
 use async_trait::async_trait;
+
+/// Explicit native stage registration. The registry keeps construction order
+/// visible and lets compatibility callers share the same provider-dependent
+/// stage list as the runtime facade.
+pub struct NativePreflightRegistry {
+    stages: Vec<Box<dyn PreflightStage>>,
+}
+
+impl NativePreflightRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self { stages: Vec::new() }
+    }
+
+    pub fn register(&mut self, stage: impl PreflightStage + 'static) {
+        self.stages.push(Box::new(stage));
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.stages.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.stages.is_empty()
+    }
+
+    #[must_use]
+    pub fn into_pipeline(self) -> PreflightPipeline {
+        PreflightPipeline::new(self.stages)
+    }
+}
+
+impl Default for NativePreflightRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// How far the pruning boundary may slide, in messages, before the pipeline is
 /// willing to rewrite history again.
@@ -200,9 +243,61 @@ impl PreflightPipeline {
         total_freed
     }
 
-    /// Run all stages in order, returning the total tokens freed.
-    ///
-    /// Two guards protect the prompt-cache prefix, both waived at/above
+    /// Editable external prefix uses the same stepped boundary as native stages.
+    pub(crate) fn external_cut(
+        &self,
+        messages: &[UnifiedMessage],
+        pressure: &ContextPressure,
+        fresh_tail: usize,
+    ) -> usize {
+        if pressure.ratio < self.min_pressure_ratio {
+            return 0;
+        }
+        let tail = if pressure.ratio >= self.flush_ratio {
+            fresh_tail
+        } else {
+            quantized_tail(messages.len(), fresh_tail, self.cut_quantum)
+        };
+        let mut cut = messages.len().saturating_sub(tail);
+        // Retreat to the owning assistant turn instead of splitting a tool pair.
+        while cut > 0 && cut < messages.len() && messages[cut].is_tool_result() {
+            cut -= 1;
+        }
+        cut
+    }
+
+    /// Apply the same pressure and minimum-savings gates to a candidate made
+    /// by an external/context-fabric stage. The caller owns the structural
+    /// checks; this method only decides whether the staged candidate may be
+    /// committed. Returning `None` leaves the caller's messages untouched.
+    #[must_use]
+    pub fn accept_external_candidate(
+        &self,
+        before: &[UnifiedMessage],
+        candidate: Vec<UnifiedMessage>,
+        pressure: &ContextPressure,
+    ) -> Option<Vec<UnifiedMessage>> {
+        if pressure.ratio < self.min_pressure_ratio {
+            return None;
+        }
+        let before_tokens = crate::context::budget::pressure::estimate_tokens_smart(
+            &serde_json::to_string(before).unwrap_or_default(),
+        );
+        let after_tokens = crate::context::budget::pressure::estimate_tokens_smart(
+            &serde_json::to_string(&candidate).unwrap_or_default(),
+        );
+        let freed = before_tokens.saturating_sub(after_tokens);
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_sign_loss,
+            clippy::cast_possible_truncation
+        )]
+        let floor = (pressure.budget_tokens as f64 * self.min_savings_ratio) as usize;
+        if pressure.ratio < self.flush_ratio && freed < floor {
+            return None;
+        }
+        Some(candidate)
+    }
     /// `flush_ratio` where compaction is about to break it
     /// anyway:
     ///
@@ -314,27 +409,23 @@ impl PreflightPipeline {
 /// clear keeps them off for the rest of that run (a documented gap).
 ///
 /// [`AiProvider::clears_tool_results_server_side`]: crate::providers::AiProvider::clears_tool_results_server_side
-#[must_use]
 pub fn default_pipeline(
     cfg: &super::ContextBudgetConfig,
     llm: &dyn crate::providers::AiProvider,
 ) -> PreflightPipeline {
-    use super::cheap_passes::{
-        FileOpSupersedeStage, HistoricalImageStrippingStage, HistoricalUserImageStrippingStage,
-        ToolResultPruningStage,
-    };
-    let preventive_floor = cfg.preventive_floor();
-    let stages: Vec<Box<dyn PreflightStage>> = if llm.clears_tool_results_server_side() {
-        vec![Box::new(HistoricalUserImageStrippingStage)]
+    let mut registry = NativePreflightRegistry::new();
+    if llm.clears_tool_results_server_side() {
+        registry.register(HistoricalUserImageStrippingStage);
     } else {
-        vec![
-            Box::new(FileOpSupersedeStage::default().with_min_pressure_ratio(preventive_floor)),
-            Box::new(ToolResultPruningStage),
-            Box::new(HistoricalImageStrippingStage),
-        ]
-    };
-    PreflightPipeline::new(stages)
-        .with_min_pressure_ratio(preventive_floor)
+        registry.register(
+            FileOpSupersedeStage::default().with_min_pressure_ratio(cfg.preventive_floor()),
+        );
+        registry.register(ToolResultPruningStage);
+        registry.register(HistoricalImageStrippingStage);
+    }
+    registry
+        .into_pipeline()
+        .with_min_pressure_ratio(cfg.preventive_floor())
         .with_cache_stability(
             DEFAULT_CUT_QUANTUM,
             DEFAULT_MIN_SAVINGS_RATIO,
