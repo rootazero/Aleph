@@ -2294,7 +2294,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     );
     // Register session management handlers if markdown store initialized
     if let Some(ref store) = markdown_session_store {
-        register_session_management_handlers(&mut server, store, args.daemon);
+        register_session_management_handlers(&mut server, store, &session_store, args.daemon);
         // Install store for HTTP attachment route
         server.set_markdown_session_store(store.clone());
     }

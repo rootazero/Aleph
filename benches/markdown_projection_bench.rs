@@ -122,6 +122,9 @@ fn create_event_sequence(
             content: make_content("Here are the files in the current directory."),
             usage: None,
             at: chrono::Utc::now().timestamp(),
+            model: None,
+            model_provider: None,
+            model_generation: None,
         },
     ));
 
@@ -261,6 +264,9 @@ fn benchmark_projection_latency(c: &mut Criterion) {
                         ),
                         usage: None,
                         at: chrono::Utc::now().timestamp(),
+                        model: None,
+                        model_provider: None,
+                        model_generation: None,
                     },
                 );
 

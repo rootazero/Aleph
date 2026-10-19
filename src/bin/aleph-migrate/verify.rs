@@ -96,7 +96,7 @@ fn check_session_count(
     if let Some(orig_path) = original_db {
         let orig_conn = Connection::open(orig_path)?;
         report.session_count_original = Some(orig_conn.query_row(
-            "SELECT COUNT(*) FROM raw_memories WHERE source = 'session'",
+            "SELECT COUNT(DISTINCT session_id) FROM raw_memories WHERE source = 'session' AND session_id IS NOT NULL",
             [],
             |row| row.get(0),
         )?);
@@ -190,25 +190,39 @@ fn check_metadata_consistency(
             continue; // Already reported in check_session_files
         }
 
-        match fs::read_to_string(&metadata_path) {
-            Ok(content) => {
-                if let Err(e) = serde_json::from_str::<serde_json::Value>(&content) {
-                    report.errors += 1;
-                    report
-                        .invalid_metadata
-                        .push(format!("{}: invalid JSON - {}", session_id, e));
-
-                    if fix {
-                        regenerate_metadata(conn, &session_id, &metadata_path.parent().unwrap())?;
-                        report.fixes_applied += 1;
-                    }
-                }
+        let content = match fs::read_to_string(&metadata_path) {
+            Ok(content) => content,
+            Err(error) => {
+                report.errors += 1;
+                report.invalid_metadata.push(format!(
+                    "{}: cannot read metadata.json - {}",
+                    session_id, error
+                ));
+                continue;
             }
-            Err(e) => {
+        };
+        let metadata: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(metadata) => metadata,
+            Err(error) => {
                 report.errors += 1;
                 report
                     .invalid_metadata
-                    .push(format!("{}: cannot read metadata.json - {}", session_id, e));
+                    .push(format!("{}: invalid JSON - {}", session_id, error));
+                if fix {
+                    regenerate_metadata(conn, &session_id, metadata_path.parent().unwrap())?;
+                    report.fixes_applied += 1;
+                }
+                continue;
+            }
+        };
+        if let Err(message) = validate_metadata(&metadata, &session_id) {
+            report.errors += 1;
+            report
+                .invalid_metadata
+                .push(format!("{}: {}", session_id, message));
+            if fix {
+                regenerate_metadata(conn, &session_id, metadata_path.parent().unwrap())?;
+                report.fixes_applied += 1;
             }
         }
     }
@@ -216,6 +230,42 @@ fn check_metadata_consistency(
     Ok(())
 }
 
+fn validate_metadata(metadata: &serde_json::Value, session_id: &str) -> Result<()> {
+    let object = metadata
+        .as_object()
+        .context("metadata must be a JSON object")?;
+    for field in [
+        "session_id",
+        "agent_id",
+        "started_at",
+        "message_count",
+        "tool_call_count",
+        "attachment_count",
+    ] {
+        if !object.contains_key(field) {
+            anyhow::bail!("metadata is missing required field {field}");
+        }
+    }
+    if object.get("session_id").and_then(|v| v.as_str()) != Some(session_id) {
+        anyhow::bail!("metadata session_id does not match directory");
+    }
+    for field in ["session_id", "agent_id"] {
+        if object.get(field).and_then(|v| v.as_str()).is_none() {
+            anyhow::bail!("metadata field {field} must be a string");
+        }
+    }
+    for field in [
+        "started_at",
+        "message_count",
+        "tool_call_count",
+        "attachment_count",
+    ] {
+        if object.get(field).and_then(|v| v.as_i64()).is_none() {
+            anyhow::bail!("metadata field {field} must be an integer");
+        }
+    }
+    Ok(())
+}
 fn check_content_hashes(
     conn: &Connection,
     sessions_dir: &Path,
@@ -239,10 +289,12 @@ fn check_content_hashes(
         let computed_hash = compute_sha256(&content);
 
         if computed_hash != stored_hash {
+            report.errors += 1;
+            let stored_preview = stored_hash.get(..8).unwrap_or(&stored_hash);
             report.warnings.push(format!(
                 "{}: content hash mismatch (stored: {}, computed: {})",
                 session_id,
-                &stored_hash[..8],
+                stored_preview,
                 &computed_hash[..8]
             ));
 
@@ -268,10 +320,8 @@ fn check_attachments(
     // Every transformed session with attachment_count > 0 must have a
     // manifest. The manifest is the portable link between a session and the
     // content-addressed attachment row in metadata.db.
-    let migration_root = sessions_dir
-        .parent()
-        .and_then(Path::parent)
-        .context("sessions directory must be <root>/raw/sessions")?;
+    let migration_root = migration_root_for(sessions_dir)
+        .context("sessions directory must have a migration root")?;
     let mut referenced_hashes = HashSet::new();
 
     for entry in WalkDir::new(sessions_dir)
@@ -285,19 +335,32 @@ fn check_attachments(
         if !metadata_path.exists() {
             continue;
         }
-        let metadata: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(&metadata_path)
-                .with_context(|| format!("cannot read {}", metadata_path.display()))?,
-        )
-        .with_context(|| format!("invalid {}", metadata_path.display()))?;
+        let metadata: serde_json::Value = match fs::read_to_string(&metadata_path)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+        {
+            Some(metadata) => metadata,
+            None => continue, // Reported by check_metadata_consistency.
+        };
         let count = metadata["attachment_count"].as_i64().unwrap_or(0);
         let manifest_path = session_dir.join("attachments.json");
         if count == 0 {
             if manifest_path.exists() {
-                let manifest: Vec<AttachmentManifestEntry> = serde_json::from_str(
-                    &fs::read_to_string(&manifest_path)
-                        .with_context(|| format!("cannot read {}", manifest_path.display()))?,
-                )?;
+                let manifest: Vec<AttachmentManifestEntry> =
+                    match fs::read_to_string(&manifest_path)
+                        .ok()
+                        .and_then(|content| serde_json::from_str(&content).ok())
+                    {
+                        Some(manifest) => manifest,
+                        None => {
+                            report.errors += 1;
+                            report.missing_attachments.push(format!(
+                                "{}: invalid attachments.json",
+                                metadata["session_id"].as_str().unwrap_or("unknown")
+                            ));
+                            continue;
+                        }
+                    };
                 if !manifest.is_empty() {
                     report.errors += 1;
                     report.missing_attachments.push(format!(
@@ -320,11 +383,20 @@ fn check_attachments(
             continue;
         }
 
-        let manifest: Vec<AttachmentManifestEntry> = serde_json::from_str(
-            &fs::read_to_string(&manifest_path)
-                .with_context(|| format!("cannot read {}", manifest_path.display()))?,
-        )
-        .with_context(|| format!("invalid {}", manifest_path.display()))?;
+        let manifest: Vec<AttachmentManifestEntry> = match fs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+        {
+            Some(manifest) => manifest,
+            None => {
+                report.errors += 1;
+                report.missing_attachments.push(format!(
+                    "{}: invalid attachments.json",
+                    metadata["session_id"].as_str().unwrap_or("unknown")
+                ));
+                continue;
+            }
+        };
         if manifest.len() as i64 != count {
             report.errors += 1;
             report.missing_attachments.push(format!(
@@ -337,17 +409,66 @@ fn check_attachments(
 
         for attachment in manifest {
             referenced_hashes.insert(attachment.content_hash.clone());
-            let path = migration_root.join(&attachment.file_path);
-            if !path.is_file() {
+            let path = match resolve_manifest_path(migration_root, &attachment.file_path) {
+                Ok(path) => path,
+                Err(error) => {
+                    report.errors += 1;
+                    report.missing_attachments.push(format!(
+                        "{}: invalid attachment path {}: {}",
+                        metadata["session_id"].as_str().unwrap_or("unknown"),
+                        attachment.file_path,
+                        error
+                    ));
+                    continue;
+                }
+            };
+            let canonical_root = match fs::canonicalize(migration_root) {
+                Ok(root) => root,
+                Err(error) => {
+                    report.errors += 1;
+                    report.missing_attachments.push(format!(
+                        "{}: cannot resolve migration root: {}",
+                        metadata["session_id"].as_str().unwrap_or("unknown"),
+                        error
+                    ));
+                    continue;
+                }
+            };
+            let canonical_path = match fs::canonicalize(&path) {
+                Ok(path) => path,
+                Err(error) => {
+                    report.errors += 1;
+                    report.missing_attachments.push(format!(
+                        "{}: cannot resolve attachment {}: {}",
+                        metadata["session_id"].as_str().unwrap_or("unknown"),
+                        attachment.file_path,
+                        error
+                    ));
+                    continue;
+                }
+            };
+            if !canonical_path.starts_with(&canonical_root) {
                 report.errors += 1;
                 report.missing_attachments.push(format!(
-                    "{}: missing attachment file {}",
+                    "{}: attachment path resolves outside migration root: {}",
                     metadata["session_id"].as_str().unwrap_or("unknown"),
                     attachment.file_path
                 ));
                 continue;
             }
-            let bytes = fs::read(&path)?;
+            let bytes = match fs::read(&canonical_path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    report.errors += 1;
+                    report.missing_attachments.push(format!(
+                        "{}: cannot read attachment {}: {}",
+                        metadata["session_id"].as_str().unwrap_or("unknown"),
+                        attachment.file_path,
+                        error
+                    ));
+                    continue;
+                }
+            };
             let hash = compute_sha256_bytes(&bytes);
             if hash != attachment.content_hash {
                 report.errors += 1;
@@ -359,13 +480,25 @@ fn check_attachments(
                     hash
                 ));
             }
-            let indexed: Option<(String, i64)> = conn
+            let indexed: Option<(String, i64)> = match conn
                 .query_row(
                     "SELECT file_path, size_bytes FROM attachments WHERE content_hash = ?1",
                     [&attachment.content_hash],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
-                .optional()?;
+                .optional()
+            {
+                Ok(indexed) => indexed,
+                Err(error) => {
+                    report.errors += 1;
+                    report.missing_attachments.push(format!(
+                        "{}: cannot query attachment index: {}",
+                        metadata["session_id"].as_str().unwrap_or("unknown"),
+                        error
+                    ));
+                    continue;
+                }
+            };
             match indexed {
                 Some((indexed_path, indexed_size))
                     if indexed_path == attachment.file_path
@@ -391,10 +524,19 @@ fn check_attachments(
         }
     }
 
-    let attachments_dir = sessions_dir
+    let attachments_dir = if sessions_dir
         .parent()
-        .context("sessions directory has no raw parent")?
-        .join("attachments");
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        == Some("raw")
+    {
+        sessions_dir
+            .parent()
+            .context("sessions directory has no raw parent")?
+            .join("attachments")
+    } else {
+        migration_root.join("attachments")
+    };
     if attachments_dir.exists() {
         for entry in WalkDir::new(&attachments_dir)
             .into_iter()
@@ -416,6 +558,31 @@ fn check_attachments(
 struct AttachmentManifestEntry {
     content_hash: String,
     file_path: String,
+}
+
+fn migration_root_for(sessions_dir: &Path) -> Option<&Path> {
+    let parent = sessions_dir.parent()?;
+    if parent.file_name().and_then(|name| name.to_str()) == Some("raw") {
+        parent.parent()
+    } else {
+        Some(parent)
+    }
+}
+
+fn resolve_manifest_path(migration_root: &Path, file_path: &str) -> Result<PathBuf> {
+    let relative = Path::new(file_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        anyhow::bail!("attachment manifest path escapes migration root: {file_path}");
+    }
+    let path = migration_root.join(relative);
+    if !path.starts_with(migration_root) {
+        anyhow::bail!("attachment manifest path escapes migration root: {file_path}");
+    }
+    Ok(path)
 }
 
 fn check_fts5_index(conn: &Connection, report: &mut VerificationReport) -> Result<()> {

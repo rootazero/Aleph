@@ -28,9 +28,25 @@ pub fn run_transform(
 
     log::info!("  Found {} sessions", export_data.sessions.len());
 
-    // Create output directories
+    let migration_root = migration_root(&output_dir)?;
     fs::create_dir_all(&output_dir).context("Failed to create sessions directory")?;
     fs::create_dir_all(&attachments_dir).context("Failed to create attachments directory")?;
+    let canonical_root =
+        fs::canonicalize(&migration_root).context("Failed to resolve migration root")?;
+    let canonical_attachments =
+        fs::canonicalize(&attachments_dir).context("Failed to resolve attachments directory")?;
+    if !canonical_attachments.starts_with(&canonical_root) {
+        anyhow::bail!(
+            "attachments directory resolves outside migration root {}",
+            migration_root.display()
+        );
+    }
+    if !attachments_dir.starts_with(&migration_root) {
+        anyhow::bail!(
+            "attachments directory must be inside migration root {}",
+            migration_root.display()
+        );
+    };
 
     // Configure thread pool
     rayon::ThreadPoolBuilder::new()
@@ -49,7 +65,13 @@ pub fn run_transform(
             if idx % 10 == 0 {
                 log::info!("  Progress: {}/{}", idx, export_data.sessions.len());
             }
-            transform_session(session, &output_dir, &attachments_dir, overwrite)
+            transform_session(
+                session,
+                &output_dir,
+                &attachments_dir,
+                &migration_root,
+                overwrite,
+            )
         })
         .collect();
 
@@ -81,38 +103,78 @@ fn transform_session(
     session: &ExportSession,
     output_dir: &Path,
     attachments_dir: &Path,
+    migration_root: &Path,
     overwrite: bool,
 ) -> Result<()> {
+    validate_session_id(&session.session_id)?;
     let session_dir = output_dir.join(&session.session_id);
+    let existed = session_dir.exists();
 
-    // Check if session exists
-    if session_dir.exists() && !overwrite {
-        anyhow::bail!(
-            "Session directory already exists: {}. Use --overwrite to replace.",
-            session_dir.display()
-        );
+    let result = (|| {
+        // Check if session exists
+        if existed && !overwrite {
+            anyhow::bail!(
+                "Session directory already exists: {}. Use --overwrite to replace.",
+                session_dir.display()
+            );
+        }
+
+        // Create session directory
+        fs::create_dir_all(&session_dir)?;
+
+        // Write transcript.md
+        write_transcript(&session_dir, session)?;
+
+        // Write tool_outputs.md
+        write_tool_outputs(&session_dir, session)?;
+
+        // Write metadata.json
+        write_metadata(&session_dir, session)?;
+
+        // Store attachments and persist a manifest so the indexer can reconstruct
+        // attachment rows without reopening the legacy database.
+        let mut attachment_manifest = Vec::with_capacity(session.attachments.len());
+        for attachment in &session.attachments {
+            attachment_manifest.push(store_attachment(
+                attachment,
+                attachments_dir,
+                migration_root,
+            )?);
+        }
+        write_attachment_manifest(&session_dir, &attachment_manifest)?;
+        Ok(())
+    })();
+
+    if result.is_err() && !existed {
+        let _ = fs::remove_dir_all(&session_dir);
     }
+    result
+}
 
-    // Create session directory
-    fs::create_dir_all(&session_dir)?;
+fn migration_root(output_dir: &Path) -> Result<PathBuf> {
+    let parent = output_dir
+        .parent()
+        .context("Output sessions directory must have a parent migration root")?;
+    let root = if parent.file_name().and_then(|name| name.to_str()) == Some("raw") {
+        parent
+            .parent()
+            .map(Path::to_path_buf)
+            .context("raw sessions directory must have a migration root")?
+    } else {
+        parent.to_path_buf()
+    };
+    Ok(root)
+}
 
-    // Write transcript.md
-    write_transcript(&session_dir, session)?;
-
-    // Write tool_outputs.md
-    write_tool_outputs(&session_dir, session)?;
-
-    // Write metadata.json
-    write_metadata(&session_dir, session)?;
-
-    // Store attachments and persist a manifest so the indexer can reconstruct
-    // attachment rows without reopening the legacy database.
-    let mut attachment_manifest = Vec::with_capacity(session.attachments.len());
-    for attachment in &session.attachments {
-        attachment_manifest.push(store_attachment(attachment, attachments_dir)?);
+fn validate_session_id(session_id: &str) -> Result<()> {
+    if session_id.is_empty()
+        || session_id.contains('/')
+        || session_id.contains('\\')
+        || Path::new(session_id).is_absolute()
+        || Path::new(session_id).components().count() != 1
+    {
+        anyhow::bail!("Invalid session_id for filesystem path: {session_id:?}");
     }
-    write_attachment_manifest(&session_dir, &attachment_manifest)?;
-
     Ok(())
 }
 
@@ -246,15 +308,29 @@ fn write_metadata(session_dir: &Path, session: &ExportSession) -> Result<()> {
 fn store_attachment(
     attachment: &crate::export::ExportAttachment,
     attachments_dir: &Path,
+    migration_root: &Path,
 ) -> Result<TransformedAttachment> {
     // Decode base64 if present
     let data = match &attachment.data_base64 {
-        Some(b64) => base64::decode(b64).context("Failed to decode attachment data")?,
+        Some(b64) => {
+            use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+            BASE64
+                .decode(b64)
+                .context("Failed to decode attachment data")?
+        }
         None => anyhow::bail!(
             "Attachment {} has no exported bytes",
             attachment.attachment_id
         ),
     };
+    if attachment.size_bytes >= 0 && attachment.size_bytes != data.len() as i64 {
+        anyhow::bail!(
+            "Attachment {} size mismatch: export says {}, decoded {}",
+            attachment.attachment_id,
+            attachment.size_bytes,
+            data.len()
+        );
+    }
 
     // Compute SHA256 hash
     use sha2::{Digest, Sha256};
@@ -283,7 +359,18 @@ fn store_attachment(
     let target_path = target_dir.join(&filename);
 
     // Skip if already exists (content-addressed deduplication)
-    if !target_path.exists() {
+    if target_path.exists() {
+        let canonical_target =
+            fs::canonicalize(&target_path).context("Failed to resolve existing attachment file")?;
+        let canonical_attachments =
+            fs::canonicalize(attachments_dir).context("Failed to resolve attachments directory")?;
+        if !canonical_target.starts_with(&canonical_attachments) {
+            anyhow::bail!(
+                "existing attachment path resolves outside attachments directory: {}",
+                target_path.display()
+            );
+        }
+    } else {
         fs::write(&target_path, &data).context("Failed to write attachment file")?;
     }
 
@@ -292,7 +379,11 @@ fn store_attachment(
         content_hash: hash,
         mime_type: attachment.mime_type.clone(),
         size_bytes: data.len() as i64,
-        file_path: format!("raw/attachments/{subdir}/{filename}"),
+        file_path: target_path
+            .strip_prefix(migration_root)
+            .context("Attachment path escaped migration root")?
+            .to_string_lossy()
+            .replace('\\', "/"),
     })
 }
 

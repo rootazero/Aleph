@@ -5,7 +5,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use std::collections::HashSet;
+
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::router::SessionKey;
+use crate::gateway::session_store::types::SessionFilter;
+use crate::gateway::session_store::SessionStore;
+use crate::gateway::visibility;
 use crate::memory::store::markdown::MarkdownSessionStore;
 use crate::memory::store::session::{
     CompressionStatus, RawSessionStore, SessionMetadata, SessionSearchResult,
@@ -62,6 +68,7 @@ pub struct ListSessionsResponse {
 pub async fn handle_list(
     request: JsonRpcRequest,
     store: Arc<MarkdownSessionStore>,
+    gateway_store: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let params: ListSessionsParams = match request.params {
         Some(p) => match serde_json::from_value(p) {
@@ -88,7 +95,27 @@ pub async fn handle_list(
     // Enforce max limit
     let limit = params.limit.min(100);
 
-    // List sessions
+    // Resolve the owner-visible session keys before applying pagination. The
+    // Markdown projection owns agent/workspace filters, while the Gateway
+    // session store is authoritative for authenticated user ownership.
+    let visible_ids = match visible_session_ids(&gateway_store, params.agent_id.as_deref()).await {
+        Ok(ids) => ids,
+        Err(message) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, message),
+    };
+
+    // A scoped caller needs all candidates before filtering; otherwise a
+    // foreign row can consume a page slot and distort `has_more`.
+    let fetch_limit = if visible_ids.is_some() {
+        i64::MAX as usize
+    } else {
+        limit + 1
+    };
+    let fetch_offset = if visible_ids.is_some() {
+        0
+    } else {
+        params.offset
+    };
+
     let sessions = match store
         .list_sessions(
             params.agent_id.as_deref(),
@@ -96,8 +123,8 @@ pub async fn handle_list(
             params.start_date,
             params.end_date,
             params.compression_status.as_deref(),
-            limit + 1, // Fetch one extra to determine has_more
-            params.offset,
+            fetch_limit,
+            fetch_offset,
         )
         .await
     {
@@ -111,9 +138,31 @@ pub async fn handle_list(
         }
     };
 
-    let has_more = sessions.len() > limit;
-    let sessions: Vec<_> = sessions.into_iter().take(limit).collect();
-    let total = sessions.len();
+    let sessions: Vec<_> = sessions
+        .into_iter()
+        .filter(|session| {
+            visible_ids
+                .as_ref()
+                .is_none_or(|ids| ids.contains(&session.session_id))
+        })
+        .collect();
+    let total_visible = sessions.len();
+    let page_start = if visible_ids.is_some() {
+        params.offset.min(total_visible)
+    } else {
+        0
+    };
+    let has_more = if visible_ids.is_some() {
+        total_visible.saturating_sub(page_start) > limit
+    } else {
+        sessions.len() > limit
+    };
+    let sessions: Vec<_> = sessions.into_iter().skip(page_start).take(limit).collect();
+    let total = if visible_ids.is_some() {
+        total_visible
+    } else {
+        sessions.len()
+    };
 
     JsonRpcResponse::success(
         request.id,
@@ -125,9 +174,169 @@ pub async fn handle_list(
     )
 }
 
-// ============================================================================
-// memory.sessions.get
-// ============================================================================
+fn session_id_is_safe(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && !session_id.contains('/')
+        && !session_id.contains('\\')
+        && !std::path::Path::new(session_id).is_absolute()
+        && std::path::Path::new(session_id).components().count() == 1
+}
+
+///
+/// `None` means an internal/in-process caller with no caller identity and
+/// preserves the existing unrestricted behavior. A scoped caller receives a
+/// concrete allow-list from the authoritative Gateway session store.
+async fn visible_session_ids(
+    gateway_store: &Arc<dyn SessionStore>,
+    agent_id: Option<&str>,
+) -> Result<Option<HashSet<String>>, String> {
+    let Some(owner) = visibility::visible_owner_filter() else {
+        return Ok(None);
+    };
+
+    let sessions = gateway_store
+        .list_sessions(SessionFilter {
+            agent_id: agent_id.map(str::to_string),
+            owner_visible_to: Some(owner),
+            ..SessionFilter::default()
+        })
+        .await
+        .map_err(|e| format!("Failed to resolve session ownership: {e}"))?;
+
+    Ok(Some(
+        sessions.into_iter().map(|session| session.key).collect(),
+    ))
+}
+
+/// Check an addressed raw session against the authoritative Gateway owner.
+async fn raw_session_visible(
+    gateway_store: &Arc<dyn SessionStore>,
+    session_id: &str,
+    raw_metadata: &SessionMetadata,
+) -> bool {
+    if visibility::visible_owner_filter().is_none() {
+        return true;
+    }
+
+    let Some(key) = SessionKey::parse(session_id) else {
+        return false;
+    };
+    if key.agent_id() != raw_metadata.agent_id {
+        return false;
+    }
+
+    match gateway_store.get_metadata(&key).await {
+        Ok(Some(metadata)) => visibility::session_visible(&metadata),
+        Ok(None) | Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::caller_identity::CALLER_USER;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::scope::{with_scope, ScopeAttribution};
+    use tempfile::TempDir;
+
+    fn test_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .expect("session store"),
+        )
+    }
+
+    async fn seed(store: Arc<dyn SessionStore>, agent: &str, owner: &str) -> String {
+        let key = SessionKey::main(agent);
+        let id = key.to_key_string();
+        with_scope(
+            Some(ScopeAttribution::personal(owner)),
+            store.get_or_create(&key),
+        )
+        .await
+        .expect("seed session");
+        id
+    }
+
+    #[tokio::test]
+    async fn visible_session_ids_enforce_owner_and_preserve_internal_access() {
+        let temp = TempDir::new().expect("temp dir");
+        let store = test_store(&temp);
+        let alice_id = seed(store.clone(), "alice", "u-alice").await;
+        let bob_id = seed(store.clone(), "bob", "u-bob").await;
+
+        let alice_visible = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                visible_session_ids(&store, None),
+            )
+            .await
+            .expect("owner filter")
+            .expect("scoped caller");
+        assert_eq!(alice_visible, HashSet::from([alice_id.clone()]));
+        assert!(!alice_visible.contains(&bob_id));
+
+        let internal_visible = visible_session_ids(&store, None)
+            .await
+            .expect("internal access");
+        assert!(internal_visible.is_none());
+
+        let raw_metadata = SessionMetadata {
+            session_id: alice_id.clone(),
+            agent_id: "alice".to_string(),
+            workspace_id: Some("workspace-a".to_string()),
+            started_at: 0,
+            ended_at: None,
+            duration_seconds: None,
+            transcript_path: "raw/sessions/alice/transcript.md".into(),
+            tool_outputs_path: "raw/sessions/alice/tool_outputs.md".into(),
+            message_count: 0,
+            tool_call_count: 0,
+            content_hash: None,
+            compression_status: CompressionStatus::Pending,
+            tags: Vec::new(),
+        };
+        assert!(
+            CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    raw_session_visible(&store, &alice_id, &raw_metadata),
+                )
+                .await
+        );
+        assert!(
+            !CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    raw_session_visible(&store, &alice_id, &raw_metadata),
+                )
+                .await
+        );
+        let wrong_agent = SessionMetadata {
+            agent_id: "bob".to_string(),
+            ..raw_metadata
+        };
+        assert!(
+            !CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    raw_session_visible(&store, &alice_id, &wrong_agent),
+                )
+                .await
+        );
+    }
+
+    #[test]
+    fn session_ids_reject_path_traversal() {
+        assert!(session_id_is_safe("agent:main:main"));
+        assert!(!session_id_is_safe("../outside"));
+        assert!(!session_id_is_safe("/tmp/outside"));
+        assert!(!session_id_is_safe("agent/main"));
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct GetSessionParams {
@@ -153,6 +362,7 @@ pub struct GetSessionResponse {
 pub async fn handle_get(
     request: JsonRpcRequest,
     store: Arc<MarkdownSessionStore>,
+    gateway_store: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let params: GetSessionParams = match request.params {
         Some(p) => match serde_json::from_value(p) {
@@ -174,6 +384,10 @@ pub async fn handle_get(
         }
     };
 
+    if !session_id_is_safe(&params.session_id) {
+        return visibility::not_found_response(request.id);
+    }
+
     // Get metadata
     let metadata = match store.get_session_metadata(&params.session_id).await {
         Ok(metadata) => metadata,
@@ -185,6 +399,10 @@ pub async fn handle_get(
             )
         }
     };
+
+    if !raw_session_visible(&gateway_store, &params.session_id, &metadata).await {
+        return visibility::not_found_response(request.id);
+    }
 
     // Read transcript
     let transcript = match store.read_transcript(&params.session_id).await {
@@ -275,6 +493,7 @@ pub struct EnrichedSearchResult {
 pub async fn handle_search(
     request: JsonRpcRequest,
     store: Arc<MarkdownSessionStore>,
+    gateway_store: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let params: SearchSessionsParams = match request.params {
         Some(p) => match serde_json::from_value(p) {
@@ -318,11 +537,17 @@ pub async fn handle_search(
     let mut enriched_results = Vec::new();
     for search_result in search_results {
         match store.get_session_metadata(&search_result.session_id).await {
-            Ok(metadata) => {
+            Ok(metadata)
+                if raw_session_visible(&gateway_store, &search_result.session_id, &metadata)
+                    .await =>
+            {
                 enriched_results.push(EnrichedSearchResult {
                     search_result,
                     metadata,
                 });
+            }
+            Ok(_) => {
+                // Foreign sessions are indistinguishable from absent rows.
             }
             Err(e) => {
                 tracing::warn!(
@@ -365,6 +590,7 @@ pub struct UpdateCompressionParams {
 pub async fn handle_update_compression(
     request: JsonRpcRequest,
     store: Arc<MarkdownSessionStore>,
+    gateway_store: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let params: UpdateCompressionParams = match request.params {
         Some(p) => match serde_json::from_value(p) {
@@ -386,8 +612,24 @@ pub async fn handle_update_compression(
         }
     };
 
-    let status = CompressionStatus::from_str(&params.status);
+    if !session_id_is_safe(&params.session_id) {
+        return visibility::not_found_response(request.id);
+    }
+    let metadata = match store.get_session_metadata(&params.session_id).await {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to get session metadata: {}", e),
+            )
+        }
+    };
+    if !raw_session_visible(&gateway_store, &params.session_id, &metadata).await {
+        return visibility::not_found_response(request.id);
+    }
 
+    let status = CompressionStatus::from_str(&params.status);
     match store
         .update_compression_status(&params.session_id, status)
         .await

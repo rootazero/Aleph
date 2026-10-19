@@ -4,7 +4,7 @@
 //! background projection to Markdown file generation.
 
 use alephcore::memory::store::markdown::MarkdownSessionStore;
-use alephcore::memory::store::session::{CompressionStatus, MessageRole, RawSessionStore};
+use alephcore::memory::store::session::{CompressionStatus, RawSessionStore};
 use alephcore::session::events::{
     MessageContent, RunOutcome, SessionEvent, SessionEventRecord, ToolOutput, ToolOutputMetadata,
     TurnTrigger,
@@ -107,6 +107,9 @@ async fn test_markdown_session_lifecycle() {
             content: make_content("Of course! I'd be happy to help. What do you need?"),
             usage: None,
             at: chrono::Utc::now().timestamp(),
+            model: None,
+            model_provider: None,
+            model_generation: None,
         },
     );
     projector.on_appended(&session_id, &assistant_msg_1);
@@ -177,6 +180,9 @@ async fn test_markdown_session_lifecycle() {
             content: make_content("Here are the files in the current directory:\n- . (current directory)\n- .. (parent directory)"),
             usage: None,
             at: chrono::Utc::now().timestamp(),
+            model: None,
+            model_provider: None,
+            model_generation: None,
         },
     );
     projector.on_appended(&session_id, &assistant_msg_2);

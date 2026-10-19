@@ -635,18 +635,41 @@ impl RawSessionStore for MarkdownSessionStore {
             .map_err(|e| AlephError::other(format!("Failed to query attachment: {}", e)))?
         }; // Drop db lock here
 
-        // Resolve portable paths stored in SQLite relative to ~/.aleph.
-        let resolved_path = if Path::new(&file_path).is_absolute() {
-            PathBuf::from(&file_path)
-        } else {
-            self.base_dir.join(&file_path)
-        };
+        // Attachment paths are portable relative paths under ~/.aleph. Reject
+        // legacy absolute paths and traversal before resolving any file.
+        let relative_path = Path::new(&file_path);
+        if relative_path.is_absolute()
+            || relative_path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(AlephError::other(format!(
+                "Attachment path escapes storage root: {}",
+                file_path
+            )));
+        }
+        let resolved_path = self.base_dir.join(relative_path);
+        let canonical_base = fs::canonicalize(&self.base_dir).await.map_err(|e| {
+            AlephError::other(format!("Failed to resolve attachment storage root: {}", e))
+        })?;
+        let canonical_path = fs::canonicalize(&resolved_path).await.map_err(|e| {
+            AlephError::other(format!(
+                "Failed to resolve attachment {:?}: {}",
+                resolved_path, e
+            ))
+        })?;
+        if !canonical_path.starts_with(&canonical_base) {
+            return Err(AlephError::other(format!(
+                "Attachment path escapes storage root: {}",
+                file_path
+            )));
+        }
 
-        // Now read file without holding the lock
-        let data = fs::read(&resolved_path).await.map_err(|e| {
+        // Now read file without holding the lock.
+        let data = fs::read(&canonical_path).await.map_err(|e| {
             AlephError::other(format!(
                 "Failed to read attachment {:?}: {}",
-                resolved_path, e
+                canonical_path, e
             ))
         })?;
 
