@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -151,6 +152,15 @@ fn index_single_session(conn: &Connection, session_path: &Path) -> Result<()> {
     let session_id = metadata["session_id"]
         .as_str()
         .context("Missing session_id")?;
+    if session_id.is_empty()
+        || session_id.contains('/')
+        || session_id.contains('\\')
+        || Path::new(session_id).is_absolute()
+        || Path::new(session_id).components().count() != 1
+        || session_path.file_name().and_then(|name| name.to_str()) != Some(session_id)
+    {
+        anyhow::bail!("metadata session_id does not match a safe session directory");
+    }
     let agent_id = metadata["agent_id"].as_str().context("Missing agent_id")?;
     let workspace_id = metadata["workspace_id"].as_str();
     let started_at = metadata["started_at"]
@@ -167,6 +177,17 @@ fn index_single_session(conn: &Connection, session_path: &Path) -> Result<()> {
     let message_count = metadata["message_count"].as_i64().unwrap_or(0);
     let tool_call_count = metadata["tool_call_count"].as_i64().unwrap_or(0);
     let attachment_count = metadata["attachment_count"].as_i64().unwrap_or(0);
+
+    let transcript_path = session_path.join("transcript.md");
+    let content_hash = if transcript_path.exists() {
+        let content =
+            fs::read_to_string(&transcript_path).context("Failed to read transcript.md")?;
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        Some(hex::encode(hasher.finalize()))
+    } else {
+        None
+    };
 
     let duration_sec = ended_at.map(|end| end - started_at);
     let now = chrono::Utc::now().timestamp();
@@ -189,8 +210,8 @@ fn index_single_session(conn: &Connection, session_path: &Path) -> Result<()> {
         "INSERT OR REPLACE INTO sessions (
             session_id, agent_id, workspace_id, started_at, ended_at, duration_sec,
             message_count, tool_call_count, attachment_count, compression_status,
-            tags, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            content_hash, tags, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         rusqlite::params![
             session_id,
             agent_id,
@@ -202,6 +223,7 @@ fn index_single_session(conn: &Connection, session_path: &Path) -> Result<()> {
             tool_call_count,
             attachment_count,
             compression_status,
+            content_hash,
             tags,
             now,
         ],
@@ -255,6 +277,7 @@ fn index_attachments(
     }
 
     for attachment in manifest {
+        validate_attachment_path(&attachment.file_path)?;
         conn.execute(
             "INSERT OR REPLACE INTO attachments
              (content_hash, mime_type, size_bytes, file_path, created_at)
@@ -267,6 +290,20 @@ fn index_attachments(
                 created_at,
             ],
         )?;
+    }
+    Ok(())
+}
+
+fn validate_attachment_path(file_path: &str) -> Result<()> {
+    let path = Path::new(file_path);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        anyhow::bail!(
+            "attachment path must be relative and stay inside migration root: {file_path}"
+        );
     }
     Ok(())
 }

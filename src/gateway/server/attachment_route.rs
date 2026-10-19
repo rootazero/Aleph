@@ -8,6 +8,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 
+use crate::gateway::router::SessionKey;
+use crate::gateway::session_store::SessionStore;
+use crate::gateway::visibility;
 use crate::memory::store::markdown::MarkdownSessionStore;
 use crate::memory::store::session::RawSessionStore;
 use crate::sync_primitives::Arc;
@@ -15,6 +18,7 @@ use crate::sync_primitives::Arc;
 /// State for the attachment route.
 pub struct AttachmentRouteState {
     pub store: Arc<MarkdownSessionStore>,
+    pub gateway_store: Arc<dyn SessionStore>,
 }
 
 /// The attachment download route, ready to merge into the gateway router.
@@ -47,6 +51,29 @@ async fn serve_attachment(
         )
             .into_response();
     };
+
+    // Reject traversal before touching either storage backend.
+    if session_id.is_empty()
+        || session_id.contains('/')
+        || session_id.contains('\\')
+        || std::path::Path::new(session_id).is_absolute()
+        || std::path::Path::new(session_id).components().count() != 1
+    {
+        return (StatusCode::NOT_FOUND, "Attachment not found").into_response();
+    }
+
+    if visibility::visible_owner_filter().is_some() {
+        let Some(key) = SessionKey::parse(session_id) else {
+            return (StatusCode::NOT_FOUND, "Attachment not found").into_response();
+        };
+        let visible = match state.gateway_store.get_metadata(&key).await {
+            Ok(Some(metadata)) => visibility::session_visible(&metadata),
+            Ok(None) | Err(_) => false,
+        };
+        if !visible {
+            return (StatusCode::NOT_FOUND, "Attachment not found").into_response();
+        }
+    }
 
     // Get attachment from store
     let attachment = match state.store.get_attachment(session_id, attachment_id).await {

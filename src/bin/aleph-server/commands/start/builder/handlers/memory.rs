@@ -468,6 +468,7 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
 pub(in crate::commands::start) fn register_session_management_handlers(
     server: &mut GatewayServer,
     session_store: &std::sync::Arc<alephcore::memory::store::markdown::MarkdownSessionStore>,
+    gateway_store: &std::sync::Arc<dyn alephcore::gateway::session_store::SessionStore>,
     daemon: bool,
 ) {
     use alephcore::gateway::handlers::memory::sessions;
@@ -476,25 +477,29 @@ pub(in crate::commands::start) fn register_session_management_handlers(
         server,
         "memory.sessions.list",
         sessions::handle_list,
-        session_store
+        session_store,
+        gateway_store
     );
     register_handler!(
         server,
         "memory.sessions.get",
         sessions::handle_get,
-        session_store
+        session_store,
+        gateway_store
     );
     register_handler!(
         server,
         "memory.sessions.search",
         sessions::handle_search,
-        session_store
+        session_store,
+        gateway_store
     );
     register_handler!(
         server,
         "memory.sessions.update_compression",
         sessions::handle_update_compression,
-        session_store
+        session_store,
+        gateway_store
     );
 
     if !daemon {

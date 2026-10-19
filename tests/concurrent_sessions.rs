@@ -4,7 +4,7 @@
 //! concurrent sessions without race conditions, data corruption, or cross-contamination.
 
 use alephcore::memory::store::markdown::MarkdownSessionStore;
-use alephcore::memory::store::session::{CompressionStatus, MessageRole, RawSessionStore};
+use alephcore::memory::store::session::{CompressionStatus, RawSessionStore};
 use alephcore::session::events::{
     MessageContent, RunOutcome, SessionEvent, SessionEventRecord, ToolOutput, ToolOutputMetadata,
     TurnTrigger,
@@ -170,6 +170,9 @@ async fn emit_session(
                 )),
                 usage: None,
                 at: chrono::Utc::now().timestamp(),
+                model: None,
+                model_provider: None,
+                model_generation: None,
             },
         );
         projector.on_appended(&session_id, &assistant_msg);

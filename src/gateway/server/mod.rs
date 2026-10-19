@@ -1034,6 +1034,10 @@ impl GatewayServer {
         let attachments = self.markdown_session_store.as_ref().map(|store| {
             attachment_route::attachment_routes(Arc::new(attachment_route::AttachmentRouteState {
                 store: store.clone(),
+                gateway_store: self
+                    .session_store
+                    .clone()
+                    .expect("session store must be installed before attachment routes"),
             }))
         });
 

@@ -49,7 +49,7 @@ pub use route::RouteView;
 pub use routing_rules::RoutingRulesView;
 pub use search::SearchView;
 pub use security::SecurityView;
-pub use sessions::{SearchBar, SessionDetail, TranscriptViewer};
+pub use sessions::{SearchBar, SessionDetail, SessionsView, TranscriptViewer};
 pub use skills::SkillsView;
 pub use workspaces::WorkspacesView;
 
