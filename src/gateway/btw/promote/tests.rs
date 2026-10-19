@@ -42,6 +42,9 @@ fn assistant(turn_id: TurnId, text: &str) -> SessionEvent {
         content: content(text),
         usage: None,
         at: 1,
+        model: None,
+        model_provider: None,
+        model_generation: None,
     }
 }
 
@@ -290,6 +293,9 @@ mod crossing {
                 content: text("X is the config loader."),
                 usage: None,
                 at: 0,
+                model: None,
+                model_provider: None,
+                model_generation: None,
             },
             SessionEvent::RunFinished {
                 run_id: "run-side".into(),

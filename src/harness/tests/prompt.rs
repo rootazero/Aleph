@@ -50,6 +50,9 @@ fn assistant_with_tool_use(tool_id: &str, tool_name: &str) -> SessionEventRecord
         },
         usage: None,
         at: now_ms(),
+        model: None,
+        model_provider: None,
+        model_generation: None,
     })
 }
 
@@ -370,6 +373,9 @@ fn assistant_turn(
         },
         usage: None,
         at: now_ms(),
+        model: None,
+        model_provider: None,
+        model_generation: None,
     })
 }
 

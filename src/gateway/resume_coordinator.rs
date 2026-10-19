@@ -570,10 +570,10 @@ pub(crate) enum SnapshotModel {
 /// `pinnable` is the published set of provider keys a pin can name
 /// ([`crate::providers::session_model_handle::pinnable_providers`]), passed in
 /// rather than read here so this stays a pure function with no global to
-/// install in a test. `None` means **no set was published**, which is
-/// "unvalidated", never "nothing is pinnable" — the same reading
-/// `select_model::refuse_unpinnable_provider` takes of the same handle, because
-/// one verb with two faces has to share its derivation (判据 #9).
+/// install in a test. `None` preserves the legacy recovery policy for a
+/// previously recorded pair; it does not authorize a new selection.
+/// New selections use `session_model_handle::resolve_selectable_model`,
+/// which refuses a missing model publication before any pin write.
 ///
 /// Lifecycle comes from [`crate::providers::model_catalog::lifecycle_for`] —
 /// the table `select_model`, the picker and the drift guard already read. A
@@ -1847,7 +1847,7 @@ impl ResumeCoordinator {
         // marker it restores decides whether this run may resume at all.
         let plan = plan_resume(
             reduction.open_run.as_ref(),
-            crate::providers::session_model_handle::pinnable_providers(),
+            crate::providers::session_model_handle::pinnable_providers().as_ref(),
             &|p| p.is_dir(),
         );
 

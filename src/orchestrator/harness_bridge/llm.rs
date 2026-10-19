@@ -54,6 +54,25 @@ pub(super) fn pick_llm(
     }
 }
 
+/// Wrap `fallback` (the result of [`pick_llm`] or the agent/brain resolution
+/// this run would otherwise use) with session-model resolution, so a
+/// `select_model` pick takes effect at the next request boundary rather than
+/// only at run construction.
+///
+/// `fallback` serves every request whose session has no selection;
+/// `named`/`default_provider` resolve qualified/unqualified picks (fail-closed
+/// when the selected provider is missing). The seam lives here so the bridge
+/// owns the construction contract without touching [`pick_llm`]'s precedence.
+#[allow(dead_code)] // wired by runner_impl (Task 3); exercised by the test below
+pub(super) fn with_session_model(
+    session_key: String,
+    fallback: Arc<dyn AiProvider>,
+    default_provider: Arc<dyn DefaultProviderHandle>,
+    named: Arc<HashMap<String, Arc<dyn AiProvider>>>,
+) -> Arc<dyn AiProvider> {
+    crate::providers::SessionModelProvider::new(session_key, fallback, default_provider, named)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +171,53 @@ mod tests {
         };
         let empty: HashMap<String, Arc<dyn AiProvider>> = HashMap::new();
         assert!(pick_llm(&brain, &default_handle(), &empty).is_err());
+    }
+
+    #[tokio::test]
+    async fn with_session_model_resolves_selection_at_request_boundary() {
+        let rec = Recorder::arc("openai");
+        let fallback = Recorder::arc("fallback");
+        let wrapped = with_session_model(
+            "llm-seam".to_string(),
+            fallback.clone(),
+            default_handle(),
+            Arc::new(named(rec.clone())),
+        );
+
+        // No selection — the fallback serves the caller's own model.
+        let msgs = [UnifiedMessage::user("hi")];
+        let payload = RequestPayload::new(&msgs).with_model(Some("caller-model".to_string()));
+        let _ = wrapped.process(payload).await.unwrap();
+        assert_eq!(
+            fallback
+                .seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_deref(),
+            Some("caller-model")
+        );
+
+        // A session pick reroutes the next request to the named provider.
+        crate::providers::session_model_handle::set_session_model(
+            "llm-seam",
+            Some("openai".to_string()),
+            "gpt-5".to_string(),
+        );
+        let _ = wrapped.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(
+            rec.seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_deref(),
+            Some("gpt-5")
+        );
+        assert_eq!(
+            wrapped.last_request_target(),
+            Some(crate::providers::ResolvedModelTarget {
+                provider: "openai".to_string(),
+                model: "gpt-5".to_string(),
+                generation: 1,
+            })
+        );
     }
 }

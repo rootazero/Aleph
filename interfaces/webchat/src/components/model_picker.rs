@@ -1,5 +1,5 @@
 //! Chat-window model picker — compact pill + popover for picking the
-//! per-turn provider/model.
+//! per-turn provider/model, with an explicit session action via `/model`.
 //!
 //! Architecture (openclaw parity, Rust port):
 //! 1. Pill button shows the *current selection* (or "Default" when none).
@@ -9,13 +9,16 @@
 //!    [`ModelOverride::Qualified`]. The composer reads this when sending,
 //!    so the daemon's run loop short-circuits its fallback chain.
 //! 4. The "Default" row clears the override — falls back to the agent's
-//!    configured model.
+//!    configured model. The separate Session button sends `/model` through the
+//!    existing chat path, and the new session pin takes effect at the next
+//!    provider request boundary.
 //!
 //! Differences from openclaw's `<select>`:
 //! * Catalog already arrives credential-filtered → the client-side pass is a
 //!   search box, not a usability check, and there is no second round-trip.
-//! * Selection persists in `ChatState` (memory-only for now); server-side
-//!   `preferred_model` row is a follow-up.
+//! * Per-turn selection persists in `ChatState` (memory-only for now).
+//!   The separate Session button sends `/model` through the existing chat path;
+//!   only the server's model-selection tool owns the persistent pin.
 //! * Each row carries a per-model link to the provider's homepage when
 //!   available — turns the picker into a low-friction discovery surface.
 //!
@@ -41,13 +44,16 @@ use leptos::task::spawn_local;
 
 use aleph_protocol::providers::search::filter_catalog;
 
+use crate::api::chat::ChatApi;
 use crate::api::providers::{CatalogEntry, CatalogView, ModelOverride, ProvidersApi, RosterModel};
 use crate::components::picker_nav::{
     publish_more_below, row_dom_id, scroll_row_into_view, step_highlight,
 };
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+use crate::state::sessions::SessionMap;
 use crate::views::chat::state::ChatState;
+use shared_ui_logic::state::session_dials_for_send;
 
 /// Namespace for this popover's row ids — see [`row_dom_id`].
 const LIST: &str = "model";
@@ -87,6 +93,15 @@ pub(crate) fn walk_targets(entries: &[CatalogEntry], query: &str) -> Vec<PickTar
     out
 }
 
+/// Format the existing slash syntax without interpreting the model id.
+///
+/// The slash dispatcher forwards `provider/model` verbatim to `select_model`.
+/// Nested aggregator ids must survive; provider resolution belongs to core.
+#[must_use]
+fn model_command(provider: &str, model: &str) -> String {
+    format!("/model {provider}/{model}")
+}
+
 /// Pill + dropdown for selecting the per-turn chat model.
 #[component]
 #[must_use]
@@ -94,6 +109,9 @@ pub fn ModelPicker() -> impl IntoView {
     let i18n = use_i18n();
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let sessions = expect_context::<SessionMap>();
+    let session_sending = RwSignal::new(false);
+    let session_notice: RwSignal<Option<String>> = RwSignal::new(None);
     let open = RwSignal::new(false);
     let entries: RwSignal<Vec<CatalogEntry>> = RwSignal::new(Vec::new());
     let loading = RwSignal::new(false);
@@ -128,10 +146,11 @@ pub fn ModelPicker() -> impl IntoView {
     // `select_model` pin, else nothing chosen at all.
     //
     // The middle arm is the one that was missing. A pin is per-session state
-    // the model itself sets (R8) and the run loop honours from the next run on,
+    // the model itself sets (R8) and the run loop honours from the next
+    // provider request boundary onward,
     // so a pill that only knew about its own per-turn override answered
     // "Default" for a conversation that was pinned — naming, of all the models
-    // available, the one that was not going to serve.
+    // available, the one that was not going to serve at its next request.
     let trigger_label = move || -> String {
         if let Some(mo) = chat.selected_model.get() {
             return match mo.provider() {
@@ -148,6 +167,68 @@ pub fn ModelPicker() -> impl IntoView {
         chat.selected_model
             .set(Some(ModelOverride::Qualified { provider, model }));
         open.set(false);
+    };
+
+    // A distinct action: never alter `selected_model` or optimistically write
+    // `session_model_pin`. The server's slash tool is the only pin writer.
+    let select_session = move |provider: String, model: String| {
+        if session_sending.get_untracked() || chat.team_id.get_untracked().is_some() {
+            return;
+        }
+        let Some(send_conv) = sessions.active_conv() else {
+            session_notice.set(Some("No active conversation / 无活动会话".to_string()));
+            return;
+        };
+        let command = model_command(&provider, &model);
+        let session_key = chat.session_key.get_untracked();
+        let agent_id = chat.agent_id.get_untracked();
+        let room_project_id = chat.room_project_id.get_untracked();
+        let project_root = if room_project_id.is_some() {
+            None
+        } else {
+            chat.active_project_root.get_untracked()
+        };
+        let dials = session_dials_for_send(session_key.is_some(), &chat.session_knobs());
+        session_sending.set(true);
+        session_notice.set(None);
+        spawn_local(async move {
+            // No attachments, voice flag or per-turn override on a control
+            // command. The existing per-turn selection remains untouched.
+            let result = ChatApi::send(
+                &dashboard,
+                &command,
+                session_key.as_deref(),
+                Vec::new(),
+                agent_id.as_deref(),
+                project_root.as_deref(),
+                room_project_id.as_deref(),
+                None,
+                &dials,
+                false,
+            )
+            .await;
+            match result {
+                Ok(resp) => {
+                    sessions.bind_run(&resp.run_id, send_conv, Some(&resp.session_key));
+                    // The user may have switched tabs while the RPC was in
+                    // flight. Backfill the captured conversation, not the new
+                    // foreground singleton (and never recreate a closed tab).
+                    if let Some(target) = sessions.chat_for(send_conv, chat) {
+                        target.session_key.set(Some(resp.session_key));
+                    }
+                    // ChatSendResponse has no selection generation or applied
+                    // selection. An accepted send is not proof of a changed
+                    // pin: leave its projection to the existing server feed.
+                    session_notice.set(Some(format!(
+                        "Sent / 已发送: {command} (selection unconfirmed / 选择未确认)"
+                    )));
+                }
+                Err(error) => {
+                    session_notice.set(Some(format!("Send failed / 发送失败: {command}: {error}")))
+                }
+            }
+            session_sending.set(false);
+        });
     };
 
     let clear_selection = move || {
@@ -279,6 +360,12 @@ pub fn ModelPicker() -> impl IntoView {
                 </svg>
             </button>
 
+            <Show when=move || session_notice.get().is_some()>
+                <p role="status" class="text-[10px] text-text-secondary max-w-80 break-words">
+                    {move || session_notice.get().unwrap_or_default()}
+                </p>
+            </Show>
+
             <Show when=move || open.get()>
                 <div node_ref=popover_ref
                     tabindex="-1"
@@ -380,6 +467,12 @@ pub fn ModelPicker() -> impl IntoView {
                                     flat += 1;
                                     let pid = provider_id.clone();
                                     let mid = model.id.clone();
+                                    let session_pid = pid.clone();
+                                    let session_mid = mid.clone();
+                                    let session_title = format!(
+                                        "Send / 发送 {} — session / 会话; per-turn override unchanged / 单次覆盖不变",
+                                        model_command(&session_pid, &session_mid)
+                                    );
                                     let pid_active = pid.clone();
                                     let mid_active = mid.clone();
                                     let is_active = move || {
@@ -407,7 +500,9 @@ pub fn ModelPicker() -> impl IntoView {
                                     };
                                     let display_text = model.id;
                                     rows.push(view! {
+                                        <div class="flex items-center gap-1">
                                         <button
+                                            type="button"
                                             id=row_dom_id(LIST, idx)
                                             title=title
                                             on:click=move |_| select_entry(pid.clone(), mid.clone())
@@ -431,6 +526,28 @@ pub fn ModelPicker() -> impl IntoView {
                                                 </span>
                                             })}
                                         </button>
+                                        <button
+                                            type="button"
+                                            title=session_title
+                                            aria-label=format!("Session / 会话: {}", model_command(&session_pid, &session_mid))
+                                            disabled=move || session_sending.get()
+                                                || chat.team_id.get().is_some()
+                                                || sessions.active.get().is_none()
+                                            // Let native Enter/Space activate THIS
+                                            // button, not the popover's per-turn
+                                            // keyboard commit handler.
+                                            on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                                if matches!(ev.key().as_str(), "Enter" | " ") {
+                                                    ev.stop_propagation();
+                                                }
+                                            }
+                                            on:click=move |_| select_session(session_pid.clone(), session_mid.clone())
+                                            class="shrink-0 px-1.5 py-1 rounded-md text-[10px] border border-border
+                                                   text-text-secondary hover:bg-surface-sunken disabled:opacity-40"
+                                        >
+                                            "Session / 会话"
+                                        </button>
+                                        </div>
                                     }.into_any());
                                 }
                                 groups.push(view! {
@@ -493,6 +610,19 @@ mod tests {
             .map(|m| RosterModel::new(*m, ModelSource::PresetFallback))
             .collect();
         e
+    }
+
+    #[test]
+    fn model_command_payload_is_the_existing_qualified_slash_form() {
+        assert_eq!(model_command("openai", "gpt-4o"), "/model openai/gpt-4o");
+        assert_eq!(
+            model_command("openrouter", "anthropic/claude-sonnet-4"),
+            "/model openrouter/anthropic/claude-sonnet-4"
+        );
+        assert_eq!(
+            model_command("custom-provider", "vendor/model:free"),
+            "/model custom-provider/vendor/model:free"
+        );
     }
 
     fn model(provider: &str, model: &str) -> PickTarget {

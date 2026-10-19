@@ -164,71 +164,134 @@ impl HarnessRunner for AgentHarnessRunner {
         //      (`chat.send.model_override`) or the `[voice]` low-TTFT pin. The
         //      most recent deliberate choice, so it outranks everything below;
         //      it is per-TURN, so nothing about it is remembered afterwards.
-        //      Until this arm existed the pick reached the vision-capability
-        //      check and the `ModelResolved` banner and stopped there — the
-        //      turn was served by (1)/(2)/(3) while the UI reported otherwise;
-        //   1. a `select_model` pick recorded for this session (A layer, R8) —
-        //      keyed by the canonical `SessionKey` the tool wrote under;
+        //      It is stamped directly via `ModelOverrideProvider` and BYPASSES
+        //      the live session wrapper below — a session `select_model` pick
+        //      must never shadow it.
+        //   1. a live `select_model` pick recorded for this session (A layer,
+        //      R8), read at every request boundary via `with_session_model`.
+        //      Keyed by the canonical `SessionKey` the tool wrote under.
         //   2. the agent's own configured pin (`provider_hint` + `model_hint`)
-        //      — gives a markdown agent's declared model teeth on main runs,
-        //      matching how `subagent_spawner` already stamps it for spawns;
-        //   3. otherwise the flow's `BrainRef` preset via `pick_llm`.
+        //      — resolved into the session wrapper's *fallback*, so a live
+        //      session pick outranks it but it still beats the flow preset.
+        //   3. otherwise the flow's `BrainRef` preset via `pick_llm`, also a
+        //      fallback under the session wrapper.
         //
-        // (1)/(2) resolve a *base provider* then stamp the model onto it via the
+        // (0)/(2) resolve a *base provider* then stamp the model onto it via the
         // shared `ModelOverrideProvider`. The base is, in turn:
         //   * the named pin chain for `provider_opt` when it names a configured
         //     provider (`named_providers`, wired from the route-shaped pin +
         //     fall-through `FailoverProvider`s), so the directive still gets
         //     failover, circuit-breaking and `[route]`-mode tier gating; else
-        //   * the global default chain.
-        // Either way the base is a `FailoverProvider`, and its primary slot now
-        // honours the stamped model (see `failover.rs` model-list resolution) —
-        // so the explicitly chosen model actually reaches the wire instead of
-        // being shadowed by that provider's static catalog. (3) is byte-identical
-        // to before — directive-less requests send `model: None`, which the
-        // failover primary ignores, walking its catalog as usual.
+        //   * the global default chain — for a provider-less pin, and for an
+        //     agent hint whose provider no longer exists. An explicit TURN pin
+        //     naming an unconfigured provider is an error instead (see the two
+        //     resolvers below), never this fallback.
+        // The session wrapper (`with_session_model`) wraps ONLY the no-explicit-
+        // override fallback (agent hint or brain): it re-reads the live session
+        // selection at each request boundary, so a `select_model` change takes
+        // effect on the next Think/Act call rather than only at run construction.
         let session_pref_key = SessionKey::from_key_string(&session_key)
             // rust-doctor-disable-next-line excessive-clone
             .map_or_else(|| session_key.clone(), |s| s.to_key_string());
-        let model_directive: Option<(Option<String>, String)> = effective_model_directive(
-            turn_model,
-            crate::providers::session_model_handle::get_session_model(&session_pref_key),
-            self.agent_registry
-                .get(&spec.agent)
-                .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m))),
-        );
-        // An unresolvable provider pin falls back to the default chain — but the
-        // *attribution* must fall back with it. `select_model` now refuses an
-        // unknown key outright, so this is reachable only via an agent's
-        // `provider_hint` naming a provider that has since been deleted; leaving
-        // the original name in `routing_directive` would price the run against a
-        // provider that never served a token and write that pair into the
-        // routing-experience store the model later reads back as verified.
-        let model_directive = model_directive.map(|(provider_opt, model)| {
-            let resolved = provider_opt.filter(|p| {
-                let known = self.named_providers.contains_key(p);
-                if !known {
-                    tracing::warn!(
-                        provider = %p,
-                        "model directive names an unconfigured provider; using the default chain",
-                    );
-                }
-                known
-            });
-            (resolved, model)
-        });
+        // (0) the explicit per-request override — bypasses the session wrapper.
+        let turn_directive: Option<(Option<String>, String)> = turn_model
+            .map(|pref| {
+                crate::providers::session_model_handle::resolve_selectable_model(
+                    pref.provider.as_deref(),
+                    &pref.model,
+                )
+                .map(|resolved| (resolved.provider, resolved.model))
+                .map_err(|rejection| FlowError::InvalidConfig(rejection.to_string()))
+            })
+            .transpose()?;
+        // (2) the agent's declared pin — the session wrapper's fallback.
+        let agent_hint: Option<(Option<String>, String)> = self
+            .agent_registry
+            .get(&spec.agent)
+            .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m)));
+        // The two directive sources do NOT share a failure policy:
+        //   * the explicit per-turn pin is a live user action — a provider it
+        //     names that is not configured is a hard error, never a silent
+        //     degrade to the default chain (the run would serve a model the
+        //     operator did not pick);
+        //   * an agent's `provider_hint` is stale config, not a live choice —
+        //     `select_model` refuses unknown keys outright, so an unknown hint
+        //     is only reachable via a provider deleted after the agent was
+        //     written. Keep the conversation alive (warn + default chain) but
+        //     drop the pin from the *attribution* with it: leaving the original
+        //     name in `routing_directive` would price the run against a
+        //     provider that never served a token and write that pair into the
+        //     routing-experience store the model later reads back as verified.
+        let turn_directive =
+            resolve_turn_directive(turn_directive, |p| self.named_providers.contains_key(p))?;
+        let agent_hint =
+            resolve_agent_hint_directive(agent_hint, |p| self.named_providers.contains_key(p));
+        // The only FIXED directive for routing/attribution: the turn override.
+        // Session selection, agent hint and brain resolve through the live
+        // wrapper, so the run-level snapshot reads the wrapper's serving hints.
         // rust-doctor-disable-next-line excessive-clone
-        let routing_directive = model_directive.clone();
-        let llm = match model_directive {
+        let routing_directive = turn_directive.clone();
+        let llm: Arc<dyn crate::providers::AiProvider> = match turn_directive {
             Some((provider_opt, model)) => {
-                let base = provider_opt
-                    .as_ref()
-                    .and_then(|p| self.named_providers.get(p).cloned())
-                    .unwrap_or_else(|| self.default_provider.current());
+                // A named provider was validated above, so the only remaining
+                // base here is the explicit known provider or (for a
+                // provider-less `Raw { model }` pin) the default chain.
+                let base = match provider_opt.as_ref() {
+                    Some(p) => self
+                        .named_providers
+                        .get(p)
+                        .cloned()
+                        .ok_or_else(|| FlowError::ProviderUnavailable(p.clone()))?,
+                    None => self.default_provider.current(),
+                };
                 Arc::new(crate::providers::ModelOverrideProvider::new(base, model))
                     as Arc<dyn crate::providers::AiProvider>
             }
-            None => llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?,
+            None => {
+                let fallback: Arc<dyn crate::providers::AiProvider> = match agent_hint {
+                    Some((provider_opt, model)) => {
+                        let base = provider_opt
+                            .as_ref()
+                            .and_then(|p| self.named_providers.get(p).cloned())
+                            .unwrap_or_else(|| self.default_provider.current());
+                        Arc::new(crate::providers::ModelOverrideProvider::new(base, model))
+                            as Arc<dyn crate::providers::AiProvider>
+                    }
+                    None => {
+                        match llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers) {
+                            Ok(provider) => provider,
+                            Err(error)
+                                if crate::providers::session_model_handle::get_session_model_snapshot(
+                                    &session_pref_key,
+                                )
+                                .pref
+                                .is_some() =>
+                            {
+                                // A live session selection outranks a stale or
+                                // unavailable flow fallback. Keep construction
+                                // alive so SessionModelProvider can resolve the
+                                // selected target at the request boundary; if
+                                // that target is also gone, it fails closed
+                                // there instead of silently serving the flow.
+                                tracing::warn!(
+                                    error = %error,
+                                    "flow fallback unavailable; deferring to live session model selection"
+                                );
+                                self.default_provider.current()
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                };
+                llm::with_session_model(
+                    // rust-doctor-disable-next-line excessive-clone
+                    session_pref_key.clone(),
+                    fallback,
+                    self.default_provider.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
+                    Arc::new(self.named_providers.clone()),
+                )
+            }
         };
         // Step 3-MoA: a session MoA activation supersedes the directive/brain
         // pick — the MoaProvider facade fans advisors out and lets the
@@ -392,10 +455,12 @@ impl HarnessRunner for AgentHarnessRunner {
         ));
 
         // Frozen attribution: the EXACT (provider, model) this run resolved.
-        // model_directive already folds the select_model session pick and the agent
-        // model_hint (with its provider_hint); the dynamic pick_llm(brain) path uses
-        // BrainRef::Strict's pinned model when present, else "(dynamic)" (genuinely
-        // unresolved at run-start — never the meaningless wrapper name "failover").
+        // Only the explicit per-request override (`turn_directive`) is fixed here;
+        // the session `select_model` pick, the agent `model_hint`, and the brain
+        // preset all resolve through the live session wrapper, so the run-level
+        // serving facts read the wrapper's hints below ("(dynamic)" — genuinely
+        // unresolved until the chain answers, never the meaningless wrapper name
+        // "failover").
         // ④ crash-recovery snapshot of the model half, taken here because the
         // directive is consumed by the match below. Post-validation: the
         // unconfigured-provider filter above has already run, so this is the
@@ -407,20 +472,13 @@ impl HarnessRunner for AgentHarnessRunner {
         let (routing_model_id, routing_provider_id): (String, Option<String>) =
             match routing_directive {
                 Some((provider_opt, model)) => (model, provider_opt),
-                None => match &spec.brain {
-                    crate::orchestrator::flow_spec::BrainRef::Strict {
-                        model: Some(m),
-                        provider: p,
-                        // rust-doctor-disable-next-line excessive-clone
-                    } => (m.clone(), Some(p.clone())),
-                    _ => ("(dynamic)".to_string(), None),
-                },
+                None => ("(dynamic)".to_string(), None),
             };
 
         // Model id that keys per-model lookups (context-gauge window + cost
-        // estimate). `routing_model_id` already folds the session
-        // `select_model` pick, the agent's `model_hint`, and the brain's
-        // strict pin; the genuinely dynamic path asks the live provider chain
+        // estimate). `routing_model_id` is the fixed turn directive when one
+        // exists; every other route (session pick, agent hint, brain) is
+        // "dynamic" and asks the live provider chain (the session wrapper)
         // which model it would serve (`serving_model_hint`, delegated through
         // Metering → Failover → primary), falling back to the provider name
         // only when even that is unknown. Resolved ONCE here — pre-loop — so
@@ -1487,12 +1545,12 @@ impl HarnessRunner for AgentHarnessRunner {
             .await
             .unwrap_or_default();
         //    Reasoning is counted as the provider the next turn would use
-        //    sends it: `run` resolves a pinned provider through
-        //    `effective_model_directive` → `named_providers`, else the default
-        //    chain — the same resolution here, so a DeepSeek-pinned session
-        //    under an Anthropic default counts DeepSeek's reasoning_content.
-        let pinned_provider = effective_model_directive(
-            None,
+        //    sends it: `run` resolves a pinned provider through the live
+        //    session selection (or the agent hint) → `named_providers`, else
+        //    the default chain — the same resolution here, so a DeepSeek-pinned
+        //    session under an Anthropic default counts DeepSeek's
+        //    reasoning_content.
+        let pinned_provider = session_or_agent_directive(
             crate::providers::session_model_handle::get_session_model(&canonical_key),
             self.agent_registry
                 .get(&agent_id)
@@ -1599,28 +1657,78 @@ pub(crate) fn seeded_calibration_for_model(model: &str) -> Option<f64> {
     calibration_seed_for_model(&CALIBRATION_CARRYOVER, model)
 }
 
-/// The one place that says which model directive wins.
+/// The explicit per-turn pin — the chat composer's `chat.send.model_override`
+/// or the `[voice]` low-TTFT pin. The highest-priority directive, applied
+/// directly (it bypasses the session wrapper in `run`).
 ///
-/// Three sources want to name the model for a run, and they are ranked by how
-/// recent and how deliberate the choice was:
+/// Fail-closed on an unconfigured provider: this is a deliberate live choice,
+/// so serving the default chain instead would silently run a different model
+/// than the one picked. `None` (`no provider half`) is passed through
+/// untouched, as is the caller's `None` (no explicit pick this turn).
+fn resolve_turn_directive(
+    directive: Option<(Option<String>, String)>,
+    is_configured: impl Fn(&str) -> bool,
+) -> Result<Option<(Option<String>, String)>, FlowError> {
+    match directive {
+        None => Ok(None),
+        Some((None, model)) => Ok(Some((None, model))),
+        Some((Some(provider), model)) => {
+            if is_configured(&provider) {
+                Ok(Some((Some(provider), model)))
+            } else {
+                Err(FlowError::ProviderUnavailable(provider))
+            }
+        }
+    }
+}
+
+/// The agent's declared `provider_hint` + `model_hint` — the session wrapper's
+/// *fallback* (the live `select_model` pick outranks it).
 ///
-/// 1. `turn` — this turn's explicit pick (chat-window picker / `[voice]` pin).
-///    A human just chose it for this message; nothing may outrank it;
-/// 2. `session` — the sticky `select_model` pick the model itself made earlier
-///    in this conversation (R8);
-/// 3. `agent_hint` — the agent's declared `provider_hint` + `model_hint`.
+/// Fail-soft on an unconfigured provider: warn, drop the provider half so the
+/// default chain serves the run, and keep the model half. Dropping it here is
+/// also what keeps the run's attribution honest — a pin that was not honoured
+/// must not be recorded as if it had been.
+fn resolve_agent_hint_directive(
+    directive: Option<(Option<String>, String)>,
+    is_configured: impl Fn(&str) -> bool,
+) -> Option<(Option<String>, String)> {
+    directive.map(|(provider_opt, model)| {
+        let resolved = provider_opt.filter(|p| {
+            let known = is_configured(p);
+            if !known {
+                tracing::warn!(
+                    provider = %p,
+                    "agent model hint names an unconfigured provider; using the default chain",
+                );
+            }
+            known
+        });
+        (resolved, model)
+    })
+}
+
+/// The session-or-agent half of the model-directive precedence, now that the
+/// live session selection is a WRAPPER rather than a folded construction-time
+/// pin.
 ///
-/// `None` from all three means "no directive": `pick_llm` resolves the flow's
+/// The explicit per-request `turn` override bypasses the session wrapper
+/// entirely (see `run`), so it does not appear here. What remains is the
+/// ranking the wrapper enforces at each request boundary:
+///
+/// 1. `session` — the sticky `select_model` pick the model itself made earlier
+///    in this conversation (R8); read live, so it outranks the agent hint;
+/// 2. `agent_hint` — the agent's declared `provider_hint` + `model_hint`,
+///    resolved into the wrapper's *fallback*.
+///
+/// `None` from both means "no directive": `pick_llm` resolves the flow's
 /// `BrainRef` and the failover primary walks its own catalog, exactly as it did
 /// before any of this existed.
-fn effective_model_directive(
-    turn: Option<crate::providers::session_model_handle::SessionModelPref>,
+fn session_or_agent_directive(
     session: Option<crate::providers::session_model_handle::SessionModelPref>,
     agent_hint: Option<(Option<String>, String)>,
 ) -> Option<(Option<String>, String)> {
-    turn.or(session)
-        .map(|p| (p.provider, p.model))
-        .or(agent_hint)
+    session.map(|p| (p.provider, p.model)).or(agent_hint)
 }
 
 /// The provider key the run's cost estimate and `FlowOutcome.serving_provider`
@@ -1938,8 +2046,13 @@ mod acting_provider_tests {
 
 #[cfg(test)]
 mod model_directive_tests {
-    use super::effective_model_directive;
+    use super::{resolve_agent_hint_directive, resolve_turn_directive, session_or_agent_directive};
+    use crate::orchestrator::errors::FlowError;
     use crate::providers::session_model_handle::SessionModelPref;
+
+    fn known(p: &str) -> bool {
+        p == "kimi"
+    }
 
     fn pref(provider: Option<&str>, model: &str) -> SessionModelPref {
         SessionModelPref {
@@ -1948,24 +2061,13 @@ mod model_directive_tests {
         }
     }
 
+    /// The live session wrapper enforces this ranking at the request boundary:
+    /// the session `select_model` pick outranks the agent's declared hint.
+    /// (The explicit per-request `turn` override bypasses the wrapper entirely
+    /// in `run`, so it is not part of this function's input.)
     #[test]
-    fn a_turn_pick_outranks_the_session_pick_and_the_agent_hint() {
-        // The regression this ranking exists for: the chat-window picker's
-        // choice used to reach the vision check and the `ModelResolved` banner
-        // and stop there, so the turn ran on whatever (2)/(3) named while the
-        // UI announced the pick.
-        let out = effective_model_directive(
-            Some(pref(Some("openai"), "gpt-5")),
-            Some(pref(None, "claude-sonnet-5")),
-            Some((Some("kimi".into()), "kimi-k2".into())),
-        );
-        assert_eq!(out, Some((Some("openai".to_string()), "gpt-5".to_string())));
-    }
-
-    #[test]
-    fn the_session_pick_still_wins_when_no_turn_pick_is_present() {
-        let out = effective_model_directive(
-            None,
+    fn the_session_pick_outranks_the_agent_hint() {
+        let out = session_or_agent_directive(
             Some(pref(None, "claude-sonnet-5")),
             Some((Some("kimi".into()), "kimi-k2".into())),
         );
@@ -1973,21 +2075,66 @@ mod model_directive_tests {
     }
 
     #[test]
-    fn the_agent_hint_is_the_last_resort_and_absence_means_no_directive() {
+    fn the_agent_hint_is_the_fallback_and_absence_means_no_directive() {
         assert_eq!(
-            effective_model_directive(None, None, Some((Some("kimi".into()), "kimi-k2".into()))),
+            session_or_agent_directive(None, Some((Some("kimi".into()), "kimi-k2".into()))),
             Some((Some("kimi".to_string()), "kimi-k2".to_string()))
         );
         // Nothing declared → `pick_llm` / catalog walk, byte-identical to before.
-        assert_eq!(effective_model_directive(None, None, None), None);
+        assert_eq!(session_or_agent_directive(None, None), None);
     }
 
     #[test]
-    fn a_provider_less_turn_pick_pins_only_the_model() {
+    fn a_provider_less_session_pick_pins_only_the_model() {
         // `Raw { model }` from the picker: the model is stamped, the provider
         // chain stands (breaker + route-mode gating preserved).
-        let out = effective_model_directive(Some(pref(None, "gpt-5")), None, None);
+        let out = session_or_agent_directive(Some(pref(None, "gpt-5")), None);
         assert_eq!(out, Some((None, "gpt-5".to_string())));
+    }
+
+    /// The explicit turn pin is fail-closed: an unknown provider is an error,
+    /// NOT a silent degrade to the default chain (which would serve a model
+    /// the operator never picked).
+    #[test]
+    fn an_unknown_turn_provider_is_an_error_not_a_default_fallback() {
+        let err = resolve_turn_directive(Some((Some("ghost".into()), "m".into())), known)
+            .expect_err("unknown explicit turn provider must fail closed");
+        match err {
+            FlowError::ProviderUnavailable(p) => assert_eq!(p, "ghost"),
+            other => panic!("expected ProviderUnavailable, got {other:?}"),
+        }
+    }
+
+    /// Known provider and provider-less (`Raw { model }`) turn pins pass
+    /// through byte-identical, and an absent pin stays absent (no directive).
+    #[test]
+    fn turn_pins_pass_through_when_known_or_provider_less() {
+        assert_eq!(
+            resolve_turn_directive(Some((Some("kimi".into()), "kimi-k2".into())), known)
+                .expect("known provider"),
+            Some((Some("kimi".to_string()), "kimi-k2".to_string()))
+        );
+        assert_eq!(
+            resolve_turn_directive(Some((None, "gpt-5".into())), known).expect("no provider half"),
+            Some((None, "gpt-5".to_string()))
+        );
+        assert_eq!(resolve_turn_directive(None, known).expect("no pin"), None);
+    }
+
+    /// The agent hint keeps the fail-soft policy: an unknown provider is
+    /// dropped (default chain serves the run) and the model half is retained.
+    /// The two paths therefore diverge on the SAME input.
+    #[test]
+    fn an_unknown_agent_hint_provider_falls_back_to_the_default_chain() {
+        assert_eq!(
+            resolve_agent_hint_directive(Some((Some("ghost".into()), "m".into())), known),
+            Some((None, "m".to_string()))
+        );
+        assert_eq!(
+            resolve_agent_hint_directive(Some((Some("kimi".into()), "kimi-k2".into())), known),
+            Some((Some("kimi".to_string()), "kimi-k2".to_string()))
+        );
+        assert_eq!(resolve_agent_hint_directive(None, known), None);
     }
 }
 

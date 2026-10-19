@@ -47,3 +47,19 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 - **载体是 `RunRequest.model_override`**，它从不写回会话行——所以崩溃之后用户新调的 `select_model` 仍然从**下一条消息**起生效，正是 `select_model` 打印给模型的那句承诺。
 - **没有快照的 marker 计入 `ResumeReport.unsnapshotted`**（envelope 出现之前写下的 marker，以及 `RunStarted` 追加失败的那种 run）。它们照旧按今天的会话/全局值恢复——数出来，而不是假装不存在。
 - **MoA 预设不持久化**（裁定 A5）：恢复的 run 不重建崩溃时的 MoA 组合。
+
+## 模型热切换语义（Model Hot-Switch，2026-10，Phase M）
+
+**SessionModelProvider 每次 `process` / `execute_streaming_dyn` 请求边界读取 `SessionModelSnapshot`**（含 `model` + `model_provider`），该快照在本次请求内 immutable；切换在下一次请求边界才生效，in-flight 请求不受影响。
+
+**generation monotonic / conditional durable persistence**：`generation` 单调递增；pin 变更写入带 generation 前置条件的 durable store，失败 fail-closed 回滚。普通 `sessions.patch` **明确禁止写入 model pin 键**（`knob_validators` 拦截），仅 `select_model` 工具拥有写权限。
+
+**runner 模型选择优先级**：显式 turn override（Panel pill / `[voice]` 钉 → `FlowRequest.model_directive`）→ session `select_model` pin → agent `model_hint` → `BrainRef` preset。每层是前一层的 fallback。
+
+**per-call provenance**：每条 `AssistantMessage` 可携带可选 per-call `model` / `provider` / `generation` provenance，支撑 trace 与成本归因。
+
+**TUI `/model` 和 webchat session picker 都走 gateway `/model` 到 `select_model`**；per-turn picker（Panel 模型 pill / `[voice]` 钉）走独立 `FlowRequest.model_directive` 路径，两者分开。
+
+**selectable roster 在 startup / provider reload 时发布**；unknown / ambiguous / unauthenticated / unsupported 模型 id 在 `select_model` 层**拒绝并保留旧 pin**，不做静默接受或 fallback 到未知 id。
+
+SessionModelProvider reads `SessionModelSnapshot` at each request boundary; the snapshot is immutable within that request, switch takes effect next request. `generation` monotonic + conditional durable persistence; stale or conflicting writes cannot overwrite a newer generation. Ordinary `sessions.patch` rejects model pin keys; only `select_model` may write them. Runner precedence: explicit turn override → session pin → agent hint → `BrainRef` preset. `AssistantMessage` carries optional per-call provenance. TUI `/model` and webchat picker both route to `select_model`; per-turn picker is separate. Roster published at startup/reload; unknown/ambiguous/unauthenticated/unsupported IDs are rejected with old pin preserved.

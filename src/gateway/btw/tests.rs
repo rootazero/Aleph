@@ -208,6 +208,9 @@ mod seeding {
                 content: content(text),
                 usage: None,
                 at: 0,
+                model: None,
+                model_provider: None,
+                model_generation: None,
             },
         )
         .await;

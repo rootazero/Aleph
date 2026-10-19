@@ -18,7 +18,9 @@ use crate::harness::TraceSink;
 use crate::providers::adapter::{ProviderResponse, RequestPayload, TokenUsage};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::session_moa_handle::SessionMoaPref;
-use crate::providers::{AiProvider, DeltaSink, MeteringProvider, ModelOverrideProvider};
+use crate::providers::{
+    AiProvider, DeltaSink, MeteringProvider, ModelOverrideProvider, ResolvedModelTarget,
+};
 use crate::sync_primitives::{Arc, Mutex};
 
 use super::advisor_health::AdvisorHealth;
@@ -640,6 +642,12 @@ impl AiProvider for MoaProvider {
 
     fn serving_provider_hint(&self) -> Option<Cow<'_, str>> {
         self.aggregator.serving_provider_hint()
+    }
+
+    /// The aggregator is the acting model; forward whatever target proof its
+    /// inner chain can offer (the facade knows no generation of its own).
+    fn last_request_target(&self) -> Option<ResolvedModelTarget> {
+        self.aggregator.last_request_target()
     }
 
     /// The aggregator is the call that carries the conversation's reasoning;

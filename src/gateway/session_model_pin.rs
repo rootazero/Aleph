@@ -46,6 +46,7 @@ impl StoreBackedPinSink {
     /// stores merge this bag key-by-key, so an omitted key means "leave it
     /// alone" — a clear that omitted them would leave the old pin on the row to
     /// be rehydrated by the next run, which is worse than never clearing.
+    #[cfg(test)]
     fn patch_for(pref: Option<&SessionModelPref>) -> SessionPatch {
         Self::patch_for_at_generation(pref, 0)
     }
@@ -71,7 +72,29 @@ impl StoreBackedPinSink {
     }
 }
 
+#[async_trait::async_trait]
 impl SessionPinSink for StoreBackedPinSink {
+    async fn persist_with_generation_durable(
+        &self,
+        session_key: &str,
+        pref: Option<&SessionModelPref>,
+        generation: u64,
+    ) -> Result<(), String> {
+        let key = SessionKey::from_key_string(session_key)
+            .ok_or_else(|| "session key is not durable".to_string())?;
+        let patch = Self::patch_for_at_generation(pref, generation);
+        let accepted = self
+            .store
+            .patch_session_if_model_pin_generation_newer(&key, &patch, generation)
+            .await
+            .map_err(|error| error.to_string())?;
+        if accepted {
+            Ok(())
+        } else {
+            Err("session row rejected or did not contain this generation".to_string())
+        }
+    }
+
     fn persist_with_generation(
         &self,
         session_key: &str,

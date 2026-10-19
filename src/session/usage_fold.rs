@@ -98,6 +98,9 @@ mod tests {
             },
             usage,
             at: 0,
+            model: None,
+            model_provider: None,
+            model_generation: None,
         }
     }
     fn tb(input: u32, output: u32) -> TokenBreakdown {

@@ -107,6 +107,10 @@ impl AiProvider for ThinkLevelProvider {
         self.inner.serving_provider_hint()
     }
 
+    fn last_request_target(&self) -> Option<crate::providers::ResolvedModelTarget> {
+        self.inner.last_request_target()
+    }
+
     fn reasoning_replay(
         &self,
         model: Option<&str>,
@@ -178,5 +182,42 @@ mod tests {
         let inner_name = inner.name().to_string();
         let provider = ThinkLevelProvider::new(inner, ThinkLevel::Low);
         assert_eq!(provider.name(), inner_name);
+    }
+
+    /// `last_request_target` forwards to the inner chain — the wrapper knows no
+    /// generation, so it must not invent one.
+    #[test]
+    fn forwards_last_request_target_to_inner() {
+        struct TargetInner;
+        impl AiProvider for TargetInner {
+            fn process<'a>(
+                &'a self,
+                _payload: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+                Box::pin(async { Ok(ProviderResponse::default()) })
+            }
+            fn name(&self) -> &str {
+                "inner"
+            }
+            fn color(&self) -> &str {
+                "#000000"
+            }
+            fn last_request_target(&self) -> Option<crate::providers::ResolvedModelTarget> {
+                Some(crate::providers::ResolvedModelTarget {
+                    provider: "openai".to_string(),
+                    model: "gpt-5".to_string(),
+                    generation: 9,
+                })
+            }
+        }
+        let provider = ThinkLevelProvider::new(Arc::new(TargetInner), ThinkLevel::Low);
+        assert_eq!(
+            provider.last_request_target(),
+            Some(crate::providers::ResolvedModelTarget {
+                provider: "openai".to_string(),
+                model: "gpt-5".to_string(),
+                generation: 9,
+            })
+        );
     }
 }

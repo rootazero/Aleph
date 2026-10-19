@@ -303,6 +303,9 @@ fn assistant_message_event_with_text(text: &str) -> SessionEvent {
         },
         usage: None,
         at: now_ms(),
+        model: None,
+        model_provider: None,
+        model_generation: None,
     }
 }
 

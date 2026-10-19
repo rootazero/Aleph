@@ -163,6 +163,9 @@ impl FastPathJournal {
                 // Slash-command reply — no LLM call, nothing billed.
                 usage: None,
                 at,
+                model: None,
+                model_provider: None,
+                model_generation: None,
             },
             SessionEvent::RunFinished {
                 run_id: self.run_id.clone(),

@@ -23,6 +23,49 @@ use crate::gateway::security::SharedTokenManager;
 use crate::providers::model_catalog::ModelSource;
 use crate::providers::probe::probe_provider_bounded;
 
+/// Refresh the selector's existing projection after a provider registry write.
+/// A failed reconstruction must not advertise the newly saved model roster on
+/// an older live instance. Unrelated writes must not re-enable that provider.
+async fn refresh_selectable_publication(
+    config: &Arc<RwLock<Config>>,
+    registry: Option<&Arc<crate::thinker::MultiProviderRegistry>>,
+    vault: Option<&Arc<SharedTokenManager>>,
+    changed: &str,
+    constructed: bool,
+) {
+    use crate::providers::session_model_handle as selection;
+    let Some(previous) = selection::selectable_models() else {
+        return;
+    };
+    let config = config.read().await;
+    let available: std::collections::BTreeSet<String> = registry
+        .map(|registry| registry.list_providers())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|name| {
+            if name == changed {
+                constructed
+            } else {
+                previous.provider_is_available(name)
+            }
+        })
+        .collect();
+    let authentication =
+        crate::routing::provider_availability_from_config(config.providers.clone(), vault.cloned());
+    selection::refresh_selectable_models(&config, &available, |name| {
+        matches!(
+            authentication(name),
+            crate::routing::recall::ProviderStatus::Available
+        ) || config
+            .providers
+            .get(name)
+            .is_some_and(|pc| pc.protocol() == "ollama")
+            || (name != changed
+                && available.contains(name)
+                && crate::gateway::available_provider_from_env() == Some(name))
+    });
+}
+
 // ============================================================================
 // List
 // ============================================================================
@@ -194,12 +237,14 @@ async fn update_provider_inner(
         }
     }
 
+    let mut constructed = false;
     // Hot-reload into the live registry so protocol/base_url/model changes take
     // effect on the very next prompt, matching create/delete/setDefault behavior.
     if let (Some(registry), Some((name, pc))) = (&multi_registry, registration) {
         match crate::providers::create_provider(&name, pc) {
             Ok(provider) => {
                 registry.register(name.clone(), provider);
+                constructed = true;
                 info!(name = %name, "Provider hot-reloaded in live registry");
             }
             Err(e) => error!(
@@ -208,6 +253,15 @@ async fn update_provider_inner(
             ),
         }
     }
+
+    refresh_selectable_publication(
+        &config,
+        multi_registry.as_ref(),
+        Some(&vault),
+        &params.name,
+        constructed,
+    )
+    .await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()
@@ -330,6 +384,7 @@ async fn create_provider_inner(
         }
     }
 
+    let mut constructed = false;
     // Hot-register into the live registry so the provider is usable and an
     // auto-derived failover fallback without a restart (mirrors set_default's
     // runtime swap). A build failure leaves the config saved — the provider
@@ -338,6 +393,7 @@ async fn create_provider_inner(
         match crate::providers::create_provider(&name, pc) {
             Ok(provider) => {
                 registry.register(name.clone(), provider);
+                constructed = true;
                 info!(name = %name, "Provider registered in live registry");
             }
             Err(e) => error!(
@@ -346,6 +402,15 @@ async fn create_provider_inner(
             ),
         }
     }
+
+    refresh_selectable_publication(
+        &config,
+        multi_registry.as_ref(),
+        Some(&vault),
+        &params.name,
+        constructed,
+    )
+    .await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()
@@ -466,6 +531,15 @@ async fn delete_provider_inner(
             tracing::warn!(provider = %params.name, error = %e, "Failed to remove provider from live registry");
         }
     }
+
+    refresh_selectable_publication(
+        &config,
+        multi_registry.as_ref(),
+        Some(&vault),
+        &params.name,
+        false,
+    )
+    .await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()
@@ -1035,6 +1109,7 @@ async fn set_default_provider_inner(
         }
     }
 
+    let mut constructed = false;
     // Hot-swap the runtime provider using MultiProviderRegistry
     if let (Some(registry), Some((name, provider_config))) =
         (multi_registry, provider_config_for_swap)
@@ -1042,6 +1117,7 @@ async fn set_default_provider_inner(
         match crate::providers::create_provider(&name, provider_config) {
             Ok(new_provider) => {
                 registry.register(name.clone(), new_provider);
+                constructed = true;
                 if let Err(e) = registry.set_default(&name) {
                     error!(name = %name, error = %e, "Failed to set default in multi-registry");
                 } else {
@@ -1066,6 +1142,8 @@ async fn set_default_provider_inner(
             }
         }
     }
+
+    refresh_selectable_publication(config, multi_registry, vault, &params.name, constructed).await;
 
     // Broadcast event
     let timestamp = std::time::SystemTime::now()

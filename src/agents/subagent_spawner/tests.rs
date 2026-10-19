@@ -1021,6 +1021,9 @@ mod tests {
                         },
                         usage: None,
                         at: now_ms(),
+                        model: None,
+                        model_provider: None,
+                        model_generation: None,
                     },
                 )
                 .await
@@ -1093,6 +1096,9 @@ mod tests {
                         },
                         usage: None,
                         at: now_ms(),
+                        model: None,
+                        model_provider: None,
+                        model_generation: None,
                     },
                 )
                 .await
@@ -1125,6 +1131,9 @@ mod tests {
                     },
                     usage: None,
                     at: now_ms(),
+                    model: None,
+                    model_provider: None,
+                    model_generation: None,
                 },
             )
             .await
@@ -1177,6 +1186,9 @@ mod tests {
                     },
                     usage: None,
                     at: now_ms(),
+                    model: None,
+                    model_provider: None,
+                    model_generation: None,
                 },
             )
             .await

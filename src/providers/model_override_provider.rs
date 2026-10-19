@@ -105,6 +105,12 @@ impl AiProvider for ModelOverrideProvider {
         self.inner.serving_provider_hint()
     }
 
+    /// This wrapper cannot prove a session target (it knows no generation);
+    /// forward to the inner chain, which may.
+    fn last_request_target(&self) -> Option<crate::providers::ResolvedModelTarget> {
+        self.inner.last_request_target()
+    }
+
     /// The pinned model reaches the wire on every call, so it is the model the
     /// policy resolves for — the caller's `model` is overridden just as the
     /// request's is.
@@ -242,5 +248,43 @@ mod tests {
         });
         let wrapped = ModelOverrideProvider::new(inner, "kimi-k2.7");
         assert_eq!(wrapped.serving_model_hint().as_deref(), Some("kimi-k2.7"));
+    }
+
+    /// `last_request_target` forwards to the inner chain — the wrapper knows no
+    /// generation, so it must not invent one (and must not report its own
+    /// stamped model as the serving target).
+    #[test]
+    fn forwards_last_request_target_to_inner() {
+        struct TargetInner;
+        impl AiProvider for TargetInner {
+            fn process<'a>(
+                &'a self,
+                _payload: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+                Box::pin(async { Ok(ProviderResponse::text_only("inner".to_string())) })
+            }
+            fn name(&self) -> &str {
+                "inner"
+            }
+            fn color(&self) -> &str {
+                "#000"
+            }
+            fn last_request_target(&self) -> Option<crate::providers::ResolvedModelTarget> {
+                Some(crate::providers::ResolvedModelTarget {
+                    provider: "openai".to_string(),
+                    model: "gpt-5".to_string(),
+                    generation: 7,
+                })
+            }
+        }
+        let wrapped = ModelOverrideProvider::new(Arc::new(TargetInner), "gpt-5");
+        assert_eq!(
+            wrapped.last_request_target(),
+            Some(crate::providers::ResolvedModelTarget {
+                provider: "openai".to_string(),
+                model: "gpt-5".to_string(),
+                generation: 7,
+            })
+        );
     }
 }

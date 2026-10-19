@@ -787,6 +787,9 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
             },
             usage: None,
             at: now_ms(),
+            model: None,
+            model_provider: None,
+            model_generation: None,
         },
         SessionEvent::ToolCallRequested {
             identity: None,
@@ -1967,6 +1970,9 @@ fn assistant_message_event(text: &str) -> SessionEvent {
         },
         usage: None,
         at: now_ms(),
+        model: None,
+        model_provider: None,
+        model_generation: None,
     }
 }
 
