@@ -995,8 +995,8 @@ async fn vision_request_skips_blind_model_in_candidate_list() {
 
 #[tokio::test]
 async fn pinned_request_model_overrides_primary_catalog() {
-    // The dynamic-routing directive (select_model / agent model_hint /
-    // BrainRef::Strict) reaches the failover as a stamped `payload.model`.
+    // The explicit model directive (`select_model`, a model/request override, or
+    // `BrainRef::Strict`) reaches the failover as a stamped `payload.model`.
     // On the primary/default slot it must win over the provider's static
     // catalog — otherwise the model the LLM explicitly chose is silently
     // discarded (the bug this guards).
@@ -1453,7 +1453,7 @@ async fn always_cloud_degrades_to_local_ungated() {
 // --- hard-guardrail: route mode gates an explicit cross-tier pin ---------
 
 /// Build a chain whose *primary* slot carries an explicit tier — the shape
-/// of a per-`provider_hint` / `select_model(provider=…)` override.
+/// of a per-provider-route / `select_model(provider=…)` override.
 fn build_pinned(
     primary: Arc<dyn AiProvider>,
     primary_tier: EndpointTier,
@@ -2879,7 +2879,7 @@ async fn a_payload_without_a_session_id_is_simply_not_witnessed() {
 
 #[tokio::test]
 async fn the_nested_chain_sentinel_never_names_itself_as_the_endpoint() {
-    // A `provider_hint` override chain is `[pin, <the whole global chain>]`.
+    // An explicit provider route is `[pin, <the whole global chain>]`.
     // The sentinel is not an endpoint; recording it would publish a provider
     // name the operator never configured. The inner chain speaks for itself.
     let session = "agent:witness-test:nested";
@@ -3005,7 +3005,7 @@ async fn a_paced_primary_that_is_skipped_still_reads_as_a_migration() {
 
 #[tokio::test]
 async fn a_pinned_chain_reports_the_pin_as_the_original() {
-    // A `provider_hint` override chain is `[pin, <the whole global chain>]`.
+    // An explicit provider route is `[pin, <the whole global chain>]`.
     // The outer walk cannot record the sentinel and the inner walk records its
     // OWN first attempt, so before the plan-time anchor a failed pin plus a
     // failed global primary published `original_model = global-primary` — an
@@ -3503,8 +3503,8 @@ async fn a_provider_whose_whole_ladder_404s_trips_after_three_walks() {
 async fn a_pinned_model_404_does_not_shed_the_provider() {
     // The negative half, and the reason the strike is derived from where the
     // model list was CHOSEN rather than from the 404 alone: a single model the
-    // caller named — a `select_model` pick, an agent `model_hint`, a
-    // `BrainRef::Strict` id, or plain typo — indicts that name, never the
+    // caller named — a `select_model` pick, an explicit model/request override,
+    // a `BrainRef::Strict` id, or plain typo — indicts that name, never the
     // endpoint. Shedding the provider would let one bad id take out a healthy
     // one for five minutes.
     let primary = ScriptProvider::err("anthropic", "HTTP 404 model not found");

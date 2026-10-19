@@ -70,11 +70,11 @@ pub(super) fn billed_tokens(usage: &crate::providers::adapter::TokenUsage) -> u6
 /// Which slot of the chain a candidate occupies.
 ///
 /// Only the walk's *model-list* resolution needs this, and it needs it to be
-/// exact: an explicitly pinned request model (a `select_model` pick, an agent
-/// `model_hint`, a `BrainRef::Strict` model — whatever `ModelOverrideProvider`
-/// stamped onto `payload.model`) belongs to the endpoint the caller actually
-/// chose, i.e. the primary slot. Stamping it onto a cross-provider fallback
-/// dials that fallback with a model id it does not serve.
+/// exact: an explicitly pinned request model (a `select_model` pick, an explicit
+/// model/request override, or a `BrainRef::Strict` model — whatever
+/// `ModelOverrideProvider` stamped onto `payload.model`) belongs to the endpoint
+/// the caller actually chose, i.e. the primary slot. Stamping it onto a
+/// cross-provider fallback dials that fallback with a model id it does not serve.
 ///
 /// This used to be inferred from `tier == EndpointTier::Unknown`, a proxy that
 /// was wrong in **both** directions:
@@ -161,9 +161,9 @@ impl CandidatePlan {
     /// same rule — so a walk whose head is the sentinel writes **nothing at
     /// either point**, and the chain nested behind it becomes the run's writer.
     ///
-    /// That head is reachable and the gap is real: a `provider_hint` pin builds
-    /// `[pin, NESTED_CHAIN_NODE]` carrying the pin's true tier, so a cloud pin
-    /// under `AlwaysLocal` with `allow_cloud_escalation = false` classifies the
+    /// That head is reachable and the gap is real: an explicit provider route
+    /// builds `[pin, NESTED_CHAIN_NODE]` carrying the pin's true tier, so a cloud
+    /// pin under `AlwaysLocal` with `allow_cloud_escalation = false` classifies the
     /// pin [`Skip`](crate::providers::route_policy::CandidateAction::Skip) and
     /// leaves the sentinel leading. The run
     /// is then reported as whatever the *global* chain set out for, not as the
@@ -434,9 +434,9 @@ pub struct FailoverProvider {
     /// Endpoint tier of the primary slot. `Unknown` (the default) is the
     /// operator's configured default — always allowed, so route mode only ever
     /// shapes the *fallbacks* around it. A *pinned* chain (an explicit
-    /// `select_model` / agent `provider_hint` override) sets this to the pinned
-    /// provider's real tier so a hard-guardrail route mode (`AlwaysLocal`) can
-    /// gate or skip an explicit cross-tier pin via the borrow-cloud approval —
+    /// `select_model` / provider route) sets this to the pinned provider's real
+    /// tier so a hard-guardrail route mode (`AlwaysLocal`) can gate or skip an
+    /// explicit cross-tier provider route via the borrow-cloud approval —
     /// the dynamic pick stops silently overriding the operator's policy.
     primary_tier: EndpointTier,
     /// Shared runtime load registry driving the load-balancing strategy. `None`
@@ -558,11 +558,10 @@ impl FailoverProvider {
     }
 
     /// Tag the primary slot with a concrete endpoint tier so a hard-guardrail
-    /// route mode can gate it. Used by `build_failover_chain` for the per-pin
-    /// override chains (an explicit `select_model` / agent `provider_hint`
-    /// target): the pinned provider's real tier makes `AlwaysLocal` route a
-    /// cloud pin through the borrow-cloud approval instead of silently allowing
-    /// it. The global default chain omits this — its primary stays `Unknown`
+    /// route mode can gate it. Used by `build_failover_chain` for the per-route
+    /// override chains (an explicit `select_model` / provider route target): the
+    /// pinned provider's real tier makes `AlwaysLocal` route a cloud pin through
+    /// the borrow-cloud approval instead of silently allowing it. The global default chain omits this — its primary stays `Unknown`
     /// (the operator's configured default is always allowed).
     #[must_use]
     pub const fn with_primary_tier(mut self, tier: EndpointTier) -> Self {
@@ -1246,8 +1245,8 @@ impl FailoverProvider {
             // The route witness's `session_id`, read once: the same
             // `metadata["session_id"]` the metering provider and the OpenAI
             // prompt-cache key already key on. Absent on every path that builds
-            // a payload without it (MoA advisor dials, non-gateway callers),
-            // which simply go unrecorded.
+            // a payload without it (non-gateway callers), which simply go
+            // unrecorded.
             let witness_session = metadata.as_ref().and_then(|m| m.get("session_id"));
             // Anchor the run on the endpoint this walk SET OUT FOR, before any
             // gate below can pass it over. Every cheap reason to skip a
@@ -1407,11 +1406,10 @@ impl FailoverProvider {
                 // Model-list resolution, in precedence:
                 //
                 // 1. An *explicitly pinned* request model on the PRIMARY slot.
-                //    This is the dynamic-routing model directive — a
-                //    `select_model` pick, an agent `model_hint`, or a
-                //    `BrainRef::Strict` model — that `ModelOverrideProvider`
-                //    stamped onto `payload.model`. It targets the endpoint the
-                //    caller chose, so it overrides that slot's static catalog
+                //    This is the explicit model directive — a `select_model` pick,
+                //    an explicit model/request override, or a `BrainRef::Strict` model —
+                //    that `ModelOverrideProvider` stamped onto `payload.model`. It
+                //    targets the endpoint the caller chose, so it overrides that slot's static catalog
                 //    walk (otherwise the catalog silently discarded the model
                 //    the LLM/agent explicitly chose). Still passed through the C
                 //    floor (fail-open) for consistency. The slot is carried
@@ -1885,9 +1883,9 @@ impl FailoverProvider {
                 //
                 // Read from the ladder's own provenance (`catalog_rungs`,
                 // derived where the list was chosen): a single model the CALLER
-                // named — a `select_model` pick, an agent `model_hint`, a
-                // `BrainRef::Strict` id, or simply a typo — indicts that name,
-                // never the endpoint, so it must not shed a healthy provider.
+                // named — a `select_model` pick, an explicit model/request
+                // override, a `BrainRef::Strict` id, or simply a typo — indicts
+                // that name, never the endpoint, so it must not shed a healthy provider.
                 //
                 // The equality is against what the CATALOG stated, never
                 // against the survivor set the request narrowed it to. Both

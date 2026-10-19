@@ -4,7 +4,7 @@
 //! everything the run needs from scratch instead of reusing the owner path:
 //!
 //! - provider: the Core default provider handle only (no per-session model
-//!   preference, no MoA handle, no named-brain lookup);
+//!   binding, no named-brain lookup);
 //! - prompt: the fixed [`PUBLIC_SYSTEM_PROMPT`], the caller's current text and
 //!   the isolated, already-decrypted `request.history` of *completed public
 //!   turns of this binding* (no owner history, memory, profile, project

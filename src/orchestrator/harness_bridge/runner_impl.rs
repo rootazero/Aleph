@@ -537,10 +537,9 @@ impl HarnessRunner for AgentHarnessRunner {
                 let budget = Arc::new(Mutex::new(budget_inner));
                 let mut compactor_inner = ContextCompactor::new(
                     // NOT `llm`: summarization is a side channel, not the
-                    // user's turn. With MoA armed this is the aggregator alone
-                    // — see `MoaProvider::acting_chain`. `with_cheap_provider`
-                    // below still wins when a cheap tier is configured; this
-                    // fixes the (very common) case where it is not.
+                    // user's turn. `with_cheap_provider` below still wins when
+                    // a cheap tier is configured; this fixes the common case
+                    // where it is not.
                     // rust-doctor-disable-next-line excessive-clone
                     side_channel_llm.clone(),
                     CompactorConfig {

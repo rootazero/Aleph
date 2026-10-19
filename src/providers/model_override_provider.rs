@@ -4,10 +4,10 @@
 //! forces a specific model onto every request, rather than threading the model
 //! through every call site. Two consumers share this wrapper:
 //!
-//! * sub-agent spawn — a per-spawn `model` / `model_hint` pins the child's model;
-//! * `pick_llm` — a `BrainRef::Strict { provider, model: Some(..) }` (the "pin"
-//!   form of an agent's configured model) stamps that model onto the picked
-//!   provider, closing the model half of provider/model pinning.
+//! * child execution — an explicit child model/request override pins the child's model;
+//! * `pick_llm` — a `BrainRef::Strict { provider, model: Some(..) }` (an explicit
+//!   model binding) stamps that model onto the picked provider, closing the model
+//!   half of provider/model pinning.
 //!
 //! All trait methods except `process` delegate verbatim to the inner provider,
 //! so wrapping is transparent to name/color/protocol/tool-support.
@@ -51,7 +51,7 @@ impl AiProvider for ModelOverrideProvider {
     /// Same stamp as `process`, then delegate — without this override the trait
     /// default collapses to `process` and replays the response in one batch, so
     /// live streaming would silently switch off for exactly the sessions that
-    /// have a `select_model` pick or an agent `model_hint`.
+    /// have a `select_model` pick or an explicit child model/request override.
     fn execute_streaming_dyn<'a>(
         &'a self,
         mut payload: RequestPayload<'a>,
