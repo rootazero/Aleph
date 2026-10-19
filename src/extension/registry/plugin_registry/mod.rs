@@ -4,13 +4,16 @@
 //! a comprehensive registry of all plugins and their registered components:
 //! tools, hooks, services, in-chat commands, skills, agents.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::types::{
-    AgentRegistration, HookRegistration, PluginDiagnostic, ServiceRegistration, SkillRegistration,
-    ToolRegistration,
+    AgentRegistration, ContextRegistration, HookRegistration, PluginDiagnostic,
+    ServiceRegistration, SkillRegistration, ToolRegistration,
 };
+use crate::extension::capability::ContextGrantAudit;
 use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
+
+mod context;
 
 /// Central registry for all plugin registrations.
 ///
@@ -45,6 +48,15 @@ pub struct PluginRegistry {
     /// Accumulated diagnostics from plugins
     diagnostics: Vec<PluginDiagnostic>,
 
+    /// Context capability registrations, keyed by one namespaced component key.
+    contexts: HashMap<String, ContextRegistration>,
+
+    /// Auditable grant validation decisions.
+    context_audit: VecDeque<ContextGrantAudit>,
+
+    /// Total audit decisions since construction/clear; retained records are bounded.
+    context_audit_total: u64,
+
     /// Plugin sources the load that built these rows could not read
     /// (`discovery::PluginDiscovery::unreadable`). Non-empty means the rows
     /// are INCOMPLETE: a plugin missing from them may be unknown rather than
@@ -70,6 +82,9 @@ impl PluginRegistry {
         self.services.clear();
         self.skills.clear();
         self.agents.clear();
+        self.contexts.clear();
+        self.context_audit.clear();
+        self.context_audit_total = 0;
         self.diagnostics.clear();
         self.unreadable_sources.clear();
     }
@@ -134,6 +149,9 @@ impl PluginRegistry {
     pub fn disable_plugin(&mut self, id: &str) -> bool {
         if let Some(plugin) = self.plugins.get_mut(id) {
             plugin.status = PluginStatus::Disabled;
+            self.contexts.retain(|_, registration| {
+                registration.plugin_id.is_empty() || registration.plugin_id != id
+            });
             true
         } else {
             false
@@ -454,8 +472,12 @@ impl PluginRegistry {
         // this plugin
         self.skills.retain(|_, s| s.plugin_id != plugin_id);
 
-        // Remove all agents from this plugin
+        // Remove all agents and context registrations owned by this plugin.
+        // An empty id denotes Core ownership, never a plugin cleanup target.
         self.agents.retain(|_, a| a.plugin_id != plugin_id);
+        self.contexts.retain(|_, registration| {
+            registration.plugin_id.is_empty() || registration.plugin_id != plugin_id
+        });
 
         // Remove all diagnostics from this plugin
         self.diagnostics
@@ -469,6 +491,7 @@ impl PluginRegistry {
     /// Get registry statistics.
     #[must_use]
     pub fn stats(&self) -> RegistryStats {
+        let context = self.context_stats();
         RegistryStats {
             plugins: self.plugins.len(),
             active_plugins: self.list_active_plugins().len(),
@@ -486,6 +509,8 @@ impl PluginRegistry {
                 .filter(|s| s.skill_type == crate::extension::types::SkillType::Skill)
                 .count(),
             agents: self.list_agents().len(),
+            contexts: context.registrations,
+            context_bundles: context.bundles,
             diagnostics: self.diagnostics.len(),
         }
     }
@@ -502,5 +527,7 @@ pub struct RegistryStats {
     pub commands: usize,
     pub skills: usize,
     pub agents: usize,
+    pub contexts: usize,
+    pub context_bundles: usize,
     pub diagnostics: usize,
 }

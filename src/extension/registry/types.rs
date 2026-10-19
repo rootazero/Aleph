@@ -5,12 +5,128 @@
 //!
 //! Plus diagnostics support for plugin health reporting.
 
+use crate::context::fabric::{ContextCapabilityDescriptor, ContextCapabilityMode, ContextPhase};
+use crate::extension::capability::{ContextGrant, ContextGrantError};
+use crate::extension::effects::PluginId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// JSON Schema type alias for tool parameter definitions
+/// A context capability registration owned by one plugin or by Aleph itself.
+#[derive(Debug, Clone)]
+pub struct ContextRegistration {
+    pub descriptor: ContextCapabilityDescriptor,
+    /// Stable owner identity, independent of any session grant lifetime.
+    pub(crate) plugin_id: String,
+    /// Host grants are keyed by authenticated invoking session. The descriptor
+    /// remains singular; grants never duplicate it or the registry key.
+    pub(crate) grants: HashMap<String, ContextGrant>,
+    /// Plugin lifecycle scope identifier. The mounted `EffectScope` remains
+    /// owned by the existing lifecycle manager; this is its stable handle.
+    pub lifecycle_handle: Option<PluginId>,
+    pub owner_mode: ContextCapabilityMode,
+    pub bundle_id: Option<String>,
+}
+
+impl ContextRegistration {
+    #[must_use]
+    pub fn new(
+        descriptor: ContextCapabilityDescriptor,
+        grant: ContextGrant,
+        lifecycle_handle: Option<PluginId>,
+    ) -> Self {
+        let owner_mode = descriptor.mode;
+        let bundle_id = descriptor.bundle_id.clone();
+        let session_id = grant.session_id.clone();
+        let mut grants = HashMap::new();
+        let plugin_id = grant.plugin_id.clone();
+        grants.insert(session_id, grant);
+        Self {
+            descriptor,
+            plugin_id,
+            grants,
+            lifecycle_handle,
+            owner_mode,
+            bundle_id,
+        }
+    }
+
+    pub fn grant_for_session(&self, session_id: &str) -> Option<&ContextGrant> {
+        self.grants.get(session_id)
+    }
+
+    #[must_use]
+    pub fn sessions(&self) -> impl Iterator<Item = &str> {
+        self.grants.keys().map(String::as_str)
+    }
+
+    pub(crate) fn supplied_grant(&self) -> Option<&ContextGrant> {
+        (self.grants.len() == 1)
+            .then(|| self.grants.values().next())
+            .flatten()
+    }
+
+    pub(crate) fn insert_grant(&mut self, grant: ContextGrant) {
+        self.grants.insert(grant.session_id.clone(), grant);
+    }
+
+    pub(crate) fn remove_session(&mut self, session_id: &str) -> Option<ContextGrant> {
+        self.grants.remove(session_id)
+    }
+
+    #[must_use]
+    pub fn key(&self) -> String {
+        namespaced_component_key(&self.plugin_id, &self.descriptor.id)
+    }
+}
+
+/// Registry-level context grant and ownership failure.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ContextRegistryError {
+    #[error("context registration key already exists: {0}")]
+    DuplicateKey(String),
+    #[error("context grant rejected: {0}")]
+    Grant(#[from] ContextGrantError),
+    #[error("context owner conflict for phase {phase:?}: {existing} and {incoming}")]
+    OwnerConflict {
+        phase: ContextPhase,
+        existing: String,
+        incoming: String,
+    },
+    #[error("bundle registration must contain at least one registration")]
+    EmptyBundle,
+    #[error("context registration is not found: {0}")]
+    NotFound(String),
+    #[error("context plugin is unavailable: {0}")]
+    PluginUnavailable(String),
+    #[error("context descriptor or ownership metadata differs for existing key: {0}")]
+    DescriptorMismatch(String),
+    #[error("context ownership metadata does not match the host grant")]
+    InvalidOwnership,
+    #[error("context observer cannot admit a transforming operation")]
+    ObserverTransformDenied,
+    #[error("context bundle must have one owner and one nonempty, unused bundle id")]
+    InvalidBundle,
+    #[error("context wire admission rejected: {0}")]
+    Contract(#[from] crate::context::fabric::ContextContractError),
+}
+
+/// Context registry observability counters.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContextStats {
+    pub registrations: usize,
+    pub builtin_registrations: usize,
+    pub plugin_registrations: usize,
+    pub bundles: usize,
+    pub active_plugins: usize,
+    /// Total decisions since construction/clear, including evicted entries.
+    pub audit_total_events: u64,
+    /// Number of retained recent audit records.
+    pub audit_retained_events: usize,
+}
+
+/// JSON Schema type alias
 pub type JsonSchema = JsonValue;
 
 /// The one derivation of `<plugin>:<component>` in the extension subsystem.
