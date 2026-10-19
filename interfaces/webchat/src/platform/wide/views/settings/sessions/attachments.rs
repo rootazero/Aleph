@@ -52,7 +52,7 @@ fn extract_filename(path: &str) -> String {
 #[component]
 #[must_use]
 pub fn AttachmentGallery(session_id: String) -> impl IntoView {
-    let _i18n = use_i18n();
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
 
     let attachments = RwSignal::new(Vec::<AttachmentInfo>::new());
@@ -74,7 +74,11 @@ pub fn AttachmentGallery(session_id: String) -> impl IntoView {
                     error.set(None);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to load attachments: {}", e)));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e.to_string(),
+                        |error| format!("Failed to load attachments: {error}"),
+                    )));
                 }
             }
             loading.set(false);

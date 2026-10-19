@@ -176,7 +176,9 @@ pub fn ModelPicker() -> impl IntoView {
             return;
         }
         let Some(send_conv) = sessions.active_conv() else {
-            session_notice.set(Some("No active conversation / 无活动会话".to_string()));
+            session_notice.set(Some(
+                t_string!(i18n, model_picker.no_active_conversation).to_string(),
+            ));
             return;
         };
         let command = model_command(&provider, &model);
@@ -219,12 +221,23 @@ pub fn ModelPicker() -> impl IntoView {
                     // ChatSendResponse has no selection generation or applied
                     // selection. An accepted send is not proof of a changed
                     // pin: leave its projection to the existing server feed.
-                    session_notice.set(Some(format!(
-                        "Sent / 已发送: {command} (selection unconfirmed / 选择未确认)"
-                    )));
+                    session_notice.set(Some(
+                        t_string!(i18n, model_picker.sent_notice, command = command.clone())
+                            .to_string(),
+                    ));
                 }
                 Err(error) => {
-                    session_notice.set(Some(format!("Send failed / 发送失败: {command}: {error}")))
+                    session_notice.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &error, |e| {
+                            t_string!(
+                                i18n,
+                                model_picker.send_failed,
+                                command = command.clone(),
+                                error = e.to_string()
+                            )
+                            .to_string()
+                        }),
+                    ));
                 }
             }
             session_sending.set(false);
@@ -469,10 +482,12 @@ pub fn ModelPicker() -> impl IntoView {
                                     let mid = model.id.clone();
                                     let session_pid = pid.clone();
                                     let session_mid = mid.clone();
-                                    let session_title = format!(
-                                        "Send / 发送 {} — session / 会话; per-turn override unchanged / 单次覆盖不变",
-                                        model_command(&session_pid, &session_mid)
-                                    );
+                                    let session_title = t_string!(
+                                        i18n,
+                                        model_picker.session_title,
+                                        command = model_command(&session_pid, &session_mid)
+                                    )
+                                    .to_string();
                                     let pid_active = pid.clone();
                                     let mid_active = mid.clone();
                                     let is_active = move || {
@@ -529,7 +544,12 @@ pub fn ModelPicker() -> impl IntoView {
                                         <button
                                             type="button"
                                             title=session_title
-                                            aria-label=format!("Session / 会话: {}", model_command(&session_pid, &session_mid))
+                                            aria-label=t_string!(
+                                                i18n,
+                                                model_picker.session_aria_label,
+                                                command = model_command(&session_pid, &session_mid)
+                                            )
+                                            .to_string()
                                             disabled=move || session_sending.get()
                                                 || chat.team_id.get().is_some()
                                                 || sessions.active.get().is_none()
@@ -545,7 +565,7 @@ pub fn ModelPicker() -> impl IntoView {
                                             class="shrink-0 px-1.5 py-1 rounded-md text-[10px] border border-border
                                                    text-text-secondary hover:bg-surface-sunken disabled:opacity-40"
                                         >
-                                            "Session / 会话"
+                                            {t!(i18n, model_picker.session_action)}
                                         </button>
                                         </div>
                                     }.into_any());

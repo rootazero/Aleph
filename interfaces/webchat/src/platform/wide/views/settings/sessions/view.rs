@@ -4,6 +4,7 @@ use crate::api::session_management::{
     CompressionStatus, SessionListFilters, SessionMetadata, SessionsApi,
 };
 use crate::context::DashboardState;
+use crate::i18n::use_i18n;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -25,6 +26,7 @@ pub struct SessionFilterParams {
 #[component]
 #[must_use]
 pub fn SessionsView() -> impl IntoView {
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let sessions = RwSignal::new(Vec::<SessionMetadata>::new());
     let selected_session_id = RwSignal::new(Option::<String>::None);
@@ -57,7 +59,13 @@ pub fn SessionsView() -> impl IntoView {
                     sessions.set(response.sessions);
                     has_more.set(response.has_more);
                 }
-                Err(message) => error.set(Some(message)),
+                Err(message) => {
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &message,
+                        str::to_string,
+                    )))
+                }
             }
             loading.set(false);
         });

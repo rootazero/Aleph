@@ -111,7 +111,7 @@ fn parse_tool_outputs(content: &str) -> Vec<ToolExecution> {
 #[component]
 #[must_use]
 pub fn ToolOutputsTab(session_id: String) -> impl IntoView {
-    let _i18n = use_i18n();
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
 
     let executions = RwSignal::new(Vec::<ToolExecution>::new());
@@ -134,7 +134,11 @@ pub fn ToolOutputsTab(session_id: String) -> impl IntoView {
                     error.set(None);
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to load tool outputs: {}", e)));
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e.to_string(),
+                        |error| format!("Failed to load tool outputs: {error}"),
+                    )));
                 }
             }
             loading.set(false);

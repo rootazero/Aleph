@@ -2447,7 +2447,13 @@
     "no_providers": "尚未配置任何 Provider。请在 设置 → Providers 中添加密钥。",
     "pick_model_title": "为本轮选择模型",
     "filter_placeholder": "过滤 Provider 与模型…",
-    "no_match": "没有匹配的模型"
+    "no_match": "没有匹配的模型",
+    "no_active_conversation": "没有活动会话",
+    "sent_notice": "已发送：{{ command }}（选择未确认）",
+    "send_failed": "发送失败：{{ command }}：{{ error }}",
+    "session_title": "发送 {{ command }} —— 会话；单次覆盖不变",
+    "session_aria_label": "会话：{{ command }}",
+    "session_action": "会话"
   },
   "layout_toggle": {
     "open_pane": "打开工作区面板",
