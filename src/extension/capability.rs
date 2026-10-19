@@ -105,13 +105,12 @@ impl CapabilityDeclaration {
 // Context capability classification
 // ============================================================================
 
-/// The catalog kind every context capability reports, alongside `tool`,
+/// The catalog kind context capabilities are meant to report, alongside `tool`,
 /// `hook`, `service`, `skill`, `agent` and `mcp_server`.
 ///
-/// Dynamic phase data stays in
-/// [`ContextCapabilityDescriptor`](crate::context::fabric::ContextCapabilityDescriptor);
-/// this module owns only the *static* classification the extension manifest and
-/// catalog need, never a second descriptor shape.
+/// This is a constant, not a wiring claim: nothing in the manifest parser, the
+/// capability registry or the catalog projection emits `"context"` yet. Task 2
+/// connects it. Until then a catalog reader will never observe this kind.
 pub const CONTEXT_CAPABILITY_KIND: &str = "context";
 
 /// Tier and manifest permission one context phase requires.
@@ -126,11 +125,19 @@ pub struct ContextCapabilityClass {
 
 /// Map one phase onto the extension capability model.
 ///
-/// Only `Status` is read-only. Every phase that can change what the model sees
-/// requires an explicit `context:<phase>` permission; `network_egress`,
-/// `project_write` and cross-session reads are *additional* permissions the
-/// descriptor must declare and the host must grant (Task 2), never implied by a
-/// phase.
+/// **Classification helper only.** This function is not reached from
+/// manifest parsing, the capability registry or the catalog projection — there
+/// is no `CapabilityDeclaration` variant for context yet, and adding one would
+/// mean editing `manifest/adapter.rs` and `lifecycle.rs`. Treat the mapping as
+/// the agreed shape Task 2 will wire, not as evidence that a context capability
+/// is already reported as registered. The dynamic phase data lives in
+/// [`ContextCapabilityDescriptor`](crate::context::fabric::ContextCapabilityDescriptor).
+///
+/// Only `Status` is read-only, so only `Status` maps to no permission. Every
+/// phase that can change what the model sees requires an explicit
+/// `context:<phase>` permission; `network_egress`, `project_write` and
+/// cross-session reads are *additional* permissions the descriptor must declare
+/// and the host must grant (Task 2), never implied by a phase.
 #[must_use]
 pub fn context_capability_class(phase: ContextPhase) -> ContextCapabilityClass {
     let permission = match phase {
@@ -305,8 +312,6 @@ mod tests {
     #[test]
     fn context_phase_maps_to_pluggable_tier_and_permission() {
         use crate::context::fabric::ContextPhase;
-
-        assert_eq!(CONTEXT_CAPABILITY_KIND, "context");
 
         assert_eq!(
             context_capability_class(ContextPhase::Status),

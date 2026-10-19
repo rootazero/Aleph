@@ -17,10 +17,21 @@
 //!   adapter bridges a dynamic wire call to a native stage; the trait never
 //!   learns about plugin ids.
 //!
-//! Only the envelope is defined here. What a snapshot payload contains (and
-//! which session/project data it may contain) is decided by the core scope
-//! filter that fills [`ContextSnapshot::payload`]; hidden reasoning and
-//! credentials are excluded before the payload is built.
+//! ## What this module enforces, and what it does not
+//!
+//! Enforced here, fail-closed, by `validate` / `validate_against`: the
+//! declaration itself, scope/permission coherence, per-call budgets, snapshot
+//! presence for transforming operations, and fingerprint agreement between
+//! request, snapshot and result. An unverifiable call is rejected, never
+//! repaired.
+//!
+//! **Not** enforced here, and therefore a contract requirement on whoever
+//! builds the call: [`ContextSnapshot::payload`] is `serde_json::Value`, so this
+//! module cannot prove that hidden reasoning, credentials, unauthorised project
+//! files or other sessions were filtered out before the payload was built. No
+//! such filter exists yet (Core-side, a later task). A snapshot builder must
+//! apply the scope filter itself; a consumer must not read receipt of a
+//! snapshot as evidence that filtering happened.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -164,6 +175,19 @@ pub enum ContextNamespace {
     CrossSession,
 }
 
+impl ContextNamespace {
+    /// How far this namespace reaches. Used to reject a request whose snapshot
+    /// claims a wider namespace than the capability declared.
+    #[must_use]
+    pub const fn reach(self) -> u8 {
+        match self {
+            Self::Session => 0,
+            Self::Project => 1,
+            Self::CrossSession => 2,
+        }
+    }
+}
+
 // ============================================================================
 // Scope / budget / policy
 // ============================================================================
@@ -179,7 +203,36 @@ pub struct ContextScope {
     pub handles: Vec<String>,
 }
 
+impl ContextScope {
+    /// Reject handles that identify nothing or identify the same thing twice.
+    ///
+    /// A duplicate handle would let a later owner-map lookup resolve two
+    /// namespaces to one entry, so it is refused here rather than deduplicated.
+    pub fn validate(&self) -> Result<(), ContextContractError> {
+        for (index, handle) in self.handles.iter().enumerate() {
+            if handle.trim().is_empty() {
+                return Err(ContextContractError::EmptyScopeHandle);
+            }
+            if self.handles[..index].contains(handle) {
+                return Err(ContextContractError::DuplicateScopeHandle {
+                    handle: handle.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A hard input or output ceiling, in both units the pipeline bills in.
+///
+/// **Wire only.** This is the ceiling a capability publishes in its descriptor
+/// and the ceiling a request grants for one call. It is a different fact from
+/// [`crate::context::budget::ContextBudget`], which is the mutable runtime
+/// pressure state of a live session (token budget, fold nudges, calibrated
+/// per-turn snapshots). The two share a name; they are not interchangeable and
+/// neither may be constructed from the other here.
+///
+/// A zero is *unset*, never *unlimited*: [`ContextBudget::validate`] rejects it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ContextBudget {
     pub max_tokens: u64,
@@ -210,6 +263,30 @@ impl ContextBudget {
             });
         }
         Ok(())
+    }
+
+    /// Whether this budget fits inside `ceiling` in both units.
+    #[must_use]
+    pub const fn fits_within(&self, ceiling: &ContextBudget) -> bool {
+        self.max_tokens <= ceiling.max_tokens && self.max_bytes <= ceiling.max_bytes
+    }
+
+    /// Fail-closed containment check, naming the declared side that was
+    /// exceeded so the error says which ceiling the caller tried to cross.
+    fn require_within(
+        &self,
+        ceiling: &ContextBudget,
+        side: &'static str,
+    ) -> Result<(), ContextContractError> {
+        if self.fits_within(ceiling) {
+            Ok(())
+        } else {
+            Err(ContextContractError::RequestBudgetExceedsDescriptor {
+                side,
+                requested: *self,
+                declared: *ceiling,
+            })
+        }
     }
 }
 
@@ -261,7 +338,11 @@ pub struct ContextCapabilityDescriptor {
     pub scope: ContextScope,
     pub input_budget: ContextBudget,
     pub output_budget: ContextBudget,
+    /// Omitted on the wire decodes as "persists nothing" — the denied default.
+    #[serde(default)]
     pub persistence: ContextPersistencePolicy,
+    /// Omitted on the wire decodes as all-denied — the fail-closed default.
+    #[serde(default)]
     pub permissions: ContextSideEffectPermissions,
     /// Lifecycle events subscribed to. Empty is valid (no subscription).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -307,6 +388,18 @@ impl ContextCapabilityDescriptor {
             if self.phases[..index].contains(phase) {
                 return Err(ContextContractError::DuplicatePhase { phase: *phase });
             }
+        }
+        self.scope.validate()?;
+        // Bidirectional: a cross-session namespace without the permission is an
+        // undeclared reach, and the permission without the namespace is a
+        // declared reach with nowhere to apply it. Both are contradictions.
+        if (self.scope.namespace == ContextNamespace::CrossSession)
+            != self.permissions.cross_session_read
+        {
+            return Err(ContextContractError::CrossSessionConsistency {
+                namespace: self.scope.namespace,
+                cross_session_read: self.permissions.cross_session_read,
+            });
         }
         self.input_budget.validate()?;
         self.output_budget.validate()?;
@@ -372,6 +465,21 @@ impl ContextOperation {
         format!("{CONTEXT_CAPABILITY_API_VERSION}/{}", self.as_str())
     }
 
+    /// Whether this operation transforms context and therefore cannot run
+    /// without a [`ContextSnapshot`].
+    ///
+    /// `describe` reports a descriptor, `status` reports pressure/health and
+    /// `shutdown` disposes the capability: none of them read context, so none of
+    /// them take a snapshot. Everything else (`admit`, `preflight`, `compact`,
+    /// `restore`, `search`) operates on context and is rejected without one.
+    #[must_use]
+    pub const fn requires_snapshot(self) -> bool {
+        match self {
+            Self::Describe | Self::Status | Self::Shutdown => false,
+            Self::Admit | Self::Preflight | Self::Compact | Self::Restore | Self::Search => true,
+        }
+    }
+
     /// The phase this operation requires, or `None` for the meta-operation
     /// `describe` (which may describe any declared phase).
     #[must_use]
@@ -389,12 +497,20 @@ impl ContextOperation {
     }
 }
 
-/// A scope-filtered, bounded view of the current context.
+/// A bounded view of the current context, scoped to what a capability declared.
 ///
-/// `payload` is the capability's own view, already filtered to
-/// [`ContextScope`]; it is deliberately schema-less here so this module does not
-/// own a second message DTO. Hidden reasoning, credentials, unauthorised
-/// project files and other sessions never enter it.
+/// `payload` is deliberately schema-less here so this module does not own a
+/// second message DTO.
+///
+/// **Contract requirement, not an enforced invariant:** whoever builds a
+/// snapshot must already have removed hidden reasoning, credentials,
+/// unauthorised project files and other sessions from `payload`. This type
+/// cannot check that — `serde_json::Value` carries no provenance — and no such
+/// filter is implemented yet. What *is* enforced is the envelope: the declared
+/// [`ContextScope`] may not exceed the capability's namespace, its handles must
+/// be declared, `token_count`/`byte_count` must fit `input_budget`, and
+/// `input_fingerprint` must match the request. Payload contents are not
+/// validated.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ContextSnapshot {
     pub snapshot_id: String,
@@ -408,6 +524,63 @@ pub struct ContextSnapshot {
     pub payload: serde_json::Value,
 }
 
+impl ContextSnapshot {
+    /// Validate the snapshot envelope against the capability it is sent to and
+    /// the request that carries it.
+    ///
+    /// Payload *contents* are out of reach here; see the type-level note.
+    pub fn validate_against(
+        &self,
+        descriptor: &ContextCapabilityDescriptor,
+        request: &ContextCapabilityRequest,
+    ) -> Result<(), ContextContractError> {
+        if self.input_fingerprint.trim().is_empty() {
+            return Err(ContextContractError::EmptyFingerprint {
+                field: "snapshot.input_fingerprint",
+            });
+        }
+        if self.input_fingerprint != request.input_fingerprint {
+            return Err(ContextContractError::FingerprintMismatch {
+                expected: request.input_fingerprint.clone(),
+                found: self.input_fingerprint.clone(),
+            });
+        }
+        if self.token_count > descriptor.input_budget.max_tokens
+            || self.byte_count > descriptor.input_budget.max_bytes
+        {
+            return Err(ContextContractError::SnapshotExceedsInputBudget {
+                tokens: self.token_count,
+                bytes: self.byte_count,
+                max_tokens: descriptor.input_budget.max_tokens,
+                max_bytes: descriptor.input_budget.max_bytes,
+            });
+        }
+        self.scope.validate()?;
+        if self.scope.namespace.reach() > descriptor.scope.namespace.reach() {
+            return Err(ContextContractError::ScopeEscalation {
+                declared: descriptor.scope.namespace,
+                requested: self.scope.namespace,
+            });
+        }
+        for handle in &self.scope.handles {
+            if descriptor.scope.handles.contains(handle) {
+                continue;
+            }
+            // Empty declared handles mean "the invoking session only"; that is
+            // the one handle a snapshot may name without it being declared.
+            let invoking_session = descriptor.scope.handles.is_empty()
+                && descriptor.scope.namespace == ContextNamespace::Session
+                && *handle == self.session_id;
+            if !invoking_session {
+                return Err(ContextContractError::ScopeHandleNotDeclared {
+                    handle: handle.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// One wire call into a capability.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ContextCapabilityRequest {
@@ -416,6 +589,10 @@ pub struct ContextCapabilityRequest {
     pub api_version: String,
     pub phase: ContextPhase,
     pub operation: ContextOperation,
+    /// Per-call ceiling the caller grants for this call's result. It may not
+    /// exceed either declared ceiling of the capability (input or output): a
+    /// caller cannot grant more than the capability declared it can take in or
+    /// emit. A zero budget is rejected, not read as unlimited.
     pub budget: ContextBudget,
     pub input_fingerprint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -425,9 +602,14 @@ pub struct ContextCapabilityRequest {
 impl ContextCapabilityRequest {
     /// Validate this call against the descriptor it names.
     ///
-    /// Rejects a request aimed at another capability, an unknown wire version,
-    /// a phase the capability never declared, an operation that belongs to a
-    /// different phase, and an invalid budget.
+    /// Fail-closed, in this order: the request must target this capability on
+    /// this wire version; the phase must be declared and must be the phase the
+    /// operation belongs to; the budget must be non-empty, in-cap and contained
+    /// in *both* declared budgets; the input fingerprint must be present; the
+    /// snapshot must exist exactly for the operations that transform context
+    /// (`admit`/`preflight`/`compact`/`restore`/`search`) and must be absent for
+    /// `describe`/`status`/`shutdown`; and the snapshot itself must agree with
+    /// the request and stay inside the declared scope and input budget.
     pub fn validate_against(
         &self,
         descriptor: &ContextCapabilityDescriptor,
@@ -454,6 +636,33 @@ impl ContextCapabilityRequest {
             }
         }
         self.budget.validate()?;
+        if self.input_fingerprint.trim().is_empty() {
+            return Err(ContextContractError::EmptyFingerprint {
+                field: "request.input_fingerprint",
+            });
+        }
+        // A caller-declared ceiling above what the capability published is a
+        // contract violation in both directions, not a request to be clamped.
+        self.budget
+            .require_within(&descriptor.input_budget, "input")?;
+        self.budget
+            .require_within(&descriptor.output_budget, "output")?;
+        match (self.operation.requires_snapshot(), self.snapshot.as_ref()) {
+            (true, None) => {
+                return Err(ContextContractError::MissingSnapshot {
+                    operation: self.operation,
+                })
+            }
+            (false, Some(_)) => {
+                return Err(ContextContractError::UnexpectedSnapshot {
+                    operation: self.operation,
+                })
+            }
+            _ => {}
+        }
+        if let Some(snapshot) = self.snapshot.as_ref() {
+            snapshot.validate_against(descriptor, self)?;
+        }
         Ok(())
     }
 }
@@ -515,6 +724,11 @@ impl ContextTransformResult {
     /// Enforce the declared output ceiling. An over-budget result is rejected
     /// as a contract violation; it is never truncated into the prompt silently.
     pub fn validate(&self, budget: &ContextBudget) -> Result<(), ContextContractError> {
+        if self.input_fingerprint.trim().is_empty() {
+            return Err(ContextContractError::EmptyFingerprint {
+                field: "result.input_fingerprint",
+            });
+        }
         budget.validate()?;
         if self.output_bytes > budget.max_bytes || self.output_tokens > budget.max_tokens {
             return Err(ContextContractError::OutputExceedsBudget {
@@ -523,6 +737,32 @@ impl ContextTransformResult {
             });
         }
         Ok(())
+    }
+
+    /// Validate this result against the request it answers.
+    ///
+    /// The result must carry the request's input fingerprint — a transform
+    /// whose provenance cannot be matched to the exact input it consumed is not
+    /// attributable, and a stale result would otherwise be accepted as if it
+    /// described the current input. The result is then held to the request's
+    /// per-call budget, which `validate_against` has already constrained to the
+    /// descriptor's declared ceilings.
+    pub fn validate_against(
+        &self,
+        request: &ContextCapabilityRequest,
+    ) -> Result<(), ContextContractError> {
+        if self.input_fingerprint.trim().is_empty() {
+            return Err(ContextContractError::EmptyFingerprint {
+                field: "result.input_fingerprint",
+            });
+        }
+        if self.input_fingerprint != request.input_fingerprint {
+            return Err(ContextContractError::FingerprintMismatch {
+                expected: request.input_fingerprint.clone(),
+                found: self.input_fingerprint.clone(),
+            });
+        }
+        self.validate(&request.budget)
     }
 }
 
@@ -567,6 +807,49 @@ pub enum ContextContractError {
     MissingBundleId,
     #[error("context result exceeds its output budget: {bytes} bytes / {tokens} tokens")]
     OutputExceedsBudget { bytes: u64, tokens: u64 },
+    #[error("scope handle must not be empty")]
+    EmptyScopeHandle,
+    #[error("scope declares handle {handle} twice")]
+    DuplicateScopeHandle { handle: String },
+    #[error(
+        "cross-session namespace/permission disagree: namespace {namespace:?}, cross_session_read {cross_session_read}"
+    )]
+    CrossSessionConsistency {
+        namespace: ContextNamespace,
+        cross_session_read: bool,
+    },
+    #[error(
+        "request budget exceeds the descriptor's declared {side} budget: requested {requested:?}, declared {declared:?}"
+    )]
+    RequestBudgetExceedsDescriptor {
+        side: &'static str,
+        requested: ContextBudget,
+        declared: ContextBudget,
+    },
+    #[error(
+        "snapshot exceeds the declared input budget: {tokens} tokens / {bytes} bytes (max {max_tokens} / {max_bytes})"
+    )]
+    SnapshotExceedsInputBudget {
+        tokens: u64,
+        bytes: u64,
+        max_tokens: u64,
+        max_bytes: u64,
+    },
+    #[error("operation {operation:?} requires a context snapshot")]
+    MissingSnapshot { operation: ContextOperation },
+    #[error("operation {operation:?} does not take a context snapshot")]
+    UnexpectedSnapshot { operation: ContextOperation },
+    #[error("{field} must not be empty; an empty fingerprint cannot be verified")]
+    EmptyFingerprint { field: &'static str },
+    #[error("input fingerprint mismatch: expected {expected}, found {found}")]
+    FingerprintMismatch { expected: String, found: String },
+    #[error("snapshot scope {requested:?} exceeds the declared scope {declared:?}")]
+    ScopeEscalation {
+        declared: ContextNamespace,
+        requested: ContextNamespace,
+    },
+    #[error("snapshot names scope handle {handle}, which the capability did not declare")]
+    ScopeHandleNotDeclared { handle: String },
 }
 
 #[cfg(test)]
@@ -610,10 +893,41 @@ mod tests {
             api_version: CONTEXT_CAPABILITY_API_VERSION.to_string(),
             phase,
             operation,
-            budget: ContextBudget::new(120_000, 1_048_576),
+            budget: ContextBudget::new(24_000, 262_144),
             input_fingerprint: "sha256:deadbeef".to_string(),
             snapshot: None,
         }
+    }
+
+    fn snapshot() -> ContextSnapshot {
+        ContextSnapshot {
+            snapshot_id: "snap-1".to_string(),
+            session_id: "sess-1".to_string(),
+            input_fingerprint: "sha256:deadbeef".to_string(),
+            scope: ContextScope {
+                namespace: ContextNamespace::Session,
+                handles: Vec::new(),
+            },
+            token_count: 900,
+            byte_count: 40_000,
+            payload: json!({"messages": []}),
+        }
+    }
+
+    /// A request for an operation that transforms context, so it carries the
+    /// snapshot those operations require.
+    fn transforming_request() -> ContextCapabilityRequest {
+        let mut req = request(ContextPhase::Compaction, ContextOperation::Compact);
+        req.snapshot = Some(snapshot());
+        req
+    }
+
+    fn all_phase_descriptor() -> ContextCapabilityDescriptor {
+        let mut descriptor = descriptor();
+        descriptor.id = "acme/all-phases".to_string();
+        descriptor.phases = ContextPhase::ALL.to_vec();
+        descriptor.mode = ContextCapabilityMode::Compose;
+        descriptor
     }
 
     fn transform_result(bytes: u64, tokens: u64) -> ContextTransformResult {
@@ -667,6 +981,7 @@ mod tests {
         let json = serde_json::to_string(&result).expect("serialize");
         let decoded: ContextTransformResult = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, result);
+        assert_eq!(decoded.validate_against(&req), Ok(()));
     }
 
     // ------------------------------------------------------------------
@@ -981,7 +1296,7 @@ mod tests {
             })
         );
 
-        let declared = request(ContextPhase::Compaction, ContextOperation::Compact);
+        let declared = transforming_request();
         assert_eq!(declared.validate_against(&descriptor), Ok(()));
     }
 
@@ -1121,6 +1436,348 @@ mod tests {
         assert_eq!(
             ContextOperation::Shutdown.wire_name(),
             "context.fabric/v1/shutdown"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // budgets: request vs descriptor, snapshot vs input budget
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn request_budget_must_fit_descriptor_ceilings() {
+        let descriptor = descriptor();
+
+        let mut over_input = transforming_request();
+        over_input.budget = ContextBudget::new(descriptor.input_budget.max_tokens + 1, 262_144);
+        assert_eq!(
+            over_input.validate_against(&descriptor),
+            Err(ContextContractError::RequestBudgetExceedsDescriptor {
+                side: "input",
+                requested: ContextBudget::new(descriptor.input_budget.max_tokens + 1, 262_144),
+                declared: descriptor.input_budget,
+            })
+        );
+
+        let mut over_output = transforming_request();
+        over_output.budget = ContextBudget::new(24_000, descriptor.input_budget.max_bytes);
+        assert_eq!(
+            over_output.validate_against(&descriptor),
+            Err(ContextContractError::RequestBudgetExceedsDescriptor {
+                side: "output",
+                requested: ContextBudget::new(24_000, descriptor.input_budget.max_bytes),
+                declared: descriptor.output_budget,
+            })
+        );
+
+        // The fixture budget itself is accepted.
+        assert_eq!(transforming_request().validate_against(&descriptor), Ok(()));
+    }
+
+    #[test]
+    fn snapshot_must_fit_the_declared_input_budget() {
+        let descriptor = descriptor();
+
+        let mut too_many_bytes = transforming_request();
+        too_many_bytes
+            .snapshot
+            .as_mut()
+            .expect("snapshot")
+            .byte_count = descriptor.input_budget.max_bytes + 1;
+        assert_eq!(
+            too_many_bytes.validate_against(&descriptor),
+            Err(ContextContractError::SnapshotExceedsInputBudget {
+                tokens: 900,
+                bytes: descriptor.input_budget.max_bytes + 1,
+                max_tokens: descriptor.input_budget.max_tokens,
+                max_bytes: descriptor.input_budget.max_bytes,
+            })
+        );
+
+        let mut too_many_tokens = transforming_request();
+        too_many_tokens
+            .snapshot
+            .as_mut()
+            .expect("snapshot")
+            .token_count = descriptor.input_budget.max_tokens + 1;
+        assert!(matches!(
+            too_many_tokens.validate_against(&descriptor),
+            Err(ContextContractError::SnapshotExceedsInputBudget { .. })
+        ));
+    }
+
+    // ------------------------------------------------------------------
+    // snapshot presence per operation
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn transforming_operations_require_a_snapshot() {
+        let descriptor = all_phase_descriptor();
+        let operations = [
+            (ContextPhase::Admission, ContextOperation::Admit),
+            (ContextPhase::Preflight, ContextOperation::Preflight),
+            (ContextPhase::Compaction, ContextOperation::Compact),
+            (ContextPhase::Recovery, ContextOperation::Restore),
+            (ContextPhase::Search, ContextOperation::Search),
+        ];
+        for (phase, operation) in operations {
+            assert!(operation.requires_snapshot(), "{operation:?}");
+            let mut req = request(phase, operation);
+            req.capability_id = descriptor.id.clone();
+            assert_eq!(
+                req.validate_against(&descriptor),
+                Err(ContextContractError::MissingSnapshot { operation })
+            );
+
+            req.snapshot = Some(snapshot());
+            assert_eq!(req.validate_against(&descriptor), Ok(()));
+        }
+    }
+
+    #[test]
+    fn meta_operations_do_not_take_a_snapshot() {
+        let descriptor = all_phase_descriptor();
+        let operations = [
+            (ContextPhase::Status, ContextOperation::Describe),
+            (ContextPhase::Status, ContextOperation::Status),
+            (ContextPhase::Lifecycle, ContextOperation::Shutdown),
+        ];
+        for (phase, operation) in operations {
+            assert!(!operation.requires_snapshot(), "{operation:?}");
+            let mut req = request(phase, operation);
+            req.capability_id = descriptor.id.clone();
+            assert_eq!(req.validate_against(&descriptor), Ok(()));
+
+            req.snapshot = Some(snapshot());
+            assert_eq!(
+                req.validate_against(&descriptor),
+                Err(ContextContractError::UnexpectedSnapshot { operation })
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // scope / permission coherence
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn descriptor_rejects_incoherent_scope() {
+        let mut duplicate = descriptor();
+        duplicate.scope.handles = vec!["sess-1".to_string(), "sess-1".to_string()];
+        assert_eq!(
+            duplicate.validate(),
+            Err(ContextContractError::DuplicateScopeHandle {
+                handle: "sess-1".to_string(),
+            })
+        );
+
+        let mut empty = descriptor();
+        empty.scope.handles = vec!["  ".to_string()];
+        assert_eq!(
+            empty.validate(),
+            Err(ContextContractError::EmptyScopeHandle)
+        );
+
+        let mut undeclared_cross_session = descriptor();
+        undeclared_cross_session.scope.namespace = ContextNamespace::CrossSession;
+        assert_eq!(
+            undeclared_cross_session.validate(),
+            Err(ContextContractError::CrossSessionConsistency {
+                namespace: ContextNamespace::CrossSession,
+                cross_session_read: false,
+            })
+        );
+
+        let mut permission_without_scope = descriptor();
+        permission_without_scope.permissions.cross_session_read = true;
+        assert_eq!(
+            permission_without_scope.validate(),
+            Err(ContextContractError::CrossSessionConsistency {
+                namespace: ContextNamespace::Session,
+                cross_session_read: true,
+            })
+        );
+
+        let mut granted = descriptor();
+        granted.scope.namespace = ContextNamespace::CrossSession;
+        granted.permissions.cross_session_read = true;
+        assert_eq!(granted.validate(), Ok(()));
+    }
+
+    #[test]
+    fn snapshot_scope_cannot_exceed_the_declared_scope() {
+        let descriptor = descriptor();
+
+        let mut wider = transforming_request();
+        wider.snapshot.as_mut().expect("snapshot").scope.namespace = ContextNamespace::Project;
+        assert_eq!(
+            wider.validate_against(&descriptor),
+            Err(ContextContractError::ScopeEscalation {
+                declared: ContextNamespace::Session,
+                requested: ContextNamespace::Project,
+            })
+        );
+
+        let mut foreign_handle = transforming_request();
+        foreign_handle
+            .snapshot
+            .as_mut()
+            .expect("snapshot")
+            .scope
+            .handles = vec!["sess-2".to_string()];
+        assert_eq!(
+            foreign_handle.validate_against(&descriptor),
+            Err(ContextContractError::ScopeHandleNotDeclared {
+                handle: "sess-2".to_string(),
+            })
+        );
+
+        // The invoking session may be named even when the descriptor declares
+        // no handles ("invoking session only").
+        let mut invoking = transforming_request();
+        invoking.snapshot.as_mut().expect("snapshot").scope.handles = vec!["sess-1".to_string()];
+        assert_eq!(invoking.validate_against(&descriptor), Ok(()));
+
+        // A declared handle is accepted.
+        let mut declared = descriptor.clone();
+        declared.scope.handles = vec!["sess-2".to_string()];
+        let mut req = transforming_request();
+        req.snapshot.as_mut().expect("snapshot").scope.handles = vec!["sess-2".to_string()];
+        assert_eq!(req.validate_against(&declared), Ok(()));
+    }
+
+    // ------------------------------------------------------------------
+    // fingerprint agreement
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn fingerprints_must_be_present_and_agree() {
+        let descriptor = descriptor();
+
+        let mut empty_request = transforming_request();
+        empty_request.input_fingerprint = String::new();
+        assert_eq!(
+            empty_request.validate_against(&descriptor),
+            Err(ContextContractError::EmptyFingerprint {
+                field: "request.input_fingerprint",
+            })
+        );
+
+        let mut empty_snapshot = transforming_request();
+        empty_snapshot
+            .snapshot
+            .as_mut()
+            .expect("snapshot")
+            .input_fingerprint = "  ".to_string();
+        assert_eq!(
+            empty_snapshot.validate_against(&descriptor),
+            Err(ContextContractError::EmptyFingerprint {
+                field: "snapshot.input_fingerprint",
+            })
+        );
+
+        let mut stale_snapshot = transforming_request();
+        stale_snapshot
+            .snapshot
+            .as_mut()
+            .expect("snapshot")
+            .input_fingerprint = "sha256:cafe".to_string();
+        assert_eq!(
+            stale_snapshot.validate_against(&descriptor),
+            Err(ContextContractError::FingerprintMismatch {
+                expected: "sha256:deadbeef".to_string(),
+                found: "sha256:cafe".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn transform_result_must_match_the_request() {
+        let request = transforming_request();
+
+        assert_eq!(
+            transform_result(1024, 256).validate_against(&request),
+            Ok(())
+        );
+
+        let mut stale = transform_result(1024, 256);
+        stale.input_fingerprint = "sha256:cafe".to_string();
+        assert_eq!(
+            stale.validate_against(&request),
+            Err(ContextContractError::FingerprintMismatch {
+                expected: "sha256:deadbeef".to_string(),
+                found: "sha256:cafe".to_string(),
+            })
+        );
+
+        let mut unbounded = transform_result(262_145, 256);
+        unbounded.input_fingerprint = request.input_fingerprint.clone();
+        assert_eq!(
+            unbounded.validate_against(&request),
+            Err(ContextContractError::OutputExceedsBudget {
+                bytes: 262_145,
+                tokens: 256,
+            })
+        );
+
+        let mut unverifiable = transform_result(1024, 256);
+        unverifiable.input_fingerprint = String::new();
+        assert_eq!(
+            unverifiable.validate_against(&request),
+            Err(ContextContractError::EmptyFingerprint {
+                field: "result.input_fingerprint",
+            })
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // wire defaults and version semantics
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn omitted_persistence_and_permissions_default_to_denied() {
+        let wire = json!({
+            "id": "acme/context-observer",
+            "api_version": CONTEXT_CAPABILITY_API_VERSION,
+            "implementation_version": "0.1.0",
+            "phases": ["status"],
+            "mode": "observer",
+            "scope": {"namespace": "session"},
+            "input_budget": {"max_tokens": 1000, "max_bytes": 2000},
+            "output_budget": {"max_tokens": 500, "max_bytes": 1000}
+        });
+        let decoded: ContextCapabilityDescriptor =
+            serde_json::from_value(wire).expect("defaults must apply");
+        assert_eq!(decoded.persistence, ContextPersistencePolicy::default());
+        assert_eq!(decoded.permissions, ContextSideEffectPermissions::default());
+        assert!(!decoded.permissions.network_egress);
+        assert!(!decoded.permissions.project_write);
+        assert!(!decoded.permissions.cross_session_read);
+        assert_eq!(decoded.validate(), Ok(()));
+    }
+
+    #[test]
+    fn wire_versions_are_single_sourced() {
+        for operation in ContextOperation::ALL {
+            assert_eq!(
+                operation.wire_name(),
+                format!("{CONTEXT_CAPABILITY_API_VERSION}/{}", operation.as_str())
+            );
+            assert!(operation.wire_name().starts_with("context.fabric/v1/"));
+        }
+
+        let encoded = serde_json::to_value(descriptor()).expect("descriptor json");
+        assert_eq!(
+            encoded["api_version"],
+            Value::String(CONTEXT_CAPABILITY_API_VERSION.to_string())
+        );
+
+        let mut wrong_version = transforming_request();
+        wrong_version.api_version = "context.fabric/v2".to_string();
+        assert_eq!(
+            wrong_version.validate_against(&descriptor()),
+            Err(ContextContractError::UnsupportedApiVersion {
+                found: "context.fabric/v2".to_string(),
+            })
         );
     }
 
