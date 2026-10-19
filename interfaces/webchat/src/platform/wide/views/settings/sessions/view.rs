@@ -52,7 +52,7 @@ pub fn SessionsView() -> impl IntoView {
             limit: Some(params.limit as usize),
             offset: Some(params.offset as usize),
         };
-        let state = state.clone();
+        let state = state; // DashboardState: Copy
         spawn_local(async move {
             match SessionsApi::list(&state, filters).await {
                 Ok(response) => {

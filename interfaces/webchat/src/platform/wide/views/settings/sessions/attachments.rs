@@ -46,7 +46,11 @@ fn format_file_size(bytes: i64) -> String {
 
 /// Extract filename from path or use a default
 fn extract_filename(path: &str) -> String {
-    path.split('/').last().unwrap_or("attachment").to_string()
+    // rsplit is DoubleEndedIterator; .next() is O(1) while .last() would walk
+    // the whole iterator. Behaviour matches the old split(..).last(): both
+    // yield the empty string for paths ending with '/' and the whole input
+    // when there is no '/'.
+    path.rsplit('/').next().unwrap_or("attachment").to_string()
 }
 
 #[component]

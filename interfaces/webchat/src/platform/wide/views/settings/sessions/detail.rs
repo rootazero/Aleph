@@ -33,7 +33,7 @@ pub fn SessionDetail(session_id: String) -> impl IntoView {
         if !state.is_connected.get() {
             return;
         }
-        let state = state.clone();
+        let state = state; // DashboardState: Copy
         let id = id_for_effect.clone();
         spawn_local(async move {
             loading.set(true);

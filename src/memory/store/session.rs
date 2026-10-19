@@ -50,8 +50,13 @@ impl CompressionStatus {
         }
     }
 
+    /// Infallible labelled parse: pairs with [`Self::as_str`]. Unknown labels
+    /// map to [`Self::Pending`] (the inferred-future-state default) rather than
+    /// failing, because the on-disk column may carry a label written by a newer
+    /// build than the one reading it — fail closed is fine, but failing *open*
+    /// would lose the row. If you want strict parsing, derive `FromStr` here.
     #[must_use]
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_label(s: &str) -> Self {
         match s {
             "compressed" => Self::Compressed,
             "archived" => Self::Archived,

@@ -54,6 +54,11 @@ pub struct ExportAttachment {
     pub data_base64: Option<String>,
 }
 
+// 1:1 with `migrate Export` CLI fields — keeping them as positional args
+// preserves the destructured pattern in main.rs without forcing a builder
+// here for a one-shot batch tool. Bump the threshold (or pack into a
+// `ExportConfig` struct) before adding the ninth option.
+#[allow(clippy::too_many_arguments)]
 pub fn run_export(
     db_path: PathBuf,
     output_path: PathBuf,

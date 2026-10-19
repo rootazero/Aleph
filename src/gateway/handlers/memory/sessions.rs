@@ -629,7 +629,7 @@ pub async fn handle_update_compression(
         return visibility::not_found_response(request.id);
     }
 
-    let status = CompressionStatus::from_str(&params.status);
+    let status = CompressionStatus::from_label(&params.status);
     match store
         .update_compression_status(&params.session_id, status)
         .await

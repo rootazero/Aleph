@@ -572,7 +572,7 @@ impl RawSessionStore for MarkdownSessionStore {
                     message_count: row.get(8)?,
                     tool_call_count: row.get(9)?,
                     content_hash: row.get(10)?,
-                    compression_status: CompressionStatus::from_str(&row.get::<_, String>(11)?),
+                    compression_status: CompressionStatus::from_label(&row.get::<_, String>(11)?),
                     tags,
                 })
             })

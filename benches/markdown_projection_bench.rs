@@ -13,7 +13,10 @@ use alephcore::session::events::{
 use alephcore::session::markdown_projector::MarkdownProjector;
 use alephcore::session::observer::SessionEventObserver;
 use alephcore::session::service::SessionId;
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+// criterion::black_box is deprecated; use std::hint::black_box directly (same
+// signature, drop-in replacement in std since 1.51).
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::hint::black_box;
 use std::sync::Arc;
 use tempfile::TempDir;
 use uuid::Uuid;

@@ -389,7 +389,7 @@ fn store_attachment(
 
 fn format_timestamp(ts: i64) -> String {
     use chrono::{DateTime, Utc};
-    let dt: DateTime<Utc> = DateTime::from_timestamp(ts, 0).unwrap_or_else(|| Utc::now());
+    let dt: DateTime<Utc> = DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now);
     dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 

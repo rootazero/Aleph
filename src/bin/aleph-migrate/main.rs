@@ -224,10 +224,10 @@ fn expand_path(path: PathBuf) -> Result<PathBuf> {
     let path_str = path.to_string_lossy();
 
     // Expand ~
-    let expanded = if path_str.starts_with("~/") {
+    let expanded = if let Some(rest) = path_str.strip_prefix("~/") {
         dirs::home_dir()
             .context("Could not determine home directory")?
-            .join(&path_str[2..])
+            .join(rest)
     } else if path_str == "~" {
         dirs::home_dir().context("Could not determine home directory")?
     } else {

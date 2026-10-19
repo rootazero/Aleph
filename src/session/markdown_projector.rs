@@ -208,7 +208,7 @@ async fn process_task(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let session_id = task.session_id.to_string();
     let event = &task.record.event;
-    let timestamp = (task.record.created_at_ms / 1000) as i64; // Convert ms to seconds
+    let timestamp = task.record.created_at_ms / 1000; // ms → s for transcript timestamps
 
     match event {
         SessionEvent::RunStarted {
@@ -254,7 +254,6 @@ async fn process_task(
 
         SessionEvent::UserMessage {
             content,
-            turn_id: _,
             ..
         } => {
             ensure_session(store, &session_id, timestamp, None).await?;
@@ -266,7 +265,6 @@ async fn process_task(
 
         SessionEvent::AssistantMessage {
             content,
-            turn_id: _,
             ..
         } => {
             ensure_session(store, &session_id, timestamp, None).await?;
@@ -282,7 +280,6 @@ async fn process_task(
 
         SessionEvent::SystemMessage {
             content,
-            turn_id: _,
             ..
         } => {
             ensure_session(store, &session_id, timestamp, None).await?;
@@ -294,8 +291,6 @@ async fn process_task(
         SessionEvent::ToolCallRequested {
             name,
             input,
-            turn_id: _,
-            call_id: _,
             ..
         } => {
             ensure_session(store, &session_id, timestamp, None).await?;
@@ -312,8 +307,6 @@ async fn process_task(
 
         SessionEvent::ToolResult {
             output,
-            turn_id: _,
-            call_id: _,
             ..
         } => {
             ensure_session(store, &session_id, timestamp, None).await?;
@@ -330,8 +323,6 @@ async fn process_task(
 
         SessionEvent::ToolError {
             error,
-            turn_id: _,
-            call_id: _,
             ..
         } => {
             ensure_session(store, &session_id, timestamp, None).await?;
@@ -349,7 +340,6 @@ async fn process_task(
         SessionEvent::Error {
             kind,
             message,
-            turn_id: _,
             ..
         } => {
             ensure_session(store, &session_id, timestamp, None).await?;
@@ -393,7 +383,7 @@ mod tests {
                 envelope: None,
                 telecom_provenance: Default::default(),
             },
-            created_at_ms: chrono::Utc::now().timestamp_millis() as i64,
+            created_at_ms: chrono::Utc::now().timestamp_millis(),
         };
 
         projector.on_appended(&session_id, &record);
