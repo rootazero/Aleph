@@ -152,25 +152,12 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     migrations::drop_obsolete_facts_tables(conn)?;
 
-    conn.execute_batch(ddl::ROUTING_EXPERIENCE_DDL)
-        .map_err(|e| {
-            AlephError::config(format!("Failed to create routing_experiences table: {e}"))
-        })?;
-
     Ok(())
 }
 
-/// Initialize every sqlite-vec virtual table, notes and routing-experience
-/// alike, for each dimension in [`crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES`].
+/// Initialize the notes sqlite-vec virtual tables for each supported dimension.
 pub fn init_vec_tables(conn: &Connection) -> Result<(), AlephError> {
-    init_notes_vec_tables(conn)?;
-
-    for (dim, _, name) in crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES {
-        conn.execute_batch(&ddl::vec_table_ddl(*dim, name))
-            .map_err(|e| AlephError::config(format!("Failed to create {name}: {e}")))?;
-    }
-
-    Ok(())
+    init_notes_vec_tables(conn)
 }
 
 /// Initialize the `notes_vec_*` virtual tables — one per supported embedding
@@ -185,7 +172,7 @@ pub fn init_notes_vec_tables(conn: &Connection) -> Result<(), AlephError> {
     migrations::migrate_notes_vec_map_freshness(conn)
         .map_err(|e| AlephError::config(format!("migrate notes_vec_map freshness: {e}")))?;
 
-    for (dim, name, _) in crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES {
+    for (dim, name) in crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES {
         let sql = ddl::vec_table_ddl(*dim, name);
         conn.execute_batch(&sql)
             .map_err(|e| AlephError::config(format!("Failed to create vec table {name}: {e}")))?;

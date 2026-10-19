@@ -9,7 +9,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use crate::agents::{AgentDef, AgentIdentity, AgentMode, Lifecycle, SpawnOverride};
+    use crate::agents::{AgentDef, AgentMode};
     use crate::error::Result as AlephResult;
     use crate::harness::chain_context::ChainContext;
     use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
@@ -241,7 +241,6 @@ mod tests {
             // P3 Stage I:
             plugin_registry: None,
             subagent_semaphore: None,
-            routing_store: None,
             // B15 — unset here on purpose: the fallback cap must hold even when
             // no runner default is threaded through.
             default_max_iterations: None,
@@ -1518,174 +1517,6 @@ mod tests {
             "the child's compactor usage must be persisted under the parent's task: {rows:?}"
         );
         drop(tx);
-    }
-
-    // -- VESR v1.1 (b): routing capture helpers ------------------------------
-
-    struct NoopTraceSink;
-    impl crate::harness::TraceSink for NoopTraceSink {
-        fn on_trace(&self, _e: &crate::harness::trace::LoopTraceEvent) {}
-        fn flush(&self) {}
-    }
-
-    struct SpawnStubEmbedder;
-    #[async_trait::async_trait]
-    impl crate::memory::EmbeddingProvider for SpawnStubEmbedder {
-        async fn embed(&self, _t: &str) -> AlephResult<Vec<f32>> {
-            Ok({
-                let mut v = vec![0.0f32; 768];
-                v[0] = 1.0;
-                v
-            })
-        }
-        async fn embed_batch(&self, t: &[&str]) -> AlephResult<Vec<Vec<f32>>> {
-            Ok(t.iter()
-                .map(|_| {
-                    let mut v = vec![0.0f32; 768];
-                    v[0] = 1.0;
-                    v
-                })
-                .collect())
-        }
-        fn dimensions(&self) -> usize {
-            768
-        }
-        fn model_name(&self) -> &str {
-            "stub"
-        }
-        fn provider_id(&self) -> &str {
-            "stub"
-        }
-    }
-
-    fn routing_store_for_test() -> (
-        tempfile::TempDir,
-        Arc<crate::routing::RoutingExperienceStore>,
-    ) {
-        let (scratch, dir) = crate::utils::scratch::scratch_root();
-        std::fs::create_dir_all(&dir).unwrap();
-        let backend = Arc::new(
-            crate::memory::store::sqlite::SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap(),
-        );
-        let embedder: Arc<dyn crate::memory::EmbeddingProvider> = Arc::new(SpawnStubEmbedder);
-        (
-            scratch,
-            Arc::new(crate::routing::RoutingExperienceStore::new(
-                backend, embedder,
-            )),
-        )
-    }
-
-    async fn drain_routing_row(
-        store: &crate::routing::RoutingExperienceStore,
-        agent: &str,
-    ) -> Vec<crate::memory::store::sqlite::routing_experience::RoutingNeighbor> {
-        let q = {
-            let mut v = vec![0.0f32; 768];
-            v[0] = 0.0;
-            v
-        };
-        let mut got = Vec::new();
-        for _ in 0..200 {
-            tokio::task::yield_now().await;
-            got = store.recall(agent, &q, 5).await.unwrap();
-            if !got.is_empty() {
-                break;
-            }
-        }
-        got
-    }
-
-    #[tokio::test]
-    async fn spawn_captures_routing_experience_under_child_agent_id() {
-        let (_scratch, store) = routing_store_for_test();
-        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only("done".to_string())]);
-        let mut base = make_base(provider);
-        base.routing_store = Some(store.clone());
-        base.trace_sink = Some(Arc::new(NoopTraceSink) as Arc<dyn crate::harness::TraceSink>);
-
-        // Explicit model_hint + provider_hint → precise attribution.
-        let agent = agent_with_allowed("reviewer", vec!["*"])
-            .with_model_hint("claude-sonnet-4-6")
-            .with_provider_hint("anthropic");
-        let req = SpawnRequest {
-            agent_def: &agent,
-            task: "review the diff",
-            context_summary: None,
-            model: None,
-            timeout_secs: 5,
-            cancel: CancellationToken::new(),
-            spawn_context: None,
-            fork_source: None,
-            isolation: None,
-            strategy: None,
-            session_mode: None,
-            request_id: None,
-        };
-
-        spawn(&base, req).await.expect("spawn ok");
-
-        let got = drain_routing_row(&store, "reviewer").await;
-        assert_eq!(got.len(), 1, "subagent run recorded under child agent_id");
-        assert_eq!(got[0].model_id, "claude-sonnet-4-6"); // from model_hint
-        assert_eq!(got[0].provider_id, "anthropic"); // from provider_hint
-    }
-
-    // -- VESR v1.1 (b): production threading test ----------------------------
-
-    #[tokio::test]
-    async fn agent_runtime_threads_routing_store_to_capture() {
-        use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig};
-
-        let (_scratch, store) = routing_store_for_test();
-        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only("ok".to_string())]);
-
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        migrate_add_session_events(&conn).unwrap();
-        let event_store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
-        let session: Arc<dyn SessionService> =
-            Arc::new(InProcessActorSessionService::new(event_store));
-
-        // child_chain must be descended (depth > 0) — execute_via_harness debug_asserts it.
-        let chain = ChainContext::new().child().expect("descended chain");
-
-        let runtime = AgentRuntime::new(
-            provider,
-            chain,
-            CancellationToken::new(),
-            session,
-            Arc::new(AlwaysOkTools),
-        )
-        .with_trace_sink(Arc::new(NoopTraceSink) as Arc<dyn crate::harness::TraceSink>)
-        .with_routing_store(store.clone());
-
-        let config = AgentRuntimeConfig {
-            identity: AgentIdentity {
-                agent_def: agent_with_allowed("planner", vec!["*"])
-                    .with_model_hint("claude-opus-4-8")
-                    .with_provider_hint("anthropic"),
-                task: "plan it".to_string(),
-                context_summary: None,
-            },
-            spawn_override: SpawnOverride {
-                spawn_context: None,
-                fork_source: None,
-                model: None,
-                request_id: None,
-            },
-            lifecycle: Lifecycle { timeout_secs: 5 },
-        };
-
-        runtime.run(config).await.expect("spawn ok");
-
-        let got = drain_routing_row(&store, "planner").await;
-        assert_eq!(
-            got.len(),
-            1,
-            "production threading reaches the spawn-seam observer"
-        );
-        assert_eq!(got[0].model_id, "claude-opus-4-8");
-        assert_eq!(got[0].provider_id, "anthropic");
     }
 
     // -- B5: the starting-context mode is authoritative -----------------------

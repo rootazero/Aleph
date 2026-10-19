@@ -17,8 +17,7 @@
 //! distinct `action` label so a reader can still tell the rails apart.
 //!
 //! Diagnostic log, not an archive: capped at [`MAX_DECISIONS_PER_AGENT`] rows
-//! per agent and pruned on every write, following the keep-newest-N idiom of
-//! `prune_routing_experiences`.
+//! per agent and pruned on every write, following the keep-newest-N idiom.
 
 use rusqlite::params;
 

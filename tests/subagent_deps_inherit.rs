@@ -136,7 +136,6 @@ async fn subagent_base_carries_4_p1_fields() {
         // P3 Stage I:
         plugin_registry: None,
         subagent_semaphore: None,
-        routing_store: None,
         default_max_iterations: None,
         parallel_tool_concurrency: None,
         // Context management — sentinel `Some`, so the spawn below exercises

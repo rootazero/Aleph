@@ -476,9 +476,6 @@ impl SubagentTool {
         if let Some(sink) = self.trace.accounting_sink.clone() {
             runtime = runtime.with_accounting_sink(sink);
         }
-        if let Some(rs) = self.routing.routing_store.clone() {
-            runtime = runtime.with_routing_store(rs);
-        }
         if let Some(sc) = self.policy_inheritance.stall_config.clone() {
             runtime = runtime.with_stall_config(sc);
         }
@@ -516,7 +513,7 @@ impl SubagentTool {
             runtime = runtime.with_verifier_chain(vc);
         }
         if !self.providers.provider_overrides.is_empty() {
-            runtime = runtime.with_provider_overrides(self.providers.provider_overrides.clone());
+            runtime = runtime.with_provider_routes(self.providers.provider_overrides.clone());
         }
         // Stage 5a (#9) — thread the parent harness's guardrail registry so
         // the child's SpawnerBase → HarnessDeps inheritance chain (already

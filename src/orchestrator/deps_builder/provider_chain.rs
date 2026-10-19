@@ -37,10 +37,10 @@ pub(crate) fn provider_tier(pc: &ProviderConfig) -> EndpointTier {
 /// Provider routing assembled once at boot.
 ///
 /// `default` is the global failover chain — wired as `deps.llm` for the main
-/// harness and used as the subagent provider for agents without a
-/// `provider_hint`. `agent_overrides` maps a `provider_hint` to a
-/// `FailoverProvider` that pins that provider, then falls through the entire
-/// global chain (the "pin + fall-through" semantics).
+/// harness and used as the subagent provider when no explicit provider/model
+/// route is selected. `agent_overrides` is the configured provider-route map:
+/// each key names a configured provider and its value pins that provider before
+/// falling through the entire global chain (the "pin + fall-through" semantics).
 #[derive(Clone)]
 pub struct ProviderChain {
     pub default: Arc<dyn DefaultProviderHandle>,
@@ -54,7 +54,7 @@ pub struct ProviderChain {
 }
 
 /// Build the provider routing: the global failover chain plus the
-/// per-`provider_hint` override registry.
+/// configured provider-route override map.
 ///
 /// The global chain wraps `default_provider` in a [`FailoverProvider`] that
 /// walks `[primary, ...[fallback_provider].chain]`. The primary slot stays
@@ -64,10 +64,11 @@ pub struct ProviderChain {
 /// so the chain can also fail over *between models* of one provider.
 ///
 /// Each `agent_overrides` entry pins one configured provider as the primary
-/// and adds a single fallback node = the whole global chain. All chains share
-/// one [`FailoverHealth`], so one provider's outage is visible everywhere.
-/// The primary provider itself gets no override entry — hinting it is
-/// equivalent to not hinting at all.
+/// for an explicit provider/model route and adds a single fallback node = the
+/// whole global chain. All chains share one [`FailoverHealth`], so one
+/// provider's outage is visible everywhere. The primary provider itself gets
+/// no override entry — explicitly selecting it is equivalent to the default
+/// route.
 ///
 /// A provider that fails to construct, and a chain entry that matches the
 /// primary or is absent from `[providers]`, are skipped with a warn log.
@@ -285,7 +286,7 @@ pub fn build_failover_chain(
         tiers: Arc::new(tier_catalog.clone()),
     };
 
-    // Per-`provider_hint` overrides: one FailoverProvider per non-primary
+    // Configured provider-route overrides: one FailoverProvider per non-primary
     // provider, pinning it as primary then falling through the global chain.
     let agent_overrides: HashMap<String, Arc<dyn AiProvider>> = built
         .into_iter()
@@ -811,7 +812,7 @@ mod tests {
         let cfg = cfg_with_fallback(None, vec![("primary", mock_provider_config())]);
         let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None, None);
         assert_eq!(chain.default.current().name(), "failover");
-        // Only the primary is configured → no per-hint overrides.
+        // Only the primary is configured → no provider-route overrides.
         assert!(chain.agent_overrides.is_empty());
     }
 
@@ -830,8 +831,9 @@ mod tests {
         );
         let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None, None);
         assert_eq!(chain.default.current().name(), "failover");
-        // `fb` is a non-primary configured provider → it gets a pinned override;
-        // the primary never gets one (hinting it == no hint).
+        // `fb` is a non-primary configured provider → it gets a pinned
+        // provider-route override; the primary never gets one because selecting
+        // it is equivalent to the default route.
         assert!(chain.agent_overrides.contains_key("fb"));
         assert!(!chain.agent_overrides.contains_key("primary"));
         assert_eq!(chain.agent_overrides["fb"].name(), "failover");
@@ -857,8 +859,8 @@ mod tests {
     #[test]
     fn agent_overrides_cover_every_non_primary_provider() {
         // Three providers configured; `aux1` / `aux2` are not even in the
-        // fallback chain, but per-hint overrides still cover them so any agent
-        // can pin any configured provider.
+        // fallback chain, but explicit provider/model routes can pin either
+        // configured provider.
         let cfg = cfg_with_fallback(
             Some(FallbackProviderToml {
                 chain: vec!["aux1".to_string()],

@@ -101,11 +101,6 @@ pub struct SpawnerBase {
     /// the cap (direct test callers); `Some(_)` makes `spawn()` acquire a
     /// permit held for the child's full lifetime.
     pub subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
-    /// VESR v1.1 (b) — routing-experience store. `Some` makes `spawn()` wrap the
-    /// child trace sink with its own `OutcomeObserver`, recording the subagent's
-    /// run under `agent_def.id`. Holds the embedder via `embed_task`. `None`
-    /// keeps the child sink raw (today's behavior — no capture).
-    pub routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
     /// B15 — the runner's boot-time `[execution] max_iterations`, inherited so a
     /// child whose `AgentDef` declares no cap still gets one. `None` falls
     /// through to `FALLBACK_MAX_ITERATIONS` inside `resolve_max_iterations`;
@@ -151,7 +146,7 @@ pub struct SpawnerBase {
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
 pub struct SpawnRequest<'a> {
-    /// Agent definition (id, `allowed_tools`, `max_iterations`, `model_hint`, …).
+    /// Agent definition (id, `allowed_tools`, `max_iterations`, …).
     pub agent_def: &'a AgentDef,
     /// Task description — seeded as the child's first `UserMessage`.
     pub task: &'a str,
@@ -159,8 +154,9 @@ pub struct SpawnRequest<'a> {
     /// task with a "## Context from parent agent" header (matches legacy
     /// `run_subagent` behaviour).
     pub context_summary: Option<&'a str>,
-    /// Explicit model override (highest priority). Falls back to
-    /// `agent_def.model_hint`, then to whatever the provider uses natively.
+    /// Explicit model override. If absent, the child uses the provider's
+    /// native model selection or the session-level resolution owned by the
+    /// caller.
     pub model: Option<&'a str>,
     /// Hard wall-clock timeout for the entire run.
     pub timeout_secs: u64,
@@ -556,10 +552,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         //     via native tool_use, not the prompt. The descended `child_chain`
         //     is passed in so `ChainContextLayer` can tell the spawned agent it
         //     is nested and how much delegation budget remains.
-        let resolved_model: Option<String> = req
-            .model
-            .map(str::to_string)
-            .or_else(|| req.agent_def.model_hint.clone());
+        let resolved_model: Option<String> = req.model.map(str::to_string);
         let token_budget = base.context_budget_config.as_ref().map_or_else(
             crate::thinker::prompt_budget::TokenBudget::default,
             |cfg| {
@@ -697,55 +690,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         if let Some(note) = fork_applied.as_ref().and_then(fork::ForkPlan::receipt) {
             effective_task = format!("{note}\n\n{effective_task}");
         }
-        // VESR v1.1 (b) — capture this subagent's run under its own agent_id by
-        // wrapping the child trace sink with a dedicated OutcomeObserver.
-        // Subagents bypass the top-level wrap (runner_impl.rs), so we mirror it
-        // here at the spawn seam. Borrows `effective_task` before it moves into
-        // the UserMessage below. `None` store / `None` sink → child keeps the
-        // raw sink (today's behavior, no capture).
-        let child_trace_sink: Option<Arc<dyn crate::harness::TraceSink>> = match (
-            base.trace_sink.as_ref(),
-            base.routing_store.as_ref(),
-        ) {
-            (Some(sink), Some(store)) => {
-                // Attribute from spawn-seam directives only (the parent's
-                // resolved model/provider are not reachable here). Explicit
-                // model choice = the high-value routing case; full
-                // inheritance → "(dynamic)".
-                let child_model = req
-                    .model
-                    .map(str::to_string)
-                    .or_else(|| req.agent_def.model_hint.clone())
-                    .unwrap_or_else(|| "(dynamic)".to_string());
-                let child_provider = req
-                    .agent_def
-                    .provider_hint
-                    .clone()
-                    .unwrap_or_else(|| "(dynamic)".to_string());
-                match store.embed_task(&effective_task).await {
-                    Ok(task_emb) => {
-                        let attribution = Arc::new(crate::routing::RoutingAttribution::new(
-                            child_id.to_key_string(),
-                        ));
-                        let _ = attribution.set_task_emb(task_emb);
-                        Some(Arc::new(crate::routing::OutcomeObserver::new(
-                            sink.clone(),
-                            store.clone(),
-                            attribution,
-                            child_model,
-                            child_provider,
-                            req.agent_def.id.clone(),
-                        ))
-                            as Arc<dyn crate::harness::TraceSink>)
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "subagent routing embed failed; capture skipped");
-                        base.trace_sink.clone()
-                    }
-                }
-            }
-            _ => base.trace_sink.clone(),
-        };
         base.session
             .emit_event(
                 &child_id,
@@ -797,7 +741,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             }
         }
 
-        // 5. Resolve the model override: explicit > model_hint > native.
+        // 5. Resolve only the explicit model override; role definitions do
+        // not supply a hidden model fallback.
         let llm: Arc<dyn AiProvider> = match resolved_model {
             Some(m) => Arc::new(crate::providers::ModelOverrideProvider::new(
                 base.provider.clone(),
@@ -927,10 +872,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             context_budget,
             context_compactor,
             preflight_pipeline,
-            // Stage A (P1) — inherited from parent SpawnerBase. VESR v1.1 (b):
-            // when routing capture is on, this is the child's own OutcomeObserver
-            // wrapping that sink; otherwise the raw sink (unchanged).
-            trace_sink: child_trace_sink,
+            // Stage A (P1) — inherited from parent SpawnerBase.
+            trace_sink: base.trace_sink.clone(),
             // Both are set. `HarnessDeps` documents that the two travel
             // independently — the harness does NOT derive one from the other —
             // so an adapter that reads only the legacy field still sees the
@@ -956,10 +899,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             // though `raw_memory_writer` is `Some` in production (the gateway
             // wires it, and the Delegation emit below already uses it), so every
             // tool call a subagent made was invisible to the `insights.tools`
-            // RPC — the sink's only real consumer. Tagged with the sub-role's
-            // `agent_def.id` (not the parent's) so per-role tool stats attribute
-            // to the role that actually ran the tool, matching the `routing_store`
-            // precedent above. No writer (tests / legacy callers) → Noop.
+            // Tagged with the sub-role's `agent_def.id` (not the parent's)
+            // so per-role tool stats attribute to the role that actually ran
+            // the tool. No writer (tests / legacy callers) → Noop.
             tool_signal_sink: match base.raw_memory_writer.clone() {
                 Some(store) => Arc::new(crate::memory::tool_signal_sink::RawMemoryToolSink::new(
                     store,

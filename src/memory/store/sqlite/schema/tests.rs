@@ -722,8 +722,6 @@ mod tests {
         for dim in PRE_WIDENING_DIMS {
             conn.execute_batch(&ddl::vec_table_ddl(dim, &format!("notes_vec_{dim}")))
                 .expect("legacy notes vec table");
-            conn.execute_batch(&ddl::vec_table_ddl(dim, &format!("routing_exp_vec_{dim}")))
-                .expect("legacy routing vec table");
         }
     }
 
@@ -862,16 +860,10 @@ mod tests {
 
         init_vec_tables(&conn).expect("upgrade");
 
-        for (dim, notes_table, routing_table) in
-            crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES
-        {
+        for (dim, notes_table) in crate::memory::store::sqlite::vec::EMBEDDING_DIM_TABLES {
             assert!(
                 table_exists(&conn, notes_table),
                 "{notes_table} (dim {dim}) missing after upgrade"
-            );
-            assert!(
-                table_exists(&conn, routing_table),
-                "{routing_table} (dim {dim}) missing after upgrade"
             );
         }
     }

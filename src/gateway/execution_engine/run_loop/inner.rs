@@ -1134,11 +1134,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(g) = orchestrator.harness.guardrails() {
                     t = t.with_guardrails(g);
                 }
-                // VESR v1.1 (b) — thread the routing store so spawned subagents
-                // capture their own routing experience under their agent_id.
-                if let Some(rs) = orchestrator.harness.routing_store() {
-                    t = t.with_routing_store(rs);
-                }
                 // Stage A (P1) — inherit the main harness's `[stability]`
                 // runaway protection so a stuck/looping/hung subagent aborts on
                 // the same stall watchdog, consecutive-failure cap, and per-turn

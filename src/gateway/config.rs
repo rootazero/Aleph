@@ -289,7 +289,7 @@ pub struct AgentConfig {
     ///
     /// Advisory: this does **not** decide which model is dialed. The binder's
     /// directive chain does that (per-turn pick ▸ session `select_model` pick ▸
-    /// the agent definition's `model_hint` ▸ the flow's `BrainRef`), and the
+    /// the flow's `BrainRef`), and the
     /// endpoint's own `[providers.<name>].models` list drives the failover
     /// walk. What this feeds is the run's vision-capability check and the
     /// `ModelResolved` label.

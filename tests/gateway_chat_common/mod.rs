@@ -221,8 +221,6 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         mcp_handle: None,
         parallel_tool_concurrency: None,
         primary_context_window: None,
-        routing_store: None,
-        routing_recall: None,
         estimate_overhead_cache: std::sync::Arc::new(
             alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
         ),

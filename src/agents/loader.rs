@@ -61,10 +61,14 @@ struct UserFrontmatter {
     id: String,
     description: String,
     when_to_use: String,
-    #[serde(default)]
-    model_hint: Option<String>,
-    #[serde(default)]
-    provider_hint: Option<String>,
+    // Legacy routing keys remain part of the tolerant frontmatter shape so old
+    // files continue to load. They are intentionally consumed here and never
+    // copied into AgentDef; Task 8 can promote this marker to the diagnostics
+    // channel without creating a second routing policy.
+    #[serde(default, rename = "model_hint")]
+    _legacy_model_hint: Option<String>,
+    #[serde(default, rename = "provider_hint")]
+    _legacy_provider_hint: Option<String>,
     /// `None` = key absent in frontmatter (loader keeps the constructor
     /// default). `Some(vec![])` = author wrote `allowed_tools: []` (explicit
     /// deny-all, must NOT be silently promoted to the wildcard default —
@@ -173,12 +177,6 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
     let mut def = AgentDef::new(&fm.id, AgentMode::SubAgent)
         .with_description(&fm.description)
         .with_when_to_use(&fm.when_to_use);
-    if let Some(m) = fm.model_hint {
-        def = def.with_model_hint(m);
-    }
-    if let Some(p) = fm.provider_hint {
-        def = def.with_provider_hint(p);
-    }
     // Apply the flat list iff the key was present. `Some(empty)` keeps the
     // empty list (explicit deny-all); `None` (absent) leaves the constructor
     // default `["*"]` in place. The old `!is_empty()` guard conflated the two
@@ -351,19 +349,21 @@ mod tests {
     }
 
     #[test]
-    fn parses_provider_hint_from_frontmatter() {
+    fn legacy_routing_fields_are_tolerated_and_ignored() {
         let tmp = tempfile::tempdir().unwrap();
         let path = write_tmp(
             &tmp,
-            "pinned.md",
-            "---\nid: pinned\ndescription: Pinned agent\nwhen_to_use: For tests\nprovider_hint: openai\n---\nbody\n",
+            "legacy.md",
+            "---\nid: legacy\ndescription: Legacy agent\nwhen_to_use: For tests\nmodel_hint: fast\nprovider_hint: openai\n---\nbody\n",
         );
         let def = parse_file(&path, AgentSource::User).unwrap();
-        assert_eq!(def.provider_hint.as_deref(), Some("openai"));
+        let json = serde_json::to_string(&def).unwrap();
+        assert!(!json.contains("model_hint"));
+        assert!(!json.contains("provider_hint"));
     }
 
     #[test]
-    fn provider_hint_absent_is_none() {
+    fn clean_frontmatter_still_loads_without_routing_metadata() {
         let tmp = tempfile::tempdir().unwrap();
         let path = write_tmp(
             &tmp,
@@ -371,7 +371,7 @@ mod tests {
             "---\nid: plain\ndescription: Plain agent\nwhen_to_use: For tests\n---\nbody\n",
         );
         let def = parse_file(&path, AgentSource::User).unwrap();
-        assert!(def.provider_hint.is_none());
+        assert_eq!(def.id, "plain");
     }
 
     #[test]

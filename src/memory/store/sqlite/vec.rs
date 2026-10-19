@@ -48,12 +48,12 @@ pub fn register_sqlite_vec() {
 ///
 /// The names are compile-time constants, so interpolating them into SQL stays
 /// injection-safe.
-pub const EMBEDDING_DIM_TABLES: &[(u32, &str, &str)] = &[
-    (384, "notes_vec_384", "routing_exp_vec_384"),
-    (768, "notes_vec_768", "routing_exp_vec_768"),
-    (1024, "notes_vec_1024", "routing_exp_vec_1024"),
-    (1536, "notes_vec_1536", "routing_exp_vec_1536"),
-    (3072, "notes_vec_3072", "routing_exp_vec_3072"),
+pub const EMBEDDING_DIM_TABLES: &[(u32, &str)] = &[
+    (384, "notes_vec_384"),
+    (768, "notes_vec_768"),
+    (1024, "notes_vec_1024"),
+    (1536, "notes_vec_1536"),
+    (3072, "notes_vec_3072"),
 ];
 
 /// Every notes vec0 table, one per supported embedding dimension. Used by
@@ -62,7 +62,7 @@ pub const EMBEDDING_DIM_TABLES: &[(u32, &str, &str)] = &[
 /// Derived from [`EMBEDDING_DIM_TABLES`] rather than restated, so a delete
 /// sweep can never miss a table that the write path is allowed to insert into.
 pub fn all_notes_vec_tables() -> impl Iterator<Item = &'static str> {
-    EMBEDDING_DIM_TABLES.iter().map(|(_, notes, _)| *notes)
+    EMBEDDING_DIM_TABLES.iter().map(|(_, notes)| *notes)
 }
 
 /// Human-readable list of supported dimensions, for error messages.
@@ -81,23 +81,7 @@ pub fn notes_vec_table_for_dim(dim: u32) -> Result<&'static str, AlephError> {
     EMBEDDING_DIM_TABLES
         .iter()
         .find(|(d, ..)| *d == dim)
-        .map(|(_, notes, _)| *notes)
-        .ok_or_else(|| {
-            AlephError::config(format!(
-                "unsupported embedding dimension: {dim} (expected one of {})",
-                supported_dims_label()
-            ))
-        })
-}
-
-/// Map an embedding dimension to the corresponding routing experience vec0 table name.
-///
-/// Returns an error for a dimension outside [`EMBEDDING_DIM_TABLES`].
-pub fn routing_exp_vec_table_for_dim(dim: u32) -> Result<&'static str, AlephError> {
-    EMBEDDING_DIM_TABLES
-        .iter()
-        .find(|(d, ..)| *d == dim)
-        .map(|(.., routing)| *routing)
+        .map(|(_, notes)| *notes)
         .ok_or_else(|| {
             AlephError::config(format!(
                 "unsupported embedding dimension: {dim} (expected one of {})",

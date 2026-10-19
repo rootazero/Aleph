@@ -316,10 +316,12 @@ pub struct ExtensionManager {
 /// `content` is the sub-agent's system prompt, through the same mapping the
 /// disk loader uses (`agents::system_prompt`).
 ///
-/// The declared `model` becomes `model_hint` through the policy a plugin
-/// command's `model:` uses ([`declared_model::declared_model_pin`]):
-/// `inherit`, a blank and the aliases `sonnet` / `opus` / `haiku` set no
-/// hint; a retired id sets none either (warned), and the agent still loads.
+/// The declared `model` is validated through the same policy as a plugin
+/// command's `model:` uses ([`declared_model::declared_model_pin`]). It does
+/// not become an AgentDef routing field; a spawned turn receives model choice
+/// only through its explicit request/session resolution.
+/// `inherit`, a blank and aliases `sonnet` / `opus` / `haiku` remain unpinned;
+/// retired ids are warned and ignored.
 ///
 /// The declared `tools` map (name → allowed) becomes allow / deny lists:
 /// * absent — the constructor default (`["*"]`) is kept, matching a disk agent
@@ -368,11 +370,11 @@ fn plugin_agent_to_def(
     if let Some(steps) = reg.steps {
         def = def.with_max_iterations(steps);
     }
-    // The one declared-model policy a plugin command's `model:` goes through
-    // too. What an unusable model costs an agent is its hint, never the agent.
+    // Validate the declared-model metadata for compatibility diagnostics, but
+    // deliberately do not copy it into AgentDef: role definitions do not route
+    // their future turns.
     match declared_model::declared_model_pin("agent", reg.model.as_deref()) {
-        Ok(Some(model)) => def = def.with_model_hint(model),
-        Ok(None) => {}
+        Ok(Some(_)) | Ok(None) => {}
         Err(why) => tracing::warn!(
             agent = id,
             why = %why,
@@ -1360,7 +1362,6 @@ mod tests {
         assert_eq!(def.source, crate::agents::AgentSource::Plugin);
         assert_eq!(def.mode, crate::agents::AgentMode::SubAgent);
         assert_eq!(def.max_iterations, Some(12));
-        assert_eq!(def.model_hint.as_deref(), Some("fast"));
         assert!(def.is_tool_allowed("bash"), "declared-allowed tool");
         assert!(!def.is_tool_allowed("file_write"), "declared-denied tool");
         assert_eq!(def.system_prompt.as_deref(), Some("You are the deployer."));
@@ -1474,13 +1475,11 @@ mod tests {
         assert!(absent.is_tool_allowed("file_read"));
     }
 
-    /// A Claude Code agent's `model:` goes through the same pin policy a
-    /// plugin command's does. `inherit` and the family aliases pin nothing.
-    /// A retired id pins nothing either, and the agent still loads. Any
-    /// other id is the hint, as written. Handing `inherit` on as a hint made
-    /// the spawner ask the provider for a model called "inherit".
+    /// A plugin agent's declared model is validated for compatibility but does
+    /// not become an AgentDef route policy. All values leave the definition
+    /// structurally identical with respect to model selection.
     #[test]
-    fn a_cc_agent_model_goes_through_the_command_pin_policy() {
+    fn a_plugin_agent_model_is_not_a_route_policy() {
         let def_with = |model: &str| {
             plugin_agent_to_def(&crate::extension::AgentRegistration {
                 name: "m".into(),
@@ -1490,16 +1489,18 @@ mod tests {
             })
             .expect("the agent loads whatever its model says")
         };
-        for pins_nothing in ["inherit", "sonnet", "opus", "haiku", "  "] {
-            assert_eq!(def_with(pins_nothing).model_hint, None, "{pins_nothing:?}");
+        for model in [
+            "inherit",
+            "sonnet",
+            "opus",
+            "haiku",
+            "  ",
+            "deepseek-reasoner",
+            "claude-sonnet-5",
+        ] {
+            let def = def_with(model);
+            assert_eq!(def.id, "m", "{model:?}");
         }
-        // Retired by its vendor (the catalog's lifecycle table): the
-        // provider would fail it, so it is no hint — and the agent loads.
-        assert_eq!(def_with("deepseek-reasoner").model_hint, None);
-        assert_eq!(
-            def_with("claude-sonnet-5").model_hint.as_deref(),
-            Some("claude-sonnet-5")
-        );
     }
 
     /// A `tools` map of only `false` entries (a runtime registration's deny

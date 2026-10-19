@@ -1883,7 +1883,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             &stop_hook_configs,
             agent_result.memory_context_provider.clone(),
             agent_result.memory_backend.clone(),
-            agent_result.embedder.clone(),
             agent_result.tool_catalog.clone(),
             auth_bundle.auth_ctx.shared_token_mgr.clone(),
             auth_bundle.auth_ctx.security_store.clone(),

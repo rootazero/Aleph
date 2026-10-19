@@ -29,11 +29,6 @@ impl HarnessRunner for AgentHarnessRunner {
         self.guardrails.clone()
     }
 
-    fn routing_store(&self) -> Option<Arc<crate::routing::RoutingExperienceStore>> {
-        // rust-doctor-disable-next-line excessive-clone
-        self.routing_store.clone()
-    }
-
     fn stall_config(&self) -> Option<crate::harness::deps::StallConfig> {
         // rust-doctor-disable-next-line excessive-clone
         self.stall_config.clone()
@@ -166,16 +161,13 @@ impl HarnessRunner for AgentHarnessRunner {
         //      it is per-TURN, so nothing about it is remembered afterwards.
         //      Until this arm existed the pick reached the vision-capability
         //      check and the `ModelResolved` banner and stopped there — the
-        //      turn was served by (1)/(2)/(3) while the UI reported otherwise;
+        //      turn was served by (1)/(2) while the UI reported otherwise;
         //   1. a `select_model` pick recorded for this session (A layer, R8) —
         //      keyed by the canonical `SessionKey` the tool wrote under;
-        //   2. the agent's own configured pin (`provider_hint` + `model_hint`)
-        //      — gives a markdown agent's declared model teeth on main runs,
-        //      matching how `subagent_spawner` already stamps it for spawns;
-        //   3. otherwise the flow's `BrainRef` preset via `pick_llm`.
+        //   2. otherwise the flow's `BrainRef` preset via `pick_llm`.
         //
-        // (1)/(2) resolve a *base provider* then stamp the model onto it via the
-        // shared `ModelOverrideProvider`. The base is, in turn:
+        // Explicit directives resolve a *base provider* then stamp the model
+        // onto it via the shared `ModelOverrideProvider`. The base is, in turn:
         //   * the named pin chain for `provider_opt` when it names a configured
         //     provider (`named_providers`, wired from the route-shaped pin +
         //     fall-through `FailoverProvider`s), so the directive still gets
@@ -184,26 +176,23 @@ impl HarnessRunner for AgentHarnessRunner {
         // Either way the base is a `FailoverProvider`, and its primary slot now
         // honours the stamped model (see `failover.rs` model-list resolution) —
         // so the explicitly chosen model actually reaches the wire instead of
-        // being shadowed by that provider's static catalog. (3) is byte-identical
-        // to before — directive-less requests send `model: None`, which the
-        // failover primary ignores, walking its catalog as usual.
+        // being shadowed by that provider's static catalog. The directive-less
+        // path is byte-identical to before — it uses `BrainRef` and lets the
+        // failover primary walk its catalog as usual.
         let session_pref_key = SessionKey::from_key_string(&session_key)
             // rust-doctor-disable-next-line excessive-clone
             .map_or_else(|| session_key.clone(), |s| s.to_key_string());
         let model_directive: Option<(Option<String>, String)> = effective_model_directive(
             turn_model,
             crate::providers::session_model_handle::get_session_model(&session_pref_key),
-            self.agent_registry
-                .get(&spec.agent)
-                .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m))),
         );
         // An unresolvable provider pin falls back to the default chain — but the
-        // *attribution* must fall back with it. `select_model` now refuses an
-        // unknown key outright, so this is reachable only via an agent's
-        // `provider_hint` naming a provider that has since been deleted; leaving
-        // the original name in `routing_directive` would price the run against a
-        // provider that never served a token and write that pair into the
-        // routing-experience store the model later reads back as verified.
+        // *attribution* must fall back with it. `select_model` refuses an
+        // unknown key outright, so this is reachable only when an explicit
+        // session directive names a provider that has since been deleted;
+        // leaving the original name in `routing_directive` would price the run
+        // against a provider that never served a token and write that pair into
+        // the routing-experience store the model later reads back as verified.
         let model_directive = model_directive.map(|(provider_opt, model)| {
             let resolved = provider_opt.filter(|p| {
                 let known = self.named_providers.contains_key(p);
@@ -289,23 +278,10 @@ impl HarnessRunner for AgentHarnessRunner {
             self.default_max_iterations,
         );
 
-        // Per-run routing handle: co-locates recall backfill (writer) with the
-        // completion observer (reader). §6/§7. Lives outside the harness (R10).
-        let routing_attribution = std::sync::Arc::new(crate::routing::RoutingAttribution::new(
-            session_id.to_key_string(),
-        ));
-
-        // Frozen attribution: the EXACT (provider, model) this run resolved.
-        // model_directive already folds the select_model session pick and the agent
-        // model_hint (with its provider_hint); the dynamic pick_llm(brain) path uses
-        // BrainRef::Strict's pinned model when present, else "(dynamic)" (genuinely
-        // unresolved at run-start — never the meaningless wrapper name "failover").
-        // ④ crash-recovery snapshot of the model half, taken here because the
-        // directive is consumed by the match below. Post-validation: the
-        // unconfigured-provider filter above has already run, so this is the
-        // pair the run is actually bound to. This is only the DIRECTIVE half —
-        // the run that carried none still served on some model, and
-        // `snapshot_model` below completes the pair from the provider chain.
+        // Frozen model identity for crash-recovery and context/cost accounting.
+        // `model_directive` folds the explicit turn and session picks; the
+        // dynamic pick_llm(brain) path uses BrainRef::Strict's pinned model when
+        // present, else "(dynamic)".
         // rust-doctor-disable-next-line excessive-clone
         let directive_model: Option<(Option<String>, String)> = routing_directive.clone();
         let (routing_model_id, routing_provider_id): (String, Option<String>) =
@@ -323,13 +299,12 @@ impl HarnessRunner for AgentHarnessRunner {
 
         // Model id that keys per-model lookups (context-gauge window + cost
         // estimate). `routing_model_id` already folds the session
-        // `select_model` pick, the agent's `model_hint`, and the brain's
-        // strict pin; the genuinely dynamic path asks the live provider chain
-        // which model it would serve (`serving_model_hint`, delegated through
-        // Metering → Failover → primary), falling back to the provider name
-        // only when even that is unknown. Resolved ONCE here — pre-loop — so
-        // the same window rides on both per-turn gauge events and the final
-        // `FlowOutcome`.
+        // `select_model` pick and the brain's strict pin; the genuinely dynamic
+        // path asks the live provider chain which model it would serve
+        // (`serving_model_hint`, delegated through Metering → Failover → primary),
+        // falling back to the provider name only when even that is unknown.
+        // Resolved ONCE here — pre-loop — so the same window rides on both
+        // per-turn gauge events and the final `FlowOutcome`.
         //
         // The hint is kept as an `Option` instead of being collapsed straight
         // into `gauge_model`, because the two consumers need different halves
@@ -430,23 +405,6 @@ impl HarnessRunner for AgentHarnessRunner {
         let prompt_estimate_factor =
             calibration_seed_for_model(&CALIBRATION_CARRYOVER, &gauge_model);
 
-        // Run-start recall (ONCE, pre-loop) → fenced String for the builder;
-        // also backfills routing_attribution.task_emb for the observer (symmetry).
-        let routing_text: Option<String> = if let Some(recall) = self.routing_recall.as_ref() {
-            match recall
-                .build_routing_experience_message(&user_query, &spec.agent, &routing_attribution)
-                .await
-            {
-                Ok(text) => text,
-                Err(e) => {
-                    tracing::warn!(error = %e, "run-start routing recall failed; recall skipped");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         // Step 5b (BUG-2/BUG-3 fix, Phase 6 follow-up): assemble the system
         // prompt from per-agent curated memory + hybrid retrieval before the
         // harness loop starts. Failures are warned and degraded to `None` so
@@ -461,7 +419,6 @@ impl HarnessRunner for AgentHarnessRunner {
                 interaction_manifest.as_ref(),
                 sandbox.as_ref(),
                 workspace_override.as_deref(),
-                routing_text,
                 has_session_summaries,
                 prompt_token_budget,
                 prompt_estimate_factor,
@@ -553,7 +510,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Per-run serving-model refinement (§2.2): the startup config
                 // is sized for the chain-MINIMUM window (failover-safe floor),
                 // but this run's serving model (`gauge_model`, folding the
-                // session select_model pick / agent model_hint / brain pin)
+                // session select_model pick / brain pin)
                 // may be a model that derivation never saw. Re-key budget,
                 // per-model thresholds, and fresh-tail onto it — min-floored
                 // by the chain-minimum, so refinement can only compact
@@ -695,33 +652,6 @@ impl HarnessRunner for AgentHarnessRunner {
         let robustness_profile =
             crate::verification::ModelRobustnessProfile::for_behavior(Some(&*behavior_name))
                 .clamped();
-        // Wrap the per-run sink so this run's SessionCompleted is observed —
-        // harness-external (R10). Subagents hold the RAW sink (captured before
-        // this wrap in the gateway run loop), so they are never routed into THIS
-        // observer. v1.1 (b) captures them via their OWN OutcomeObserver wrapped
-        // at the spawn seam (subagent_spawner::spawn) — each run records under
-        // its own agent_id; no cross-agent leakage.
-        let (vesr_model_id, vesr_provider_id): (String, String) = (
-            routing_model_id.clone(),
-            routing_provider_id.clone().unwrap_or_default(),
-        );
-        let trace_sink = match (trace_sink, self.routing_store.as_ref()) {
-            (Some(parent), Some(store)) => {
-                Some(std::sync::Arc::new(crate::routing::OutcomeObserver::new(
-                    parent,
-                    // rust-doctor-disable-next-line excessive-clone
-                    store.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    routing_attribution.clone(),
-                    vesr_model_id,
-                    vesr_provider_id,
-                    // rust-doctor-disable-next-line excessive-clone
-                    spec.agent.clone(),
-                ))
-                    as std::sync::Arc<dyn crate::harness::TraceSink>)
-            }
-            (other, _) => other,
-        };
         // B14: the Layer-3 per-turn tool-output cap tracks the model's real
         // window instead of one fixed constant. `token_budget` is the same
         // provider/capability-derived figure the compactor sizes itself from
@@ -1245,11 +1175,11 @@ impl HarnessRunner for AgentHarnessRunner {
         let agent_id = session_id.agent_id().to_string();
         let canonical_key = session_id.to_key_string();
 
-        // 2. Resolve the model the next turn would use: session pin → agent
-        //    hint → the default provider chain's serving-model hint. The last
-        //    step mirrors `run`'s dynamic-brain fallback (`gauge_model`), so
-        //    the estimate's denominator matches the one a real turn will
-        //    report instead of dropping to the conservative 128k window.
+        // 2. Resolve the model the next turn would use: session pin → the
+        //    default provider chain's serving-model hint. The last step mirrors
+        //    `run`'s dynamic-brain fallback (`gauge_model`), so the estimate's
+        //    denominator matches the one a real turn will report instead of
+        //    dropping to the conservative 128k window.
         //    (Known gap, accepted: a `BrainRef::Strict` pin on a non-default
         //    flow is invisible here — the estimate has no `FlowSpec`. All
         //    chat presets use `brain = default`, and the `≈` label plus the
@@ -1257,11 +1187,6 @@ impl HarnessRunner for AgentHarnessRunner {
         let model: String =
             crate::providers::session_model_handle::get_session_model(&canonical_key)
                 .map(|p| p.model)
-                .or_else(|| {
-                    self.agent_registry
-                        .get(&agent_id)
-                        .and_then(|d| d.model_hint)
-                })
                 .unwrap_or_else(|| {
                     self.default_provider
                         .current()
@@ -1324,7 +1249,6 @@ impl HarnessRunner for AgentHarnessRunner {
                     None,
                     sandbox.as_ref(),
                     None,
-                    None,
                     // Static overhead estimate: no real history, so no session
                     // summaries — keeps the cached estimate stable.
                     false,
@@ -1368,9 +1292,6 @@ impl HarnessRunner for AgentHarnessRunner {
         let pinned_provider = effective_model_directive(
             None,
             crate::providers::session_model_handle::get_session_model(&canonical_key),
-            self.agent_registry
-                .get(&agent_id)
-                .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m))),
         )
         .and_then(|(provider, _)| provider)
         .and_then(|p| self.named_providers.get(&p).cloned());
@@ -1475,26 +1396,22 @@ pub(crate) fn seeded_calibration_for_model(model: &str) -> Option<f64> {
 
 /// The one place that says which model directive wins.
 ///
-/// Three sources want to name the model for a run, and they are ranked by how
-/// recent and how deliberate the choice was:
+/// Two explicit sources want to name the model for a run, ranked by how
+/// recent and deliberate the choice was:
 ///
 /// 1. `turn` — this turn's explicit pick (chat-window picker / `[voice]` pin).
 ///    A human just chose it for this message; nothing may outrank it;
 /// 2. `session` — the sticky `select_model` pick the model itself made earlier
-///    in this conversation (R8);
-/// 3. `agent_hint` — the agent's declared `provider_hint` + `model_hint`.
+///    in this conversation (R8).
 ///
-/// `None` from all three means "no directive": `pick_llm` resolves the flow's
+/// `None` from both means "no directive": `pick_llm` resolves the flow's
 /// `BrainRef` and the failover primary walks its own catalog, exactly as it did
 /// before any of this existed.
 fn effective_model_directive(
     turn: Option<crate::providers::session_model_handle::SessionModelPref>,
     session: Option<crate::providers::session_model_handle::SessionModelPref>,
-    agent_hint: Option<(Option<String>, String)>,
 ) -> Option<(Option<String>, String)> {
-    turn.or(session)
-        .map(|p| (p.provider, p.model))
-        .or(agent_hint)
+    turn.or(session).map(|p| (p.provider, p.model))
 }
 
 /// The provider key the run's cost estimate and `FlowOutcome.serving_provider`
@@ -1787,44 +1704,35 @@ mod model_directive_tests {
     }
 
     #[test]
-    fn a_turn_pick_outranks_the_session_pick_and_the_agent_hint() {
+    fn a_turn_pick_outranks_the_session_pick() {
         // The regression this ranking exists for: the chat-window picker's
         // choice used to reach the vision check and the `ModelResolved` banner
-        // and stop there, so the turn ran on whatever (2)/(3) named while the
-        // UI announced the pick.
+        // and stop there, so the turn ran on the session pick while the UI
+        // announced the turn pick.
         let out = effective_model_directive(
             Some(pref(Some("openai"), "gpt-5")),
             Some(pref(None, "claude-sonnet-5")),
-            Some((Some("kimi".into()), "kimi-k2".into())),
         );
         assert_eq!(out, Some((Some("openai".to_string()), "gpt-5".to_string())));
     }
 
     #[test]
-    fn the_session_pick_still_wins_when_no_turn_pick_is_present() {
-        let out = effective_model_directive(
-            None,
-            Some(pref(None, "claude-sonnet-5")),
-            Some((Some("kimi".into()), "kimi-k2".into())),
-        );
+    fn the_session_pick_wins_when_no_turn_pick_is_present() {
+        let out = effective_model_directive(None, Some(pref(None, "claude-sonnet-5")));
         assert_eq!(out, Some((None, "claude-sonnet-5".to_string())));
     }
 
     #[test]
-    fn the_agent_hint_is_the_last_resort_and_absence_means_no_directive() {
-        assert_eq!(
-            effective_model_directive(None, None, Some((Some("kimi".into()), "kimi-k2".into()))),
-            Some((Some("kimi".to_string()), "kimi-k2".to_string()))
-        );
+    fn absence_of_explicit_picks_means_no_directive() {
         // Nothing declared → `pick_llm` / catalog walk, byte-identical to before.
-        assert_eq!(effective_model_directive(None, None, None), None);
+        assert_eq!(effective_model_directive(None, None), None);
     }
 
     #[test]
     fn a_provider_less_turn_pick_pins_only_the_model() {
         // `Raw { model }` from the picker: the model is stamped, the provider
         // chain stands (breaker + route-mode gating preserved).
-        let out = effective_model_directive(Some(pref(None, "gpt-5")), None, None);
+        let out = effective_model_directive(Some(pref(None, "gpt-5")), None);
         assert_eq!(out, Some((None, "gpt-5".to_string())));
     }
 }

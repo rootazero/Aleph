@@ -766,57 +766,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial(spend_global_policy)]
-    async fn runner_public_path_uses_core_default_not_owner_agent_provider_hint() {
-        let (default_llm, default_captured) = named_spy("core-default", "default public answer");
-        let (override_llm, override_captured) =
-            named_spy("owner-override", "owner override answer");
-        let (mut runner, owner) =
-            super::super::tests::runner_with_provider_for_public(default_llm, CANARY).await;
-        runner
-            .named_providers
-            .insert("owner-override".into(), override_llm);
-        runner.agent_registry.register(
-            crate::agents::AgentDef::new("main", crate::agents::AgentMode::Primary)
-                .with_provider_hint("owner-override")
-                .with_model_hint("owner-private-model"),
-        );
-        let owner_before = super::super::tests::owner_event_count(&runner, &owner).await;
-        let (tx, mut rx) = broadcast::channel(8);
-        let out = crate::orchestrator::dispatch::HarnessRunner::run_public_text(
-            &runner,
-            request("use the public default"),
-            CancellationToken::new(),
-            tx.clone(),
-        )
-        .await
-        .expect("public default provider run");
-        assert_eq!(out.final_text, "default public answer");
-        assert_eq!(
-            super::super::tests::owner_event_count(&runner, &owner).await,
-            owner_before
-        );
-        assert!(matches!(
-            rx.try_recv(),
-            Err(broadcast::error::TryRecvError::Empty)
-        ));
-        let c = default_captured.lock().unwrap();
-        assert_eq!(
-            c.payloads.len(),
-            1,
-            "default provider must actually be reached"
-        );
-        for input in c.messages.iter().chain(c.system.iter().flatten()) {
-            assert!(!input.contains(CANARY));
-            assert!(!input.contains("owner-private-model"));
-        }
-        assert!(
-            override_captured.lock().unwrap().payloads.is_empty(),
-            "owner named provider must never be reached"
-        );
-    }
-
-    #[tokio::test]
     async fn pre_cancelled_run_never_calls_provider() {
         let (llm, captured) = spy("should not appear");
         let cancel = CancellationToken::new();

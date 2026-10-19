@@ -103,7 +103,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // SQLite memory backend, threaded into the per-run `ContextCompactor` so it
     // can reuse hierarchical session summaries for zero-API-cost compaction.
     memory_backend: Option<alephcore::memory::store::MemoryBackend>,
-    embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     // Tool catalog — owns the `ToolHealthCache` whose snapshot
     // feeds `runtime_state_blocks`. Threaded so `build_system_prompt` can
     // populate `<tool_runtime_state>` fragments.
@@ -354,20 +353,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         named_providers.keys().cloned(),
     );
 
-    let routing_store = match (embedder.clone(), memory_backend.clone()) {
-        (Some(embedder), Some(backend)) => Some(std::sync::Arc::new(
-            alephcore::routing::RoutingExperienceStore::new(backend, embedder),
-        )),
-        _ => None,
-    };
-    let routing_recall = routing_store.clone().map(|store| {
-        let availability = alephcore::routing::provider_availability_from_config(
-            config.providers.clone(),
-            Some(shared_token_mgr.clone()),
-        );
-        std::sync::Arc::new(alephcore::routing::RoutingRecall::new(store, availability))
-    });
-
     // Cheap-tier summarization provider, built once and used twice: by the
     // per-run compactor (via `AgentHarnessRunner.cheap_provider`, below) and by
     // user-driven `/compact`. The manual path has no run to inherit a provider
@@ -472,12 +457,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // production consumer (`ExtraFilesLayer` via `build_system_prompt`).
         // Disabled / empty config keeps prompts byte-identical.
         prompt_extra_files: Some(config.prompt.extra_files.clone()),
-        // Wire `[tool_service] parallel_tool_concurrency` (default 8) so the
-        // Act-phase fast-path cap is operator-tunable instead of a hardcoded
-        // literal. `Some(8)` keeps the prior behaviour byte-identical.
         parallel_tool_concurrency: config.tool_service.parallel_tool_concurrency_opt(),
-        routing_store,
-        routing_recall,
         estimate_overhead_cache: std::sync::Arc::new(
             alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
         ),
