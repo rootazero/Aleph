@@ -463,4 +463,48 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     std::sync::Arc::new(mcp)
 }
 
+// ─── register_session_management_handlers ────────────────────────────────────
+
+pub(in crate::commands::start) fn register_session_management_handlers(
+    server: &mut GatewayServer,
+    session_store: &std::sync::Arc<alephcore::memory::store::markdown::MarkdownSessionStore>,
+    daemon: bool,
+) {
+    use alephcore::gateway::handlers::memory::sessions;
+
+    register_handler!(
+        server,
+        "memory.sessions.list",
+        sessions::handle_list,
+        session_store
+    );
+    register_handler!(
+        server,
+        "memory.sessions.get",
+        sessions::handle_get,
+        session_store
+    );
+    register_handler!(
+        server,
+        "memory.sessions.search",
+        sessions::handle_search,
+        session_store
+    );
+    register_handler!(
+        server,
+        "memory.sessions.update_compression",
+        sessions::handle_update_compression,
+        session_store
+    );
+
+    if !daemon {
+        println!("Session management methods:");
+        println!("  - memory.sessions.list               : List sessions");
+        println!("  - memory.sessions.get                : Get session details");
+        println!("  - memory.sessions.search             : Search transcripts");
+        println!("  - memory.sessions.update_compression : Update compression status");
+        println!();
+    }
+}
+
 // ─── register_workspace_handlers ─────────────────────────────────────────────

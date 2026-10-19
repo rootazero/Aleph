@@ -4,6 +4,7 @@
 //! to registered handlers.
 
 mod artifact_route;
+mod attachment_route;
 mod browser_live_runtime;
 mod browser_viewer_route;
 mod byte_range;
@@ -514,6 +515,10 @@ pub struct GatewayServer {
     /// See [`GatewaySharedState::session_store`]. Installed by
     /// [`GatewayServer::set_session_store`].
     session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    /// Markdown session store for Phase A storage backend. Installed during
+    /// boot if the store can be initialized; `None` means sessions are not
+    /// saved as Markdown files.
+    markdown_session_store: Option<Arc<crate::memory::store::markdown::MarkdownSessionStore>>,
     /// See [`GatewaySharedState::team_store`]. Installed by
     /// [`GatewayServer::set_team_store`].
     team_store: Option<Arc<dyn crate::teams::TeamStore>>,
@@ -575,6 +580,7 @@ impl GatewayServer {
             exec_approval_manager: None,
             audit_log: None,
             session_store: None,
+            markdown_session_store: None,
             team_store: None,
             event_visibility: Arc::new(
                 crate::gateway::event_visibility::EventVisibilityIndex::new(),
@@ -639,6 +645,7 @@ impl GatewayServer {
             exec_approval_manager: None,
             audit_log: None,
             session_store: None,
+            markdown_session_store: None,
             team_store: None,
             event_visibility: Arc::new(
                 crate::gateway::event_visibility::EventVisibilityIndex::new(),
@@ -862,6 +869,15 @@ impl GatewayServer {
         self.team_store = Some(store);
     }
 
+    /// Install the Markdown session store for Phase A storage backend.
+    /// Called during boot after successful store initialization.
+    pub fn set_markdown_session_store(
+        &mut self,
+        store: Arc<crate::memory::store::markdown::MarkdownSessionStore>,
+    ) {
+        self.markdown_session_store = Some(store);
+    }
+
     /// The event-plane ownership cache (P1 data isolation, spec §5.4 —
     /// `event_visibility::EventVisibilityIndex`). Always constructed (see the
     /// field doc); exposed so a handler that REWRITES a cached session's
@@ -1013,6 +1029,14 @@ impl GatewayServer {
             ))
         });
 
+        // Session attachment download route. Mounted only when a Markdown
+        // session store exists; absent store means the route is not mounted.
+        let attachments = self.markdown_session_store.as_ref().map(|store| {
+            attachment_route::attachment_routes(Arc::new(attachment_route::AttachmentRouteState {
+                store: store.clone(),
+            }))
+        });
+
         let mut router = Router::new()
             .route("/ws", get(handler::ws_upgrade_handler))
             .route("/health", get(probe::handle_health))
@@ -1028,6 +1052,10 @@ impl GatewayServer {
 
         if let Some(canvas_assets) = canvas_assets {
             router = router.merge(canvas_assets);
+        }
+
+        if let Some(attachments) = attachments {
+            router = router.merge(attachments);
         }
 
         // r4 capability-limited browser viewer (`/viewer/browser/...`). Its

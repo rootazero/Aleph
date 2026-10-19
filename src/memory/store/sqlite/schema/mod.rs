@@ -1,5 +1,6 @@
 pub mod ddl;
 pub(crate) mod migrations;
+pub mod session_ddl;
 #[cfg(test)]
 mod tests;
 

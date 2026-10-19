@@ -10,9 +10,11 @@
 pub mod actor;
 pub mod boundary_repair;
 pub mod call_log;
+pub mod composite_observer;
 pub mod epoch_registrar;
 pub mod events;
 pub mod in_process;
+pub mod markdown_projector;
 pub mod marker_balance;
 pub mod observer;
 pub mod projection;
