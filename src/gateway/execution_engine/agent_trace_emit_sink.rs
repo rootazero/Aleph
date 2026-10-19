@@ -55,8 +55,9 @@
 //!   `mask_trace_event`.
 //!
 //! Only the step-relevant variants are forwarded (see [`is_step_event`]) —
-//! the heavy/internal ones (session metrics, worktree/MCP lifecycle) carry no
-//! user-facing meaning and would only add wire noise.
+//! the heavy/internal ones (session metrics, worktree/MCP lifecycle and
+//! historical MoA events) carry no user-facing meaning on a new run and would
+//! only add wire noise.
 //!
 //! `ProviderUsage` is an explicit exception to the "internal" rule: it is the
 //! sole source of the live prompt-cache reading, and it fires once per LLM
@@ -78,10 +79,11 @@ use crate::orchestrator::dispatch::FlowStreamEvent;
 /// recovery/watchdog moments that explain *why* the loop changed course —
 /// reactive context compaction (problem: context overflow → handled: history
 /// compacted → next: retried) and a structural goal-loop veto (problem:
-/// checklist incomplete → next: forced continue). Also the three lightweight
-/// MoA fan-out moments (advisor answer, aggregator hand-off, advisor spend) —
-/// `MoaTurnTrace` is deliberately excluded: it carries the full advisor I/O
-/// payload and is persisted-only, never wire.
+/// checklist incomplete → next: forced continue).
+///
+/// Historical MoA variants deliberately remain out of this live whitelist:
+/// they are still decoded and presented when reading old traces, but ordinary
+/// runs must never publish them on the flow channel.
 ///
 /// And `ProviderUsage`, which is what the TUI's `cache N%` cell is built from
 /// (`interfaces/tui/.../app/trace.rs` → `AppState.cache_stat` →
@@ -103,9 +105,6 @@ pub(crate) const fn is_step_event(event: &LoopTraceEvent) -> bool {
             | LoopTraceEvent::ToolCallCompleted { .. }
             | LoopTraceEvent::ReactiveCompactionAttempted { .. }
             | LoopTraceEvent::VerifierVeto { .. }
-            | LoopTraceEvent::MoaAdvisor { .. }
-            | LoopTraceEvent::MoaAggregating { .. }
-            | LoopTraceEvent::MoaAdvisorSpend { .. }
             | LoopTraceEvent::ProviderUsage { .. }
             | LoopTraceEvent::CacheHealthDegraded { .. }
     )
@@ -221,6 +220,43 @@ mod tests {
             rx.try_recv().is_err(),
             "a non-step event must not be published on the flow channel"
         );
+    }
+
+    #[test]
+    fn historical_moa_events_are_not_emitted_on_the_live_flow_channel() {
+        let historical = [
+            LoopTraceEvent::MoaAdvisor {
+                index: 1,
+                count: 2,
+                label: "provider:model".into(),
+                text: "legacy advice".into(),
+                error: None,
+            },
+            LoopTraceEvent::MoaAggregating {
+                aggregator: "provider:model".into(),
+                advisor_count: 2,
+                cached: false,
+            },
+            LoopTraceEvent::MoaAdvisorSpend {
+                advisor_count: 2,
+                billed_count: 2,
+                input_tokens: 10,
+                output_tokens: 5,
+                cost_usd: None,
+            },
+            LoopTraceEvent::MoaTurnTrace {
+                preset: "legacy".into(),
+                payload: serde_json::json!({"advisors": []}),
+            },
+        ];
+
+        let (tx, mut rx) = flow_event_channel();
+        let sink = AgentTraceEmitSink::new(Arc::new(NoopTraceSink), &tx);
+        for event in &historical {
+            assert!(!is_step_event(event));
+            sink.on_trace(event);
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     /// The mirror publishes SYNCHRONOUSLY onto the run's flow channel — no

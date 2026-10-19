@@ -252,10 +252,11 @@ impl EventEmitter for RedactingEmitter {
             // `ToolCallStarted.call.input` — the same bytes its masked
             // `ToolCallCompleted` twin carries — reached this arm in the clear
             // and this comment vouched for it. What backs the exemption now is
-            // that the sink matches the enum exhaustively with no wildcard, and
-            // `the_agent_trace_exemption_is_backed_by_an_exhaustive_upstream_match`
-            // below reads that property off the sink's source rather than
-            // restating it here.
+            // that ordinary live variants have explicit redaction arms, while
+            // history-only and future variants hit the fail-closed `None`
+            // fallback. `the_agent_trace_exemption_is_backed_by_live_arms_and_fail_closed_history_fallback`
+            // below reads those properties off the sink's source rather than
+            // restating them here.
             //
             // The rest carry no free text: identifiers, counters, gauges, and
             // the `AskUser` question (authored by the model as a question to a
@@ -421,18 +422,15 @@ mod tests {
     }
 
     /// The `AgentTrace` pass-through arm above is the one place this file
-    /// outsources its guarantee to another module. Check the property that
-    /// makes the outsourcing sound, instead of trusting the comment.
+    /// outsources its guarantee to another module. Check the properties that
+    /// make the outsourcing sound, instead of trusting the comment.
     ///
-    /// The property is *exhaustiveness*, not "three named variants are
-    /// handled": `UnattendedRedactingSink` used to end in `other =>
-    /// self.inner.on_trace(other)`, written for `#[non_exhaustive]`
-    /// forward-compatibility, and that wildcard is exactly what let
-    /// `ToolCallStarted.call.input` — a credential the model had just echoed
-    /// into a tool argument — reach this emitter unmasked while the comment
-    /// said it could not. A wildcard reintroduced there turns this red.
+    /// Ordinary live variants must have explicit redaction arms. History-only
+    /// variants such as MoA events must stay out of those arms and land in the
+    /// fail-closed `_ => None` fallback, so they cannot be forwarded to the
+    /// inner sink without a live redaction policy.
     #[test]
-    fn the_agent_trace_exemption_is_backed_by_an_exhaustive_upstream_match() {
+    fn the_agent_trace_exemption_is_backed_by_live_arms_and_fail_closed_history_fallback() {
         use crate::utils::source_scan::{code_text, production_prefix};
 
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -467,19 +465,24 @@ mod tests {
         let body = &src[open..=end];
 
         let arms = body.matches("LoopTraceEvent::").count();
-        assert!(
-            arms >= 19,
-            "found only {arms} LoopTraceEvent arms in mask_trace_event — the \
-             scan stopped matching, so its green would mean nothing"
+        assert_eq!(
+            arms, 15,
+            "found {arms} live LoopTraceEvent arms in mask_trace_event — the \
+             source scan or live redaction set changed"
         );
-        for wildcard in ["_ =>", "other =>", "_event =>"] {
-            assert!(
-                !body.contains(wildcard),
-                "mask_trace_event has a `{wildcard}` catch-all, so a trace variant can \
-                 reach this emitter unmasked while the AgentTrace pass-through arm \
-                 above still claims it was masked upstream"
-            );
-        }
+        assert!(
+            !body.contains("LoopTraceEvent::Moa"),
+            "history-only MoA variants must remain outside live redaction arms"
+        );
+        assert!(
+            body.contains("_ => None"),
+            "mask_trace_event must fail closed for history-only and future variants"
+        );
+        assert_eq!(
+            body.matches("_ => None").count(),
+            1,
+            "mask_trace_event must have one explicit fail-closed fallback"
+        );
     }
 
     /// `ToolResult.presentation` is a **second copy of file content** on the
