@@ -2,7 +2,7 @@
 
 **Aleph Model Routing and MoA Removal Design & Migration Plan**
 **日期 / Date:** 2026-10-19
-**状态 / Status:** 已获用户批准的设计草案，已通过 builder check；尚未进入实现阶段
+**状态 / Status:** 已获用户批准的设计草案，builder check 已完成；没有重要未决问题
 **范围 / Scope:** Rust Core、Orchestrator、Harness、Builtin Tools、Gateway、Webchat Panel、TUI、配置、观测与测试
 
 ## 1. 意图 / Intent
@@ -27,6 +27,22 @@ The target is not to remove model support. The target is to remove runtime-owned
     -> result / cancellation / cleanup
 ```
 
+## 1.1 架构修正与最终目标 / Architecture Correction and Final Target
+
+通用 AI Agent 不应把 MoA、Debate、Review 或 Swarm 固化为核心执行架构。它们可以由主 Agent 或 Skill 根据任务动态组合，但不是 Runtime 的内置认知原语、固定引擎或默认执行流程。本次删除的最终目标是保留普通 subagent ability，同时把协作策略的选择权还给主 Agent/Skill。
+
+三者边界如下：
+
+- **通用 Subagent Runtime** 只提供模型无关、任务无关的生命周期与可靠性能力：spawn、join、cancel、collect、隔离、权限、并发控制和失败可见性；必要时可以支持轻量的只读、无工具任务，但不新增固定 MoA 引擎。
+- **LLM / 主 Agent** 决定任务拆分、是否并行、使用多少 subagent、显式模型绑定以及如何解释和组合结果。
+- **Skill** 可以在自身边界内动态编排 MoA、debate、review、pipeline 或其他协作策略，并提供所需的证据和验证规则；这些策略不能回流为 Runtime 的固定 API 或隐藏默认行为。
+
+BrainRef 及其 preset 保留，但它们只表示显式的 flow/session/provider-model 绑定或默认值；它们不根据任务语义推断模型，也不承担 semantic strategy routing。`AgentDef` 的 model/provider hints、learned routing 和 semantic strategy routing 属于本次删除范围。
+
+Runtime 不内置投票、结果聚合、最佳答案选择、提案合并、自动模型重选或策略性路由。`verify` 现阶段沿用已有的状态、结果和调用方外部检查：调用方提供证据和验证规则，Runtime 只负责让调用方能够观察任务结果、失败、超时、取消与恢复状态，不新增 caller-supplied evidence API。只有契约测试证明现有接口无法表达这一验收边界时，才允许引入最小 facade；这样会使调用方需要显式承担协作策略与验证成本，但能避免通用执行层被某一种当前流行的多模型模式锁死。
+
+当前 Aleph 已有 spawn、cancel、隔离、权限和部分失败恢复能力，但实现分散在 tracker、spawner、recovery 与执行路径中；join、collect、verify 的公共契约仍需要通过契约测试确认是否可由现有 API 表达。现阶段验收沿用已有状态、结果和调用方外部检查，不新增 caller-supplied evidence API；只有测试证明缺少稳定的 handle、join 或 collect 语义时，才做最小 facade 收敛，并复用现有 tracker/spawner/recovery，而不是复制状态机。
+
 ## 2. 决策 / Decisions
 
 ### 2.1 删除 MoA 整套产品能力
@@ -44,8 +60,10 @@ Aleph 中当前名为 MoA（Mixture of Agents）的功能包括：多个 advisor
 - `AgentDef.model_hint` 作为角色默认模型；
 - `AgentDef.provider_hint` 作为角色默认 provider；
 - routing experience 的 embedding 召回、经验注入和结果记录；
-- 任何根据任务、角色、成本、负载或历史经验替主 Agent 选择模型的主动路由；
+- 任何根据任务、角色、成本、负载或历史经验替主 Agent 选择模型的主动路由，包括 semantic strategy routing；
 - 为上述机制提供的 Panel 配置、运行时状态、数据库表和测试。
+
+BrainRef 及其 preset 不在删除范围内：它们是显式 flow/session/provider-model 绑定或默认值，不按任务语义推断；实现不得把它们改造成隐式路由。
 
 保留以下显式或可靠性基础设施：
 
@@ -321,6 +339,6 @@ MoA 专属 usage 聚合函数和测试删除。历史 trace 行不在本次自�
 
 ## 10. Builder handoff / 交给实现者
 
-实现者需要按 Phase 0–4 执行，并把最终文件清单、archive checksum、删除 symbol census、配置兼容结果和验证命令实际输出附在实现报告中。实现者可以决定共享文件中具体 import/测试的整理方式，但不能改变以下边界：MoA 整体删除、策略性模型路由删除、显式模型选择保留、provider failover 与 subagent 生命周期保留、旧数据库不自动 drop。
+实现者需要按 Phase 0–4 执行，并把最终文件清单、archive checksum、删除 symbol census、配置兼容结果和验证命令实际输出附在实现报告中。实现者可以决定共享文件中具体 import/测试的整理方式，但不能改变以下边界：MoA 整体删除、策略性模型路由删除、显式模型选择保留、BrainRef/preset 的显式绑定或默认值保留、provider failover 与 subagent 生命周期保留、旧数据库不自动 drop。
 
-本设计不包含代码实现，也不等同于实现批准；设计文档通过 builder check 后，还需要用户批准最终设计，随后才能进入 implementation plan 和代码修改。
+本设计不包含代码实现；builder check 已完成，没有重要未决问题。已知限制是完整 `cargo check --tests` 曾因资源超时并收到 SIGKILL，后续验证必须单独运行并如实报告，不能把该限制当作代码通过或回归。

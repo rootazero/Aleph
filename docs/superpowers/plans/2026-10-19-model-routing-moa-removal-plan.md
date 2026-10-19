@@ -4,11 +4,15 @@
 
 **Goal:** 删除 Aleph 的 MoA 多模型聚合和策略性模型路由，把任务拆分与模型分配交给主 Agent，同时保留显式模型绑定、provider failover、subagent 生命周期和历史数据兼容。
 
-**Architecture:** 先在删除前生成可校验的源代码归档，再按“MoA 执行路径 → 学习/角色路由 → 显式模型绑定 → UI/API → 兼容与文档”的顺序收缩系统。运行时最终只保留显式 `select_model`/subagent model directive、一个 `effective_model_directive` 汇合点和一个 `Orchestrator -> Harness` 执行路径；失败恢复仍由 provider chain 负责。共享协议保留 deprecated MoA trace typed variants，只用于历史读取。
+**Architecture:** 主 Agent/Skill 决定任务拆分、模型绑定和协作策略；通用 Subagent Runtime 只提供模型无关、任务无关的 spawn、join、cancel、collect、隔离、权限、并发和失败可见性。MoA、Debate、Review、Swarm 和 pipeline 是主 Agent/Skill 可动态组合的策略，不是 Runtime 的固定执行原语。Runtime 不内置投票、聚合、最佳答案选择、自动模型重选或策略性路由；`verify` 由调用方提供证据和验证规则。先以契约测试判断现有 tracker/spawner/recovery 是否已经足够，只有证明缺少稳定 handle、join 或 collect 语义时才做最小 generic facade 收敛，不复制状态机。运行时最终仍只保留显式 `select_model`/subagent model directive、一个 `effective_model_directive` 汇合点和一个 `Orchestrator -> Harness` 执行路径；失败恢复仍由 provider chain 负责。共享协议保留 deprecated MoA trace typed variants，只用于历史读取。
 
 **Tech Stack:** Rust workspace (`alephcore`, `aleph-server`, `aleph-panel`)、Leptos/WASM Panel、TUI、SQLite/sqlite-vec、serde/TOML/JSON-RPC、Python stdlib archive helper、现有 Cargo/just 验证命令。
 
 **Spec:** `docs/superpowers/specs/2026-10-19-model-routing-moa-removal-design.md`
+
+**Current status:** Tasks 1–5（archive、MoA core/provider/UI core deletion、proposer aggregator deletion、historical trace compatibility、learned routing/AgentDef hints deletion）已完成并分别提交；本计划只继续收敛 Task 6–9，不回滚这些删除。
+
+**Builder check:** 已完成；没有重要未决问题。已知限制是完整 `cargo check --tests` 曾因资源超时并收到 SIGKILL，后续必须单独验证并如实记录。
 
 ## Global Constraints
 
@@ -21,6 +25,8 @@
 - 共享协议保留 MoA trace typed variants 作为 deprecated historical compatibility；新运行不得生产这些事件。
 - 归档必须在任何删除前生成，包含完整删除文件和保留文件的 pre-removal snapshots，并有 manifest、SHA-256 和动态引用审计。
 - 不新增第三方依赖；Python archive helper 只使用标准库。
+- 完整 `cargo check --tests` 曾因资源超时并收到 SIGKILL 未通过；后续必须单独验证，不能把该次失败当作代码回归或成功结果。
+- 通用 facade 若现有 tracker/spawner/recovery API 已满足契约测试，不强行新增；只有契约测试证明缺口时才引入最小稳定 handle/join/collect 收敛。
 - 每个任务完成后独立运行其测试并提交一个可审查 commit；不得把失败测试改成无意义的 no-op。
 
 ## Review Focus
@@ -81,7 +87,10 @@
 - Leaves ordinary `select_model`, `list_models`, provider catalog, and the existing default/failover provider chain available.
 
 - [ ] **Step 1: Add/adjust negative tests** asserting builtin registry no longer contains `moa`, gateway method census no longer registers `moa.*`, slash dispatch treats `/moa` as removed/unknown according to existing conventions, and `select_model` rejects `moa`/`moa:<preset>` without changing ordinary model behavior.
-- [ ] **Step 2: Run targeted core tests** with `cargo test -p alephcore --lib builtin_tools::select_model gateway::method_census` and record the expected failures from the existing MoA assertions.
+- [ ] **Step 2: Run targeted core tests** separately, with one filter per invocation:
+  - `cargo test -p alephcore --lib builtin_tools::select_model`
+  - `cargo test -p alephcore --lib gateway::method_census`
+  Record the expected failures from the existing MoA assertions.
 - [ ] **Step 3: Remove module declarations and constructor/registry wiring**, then delete MoA config fields and patcher branches. Keep config deserialization tolerant of an unknown `[moa]` section; add a raw-config diagnostic hook without importing `MoaToml`.
 - [ ] **Step 4: Remove gateway execution branches and session activation** from `execute.rs`, `slash_command.rs`, `steering.rs`, and `runner_impl.rs`; ensure a normal message containing `/moa` follows the existing unknown/LLM pass-through convention and cannot arm hidden state.
 - [ ] **Step 5: Remove the MoA-specific tests and add the negative/ordinary-model tests from Step 1.** Do not delete shared historical trace variants; those belong to Task 4.
@@ -159,7 +168,12 @@
 
 - [ ] **Step 1: Add loader compatibility tests** with legacy frontmatter `model_hint` and `provider_hint`; assert the AgentDef loads without those fields and emits the deprecation diagnostic. Add spawn tests for explicit request model, no override, and no hidden AgentDef fallback.
 - [ ] **Step 2: Add SQLite fixtures** for all routing objects present, partial objects, vector extension unavailable, and no objects; assert schema initialization and ordinary memory startup continue without creating, repairing, or querying them.
-- [ ] **Step 3: Run targeted tests** with `cargo test -p alephcore --lib agents::loader agents::types agents::subagent_spawner routing`; verify failures identify the old hint/routing expectations.
+- [ ] **Step 3: Run targeted tests** separately, with one filter per invocation:
+  - `cargo test -p alephcore --lib agents::loader`
+  - `cargo test -p alephcore --lib agents::types`
+  - `cargo test -p alephcore --lib agents::subagent_spawner`
+  - `cargo test -p alephcore --lib routing`
+  Verify failures identify the old hint/routing expectations.
 - [ ] **Step 4: Remove routing store/recall/observer injection** from runtime, spawner, harness bridge, context compact, and subagent tool; remove only model-routing exports from `src/routing/mod.rs`.
 - [ ] **Step 5: Remove `model_hint`/`provider_hint` from AgentDef and loader schema**, preserving tolerant frontmatter parsing and the explicit request model path. Remove per-provider hint override registry and update attribution to actual serving model.
 - [ ] **Step 6: Remove routing experience backend and DDL creation statements**. Ensure existing partial objects are ignored by using no access path, not by a new repair migration.
@@ -179,16 +193,24 @@
 - Modify: `src/orchestrator/harness_bridge/public_run.rs`
 
 **Interfaces:**
+- Explicit model binding is independent from generic lifecycle: the same spawn/join/cancel/collect path must work with the provider default, an explicit model, and provider-configured failover.
+- BrainRef and its preset remain available as explicit flow/session/provider-model bindings or defaults; they do not infer from task semantics and do not select a lifecycle strategy.
 - `effective_model_directive` resolves only per-turn explicit model, session `select_model` pin, then provider default.
 - Explicit `(provider, model)` remains the primary pin; existing `FailureKind`/`Decision` behavior remains authoritative for retry, next model, rate limit, next provider, and stop.
 - Resume preserves current `RunStarted` freeze/replay semantics and does not write a fallback as a new session pin.
+- Current `verify` acceptance uses existing state, result, and caller-side external checks; it does not add a caller-supplied evidence API. If contract tests prove an expression gap, add only the smallest generic facade and reuse the existing tracker/spawner/recovery state.
 
-- [ ] **Step 1: Pin the precedence and failover baseline** with tests for per-turn > session pin > default, explicit provider/model primary, transient retry, model-specific next-model, provider failover, permanent stop, actual serving-model attribution, and resume after fallback.
-- [ ] **Step 2: Run `cargo test -p alephcore --lib orchestrator::harness_bridge::runner_impl providers::failover builtin_tools::select_model gateway::resume_coordinator`** and record the pre-change baseline.
-- [ ] **Step 3: Remove AgentDef/Brain/MoA/routing branches from `effective_model_directive` and runner construction**, leaving the explicit directive chain and one `ModelOverrideProvider` wrapper.
-- [ ] **Step 4: Remove `moa` pseudo-model handling from `select_model` and `list_models`;** ordinary model discovery and session pin behavior remain unchanged.
-- [ ] **Step 5: Update stale comments and test fixtures without changing `FailoverProvider` decision semantics.** Use actual serving provider/model for attribution and preserve the original directive separately where the current event contract supports it.
-- [ ] **Step 6: Run the baseline suite again plus `cargo test -p alephcore --lib orchestrator::harness_bridge::public_run`.** Expected: all baseline behavior passes and no strategy-level model selection remains.
+- [ ] **Step 1: Pin the precedence, lifecycle, and failover baseline** with tests for per-turn > session pin > default, one generic lifecycle working with default/explicit/failover model selection, explicit provider/model primary, transient retry, model-specific next-model, provider failover, permanent stop, actual serving-model attribution, cancellation, join/collect, and resume after fallback. Verify `verify` through existing state/result observations and caller-side checks; do not add a new evidence API.
+- [ ] **Step 2: Run the pre-change baseline separately, with one filter per invocation:
+  - `cargo test -p alephcore --lib orchestrator::harness_bridge::runner_impl`
+  - `cargo test -p alephcore --lib providers::failover`
+  - `cargo test -p alephcore --lib builtin_tools::select_model`
+  - `cargo test -p alephcore --lib gateway::resume_coordinator`
+  Then run the smallest applicable lifecycle contract target, using one filter per invocation. Record the pre-change baseline and any resource limitation separately.
+- [ ] **Step 3: Remove AgentDef hint/MoA/routing branches from `effective_model_directive` and runner construction**, leaving BrainRef/preset explicit bindings or defaults intact, the explicit directive chain, and one `ModelOverrideProvider` wrapper. Keep lifecycle ownership in the existing tracker/spawner/recovery path.
+- [ ] **Step 4: Remove `moa` pseudo-model handling from `select_model` and `list_models`;** ordinary model discovery and session pin behavior remain unchanged. Verify that model binding does not select or reshape lifecycle strategy.
+- [ ] **Step 5: If the lifecycle contract tests expose a real missing handle/join/collect boundary, make the minimum generic facade change.** Otherwise document that existing APIs satisfy the contract. Keep `verify` on existing state/result/caller checks and do not add a caller-supplied evidence API. Update stale comments and test fixtures without changing `FailoverProvider` decision semantics. Use actual serving provider/model for attribution and preserve the original directive separately where the current event contract supports it.
+- [ ] **Step 6: Run the baseline commands from Step 2 again, one command per filter, then run `cargo test -p alephcore --lib orchestrator::harness_bridge::public_run` and the applicable lifecycle contract tests with one filter per invocation.** Expected: all baseline behavior passes, generic lifecycle is independent of model strategy, `verify` remains expressible through existing observations and caller checks, and no strategy-level model selection remains.
 - [ ] **Step 7: Commit** with `orchestrator: simplify explicit model binding`.
 
 ### Task 7: Remove model strategy UI/API and update Panel/chat/TUI
@@ -209,15 +231,16 @@
 - Preserve: provider catalog, ordinary model picker, `select_model`, channel/session route UI if any separate surface exists
 
 **Interfaces:**
-- Panel/chat/TUI ordinary model selection uses the same `select_model` -> `effective_model_directive` path.
-- MoA pseudo-provider, preset, model ladder, AgentDef model/provider hint fields, and provider/model routing rules are absent from visible settings and catalogs.
+- Panel/chat/TUI expose only a normal configured provider/model picker and the existing explicit `select_model` path.
+- No MoA, debate, review, swarm, pipeline, model ladder, strategy, or routing-rule collaboration entry is added.
+- Ordinary model selection remains independent from generic subagent lifecycle and uses the same `select_model` -> `effective_model_directive` path.
 - Deleted RPC/CLI/tool surfaces return existing unknown/removed errors; they do not return successful no-op responses.
 
-- [ ] **Step 1: Add UI tests** for configured provider/model-only picker output, no `moa` pseudo-provider, ordinary picker selection invoking `select_model`, no MoA/routing tabs, and no AgentDef hint fields. Add API tests for removed methods using the existing unknown-method convention.
+- [ ] **Step 1: Add UI tests** for configured provider/model-only picker output, no `moa` pseudo-provider, ordinary picker selection invoking `select_model`, no MoA/routing/strategy tabs, and no AgentDef hint fields. Add API tests for removed methods using the existing unknown-method convention.
 - [ ] **Step 2: Run the focused Panel and TUI tests** before implementation and record existing failures caused by current MoA/routing expectations.
-- [ ] **Step 3: Remove Panel MoA page/API/sidebar/app route, `save_traces` control, MoA locales and live trace labels.** Keep generic provider/model catalog UI.
+- [ ] **Step 3: Remove Panel MoA page/API/sidebar/app route, `save_traces` control, MoA locales and live trace labels.** Keep generic provider/model catalog UI and do not add a collaboration-strategy picker.
 - [ ] **Step 4: Remove the provider/model `routing_rules` settings page and API wiring;** do not remove the distinct channel/session routing implementation under `src/routing/`.
-- [ ] **Step 5: Simplify chat selector/state and TUI picker/status** to show configured models, explicit pin, and actual serving model only. Remove role defaults, MoA presets and model-ladder strategy labels.
+- [ ] **Step 5: Simplify chat selector/state and TUI picker/status** to show configured models, explicit pin, and actual serving model only. Remove role defaults, MoA presets, model-ladder strategy labels, and any new strategy entry point.
 - [ ] **Step 6: Run `cargo test -p aleph-panel --lib`, the focused TUI test target, and `cargo fmt --check`.** Expected: Panel and TUI compile without MoA/routing settings and ordinary model selection remains functional.
 - [ ] **Step 7: Commit** with `ui: remove model routing and moa settings`.
 
@@ -236,12 +259,13 @@
 **Interfaces:**
 - Old `[moa]` is detected from raw config and produces one clear deprecated-feature diagnostic without constructing MoA types or writing config.
 - Old Agent frontmatter hints are ignored and produce a clear deprecated-field diagnostic without blocking load.
-- Documentation states that model choice and task decomposition belong to the LLM; runtime retains provider/model binding and reliability boundaries.
+- Documentation states that model choice, task decomposition, and collaboration strategy belong to the LLM/主 Agent or Skill; the Runtime retains only generic lifecycle/reliability capabilities and explicit provider/model binding.
+- MoA, debate, review, and pipeline are documented as dynamic caller composition, not as dedicated Runtime APIs or automatic policy routes.
 
 - [ ] **Step 1: Add config and loader diagnostic fixtures** for one old `[moa]` section, one old Agent frontmatter, both together, and clean config; assert no config rewrite and no MoA type construction.
 - [ ] **Step 2: Run the focused diagnostic tests** and verify old fixtures fail before the compatibility hooks exist.
 - [ ] **Step 3: Implement one-shot diagnostics** using the existing config/loader diagnostic channel; do not add an auto-migration that edits user files.
-- [ ] **Step 4: Update reference docs** to remove the obsolete model router description and document the explicit model binding/failover boundary; mark historical MoA design docs superseded.
+- [ ] **Step 4: Update reference docs** to remove the obsolete model router description, document the explicit model binding/failover boundary, and state the generic Runtime/LLM/Skill boundary. Mark historical MoA design docs superseded.
 - [ ] **Step 5: Run documentation/i18n census and focused tests**; expected: no stale live product references, while historical docs remain clearly marked.
 - [ ] **Step 6: Commit** with `docs: document explicit model selection after routing removal`.
 
@@ -253,17 +277,21 @@
 
 **Interfaces:**
 - Final proof must demonstrate the archive can restore every deleted source file and that the production tree has no live MoA/strategy routing path.
+- Generic lifecycle contract proof must cover spawn, join, collect, and cancel; success, failure, timeout, cancellation, and recovery; request ownership; and tool/MCP/worktree isolation boundaries.
+- BrainRef and its preset remain in the retained surface as explicit flow/session/provider-model bindings or defaults. The final census must distinguish these explicit bindings/defaults from deleted AgentDef hints, learned routing, and semantic strategy routing.
+- `verify` is accepted through existing task state, result, and caller-side external checks. It may use caller-provided evidence and validation rules at that boundary, but Runtime adds no evidence API, aggregation, voting, best-answer selection, or automatic model re-selection. A facade is conditional on contract tests proving an expression gap.
 
 - [ ] **Step 1: Run archive verification**: checksum files, extract archive to a temporary directory, compare every manifest entry, and verify the dynamic-reference decision list is complete.
-- [ ] **Step 2: Run production census** with `rg` for `MoaProvider`, `MoaManageTool`, `session_moa_handle`, `RoutingRecall`, `RoutingExperienceStore`, `OutcomeObserver`, `routing_experience`, `model_hint`, `provider_hint`, `proposer_models`, `moa_synthesis`, `moa.*`, and `protocol == "moa"`; manually classify historical compatibility and unrelated provider-config matches.
-- [ ] **Step 3: Run the minimum trusted validation set from `docs/reference/DEVELOPMENT.md`**: Core lib/bins compile and tests, `test-helpers` integration target, Panel lib/no-run, `just test-shared`, desktop checks required by the change, and workspace all-target clippy.
-- [ ] **Step 4: Run focused runtime smoke tests** for default model, explicit session model, explicit subagent model, failover, cancel, resume, old `[moa]` config, old Agent frontmatter, old trace replay, and partial routing tables.
-- [ ] **Step 5: Run `git diff --check`, `cargo fmt --check`, and final `git status --short`;** expected: all pass, archive is tracked, no generated build output or user data is included.
-- [ ] **Step 6: Have an independent reviewer inspect the complete diff and archive manifest** for omitted dynamic registrations, accidental deletion of channel/session routing, changed failover semantics, and UI no-op paths.
-- [ ] **Step 7: Commit any concrete verification fixes separately** with a message naming the defect; do not squash away archive or migration evidence.
+- [ ] **Step 2: Run production census** with `rg` for `MoaProvider`, `MoaManageTool`, `session_moa_handle`, `RoutingRecall`, `RoutingExperienceStore`, `OutcomeObserver`, `routing_experience`, `model_hint`, `provider_hint`, `proposer_models`, `moa_synthesis`, `moa.*`, and `protocol == "moa"`; manually classify historical compatibility, explicit BrainRef/preset bindings or defaults, and unrelated provider-config matches.
+- [ ] **Step 3: Run lifecycle and boundary contract checks** for spawn/join/collect/cancel, success/failure/timeout/cancellation/recovery, request ownership, tool/MCP/worktree isolation, permissions, concurrency, and failure visibility. Verify through existing task state, result, and caller-side external checks; do not add an evidence API or facade unless these tests prove the existing contract cannot express the check. There must be no Runtime aggregation, voting, or model re-selection.
+- [ ] **Step 4: Run the minimum trusted validation set from `docs/reference/DEVELOPMENT.md`** as separate executable commands or explicit single-target filters: Core lib/bins compile and tests, the `test-helpers` integration target, Panel lib/no-run, `just test-shared`, desktop checks required by the change, and workspace all-target clippy. Run `cargo check --tests` as its own separate check because the earlier attempt ended in resource timeout/SIGKILL; report its actual result independently.
+- [ ] **Step 5: Run focused runtime smoke tests** for default model, explicit session model, explicit subagent model, failover, cancel, join/collect, resume, old `[moa]` config, old Agent frontmatter, old trace replay, and partial routing tables.
+- [ ] **Step 6: Run `git diff --check`, `cargo fmt --check`, and final `git status --short`;** expected: all pass, archive is tracked, no generated build output or user data is included.
+- [ ] **Step 7: Have an independent reviewer inspect the complete diff and archive manifest** for omitted dynamic registrations, accidental deletion of channel/session routing, changed failover semantics, UI no-op paths, and accidental reintroduction of fixed collaboration strategy APIs.
+- [ ] **Step 8: Commit any concrete verification fixes separately** with a message naming the defect; do not squash away archive or migration evidence.
 
 ## Execution Order and Handoff
 
 Tasks 1–6 are sequential because the archive must precede deletion and the binding contract must be simplified before UI selectors are changed. Task 7 depends on Tasks 2, 5, and 6. Task 8 depends on the final compatibility surface from Tasks 2 and 5. Task 9 runs only after Tasks 1–8 are complete.
 
-The plan is intentionally implementation-ready but does not authorize pushing, releasing, or deploying. The archive is a tracked historical asset; it is not added to the workspace and is never compiled.
+Builder check is complete and has no important unresolved issues. The plan records the known `cargo check --tests` resource timeout/SIGKILL limitation; that check remains an independent validation result. The plan is intentionally implementation-ready but does not authorize pushing, releasing, or deploying. The archive is a tracked historical asset; it is not added to the workspace and is never compiled.
