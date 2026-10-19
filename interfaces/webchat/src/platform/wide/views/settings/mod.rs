@@ -22,6 +22,7 @@ pub mod route;
 pub mod routing_rules;
 pub mod search;
 pub mod security;
+pub mod sessions;
 pub mod skills;
 pub mod workspaces;
 
@@ -48,6 +49,7 @@ pub use route::RouteView;
 pub use routing_rules::RoutingRulesView;
 pub use search::SearchView;
 pub use security::SecurityView;
+pub use sessions::{SearchBar, SessionDetail, TranscriptViewer};
 pub use skills::SkillsView;
 pub use workspaces::WorkspacesView;
 
