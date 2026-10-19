@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::context::fabric::ContextPhase;
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registry::{
     AgentRegistration, HookRegistration, ServiceRegistration, SkillRegistration, ToolRegistration,
@@ -97,6 +98,51 @@ impl CapabilityDeclaration {
             Self::Service(_) => Some(PluginPermission::Background),
             Self::McpServer(_) => None, // MCP is the standard extension mechanism
         }
+    }
+}
+
+// ============================================================================
+// Context capability classification
+// ============================================================================
+
+/// The catalog kind every context capability reports, alongside `tool`,
+/// `hook`, `service`, `skill`, `agent` and `mcp_server`.
+///
+/// Dynamic phase data stays in
+/// [`ContextCapabilityDescriptor`](crate::context::fabric::ContextCapabilityDescriptor);
+/// this module owns only the *static* classification the extension manifest and
+/// catalog need, never a second descriptor shape.
+pub const CONTEXT_CAPABILITY_KIND: &str = "context";
+
+/// Tier and manifest permission one context phase requires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextCapabilityClass {
+    /// Context capability is always pluggable: it can be disabled per plugin
+    /// without taking a core surface with it.
+    pub tier: Tier,
+    /// `None` for read-only phases; otherwise the declared permission string.
+    pub permission: Option<PluginPermission>,
+}
+
+/// Map one phase onto the extension capability model.
+///
+/// Only `Status` is read-only. Every phase that can change what the model sees
+/// requires an explicit `context:<phase>` permission; `network_egress`,
+/// `project_write` and cross-session reads are *additional* permissions the
+/// descriptor must declare and the host must grant (Task 2), never implied by a
+/// phase.
+#[must_use]
+pub fn context_capability_class(phase: ContextPhase) -> ContextCapabilityClass {
+    let permission = match phase {
+        ContextPhase::Status => None,
+        _ => Some(PluginPermission::Custom(format!(
+            "context:{}",
+            phase.as_str()
+        ))),
+    };
+    ContextCapabilityClass {
+        tier: Tier::Pluggable,
+        permission,
     }
 }
 
@@ -254,6 +300,39 @@ mod tests {
 
         let roundtrip: Tier = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtrip, Tier::Core);
+    }
+
+    #[test]
+    fn context_phase_maps_to_pluggable_tier_and_permission() {
+        use crate::context::fabric::ContextPhase;
+
+        assert_eq!(CONTEXT_CAPABILITY_KIND, "context");
+
+        assert_eq!(
+            context_capability_class(ContextPhase::Status),
+            ContextCapabilityClass {
+                tier: Tier::Pluggable,
+                permission: None,
+            }
+        );
+        assert_eq!(
+            context_capability_class(ContextPhase::Compaction),
+            ContextCapabilityClass {
+                tier: Tier::Pluggable,
+                permission: Some(PluginPermission::Custom("context:compaction".to_string())),
+            }
+        );
+        for phase in ContextPhase::ALL {
+            assert_eq!(context_capability_class(phase).tier, Tier::Pluggable);
+        }
+        assert_eq!(
+            context_capability_class(ContextPhase::Lifecycle).permission,
+            Some(PluginPermission::Custom("context:lifecycle".to_string()))
+        );
+        assert_eq!(
+            context_capability_class(ContextPhase::Admission).permission,
+            Some(PluginPermission::Custom("context:admission".to_string()))
+        );
     }
 
     #[test]
