@@ -368,7 +368,7 @@ fn AgentRow(entry: RuntimeAgentEntry) -> impl IntoView {
     let dash = expect_context::<DashboardState>();
     // `use_navigate` returns a non-`Copy` closure; the row's click handler is
     // `move` and outlives this body, so it is parked in a `StoredValue` the
-    // same way `views/agents/mod.rs` and `views/settings/moa/mod.rs` do.
+    // same way the agents and settings views do.
     let navigate = StoredValue::new(use_navigate());
     let session_id = entry.session_id.clone();
     let state = entry.state;

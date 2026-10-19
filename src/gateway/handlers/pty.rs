@@ -1674,10 +1674,8 @@ mod tests {
     ///
     /// A hit is charged to the brace-matched body of the `#[test]` /
     /// `#[tokio::test]` function containing it, by the shared walk
-    /// [`scan_test_bodies`](crate::utils::source_scan::scan_test_bodies) —
-    /// shared because "which test owns this line" is one fact and
-    /// `providers::route_observe`'s route-globals census asks it too. A hit
-    /// that lands in NO test
+    /// [`scan_test_bodies`](crate::utils::source_scan::scan_test_bodies).
+    /// A hit that lands in NO test
     /// body — a shared helper in the test module — fails too, naming itself:
     /// the guard cannot tell which tests call a helper, and silently charging
     /// it to whichever test happens to precede it in the file would be a

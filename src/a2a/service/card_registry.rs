@@ -8,7 +8,8 @@ use chrono::Utc;
 ///
 /// Stores `RegisteredAgent` entries and implements the `AgentResolver` trait
 /// for registration and lookup. Remote card fetching lives in
-/// `service::card_refresh`; intent routing lives in `service::SmartRouter`.
+/// `service::card_refresh`; explicit agent name/alias resolution lives in
+/// `service::SmartRouter`.
 pub struct CardRegistry {
     agents: AsyncRwLock<Vec<RegisteredAgent>>,
 }

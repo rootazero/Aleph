@@ -3,36 +3,11 @@
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use crate::config::types::ProviderConfig;
 use crate::config::Config;
-use crate::providers::model_catalog::endpoint_kind_for_base_url;
-use crate::providers::route_observe::RouteObservability;
-use crate::providers::route_policy::EndpointTier;
 use crate::providers::{
     create_provider, AiProvider, DefaultProviderHandle, FailoverConfig, FailoverHealth,
-    FailoverNode, FailoverProvider, LoadStats, ModelCooldown, ProviderCooldown, StaticDefault,
+    FailoverNode, FailoverProvider, ModelCooldown, ProviderCooldown, StaticDefault,
 };
-use crate::sandbox::exec_approval::gate::ApprovalRequester;
-
-/// Endpoint tier for one configured provider, used by the route policy.
-///
-/// Special-cases `protocol == "ollama"` with no `base_url` → [`Local`]
-/// ([`OllamaProvider`](crate::providers::OllamaProvider) defaults to
-/// `http://localhost:11434`). Otherwise defers to
-/// [`endpoint_kind_for_base_url`], which keys on the `base_url` host so
-/// `ollama.com` (Cloud) and a local Ollama (Local) are distinguished.
-///
-/// [`Local`]: EndpointTier::Local
-pub(crate) fn provider_tier(pc: &ProviderConfig) -> EndpointTier {
-    let is_native_ollama = pc
-        .protocol
-        .as_deref()
-        .is_some_and(|p| p.eq_ignore_ascii_case("ollama"));
-    if is_native_ollama && pc.base_url.as_deref().is_none_or(str::is_empty) {
-        return EndpointTier::Local;
-    }
-    endpoint_kind_for_base_url(pc.base_url.as_deref()).into()
-}
 
 /// Provider routing assembled once at boot.
 ///
@@ -45,12 +20,9 @@ pub(crate) fn provider_tier(pc: &ProviderConfig) -> EndpointTier {
 pub struct ProviderChain {
     pub default: Arc<dyn DefaultProviderHandle>,
     pub agent_overrides: HashMap<String, Arc<dyn AiProvider>>,
-    /// Live handles onto the chain's shared runtime state (breaker, cooldowns,
-    /// load) plus the chain itself, which is what answers composition — the
-    /// bundle carries no second copy of who is in the chain. The production
-    /// boot path registers a clone as the process-global `route_observe` bundle so the
-    /// `self_config` `route_status` action can render live diagnostics.
-    pub observability: RouteObservability,
+    /// The concrete global chain used for fallback ordering and live
+    /// auto-derived membership.
+    pub chain: Arc<FailoverProvider>,
 }
 
 /// Build the provider routing: the global failover chain plus the
@@ -76,13 +48,7 @@ pub fn build_failover_chain(
     config: &Config,
     primary_provider_key: &str,
     default_provider: Arc<dyn DefaultProviderHandle>,
-    escalation_approval: Option<Arc<dyn ApprovalRequester>>,
-    route_handle: Option<Arc<crate::providers::route_handle::RouteHandle>>,
 ) -> ProviderChain {
-    // Local/cloud route preference (`[route]`). `Auto` (default) is a no-op,
-    // so an unconfigured deployment is byte-identical to pre-route failover.
-    let route_mode = config.route.mode;
-    let allow_escalation = config.route.allow_cloud_escalation;
     // Catalog of every configured provider's model list, keyed by toml name.
     // Lets the live primary — and each fallback — fail over across models.
     // `presets::model_ladder` folds the preset's curated fallback chain in
@@ -104,33 +70,17 @@ pub fn build_failover_chain(
         })
         .collect();
 
-    // Endpoint tier of every configured provider, keyed by the same toml name.
-    // The *static* chain stamps this onto each node via `node_for`; the
-    // *live-derived* chain (the default when no `[fallback_provider].chain` is
-    // configured) has no node to copy from, so it resolves the tier through this
-    // catalog. Without it every live-derived candidate would be `Unknown`, which
-    // classifies to `Allow` under every route mode — silently voiding
-    // `always_local` — and reads as unknown-cost, inverting `cost_aware` for
-    // on-machine endpoints.
-    let tier_catalog: HashMap<String, EndpointTier> = config
-        .providers
-        .iter()
-        // rust-doctor-disable-next-line excessive-clone
-        .map(|(name, pc)| (name.clone(), provider_tier(pc)))
-        .collect();
-
     // Shared circuit-breaker health: the global chain and every per-hint
     // override see the same provider-outage picture.
     let health = FailoverHealth::default();
+    crate::providers::failover::register_global_health(health.clone());
 
     // Shared per-model rate-limit cooldown: a model-specific 429 sidelines that
     // one model (not the whole provider) across every chain built here.
     let model_cooldown = ModelCooldown::default();
 
     // Shared per-provider rate-limit cooldown gate: after a provider 429s, the
-    // next turn paces itself (waits out the recorded window) before re-dialing
-    // it, instead of eating a fresh 429 and bouncing to a fallback — keeps a
-    // single paid primary (e.g. Kimi) in use. Scoped exactly like `health`.
+    // next turn paces itself before re-dialing it. Scoped exactly like `health`.
     let provider_cooldown = ProviderCooldown::default();
 
     // Operator-tunable in-place retry budget (`[fallback_provider].max_retries`),
@@ -144,12 +94,6 @@ pub fn build_failover_chain(
             .unwrap_or_else(|| FailoverConfig::default().max_retries),
         ..FailoverConfig::default()
     };
-
-    // Shared runtime load registry: in-flight counts and observed latencies are
-    // visible to every chain that might dial a given endpoint, so the
-    // load-balancing strategy sees one consistent picture (scoped exactly like
-    // `health` — one registry per boot-time chain assembly).
-    let load = Arc::new(LoadStats::new());
 
     // Build every non-primary provider once, reused by both the fallback
     // chain and the per-hint override registry (no double construction).
@@ -187,27 +131,6 @@ pub fn build_failover_chain(
         "failover chain assembled"
     );
 
-    // `[route]` settings that are set but cannot take effect, resolved once from
-    // the same provider/tier picture the chain is built from — so the diagnostic
-    // and the engine can never describe different provider sets. Logged loudly
-    // here (a silent no-op knob is the failure mode) and carried into
-    // `route_status` for the model. This is only the BOOT generation: the
-    // `route` arm of `config::live_apply::apply_live_sections` re-computes the
-    // list on every hot `[route]` write, whichever face it came through
-    // (`RouteObservability::hot_apply_problems`), against the same tier catalog.
-    let problems = crate::providers::route_policy::route_problems(&config.route, &tier_catalog);
-    for problem in &problems {
-        tracing::warn!(
-            field = %problem.field,
-            "[route] {}: {}", problem.field, problem.detail,
-        );
-    }
-
-    // The observability bundle reports the live primary slot; the chain consumes
-    // the handle itself.
-    // rust-doctor-disable-next-line excessive-clone
-    let default_provider_for_observability = default_provider.clone();
-
     let global_provider = FailoverProvider::new(
         default_provider,
         fallbacks,
@@ -219,22 +142,9 @@ pub fn build_failover_chain(
         failover_config.clone(),
     )
     // rust-doctor-disable-next-line excessive-clone
-    .with_route(route_mode, allow_escalation, escalation_approval.clone())
-    // rust-doctor-disable-next-line excessive-clone
-    .with_tier_catalog(tier_catalog.clone())
-    // rust-doctor-disable-next-line excessive-clone
-    .with_load_stats(load.clone())
-    // rust-doctor-disable-next-line excessive-clone
     .with_model_cooldown(model_cooldown.clone())
     // rust-doctor-disable-next-line excessive-clone
     .with_provider_cooldown(provider_cooldown.clone());
-    // A live handle (production) makes mode switches hot-apply; its absence
-    // (tests) keeps the boot snapshot above — byte-identical to before.
-    // rust-doctor-disable-next-line excessive-clone
-    let global_provider = match route_handle.clone() {
-        Some(h) => global_provider.with_route_live(h),
-        None => global_provider,
-    };
     // Auto-derived chains (no operator `[fallback_provider].chain`) derive the
     // fallback set live from the registry each turn, so a provider added or
     // removed at runtime joins/leaves the fallback set without a restart. An
@@ -244,61 +154,19 @@ pub fn build_failover_chain(
     } else {
         global_provider
     };
-    // Kept as the concrete type as well: the observability bundle asks this very
-    // chain for the order the next request will walk, so `route_status` cannot
-    // report an ordering the walk would not produce.
+    // Kept as the concrete type so context-budget sizing and diagnostics can
+    // ask the same chain for the fallback order the walk uses.
     let global_chain = Arc::new(global_provider);
     // rust-doctor-disable-next-line excessive-clone
     let global: Arc<dyn AiProvider> = global_chain.clone();
     // rust-doctor-disable-next-line excessive-clone
     let default: Arc<dyn DefaultProviderHandle> = Arc::new(StaticDefault::new(global.clone()));
 
-    // Every handle here is a clone that shares the same live `Arc` state the
-    // chains mutate, so a later snapshot always reads the current
-    // breaker/cooldown/load picture.
-    let observability = RouteObservability {
-        // rust-doctor-disable-next-line excessive-clone
-        primary: default_provider_for_observability,
-        // The chain's own composition answers `fallback_chain` (it materialises
-        // members exactly as the walk does), so the bundle no longer carries a
-        // boot-time copy to disagree with it.
-        auto_derived,
-        // rust-doctor-disable-next-line excessive-clone
-        health: health.clone(),
-        // rust-doctor-disable-next-line excessive-clone
-        model_cooldown: model_cooldown.clone(),
-        // rust-doctor-disable-next-line excessive-clone
-        provider_cooldown: provider_cooldown.clone(),
-        // rust-doctor-disable-next-line excessive-clone
-        load: load.clone(),
-        // The chain carries the route handle (`with_route_live` above) and the
-        // snapshot reads its generation through the preview, so the bundle does
-        // not keep a second copy of the handle to drift from it.
-        chain: Some(global_chain),
-        // Boot generation of the inert-`[route]` list; the hot write path
-        // republishes it through the shared `ArcSwap` (cloned handles share
-        // the same cell, like every other handle in this bundle).
-        problems: Arc::new(arc_swap::ArcSwap::from_pointee(problems)),
-        // The same tier catalog the chain and the boot problem list were built
-        // from, so a hot-applied config's problems are computed against the
-        // identical provider picture.
-        // rust-doctor-disable-next-line excessive-clone
-        tiers: Arc::new(tier_catalog.clone()),
-    };
-
-    // Configured provider-route overrides: one FailoverProvider per non-primary
+    // Configured provider overrides: one FailoverProvider per non-primary
     // provider, pinning it as primary then falling through the global chain.
     let agent_overrides: HashMap<String, Arc<dyn AiProvider>> = built
         .into_iter()
         .map(|(name, provider)| {
-            // The pinned provider's real tier, so a hard-guardrail route mode
-            // (`AlwaysLocal`) routes an explicit cloud pin through the
-            // borrow-cloud approval instead of silently allowing it. Unknown
-            // configured tier defaults to Cloud (the conservative, gated side).
-            let pin_tier = config
-                .providers
-                .get(&name)
-                .map_or(EndpointTier::Cloud, provider_tier);
             let pinned = FailoverProvider::new(
                 Arc::new(StaticDefault::new(provider)),
                 vec![FailoverNode {
@@ -306,10 +174,6 @@ pub fn build_failover_chain(
                     models: Vec::new(),
                     // rust-doctor-disable-next-line excessive-clone
                     provider: global.clone(),
-                    // The global-chain wrapper is itself route-shaped; tag it
-                    // Unknown so the pinned chain's own route policy never drops
-                    // it (the global chain already enforced the tier policy).
-                    tier: EndpointTier::Unknown,
                 }],
                 // rust-doctor-disable-next-line excessive-clone
                 model_catalog.clone(),
@@ -319,21 +183,9 @@ pub fn build_failover_chain(
                 failover_config.clone(),
             )
             // rust-doctor-disable-next-line excessive-clone
-            .with_route(route_mode, allow_escalation, escalation_approval.clone())
-            .with_primary_tier(pin_tier)
-            // rust-doctor-disable-next-line excessive-clone
-            .with_tier_catalog(tier_catalog.clone())
-            // rust-doctor-disable-next-line excessive-clone
-            .with_load_stats(load.clone())
-            // rust-doctor-disable-next-line excessive-clone
             .with_model_cooldown(model_cooldown.clone())
             // rust-doctor-disable-next-line excessive-clone
             .with_provider_cooldown(provider_cooldown.clone());
-            // rust-doctor-disable-next-line excessive-clone
-            let pinned = match route_handle.clone() {
-                Some(h) => pinned.with_route_live(h),
-                None => pinned,
-            };
             (name, Arc::new(pinned) as Arc<dyn AiProvider>)
         })
         .collect();
@@ -341,26 +193,18 @@ pub fn build_failover_chain(
     ProviderChain {
         default,
         agent_overrides,
-        observability,
+        chain: global_chain,
     }
 }
 
 /// The providers `chain`'s global failover walk can migrate a request into,
-/// in walk order, primary excluded — asked of the chain itself
-/// ([`FailoverProvider::chain_composition`]), so whoever sizes for "every model
-/// a request can land on" reads the one selection the walk uses (the explicit
-/// or legacy chain, or the registry-derived one) instead of re-deriving it
-/// from config.
-///
-/// [`FailoverProvider::chain_composition`]: crate::providers::failover::FailoverProvider::chain_composition
+/// in walk order, primary excluded — asked of the chain itself, so whoever
+/// sizes for "every model a request can land on" reads the one selection the
+/// walk uses (the explicit or legacy chain, or the registry-derived one)
+/// instead of re-deriving it from config.
 #[must_use]
 pub fn chain_fallback_names(chain: &ProviderChain) -> Vec<String> {
-    chain
-        .observability
-        .chain
-        .as_ref()
-        .map(|c| c.chain_composition().into_iter().map(|m| m.name).collect())
-        .unwrap_or_default()
+    chain.chain.fallback_names()
 }
 
 /// Assemble the ordered fallback chain for the global failover provider.
@@ -393,16 +237,9 @@ fn assemble_fallbacks(
     built: &HashMap<String, Arc<dyn AiProvider>>,
     model_catalog: &HashMap<String, Vec<String>>,
 ) -> (Vec<FailoverNode>, bool) {
-    // Build one node from a name + its already-constructed provider. Tier comes
-    // from the provider's base_url host so the route policy can order/gate this
-    // fallback by local-vs-cloud.
     let node_for = |name: &str, provider: &Arc<dyn AiProvider>| FailoverNode {
         name: name.to_string(),
         models: model_catalog.get(name).cloned().unwrap_or_default(),
-        tier: config
-            .providers
-            .get(name)
-            .map_or(EndpointTier::Cloud, provider_tier),
         // rust-doctor-disable-next-line excessive-clone
         provider: provider.clone(),
     };
@@ -789,7 +626,7 @@ mod tests {
         );
         cfg.general.fallback_providers = vec!["mid".to_string()];
 
-        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None, None);
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
         let fallbacks = chain_fallback_names(&chain);
         assert_eq!(fallbacks, vec!["mid".to_string()], "the walk's own chain");
 
@@ -810,7 +647,7 @@ mod tests {
         // No `[fallback_provider]` — the primary is still wrapped so it gains
         // model-level fallback, transient retry, and a circuit breaker.
         let cfg = cfg_with_fallback(None, vec![("primary", mock_provider_config())]);
-        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None, None);
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
         assert_eq!(chain.default.current().name(), "failover");
         // Only the primary is configured → no provider-route overrides.
         assert!(chain.agent_overrides.is_empty());
@@ -829,7 +666,7 @@ mod tests {
                 ("fb", mock_provider_config()),
             ],
         );
-        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None, None);
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
         assert_eq!(chain.default.current().name(), "failover");
         // `fb` is a non-primary configured provider → it gets a pinned
         // provider-route override; the primary never gets one because selecting
@@ -852,7 +689,7 @@ mod tests {
             }),
             vec![("primary", mock_provider_config())],
         );
-        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None, None);
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
         assert_eq!(chain.default.current().name(), "failover");
     }
 
@@ -873,7 +710,7 @@ mod tests {
                 ("aux2", mock_provider_config()),
             ],
         );
-        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None, None);
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
         assert_eq!(chain.agent_overrides.len(), 2);
         assert!(chain.agent_overrides.contains_key("aux1"));
         assert!(chain.agent_overrides.contains_key("aux2"));

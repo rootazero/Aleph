@@ -1242,8 +1242,7 @@ pub(crate) struct TestBodyScan {
 ///
 /// A "membership derived from the CALL" census — the shape that replaced
 /// `gateway::handlers::pty`'s file-enumerating guard after a measured
-/// 3-failures-in-8-runs flake, and that `providers::route_observe` now carries
-/// over for the route globals (判据 #16) — is two separable halves: *which
+/// 3-failures-in-8-runs flake (判据 #16) — is two separable halves: *which
 /// lines reach the singleton* (the census's own question) and *which test owns
 /// a line* (this walk). The second half is one fact, so it has one author:
 /// written twice, the two copies are free to disagree about which attributes
@@ -1374,11 +1373,10 @@ mod tests {
         );
     }
 
-    /// [`scan_test_bodies`] is the shared half of two census guards
-    /// (`gateway::handlers::pty`'s global `PtyManager`,
-    /// `providers::route_observe`'s route globals), so its own failure modes
-    /// are asserted here — on a fixture — instead of being rediscovered in
-    /// whichever guard misfires first. All four are load-bearing: a tag
+    /// [`scan_test_bodies`] is the shared half of the census guards for global
+    /// process state, so its own failure modes are asserted here — on a
+    /// fixture — instead of being rediscovered in whichever guard misfires
+    /// first. All four are load-bearing: a tag
     /// written ABOVE `#[test]` is the false-positive direction (a tagged test
     /// reported as a violation, and a guard that misfires gets cited as
     /// evidence), a hit in a shared helper is the case the walk refuses to

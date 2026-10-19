@@ -1,6 +1,6 @@
 //! `A2ASubAgent` — A2A remote delegation engine
 //!
-//! Integrates `SmartRouter` (routing) + `A2AClientPool` (communication) to delegate
+//! Integrates `SmartRouter` (explicit agent resolution) + `A2AClientPool` (communication) to delegate
 //! tasks to remote agents via the A2A protocol.
 
 #[cfg(test)]
@@ -19,7 +19,7 @@ use crate::sync_primitives::Arc;
 
 /// `SubAgent` implementation that delegates tasks to remote A2A agents.
 ///
-/// Uses `SmartRouter` for intent-based agent discovery and `A2AClientPool`
+/// Uses `SmartRouter` for explicit quoted name/alias resolution and `A2AClientPool`
 /// for managing HTTP connections to remote agents.
 pub struct A2ASubAgent {
     smart_router: Arc<SmartRouter>,
@@ -40,8 +40,8 @@ pub struct A2ASubAgent {
 /// handled the task, so the `a2a_delegate` tool can surface it to the model.
 #[derive(Debug, Clone)]
 pub struct DelegationOutcome {
-    /// Name of the remote agent that handled the task, or `None` when routing
-    /// found no matching agent.
+    /// Name of the remote agent that handled the task, or `None` when explicit
+    /// agent resolution found no matching agent.
     pub agent: Option<String>,
     /// The delegation result (success summary or failure error).
     pub result: SubAgentResult,
@@ -210,10 +210,10 @@ impl A2ASubAgent {
     /// `a2a_delegate` builtin tool.
     ///
     /// When `agent` is `Some`, the delegation is pinned to the agent whose id
-    /// or name matches case-insensitively. When `None`, [`SmartRouter`] selects
-    /// the best match from the prompt. A missing target is reported as a failed
-    /// [`DelegationOutcome`] (not an `Err`) so the caller can surface a clean
-    /// message to the model.
+    /// or name matches case-insensitively. When `None`, [`SmartRouter`] resolves
+    /// an explicitly quoted agent name or alias from the prompt. A missing target is
+    /// reported as a failed [`DelegationOutcome`] (not an `Err`) so the caller can
+    /// surface a clean message to the model.
     ///
     /// `parent_agent_id` / `parent_session_id` identify the delegating local
     /// agent turn; they are stamped onto the emitted `RawMemory(Delegation)`
@@ -240,13 +240,15 @@ impl A2ASubAgent {
                 .smart_router
                 .route(prompt)
                 .await
-                .map_err(|e| crate::error::AlephError::other(format!("A2A routing failed: {e}")))?
+                .map_err(|e| {
+                    crate::error::AlephError::other(format!("A2A agent resolution failed: {e}"))
+                })?
                 .map(|d| {
                     tracing::info!(
                         agent = %d.agent.card.name,
                         confidence = %d.confidence,
                         method = ?d.method,
-                        "Routed to remote agent"
+                        "Resolved remote agent"
                     );
                     d.agent
                 }),

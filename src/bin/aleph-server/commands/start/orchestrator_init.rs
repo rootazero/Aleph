@@ -75,7 +75,6 @@ use alephcore::Config;
 /// first-writer-wins, so it is a no-op on anything already stamped `Installed`.
 pub(in crate::commands::start) fn decline_orchestrator_slots(because: &'static str) {
     alephcore::gateway::i18n::decline_locale(because);
-    alephcore::providers::route_observe::decline_global_route_observability(because);
     alephcore::providers::session_model_handle::decline_pinnable_providers(because);
     alephcore::context::compact::manual::decline_manual_compaction(because);
 }
@@ -120,13 +119,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // connected servers' advertised `instructions` into the system prompt
     // (`McpInstructionsLayer`). `None` keeps that layer silent.
     mcp_handle: Option<alephcore::mcp::McpManagerHandle>,
-    // Approval gate for route-mode cloud escalation (borrow-cloud under
-    // `[route] mode = always_local`). Reuses the shared `ApprovalGate` whose
-    // channel requester is late-bound after channels are up. `None` fails any
-    // escalation closed.
-    escalation_approval: Option<
-        Arc<dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester>,
-    >,
     // Call-time descriptor identity lookup for `ToolCallRequested` stamping.
     // Wired from the MCP `tool_registry_phase2` — the only registry whose
     // tool-name space the live agent loop resolves against. `None` (tests /
@@ -291,37 +283,18 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
 
     // Wire the provider failover chain: wrap the live default-provider handle
     // in a FailoverProvider that walks [primary, ...[fallback_provider].chain],
-    // each provider expanded across its `models` list. Hot-reload is preserved
-    // — the wrapper resolves `default_provider.current()` on every call.
-    // `build_failover_chain` also yields the per-`provider_hint` override
-    // registry; both are carried on the orchestrator (`with_subagent_routing`)
-    // so the gateway routes spawned subagents through the same chain.
-    // Seed the process-global live route handle from the loaded `[route]`
-    // section and hand the chain a clone. Now a `route_config.update` /
-    // `self_config` mode switch hot-applies to the very next prompt with no
-    // daemon restart (the chain is otherwise built once and never rebuilt).
-    let route_handle = alephcore::providers::route_handle::global_route_handle(&config.route);
+    // each provider expanded across its `models` list. The wrapper resolves
+    // `default_provider.current()` on every call, so provider swaps remain live.
     let provider_chain = alephcore::orchestrator::build_failover_chain(
         config,
         primary_provider_key,
         default_provider,
-        escalation_approval,
-        Some(route_handle),
     );
     let default_provider = provider_chain.default.clone();
     // The providers this chain can migrate a request into, as the chain itself
     // answers it — the compaction budget is sized for the narrowest of them,
     // so it reads the live walk rather than re-deriving the chain from config.
     let chain_fallbacks = alephcore::orchestrator::chain_fallback_names(&provider_chain);
-    // Surface the chain's live runtime state (circuit breakers, cooldowns,
-    // load, chain composition) as the process-global observability bundle the
-    // `self_config` `route_status` action renders — the provider-health status
-    // surface the breaker's diagnostic accessor was built to feed. First-set-
-    // wins OnceLock, mirroring `global_route_handle`; production-only, so
-    // library tests never see a populated global.
-    alephcore::providers::route_observe::set_global_route_observability(
-        provider_chain.observability.clone(),
-    );
     // Wire the per-provider pin chains as the harness `named_providers` so the
     // dynamic-routing model directive composes with failover, not around it:
     // `BrainRef::Strict`/`Preferred` and a `select_model(provider=…)` pick now

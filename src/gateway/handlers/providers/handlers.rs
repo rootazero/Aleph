@@ -495,9 +495,8 @@ async fn delete_provider_inner(
 ///
 /// This used to come in two variants — one taking the `MultiProviderRegistry`
 /// and one without — because the reset went through that registry's own health
-/// map. The breaker that actually gates dialing is reached through the process
-/// route-observability handle instead, so the registry is not needed here and
-/// the split collapsed with it.
+/// map. The breaker that actually gates dialing is the shared failover health,
+/// so the registry is not needed here and the split collapsed with it.
 pub async fn handle_test(
     request: JsonRpcRequest,
     config_store: Arc<RwLock<Config>>,
@@ -584,8 +583,8 @@ pub async fn handle_test(
             // cooldown despite "Test connection" going green. (There used to be
             // a second reset here, against a registry health map that fed only
             // the `ModelResolved` badge and gated no dial; that map is gone.)
-            if let Some(obs) = crate::providers::route_observe::global_route_observability() {
-                if obs.health.reset(name).await {
+            if let Some(health) = crate::providers::failover::global_health() {
+                if health.reset(name).await {
                     info!(provider = %name, "connection test passed; failover circuit reset");
                 }
             }
@@ -1052,9 +1051,8 @@ async fn set_default_provider_inner(
                     // provider whose circuit was open left it skipped for the
                     // rest of the cooldown. Same fix, and same reason, as the
                     // connection-test path above.
-                    if let Some(obs) = crate::providers::route_observe::global_route_observability()
-                    {
-                        if obs.health.reset(&name).await {
+                    if let Some(health) = crate::providers::failover::global_health() {
+                        if health.reset(&name).await {
                             info!(name = %name, "set as default; failover circuit reset");
                         }
                     }

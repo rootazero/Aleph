@@ -82,15 +82,6 @@ pub enum SelfConfigArgs {
         #[serde(default)]
         verify: bool,
     },
-    /// Show the live routing/failover status: route mode, load-balance
-    /// strategy, provider pins, the failover chain order, and per-provider
-    /// runtime health — circuit-breaker state, failure counts, rate-limit
-    /// cooldowns, in-flight load, latency, rolling rpm/tpm usage vs configured
-    /// limits. Use this to diagnose "why did my request fall back / stall /
-    /// which provider is throttled" or before picking a model with
-    /// `select_model`. To *change* the route, use `update_config` with
-    /// `config_path: "route"`.
-    RouteStatus,
     /// List available config.toml backup snapshots (one is taken before every
     /// applied config change), newest last. Each entry exposes a `timestamp`
     /// usable as the `rollback_config` target.
@@ -351,65 +342,6 @@ impl SelfConfigTool {
                 preview_message: None,
             }),
         }
-    }
-
-    /// Read-only view of the current local/cloud route decision plus, when
-    /// the production failover chain has been assembled, its live runtime
-    /// state (circuit breakers, cooldowns, load, chain composition).
-    async fn route_status(&self) -> Result<SelfConfigOutput> {
-        let config = match &self.config {
-            Some(c) => c,
-            None => {
-                return Ok(SelfConfigOutput {
-                    success: false,
-                    message: "Config handle not available".into(),
-                    data: None,
-                    preview_message: None,
-                });
-            }
-        };
-
-        let route = config.read().await.route.clone();
-        let mode_str = match route.mode {
-            crate::config::types::RouteMode::Auto => "auto",
-            crate::config::types::RouteMode::AlwaysLocal => "always_local",
-            crate::config::types::RouteMode::AlwaysCloud => "always_cloud",
-        };
-        let mut data = serde_json::json!({
-            "mode": mode_str,
-            "allow_cloud_escalation": route.allow_cloud_escalation,
-        });
-        // Live diagnostics from the boot-registered failover chain. Absent in
-        // tests / before boot — the config-only view above still answers.
-        let runtime_note = match crate::providers::route_observe::global_route_observability() {
-            Some(obs) => {
-                if let Some(obj) = data.as_object_mut() {
-                    obj.insert("runtime".to_string(), obs.snapshot().await);
-                }
-                " Live provider health (circuit breakers, cooldowns, in-flight \
-                 load, latency, rolling rpm/tpm usage) and the failover chain \
-                 are in data.runtime. data.runtime.next_order is the order the \
-                 NEXT request will dial, gates included — read it before \
-                 guessing why a provider was chosen; a step flagged \
-                 health_sidelined (breaker open or pacing) or rate_sidelined \
-                 (at its configured ceiling, unpinned) is passed over while a \
-                 later candidate remains. data.runtime.config_problems \
-                 lists [route] settings that are set but cannot take effect."
-            }
-            None => "",
-        };
-        let message = format!(
-            "Route mode: {mode_str} (allow_cloud_escalation: {}). \
-             To change: update_config config_path=\"route\" \
-             config_value={{\"mode\":\"always_local\"}}.{runtime_note}",
-            route.allow_cloud_escalation
-        );
-        Ok(SelfConfigOutput {
-            success: true,
-            message,
-            data: Some(data),
-            preview_message: None,
-        })
     }
 
     async fn update_config(
@@ -776,7 +708,6 @@ impl AlephTool for SelfConfigTool {
             SelfConfigArgs::UpdateConfig { config_path, .. } => {
                 notify_tool_start(Self::NAME, &format!("update_config:{config_path}"))
             }
-            SelfConfigArgs::RouteStatus => notify_tool_start(Self::NAME, "route_status"),
             SelfConfigArgs::ListBackups => notify_tool_start(Self::NAME, "list_backups"),
             SelfConfigArgs::RollbackConfig { timestamp, .. } => notify_tool_start(
                 Self::NAME,
@@ -803,7 +734,6 @@ impl AlephTool for SelfConfigTool {
                 self.update_config(&config_path, config_value, dry_run, verify)
                     .await
             }
-            SelfConfigArgs::RouteStatus => self.route_status().await,
             SelfConfigArgs::ListBackups => self.list_backups().await,
             SelfConfigArgs::RollbackConfig { timestamp, dry_run } => {
                 self.rollback_config(timestamp, dry_run).await
@@ -1133,40 +1063,6 @@ mod tests {
         .unwrap();
         assert!(!rollback.success);
         assert!(rollback.message.contains("patcher not available"));
-    }
-
-    #[tokio::test]
-    async fn test_route_status_default_is_auto() {
-        let tmp = TempDir::new().unwrap();
-        let cfg = Arc::new(RwLock::new(Config::default()));
-        let tool = tool_with_dir(tmp.path()).with_config(cfg);
-
-        let result = AlephTool::call(&tool, SelfConfigArgs::RouteStatus)
-            .await
-            .unwrap();
-        assert!(result.success);
-        let data = result.data.unwrap();
-        assert_eq!(data["mode"], "auto");
-        assert_eq!(data["allow_cloud_escalation"], false);
-    }
-
-    #[tokio::test]
-    async fn test_route_status_reflects_configured_mode() {
-        let tmp = TempDir::new().unwrap();
-        let mut config = Config::default();
-        config.route.mode = crate::config::types::RouteMode::AlwaysLocal;
-        config.route.allow_cloud_escalation = true;
-        let cfg = Arc::new(RwLock::new(config));
-        let tool = tool_with_dir(tmp.path()).with_config(cfg);
-
-        let result = AlephTool::call(&tool, SelfConfigArgs::RouteStatus)
-            .await
-            .unwrap();
-        assert!(result.success);
-        let data = result.data.unwrap();
-        assert_eq!(data["mode"], "always_local");
-        assert_eq!(data["allow_cloud_escalation"], true);
-        assert!(result.message.contains("always_local"));
     }
 
     /// Helper: build a `ConfigPatcher` wired to a temp config file (mirrors

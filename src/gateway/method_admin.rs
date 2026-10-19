@@ -225,8 +225,6 @@ const ADMIN_PREFIXES: &[&str] = &[
     "browser_config.",
     "rerank_config.",
     "search_config.",
-    "route_config.",
-    "routing_rules.",
     "logs.", // getLevel/setLevel/getDirectory — setLevel mutates the process-wide
     // tracing verbosity for every caller; getDirectory discloses a server
     // filesystem path. No read-only carve-out: getLevel alone isn't worth
@@ -741,8 +739,6 @@ mod tests {
             "browser_config.update",
             "rerank_config.update",
             "search_config.update",
-            "route_config.update",
-            "routing_rules.create",
             "logs.setLevel",
             // extension / capability install
             "extensions.install",

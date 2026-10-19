@@ -70,7 +70,6 @@ pub mod gemini;
 pub mod health;
 pub mod http_provider;
 pub mod llm_retry;
-pub mod load_stats;
 pub mod message;
 pub mod metadata;
 pub mod metering;
@@ -90,9 +89,6 @@ pub mod recording_mock;
 pub mod registry;
 pub mod responses;
 pub mod retry;
-pub mod route_handle;
-pub mod route_observe;
-pub mod route_policy;
 pub mod route_witness;
 pub mod session_model_handle;
 pub mod think_level_provider;
@@ -110,7 +106,6 @@ pub use failover::{
 };
 pub use health::{ModelInfo, ProviderError};
 pub use http_provider::HttpProvider;
-pub use load_stats::{InFlightGuard, LoadStats};
 pub use metering::MeteringProvider;
 pub use mock::{MockError, MockProvider};
 pub use model_catalog::{

@@ -1101,9 +1101,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 let run_chain = crate::harness::chain_context::ChainContext::new();
                 let sub_session = orchestrator.session_service.clone();
                 // Phase 3 — route spawned subagents through the same
-                // FailoverProvider chain the main harness uses, and surface the
-                // per-`provider_hint` override registry. Without this the
-                // gateway handed subagents a bare provider, bypassing failover.
+                // failure-only FailoverProvider chain the main harness uses.
+                // Provider/model selection is explicit at the binding point;
+                // this chain only retries a failed provider/model and does not
+                // perform semantic routing or consult legacy provider hints.
                 // Falls back to the bare default provider only when the
                 // orchestrator carries no chain (test / simple-engine paths).
                 let (sub_provider, agent_overrides) = match &orchestrator.subagent_routing {

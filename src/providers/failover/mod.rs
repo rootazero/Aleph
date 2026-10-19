@@ -34,7 +34,6 @@
 
 use std::time::Duration;
 
-use crate::providers::route_policy::EndpointTier;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 
@@ -52,8 +51,10 @@ mod tests;
 #[cfg(test)]
 pub(crate) use decision::{decide, Decision};
 pub use health::{
-    CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown, ProviderHealthView,
+    global_health, register_global_health, CircuitState, FailoverHealth, ModelCooldown,
+    ProviderCooldown, ProviderHealthView,
 };
+
 /// Chain membership, exported so the membership rule can be asserted directly.
 /// Test-only: production has ONE caller and it lives inside this module. A
 /// render face that recomputes membership from here is a second call site, and
@@ -61,7 +62,7 @@ pub use health::{
 /// have materialised differently — re-exporting it offers that shortcut back.
 #[cfg(test)]
 pub(crate) use provider::effective_fallback_names;
-pub use provider::{ChainMember, FailoverProvider, RoutePreview, RouteStep};
+pub use provider::FailoverProvider;
 
 /// Name of the sentinel node that wraps a whole *nested* chain rather than a
 /// real endpoint.
@@ -71,9 +72,9 @@ pub use provider::{ChainMember, FailoverProvider, RoutePreview, RouteStep};
 /// provider (names come from `[providers]` toml keys, which cannot start with
 /// `__`). It is not an endpoint, so it takes part in nothing that describes one:
 /// no load accounting (its in-flight count and latency EWMA would be the *sum*
-/// of the nested dials it delegates to, and its name would surface in
-/// `route_status` as a provider the operator never configured), and no health
-/// sidelining (the nested chain runs its own breaker per real provider).
+/// of the nested dials it delegates to, and its name would surface as a
+/// provider the operator never configured), and no health sidelining (the
+/// nested chain runs its own breaker per real provider).
 pub const NESTED_CHAIN_NODE: &str = "__global_chain__";
 
 /// Phrase planted in the *rendered message* of an error the walk raises after
@@ -201,25 +202,15 @@ pub struct FailoverNode {
     pub models: Vec<String>,
     /// The underlying provider implementation.
     pub provider: Arc<dyn AiProvider>,
-    /// Endpoint locality tier, used by the route policy. Defaults to
-    /// [`EndpointTier::Unknown`] so existing literals stay valid and the node
-    /// is treated as the operator's configured default (always allowed).
-    pub tier: EndpointTier,
 }
 
 impl FailoverNode {
-    /// Construct a node with an explicit tier.
-    pub fn with_tier(
-        name: String,
-        models: Vec<String>,
-        provider: Arc<dyn AiProvider>,
-        tier: EndpointTier,
-    ) -> Self {
+    /// Construct a node with an explicit provider and model ladder.
+    pub fn new(name: String, models: Vec<String>, provider: Arc<dyn AiProvider>) -> Self {
         Self {
             name,
             models,
             provider,
-            tier,
         }
     }
 }

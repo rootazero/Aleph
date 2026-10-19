@@ -37,10 +37,10 @@ pub mod teams;
 /// answered `null` for a provider whose `enabled = true` sat on disk two
 /// panes away.
 ///
-/// The cost was not cosmetic. Every provider, every embedding entry and the
-/// model-route escalation toggle read as **off** on the phone regardless of
-/// their real state, and the click handler flips `!enabled` — so the first tap
-/// on a switch that looked off *disabled* an enabled provider. The three
+/// The cost was not cosmetic. Every provider and every embedding entry read as
+/// **off** on the phone regardless of their real state, and the click handler
+/// flips `!enabled` — so the first tap on a switch that looked off *disabled*
+/// an enabled provider. The three
 /// working spellings elsewhere in this crate (`components/ui/swatch_button.rs`,
 /// `components/theme_toggle.rs`, `views/settings/appearance.rs`) all write the
 /// bare `aria-pressed=`; these three were the only ones that did not.

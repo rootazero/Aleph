@@ -12,14 +12,11 @@ pub mod generation_providers;
 pub mod grants;
 pub mod mcp;
 pub mod memory;
-pub mod moa;
 pub mod network;
 pub mod plugins;
 pub mod policies;
 pub mod providers;
 pub mod reranking_providers;
-pub mod route;
-pub mod routing_rules;
 pub mod search;
 pub mod security;
 pub mod skills;
@@ -38,14 +35,11 @@ pub use generation_providers::GenerationProvidersView;
 pub use grants::StandingGrantsSection;
 pub use mcp::McpView;
 pub use memory::MemoryView;
-pub use moa::MoaView;
 pub use network::NetworkView;
 pub use plugins::PluginsView;
 pub use policies::PoliciesView;
 pub use providers::ProvidersView;
 pub use reranking_providers::RerankingProvidersView;
-pub use route::RouteView;
-pub use routing_rules::RoutingRulesView;
 pub use search::SearchView;
 pub use security::SecurityView;
 pub use skills::SkillsView;
@@ -134,14 +128,12 @@ pub fn Settings() -> impl IntoView {
     let providers_ready = RwSignal::new(StepStatus::Unknown);
     let generation_ready = RwSignal::new(StepStatus::Unknown);
     let memory_ready = RwSignal::new(StepStatus::Unknown);
-    let moa_ready = RwSignal::new(StepStatus::Unknown);
 
     Effect::new(move || {
         if !state.is_connected.get() {
             providers_ready.set(StepStatus::Unknown);
             generation_ready.set(StepStatus::Unknown);
             memory_ready.set(StepStatus::Unknown);
-            moa_ready.set(StepStatus::Unknown);
             return;
         }
         leptos::task::spawn_local(async move {
@@ -162,13 +154,6 @@ pub fn Settings() -> impl IntoView {
             // Step 3 — memory backend online (any stat row returns).
             memory_ready.set(StepStatus::of(
                 MemoryApi::stats(&state, "main").await.map(|_| true),
-            ));
-
-            // Step 4 — at least one MoA preset configured (optional).
-            moa_ready.set(StepStatus::of(
-                crate::api::moa::MoaApi::list_presets(&state)
-                    .await
-                    .map(|cfg| !cfg.presets.is_empty()),
             ));
         });
     });
@@ -196,12 +181,6 @@ pub fn Settings() -> impl IntoView {
             href: "/settings/memory",
             cta: "Open Memory",
         },
-        SetupStep {
-            title: "Configure MoA presets (optional)",
-            body: "Mixture-of-Agents: multiple advisor models consult before one aggregator model responds.",
-            href: "/settings/moa",
-            cta: "Open MoA",
-        },
     ];
 
     view! {
@@ -223,7 +202,7 @@ pub fn Settings() -> impl IntoView {
                         {t!(i18n, settings.quick_start.title)}
                     </h2>
                     {move || {
-                        let all = [providers_ready.get(), generation_ready.get(), memory_ready.get(), moa_ready.get()];
+                        let all = [providers_ready.get(), generation_ready.get(), memory_ready.get()];
                         let done = all.iter().filter(|s| **s == StepStatus::Ready).count();
                         let restricted = all.iter().filter(|s| **s == StepStatus::Restricted).count();
                         let total = all.len();
@@ -245,7 +224,7 @@ pub fn Settings() -> impl IntoView {
 
                 <div class="space-y-3">
                     {move || {
-                        let statuses = [providers_ready.get(), generation_ready.get(), memory_ready.get(), moa_ready.get()];
+                        let statuses = [providers_ready.get(), generation_ready.get(), memory_ready.get()];
                         steps.iter().zip(statuses.iter()).map(|(step, status)| {
                             view! { <SetupRow step=step.clone() status=*status /> }
                         }).collect_view()

@@ -8,7 +8,7 @@
 //! - `detail_view` — `ProviderDetailView` for a configured provider
 //! - `preset_setup` — `PresetSetupPanel` for unconfigured presets
 //! - `add_custom` — `AddCustomProviderPanel` for non-preset providers
-//! - `settings_panel` — `GenerationSettingsPanel` (thresholds + routing)
+//! - `settings_panel` — `GenerationSettingsPanel` (thresholds)
 
 mod add_custom;
 mod detail_view;

@@ -4,15 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::a2a::port::{A2AResult, AgentHealth, AgentResolver, RegisteredAgent};
 
-/// How the routing decision was made
+/// How the explicit agent resolution decision was made
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingMethod {
     ExactName,
-    LlmSemantic,
 }
 
-/// Result of smart routing
+/// Result of explicit agent resolution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingDecision {
     pub agent: RegisteredAgent,
@@ -21,45 +20,14 @@ pub struct RoutingDecision {
     pub reason: Option<String>,
 }
 
-/// Callback for LLM-based semantic matching
-#[async_trait::async_trait]
-pub trait LlmMatcher: Send + Sync {
-    /// Given user intent and available agents, return the best match
-    async fn match_intent(
-        &self,
-        intent: &str,
-        agents: &[RegisteredAgent],
-    ) -> Option<RoutingDecision>;
-}
-
-/// Two-tier smart router: **explicitly quoted** agent name → LLM semantic match.
-///
-/// There is deliberately no keyword tier. A previous Tier 2 lowercased the
-/// caller's free-text intent and word-boundary-matched it against every skill
-/// id / name / alias, returning confidence 0.8 *before* the LLM matcher was
-/// ever consulted — i.e. a rules engine deciding a routing question from
-/// natural-language prose. CLAUDE.md R7 forbids exactly that
-/// ("严禁用确定性代码替代 LLM 擅长的推理判断（…路由决策…）", and the
-/// Do-NOT list names "正则 / 规则引擎做意图识别或路由"), which is why Tier 1
-/// already restricted itself to *quoted* names. With no matcher configured the
-/// router now returns `None` for unquoted prose rather than guessing —
-/// failing visibly beats routing to the wrong agent with 0.8 confidence.
+/// Resolve explicitly quoted agent names and aliases against registered agents.
 pub struct SmartRouter {
     resolver: Arc<dyn AgentResolver>,
-    llm_matcher: Option<Arc<dyn LlmMatcher>>,
 }
 
 impl SmartRouter {
     pub fn new(resolver: Arc<dyn AgentResolver>) -> Self {
-        Self {
-            resolver,
-            llm_matcher: None,
-        }
-    }
-
-    pub fn with_llm_matcher(mut self, matcher: Arc<dyn LlmMatcher>) -> Self {
-        self.llm_matcher = Some(matcher);
-        self
+        Self { resolver }
     }
 
     /// List all registered agents (delegates to resolver)
@@ -79,22 +47,15 @@ impl SmartRouter {
             return Ok(None);
         }
 
-        // Tier 1: Exact name match
+        // Explicit name or alias resolution only.
         if let Some(decision) = self.try_exact_name(intent, &healthy_agents) {
             return Ok(Some(decision));
-        }
-
-        // Tier 2: LLM semantic match
-        if let Some(ref matcher) = self.llm_matcher {
-            if let Some(decision) = matcher.match_intent(intent, &healthy_agents).await {
-                return Ok(Some(decision));
-            }
         }
 
         Ok(None)
     }
 
-    /// Tier 1: Extract quoted names only (no substring matching per R8 LLM Sovereignty)
+    /// Resolve only explicitly quoted names and aliases (no substring matching).
     fn try_exact_name(&self, intent: &str, agents: &[RegisteredAgent]) -> Option<RoutingDecision> {
         let quoted = extract_quoted_name(intent)?;
         let quoted_lower = quoted.to_lowercase();
@@ -322,47 +283,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unquoted_skill_words_do_not_route_without_an_llm_matcher() {
-        // R7 regression: prose that merely *mentions* a skill must not be
-        // keyword-routed. With no matcher configured the router says "I don't
-        // know" instead of picking Dev Agent at 0.8 confidence.
+    async fn unquoted_skill_words_do_not_route() {
+        // Free text that merely mentions a skill must not select an agent.
         let skill = make_skill("code-review", "Code Review", None);
         let agent = make_agent("Dev Agent", vec![skill], AgentHealth::Healthy);
         let resolver = Arc::new(MockResolver::new(vec![agent]));
         let router = SmartRouter::new(resolver);
 
         assert!(router.route("do a code review").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn unquoted_skill_words_go_to_the_llm_matcher() {
-        struct RecordingLlm;
-        #[async_trait::async_trait]
-        impl LlmMatcher for RecordingLlm {
-            async fn match_intent(
-                &self,
-                _intent: &str,
-                agents: &[RegisteredAgent],
-            ) -> Option<RoutingDecision> {
-                agents.first().map(|a| RoutingDecision {
-                    agent: a.clone(),
-                    confidence: 0.7,
-                    method: RoutingMethod::LlmSemantic,
-                    reason: None,
-                })
-            }
-        }
-        let skill = make_skill("code-review", "Code Review", None);
-        let agent = make_agent("Dev Agent", vec![skill], AgentHealth::Healthy);
-        let resolver = Arc::new(MockResolver::new(vec![agent]));
-        let router = SmartRouter::new(resolver).with_llm_matcher(Arc::new(RecordingLlm));
-
-        let decision = router.route("do a code review").await.unwrap().unwrap();
-        assert_eq!(
-            decision.method,
-            RoutingMethod::LlmSemantic,
-            "the semantic tier owns unquoted intent"
-        );
     }
 
     #[tokio::test]
@@ -386,39 +314,5 @@ mod tests {
             .await
             .unwrap();
         assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn route_llm_fallback() {
-        let agent = make_agent("SmartAgent", vec![], AgentHealth::Healthy);
-        let resolver = Arc::new(MockResolver::new(vec![agent.clone()]));
-
-        struct FakeLlm;
-        #[async_trait::async_trait]
-        impl LlmMatcher for FakeLlm {
-            async fn match_intent(
-                &self,
-                _intent: &str,
-                agents: &[RegisteredAgent],
-            ) -> Option<RoutingDecision> {
-                agents.first().map(|a| RoutingDecision {
-                    agent: a.clone(),
-                    confidence: 0.7,
-                    method: RoutingMethod::LlmSemantic,
-                    reason: Some("LLM matched".to_string()),
-                })
-            }
-        }
-
-        let router = SmartRouter::new(resolver).with_llm_matcher(Arc::new(FakeLlm));
-
-        let result = router
-            .route("something unrelated to name or skill")
-            .await
-            .unwrap();
-        assert!(result.is_some());
-        let decision = result.unwrap();
-        assert_eq!(decision.confidence, 0.7);
-        assert_eq!(decision.method, RoutingMethod::LlmSemantic);
     }
 }

@@ -118,11 +118,6 @@ pub struct Config {
     /// Local voice ([voice.local]) — BYO OpenAI-compatible STT/TTS endpoint.
     #[serde(default, rename = "voice")]
     pub voice_local: VoiceSection,
-    /// Local-vs-cloud failover routing mode. `Auto` (default) is a no-op:
-    /// failover candidate order is unchanged. `AlwaysLocal`/`AlwaysCloud`
-    /// shape the chain by endpoint tier (see `[route]`).
-    #[serde(default)]
-    pub route: crate::config::types::ModelRouteConfig,
     /// Group chat configuration (multi-agent persona orchestration)
     #[serde(default)]
     pub group_chat: GroupChatConfig,
@@ -410,7 +405,6 @@ impl Default for Config {
             policies: PoliciesConfig::default(),
             generation: GenerationConfig::default(),
             voice_local: VoiceSection::default(),
-            route: crate::config::types::ModelRouteConfig::default(),
             group_chat: GroupChatConfig::default(),
             cron: CronConfig::default(),
             heartbeat: HeartbeatConfig::default(),

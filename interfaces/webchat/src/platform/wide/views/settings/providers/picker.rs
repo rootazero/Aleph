@@ -35,10 +35,10 @@ use crate::components::provider_badge::BadgeState;
 ///
 /// Two exclusions, each because the row already has a door of its own:
 ///
-/// * `protocol == "moa"` is a virtual multiplexer over other providers'
-///   credentials with no config section, so "adding" it would open an editor
-///   that can only write nonsense — the same exclusion, for the same reason, as
-///   `list::editable`.
+/// * Legacy virtual rows (`protocol == "moa"`) have no provider config
+///   section. Keeping them out of the picker is a fail-closed compatibility
+///   guard for old catalogue data, so stale data cannot create a clickable row
+///   with no truthful editor behind it.
 /// * `auth_kind == OAuth` rows stay in the always-visible subscription section
 ///   of the left panel. They are three to five rows that need no key, and they
 ///   are on screen without opening anything; offering them here as well would
@@ -254,10 +254,10 @@ mod tests {
     }
 
     #[test]
-    fn the_moa_pseudo_row_is_never_offered() {
+    fn a_legacy_virtual_protocol_row_is_never_offered() {
         let catalog = vec![key_entry("openai"), entry("moa", "moa", AuthKind::ApiKey)];
         assert_eq!(ids(&pickable(&catalog, "")), ["openai"]);
-        // Not merely absent from the unfiltered list — unreachable by name too.
+        // The compatibility guard also applies when the stale id is searched.
         assert!(pickable(&catalog, "moa").is_empty());
     }
 

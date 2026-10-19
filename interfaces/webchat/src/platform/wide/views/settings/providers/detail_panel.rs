@@ -7,18 +7,10 @@
 //! - any other → existing provider edit (full form, including the OAuth
 //!   section for rows the server marks `auth_kind: oauth`)
 //!
-//! # The model field is a ladder, not a string
-//!
-//! `providers.update` takes `models: [..]` and replaces the stored list
-//! wholesale. This page used to send a single `model`, so saving anything here
-//! — including a bare "enabled" toggle — truncated a provider's failover ladder
-//! to its first rung. The editor is therefore ordered and says so: `models[0]`
-//! is what a turn uses when it names no model, the rest are the failover rungs.
-//!
-//! The editor itself lives in [`super::model_ladder`]; this file owns the form
-//! around it, and the [`RefreshState`] both it and the ladder write to.
+//! The `models` field is the ordinary provider model list sent by
+//! `providers.create`/`providers.update`. The form edits that list directly;
+//! provider discovery remains a separate catalog operation.
 
-use super::model_ladder::{ModelLadder, RefreshState};
 use crate::api::{
     AuthKind, CatalogEntry, OAuthStatus, ProviderConfigJson, ProviderInfo, ProvidersApi, TestResult,
 };
@@ -280,6 +272,35 @@ fn ModelDefsEditor(model_defs: RwSignal<Vec<ModelDefJson>>) -> impl IntoView {
     }
 }
 
+/// Ordinary provider model list editor.
+#[component]
+fn ModelListEditor(models: RwSignal<Vec<String>>) -> impl IntoView {
+    let i18n = use_i18n();
+    view! {
+        <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-2">
+            <label class="block text-xs font-medium text-text-secondary uppercase tracking-wider">
+                {t!(i18n, settings.providers.models_label)}
+            </label>
+            <textarea
+                prop:value=move || models.get().join("\\n")
+                on:input=move |ev| {
+                    models.set(
+                        event_target_value(&ev)
+                            .lines()
+                            .map(str::trim)
+                            .filter(|line| !line.is_empty())
+                            .map(ToOwned::to_owned)
+                            .collect(),
+                    );
+                }
+                rows="5"
+                class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+                placeholder=move || t_string!(i18n, settings.providers.models_add_placeholder).to_string()
+            />
+        </div>
+    }
+}
+
 #[component]
 pub(super) fn ProviderDetailPanel(
     providers: RwSignal<Vec<ProviderInfo>>,
@@ -293,7 +314,8 @@ pub(super) fn ProviderDetailPanel(
     // Form state
     let form_name = RwSignal::new(String::new());
     let form_protocol = RwSignal::new(String::from("openai"));
-    // The ordered ladder, not a single id — see the module doc.
+    // The ordinary provider model list, kept as a vector because that is the
+    // wire shape accepted by `ProviderConfigJson`.
     let form_model = RwSignal::new(Vec::<String>::new());
     let form_api_key = RwSignal::new(String::new());
     let form_base_url = RwSignal::new(String::new());
@@ -313,11 +335,6 @@ pub(super) fn ProviderDetailPanel(
     let test_result = RwSignal::new(Option::<TestResult>::None);
     let oauth_status = RwSignal::new(Option::<OAuthStatus>::None);
     let oauth_loading = RwSignal::new(false);
-    // Owned here, not inside `ModelLadder`: the post-save sweep started by
-    // `on_save` has to report through the same badge the ladder's own button
-    // writes. When this lived in the child, the save path had nowhere to put
-    // its answer and threw it away — while a comment claimed the opposite.
-    let refresh = RwSignal::new(RefreshState::Idle);
 
     // Equality-gated so the hydration Effect below re-runs exactly once when
     // the catalogue arrives — a plain `catalog.get()` would also re-run after
@@ -587,36 +604,21 @@ pub(super) fn ProviderDetailPanel(
                         providers.set(list);
                     }
                     selected.set(Some(name.clone()));
-                    // Fire-and-forget for *latency*, not for the answer: a
-                    // vendor that is down must not make "save my API key" slow,
-                    // so the sweep runs in its own task and the save has already
-                    // reported success by the time it answers — but the verdict
-                    // still lands on the ladder's refresh badge, through the
-                    // same `settle` the manual button uses.
-                    //
-                    // The previous shape tested `.is_ok()`, which is true even
-                    // when every row is a failure: per-provider failures are
-                    // rows and not RPC errors, by design. So linking a vendor
-                    // that was unreachable said nothing at all.
+                    // Refresh discovered catalog data separately from the saved
+                    // provider configuration. The edited model list is already
+                    // persisted by the create/update call above.
                     if sweep_worthwhile {
-                        refresh.set(RefreshState::Running);
                         spawn_local(async move {
-                            match ProvidersApi::models_refresh(&state, Some(name.clone())).await {
-                                Ok(result) => {
-                                    refresh.set(RefreshState::settle(&result, &name));
-                                    if let Ok(items) =
-                                        ProvidersApi::catalog(&state, crate::api::CatalogView::All)
-                                            .await
-                                    {
-                                        catalog.set(items);
-                                    }
+                            if ProvidersApi::models_refresh(&state, Some(name.clone()))
+                                .await
+                                .is_ok()
+                            {
+                                if let Ok(items) =
+                                    ProvidersApi::catalog(&state, crate::api::CatalogView::All)
+                                        .await
+                                {
+                                    catalog.set(items);
                                 }
-                                // A transport failure on the sweep is not a
-                                // failure of the save, which has already
-                                // succeeded — so it does not become the form's
-                                // error banner. Dropping back to `Idle` says
-                                // "no answer" rather than inventing one.
-                                Err(_) => refresh.set(RefreshState::Idle),
                             }
                         });
                     }
@@ -945,14 +947,7 @@ pub(super) fn ProviderDetailPanel(
                                             }}
                                         </div>
 
-                                        // Model ladder
-                                        <ModelLadder
-                                            provider_id=key.clone()
-                                            models=form_model
-                                            catalog=catalog
-                                            error=error
-                                            refresh=refresh
-                                        />
+                                        <ModelListEditor models=form_model />
 
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
                                             <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{t!(i18n, settings.providers.configuration)}</h3>
@@ -1131,14 +1126,7 @@ pub(super) fn ProviderDetailPanel(
                                             </label>
                                         </div>
 
-                                        // Model ladder
-                                        <ModelLadder
-                                            provider_id=key.clone()
-                                            models=form_model
-                                            catalog=catalog
-                                            error=error
-                                            refresh=refresh
-                                        />
+                                        <ModelListEditor models=form_model />
 
                                         // Advanced Settings card
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">

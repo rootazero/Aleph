@@ -193,8 +193,8 @@ impl CodexTokenRefresher {
                 // (A second reset against the registry's own health map used to
                 // sit here; that map fed only the resolution badge and gated no
                 // dial, and is gone.)
-                if let Some(obs) = crate::providers::route_observe::global_route_observability() {
-                    obs.health.reset(PROVIDER_NAME).await;
+                if let Some(health) = crate::providers::failover::global_health() {
+                    health.reset(PROVIDER_NAME).await;
                 }
                 info!("codex refresh: hot-swapped chatgpt provider with renewed token");
             }

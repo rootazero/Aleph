@@ -13,7 +13,7 @@
 //!    also comes from the caller; only the delivery differs.
 //!
 //! ```ignore
-//! GLOBAL.get_or_init(|| Arc::new(RouteHandle::from_config(cfg)))    // install (uses `cfg`)
+//! HANDLE.get_or_init(|| Arc::new(Handle::from_config(cfg)))         // install (uses `cfg`)
 //! WITNESSES.get_or_init(|| RwLock::new(BoundedWitnesses::default())) // lazy (no parameter)
 //! ```
 //!
@@ -39,19 +39,12 @@
 //! migrating it onto a slot would mean either boot "installing" a regex or a
 //! diagnostic reporting "never installed" forever: the over-see direction.
 //!
-//! ## Why form 2 is a rule and not an exemption
+//! ## Why form 2 is a rule, not an exemption
 //!
-//! `providers/route_handle.rs::GLOBAL` is boot-installed
-//! (`orchestrator_init.rs:276`) and read through `try_global_route_handle() ->
-//! Option`, so it is a genuine member — but it has no setter anywhere in its own
-//! file. The specification's roster contained it anyway, because that roster was
-//! produced by a **corpus-wide word-boundary** writer search, and it is not the
-//! only static called `GLOBAL`: seven container statics in `src/` carry that
-//! name, six of them are `.set(` in their own files (nine sites across six
-//! files), and a corpus-wide search cannot tell the seventh from the other six.
-//! It was in the roster by name collision — rename any one of those six and the
-//! roster would have lost a real member with no signal at all. Form 2 selects it
-//! for the reason it actually belongs, and survives the rename.
+//! Form 2 selects a handle by the data flow that actually installs it: the
+//! initialiser must use a parameter of the enclosing function. That makes the
+//! rule independent of static names and of which caller happens to provide the
+//! value.
 //!
 //! The discriminating half is *use*, not *presence*. Ten sites across eight
 //! statics in `src/` are `get_or_init`-ed inside a function that HAS parameters
@@ -115,14 +108,13 @@
 //! failure semantics in full: an uninstalled read yields `None`, which reads as
 //! a legal "not configured" and no caller can tell.
 //!
-//! **At least SEVENTEEN confirmed instances — and the number is the least
+//! **At least SIXTEEN confirmed instances — and the number is the least
 //! reliable thing in this section.** Read the counting rule below before using
-//! it. Five members share one spelling; twelve do not, and the class is defined
+//! it. Four members share one spelling; twelve do not, and the class is defined
 //! by the *install*, never by the syntax:
 //!
 //! | static | shape | an uninstalled read means |
 //! |---|---|---|
-//! | `providers/moa/config_handle.rs::MOA_CONFIG` | `OnceLock<RwLock<Option<MoaToml>>>` | "no `[moa]` section configured" |
 //! | `gateway/middleware/request_state.rs::STATE_REGISTRY` | `OnceLock<RwLock<Option<Arc<…>>>>` | `request.state` sees no registry |
 //! | `gateway/middleware/latency.rs::GLOBAL_LATENCY` | `OnceLock<RwLock<Option<Arc<…>>>>` | `/metrics` renders no latency family |
 //! | `gateway/event_emitter/origin_fanout.rs::CHANNEL_REGISTRY` | `OnceLock<RwLock<Option<Arc<…>>>>` | origin fan-out silently skipped |
@@ -175,7 +167,8 @@
 //! **A warning is not a counting rule**, which is why what follows is a method
 //! rather than another warning — and the seventh revision found its member
 //! because the METHOD had the same defect the method itself diagnoses, one level
-//! up. See step 2.
+//! up. See step 2. Those are historical sweep counts; the current table lists
+//! sixteen surviving instances after a module removal.
 //!
 //! 1. **Grep the rationale sentence, not the type.** Authors who choose this
 //!    pattern explain themselves in near-identical words: *"installed once at
@@ -209,9 +202,9 @@
 //!    scan keyed on one of those spellings, which is precisely how it kept
 //!    coming out low.
 //!
-//! Nothing asserts seventeen, and nothing can: the class is *below this rule's
-//! resolution* by construction, so no guard sees the eighteenth arrive. That
-//! is the reason this is prose with a method attached rather than a test.
+//! Nothing asserts the table's size, and nothing can: the class is *below this
+//! rule's resolution* by construction, so no guard sees a new member arrive.
+//! That is the reason this is prose with a method attached rather than a test.
 //!
 //! `STATE_REGISTRY` shows how little hiding this takes: `origin_fanout.rs` names
 //! it in the doc comment on its own row above ("Mirrors the
@@ -226,13 +219,11 @@
 //! gateway fan-out paths, two gateway middleware handles, the channel-factory
 //! table, the audit trail, three persistence roots, the id floor, the operator
 //! mask patterns, the plugin skill dirs and sub-agents, the project roster, the
-//! user directory, the sub-agent concurrency cap, and the `[moa]` config — none
+//! user directory, and the sub-agent concurrency cap — none
 //! of which can currently be asked whether boot reached them.
 //!
-//! `the_interior_mutable_install_class_is_below_this_rules_resolution` pins
-//! `MOA_CONFIG`'s shape. All seventeen are excluded here, and all seventeen were
-//! excluded from the specification's roster too — this class has been missing
-//! all along, so nothing regressed; it was never seen.
+//! The listed instances are excluded from the specification's roster too — this
+//! class has been missing all along, so nothing regressed; it was never seen.
 //!
 //! Closing it needs a "who writes through the guard" predicate — reachability
 //! from a `write()`/`lock()` guard binding to the static — not a method-name
@@ -757,46 +748,17 @@ mod tests {
     /// Guard A — the class is closed. A new bare install-once static is a new
     /// handle nobody can observe.
     ///
-    /// `providers/route_handle.rs::GLOBAL` is the one deliberate exception: the
-    /// census's single first-caller-wins member, ruled to stay a raw
-    /// `OnceLock` rather than migrate onto [`super::CapabilitySlot`] — fitting
-    /// it to [`super::CapabilitySlot::install`] would need either a different
-    /// `Outcome` shape or a changed call site, and the second one would change
-    /// WHICH caller's config wins the initialisation. The ruling and its full
-    /// reasoning live at the static itself (`providers::route_handle::GLOBAL`,
-    /// adjudicated 2026-08-25) so that a migrator who opens the code before the
-    /// docs still finds it; this comment is a pointer, not a second account.
-    /// See this module's doc ("Why
-    /// form 2 is a rule and not an exemption") and
-    /// `route_handle_global_is_selected_by_the_first_caller_wins_arm_alone`
-    /// below for why it genuinely belongs to this census while staying off
-    /// the offender list. Named rather than silently swallowed by a weaker
-    /// predicate — the same rule the rest of this module follows for every
-    /// other named exclusion.
-    ///
     /// The offender scan alone cannot see the census itself shrinking (fewer
     /// sites means fewer offenders, not more), so the total is pinned too —
     /// the SUM, never a bare count of either side, because that is the form
     /// that survives further migration: `raw` and `slots` move against each
-    /// other as handles migrate (today: 1 raw, all of it
-    /// `route_handle::GLOBAL`, + 48 slots), and only the sum is invariant.
-    ///
-    /// Neither of those two assertions can see the exemption ITSELF growing:
-    /// widen the filter below to also swallow a second raw handle and
-    /// `offenders` empties by construction, the sum is untouched, and both
-    /// assertions stay green. An exemption that can grow silently is a
-    /// licence, not a named exception, so a third assertion pins its SIZE —
-    /// exactly one match, by name — independent of the other two.
+    /// other as handles migrate, and only the sum is invariant.
     #[test]
     fn every_installed_global_is_a_capability_slot() {
         let sites = capability_handles();
-        let is_the_route_handle_global_exemption = |s: &&HandleSite| {
-            s.file.ends_with("src/providers/route_handle.rs") && s.name == "GLOBAL"
-        };
         let offenders: Vec<String> = sites
             .iter()
             .filter(|s| !s.is_slot)
-            .filter(|s| !is_the_route_handle_global_exemption(s))
             .map(|s| format!("{}::{} ({})", s.file, s.name, s.container))
             .collect();
         assert!(
@@ -810,70 +772,20 @@ mod tests {
             sites.iter().filter(|s| !s.is_slot).count(),
             sites.iter().filter(|s| s.is_slot).count(),
         );
-        // The literal tracks the DELTA of deliberate additions, not a
-        // measured total. Closing the previous "one BELOW live total" gap
-        // (2026-10): the unaccounted raw handle was the
-        // `route_handle::GLOBAL` exemption that this very test's filter
-        // already names a few lines above; the literal was lagging the
-        // measured total by exactly one — the SUM guard was the design, not
-        // the bug. New red is a recogniser regression or a handle that left
-        // the corpus; investigate before editing the number (判据 §17: a
-        // guard edited green is worse than one that is honestly red).
+        // Measured from this worktree after the raw first-caller handle's module
+        // removal: 0 raw + 55 slots = 55. Keep the sum guard for future changes;
+        // investigate a drift before editing it (判据 §17).
         assert_eq!(
             raw + slots,
-            56,
+            55,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             56. Never assert either side alone: raw shrinks and slots grows as \
-             migration proceeds, so only the SUM is stable. A drift here means \
-             either a census recogniser regressed (see the module doc's \
-             recogniser blind spots) or a handle genuinely left the corpus — \
-             investigate before editing this number. \
-             Last moved 2026-10-15: 55 -> 56 when `capability/projection_host` \
-             was rostered alongside the existing telecom public-history and \
-             public-approval slots. Before that, 2026-10-13: 54 -> 55 when \
-             `gateway/telecom/public_approval` was rostered (Task #14, A-step), \
-             so the operator control plane's shared ledger and the public run \
-             driver's trusted scope lifecycle share one observable install-or-decline. Before that, 2026-10-03: \
-             52 -> 53 when the `gateway/mcp-face` slot was rostered (P6.4), so \
-             the MCP server face's install-or-decline is observable to \
-             `core/capability-wiring` like every other subsystem. Before that, \
-             2026-10: 51 -> 52 to acknowledge the named raw exemption \
-             (`route_handle::GLOBAL`, see this test's filter above) as part of \
-             the SUM. Before that, 2026-09-24: 50 -> 51 when \
-             `teams/background-stores` was added, so `users.update`'s \
-             deactivation freeze had a fifth leg (the principal's \
-             dispatcher-managed team tasks) to reach. Before that, 2026-09-23: \
-             49 -> 50 when `security/users-store` was added, so the fire-time \
-             authority resolver could re-read the users table at every \
-             background trigger. Before that, 2026-09-06: 48 -> 49 when \
-             `thinker/prompt-size-registry` was added, so `context.breakdown` \
-             could report the prompt that was actually sent instead of \
-             re-deriving it. Before that, 2026-09-04: 47 -> 48 when \
-             `heartbeat/service` was added, so `users.update`'s deactivation \
-             freeze had a fourth subsystem to reach.",
+             55. Never assert either side alone: raw shrinks and slots grows as \
+             migration proceeds, so only the SUM is stable. A drift means either \
+             a census recogniser regressed (see the module doc's recogniser blind \
+             spots) or a handle genuinely left the corpus — investigate before \
+             editing this number. The current total is derived from the files in \
+             the worktree, not a historical exception.",
             raw + slots
-        );
-
-        let exempted: Vec<String> = sites
-            .iter()
-            .filter(|s| !s.is_slot)
-            .filter(|s| is_the_route_handle_global_exemption(s))
-            .map(|s| format!("{}::{}", s.file, s.name))
-            .collect();
-        assert_eq!(
-            exempted.len(),
-            1,
-            "the route_handle::GLOBAL exemption above matched {} raw handle(s), \
-             not exactly one: {exempted:?}. This assertion FORBIDS widening \
-             that filter: it exists for the one member ruled exempt \
-             (providers/route_handle.rs::GLOBAL, see this test's doc and \
-             `route_handle_global_is_selected_by_the_first_caller_wins_arm_alone`), \
-             and a broader predicate would make `offenders` empty by \
-             construction while a second, genuinely unmigrated handle rode \
-             along unnoticed. If a new raw handle needs the same treatment, \
-             that is a decision for a human to write here explicitly — name \
-             it, do not generalise the predicate to catch it.",
-            exempted.len()
         );
     }
 
@@ -914,11 +826,9 @@ mod tests {
         );
         assert!(
             rostered.len() >= 40,
-            "roster has {} entries; 45 were measured on 2026-08-25 (the census \
-             decomposes as 1 raw -- route_handle::GLOBAL, staying raw by ruling, \
-             see every_installed_global_is_a_capability_slot above -- + 45 \
-             slots). A shrinking roster and a broken scan look identical in a \
-             green report.",
+            "roster has {} entries; expected at least 40 to ensure the census \
+             and roster do not both pass vacuously. A shrinking roster and a \
+             broken scan look identical in a green report.",
             rostered.len()
         );
     }
@@ -1002,46 +912,6 @@ mod tests {
         }
     }
 
-    /// `providers/route_handle.rs::GLOBAL` is selected by the first-caller-wins
-    /// arm and by nothing else.
-    ///
-    /// This is the member the specification's roster held by accident: a
-    /// corpus-wide writer search could not distinguish it from the six OTHER
-    /// container statics named `GLOBAL` that are `.set(` in their own files. It is
-    /// boot-installed at `orchestrator_init.rs:276` and read through
-    /// `try_global_route_handle() -> Option`, so it genuinely belongs — and it
-    /// now belongs for a reason a rename cannot break.
-    ///
-    /// The assertion is two-sided on purpose. "Is a handle" would still pass if
-    /// someone widened the writer search until it swallowed this static by name
-    /// again, which is precisely the derivation this test exists to forbid.
-    #[test]
-    fn route_handle_global_is_selected_by_the_first_caller_wins_arm_alone() {
-        let c = take_census();
-        let is = |v: &[HandleSite]| {
-            v.iter()
-                .any(|s| s.file.ends_with("src/providers/route_handle.rs") && s.name == "GLOBAL")
-        };
-        assert!(
-            is(&c.first_caller),
-            "route_handle::GLOBAL is no longer selected by the first-caller-wins \
-             arm. Either its install shape changed (it was \
-             `GLOBAL.get_or_init(|| Arc::new(RouteHandle::from_config(cfg)))`, \
-             installed from the enclosing fn's `cfg` parameter), or that arm \
-             stopped working — and a handle silently leaving the roster is the \
-             failure this whole round exists to remove."
-        );
-        assert!(
-            !is(&c.written),
-            "route_handle::GLOBAL is now matched by the WRITER search. If someone \
-             gave it a real setter, that is fine — delete this test and the note \
-             in the module doc. If instead the writer search was widened until it \
-             matched across files, revert that: it would be selecting this static \
-             by its very short name, which is how the specification's roster got \
-             it, and a rename would silently drop a real member."
-        );
-    }
-
     /// A writer split across lines is still a writer.
     ///
     /// Roster membership must not be a function of line length.
@@ -1094,58 +964,14 @@ mod tests {
         );
     }
 
-    /// The known gap, pinned as a fact rather than left in prose: `MOA_CONFIG`
-    /// is `OnceLock<RwLock<Option<T>>>`, lazily built with no argument and then
-    /// filled THROUGH the lock. It has the round-7 failure semantics and neither
-    /// install form can see it — the whole `OnceLock<Lock<Option<T>>>` class is
-    /// below this rule's resolution. See the module doc's "Known gap" section.
-    ///
-    /// This test does not assert the gap is acceptable. It asserts the gap is
-    /// still THIS gap, so that the day `MOA_CONFIG` grows a real writer, the
-    /// number moves for a reason someone reads about instead of guesses at.
-    #[test]
-    fn the_interior_mutable_install_class_is_below_this_rules_resolution() {
-        let src = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("src/providers/moa/config_handle.rs"),
-        )
-        .expect("config_handle.rs");
-        let prod = strip_comment_lines(&production_prefix(&src));
-        assert!(
-            prod.contains("static MOA_CONFIG:"),
-            "MOA_CONFIG is gone or renamed"
-        );
-        assert!(
-            !is_written(&prod, "MOA_CONFIG"),
-            "MOA_CONFIG now has a writer: it is selectable by install form 1, the \
-             count moves by one, and the module doc's known-gap section should \
-             record that its confirmed instance is gone."
-        );
-        let c = take_census();
-        assert!(
-            c.lazy
-                .iter()
-                .any(|s| s.file.ends_with("src/providers/moa/config_handle.rs")
-                    && s.name == "MOA_CONFIG"),
-            "MOA_CONFIG is no longer a candidate at all — the recogniser stopped \
-             seeing its declaration, which looks exactly like a correct exclusion"
-        );
-    }
-
-    /// Test-only statics are removed by the extractor, not by a name filter.
-    ///
-    /// Both of these sit inside a `#[cfg(test)]` **function** — the shape the
-    /// deleted `split("#[cfg(test)]")` idiom got right only by cutting the whole
-    /// tail of the file. They must be absent from BOTH halves of the verdict:
-    /// absent from the handles is not evidence (the install predicates would
-    /// also have excluded them), absent from the candidates is.
+    /// The test-only static in the session-store fixture is removed by the
+    /// extractor, not by a name filter. It must be absent from BOTH halves of
+    /// the verdict: absent from the handles is not evidence (the install
+    /// predicates would also have excluded it), absent from the candidates is.
     #[test]
     fn test_only_statics_are_not_candidates_at_all() {
         let c = take_census();
-        for (file, name) in [
-            ("src/providers/moa/config_handle.rs", "LOCK"),
-            ("src/session/store.rs", "TEST_STORE"),
-        ] {
+        for (file, name) in [("src/session/store.rs", "TEST_STORE")] {
             let in_handles = c
                 .written
                 .iter()
@@ -1483,11 +1309,11 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// That is safe, and the reason is worth writing down rather than
     /// rediscovering: rustfmt's over-width wrap for a `static` breaks *inside
     /// the generic list*, so line one keeps `static NAME: Container<` intact —
-    /// verified for both a raw handle and a slot, census unchanged at 46. Any
+    /// verified for both a raw handle and a slot, with the census unchanged. Any
     /// other wrap is not a fixed point of rustfmt, so `cargo fmt --check`
     /// rejects it. And if one ever does slip through, it fails LOUDLY: the
     /// handle leaves the census and `every_installed_global_is_a_capability_slot`'s
-    /// `raw + slots == 46` assertion reds on the total. Do not "fix" those two
+    /// `raw + slots` total assertion reds. Do not "fix" those two
     /// by making them span lines without first producing a wrap that actually
     /// breaks them.
     ///
@@ -1635,7 +1461,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
              recognised: `parse_static_decl` and the slot arm of `take_census` \
              read `static NAME: Container<` from ONE line. Check \
              `every_installed_global_is_a_capability_slot` in the same run — \
-             its `raw + slots == 46` assertion will be red too, and its \
+             its `raw + slots` total assertion will be red too, and its \
              message is the accurate one.\n\
              \n\
              (If you expected 'missing accessor', that is the loop above.)",

@@ -99,7 +99,6 @@ pub struct GenerationSettings {
     pub output_dir: Option<String>,
     pub auto_paste_threshold_mb: u32,
     pub background_task_threshold_seconds: u32,
-    pub smart_routing_enabled: bool,
 }
 
 // ============================================================================
@@ -357,7 +356,6 @@ mod tests {
             output_dir: None,
             auto_paste_threshold_mb: 5,
             background_task_threshold_seconds: 30,
-            smart_routing_enabled: true,
         }
     }
 
@@ -370,7 +368,6 @@ mod tests {
             "output_dir": null,
             "auto_paste_threshold_mb": 5,
             "background_task_threshold_seconds": 30,
-            "smart_routing_enabled": true,
         });
         let decoded: GenerationSettings = serde_json::from_value(body).expect("decode");
         assert_eq!(decoded, settings());
@@ -385,7 +382,6 @@ mod tests {
         let body = serde_json::json!({
             "auto_paste_threshold_mb": 5,
             "background_task_threshold_seconds": 30,
-            "smart_routing_enabled": true,
         });
         let decoded: GenerationSettings = serde_json::from_value(body).expect("decode");
         assert_eq!(decoded.output_dir, None);
