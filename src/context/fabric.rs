@@ -672,6 +672,13 @@ impl ContextSnapshot {
                 found: self.input_fingerprint.clone(),
             });
         }
+        let payload_fingerprint = self.payload_fingerprint();
+        if self.input_fingerprint != payload_fingerprint {
+            return Err(ContextContractError::FingerprintMismatch {
+                expected: payload_fingerprint,
+                found: self.input_fingerprint.clone(),
+            });
+        }
         if self.session_id.trim().is_empty() {
             return Err(ContextContractError::EmptySessionId {
                 field: "snapshot.session_id",
@@ -2480,6 +2487,19 @@ mod tests {
             canonical_fingerprint(&snapshot_payload())
         );
         assert_eq!(snapshot.payload_fingerprint(), snapshot.input_fingerprint);
+    }
+
+    #[test]
+    fn admission_rejects_a_payload_changed_after_fingerprinting() {
+        let mut request = legacy_request();
+        let snapshot = request.snapshot.as_mut().unwrap();
+        snapshot.payload = serde_json::json!({"messages": ["tampered"]});
+        let expected = snapshot.payload_fingerprint();
+        let found = snapshot.input_fingerprint.clone();
+        assert_eq!(
+            request.admit(&descriptor(), &caller()).err(),
+            Some(ContextContractError::FingerprintMismatch { expected, found })
+        );
     }
 
     #[test]
