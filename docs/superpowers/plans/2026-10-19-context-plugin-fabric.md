@@ -18,7 +18,7 @@
 - 内置实现是默认 owner；Replace 或 Bundle 失败只能在当次调用内使用 bounded built-in fallback，并让 degraded 状态可见。
 - 宿主显式授予 namespace/scope；默认只允许当前 session，project scope 默认不可跨 session；跨 session 访问必须显式授权并审计。
 - 历史 fold 通过 owner/provenance 路由；旧事件缺少 owner 时按 builtin 解释，不能因新插件接管而隐藏旧 fold。
-- 恢复内容走普通工具结果或动态 tail，不改 system prompt 稳定前缀；不得把隐藏 reasoning 默认送入插件或持久化。
+- 恢复内容走普通工具结果或动态 tail，不改 system prompt 稳定前缀；普通隐藏 reasoning 默认不持久化。用户确认仅 Core 可保留目标协议强制要求的续跑推理内容或签名，全部推理从插件、摘要和通用检索投影中剔除。 / Core may retain only provider-required protocol artifacts for resume compatibility; plugin, summarization and general retrieval projections exclude all reasoning.
 - 网络出口和项目目录写入默认拒绝；必须经过显式 capability 声明、宿主授权和审计。
 - 不新增第二套插件系统、MCP server、CDP/terminal 实现；复用现有 `src/extension/` runtime 与 lifecycle。
 - 不扩张 `src/harness/` 超过 R10 允许的 12 文件边界；每个 harness 修改都必须说明其对现有链路的必要性。

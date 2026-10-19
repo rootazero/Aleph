@@ -47,7 +47,7 @@ The session event log remains Aleph's durable source of truth. Plugins may propo
 - 让第三方 context plugin 能按 capability 声明接管单个阶段、整个阶段，或和内置能力按明确顺序组合。
 - 内置实现默认启用；未配置插件时行为保持当前 Aleph 语义。
 - 所有可外部组合能力有稳定 descriptor、版本、权限范围、预算、错误策略和可观测结果。
-- 原始隐藏思维链默认不持久化、不进入插件输入、不被上下文重放；保留用户消息、助手最终答复、工具调用/结果和完成任务所需的状态事实。
+- 普通隐藏推理默认不持久化、不进入插件输入、不被上下文重放；用户确认的兼容性例外是：Core 按目标提供商协议保留续跑必需的推理内容或签名，插件、摘要和通用检索仍不得读取。保留用户消息、助手最终答复、工具调用/结果和完成任务所需的状态事实。 / Ordinary hidden reasoning is dropped by default. Core alone retains reasoning or signatures required by the target protocol for resumable tool turns; plugins, summaries and general retrieval cannot access these artifacts.
 - 保持 `session_events` 为唯一持久化真源，保持 Core/Interface 分离和 harness 12 文件棘轮。
 
 ## 4. Non-goals and anti-goals
@@ -127,7 +127,7 @@ Facade 只编排和校验，不保存第二份历史，不将插件输出直接�
 
 ### 6.5 Reasoning and output policy
 
-- provider 返回的隐藏 reasoning 不进入 session event、ContextSnapshot 或第三方插件，除非未来有单独的显式 capability 和用户授权。
+- provider 返回的普通隐藏 reasoning 不进入 session event；目标协议强制回传的内容或签名作为 Core 内部协议数据保留。所有推理内容和签名均从 ContextSnapshot、第三方插件、摘要输入和通用检索投影中剔除，不向插件开放额外授权入口。 / Persist only provider-required protocol artifacts inside Core; all reasoning and signatures are excluded from plugin snapshots, summary inputs and general retrieval projections.
 - 工具调用参数、工具结果、用户消息、助手最终输出和必要的运行状态按现有事件语义保留。
 - tool output 先经过 Admission；结构化 JSON、日志、搜索、diff 等类型继续由现有 reducer 处理。
 - 每个插件结果必须有 byte/token upper bound；字符串边界使用统一安全 API，不能各自实现 UTF-8/UTF-16/JSON 截断。
@@ -171,6 +171,7 @@ DeepSeek Flash 的独立 builder check 提出了会改变实现结构的问题�
 2. **旧 fold**：Core 按 `owner/provenance` 路由历史 fold；owner 切换不自动要求新插件读取旧 owner 的 fold。
 3. **故障与组合**：Replace 插件失败或超时，当次调用立即使用 bounded built-in fallback；允许耦合 phase 以原子 bundle 由一个插件拥有。
 4. **缓存与副作用**：允许 namespace 内可重建缓存/checkpoint/index，但不得成为真源；原文不得越过 Core retire/forget 边界；网络出口和项目目录写入默认拒绝，须显式 capability + 宿主授权 + 审计。
+5. **协议必需推理例外（实施中用户确认）**：保留 Core 内部续跑所必需的提供商推理内容或签名，避免 Anthropic / DeepSeek 工具回合因缺字段而被拒绝；普通推理仍默认剔除，所有推理均不得进入插件、摘要或通用检索。 / User-approved compatibility exception: retain provider-required reasoning only inside Core for resumable tool turns.
 
 ## 11. Builder handoff
 
