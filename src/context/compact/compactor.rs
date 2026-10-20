@@ -42,6 +42,8 @@ pub enum CompactStrategy {
     /// Reapplied this run's cached compaction over an unchanged window
     /// fingerprint — zero API cost.
     CacheReuse,
+    /// A context capability supplied the committed result.
+    Plugin { capability: String },
     /// Compaction was skipped entirely.
     Skipped { reason: String },
 }
@@ -415,6 +417,34 @@ impl ContextCompactor {
         Ok(result)
     }
 
+    /// Shared native/external compaction boundary, in original message coordinates.
+    pub(crate) fn compression_window(
+        &self,
+        messages: &[UnifiedMessage],
+        fresh_tail: usize,
+        transient_tail: usize,
+    ) -> Option<std::ops::Range<usize>> {
+        let effective_tail = fresh_tail
+            .max(self.config.fresh_tail)
+            .saturating_add(transient_tail);
+        if messages.len() <= effective_tail {
+            return None;
+        }
+        let cut_end = snap_boundary_forward(messages, messages.len() - effective_tail);
+        if cut_end == 0 {
+            return None;
+        }
+        let start = snap_boundary_forward(messages, 0);
+        let end = select_window_end(
+            messages,
+            start,
+            cut_end,
+            self.config.max_window,
+            self.config.summarizer_input_budget,
+        );
+        (start < end).then_some(start..end)
+    }
+
     /// Body of [`compact`](Self::compact) — all strategy selection and early
     /// `Skipped` exits live here so the wrapper above can observe the final
     /// outcome once.
@@ -489,14 +519,17 @@ impl ContextCompactor {
         // the head snap avoids draining a result whose call stays in the (empty)
         // kept head, and `select_window_end` snaps its end past any tool-result
         // run so the kept region never begins on an orphan.
-        let window_start = snap_boundary_forward(messages.as_slice(), 0);
-        let window_end = select_window_end(
-            messages.as_slice(),
-            window_start,
-            cut_end,
-            self.config.max_window,
-            self.config.summarizer_input_budget,
-        );
+        let Some(window) = self.compression_window(messages, fresh_tail, transient_tail) else {
+            return Ok(CompactResult {
+                tokens_before: 0,
+                tokens_after: 0,
+                strategy_used: CompactStrategy::Skipped {
+                    reason: "compression window is empty".into(),
+                },
+            });
+        };
+        let window_start = window.start;
+        let window_end = window.end;
 
         // Guard: a zero-width window means there is nothing to compress.
         if window_start >= window_end {

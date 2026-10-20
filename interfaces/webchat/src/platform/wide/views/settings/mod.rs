@@ -19,6 +19,7 @@ pub mod providers;
 pub mod reranking_providers;
 pub mod search;
 pub mod security;
+pub mod sessions;
 pub mod skills;
 pub mod workspaces;
 
@@ -42,6 +43,7 @@ pub use providers::ProvidersView;
 pub use reranking_providers::RerankingProvidersView;
 pub use search::SearchView;
 pub use security::SecurityView;
+pub use sessions::{SearchBar, SessionDetail, SessionsView, TranscriptViewer};
 pub use skills::SkillsView;
 pub use workspaces::WorkspacesView;
 

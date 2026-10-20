@@ -1400,6 +1400,9 @@ mod tests {
             content: content(text),
             usage: None,
             at: 5,
+            model: None,
+            model_provider: None,
+            model_generation: None,
         }
     }
 
@@ -1475,6 +1478,9 @@ mod tests {
                     content: content("a"),
                     usage: None,
                     at: 5,
+                    model: None,
+                    model_provider: None,
+                    model_generation: None,
                 },
             ),
             rec(4, user_on(t, false)),
@@ -3153,6 +3159,9 @@ mod own_scope_tests {
             },
             usage: None,
             at: 1,
+            model: None,
+            model_provider: None,
+            model_generation: None,
         }
     }
 

@@ -131,6 +131,9 @@ pub struct AlephExtensionsToml {
     #[serde(default)]
     pub capabilities: CapabilitiesSection,
 
+    #[serde(default)]
+    pub contexts: Vec<crate::extension::capability::ContextDeclaration>,
+
     /// Background services
     #[serde(default)]
     pub services: Vec<ServiceSection>,
@@ -257,6 +260,7 @@ pub fn parse_cc_plugin_toml_content(
             runtime: runtime_to_aleph_runtime(runtime_str),
             entry: Some(entry.clone()),
             services: aleph.services,
+            contexts: aleph.contexts,
             permissions: if aleph.permissions.network
                 || aleph.permissions.env
                 || aleph.permissions.shell

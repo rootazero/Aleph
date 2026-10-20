@@ -606,16 +606,21 @@ impl AgentHarness {
                 let args = call.arguments.clone();
                 // BoxFuture erases the task-local future's spawned-runtime HRTB.
                 let fut: BoxFuture<'static, (ExecOutcome, Option<serde_json::Value>)> =
-                    Box::pin(crate::approval::with_call_identity(
-                        Some(crate::approval::CallIdentity {
-                            turn_id,
-                            call_id: call.id.clone(),
-                        }),
-                        async move {
-                            tools
-                                .execute_with_cancel_effective(&name, args, call_cancel)
-                                .await
-                        },
+                    Box::pin(crate::context::fabric::tool_admission::with_tool_admission(
+                        self.deps.context_fabric.clone(),
+                        session_id.to_key_string(),
+                        call_cancel.clone(),
+                        crate::approval::with_call_identity(
+                            Some(crate::approval::CallIdentity {
+                                turn_id,
+                                call_id: call.id.clone(),
+                            }),
+                            async move {
+                                tools
+                                    .execute_with_cancel_effective(&name, args, call_cancel)
+                                    .await
+                            },
+                        ),
                     ));
                 fut.await
             };
@@ -910,15 +915,22 @@ impl AgentHarness {
                 turn_id,
                 call_id: call.id.clone(),
             };
+            let admission_fabric = self.deps.context_fabric.clone();
+            let admission_session = session_id.to_key_string();
             live_futs.push(Box::pin(async move {
                 // Start the wall clock on first poll, not admission.
                 let started = Instant::now();
                 let (exec, effective_input) =
-                    crate::approval::with_call_identity(Some(identity), async move {
-                        tools
-                            .execute_with_cancel_effective(&name, args, call_cancel)
-                            .await
-                    })
+                    crate::context::fabric::tool_admission::with_tool_admission(
+                        admission_fabric,
+                        admission_session,
+                        call_cancel.clone(),
+                        crate::approval::with_call_identity(Some(identity), async move {
+                            tools
+                                .execute_with_cancel_effective(&name, args, call_cancel)
+                                .await
+                        }),
+                    )
                     .await;
                 let dur_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
                 (idx, exec, effective_input, dur_ms)

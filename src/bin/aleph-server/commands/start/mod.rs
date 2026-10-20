@@ -36,9 +36,9 @@ use builder::{
     register_graph_handlers, register_group_chat_handlers, register_heartbeat_handlers,
     register_identity_handlers, register_mcp_config_handlers, register_mcp_handlers,
     register_memory_handlers, register_oauth_handlers, register_projects_handlers,
-    register_pty_handlers, register_session_handlers, register_teams_handlers,
-    register_voice_capability_handlers, register_workspace_handlers, setup_config_watcher,
-    start_webchat_server,
+    register_pty_handlers, register_session_handlers, register_session_management_handlers,
+    register_teams_handlers, register_voice_capability_handlers, register_workspace_handlers,
+    setup_config_watcher, start_webchat_server,
 };
 
 mod orchestrator_init;
@@ -541,8 +541,54 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // write path from the two registries that build it — neither of which has
     // ever held a session store. Without it that check reports UNKNOWN.
     alephcore::gateway::session_projector::set_global_message_projector(message_projector.clone());
-    let projector: Arc<dyn alephcore::session::observer::SessionEventObserver> =
-        message_projector.clone();
+
+    // Initialize Markdown session storage (Phase B: Event Sourcing Read Side)
+    let markdown_store_result: Result<
+        Arc<alephcore::memory::store::markdown::MarkdownSessionStore>,
+        Box<dyn std::error::Error>,
+    > = async {
+        let aleph_home = alephcore::utils::paths::get_config_dir()?;
+        let store =
+            alephcore::memory::store::markdown::MarkdownSessionStore::new(&aleph_home).await?;
+        Ok(Arc::new(store))
+    }
+    .await;
+
+    let markdown_session_store = markdown_store_result.as_ref().ok().cloned();
+
+    let markdown_projector = match markdown_store_result {
+        Ok(ref store) => {
+            let projector = Arc::new(
+                alephcore::session::markdown_projector::MarkdownProjector::new(store.clone()),
+            );
+            tracing::info!("Markdown session projector initialized successfully");
+            Some(projector as Arc<dyn alephcore::session::observer::SessionEventObserver>)
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "Failed to initialize Markdown session projector; sessions will not be saved as Markdown files"
+            );
+            None
+        }
+    };
+
+    // Combine MessageProjector and MarkdownProjector using CompositeObserver
+    let projector: Arc<dyn alephcore::session::observer::SessionEventObserver> = {
+        let mut observers = vec![message_projector.clone()
+            as Arc<dyn alephcore::session::observer::SessionEventObserver>];
+        if let Some(md_proj) = markdown_projector {
+            observers.push(md_proj);
+        }
+        if observers.len() == 1 {
+            // Only MessageProjector, use it directly
+            observers.into_iter().next().unwrap()
+        } else {
+            // Multiple observers, use CompositeObserver
+            Arc::new(alephcore::session::composite_observer::CompositeObserver::new(observers))
+        }
+    };
+
     let session_service_and_store = build_sqlite_session_service(
         &alephcore::gateway::SessionManagerConfig::default().db_path,
         Some(projector),
@@ -2242,6 +2288,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.memory_context_provider.clone(),
         args.daemon,
     );
+    // Register session management handlers if markdown store initialized
+    if let Some(ref store) = markdown_session_store {
+        register_session_management_handlers(&mut server, store, &session_store, args.daemon);
+        // Install store for HTTP attachment route
+        server.set_markdown_session_store(store.clone());
+    }
     register_daemon_handlers(&mut server, start_time, args.daemon);
     // Explicit denying seam until the real browser backend/registry/public
     // origin composition root is supplied. No bind-address origin inference.

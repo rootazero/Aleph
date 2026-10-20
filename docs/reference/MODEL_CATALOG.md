@@ -366,7 +366,7 @@ openclaw 把整份目录放在每个 provider 插件的 `openclaw.plugin.json` �
 | 模型 id 归一 | provider-scoped 存储（id 只在 provider 内唯一） | 原样 | 剥 tag → 折 host 路径末段 → 剥 `:tag` → 剥日期戳 | **对齐**（用归一化取代 provider-scope 的存储分层） |
 | 能力矩阵 | tools + modalities in/out 数组 | context_length / reasoning / image_in / video_in | window / max-out / vision / tools / reasoning | **对齐**；模态数组是**尚未闭合**项 |
 | 发布日期 | `time.released` | 无 | 无 | **尚未闭合**（低信号：目前没有消费者需要按发布日期排序） |
-| 选模校验 | branded ID + `NotFound` | `default_model` 必须存在于 models 表（config 层校验） | 弃用硬拒 + 未知放行带 caveat | **对齐**；未知放行是刻意的（策展表永远落后厂商，拒绝未知＝拒绝所有新模型） |
+| 选模校验 | branded ID + `NotFound` | `default_model` 必须存在于 models 表（config 层校验） | 弃用硬拒 + 未知/不可用/未鉴权/不支持 拒绝并保留旧 pin | **对齐** |
 | 模型可见面 | `catalog.model.available()` | `/model` 列出全部刷新后的模型 | `list_models` 给 default + fallback 链 + aux + configured + discovered | **对齐** |
 | 漂移防护 | 单一远端源，结构上无从漂移 | 每次刷新覆盖托管命名空间 | `drift_tests.rs` 十条交叉守卫 + 两条 prefix-shadow 守卫 | **超越**（静态表 + 编译期守卫，是"不引远端依赖"的对价） |
 | 并发 | 单次 models.dev 拉取 | 顺序 for 循环逐平台 | `JoinSet` 并发扇出 | **超越** |
@@ -487,7 +487,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 - **给开放权重宿主编"Meta 价"** — Meta 不卖 Llama 推理，各宿主价差极大。保持 unpriced，并在测试里把这条限制钉死。
 - **外推 opus-4.6+/fable-5 的 1M tier** — 无可核实的公开倍率，外推属于编数据。
 - **按记忆重猜 `github-copilot` / `azure-*` / `siliconflow` 等的默认 id** — 聚合器/中继陈旧问题的正解是 discovery，不是往表里塞更多猜测。
-- **`select_model` 拒绝未知模型 id** — 策展表永远落后厂商，自定义中继用自己的别名；拒绝未知等于拒绝所有比二进制新的模型。只硬拒**空**与**已知已下线**两种。
+- **`select_model` 拒绝未知模型 id** — provider/model roster 以启动与 provider reload 的实际配置、发现和可路由状态为准；选择层拒绝不在该 roster 中的未知、歧义、未认证或不可用目标，并保留旧 pin。配置中明确声明的自定义 model id 可以通过，即使策展 metadata 未收录；策展表不是可用性事实源。
 - **让 discovery 覆盖窗口/价格** — `/models` 响应基本不带这些；用它去覆盖策展数据是拿低质量数据换高质量数据。
 - **给 `providers.modelsRefresh` 单独加 RPC 权限层** — Gateway 的 RPC 面没有 per-method tier（授权即 operator，见 `method_authz.rs` 的模块注释）；它和 `providers.catalog` / `providers.healthcheck` 同在一道墙后。
 

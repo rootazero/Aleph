@@ -62,7 +62,7 @@ pub fn capture_window(window_id: u64, show_cursor: bool) -> Result<WindowShot> {
     // SAFETY: the handle is validated before any use; the remaining calls are
     // documented read-only Win32 queries.
     unsafe {
-        if !IsWindow(hwnd).as_bool() {
+        if !IsWindow(Some(hwnd)).as_bool() {
             return Err(DesktopError::ScreenCapture(format!(
                 "no window with id {window_id} is open"
             )));
@@ -214,7 +214,6 @@ fn print_window(
     width: i32,
     height: i32,
 ) -> Result<Vec<u8>> {
-    use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
         GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
@@ -229,13 +228,13 @@ fn print_window(
     unsafe {
         // A null HWND asks for the whole-screen DC, which is the reference
         // device the memory bitmap must be compatible with.
-        let screen_dc = GetDC(HWND::default());
+        let screen_dc = GetDC(None);
         if screen_dc.is_invalid() {
             return Err(DesktopError::ScreenCapture("GetDC failed".into()));
         }
-        let mem_dc = CreateCompatibleDC(screen_dc);
+        let mem_dc = CreateCompatibleDC(Some(screen_dc));
         if mem_dc.is_invalid() {
-            ReleaseDC(HWND::default(), screen_dc);
+            ReleaseDC(None, screen_dc);
             return Err(DesktopError::ScreenCapture(
                 "CreateCompatibleDC failed".into(),
             ));
@@ -243,12 +242,12 @@ fn print_window(
         let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
         if bitmap.is_invalid() {
             let _ = DeleteDC(mem_dc);
-            ReleaseDC(HWND::default(), screen_dc);
+            ReleaseDC(None, screen_dc);
             return Err(DesktopError::ScreenCapture(
                 "CreateCompatibleBitmap failed".into(),
             ));
         }
-        let previous = SelectObject(mem_dc, bitmap);
+        let previous = SelectObject(mem_dc, bitmap.into());
 
         let printed = PrintWindow(hwnd, mem_dc, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)).as_bool();
 
@@ -286,7 +285,15 @@ fn print_window(
             let mut rect = windows::Win32::Foundation::RECT::default();
             if GetWindowRect(hwnd, &mut rect).is_ok()
                 && BitBlt(
-                    mem_dc, 0, 0, width, height, screen_dc, rect.left, rect.top, SRCCOPY,
+                    mem_dc,
+                    0,
+                    0,
+                    width,
+                    height,
+                    Some(screen_dc),
+                    rect.left,
+                    rect.top,
+                    SRCCOPY,
                 )
                 .is_ok()
             {
@@ -303,9 +310,9 @@ fn print_window(
         }
 
         SelectObject(mem_dc, previous);
-        let _ = DeleteObject(bitmap);
+        let _ = DeleteObject(bitmap.into());
         let _ = DeleteDC(mem_dc);
-        ReleaseDC(HWND::default(), screen_dc);
+        ReleaseDC(None, screen_dc);
 
         if read == 0 {
             return Err(DesktopError::ScreenCapture(
@@ -349,8 +356,8 @@ fn is_blank(bgra: &[u8]) -> bool {
 /// case (a real capture is never uniformly transparent — it would be a window
 /// with nothing in it), and only then is opacity forced.
 fn bgra_to_rgba(mut buf: Vec<u8>) -> Vec<u8> {
-    let alpha_is_meaningless = buf.chunks_exact(4).all(|px| px[3] == 0);
-    for px in buf.chunks_exact_mut(4) {
+    let alpha_is_meaningless = buf.as_chunks::<4>().0.iter().all(|px| px[3] == 0);
+    for px in buf.as_chunks_mut::<4>().0 {
         px.swap(0, 2);
         if alpha_is_meaningless {
             px[3] = 255;

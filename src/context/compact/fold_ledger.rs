@@ -86,6 +86,7 @@ mod tests {
     fn fold(folded_tokens: u64, summary_tokens: u64) -> FoldRecord {
         FoldRecord {
             fold_id: "fold_test_2".to_string(),
+            owner: None,
             from_seq: 2,
             to_seq: 40,
             summary_ref: "41".to_string(),

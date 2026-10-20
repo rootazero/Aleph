@@ -462,6 +462,24 @@ impl SessionManager {
         key: &SessionKey,
         patch: &SessionPatch,
     ) -> Result<bool, SessionManagerError> {
+        let reserved_model_pin_keys = [
+            crate::providers::session_model_handle::MODEL_PIN_SESSION_KEY,
+            crate::providers::session_model_handle::MODEL_PIN_PROVIDER_SESSION_KEY,
+            crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY,
+        ];
+        if patch
+            .metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|metadata| {
+                metadata
+                    .keys()
+                    .any(|key| reserved_model_pin_keys.contains(&key.as_str()))
+            })
+        {
+            return Ok(false);
+        }
+
         let key_str = key.to_key_string();
         let conn = self
             .conn
@@ -522,6 +540,103 @@ impl SessionManager {
 
         drop(conn);
         self.emit_session_updated(&key_str);
+        Ok(updated > 0)
+    }
+
+    /// Patch a model pin only when its durable generation is older than the
+    /// incoming one. The read, generation comparison, merge, and update all
+    /// stay under the same connection mutex so spawned sink tasks cannot
+    /// reorder durable model state.
+    pub async fn patch_session_if_model_pin_generation_newer(
+        &self,
+        key: &SessionKey,
+        patch: &SessionPatch,
+        generation: u64,
+    ) -> Result<bool, SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+
+        let existing_json: Option<String> = conn
+            .query_row(
+                "SELECT metadata FROM sessions WHERE key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+            .flatten();
+
+        let mut identity_meta = if existing_json
+            .as_deref()
+            .is_some_and(|json| !json.trim().is_empty())
+            && existing_json
+                .as_deref()
+                .is_some_and(|json| serde_json::from_str::<SessionIdentityMeta>(json).is_err())
+        {
+            return Ok(false);
+        } else {
+            SessionIdentityMeta::from_json_str(existing_json.as_deref())
+        };
+        let generation_key =
+            crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY;
+        if let Some(value) = identity_meta.custom.get(generation_key) {
+            let durable_generation = value
+                .as_str()
+                .and_then(|value| value.parse::<u64>().ok())
+                .or_else(|| value.as_u64());
+            let Some(durable_generation) = durable_generation else {
+                return Ok(false);
+            };
+            if generation <= durable_generation {
+                return Ok(false);
+            }
+        }
+        if let Some(extra) = &patch.metadata {
+            if let Some(extra_obj) = extra.as_object() {
+                for (k, v) in extra_obj {
+                    identity_meta.custom.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        identity_meta.custom.insert(
+            generation_key.to_string(),
+            serde_json::Value::String(generation.to_string()),
+        );
+
+        let meta_json = identity_meta
+            .to_json_string()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        let mut sql = String::from("UPDATE sessions SET metadata = ?");
+        let mut sql_params: Vec<&dyn rusqlite::ToSql> = vec![&meta_json];
+
+        if let Some(label) = &patch.label {
+            sql.push_str(", label = ?");
+            sql_params.push(label);
+        }
+        if let Some(model) = &patch.model {
+            sql.push_str(", model = ?");
+            sql_params.push(model);
+        }
+        if let Some(provider) = &patch.model_provider {
+            sql.push_str(", model_provider = ?");
+            sql_params.push(provider);
+        }
+
+        sql.push_str(" WHERE key = ?");
+        sql_params.push(&key_str as &dyn rusqlite::ToSql);
+
+        let updated = conn
+            .execute(&sql, sql_params.as_slice())
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Patch failed: {e}")))?;
+
+        drop(conn);
+        if updated > 0 {
+            self.emit_session_updated(&key_str);
+        }
         Ok(updated > 0)
     }
 

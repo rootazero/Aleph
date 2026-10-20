@@ -94,6 +94,143 @@ impl ExtensionManager {
         self.plugin_registry.clone()
     }
 
+    /// Resolve mounted WASM backends dynamically, including mounts performed
+    /// after a root/child/manual facade was assembled. No authority is copied.
+    #[must_use]
+    pub fn context_handler_resolver(&self) -> super::context_adapter::ContextHandlerResolver {
+        super::context_adapter::handler_resolver(
+            self.plugin_loader.clone(),
+            self.plugin_registry.clone(),
+        )
+    }
+
+    /// Discovery from immutable, validated facts on the actual mounted instance.
+    /// This is not consent and never reads a replacement manifest from disk.
+    pub async fn context_declarations(
+        &self,
+        plugin_id: &str,
+    ) -> ExtensionResult<Vec<super::capability::ContextDeclaration>> {
+        let _guard = self.load_guard.lock().await;
+        self.ensure_plugin_active(plugin_id).await?;
+        self.plugin_loader
+            .read()
+            .await
+            .context_declarations(plugin_id)
+    }
+
+    /// Called only AFTER the canonical host confirmation boundary approves.
+    /// Serialize with mount/unmount, issue from actual mounted declarations,
+    /// and install the entire selected bundle in one registry transaction.
+    pub async fn grant_context_capabilities(
+        &self,
+        plugin_id: &str,
+        capability_ids: &[String],
+        caller: &crate::context::fabric::AuthenticatedCaller,
+        approval: super::capability::ContextGrantApproval,
+        now: u64,
+    ) -> ExtensionResult<usize> {
+        use super::capability::ContextGrant;
+        use super::registry::ContextRegistration;
+        use crate::context::fabric::ContextNamespace;
+        let reject =
+            |message: &str| ExtensionError::Runtime(format!("context grant rejected: {message}"));
+        let _guard = self.load_guard.lock().await;
+        self.ensure_plugin_active(plugin_id).await?;
+        if approval.scope.namespace != ContextNamespace::Session
+            || approval.cross_session
+            || approval.egress
+            || approval.project_write
+            || approval
+                .scope
+                .handles
+                .iter()
+                .any(|handle| handle != caller.session_id())
+        {
+            return Err(reject(
+                "only session-local effect-free grants are supported",
+            ));
+        }
+        let declarations = self
+            .plugin_loader
+            .read()
+            .await
+            .context_declarations(plugin_id)?;
+        let ids: std::collections::HashSet<_> = capability_ids.iter().collect();
+        if ids.is_empty() || ids.len() != capability_ids.len() {
+            return Err(reject("capability selection is empty or duplicated"));
+        }
+        let selected: Vec<_> = declarations
+            .iter()
+            .filter(|declaration| ids.contains(&declaration.descriptor.id))
+            .collect();
+        if selected.len() != ids.len() {
+            return Err(reject(
+                "capability is not declared by the current mounted instance",
+            ));
+        }
+        // Never install just one member of an advertised bundle, including on
+        // its first registration (the registry cannot infer absent members).
+        for declaration in &selected {
+            if let Some(bundle) = &declaration.descriptor.bundle_id {
+                if declarations.iter().any(|member| {
+                    member.descriptor.bundle_id.as_ref() == Some(bundle)
+                        && !ids.contains(&member.descriptor.id)
+                }) {
+                    return Err(reject(
+                        "all mounted members of a bundle must be approved atomically",
+                    ));
+                }
+            }
+        }
+        let mut registrations = Vec::with_capacity(selected.len());
+        for declaration in selected {
+            let grant = ContextGrant::host_issue(
+                &declaration.descriptor,
+                plugin_id,
+                caller,
+                approval.clone(),
+                now,
+            )
+            .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+            registrations.push(ContextRegistration::new(
+                declaration.descriptor.clone(),
+                grant,
+                Some(plugin_id.to_owned()),
+            ));
+        }
+        let count = registrations.len();
+        let notification_keys: Vec<_> =
+            registrations.iter().map(ContextRegistration::key).collect();
+        // No loader guard crosses this await. load_guard excludes lifecycle
+        // replacement; re-check the live registry status at the write boundary.
+        let mut registry = self.plugin_registry.write().await;
+        if !registry
+            .get_plugin(plugin_id)
+            .is_some_and(|record| record.status.is_active())
+        {
+            return Err(reject("plugin is no longer active"));
+        }
+        registry
+            .register_context_bundle(registrations, now)
+            .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+        drop(registry);
+        drop(_guard);
+        // Session start means this newly authorized plugin attachment. It is
+        // metadata-only, never a second durable session event or an implicit
+        // grant to observers on other mounted plugins.
+        crate::context::fabric::ContextFabric::builder(self.plugin_registry_handle())
+            .handler_resolver(self.context_handler_resolver())
+            .build()
+            .notify_lifecycle_selected(
+                crate::context::fabric::ContextLifecycleEvent::SessionStart,
+                caller,
+                None,
+                Some(&notification_keys),
+            )
+            .await;
+        Ok(count)
+    }
+
     /// Get mutable access to the plugin registry.
     pub async fn get_plugin_registry_mut(
         &self,

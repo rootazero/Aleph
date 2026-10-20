@@ -54,6 +54,9 @@ pub struct AlephPluginToml {
     pub services: Vec<ServiceSection>,
     #[serde(default)]
     pub capabilities: CapabilitiesSection,
+    /// Context discovery declarations, without session authorization.
+    #[serde(default)]
+    pub contexts: Vec<crate::extension::capability::ContextDeclaration>,
     /// Optional \[memory\] section — declares which memory extension hooks this plugin implements.
     #[serde(default)]
     pub memory: Option<MemoryManifestSection>,
@@ -571,7 +574,22 @@ pub fn parse_aleph_plugin_toml_content(
         wasm_capabilities: convert_wasm_capabilities(&toml.capabilities),
         wasm_resource_limits: None,
         capabilities_v2: Some(toml.capabilities),
-        aleph_extensions: None,
+        aleph_extensions: if toml.contexts.is_empty() {
+            None
+        } else {
+            Some(super::types::AlephExtensions {
+                runtime: match kind {
+                    PluginKind::Wasm => super::types::AlephRuntime::Wasm,
+                    PluginKind::Mcp => super::types::AlephRuntime::Mcp,
+                    PluginKind::Static => super::types::AlephRuntime::Static,
+                },
+                entry: None,
+                services: Vec::new(),
+                permissions: None,
+                capabilities: None,
+                contexts: toml.contexts,
+            })
+        },
         memory_manifest: toml.memory,
     })
 }

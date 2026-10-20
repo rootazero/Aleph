@@ -1408,6 +1408,23 @@ impl SessionStore for FileSessionStore {
         patch: &SessionPatch,
     ) -> Result<bool, SessionStoreError> {
         let key_str = key.to_key_string();
+        if patch
+            .metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|metadata| {
+                [
+                    crate::providers::session_model_handle::MODEL_PIN_SESSION_KEY,
+                    crate::providers::session_model_handle::MODEL_PIN_PROVIDER_SESSION_KEY,
+                    crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY,
+                ]
+                .iter()
+                .any(|reserved| metadata.contains_key(*reserved))
+            })
+        {
+            return Ok(false);
+        }
+
         let mut guard = self.lock_metadata(&key_str).await?;
         match guard.existing_mut() {
             Some(meta) => {
@@ -1445,6 +1462,70 @@ impl SessionStore for FileSessionStore {
             // Nothing to patch: the guard drops uncommitted.
             None => return Ok(false),
         }
+        let meta = guard.commit().await?;
+        self.emit_session_changed(&key_str, "patch", Some(&meta));
+        Ok(true)
+    }
+
+    async fn patch_session_if_model_pin_generation_newer(
+        &self,
+        key: &SessionKey,
+        patch: &SessionPatch,
+        generation: u64,
+    ) -> Result<bool, SessionStoreError> {
+        let key_str = key.to_key_string();
+        let mut guard = self.lock_metadata(&key_str).await?;
+        let Some(meta) = guard.existing_mut() else {
+            return Ok(false);
+        };
+
+        let generation_key =
+            crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY;
+        if let Some(value) = meta
+            .identity_meta
+            .as_ref()
+            .and_then(|identity| identity.custom.get(generation_key))
+        {
+            let durable_generation = value
+                .as_str()
+                .and_then(|value| value.parse::<u64>().ok())
+                .or_else(|| value.as_u64());
+            let Some(durable_generation) = durable_generation else {
+                return Ok(false);
+            };
+            if generation <= durable_generation {
+                return Ok(false);
+            }
+        }
+
+        if let Some(label) = &patch.label {
+            meta.label = Some(label.clone());
+        }
+        if let Some(model) = &patch.model {
+            meta.model = Some(model.clone());
+        }
+        if let Some(provider) = &patch.model_provider {
+            meta.model_provider = Some(provider.clone());
+        }
+        if patch.status.is_some() || patch.metadata.is_some() {
+            with_identity_meta(meta, |identity| {
+                if let Some(status) = &patch.status {
+                    identity
+                        .custom
+                        .insert("status".to_string(), serde_json::json!(status));
+                }
+                if let Some(extra) = patch.metadata.as_ref().and_then(|m| m.as_object()) {
+                    for (k, v) in extra {
+                        identity.custom.insert(k.clone(), v.clone());
+                    }
+                }
+                identity.custom.insert(
+                    generation_key.to_string(),
+                    serde_json::Value::String(generation.to_string()),
+                );
+            });
+        }
+
         let meta = guard.commit().await?;
         self.emit_session_changed(&key_str, "patch", Some(&meta));
         Ok(true)
@@ -2593,7 +2674,138 @@ mod patch_metadata_tests {
         (FileSessionStore::new(config).expect("store"), dir)
     }
 
-    /// `sessions.patch { metadata }` is the ONLY way the Panel persists a
+    #[tokio::test]
+    async fn model_pin_generation_rejects_old_and_accepts_new_writes() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::parse("agent:pin-generation:main:s1").expect("key");
+        store.get_or_create(&key).await.expect("create");
+
+        let patch = |model: &str, generation: u64| SessionPatch {
+            metadata: Some(serde_json::json!({
+                crate::providers::session_model_handle::MODEL_PIN_SESSION_KEY: model,
+                crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY:
+                    generation.to_string(),
+            })),
+            ..Default::default()
+        };
+
+        let bad_key = SessionKey::parse("agent:pin-generation-malformed:main:s1").expect("key");
+        store
+            .get_or_create(&bad_key)
+            .await
+            .expect("create malformed");
+        let mut malformed = store
+            .read_metadata(&bad_key.to_key_string())
+            .await
+            .expect("read malformed fixture")
+            .expect("malformed session metadata");
+        malformed
+            .identity_meta
+            .get_or_insert_with(|| SessionIdentityMeta::owner("test"))
+            .custom
+            .insert(
+                crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY
+                    .to_string(),
+                serde_json::json!("not-a-generation"),
+            );
+        tokio::fs::write(
+            store.metadata_path(&bad_key.to_key_string()),
+            serde_json::to_vec(&malformed).expect("serialize malformed fixture"),
+        )
+        .await
+        .expect("write malformed fixture");
+        assert!(!store
+            .patch_session(
+                &bad_key,
+                &SessionPatch {
+                    metadata: Some(serde_json::json!({
+                        crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY:
+                            "not-a-generation",
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("ordinary patch must reject model pin metadata"));
+        assert!(!store
+            .patch_session_if_model_pin_generation_newer(&bad_key, &patch("ignored", 1), 1)
+            .await
+            .expect("reject malformed generation"));
+
+        assert!(store
+            .patch_session_if_model_pin_generation_newer(&key, &patch("first", 2), 2)
+            .await
+            .expect("first patch"));
+        assert!(store
+            .patch_session_if_model_pin_generation_newer(&key, &patch("metadata-wins", 99), 3,)
+            .await
+            .expect("generation-authoritative patch"));
+        let after_authoritative_patch = store
+            .get_metadata(&key)
+            .await
+            .expect("metadata after authoritative patch")
+            .expect("session metadata");
+        let authoritative_custom = after_authoritative_patch
+            .identity_meta
+            .expect("identity metadata")
+            .custom;
+        assert_eq!(
+            authoritative_custom[crate::providers::session_model_handle::MODEL_PIN_SESSION_KEY],
+            "metadata-wins"
+        );
+        assert_eq!(
+            authoritative_custom
+                [crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY],
+            "3"
+        );
+        assert!(!store
+            .patch_session_if_model_pin_generation_newer(&key, &patch("legacy", 0), 0)
+            .await
+            .expect("legacy patch must be stale"));
+        let after_legacy = store
+            .get_metadata(&key)
+            .await
+            .expect("metadata after legacy patch")
+            .expect("session metadata");
+        let legacy_custom = after_legacy
+            .identity_meta
+            .expect("identity metadata")
+            .custom;
+        assert_eq!(
+            legacy_custom[crate::providers::session_model_handle::MODEL_PIN_SESSION_KEY],
+            "metadata-wins"
+        );
+        assert_eq!(
+            legacy_custom[crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY],
+            "3"
+        );
+        assert!(!store
+            .patch_session_if_model_pin_generation_newer(&key, &patch("stale", 1), 1)
+            .await
+            .expect("stale patch"));
+        assert!(store
+            .patch_session_if_model_pin_generation_newer(&key, &patch("new", 4), 4)
+            .await
+            .expect("new patch"));
+
+        let custom = store
+            .get_metadata(&key)
+            .await
+            .expect("read")
+            .expect("session")
+            .identity_meta
+            .expect("identity")
+            .custom;
+        assert_eq!(
+            custom[crate::providers::session_model_handle::MODEL_PIN_SESSION_KEY],
+            "new"
+        );
+        assert_eq!(
+            custom[crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY],
+            "4"
+        );
+    }
+
     /// per-session setting — the exec tier, the project root. This backend used
     /// to drop the whole map on the floor and still answer `Ok(true)`, so the
     /// Panel believed every write landed and none did. The tier feature was

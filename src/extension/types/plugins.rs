@@ -493,6 +493,7 @@ impl PluginRecord {
                 }
                 CapabilityDeclaration::Agent(_) => agent_count += 1,
                 CapabilityDeclaration::McpServer(_) => mcp_server_count += 1,
+                CapabilityDeclaration::Context(_) => {} // Discovery does not count an admitted context.
             }
         }
 

@@ -1941,9 +1941,47 @@ impl ScopedToolService {
         // A result carrying its own call's offload marker skips the rewrite: a
         // cut that dropped the marker line would hide the offload from Layer 2,
         // which would then persist this result over the blob the marker names.
-        let outcome = self
-            .run_ingress(name, &mut out.value, budget, &call_id)
-            .await;
+        let recovery = crate::tools::result_processing::dispatch_recovery_tools()
+            .map_or(self.recovery_tools(), |outer| {
+                outer.intersect(self.recovery_tools())
+            });
+        let admitted = crate::context::fabric::tool_admission::admit_scoped_tool_output(
+            name,
+            &call_id,
+            &mut out.value,
+            budget,
+            self.result_store.as_deref(),
+            recovery,
+        )
+        .await;
+        let (outcome, processed) = if let Ok(Some((admitted, original))) = admitted {
+            tracing::debug!(tool = name, owner = ?admitted.owner, degraded = ?admitted.degraded,
+                "context capability admitted tool output");
+            let outcome = crate::tool_output::ingress::IngressOutcome {
+                model_facing: admitted.result.text.clone(),
+                reduced_from: Some(original),
+                reductions: Vec::new(),
+                compressed: false,
+            };
+            (outcome, admitted.result)
+        } else {
+            // A completed tool effect still needs its result persisted when
+            // context admission is cancelled. Its original stays untouched;
+            // the ordinary bounded ingress path supplies the durable result.
+            let outcome = self
+                .run_ingress(name, &mut out.value, budget, &call_id)
+                .await;
+            let processed = crate::tools::result_processing::apply_result_budget(
+                &call_id,
+                name,
+                &outcome.model_facing,
+                self.result_store.as_deref(),
+                budget,
+                outcome.reduced_from.as_deref(),
+                recovery,
+            );
+            (outcome, processed)
+        };
 
         if outcome.compressed {
             tracing::debug!(tool = name, "ingress compressed a tool-result field");
@@ -1958,21 +1996,6 @@ impl ScopedToolService {
                 "ingress hygiene reduced a tool-result field"
             );
         }
-
-        let processed = crate::tools::result_processing::apply_result_budget(
-            &call_id,
-            name,
-            &outcome.model_facing,
-            self.result_store.as_deref(),
-            budget,
-            outcome.reduced_from.as_deref(),
-            // Narrowed by any wrapper around this dispatch (a subagent's
-            // allowlist scopes its set around the delegation).
-            crate::tools::result_processing::dispatch_recovery_tools()
-                .map_or(self.recovery_tools(), |outer| {
-                    outer.intersect(self.recovery_tools())
-                }),
-        );
 
         // What this result cost on its way in: the tokens the tool produced
         // (the untouched original when ingress reduced it) against the tokens
@@ -2024,6 +2047,10 @@ impl ScopedToolService {
         }
 
         out.value = Value::String(processed.text);
+        crate::context::fabric::tool_admission::notify_current_lifecycle(
+            crate::context::fabric::ContextLifecycleEvent::ToolResultAdmitted,
+        )
+        .await;
         out
     }
 

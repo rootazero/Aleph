@@ -285,6 +285,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // in a FailoverProvider that walks [primary, ...[fallback_provider].chain],
     // each provider expanded across its `models` list. The wrapper resolves
     // `default_provider.current()` on every call, so provider swaps remain live.
+    // The provider catalog below is also the readiness source for selectable
+    // model publication; it does not consult learned routing state.
+    let registered_provider_names: std::collections::BTreeSet<String> =
+        default_provider.provider_names().into_iter().collect();
     let provider_chain = alephcore::orchestrator::build_failover_chain(
         config,
         primary_provider_key,
@@ -320,12 +324,33 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
             .entry(primary_provider_key.to_string())
             .or_insert_with(|| default_provider.current());
     }
-    // Publish exactly this key set so `select_model(provider=…)` refuses a name
-    // the run builder would silently substitute the default chain for. Same map,
-    // same moment — the tool's answer and the runtime's lookup cannot diverge.
-    alephcore::providers::session_model_handle::set_pinnable_providers(
-        named_providers.keys().cloned(),
-    );
+    // Publish the generation-bearing selectable-model roster from the live
+    // provider catalog and runtime config. Availability here means that the
+    // provider was constructed by the startup registry; authentication is a
+    // separate config/vault/env check. No learned routing or semantic
+    // availability is involved in this projection.
+    let snapshot =
+        alephcore::providers::session_model_handle::SelectableModelsSnapshot::from_config(
+            config,
+            named_providers.keys().cloned().collect(),
+            &registered_provider_names,
+            |name| {
+                config.providers.get(name).is_some_and(|pc| {
+                    pc.protocol() == "ollama"
+                        || pc
+                            .api_key
+                            .as_ref()
+                            .is_some_and(|key| !key.is_empty())
+                }) || shared_token_mgr
+                    .get_secret(&format!("ai:{name}"))
+                    .ok()
+                    .flatten()
+                    .is_some()
+                    || (registered_provider_names.contains(name)
+                        && alephcore::gateway::available_provider_from_env() == Some(name))
+            },
+        );
+    alephcore::providers::session_model_handle::publish_selectable_models(snapshot);
 
     // Cheap-tier summarization provider, built once and used twice: by the
     // per-run compactor (via `AgentHarnessRunner.cheap_provider`, below) and by

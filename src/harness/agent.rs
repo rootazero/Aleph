@@ -1010,11 +1010,7 @@ pub(crate) fn tool_use_blocks(tool_calls: &[NativeToolCall]) -> Vec<Value> {
 /// Last assistant record from an already run-scoped event range.
 fn final_reply_in(events: &[SessionEventRecord]) -> Option<String> {
     events.iter().rev().find_map(|record| match &record.event {
-        SessionEvent::AssistantMessage { content, .. } => Some(if content.text.is_empty() {
-            content.thinking.clone().unwrap_or_default()
-        } else {
-            content.text.clone()
-        }),
+        SessionEvent::AssistantMessage { content, .. } => Some(content.text.clone()),
         _ => None,
     })
 }

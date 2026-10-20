@@ -15,6 +15,22 @@ Aleph 插件系统实现了 **单向兼容 + 超集** 策略：
 
 ---
 
+## Context Capability 授权契约 / Context capability authorization
+
+可被外部发现、调用、替换或管理的上下文操作采用同一 Capability 契约。`src/context/fabric.rs` 是唯一 wire DTO 来源；本机 `PreflightStage::name(&self) -> &'static str` 保持 Rust 内部接口，不能充当第三方 ABI。描述符是声明；安装插件或枚举描述符不会授予会话数据读取权限。
+
+Externally composable context operations use the canonical DTOs in `src/context/fabric.rs`. Native Rust traits remain internal interfaces. Discovery and installation do not authorize context access.
+
+宿主通过 `src/extension/capability.rs::ContextGrant` 明确授权，并绑定完整 descriptor 指纹；修改预算、权限或 phase 后，旧授权失效。`src/extension/registry/plugin_registry/context.rs` 按 session 检查 owner 冲突；同一 descriptor 可以分别服务多个已授权 session。bundle 必须完整注册和撤销，调用前后仍需验证授权与挂载状态。审计保留最近 256 条，并单独报告累计数量。
+
+Host grants bind the complete descriptor fingerprint. Ownership conflicts and revocation are scoped to the session; bundles are atomic. The registry retains the latest 256 audit entries and a separate cumulative count. The executable WASM path uses the existing loader and actual mount identity; grants remain separate from manifest declarations. See [Context Plugins / 上下文插件](CONTEXT_PLUGINS.md) for the manifest, confirmed `context_plugin` grant/revoke tool, dynamic resolver and runtime boundaries.
+
+fold 的历史 owner 与摘要、checkpoint 一起写入原有 `SessionEvent::FoldRecorded` 事务，缺失 owner 的旧事件仍按 builtin 解释。恢复依据历史记录；无法确认外部 owner 时采用明确标注 degraded 的 Core 恢复，不能将旧原文交给当前 phase owner。`session_events` 继续是唯一持久化事实源，插件缓存只允许作为可重建派生数据。
+
+Fold ownership is recorded atomically with the existing compaction events. Legacy folds default to builtin ownership. Recovery follows historical provenance and falls back explicitly to Core when an external owner cannot be established; plugin caches are rebuildable projections of the authoritative event log.
+
+---
+
 ## 架构
 
 ```

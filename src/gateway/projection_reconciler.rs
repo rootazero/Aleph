@@ -538,6 +538,9 @@ mod tests {
                 ..Default::default()
             }),
             at,
+            model: None,
+            model_provider: None,
+            model_generation: None,
         }
     }
 
@@ -549,6 +552,9 @@ mod tests {
             content: mc("hello"),
             usage: None,
             at,
+            model: None,
+            model_provider: None,
+            model_generation: None,
         }
     }
 

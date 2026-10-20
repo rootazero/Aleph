@@ -11,7 +11,7 @@ use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState, TurnStep};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::message::UnifiedMessage;
-use crate::session::events::{EventSeq, MessageContent, SessionEvent, SessionEventRecord, TurnId};
+use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
 use crate::thinker::nudges::{
     compact_growth_nudge, MAX_OUTPUT_TOKENS_RESUME_NUDGE, MAX_STEPS_HINT,
@@ -379,12 +379,6 @@ fn build_request_payload<'a>(
     base.with_system_blocks(system_blocks)
 }
 
-/// Fresh-tail size for the preflight cheap passes when no context budget is
-/// wired (`context_budget == None`). Mirrors `CompactorConfig::default`'s tail
-/// of 6 — named so the no-budget fallback cannot silently diverge from the
-/// configured compactor's tail.
-const NO_BUDGET_FRESH_TAIL: usize = 6;
-
 /// Plain-text tool-call promotion (openclaw `tool-call-repair` parity).
 ///
 /// Weaker / proxied models sometimes emit a tool call as assistant **text**
@@ -583,62 +577,18 @@ impl AgentHarness {
             0
         };
 
-        // 2a. Preflight cheap passes (hermes-inspired). Run BEFORE the budget
-        // check so token-saving transforms — tool_result pruning + historical
-        // image stripping — happen even if the compactor's side-channel LLM
-        // call later fails. No LLM cost in this step.
-        if let Some(pipeline) = self.deps.preflight_pipeline.as_ref() {
-            // Compute the REAL pressure snapshot (read-only via `peek_pressure`
-            // — no calibration or circuit-breaker mutation) so the pipeline's
-            // preventive-band gate (`PreflightPipeline::min_pressure_ratio`,
-            // wired from `ContextBudgetConfig::preventive_floor`, default 0.60)
-            // fires the lossy cheap passes only when the context is actually
-            // filling up. The old `ratio: 1.0` placeholder kept the gate
-            // permanently open, so the passes ran on every turn even on a
-            // near-empty context — contradicting the "calm runs pay nothing"
-            // contract.
-            // `fresh_tail` comes from the same `ContextBudget` the compactor
-            // consults, keeping the protected-tail invariant intact. Falls back
-            // to a max-pressure placeholder + `CompactorConfig::default` tail of
-            // 6 only when no budget is wired (degenerate config), preserving the
-            // previous always-on behaviour there.
-            let (pressure, fresh_tail) = match self.deps.context_budget.as_ref() {
-                Some(budget) => {
-                    let guard = budget.lock().await;
-                    let pressure =
-                        guard.peek_pressure(&messages, system_prompt, budget_tool_tokens);
-                    (pressure, guard.fresh_tail_count())
-                }
-                None => (
-                    crate::context::budget::ContextPressure {
-                        used_tokens: 0,
-                        budget_tokens: 0,
-                        ratio: 1.0,
-                        overhead_tokens: 0,
-                        available_for_messages: 0,
-                    },
-                    NO_BUDGET_FRESH_TAIL,
-                ),
-            };
-            // `+ transient_tail`: the protected tail is a count of PERSISTED
-            // messages, but this vector ends with up to four `<system-reminder>`
-            // nudges plus the recall message — five synthetic entries that could
-            // consume a six-message guard, letting the cheap passes rewrite a
-            // message the model saw one turn ago. Adding the count back makes the
-            // cut `persisted_len - fresh_tail`, which is also independent of how
-            // many nudges happened to fire, so the boundary stops jittering near
-            // a quantum edge (FEATURE_LOCATOR §2.18 ledger item 2).
-            let freed = pipeline
-                .run(&mut messages, &pressure, fresh_tail + transient_tail)
-                .await;
-            if freed > 0 {
-                tracing::debug!(
-                    ?session_id,
-                    tokens_freed = freed,
-                    "preflight cheap passes saved tokens",
-                );
-            }
-        }
+        crate::context::compact::directive::preflight(
+            self.deps.context_fabric.as_deref(),
+            self.deps.context_budget.as_ref(),
+            &mut messages,
+            system_prompt,
+            budget_tool_tokens,
+            transient_tail,
+            session_id,
+            parent_cancel,
+        )
+        .await
+        .map_err(|_| HarnessError::Cancelled)?;
 
         // 2b. Task-10 budget check: evaluate context pressure before issuing
         // the LLM call. The sensor sees the real system prompt and tool-schema
@@ -658,6 +608,7 @@ impl AgentHarness {
             match crate::context::compact::directive::apply_budget_directive(
                 directive,
                 self.deps.context_compactor.as_deref(),
+                self.deps.context_fabric.as_deref(),
                 self.deps.context_budget.as_ref(),
                 self.deps.session_epoch_registrar.as_ref(),
                 self.deps.session.as_ref(),
@@ -668,9 +619,13 @@ impl AgentHarness {
                 system_prompt,
                 budget_tool_tokens,
                 transient_tail,
+                parent_cancel,
             )
             .await
             {
+                crate::context::compact::directive::DirectiveOutcome::Cancelled => {
+                    return Err(HarnessError::Cancelled)
+                }
                 crate::context::compact::directive::DirectiveOutcome::SplitTo(child) => {
                     return Ok(TurnStep {
                         state: TurnState::Continue,
@@ -787,7 +742,7 @@ impl AgentHarness {
             budget_tool_tokens,
             transient_tail,
             started,
-            compactor: self.deps.context_compactor.as_deref(),
+            fabric: self.deps.context_fabric.as_deref(),
             budget: self.deps.context_budget.as_ref(),
         };
         let payload = build_request_payload(
@@ -998,6 +953,17 @@ impl AgentHarness {
         )
         .await?;
 
+        // Provenance of the ONE LLM call that produced the surviving response:
+        // read the live wrapper's last-request target NOW, immediately after the
+        // final retry/drain future completed, before any further `await` could
+        // interleave another `deps.llm` call. `None` when the provider cannot
+        // prove which model served (plain adapters / no session wrapper).
+        let last_target = self.deps.llm.last_request_target();
+        let (serving_model, serving_provider, serving_generation) = match last_target {
+            Some(t) => (Some(t.model), Some(t.provider), Some(t.generation)),
+            None => (None, None, None),
+        };
+
         // Exit-point reason fidelity. Capture the surviving response's
         // degradation verdicts here — after every bounded recovery loop has
         // had its chance to replace `response`, and before tool-call
@@ -1150,17 +1116,18 @@ impl AgentHarness {
             });
         }
         self.emit_reasoning(iterations, response.thinking.as_deref());
-        let blocks = super::tool_use_blocks(&response.tool_calls);
         let assistant_event = SessionEvent::AssistantMessage {
             turn_id,
-            content: MessageContent {
-                text: text.clone(),
-                blocks,
-                thinking: response.thinking.clone(),
-                thinking_signature: response.thinking_signature.clone(),
-            },
+            content: crate::session::projection::project_assistant_response(
+                &response,
+                text.clone(),
+                super::tool_use_blocks(&response.tool_calls),
+            ),
             usage: response.usage.as_ref().map(Into::into),
             at: crate::session::events::now_ms(),
+            model: serving_model,
+            model_provider: serving_provider,
+            model_generation: serving_generation,
         };
         self.deps
             .session
@@ -1524,6 +1491,14 @@ impl AgentHarness {
                 return;
             }
         };
+        // Provenance: capture the grace call's target right after `resp`
+        // settled (same contract as the primary turn — read after the future,
+        // never before, and never faked from a run-level hint).
+        let last_target = self.deps.llm.last_request_target();
+        let (serving_model, serving_provider, serving_generation) = match last_target {
+            Some(t) => (Some(t.model), Some(t.provider), Some(t.generation)),
+            None => (None, None, None),
+        };
         // Account the grace call's billed tokens immediately — the early
         // returns below (empty text, guardrail block) previously skipped the
         // end-of-function accounting entirely, silently dropping a real billed
@@ -1568,14 +1543,16 @@ impl AgentHarness {
         callback.on_delta(&text);
         let grace_event = SessionEvent::AssistantMessage {
             turn_id,
-            content: MessageContent {
-                text: text.clone(),
-                blocks: Vec::new(),
-                thinking: resp.thinking.clone(),
-                thinking_signature: resp.thinking_signature.clone(),
-            },
+            content: crate::session::projection::project_assistant_response(
+                &resp,
+                text.clone(),
+                Vec::new(),
+            ),
             usage: resp.usage.as_ref().map(Into::into),
             at: crate::session::events::now_ms(),
+            model: serving_model,
+            model_provider: serving_provider,
+            model_generation: serving_generation,
         };
         // Token accounting already happened via `account_intermediate_tokens`
         // right after the LLM call, so the early-return paths are counted too.
@@ -1662,6 +1639,10 @@ impl AgentHarness {
 impl RescueHost for AgentHarness {
     type Fatal = HarnessError;
 
+    fn cancelled(&self) -> Self::Fatal {
+        HarnessError::Cancelled
+    }
+
     async fn call_llm(
         &self,
         cx: &RescueCx<'_>,
@@ -1742,6 +1723,9 @@ mod tests {
             },
             usage: None,
             at: now_ms(),
+            model: None,
+            model_provider: None,
+            model_generation: None,
         }
     }
 
@@ -1786,6 +1770,7 @@ mod tests {
                 trigger: "manual-command".to_string(),
                 folded_tokens: 1_000,
                 summary_tokens: 100,
+                owner: None,
                 at: now_ms(),
             },
         ]

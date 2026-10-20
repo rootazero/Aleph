@@ -46,4 +46,20 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 - **model 先校验再回放。** `validate_snapshot_model` 复用 `model_catalog::lifecycle_for` 与 `pinnable_providers()`：退役且有继任 → 换继任；无继任、或 provider 已不在本机配置里 → 落回 agent 默认链。任一降级都写进 `ResumeReport.degraded`，并**对模型说一句**（有悬空调用时附在第一条边界修复的 `ToolError` 上，没有时单独追加一条 `SystemMessage`）。`project_root` 消失走同一条路（裁定 A9）。
 - **载体是 `RunRequest.model_override`**，它从不写回会话行——所以崩溃之后用户新调的 `select_model` 仍然从**下一条消息**起生效，正是 `select_model` 打印给模型的那句承诺。
 - **没有快照的 marker 计入 `ResumeReport.unsnapshotted`**（envelope 出现之前写下的 marker，以及 `RunStarted` 追加失败的那种 run）。它们照旧按今天的会话/全局值恢复——数出来，而不是假装不存在。
-- **主模型绑定与 failure-only fallback**：`model` / `model_provider` 在 `RunStarted` envelope 中记录本次实际显式绑定；恢复时只回放仍可用的 binding，并把失效/退役值写入 `ResumeReport.degraded`。`BrainRef` 与命名 preset 仍是显式绑定/配置引用，不是语义路由；provider fallback 只在失败后发生，受 retry budget、circuit 与 cooldown 约束；恢复不会重建已 superseded 的 MoA/preset/strategy-routing 组合，旧 MoA preset 只按历史兼容规则诊断并忽略。
+- **主模型绑定与 failure-only fallback**：`model` / `model_provider` 在 `RunStarted` envelope 中记录本次实际显式绑定；恢复时只回放仍可用的 binding，并把失效/退役值写入 `ResumeReport.degraded`。per-turn model directive、session pin 与 `BrainRef` / 命名 preset 都是显式绑定或配置引用；provider fallback 只在失败后发生，受 retry budget、circuit 与 cooldown 约束。
+
+## 模型热切换语义（Model Hot-Switch，2026-10，Phase M）
+
+**SessionModelProvider 每次 `process` / `execute_streaming_dyn` 请求边界读取 `SessionModelSnapshot`**（含 `model`、`model_provider` 与 `generation`），该快照在本次请求内 immutable；切换在下一次请求边界才生效，in-flight 请求不受影响。
+
+**generation monotonic / conditional durable persistence**：`generation` 单调递增；pin 变更写入带 generation 前置条件的 durable store，stale 或冲突写入 fail-closed，不能覆盖更新的 generation，失败时保留旧 pin。普通 `sessions.patch` **明确禁止写入 model pin 键**（`knob_validators` 拦截），仅 `select_model` 工具拥有写权限。
+
+**runner 模型绑定**：显式 turn override（Panel pill / `[voice]` 钉 → `FlowRequest.model_directive`）→ session `select_model` pin → `BrainRef` preset；这些都是显式绑定或配置引用，不是按语义动态路由，provider fallback 只在请求失败后发生。
+
+**per-call provenance**：每条 `AssistantMessage` 可携带可选 per-call `model` / `provider` / `generation` provenance，支撑 trace 与成本归因。
+
+**TUI `/model` 和 webchat session picker 都走 gateway `/model` 到 `select_model`**；per-turn picker（Panel 模型 pill / `[voice]` 钉）走独立 `FlowRequest.model_directive` 路径，两者分开。
+
+**resume 使用快照**：崩溃恢复回放 `RunStarted` envelope 中冻结的有效 model/provider binding，而不是重新读取恢复时的当前 pin；恢复仍执行可用性校验，并将降级记录到 `ResumeReport.degraded`。新 pin 从下一条正常请求起生效。
+
+SessionModelProvider reads `SessionModelSnapshot` at each request boundary; the snapshot is immutable within that request, and a switch takes effect on the next request. `generation` is monotonic and durable writes use CAS, so stale writes fail closed. `select_model` is the sole writer; ordinary `sessions.patch` rejects model pin keys. Explicit turn directives, session pins, and `BrainRef` presets remain explicit bindings; provider fallback is failure-only. `AssistantMessage` carries optional per-call provenance.

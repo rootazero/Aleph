@@ -330,6 +330,9 @@ pub async fn handle(
                         // we did not make this call and were not billed for it.
                         usage: None,
                         at,
+                        model: None,
+                        model_provider: None,
+                        model_generation: None,
                     },
                     "system" => crate::session::events::SessionEvent::SystemMessage {
                         turn_id,

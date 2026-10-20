@@ -171,10 +171,11 @@ mod tests {
         fn walk(dir: &std::path::Path, needle: &str, skip: &str, hits: &mut Vec<String>) {
             for e in std::fs::read_dir(dir).unwrap().flatten() {
                 let p = e.path();
+                let normalized_path = p.to_string_lossy().replace('\\', "/");
                 if p.is_dir() {
                     walk(&p, needle, skip, hits);
                 } else if p.extension().is_some_and(|x| x == "rs")
-                    && !p.display().to_string().ends_with(skip)
+                    && !normalized_path.ends_with(skip)
                 {
                     let s = std::fs::read_to_string(&p).unwrap();
                     // Declared-test-module files (`tests.rs`, census modules)
@@ -184,7 +185,7 @@ mod tests {
                         .lines()
                         .any(|l| !l.trim_start().starts_with("//") && l.contains(needle))
                     {
-                        hits.push(p.display().to_string());
+                        hits.push(normalized_path);
                     }
                 }
             }

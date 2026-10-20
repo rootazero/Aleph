@@ -484,6 +484,9 @@ pub struct AlephExtensions {
     /// Permission grants
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permissions: Option<PermissionsSection>,
+    /// Context discovery declarations; host grants are issued separately.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contexts: Vec<crate::extension::capability::ContextDeclaration>,
     /// WASM-specific capabilities
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<CapabilitiesSection>,

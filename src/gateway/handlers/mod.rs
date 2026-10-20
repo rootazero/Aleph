@@ -498,6 +498,39 @@ impl HandlerRegistry {
             )
         });
 
+        // Memory session management handlers (placeholders - wired with MarkdownSessionStore at boot)
+        registry.register("memory.sessions.list", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "memory.sessions.list requires MarkdownSessionStore — wire in Gateway startup"
+                    .to_string(),
+            )
+        });
+        registry.register("memory.sessions.get", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "memory.sessions.get requires MarkdownSessionStore — wire in Gateway startup"
+                    .to_string(),
+            )
+        });
+        registry.register("memory.sessions.search", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "memory.sessions.search requires MarkdownSessionStore — wire in Gateway startup"
+                    .to_string(),
+            )
+        });
+        registry.register("memory.sessions.update_compression", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "memory.sessions.update_compression requires MarkdownSessionStore — wire in Gateway startup".to_string(),
+            )
+        });
+
         // MCP Approval handlers
         registry.register(
             "mcp.list_pending_approvals",

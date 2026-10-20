@@ -19,7 +19,8 @@ use tracing::warn;
 use crate::gateway::session_store::types::SessionPatch;
 use crate::gateway::session_store::SessionStore;
 use crate::providers::session_model_handle::{
-    SessionModelPref, SessionPinSink, MODEL_PIN_PROVIDER_SESSION_KEY, MODEL_PIN_SESSION_KEY,
+    SessionModelPref, SessionPinSink, MODEL_PIN_GENERATION_SESSION_KEY,
+    MODEL_PIN_PROVIDER_SESSION_KEY, MODEL_PIN_SESSION_KEY,
 };
 use crate::routing::session_key::SessionKey;
 
@@ -45,7 +46,12 @@ impl StoreBackedPinSink {
     /// stores merge this bag key-by-key, so an omitted key means "leave it
     /// alone" — a clear that omitted them would leave the old pin on the row to
     /// be rehydrated by the next run, which is worse than never clearing.
+    #[cfg(test)]
     fn patch_for(pref: Option<&SessionModelPref>) -> SessionPatch {
+        Self::patch_for_at_generation(pref, 0)
+    }
+
+    fn patch_for_at_generation(pref: Option<&SessionModelPref>, generation: u64) -> SessionPatch {
         let (model, provider) = match pref {
             Some(p) => (
                 serde_json::Value::String(p.model.clone()),
@@ -59,14 +65,42 @@ impl StoreBackedPinSink {
             metadata: Some(serde_json::json!({
                 MODEL_PIN_SESSION_KEY: model,
                 MODEL_PIN_PROVIDER_SESSION_KEY: provider,
+                MODEL_PIN_GENERATION_SESSION_KEY: generation.to_string(),
             })),
             ..Default::default()
         }
     }
 }
 
+#[async_trait::async_trait]
 impl SessionPinSink for StoreBackedPinSink {
-    fn persist(&self, session_key: &str, pref: Option<&SessionModelPref>) {
+    async fn persist_with_generation_durable(
+        &self,
+        session_key: &str,
+        pref: Option<&SessionModelPref>,
+        generation: u64,
+    ) -> Result<(), String> {
+        let key = SessionKey::from_key_string(session_key)
+            .ok_or_else(|| "session key is not durable".to_string())?;
+        let patch = Self::patch_for_at_generation(pref, generation);
+        let accepted = self
+            .store
+            .patch_session_if_model_pin_generation_newer(&key, &patch, generation)
+            .await
+            .map_err(|error| error.to_string())?;
+        if accepted {
+            Ok(())
+        } else {
+            Err("session row rejected or did not contain this generation".to_string())
+        }
+    }
+
+    fn persist_with_generation(
+        &self,
+        session_key: &str,
+        pref: Option<&SessionModelPref>,
+        generation: u64,
+    ) {
         // A key this store cannot address is not an error worth logging every
         // turn: sub-agent and ephemeral keys legitimately pin models on
         // sessions that have no row. The in-memory map still governs them for
@@ -74,7 +108,7 @@ impl SessionPinSink for StoreBackedPinSink {
         let Some(key) = SessionKey::from_key_string(session_key) else {
             return;
         };
-        let patch = Self::patch_for(pref);
+        let patch = Self::patch_for_at_generation(pref, generation);
         let store = Arc::clone(&self.store);
 
         // The caller is a synchronous fn on a path where a store failure must
@@ -86,7 +120,10 @@ impl SessionPinSink for StoreBackedPinSink {
             return;
         };
         handle.spawn(async move {
-            if let Err(e) = store.patch_session(&key, &patch).await {
+            if let Err(e) = store
+                .patch_session_if_model_pin_generation_newer(&key, &patch, generation)
+                .await
+            {
                 warn!(error = %e, "Failed to persist session model pin");
             }
         });
@@ -131,6 +168,45 @@ mod tests {
     }
 
     #[test]
+    fn a_pick_writes_the_generation_alongside_both_keys() {
+        let patch = StoreBackedPinSink::patch_for_at_generation(
+            Some(&SessionModelPref {
+                provider: Some("anthropic".to_string()),
+                model: "claude-opus-5".to_string(),
+            }),
+            7,
+        );
+        let m = keys(&patch);
+        assert_eq!(m[MODEL_PIN_SESSION_KEY], "claude-opus-5");
+        assert_eq!(m[MODEL_PIN_PROVIDER_SESSION_KEY], "anthropic");
+        assert_eq!(m[MODEL_PIN_GENERATION_SESSION_KEY], "7");
+    }
+
+    #[test]
+    fn a_clear_keeps_the_generation_tombstone() {
+        let patch = StoreBackedPinSink::patch_for_at_generation(None, 8);
+        let m = keys(&patch);
+        assert!(m[MODEL_PIN_SESSION_KEY].is_null());
+        assert!(m[MODEL_PIN_PROVIDER_SESSION_KEY].is_null());
+        assert_eq!(m[MODEL_PIN_GENERATION_SESSION_KEY], "8");
+    }
+
+    #[test]
+    fn generation_zero_remains_the_legacy_compatibility_value() {
+        let patch = StoreBackedPinSink::patch_for_at_generation(
+            Some(&SessionModelPref {
+                provider: None,
+                model: "legacy-model".to_string(),
+            }),
+            0,
+        );
+        assert_eq!(
+            keys(&patch)[MODEL_PIN_GENERATION_SESSION_KEY],
+            "0",
+            "legacy persistence must retain generation zero"
+        );
+    }
+    #[test]
     fn a_clear_nulls_both_keys_rather_than_omitting_them() {
         let patch = StoreBackedPinSink::patch_for(None);
         let m = keys(&patch);
@@ -138,7 +214,7 @@ mod tests {
         assert!(m[MODEL_PIN_PROVIDER_SESSION_KEY].is_null());
         assert_eq!(
             m.len(),
-            2,
+            3,
             "an omitted key means \"leave it alone\" to both stores — a clear \
              that omitted them would be undone by the next run's rehydrate"
         );

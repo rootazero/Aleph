@@ -31,6 +31,8 @@
 
 > 最高优先级约束，违反的代码不得合入。**完整例外条款与 R10 棘轮机制** → [REDLINES.md](docs/reference/REDLINES.md)
 
+**Capability 总原则：Everything externally composable is a Capability.** 任何需要被 Agent、Runtime 或其他系统动态发现、调用、替换、订阅或管理的能力，都必须通过 Capability 契约表达。
+
 | # | 红线 | 一句话 |
 |---|------|--------|
 | **R1** | 大脑与四肢绝对分离 | Core 不调平台 API；走 Bridge IPC |

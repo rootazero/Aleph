@@ -415,7 +415,7 @@ $null = $nodes.Item(1).AppendChild($template.CreateTextNode($env:ALEPH_TOAST_BOD
                 let hostname = unsafe {
                     if GetComputerNameExW(
                         ComputerNamePhysicalDnsHostname,
-                        PWSTR(hostname_buf.as_mut_ptr()),
+                        Some(PWSTR(hostname_buf.as_mut_ptr())),
                         std::ptr::addr_of_mut!(size),
                     )
                     .is_ok()

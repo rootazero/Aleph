@@ -7,9 +7,14 @@
 
 use crate::context::budget::pressure::estimate_message_tokens_aware;
 use crate::context::budget::ContextBudget;
-use crate::context::compact::compactor::ContextCompactor;
+use crate::context::fabric::runtime::ContextFabricError;
+use crate::context::fabric::ContextFabric;
 use crate::providers::message::UnifiedMessage;
 use crate::providers::reasoning_replay::ReasoningReplay;
+use crate::session::service::SessionId;
+use crate::sync_primitives::Arc;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 /// Estimate the total token footprint of `messages` as `replay` sends them —
 /// the budget's own projection, so the floor and the gauge count alike.
@@ -115,34 +120,65 @@ fn evict_one(messages: &mut Vec<UnifiedMessage>, tail: usize) {
 /// is below `critical_threshold` UNLESS the protected fresh tail plus the fixed
 /// overhead (system prompt + tool schemas) alone already meet/exceed the budget
 /// — the Plan-1b pathological case, where the caller continues anyway. Never
-/// returns an error and never hard-stops — this IS the never-break mechanism.
+/// hard-stops on pressure — only request cancellation returns an error.
 pub(crate) async fn compact_to_fit(
-    compactor: Option<&ContextCompactor>,
+    fabric: Option<&ContextFabric>,
+    budget: &Arc<Mutex<ContextBudget>>,
+    messages: &mut Vec<UnifiedMessage>,
+    system_prompt: &str,
+    tool_schema_tokens: usize,
+    transient_tail: usize,
+    session_id: &SessionId,
+    cancel: &CancellationToken,
+) -> Result<(), ContextFabricError> {
+    if cancel.is_cancelled() {
+        return Err(ContextFabricError::Cancelled);
+    }
+    // Snapshot the only native input needed before the handler await.
+    let fresh_tail = budget.lock().await.fresh_tail_count();
+    if let Some(fabric) = fabric {
+        match super::directive::compact_for_session(
+            fabric,
+            messages,
+            fresh_tail,
+            transient_tail,
+            session_id,
+            cancel,
+        )
+        .await
+        {
+            Err(ContextFabricError::Cancelled) => return Err(ContextFabricError::Cancelled),
+            Err(e) => {
+                tracing::warn!(error = %e, "compact_to_fit: compaction failed; falling back to floor")
+            }
+            Ok(_) => {}
+        }
+    }
+    if cancel.is_cancelled() {
+        return Err(ContextFabricError::Cancelled);
+    }
+    let guard = budget.lock().await;
+    apply_fit_floor(
+        &guard,
+        messages,
+        system_prompt,
+        tool_schema_tokens,
+        transient_tail,
+    );
+    Ok(())
+}
+
+/// Re-measure and apply the native deterministic floor. This synchronous
+/// operation may borrow the budget guard; plugin execution never does.
+fn apply_fit_floor(
     budget: &ContextBudget,
     messages: &mut Vec<UnifiedMessage>,
     system_prompt: &str,
     tool_schema_tokens: usize,
     transient_tail: usize,
-    session_id: Option<&str>,
 ) {
     let critical = budget.critical_threshold();
     let ratio = budget.token_estimate_ratio();
-
-    // 1. LLM compaction (aggressive: minimal fresh tail). Fail-soft.
-    if let Some(c) = compactor {
-        if let Err(e) = c
-            .compact(
-                messages,
-                budget.fresh_tail_count(),
-                transient_tail,
-                session_id,
-            )
-            .await
-        {
-            tracing::warn!(error = %e, "compact_to_fit: LLM compaction failed; falling back to floor");
-        }
-    }
-
     // 2. Re-measure.
     let p = budget.peek_pressure(messages, system_prompt, tool_schema_tokens);
     if p.ratio < critical {
@@ -366,8 +402,20 @@ mod tests {
             "premise: raw total must sit between the raw and calibrated targets, got {raw}"
         );
 
-        compact_to_fit(None, &budget, &mut msgs, "", 0, 0, None).await;
-        let p = budget.peek_pressure(&msgs, "", 0);
+        let budget = Arc::new(Mutex::new(budget));
+        compact_to_fit(
+            None,
+            &budget,
+            &mut msgs,
+            "",
+            0,
+            0,
+            &SessionId::main("test"),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let p = budget.lock().await.peek_pressure(&msgs, "", 0);
         assert!(
             p.ratio < 0.85,
             "post-condition must hold in CALIBRATED space, got {}",
@@ -395,8 +443,20 @@ mod tests {
             text_user(&"b".repeat(20000)),
             text_user("tail"),
         ];
-        compact_to_fit(None, &budget, &mut msgs, "", 0, 0, None).await;
-        let p = budget.peek_pressure(&msgs, "", 0);
+        let budget = Arc::new(Mutex::new(budget));
+        compact_to_fit(
+            None,
+            &budget,
+            &mut msgs,
+            "",
+            0,
+            0,
+            &SessionId::main("test"),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let p = budget.lock().await.peek_pressure(&msgs, "", 0);
         assert!(
             p.ratio < 0.85,
             "post-condition: pressure must be under critical, got {}",

@@ -427,6 +427,7 @@ mod tests {
                     .unwrap()
                     .display()
                     .to_string()
+                    .replace('\\', "/")
             })
             .collect();
         relative.sort();

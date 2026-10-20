@@ -1219,6 +1219,9 @@ mod tests {
                     },
                     usage: None,
                     at: now_ms(),
+                    model: None,
+                    model_provider: None,
+                    model_generation: None,
                 },
                 created_at_ms: now_ms(),
             },
@@ -1541,6 +1544,9 @@ mod tests {
             },
             usage: None,
             at: now_ms(),
+            model: None,
+            model_provider: None,
+            model_generation: None,
         };
         let msg = event_to_message(&event).expect("an assistant turn maps");
         assert!(!msg

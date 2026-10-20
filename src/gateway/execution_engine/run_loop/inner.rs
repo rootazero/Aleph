@@ -4,6 +4,7 @@
 //! `run_agent_loop` (in the parent module) wraps this with the
 //! `BeforeAgentStart` / `AgentEnd` lifecycle hooks.
 
+use base64::Engine as _;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -600,7 +601,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             )
             .await;
 
-            let blocks = media_processor
+            let mut blocks = media_processor
                 .process(
                     &request.attachments,
                     supports_vision,
@@ -608,6 +609,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     run_id,
                 )
                 .await;
+
+            blocks.extend(inbound_attachment_markers(&request.attachments));
 
             let has_images = blocks
                 .iter()
@@ -636,7 +639,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .filter_map(|b| serde_json::to_value(b).ok())
                 .collect()
         } else {
-            Vec::new()
+            inbound_attachment_markers(&request.attachments)
+                .into_iter()
+                .filter_map(|block| serde_json::to_value(block).ok())
+                .collect()
         };
 
         // RAII guard for the media cache: every terminal arm of the retry
@@ -1659,6 +1665,26 @@ pub(super) fn model_supports_vision(configured: &str, serving_hint: Option<&str>
         .flatten()
         .find_map(crate::providers::capabilities_for)
         .is_none_or(|caps| caps.supports_vision)
+}
+
+fn inbound_attachment_markers(
+    attachments: &[crate::gateway::channel::Attachment],
+) -> Vec<crate::providers::message::ContentBlock> {
+    attachments
+        .iter()
+        .filter_map(|attachment| {
+            let bytes = attachment.data.as_ref()?;
+            Some(crate::providers::message::ContentBlock::Json {
+                value: serde_json::json!({
+                    "aleph_attachment": {
+                        "name": attachment.filename,
+                        "mime_type": attachment.mime_type,
+                        "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+                    }
+                }),
+            })
+        })
+        .collect()
 }
 
 /// Copy every inbound attachment into the durable artifact store, then ping

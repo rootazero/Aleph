@@ -22,7 +22,8 @@ use crate::views::settings::{
     AcpHarnessesView, AppearanceView, BehaviorView, BrowserView, ChannelPlatformPage,
     ChannelsOverview, EmbeddingProvidersView, ExecutionView, GeneralView, GenerationProvidersView,
     McpView, MemoryView, NetworkView, PluginsView, PoliciesView, ProvidersView,
-    RerankingProvidersView, SearchView, SecurityView, Settings, SkillsView, WorkspacesView,
+    RerankingProvidersView, SearchView, SecurityView, SessionsView, Settings, SkillsView,
+    WorkspacesView,
 };
 use crate::views::subagent_tree::SubagentTreeDeepLink;
 use crate::views::tasks::TasksView;
@@ -813,6 +814,7 @@ fn desktop_settings_body(path: &str) -> AnyView {
         "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
         "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
         "/settings/memory" => view! { <MemoryView /> }.into_any(),
+        "/settings/sessions" => view! { <SessionsView /> }.into_any(),
 
         // Browser
         "/settings/browser" => view! { <BrowserView /> }.into_any(),

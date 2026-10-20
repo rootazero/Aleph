@@ -1442,7 +1442,7 @@ mod tests {
         .expect("the store takes the original");
         let sections = format!("{}\n{footer}", "selected section text ".repeat(2_000));
         let flattened = serde_json::json!({ "content": sections }).to_string();
-        for text in [&sections, &flattened] {
+        for (text, json_escaped) in [(&sections, false), (&flattened, true)] {
             let out = apply_result_budget(
                 "call_own",
                 "web_fetch",
@@ -1463,7 +1463,17 @@ mod tests {
                 crate::tools::result_store::PERSISTED_REF_PREFIX,
                 store.blob_path("call_own", "web_fetch").display()
             );
-            assert!(out.text.contains(&own), "the handle is kept whole");
+            // Flattened JSON retains string escaping in its recovery handle.
+            let expected_handle = if json_escaped {
+                let encoded = serde_json::to_string(&own).unwrap();
+                encoded[1..encoded.len() - 1].to_string()
+            } else {
+                own
+            };
+            assert!(
+                out.text.contains(&expected_handle),
+                "the handle is kept whole"
+            );
         }
     }
 

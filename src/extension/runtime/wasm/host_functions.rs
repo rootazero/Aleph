@@ -20,6 +20,8 @@ use super::capability_kernel::WasmCapabilityKernel;
 pub struct HostState {
     pub kernel: Arc<WasmCapabilityKernel>,
     pub workspace_root: std::path::PathBuf,
+    /// Context payloads must not be persisted through the guest logging import.
+    pub suppress_guest_logs: bool,
 }
 
 /// Maximum bytes `workspace_read` will load from a single file.
@@ -28,7 +30,9 @@ const MAX_WORKSPACE_READ_BYTES: u64 = 1024 * 1024;
 host_fn!(pub host_log(state: HostState; level: String, message: String) {
     let state = state.get()?;
     let state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let _ = state.kernel.log(&level, &message);
+    if !state.suppress_guest_logs {
+        let _ = state.kernel.log(&level, &message);
+    }
     Ok(())
 });
 

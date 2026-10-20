@@ -36,6 +36,7 @@ pub mod visibility;
 pub mod capability;
 #[cfg(test)]
 mod claude_cache_tests;
+pub mod context_adapter;
 pub(crate) mod declared_model;
 pub mod effects;
 pub mod registrar;

@@ -271,6 +271,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         // Same process-global extension manager as `hooks_manage`.
         requires_config: false,
     },
+    BuiltinToolDefinition {
+        name: "context_plugin",
+        description: <crate::builtin_tools::context_plugin::ContextPluginTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
     // The model's face of project rooms (R8 twin of `projects.*`). Shares the
     // one process-global `ProjectStore` and the same `authz` predicates the
     // RPC handlers use, so a room renamed in words and one renamed by a click
@@ -1170,6 +1175,9 @@ pub fn create_tool_boxed(
         )),
         "plugin_manage" => Some(Box::new(
             crate::builtin_tools::plugin_manage::PluginManageTool::new(),
+        )),
+        "context_plugin" => Some(Box::new(
+            crate::builtin_tools::context_plugin::ContextPluginTool,
         )),
         "desktop" => Some(Box::new(DesktopTool::new())),
         "desktop_ax_query_focused" => Some(Box::new(DesktopAxQueryFocused::new())),
@@ -3844,6 +3852,10 @@ mod tests {
              attribution this guard prints is against a table nobody measured."
         );
 
+        eprintln!(
+            "registry schema measurement: total={total}, tools={}",
+            sizes.len()
+        );
         if total > REGISTRY_SCHEMA_CEILING_BYTES {
             let base: std::collections::BTreeMap<&str, usize> =
                 REGISTRY_SCHEMA_BASELINE.iter().copied().collect();

@@ -580,6 +580,11 @@ impl HttpProvider {
             collector.push(delta);
         }
         let mut provider_response = collector.finish();
+        // Stamp the policy used for this concrete request before any wrapper can
+        // return the response. Reading the provider's current target after the
+        // response completes would race failover/hot-switch state and could
+        // project the response with the wrong wire policy.
+        provider_response.reasoning_replay = Some(self.reasoning_replay(payload.model.as_deref()));
 
         // What a reported fault means for this attempt is derived once
         // (`TerminalFrames::classify`) and applied once (`apply_fault`).

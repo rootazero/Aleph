@@ -1827,6 +1827,9 @@ mod tests {
                 },
                 usage: None,
                 at: 1,
+                model: None,
+                model_provider: None,
+                model_generation: None,
             })
         };
         let events = vec![

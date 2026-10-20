@@ -45,75 +45,67 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AlephError, Result};
 use crate::tools::AlephTool;
 
-/// Action to perform on the plugin system.
+/// Plugin operation.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginAction {
-    /// List installed plugins with runtime kind, status and component counts.
+    /// Installed plugins: kind, status/error and component counts.
     List,
-    /// Show one plugin in detail, including its configuration schema.
+    /// Plugin detail and configuration schema.
     Show,
-    /// Turn a plugin on.
+    /// Mounted context descriptors and session grants.
+    ContextStatus,
+    /// Enable.
     Enable,
-    /// Turn a plugin off.
+    /// Disable.
     Disable,
-    /// Re-read a plugin from disk (picks up new configuration).
+    /// Reload configuration from disk.
     Reload,
-    /// Read a plugin's stored configuration.
+    /// Read stored configuration.
     ConfigGet,
-    /// Replace a plugin's stored configuration.
+    /// Replace stored configuration.
     ConfigSet,
-    /// Show the owner trust policy: whether it is enforced, and which plugins
-    /// are vouched for.
+    /// Trust policy and vouched plugins.
     TrustStatus,
-    /// Vouch for a plugin, so it may load from an untrusted origin.
+    /// Vouch for an untrusted-origin plugin.
     Trust,
-    /// Withdraw vouching for a plugin.
+    /// Withdraw trust.
     Untrust,
-    /// Turn owner-trust enforcement on or off (`enforce`).
+    /// Toggle load-time trust enforcement.
     TrustEnforce,
-    /// List registered marketplaces, with the type and source of each and
-    /// whether it can be removed.
+    /// Catalogues: kind, source and removability.
     MarketplaceList,
-    /// List the plugins a marketplace offers. Reads the local cache; it does
-    /// not fetch.
+    /// Browse cached catalogue; no fetch.
     MarketplaceBrowse,
-    /// Register a marketplace from `source`, then fetch its contents.
+    /// Register and fetch `source`.
     MarketplaceAdd,
-    /// Drop a marketplace registration and its cache.
+    /// Remove catalogue and cache.
     MarketplaceRemove,
-    /// Re-fetch one marketplace (`name`) or all of them.
+    /// Refresh named catalogue or all catalogues.
     MarketplaceUpdate,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct PluginManageArgs {
-    /// What to do.
     pub action: PluginAction,
 
-    /// Plugin id — or, for the `marketplace_*` actions, the marketplace name.
-    /// Required for everything except `list`, `marketplace_list`,
-    /// `marketplace_browse`, `marketplace_add` and `marketplace_update`.
+    /// Plugin id or catalogue name. Optional for list and marketplace_list/browse/add/update.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
-    /// For `marketplace_add`: an `owner/repo` slug, a GitHub URL, or a local
-    /// directory path. The name and type are derived from it.
+    /// marketplace_add: owner/repo, GitHub URL or local directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 
-    /// For `marketplace_browse`: substring filter over plugin ids and
-    /// descriptions. Omit to list everything.
+    /// marketplace_browse: optional id/description substring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
 
-    /// For `config_set`: the complete configuration object. This REPLACES the
-    /// stored configuration — read it with `config_get` first and send the
-    /// merged result, or fields the operator set will disappear.
+    /// config_set replaces the whole object; config_get then merge first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
 
-    /// For `trust_enforce`: whether to enforce the trust allowlist.
+    /// trust_enforce: enable or disable load-time checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enforce: Option<bool>,
 }
@@ -190,31 +182,15 @@ impl AlephTool for PluginManageTool {
     const NAME: &'static str = "plugin_manage";
     const DESCRIPTION: &'static str =
         "Inspect, enable/disable, reload and configure installed plugins. \
-         Use action='list' to see every installed plugin with its runtime kind (wasm/mcp/static), \
-         status, and how many skills/commands/agents/hooks/tools it contributes — a plugin whose \
-         status is not 'loaded' carries the reason in 'error'. \
-         action='config_get' returns the plugin's stored configuration together with the JSON \
-         Schema its manifest declares; action='config_set' REPLACES the whole configuration object, \
-         so read it first and send the merged result. Configuration changes take effect on the \
-         next reload — call action='reload' afterwards and say so. \
-         action='trust_status' reports the owner trust policy; when it is enforced, plugins from \
-         workspace/global directories or Claude Code's cache load only if action='trust' vouched \
-         for them, and the rest are listed with status 'blocked'. trust/untrust and trust_enforce \
-         are LOAD gates: they do not stop a plugin that is already running — action='disable' does. \
-         A 'claude_cache' row is Claude Code's install: you may disable it, never enable it -- \
-         the operator does. \
-         This tool cannot install or uninstall plugins: installing runs third-party code, so it \
-         stays with the operator (or the consent-gated hub_install_run). Do not claim you \
-         installed or removed a plugin. \
-         The marketplace_* actions manage plugin CATALOGUES, which is a different thing from \
-         installing: marketplace_list shows what is registered and whether each can be removed, \
-         marketplace_browse reports what a marketplace offers so you can tell the operator (a \
-         local cache read; run marketplace_update first if it says the cache is missing, and note \
-         that installing from it is still the operator's to do -- the rows say whether an \
-         entry is one Aleph can install at all), marketplace_add \
-         takes an owner/repo slug, a GitHub URL or a local directory in `source` and both \
-         registers and fetches it, and marketplace_remove drops a registration and its cache. \
-         Registering a catalogue never runs anything from it.";
+         list reports kind (wasm/mcp/static), status/error and component counts; show includes schema. \
+         context_status(name) reports mounted context descriptors/session grants; context_plugin confirms grant/revoke. \
+         config_set REPLACES configuration: config_get first, merge, then reload. \
+         trust_status/trust/untrust/trust_enforce control LOAD gates for workspace/global/claude_cache; \
+         they do not stop running plugins (disable does). Only the operator may enable claude_cache; you may disable it. \
+         This tool cannot install or uninstall: use the operator or consent-gated hub_install_run. \
+         marketplace_list reports catalogues/removability; marketplace_browse(query) reads cached offerings/installability. \
+         marketplace_update refreshes one/all; marketplace_add(source) registers and fetches owner/repo, a GitHub URL or local directory; \
+         marketplace_remove(name) drops the registration/cache. Registering a catalogue never runs anything from it.";
 
     type Args = PluginManageArgs;
     type Output = PluginManageOutput;
@@ -263,6 +239,35 @@ impl PluginManageTool {
                 Ok(PluginManageOutput {
                     summary: format!("{name}: {} ({})", info.status, info.kind),
                     data: serde_json::json!({ "plugin": info, "config": config }),
+                })
+            }
+            PluginAction::ContextStatus => {
+                let name = Self::require_name(&args)?;
+                let declarations = manager
+                    .context_declarations(name)
+                    .await
+                    .map_err(|error| AlephError::config(error.to_string()))?;
+                let caller = super::context_plugin::host_caller()?;
+                let registry = manager.get_plugin_registry().await;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|error| AlephError::config(error.to_string()))?
+                    .as_secs();
+                let eligible = registry.eligible_context_keys(caller.session_id(), now);
+                let states: Vec<_> = declarations
+                    .into_iter()
+                    .map(|declaration| {
+                        let key = crate::extension::registry::namespaced_component_key(
+                            name,
+                            &declaration.descriptor.id,
+                        );
+                        serde_json::json!({"descriptor": declaration.descriptor, "key": key,
+                        "granted": eligible.contains(&key)})
+                    })
+                    .collect();
+                Ok(PluginManageOutput {
+                    summary: format!("{} mounted context capability declaration(s)", states.len()),
+                    data: serde_json::json!({"capabilities": states, "stats": registry.context_stats()}),
                 })
             }
             PluginAction::Enable | PluginAction::Disable => {

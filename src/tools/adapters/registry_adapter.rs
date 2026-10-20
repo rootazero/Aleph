@@ -233,6 +233,7 @@ pub(crate) const CONFIRMATION_REQUIRED_TOOLS: &[&str] = &[
     "agent_delete",
     "team_disband",
     "skill_install",
+    "context_plugin",
 ];
 
 /// Extract the bounded target path for a single-path file mutator
@@ -846,6 +847,15 @@ mod tests {
         let registry = build_registry_from_tools(tool_registry.clone(), &confirm_tools);
         let agent_delete = registry.get("agent_delete").unwrap();
         assert!(agent_delete.requires_confirmation());
+        let context_tools = vec![make_unified_tool(
+            "context_plugin",
+            "Grant a context capability",
+        )];
+        let context_registry = build_registry_from_tools(tool_registry.clone(), &context_tools);
+        assert!(context_registry
+            .get("context_plugin")
+            .unwrap()
+            .requires_confirmation());
 
         // A plain read-only tool does not.
         let plain_tools = vec![make_unified_tool("search", "Search")];
@@ -863,6 +873,7 @@ mod tests {
             "agent_delete",
             "team_disband",
             "skill_install",
+            "context_plugin",
         ] {
             assert!(
                 CONFIRMATION_REQUIRED_TOOLS.contains(tool),

@@ -202,6 +202,10 @@ impl BuiltinToolRegistry {
             <crate::builtin_tools::PluginManageTool as AlephTool>::MAX_RESULT_TOKENS,
             schema::<crate::builtin_tools::plugin_manage::PluginManageArgs>("plugin_manage"),
         );
+        reg(tools, "context_plugin",
+            crate::builtin_tools::context_plugin::ContextPluginTool::DESCRIPTION,
+            <crate::builtin_tools::context_plugin::ContextPluginTool as AlephTool>::MAX_RESULT_TOKENS,
+            schema::<crate::builtin_tools::context_plugin::ContextPluginArgs>("context_plugin"));
         // Always-on: the ledger it reads is a process global installed at boot,
         // so this tool has no service dependency to wait for. It must be
         // reachable even when the ledger is NOT installed — it then says so

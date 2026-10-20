@@ -241,6 +241,9 @@ impl SimpleExecutionEngine {
                                 },
                                 usage: None,
                                 at: crate::session::events::now_ms(),
+                                model: None,
+                                model_provider: None,
+                                model_generation: None,
                             },
                         )
                         .await;

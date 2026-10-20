@@ -2443,3 +2443,45 @@ async fn a_missing_model_is_sidelined_so_the_next_walk_stops_paying_for_it() {
         ],
     );
 }
+
+/// `last_request_target` forwards to the live primary's answer — the chain
+/// knows no generation, so it must not invent one.
+#[test]
+fn forwards_last_request_target_to_primary() {
+    struct TargetPrimary;
+    impl AiProvider for TargetPrimary {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            Box::pin(async { Ok(ProviderResponse::default()) })
+        }
+        fn name(&self) -> &str {
+            "primary"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+        fn last_request_target(&self) -> Option<crate::providers::ResolvedModelTarget> {
+            Some(crate::providers::ResolvedModelTarget {
+                provider: "openai".to_string(),
+                model: "gpt-5".to_string(),
+                generation: 4,
+            })
+        }
+    }
+    let fp = build_with_health(
+        Arc::new(TargetPrimary),
+        vec![],
+        vec![],
+        FailoverHealth::default(),
+    );
+    assert_eq!(
+        fp.last_request_target(),
+        Some(crate::providers::ResolvedModelTarget {
+            provider: "openai".to_string(),
+            model: "gpt-5".to_string(),
+            generation: 4,
+        })
+    );
+}

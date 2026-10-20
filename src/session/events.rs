@@ -550,6 +550,23 @@ pub enum SessionEvent {
         #[serde(default)]
         usage: Option<crate::orchestrator::dispatch::TokenBreakdown>,
         at: Timestamp,
+        /// Provenance of the ONE LLM call that produced this message: which
+        /// model served it, under which provider id, at which session-selection
+        /// generation (see `session_model_handle::SessionModelSnapshot`).
+        ///
+        /// These are per-request *facts* captured from the provider's
+        /// `last_request_target()` at the request boundary — never re-derived
+        /// from a run-level hint, and never spliced into prompt reconstruction
+        /// (prompt builders read `content` only). `None` when the provider
+        /// cannot prove a target (plain providers, most decorators, replayed
+        /// pre-existing logs). `serde(default)` keeps legacy rows deserialising;
+        /// `skip_serializing_if` keeps the wire lean for the None majority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model_provider: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model_generation: Option<u64>,
     },
     /// Stamped after every completed run. Carries what the usage fold
     /// (`session::usage_fold`) cannot derive: the run_id join, context-window
@@ -713,6 +730,10 @@ pub enum SessionEvent {
         trigger: String,
         folded_tokens: u64,
         summary_tokens: u64,
+        /// Capability owner that produced the fold. Missing on historical rows
+        /// and therefore interpreted as the builtin owner.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<String>,
         at: Timestamp,
     },
 
@@ -993,6 +1014,9 @@ pub(crate) mod fixtures {
                     content: content("a"),
                     usage: None,
                     at: 0,
+                    model: None,
+                    model_provider: None,
+                    model_generation: None,
                 },
             ),
             (
@@ -1124,6 +1148,7 @@ pub(crate) mod fixtures {
                     trigger: "manual-command".into(),
                     folded_tokens: 0,
                     summary_tokens: 0,
+                    owner: None,
                     at: 0,
                 },
             ),
@@ -1294,6 +1319,88 @@ mod tests {
         assert!(!serde_json::to_string(&legacy)
             .unwrap()
             .contains("telecom_provenance"));
+    }
+
+    /// `AssistantMessage` provenance: the three optional fields round-trip;
+    /// a legacy row missing them deserialises to `None`; `None` fields are
+    /// omitted from the wire entirely.
+    #[test]
+    fn assistant_message_provenance_round_trips_and_missing_fields_are_legacy() {
+        let t = uuid::Uuid::new_v4();
+        let content = MessageContent {
+            text: "a".into(),
+            blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
+        };
+        let ev = SessionEvent::AssistantMessage {
+            turn_id: t,
+            content,
+            usage: None,
+            at: 0,
+            model: Some("gpt-6.1-sol".to_string()),
+            model_provider: Some("openai".to_string()),
+            model_generation: Some(3),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"model\":\"gpt-6.1-sol\""));
+        assert!(json.contains("\"model_provider\":\"openai\""));
+        assert!(json.contains("\"model_generation\":3"));
+        match serde_json::from_str::<SessionEvent>(&json).unwrap() {
+            SessionEvent::AssistantMessage {
+                model,
+                model_provider,
+                model_generation,
+                ..
+            } => {
+                assert_eq!(model.as_deref(), Some("gpt-6.1-sol"));
+                assert_eq!(model_provider.as_deref(), Some("openai"));
+                assert_eq!(model_generation, Some(3));
+            }
+            other => panic!("expected AssistantMessage, got {other:?}"),
+        }
+
+        // Legacy row: the three fields absent → all `None`.
+        let mut value = serde_json::to_value(&ev).unwrap();
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("model");
+            obj.remove("model_provider");
+            obj.remove("model_generation");
+        }
+        let bare = serde_json::to_string(&value).unwrap();
+        match serde_json::from_str::<SessionEvent>(&bare).unwrap() {
+            SessionEvent::AssistantMessage {
+                model,
+                model_provider,
+                model_generation,
+                ..
+            } => {
+                assert!(model.is_none());
+                assert!(model_provider.is_none());
+                assert!(model_generation.is_none());
+            }
+            other => panic!("expected AssistantMessage, got {other:?}"),
+        }
+
+        // `None` fields are omitted from the wire entirely.
+        let none_ev = SessionEvent::AssistantMessage {
+            turn_id: t,
+            content: MessageContent {
+                text: "a".into(),
+                blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
+            },
+            usage: None,
+            at: 0,
+            model: None,
+            model_provider: None,
+            model_generation: None,
+        };
+        let none_json = serde_json::to_string(&none_ev).unwrap();
+        assert!(!none_json.contains("\"model\""));
+        assert!(!none_json.contains("model_provider"));
+        assert!(!none_json.contains("model_generation"));
     }
 
     /// Existing `UserMessage` wire is byte-compatible: no new field.

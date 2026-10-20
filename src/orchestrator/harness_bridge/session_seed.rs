@@ -274,6 +274,9 @@ pub(super) async fn emit_message(
         // Replayed history, not an observed call — no tokens to attribute.
         usage: None,
         at: now_ms(),
+        model: None,
+        model_provider: None,
+        model_generation: None,
     };
     service
         .emit_event(session_id, event)

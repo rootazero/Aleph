@@ -99,6 +99,7 @@ impl AiProvider for FastToolCallProvider {
                 usage: None,
                 truncated_tool_call: None,
                 provider_error: None,
+                reasoning_replay: None,
             })
         })
     }

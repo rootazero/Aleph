@@ -137,7 +137,7 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,
-        preflight_pipeline: None,
+        context_fabric: None,
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,

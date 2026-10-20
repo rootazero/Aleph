@@ -447,6 +447,10 @@ impl AiProvider for MeteringProvider {
         self.inner.serving_provider_hint()
     }
 
+    fn last_request_target(&self) -> Option<crate::providers::ResolvedModelTarget> {
+        self.inner.last_request_target()
+    }
+
     fn reasoning_replay(
         &self,
         model: Option<&str>,
@@ -504,6 +508,43 @@ mod tests {
             self.0.lock().unwrap().push(event.clone());
         }
         fn flush(&self) {}
+    }
+
+    /// `last_request_target` forwards to the inner chain — the wrapper knows no
+    /// generation, so it must not invent one.
+    #[test]
+    fn forwards_last_request_target_to_inner() {
+        struct TargetInner;
+        impl AiProvider for TargetInner {
+            fn process<'a>(
+                &'a self,
+                _req: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+                Box::pin(async { Ok(ProviderResponse::default()) })
+            }
+            fn name(&self) -> &str {
+                "inner"
+            }
+            fn color(&self) -> &str {
+                "#000"
+            }
+            fn last_request_target(&self) -> Option<crate::providers::ResolvedModelTarget> {
+                Some(crate::providers::ResolvedModelTarget {
+                    provider: "openai".to_string(),
+                    model: "gpt-5".to_string(),
+                    generation: 5,
+                })
+            }
+        }
+        let metering = MeteringProvider::new(Arc::new(TargetInner), None, "agent");
+        assert_eq!(
+            metering.last_request_target(),
+            Some(crate::providers::ResolvedModelTarget {
+                provider: "openai".to_string(),
+                model: "gpt-5".to_string(),
+                generation: 5,
+            })
+        );
     }
 
     #[tokio::test]

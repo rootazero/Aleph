@@ -529,6 +529,17 @@ impl SessionStore for SessionManager {
         self.patch_session(key, patch).await.map_err(map_err)
     }
 
+    async fn patch_session_if_model_pin_generation_newer(
+        &self,
+        key: &SessionKey,
+        patch: &SessionPatch,
+        generation: u64,
+    ) -> Result<bool, SessionStoreError> {
+        self.patch_session_if_model_pin_generation_newer(key, patch, generation)
+            .await
+            .map_err(map_err)
+    }
+
     async fn get_session_preview(
         &self,
         key: &SessionKey,
@@ -764,6 +775,7 @@ impl crate::session::epoch_registrar::SessionEpochRegistrar for SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::session_manager::SessionIdentityMeta;
     use tempfile::tempdir;
 
     fn test_store(temp: &tempfile::TempDir) -> SessionManager {
@@ -774,6 +786,108 @@ mod tests {
         SessionManager::new(config).expect("test session store")
     }
 
+    #[tokio::test]
+    async fn model_pin_generation_rejects_old_and_accepts_new_writes() {
+        let temp = tempdir().unwrap();
+        let store = test_store(&temp);
+        let key = SessionKey::from_key_string("agent:pin-generation:main").unwrap();
+        store.get_or_create(&key).await.unwrap();
+
+        let patch = |model: &str, generation: u64| SessionPatch {
+            metadata: Some(serde_json::json!({
+                crate::providers::session_model_handle::MODEL_PIN_SESSION_KEY: model,
+                crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY:
+                    generation.to_string(),
+            })),
+            ..Default::default()
+        };
+
+        let bad_key = SessionKey::from_key_string("agent:pin-generation-malformed:main").unwrap();
+        store.get_or_create(&bad_key).await.unwrap();
+        let mut malformed = store.get_metadata(&bad_key).await.unwrap().unwrap();
+        malformed
+            .identity_meta
+            .get_or_insert_with(|| SessionIdentityMeta::owner("test"))
+            .custom
+            .insert(
+                crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY
+                    .to_string(),
+                serde_json::json!("not-a-generation"),
+            );
+        let malformed_json =
+            serde_json::to_string(&malformed.identity_meta.expect("identity metadata fixture"))
+                .unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET metadata = ?1 WHERE key = ?2",
+                rusqlite::params![malformed_json, bad_key.to_key_string()],
+            )
+            .unwrap();
+        assert!(!store
+            .patch_session(
+                &bad_key,
+                &SessionPatch {
+                    metadata: Some(serde_json::json!({
+                        crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY:
+                            "not-a-generation",
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap());
+        assert!(!store
+            .patch_session_if_model_pin_generation_newer(&bad_key, &patch("ignored", 1), 1)
+            .await
+            .unwrap());
+
+        assert!(store
+            .patch_session_if_model_pin_generation_newer(&key, &patch("first", 2), 2)
+            .await
+            .unwrap());
+        assert!(!store
+            .patch_session_if_model_pin_generation_newer(&key, &patch("legacy", 0), 0)
+            .await
+            .unwrap());
+        let after_legacy = store.get_metadata(&key).await.unwrap().unwrap();
+        let legacy_custom = after_legacy.identity_meta.unwrap().custom;
+        assert_eq!(
+            legacy_custom[crate::providers::session_model_handle::MODEL_PIN_SESSION_KEY],
+            "first"
+        );
+        assert_eq!(
+            legacy_custom[crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY],
+            "2"
+        );
+        assert!(!store
+            .patch_session_if_model_pin_generation_newer(&key, &patch("stale", 1), 1)
+            .await
+            .unwrap());
+        assert!(store
+            .patch_session_if_model_pin_generation_newer(&key, &patch("new", 3), 3)
+            .await
+            .unwrap());
+
+        let custom = store
+            .get_metadata(&key)
+            .await
+            .unwrap()
+            .unwrap()
+            .identity_meta
+            .unwrap()
+            .custom;
+        assert_eq!(
+            custom[crate::providers::session_model_handle::MODEL_PIN_SESSION_KEY],
+            "new"
+        );
+        assert_eq!(
+            custom[crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY],
+            "3"
+        );
+    }
     #[tokio::test]
     async fn register_epoch_registers_child_session_row() {
         use crate::routing::session_key::SessionKey;
