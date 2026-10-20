@@ -6,18 +6,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Instant;
 
-use crate::config::types::{LoadBalanceStrategy, RouteMode};
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::capability_gate::{retain_capable_models, RequestRequirements};
 use crate::providers::llm_retry::{backoff_delay, is_transient_overload};
-use crate::providers::load_stats::LoadStats;
-use crate::providers::route_handle::{RouteHandle, RouteState};
-use crate::providers::route_policy::{
-    classify_candidate, order_candidates, order_candidates_balanced, EndpointTier, RouteGate,
-};
 use crate::providers::{AiProvider, DefaultProviderHandle, DeltaSink, ProviderDelta};
-use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::sync_primitives::Arc;
 
 use super::decision::{cooldown_window, decide, strike_for, Decision, FailureKind};
@@ -27,169 +20,26 @@ use super::{
     MAX_OVERLOAD_RETRY_DELAY, MAX_RETRY_DELAY,
 };
 
-/// Cost-routing sort key for a model with no static rate card.
-///
-/// A missing rate card means the price is *unknown*, not necessarily zero. Only
-/// on-machine / local-network endpoints are genuinely free, so those keep `0`
-/// (sorted first under [`CostAware`](LoadBalanceStrategy::CostAware)). An
-/// unpriced [`Cloud`](EndpointTier::Cloud) endpoint — a new or typo'd model
-/// absent from the table — is unknown-cost: ranking it as "free" would let it
-/// win over a model whose price we can confirm, so it sorts *last*
-/// ([`u64::MAX`]). The [`Unknown`](EndpointTier::Unknown) tier (an unresolved
-/// `base_url`) is treated conservatively as cloud for the same reason. Unpriced
-/// candidates are never dropped — `MAX` only deprioritises them within the
-/// fresh group, so the chain can still fall back to them.
-const fn unpriced_cost(tier: EndpointTier) -> u64 {
-    match tier {
-        EndpointTier::Local => 0,
-        EndpointTier::Cloud | EndpointTier::Unknown => u64::MAX,
-    }
-}
-
-/// Every token this call put through the provider's rate window.
-///
-/// [`TokenUsage`](crate::providers::adapter::TokenUsage) counters are
-/// **disjoint** by adapter post-condition — `input_tokens` excludes both cache
-/// counters — so the prompt is only whole once all three are added. Summing
-/// input+output alone understates a cache-heavy turn by the entire cached
-/// prefix (a 48k-token cached prompt reads as ~120 tokens), which silently
-/// disarms everything downstream of the rate window: `over_limit` never trips,
-/// so the saturated-provider deprioritisation and `usage_based` ordering sit
-/// idle while the account is being throttled for real, and `route_status`
-/// reports the same understated figure back to whoever is diagnosing it.
-///
-/// Providers bill cached reads at a discount, but the rate *limit* counts them
-/// at face value — this is a throughput ceiling, not a bill.
-pub(super) fn billed_tokens(usage: &crate::providers::adapter::TokenUsage) -> u64 {
-    u64::from(usage.input_tokens)
-        + u64::from(usage.output_tokens)
-        + u64::from(usage.cache_read_tokens.unwrap_or(0))
-        + u64::from(usage.cache_creation_tokens.unwrap_or(0))
-}
-
 /// Which slot of the chain a candidate occupies.
 ///
-/// Only the walk's *model-list* resolution needs this, and it needs it to be
-/// exact: an explicitly pinned request model (a `select_model` pick, an agent
-/// `model_hint`, a `BrainRef::Strict` model — whatever `ModelOverrideProvider`
-/// stamped onto `payload.model`) belongs to the endpoint the caller actually
-/// chose, i.e. the primary slot. Stamping it onto a cross-provider fallback
-/// dials that fallback with a model id it does not serve.
-///
-/// This used to be inferred from `tier == EndpointTier::Unknown`, a proxy that
-/// was wrong in **both** directions:
-///
-/// * a *pinned* chain tags its primary with the pin's real tier
-///   (`with_primary_tier`, only ever `Local`/`Cloud`), so the pinned model was
-///   silently discarded and the provider's first catalog model used instead;
-/// * a *live-derived* fallback was tagged `Unknown`, so every fallback was
-///   treated as the primary slot and dialed with the primary's model.
-///
-/// The slot is now carried explicitly, so tier means only "local or cloud".
+/// The primary slot owns an explicitly pinned request model. Fallbacks always
+/// use their own model catalog so a model selected for the primary is never
+/// sent to a different provider by accident.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SlotKind {
-    /// The caller's chosen endpoint — owns any explicitly pinned request model.
     Primary,
-    /// A cross-provider safety net — always walks its own model catalog.
     Fallback,
 }
 
-/// One request's resolved candidate chain plus the prompt-blind gate facts the
-/// walk needs about it.
-///
-/// The set travels *with* the chain because both are derived from one route
-/// snapshot: recomputing "is this provider over its ceiling" inside the walk
-/// would read a possibly-newer config generation than the one that ordered the
-/// chain, and the two disagreeing is how a candidate ends up sorted last for a
-/// reason the walk then declines to act on.
+/// One request's resolved candidate chain in configured order.
 struct CandidatePlan {
-    /// The chain to walk, in order, each entry with the route gate it must
-    /// enforce and the slot that decides whose model list wins.
-    candidates: Vec<(FailoverNode, RouteGate, SlotKind)>,
-    /// Providers at or over a configured `[route].rate_limits` ceiling right
-    /// now. Empty whenever no ceilings are configured (the default), so the
-    /// gate below is a no-op on an unconfigured deployment.
-    ///
-    /// Read only through [`rate_deferred`](Self::rate_deferred) — membership
-    /// alone is not the gate's answer (a pin is exempt).
-    saturated: std::collections::HashSet<String>,
-    /// Providers the shared health registries currently sideline: circuit open
-    /// and still cooling, or parked in a rate-limit pacing window. Computed
-    /// over the WHOLE chain (primary included) by
-    /// [`sidelined_providers`](FailoverProvider::sidelined_providers), the
-    /// read-only twin of the walk's two health gates.
-    ///
-    /// Two consumers: the ordering pass folds it into `LoadMetric.cooling`, and
-    /// `route_status`'s preview renders it, so the diagnostic states the same
-    /// verdict the walk is about to reach instead of showing an open-circuit
-    /// primary as a healthy first dial.
-    health_sidelined: std::collections::HashSet<String>,
-    /// The single route-state generation this plan was ordered from. Carried
-    /// so the walk's gates (the saturation gate's pin exemption) and the
-    /// empty-chain error read the SAME snapshot that produced the candidate
-    /// set — re-reading the live handle mid-walk could observe a config that
-    /// hot-swapped in after the ordering pass and name a mode that had nothing
-    /// to do with why the chain is empty.
-    route: Arc<RouteState>,
+    candidates: Vec<(FailoverNode, SlotKind)>,
 }
 
 impl CandidatePlan {
-    /// Whether the rate-ceiling gate defers `name`: it is at or over its
-    /// configured `[route].rate_limits` window AND it is not operator-pinned.
-    ///
-    /// The ONE spelling of that rule. Its two callers are the walk's gate and
-    /// `route_status`'s [`preview_order`](FailoverProvider::preview_order) —
-    /// a preview restating only the first half renders a pinned saturated
-    /// provider as "skipped" and then watches the walk dial it first (the pin
-    /// exemption is `order_candidates_balanced`'s promise). Both callers must
-    /// read this, never `saturated` directly.
-    ///
-    /// Position is deliberately NOT part of it: whether a deferral actually
-    /// happens also needs "is there a later candidate", which is a fact about
-    /// the index, not about the provider. The walk adds that; the preview
-    /// renders the per-provider half.
-    fn rate_deferred(&self, name: &str) -> bool {
-        self.saturated.contains(name) && !self.route.targets.is_pinned(name)
-    }
-
-    /// The endpoint this plan sets out for, as the route witness's anchor — or
-    /// `None` when the head is not an endpoint at all.
-    ///
-    /// The single unanchorable head is the nested-chain sentinel: it stands for
-    /// a whole chain, not a provider (see [`NESTED_CHAIN_NODE`]). There is no
-    /// fall-through for it — the dial-time anchor excludes the sentinel by the
-    /// same rule — so a walk whose head is the sentinel writes **nothing at
-    /// either point**, and the chain nested behind it becomes the run's writer.
-    ///
-    /// That head is reachable and the gap is real: a `provider_hint` pin builds
-    /// `[pin, NESTED_CHAIN_NODE]` carrying the pin's true tier, so a cloud pin
-    /// under `AlwaysLocal` with `allow_cloud_escalation = false` classifies the
-    /// pin [`Skip`](crate::providers::route_policy::CandidateAction::Skip) and
-    /// leaves the sentinel leading. The run
-    /// is then reported as whatever the *global* chain set out for, not as the
-    /// pin the caller asked for. Anchoring the dropped head instead is not
-    /// obviously right — the identical drop on an operator-configured primary
-    /// is that deployment's steady state under `AlwaysLocal`, and reporting it
-    /// would light the banner on every turn — so this round leaves the pin case
-    /// under-reported rather than guess (FEATURE_LOCATOR §3.6 round-6 T6,
-    /// deferred list).
-    ///
-    /// An approval-gated cross-tier head **is** anchored here, and the walk's
-    /// escalation arm withdraws the anchor
-    /// ([`route_witness::retract`](crate::providers::route_witness::retract)) if
-    /// the user actually declines. "Declined" and "skipped" are different
-    /// events and only the first must stay silent: the breaker and rate-ceiling
-    /// gates run *ahead* of the approval prompt, so a gated head whose provider
-    /// is dead or saturated is passed over without anyone being asked — and
-    /// being passed over for being dead is exactly the migration this anchor
-    /// exists to report.
-    ///
-    /// The model is left [`Unresolved`](crate::providers::route_witness::DialedModel::Unresolved)
-    /// on purpose: the walk settles which model this slot dials only after the
-    /// capability floor and the cooling sideline have run, so a seed derived
-    /// from the catalog head here could name a model that is then filtered out.
+    /// The endpoint this plan sets out for, as the route witness's anchor.
     fn anchor(&self) -> Option<crate::providers::route_witness::Dialed> {
-        let (node, _, _) = self.candidates.first()?;
+        let (node, _) = self.candidates.first()?;
         if node.name == super::NESTED_CHAIN_NODE {
             return None;
         }
@@ -199,100 +49,12 @@ impl CandidatePlan {
     }
 }
 
-/// One member of the fallback chain, as rendered by `route_status`'s
-/// `fallback_chain` ([`FailoverProvider::chain_composition`]).
-///
-/// Distinct from [`RouteStep`] on purpose: this is *membership* (who is in the
-/// chain, with what ladder and tier), that is the *dial plan* (who gets tried
-/// first, behind which gate). Both are now materialised from one place, so they
-/// can differ in what they answer but not in what they say about a provider.
-#[derive(Debug, Clone)]
-pub struct ChainMember {
-    /// Provider name — the breaker / cooldown / load key.
-    pub name: String,
-    /// The model walk order for this provider, from the boot model catalog.
-    pub models: Vec<String>,
-    /// Endpoint locality, from the boot tier catalog (see the residual noted on
-    /// [`FailoverProvider::chain_composition`]).
-    pub tier: EndpointTier,
-}
-
-/// One step of the chain the next request would walk, as rendered by
-/// `route_status` ([`FailoverProvider::preview_order`]).
-#[derive(Debug, Clone)]
-pub struct RouteStep {
-    /// Provider name — the breaker / cooldown / load key.
-    pub provider: String,
-    /// Endpoint locality the route policy gated on.
-    pub tier: EndpointTier,
-    /// What the walk will enforce before dialing it.
-    pub action: RouteGate,
-    /// Whether this is the primary slot (the only slot that honours an
-    /// explicitly pinned request model).
-    pub primary: bool,
-    /// Whether a configured rate ceiling currently sidelines it: at or over its
-    /// `[route].rate_limits` window and not operator-pinned, so the walk
-    /// **skips it while a later candidate remains** (the last candidate is
-    /// always attempted — the ceiling defers, it never starves).
-    ///
-    /// Derived through `CandidatePlan::rate_deferred`, the same helper the
-    /// walk's gate calls.
-    pub rate_sidelined: bool,
-    /// Whether the health registries currently sideline it: circuit open and
-    /// still cooling, or parked in a rate-limit pacing window. Same rule as
-    /// above — the walk **skips it while a later candidate remains**, and
-    /// attempts it anyway when it is the last one.
-    ///
-    /// Derived from `FailoverProvider::sidelined_providers`, the read-only
-    /// twin of the walk's breaker and pacing gates (it must not spend the
-    /// `Open → HalfOpen` probe that a real dial spends).
-    pub health_sidelined: bool,
-}
-
-/// What [`FailoverProvider::preview_order`] answers: the chain the next request
-/// would walk, plus the route generation that ordering was computed from.
-///
-/// The generation travels with the order because `route_status` renders both
-/// halves — the header (mode, strategy, pins, ceilings) and the order — and a
-/// concurrent `route_config.update` between two separate loads would publish a
-/// header naming one strategy next to an order produced under another. Same
-/// rule, one level up, as `CandidatePlan::route`.
-pub struct RoutePreview {
-    /// The dial order, gates included.
-    pub steps: Vec<RouteStep>,
-    /// The single route-state generation `steps` was ordered from.
-    pub route: Arc<RouteState>,
-}
-
-/// Why a chain came back empty, phrased for whoever has to read it.
-///
-/// An empty chain is always the route policy's doing — it is the only stage that
-/// removes candidates outright — so "all 0 failover candidates failed" was both
-/// true and useless: nothing was attempted, and the reason was a mode the
-/// operator set.
-fn empty_chain_error(mode: RouteMode) -> AlephError {
-    AlephError::provider(match mode {
-        RouteMode::AlwaysLocal => "route mode 'always_local' left no candidate: every configured \
-             provider resolves to a cloud endpoint and cloud escalation is off. Set \
-             [route] allow_cloud_escalation = true, configure a local provider, \
-             or switch [route] mode."
-            .to_string(),
-        RouteMode::AlwaysCloud => "route mode 'always_cloud' left no candidate: no configured \
-             provider resolves to a cloud endpoint."
-            .to_string(),
-        RouteMode::Auto => "no provider is configured to serve this request".to_string(),
-    })
-}
-
-/// Fallback chain **membership** for the next request, in order.
+/// Fallback chain membership for the next request, in order.
 ///
 /// The single description of "who is in the chain". It has exactly one
 /// production caller, [`FailoverProvider::fallback_nodes`], which materialises
-/// these names into nodes; both faces that need membership — the walk
-/// ([`FailoverProvider::candidates`]) and the `route_status` composition
-/// ([`FailoverProvider::chain_composition`]) — go through *that*, so no
-/// diagnostic can disagree with the chain it is describing. Three cases,
-/// matching how the chain was assembled:
+/// these names into nodes for the failure-only walk. Three cases, matching how
+/// the chain was assembled:
 ///
 /// * the handle exposes no live registry (tests / non-registry boot) → the
 ///   boot-time configured order verbatim;
@@ -406,45 +168,10 @@ pub struct FailoverProvider {
     /// Provider name → model list. Boot snapshot; lets the live primary
     /// resolve its model list by name.
     model_catalog: HashMap<String, Vec<String>>,
-    /// Provider name → endpoint tier. Boot snapshot from the same
-    /// `provider_tier(base_url)` derivation the static chain uses, so a
-    /// *live-derived* fallback carries its real local/cloud tier instead of the
-    /// `Unknown` placeholder that made `AlwaysLocal` a no-op and inverted
-    /// `CostAware` for on-machine endpoints. A provider registered after boot is
-    /// absent here and resolves to [`EndpointTier::Cloud`] — the conservative
-    /// side of both decisions (gated under `AlwaysLocal`, never assumed free).
-    tier_catalog: HashMap<String, EndpointTier>,
     /// Shared circuit-breaker state.
     health: FailoverHealth,
+    /// Failure-only retry and circuit-breaker tuning.
     config: FailoverConfig,
-    /// Local/cloud route preference. `Auto` (default) is a no-op — candidates
-    /// keep their configured order (byte-identical to pre-route failover).
-    route_mode: RouteMode,
-    /// In `AlwaysLocal`, whether a cloud candidate may be tried as an
-    /// approval-gated terminal fallback ("borrow cloud").
-    allow_cloud_escalation: bool,
-    /// Gate consulted before dialing an approval-gated cross-tier candidate.
-    /// `None` (the default) fails escalation closed.
-    approval: Option<Arc<dyn ApprovalRequester>>,
-    /// Live route preference. When `Some`, it overrides the boot-snapshot
-    /// `route_mode` / `allow_cloud_escalation` fields on *every* request, so a
-    /// mode switch hot-applies with no rebuild. `None` (tests, `new()`) keeps
-    /// the snapshot fields — byte-identical to pre-handle behaviour.
-    route_handle: Option<Arc<RouteHandle>>,
-    /// Endpoint tier of the primary slot. `Unknown` (the default) is the
-    /// operator's configured default — always allowed, so route mode only ever
-    /// shapes the *fallbacks* around it. A *pinned* chain (an explicit
-    /// `select_model` / agent `provider_hint` override) sets this to the pinned
-    /// provider's real tier so a hard-guardrail route mode (`AlwaysLocal`) can
-    /// gate or skip an explicit cross-tier pin via the borrow-cloud approval —
-    /// the dynamic pick stops silently overriding the operator's policy.
-    primary_tier: EndpointTier,
-    /// Shared runtime load registry driving the load-balancing strategy. `None`
-    /// (tests, `new()`) disables balancing entirely — the chain keeps configured
-    /// order, byte-identical to pre-balance failover. Shared (`Arc`) across the
-    /// global chain and every per-hint override, like [`FailoverHealth`], so one
-    /// endpoint's in-flight/latency picture is visible to every chain.
-    load: Option<Arc<LoadStats>>,
     /// Shared per-model rate-limit cooldown. `None` (tests, `new()`) disables
     /// cooldown entirely — the chain keeps every model, byte-identical to
     /// pre-cooldown failover. Shared across the global chain and every per-hint
@@ -489,15 +216,8 @@ impl FailoverProvider {
             primary,
             fallbacks,
             model_catalog,
-            tier_catalog: HashMap::new(),
             health,
             config,
-            route_mode: RouteMode::Auto,
-            allow_cloud_escalation: false,
-            approval: None,
-            route_handle: None,
-            primary_tier: EndpointTier::Unknown,
-            load: None,
             model_cooldown: None,
             provider_cooldown: None,
             derive_fallbacks_live: false,
@@ -512,70 +232,6 @@ impl FailoverProvider {
     #[must_use]
     pub const fn with_live_fallback_derivation(mut self) -> Self {
         self.derive_fallbacks_live = true;
-        self
-    }
-
-    /// Attach the boot provider → endpoint-tier map.
-    ///
-    /// Required for [`with_live_fallback_derivation`](Self::with_live_fallback_derivation)
-    /// to be *correct*: without it every live-derived node falls back to
-    /// [`EndpointTier::Cloud`], and the route policy can only gate on the
-    /// conservative side. `build_failover_chain` supplies the same map the
-    /// static chain derives its node tiers from, so both paths gate identically.
-    #[must_use]
-    pub fn with_tier_catalog(mut self, tiers: HashMap<String, EndpointTier>) -> Self {
-        self.tier_catalog = tiers;
-        self
-    }
-
-    /// Attach a local/cloud route preference and the escalation approval gate.
-    ///
-    /// `new()` alone stays `Auto` + no-gate (today's behaviour). In `Auto` the
-    /// `approval` gate is never consulted. In `AlwaysLocal` with
-    /// `allow_cloud_escalation`, the gate authorises borrowing a cloud
-    /// endpoint as a terminal fallback; absent a gate, escalation fails closed.
-    #[must_use]
-    pub fn with_route(
-        mut self,
-        mode: RouteMode,
-        allow_cloud_escalation: bool,
-        approval: Option<Arc<dyn ApprovalRequester>>,
-    ) -> Self {
-        self.route_mode = mode;
-        self.allow_cloud_escalation = allow_cloud_escalation;
-        self.approval = approval;
-        self
-    }
-
-    /// Attach a live [`RouteHandle`] so the route preference is read fresh on
-    /// every request instead of frozen at boot. The handle overrides the
-    /// snapshot set by [`with_route`](Self::with_route); the approval gate is
-    /// still supplied via `with_route`. Wired only in production
-    /// (`build_failover_chain`); tests omit it and keep the boot snapshot.
-    pub fn with_route_live(mut self, handle: Arc<RouteHandle>) -> Self {
-        self.route_handle = Some(handle);
-        self
-    }
-
-    /// Tag the primary slot with a concrete endpoint tier so a hard-guardrail
-    /// route mode can gate it. Used by `build_failover_chain` for the per-pin
-    /// override chains (an explicit `select_model` / agent `provider_hint`
-    /// target): the pinned provider's real tier makes `AlwaysLocal` route a
-    /// cloud pin through the borrow-cloud approval instead of silently allowing
-    /// it. The global default chain omits this — its primary stays `Unknown`
-    /// (the operator's configured default is always allowed).
-    #[must_use]
-    pub const fn with_primary_tier(mut self, tier: EndpointTier) -> Self {
-        self.primary_tier = tier;
-        self
-    }
-
-    /// Attach the shared runtime load registry that drives the load-balancing
-    /// strategy. Wired only in production (`build_failover_chain`) with one
-    /// registry cloned across all chains; tests omit it and keep the configured
-    /// order (byte-identical to pre-balance failover).
-    pub fn with_load_stats(mut self, load: Arc<LoadStats>) -> Self {
-        self.load = Some(load);
         self
     }
 
@@ -628,122 +284,8 @@ impl FailoverProvider {
         }
     }
 
-    /// One coherent snapshot of the live route state for this candidate-ordering
-    /// pass: the live handle if attached, else the boot config frozen into a
-    /// [`RouteState`]. Reading mode/targets/strategy/limits from a *single*
-    /// snapshot means a config hot-swap landing mid-pass is seen whole or not at
-    /// all — never a torn mix (new mode with stale targets). Pins/limits only
-    /// ever enter via the boot-wired handle, so `new()`/tests see an empty set —
-    /// byte-identical to unpinned/pre-usage ordering.
-    fn route_snapshot(&self) -> Arc<RouteState> {
-        match &self.route_handle {
-            Some(h) => h.snapshot(),
-            // No live handle (tests, non-config boot): the boot snapshot from
-            // `with_route`, over the one shared spelling of "no `[route]`
-            // section" — so this and a chain-less `route_status` render cannot
-            // disagree about what unconfigured means.
-            None => Arc::new(RouteState {
-                mode: self.route_mode,
-                allow_escalation: self.allow_cloud_escalation,
-                ..RouteState::unconfigured()
-            }),
-        }
-    }
-
-    /// Blended `input + output` price for `provider`'s first model, in milli-USD
-    /// per million tokens (USD/Mtok × 1000), looked up from the static
-    /// [`crate::pricing`] table. The sort key fed to the
-    /// [`CostAware`](LoadBalanceStrategy::CostAware) strategy — the bridge that
-    /// finally wires Aleph's shipped price card into route ordering (it had only
-    /// ever fed post-hoc cost *estimation* before).
-    ///
-    /// When the provider's first model carries no rate card the price is
-    /// *unknown*, and the candidate's [`EndpointTier`] decides how to rank it
-    /// (see [`unpriced_cost`]): a [`Local`](EndpointTier::Local) endpoint is
-    /// genuinely free (`0`, sorts first), but an unpriced [`Cloud`] or
-    /// [`Unknown`](EndpointTier::Unknown) endpoint is unknown-cost — cost routing
-    /// must not assume it is free, so it sorts *last* rather than ahead of a
-    /// model whose price we can actually confirm. Stays prompt-blind (R7) —
-    /// price and tier are static `(provider, model)` / `base_url` facts, never
-    /// the message.
-    ///
-    /// [`Cloud`]: EndpointTier::Cloud
-    fn price_hint(&self, provider: &str, tier: EndpointTier) -> u64 {
-        let Some(model) = self
-            .model_catalog
-            .get(provider)
-            .and_then(|models| models.first())
-        else {
-            return unpriced_cost(tier);
-        };
-        match crate::pricing::rate_card(provider, model) {
-            Some(card) => {
-                let usd = card.input_per_mtok.unwrap_or(0.0) + card.output_per_mtok.unwrap_or(0.0);
-                (usd * 1000.0).round() as u64
-            }
-            None => unpriced_cost(tier),
-        }
-    }
-
-    /// Whether a cloud-borrow escalation for `name` is authorised right now.
-    ///
-    /// Fails closed: no gate wired → denied (a warn is logged). Mirrors the
-    /// sandbox escalation contract — the money-spending action is gated at the
-    /// moment it would happen, not at config-write time.
-    async fn escalation_allowed(&self, name: &str) -> bool {
-        // rust-doctor-disable-next-line excessive-clone
-        match self.approval.clone() {
-            Some(gate) => {
-                let reason = format!(
-                    "Route mode is AlwaysLocal; borrow cloud provider '{name}' \
-                     for this request?"
-                );
-                let action = crate::sandbox::exec_approval::ApprovalAction::bare(
-                    "__route_escalate_cloud",
-                    reason,
-                );
-                gate.request_approval(&action).await.outcome.is_approved()
-            }
-            None => {
-                tracing::warn!(
-                    provider = %name,
-                    "route: cloud escalation requested but no approval gate wired; denying"
-                );
-                false
-            }
-        }
-    }
-
-    /// Build the ordered candidate list for one request: the primary slot
-    /// first, then each fallback whose name differs from the primary's, shaped
-    /// by the route policy (tier ordering + cross-tier gating).
-    ///
-    /// The primary slot keeps its position 0 but is **classified in place** by
-    /// the route policy:
-    ///
-    /// * the global default chain tags it [`EndpointTier::Unknown`] — its
-    ///   `base_url` is not resolvable from the live `DefaultProviderHandle` and
-    ///   it is the operator's configured default, so it always classifies to
-    ///   [`Allow`](RouteGate::Allow) (byte-identical to before);
-    /// * a *pinned* override chain tags it with the pin's real tier (via
-    ///   [`with_primary_tier`](Self::with_primary_tier)), so a hard-guardrail
-    ///   `AlwaysLocal` can turn an explicit cloud pin into a
-    ///   [`CrossTier`](RouteGate::CrossTier) (borrow-cloud approval) or dropped
-    ///   outright (escalation off) — the dynamic pick no
-    ///   longer bypasses the operator's policy.
-    ///
-    /// The primary is never reordered below its own fallbacks (it is the
-    /// operator default or the explicitly-chosen provider); only the *fallback*
-    /// list is run through [`order_candidates`] for local-first ordering, pin
-    /// promotion and tier gating. Each entry carries the [`RouteGate`] the walk
-    /// must enforce plus the [`SlotKind`] that decides whose model list wins —
-    /// the dropped candidates are gone by construction, not carried as a state
-    /// nothing downstream can act on.
-    ///
-    /// `advance_rotation` consumes a round-robin tick (what a real request
-    /// does); the read-only [`preview_order`](Self::preview_order) passes
-    /// `false` so looking at the order does not rotate it.
-    async fn candidates(&self, advance_rotation: bool) -> CandidatePlan {
+    /// Build the ordered candidate list for one request in explicit order.
+    async fn candidates(&self) -> CandidatePlan {
         let primary = self.primary.current();
         let primary_name = primary.name().to_string();
         let primary_models = self
@@ -752,275 +294,33 @@ impl FailoverProvider {
             .cloned()
             .unwrap_or_default();
         let primary_node = FailoverNode {
-            // rust-doctor-disable-next-line excessive-clone
             name: primary_name.clone(),
             models: primary_models,
             provider: primary,
-            tier: self.primary_tier,
         };
         let fallbacks = self.fallback_nodes(&primary_name);
-        // One coherent route snapshot for the whole ordering pass — mode,
-        // targets, strategy and limits all read from a single config generation.
-        let route = self.route_snapshot();
-        let (mode, allow_escalation) = (route.mode, route.allow_escalation);
-        let targets = Arc::clone(&route.targets);
-
-        // Classify the primary in place. A `Skip` (a hard-guardrail mode with
-        // escalation off, on a cross-tier pin) drops it so the chain falls
-        // straight through to the fallbacks; `Allow`/`CrossTier` keep it first.
-        let mut out: Vec<(FailoverNode, RouteGate, SlotKind)> =
-            Vec::with_capacity(fallbacks.len() + 1);
-        if let Some(gate) = RouteGate::retained(classify_candidate(
-            mode,
-            primary_node.tier,
-            allow_escalation,
-        )) {
-            out.push((primary_node, gate, SlotKind::Primary));
-        }
-        // Order the fallback pool. The balanced path runs when there is a load
-        // registry AND either a non-`Ordered` strategy (sort by live signals) or
-        // configured rate limits (the over-limit gate must deprioritise
-        // saturated providers even under `Ordered`); otherwise the
-        // configured-order path stays byte-identical to before.
-        let strategy = route.load_balance;
-        let limits = Arc::clone(&route.limits);
-        // Providers the shared breaker/pacing registries currently consider
-        // unhealthy. Gathered once per pass (the registries are async, the
-        // ordering closure is not) and folded into `LoadMetric.cooling`, so an
-        // outage shapes the *order of the next request* instead of only being
-        // discovered mid-walk. This is the feedback edge LiteLLM closes with
-        // `_filter_cooldown_deployments` ahead of every strategy; Aleph
-        // deprioritises rather than removes, so a chain of cooling providers
-        // still resolves instead of raising "no deployments available".
-        //
-        // Gathered over the WHOLE chain, primary included. Ordering only ever
-        // reads the fallback half (the primary keeps position 0 and is not part
-        // of the pool being sorted), but the walk's health gates apply to every
-        // slot — so a fallbacks-only set left `route_status` rendering an
-        // open-circuit primary as a healthy first dial while the walk passed
-        // straight over it.
-        let sidelined = self
-            .sidelined_providers(
-                std::iter::once(primary_name.as_str())
-                    .chain(fallbacks.iter().map(|n| n.name.as_str())),
-            )
-            .await;
-        // Rate-window saturation, folded ONCE per pass for every candidate the
-        // primary included. Three consumers read this single answer: the
-        // ordering below (deprioritise to the back of the tier), the walk's
-        // gate and `route_status`'s preview (both through
-        // `CandidatePlan::rate_deferred`, which adds the pin exemption) — so a
-        // provider cannot be sorted last for a ceiling the walk then ignores,
-        // nor reported skipped for one it is exempt from. Empty without
-        // `[route].rate_limits`, which is the default.
-        let saturated: std::collections::HashSet<String> = match &self.load {
-            Some(load) if !limits.is_empty() => std::iter::once(primary_name.as_str())
-                .chain(fallbacks.iter().map(|n| n.name.as_str()))
-                .filter(|name| {
-                    let m = load.metric(name);
-                    limits.assess(name, m.rpm_used, m.tpm_used).1
-                })
-                .map(ToString::to_string)
-                .collect(),
-            _ => std::collections::HashSet::new(),
-        };
-        let needs_balance =
-            strategy != LoadBalanceStrategy::Ordered || !limits.is_empty() || !sidelined.is_empty();
-        let ordered = match &self.load {
-            Some(load) if needs_balance => {
-                // One rotation tick per request drives RoundRobin; the sort
-                // strategies ignore it. A preview must not consume one.
-                let rr_base = if advance_rotation {
-                    load.next_round_robin()
-                } else {
-                    load.peek_round_robin()
-                };
-                // Provider → endpoint tier, captured before `fallbacks` is moved
-                // into the ordering call. Cost routing needs each candidate's
-                // tier to rank an *unpriced* model (free local vs unknown-cost
-                // cloud — see `unpriced_cost`); the metric closure only receives
-                // the provider name, so the tier rides in via this map.
-                let tier_by_name: HashMap<String, EndpointTier> =
-                    // rust-doctor-disable-next-line excessive-clone
-                    fallbacks.iter().map(|n| (n.name.clone(), n.tier)).collect();
-                order_candidates_balanced(
-                    fallbacks,
-                    mode,
-                    allow_escalation,
-                    &targets,
-                    |n| n.tier,
-                    |n| n.name.as_str(),
-                    strategy,
-                    rr_base,
-                    // Fold each provider's live window counts against its
-                    // configured ceiling into the derived utilisation/over-limit
-                    // scalars, and (only under cost routing) its static price.
-                    // The ordering logic stays limit- and price-blind (R7: pure
-                    // infrastructure) — it just sorts the scalars handed to it.
-                    |name| {
-                        let mut m = load.metric(name);
-                        m.utilization_permille = limits.assess(name, m.rpm_used, m.tpm_used).0;
-                        m.over_limit = saturated.contains(name);
-                        m.cooling = sidelined.contains(name);
-                        // Price lookup only when it is the active sort key —
-                        // every other strategy ignores `price_per_mtok`. The
-                        // tier disambiguates an unpriced model (free local vs
-                        // unknown-cost cloud); an unmapped name falls back to
-                        // `Unknown` (treated as cloud — never assumed free).
-                        if strategy == LoadBalanceStrategy::CostAware {
-                            let tier = tier_by_name
-                                .get(name)
-                                .copied()
-                                .unwrap_or(EndpointTier::Unknown);
-                            m.price_per_mtok = self.price_hint(name, tier);
-                        }
-                        m
-                    },
-                )
-            }
-            _ => order_candidates(
-                fallbacks,
-                mode,
-                allow_escalation,
-                &targets,
-                |n| n.tier,
-                |n| n.name.as_str(),
-            ),
-        };
-        out.extend(ordered.into_iter().filter_map(|(node, action)| {
-            // Both ordering functions already dropped every `Skip`
-            // (`route_policy::order_candidates` / `order_candidates_balanced`),
-            // and the primary's own `Skip` was dropped above. This is the
-            // second half of that same statement — typed, so the chain cannot
-            // carry a state the walk has no arm for.
-            let gate = RouteGate::retained(action);
-            debug_assert!(
-                gate.is_some(),
-                "route ordering returned a Skip it promises to drop: {action:?}"
-            );
-            gate.map(|gate| (node, gate, SlotKind::Fallback))
-        }));
-        CandidatePlan {
-            candidates: out,
-            saturated,
-            health_sidelined: sidelined,
-            route,
-        }
+        let mut candidates = Vec::with_capacity(fallbacks.len() + 1);
+        candidates.push((primary_node, SlotKind::Primary));
+        candidates.extend(fallbacks.into_iter().map(|node| (node, SlotKind::Fallback)));
+        CandidatePlan { candidates }
     }
 
-    /// The chain the *next* request would walk — one [`RouteStep`] per
-    /// candidate in dial order, plus the route generation they were ordered
-    /// from ([`RoutePreview`]).
-    ///
-    /// Read-only twin of `candidates` — same function, same
-    /// route snapshot, same gates — so `route_status` cannot report an order the
-    /// walk would not produce. Answering "why did it pick that provider / why is
-    /// my pin not leading / did the strategy take effect" needs the *result* of
-    /// the ordering, not the raw signals that feed it; before this the operator
-    /// had to re-run the sort in their head.
-    ///
-    /// Observes without disturbing: it consumes no round-robin tick and performs
-    /// no `Open → HalfOpen` breaker transition (that belongs to a real dial).
-    ///
-    /// Both skip flags are DERIVED from the plan the walk would use — the rate
-    /// one through `CandidatePlan::rate_deferred` (the walk's own gate calls
-    /// the same helper) and the health one from the set
-    /// `sidelined_providers` computed for that
-    /// plan. Restating either condition here is what made the preview describe
-    /// a chain the walk does not walk.
-    ///
-    /// The route generation comes back with the order so the caller renders one
-    /// coherent picture — see [`RoutePreview`].
-    pub async fn preview_order(&self) -> RoutePreview {
-        let plan = self.candidates(false).await;
-        let steps = plan
-            .candidates
-            .iter()
-            .map(|(node, action, slot)| RouteStep {
-                rate_sidelined: plan.rate_deferred(&node.name),
-                health_sidelined: plan.health_sidelined.contains(&node.name),
-                // rust-doctor-disable-next-line excessive-clone
-                provider: node.name.clone(),
-                tier: node.tier,
-                action: *action,
-                primary: *slot == SlotKind::Primary,
-            })
-            .collect();
-        RoutePreview {
-            steps,
-            route: plan.route,
-        }
-    }
-
-    /// The subset of `names` the shared registries currently consider unhealthy:
-    /// circuit breaker open (cooldown not yet elapsed), or parked inside a
-    /// rate-limit pacing window.
-    ///
-    /// Strictly read-only — it must **not** perform the `Open → HalfOpen`
-    /// transition, which belongs to [`circuit_allows`](Self::circuit_allows) at
-    /// dial time. Ordering asks "is this a good bet right now"; only an actual
-    /// dial may spend the probe.
-    async fn sidelined_providers<'n>(
-        &self,
-        names: impl Iterator<Item = &'n str>,
-    ) -> std::collections::HashSet<String> {
-        // The nested-chain sentinel has no health of its own — the chain it
-        // delegates to breaks per real provider.
-        let names: Vec<&str> = names.filter(|n| *n != super::NESTED_CHAIN_NODE).collect();
-        let mut out = std::collections::HashSet::new();
-        {
-            let map = self.health.0.read().await;
-            for name in &names {
-                let open = map.get(*name).is_some_and(|st| {
-                    // Open *and still cooling down*: no recorded failure, or the
-                    // cooldown has not elapsed yet.
-                    st.circuit == CircuitState::Open
-                        && st.last_failure.is_none_or(|at| at.elapsed() < st.cooldown)
-                });
-                if open {
-                    out.insert((*name).to_string());
-                }
-            }
-        }
-        if let Some(pc) = &self.provider_cooldown {
-            for name in &names {
-                if pc.remaining(name).await.is_some() {
-                    out.insert((*name).to_string());
-                }
-            }
-        }
-        out
-    }
-
-    /// This candidate's endpoint tier from the boot catalog, defaulting to
-    /// [`EndpointTier::Cloud`] for a provider registered after boot — the
-    /// conservative side of both decisions the tier drives (gated under
-    /// `AlwaysLocal`, never assumed free by `CostAware`).
-    fn node_tier(&self, name: &str) -> EndpointTier {
-        self.tier_catalog
-            .get(name)
-            .copied()
-            .unwrap_or(EndpointTier::Cloud)
+    /// The fallback names this chain would walk right now, in order.
+    #[must_use]
+    pub(crate) fn fallback_names(&self) -> Vec<String> {
+        let primary_name = self.primary.current().name().to_string();
+        self.fallback_nodes(&primary_name)
+            .into_iter()
+            .map(|node| node.name)
+            .collect()
     }
 
     /// The fallback slots this chain would walk right now, materialised.
     ///
     /// Membership comes from the one shared description
-    /// ([`effective_fallback_names`]) so no diagnostic can describe a different
-    /// chain than the one that is walked. Each name is then materialised into a
-    /// node: a boot node when the operator configured the chain (it already
-    /// carries the built provider, its model list and its tier), otherwise a
-    /// live registry lookup whose model list and endpoint tier come from the
-    /// same boot catalogs the static path uses — a live-derived candidate is a
-    /// real chain member, not a placeholder.
-    ///
-    /// Both the walk ([`candidates`](Self::candidates)) and the read-only
-    /// composition ([`chain_composition`](Self::chain_composition)) go through
-    /// here. A second copy materialised from a boot-time vec cannot answer
-    /// this: one `providers.setDefault` is enough to make the ex-primary a
-    /// member of the walked chain that was never in that vec, and defaulting
-    /// an unfound name to `Cloud` with an empty ladder renders a member the
-    /// walk would never gate that way.
+    /// ([`effective_fallback_names`]) and is then materialised into nodes for
+    /// the walk: a boot node when the operator configured the chain, otherwise
+    /// a live registry lookup for an auto-derived chain.
     fn fallback_nodes(&self, primary_name: &str) -> Vec<FailoverNode> {
         let live_names = self.primary.provider_names();
         let configured: Vec<String> = self.fallbacks.iter().map(|n| n.name.clone()).collect();
@@ -1041,7 +341,6 @@ impl FailoverProvider {
                 if let Some(provider) = self.primary.provider_by_name(&name) {
                     return Some(FailoverNode {
                         models: self.model_catalog.get(&name).cloned().unwrap_or_default(),
-                        tier: self.node_tier(&name),
                         name,
                         provider,
                     });
@@ -1051,38 +350,6 @@ impl FailoverProvider {
             self.fallbacks.iter().find(|fb| fb.name == name).cloned()
         })
         .collect()
-    }
-
-    /// Read-only composition of the fallback chain the next request would walk:
-    /// each member's name, its model ladder and its endpoint tier, in
-    /// configured order (no route gating, no load-balancing — that is
-    /// [`preview_order`](Self::preview_order)'s answer).
-    ///
-    /// Rendered as `route_status`'s `fallback_chain`. It is derived from
-    /// `fallback_nodes` — the same materialisation the
-    /// walk uses — so the two faces of the snapshot cannot state two tiers or
-    /// two ladders for one provider.
-    ///
-    /// ⚠️ Residual, deliberately open: the tier comes from
-    /// `node_tier`](Self::node_tier), whose catalog is the BOOT `[providers`
-    /// picture. A provider registered after boot has no entry and reads
-    /// [`EndpointTier::Cloud`] on *both* faces — agreeing, and both possibly
-    /// wrong, for an on-machine endpoint added at runtime. Closing it means
-    /// hot-extending `tier_catalog` on provider creation (the RCU shape
-    /// `RouteObservability::hot_apply_problems` already uses for the problem
-    /// list); until then this agreement is not a claim that the tier is right
-    /// (FEATURE_LOCATOR §3.6 round-6 T9, deferred list).
-    #[must_use]
-    pub fn chain_composition(&self) -> Vec<ChainMember> {
-        let primary_name = self.primary.current().name().to_string();
-        self.fallback_nodes(&primary_name)
-            .into_iter()
-            .map(|node| ChainMember {
-                name: node.name,
-                models: node.models,
-                tier: node.tier,
-            })
-            .collect()
     }
 
     /// Whether `name` may be tried now. Transitions `Open → HalfOpen` once the
@@ -1180,11 +447,6 @@ impl FailoverProvider {
 
     /// Whether `name`'s circuit is currently open.
     ///
-    /// Test-only: the operator/model-facing status surface is
-    /// [`FailoverHealth::snapshot`] (rendered by `route_observe` for the
-    /// `route_status` tool action), and the walk itself uses
-    /// [`circuit_allows`](Self::circuit_allows). Gated so it cannot quietly
-    /// become a second, half-featured status API.
     #[cfg(test)]
     pub async fn circuit_open(&self, name: &str) -> bool {
         self.health
@@ -1240,14 +502,14 @@ impl FailoverProvider {
             RequestRequirements::from_request(messages, tools.is_some_and(|t| !t.is_empty()));
 
         Box::pin(async move {
-            let mut plan = self.candidates(true).await;
+            let mut plan = self.candidates().await;
             let total = plan.candidates.len();
             let mut last_error: Option<AlephError> = None;
             // The route witness's `session_id`, read once: the same
             // `metadata["session_id"]` the metering provider and the OpenAI
             // prompt-cache key already key on. Absent on every path that builds
-            // a payload without it (MoA advisor dials, non-gateway callers),
-            // which simply go unrecorded.
+            // a payload without it (non-gateway callers), which simply go
+            // unrecorded.
             let witness_session = metadata.as_ref().and_then(|m| m.get("session_id"));
             // Anchor the run on the endpoint this walk SET OUT FOR, before any
             // gate below can pass it over. Every cheap reason to skip a
@@ -1279,7 +541,7 @@ impl FailoverProvider {
             // consumed: the gates below are the plan's own methods
             // (`rate_deferred`), and a partially-moved plan cannot answer them.
             let chain = std::mem::take(&mut plan.candidates);
-            for (idx, (cand, action, slot)) in chain.into_iter().enumerate() {
+            for (idx, (cand, slot)) in chain.into_iter().enumerate() {
                 // "Is there somewhere else to go?" — derived once per candidate
                 // and read by every gate below plus `decide`. Four rules yield
                 // to a later candidate and insist on the last one (breaker,
@@ -1312,36 +574,6 @@ impl FailoverProvider {
                     continue;
                 }
 
-                // Rate-ceiling gate, same shape as the breaker's: a provider at
-                // or over its configured `[route].rate_limits` window yields to
-                // a later candidate, and is still attempted when it is the last
-                // one (the chain must never starve).
-                //
-                // A pinned provider is EXEMPT, judged by the same
-                // `targets.is_pinned` the ordering used: an operator pin is an
-                // explicit hard signal, and `order_candidates_balanced` already
-                // promises a pin leads its tier even when rate-saturated ("pin
-                // beats the over-limit gate"). Skipping it here anyway made the
-                // two halves of the same rule contradict each other — the pin
-                // sorted first and was then passed over. The exemption covers
-                // capacity yield only: the circuit-breaker and pacing gates
-                // still skip a pinned candidate, because a pin does not exempt
-                // failure.
-                //
-                // Without this the ceiling only ever *re-ordered* the fallback
-                // pool, and the primary slot — which is not part of that pool —
-                // ignored it completely: on a single-provider or primary-heavy
-                // deployment `[route].rate_limits` changed nothing at all
-                // except a number in `route_status`.
-                if plan.rate_deferred(&cand.name) && has_later_candidate {
-                    tracing::debug!(
-                        provider = %cand.name,
-                        "failover: provider at its configured rate ceiling, deferring \
-                         to a later candidate",
-                    );
-                    continue;
-                }
-
                 // 429 pacing gate — the *skip* half only, which is the half
                 // that belongs among the cheap local reasons. Its twin, the
                 // last-resort wait, stays below the model resolution: hoisting
@@ -1369,49 +601,13 @@ impl FailoverProvider {
                     }
                 }
 
-                // Route gate: an approval-gated cross-tier candidate (borrow
-                // cloud under AlwaysLocal) is skipped unless the user approves
-                // — fail-closed, exactly like an open circuit. Cloud→local
-                // degrade is `CrossTier{requires_approval:false}` and is never
-                // gated (degrading to local spends nothing).
-                if let RouteGate::CrossTier {
-                    requires_approval: true,
-                } = action
-                {
-                    if !self.escalation_allowed(&cand.name).await {
-                        tracing::warn!(
-                            provider = %cand.name,
-                            "route: cloud escalation denied, skipping candidate"
-                        );
-                        // The one event that invalidates a plan-time anchor.
-                        // The head was anchored like any other (the gates above
-                        // pass a gated head over without ever asking, and that
-                        // IS a migration); an actual refusal is not, so the
-                        // anchor is withdrawn rather than never written — which
-                        // would have left the far commoner "skipped before the
-                        // prompt" case unanchored too. A no-op unless the
-                        // record is still this candidate's bare anchor.
-                        if let Some(session) = witness_session {
-                            crate::providers::route_witness::retract(session, &cand.name);
-                        }
-                        last_error.get_or_insert_with(|| {
-                            AlephError::provider(format!(
-                                "route: cloud escalation to '{}' not approved",
-                                cand.name
-                            ))
-                        });
-                        continue;
-                    }
-                }
-
                 // Model-list resolution, in precedence:
                 //
                 // 1. An *explicitly pinned* request model on the PRIMARY slot.
-                //    This is the dynamic-routing model directive — a
-                //    `select_model` pick, an agent `model_hint`, or a
-                //    `BrainRef::Strict` model — that `ModelOverrideProvider`
-                //    stamped onto `payload.model`. It targets the endpoint the
-                //    caller chose, so it overrides that slot's static catalog
+                //    This is the explicit model directive — a `select_model` pick,
+                //    an explicit model/request override, or a `BrainRef::Strict` model —
+                //    that `ModelOverrideProvider` stamped onto `payload.model`. It
+                //    targets the endpoint the caller chose, so it overrides that slot's static catalog
                 //    walk (otherwise the catalog silently discarded the model
                 //    the LLM/agent explicitly chose). Still passed through the C
                 //    floor (fail-open) for consistency. The slot is carried
@@ -1549,27 +745,6 @@ impl FailoverProvider {
                             // rust-doctor-disable-next-line excessive-clone
                             metadata: metadata.clone(),
                         };
-                        // Count this attempt as in-flight for the duration of
-                        // the await (RAII: decremented on Ok, Err, retry, and
-                        // panic alike). `None` load → no-op, zero overhead.
-                        // The nested-chain sentinel is excluded: it is not an
-                        // endpoint, and the inner chain records the real
-                        // provider a moment later — counting both would publish
-                        // a phantom provider row whose latency is the sum of two
-                        // nested dials (see `NESTED_CHAIN_NODE`).
-                        //
-                        // Named (not `_`-prefixed) so the RetrySame arm can drop
-                        // it BEFORE the backoff sleep: the attempt is over once
-                        // the error is classified, and holding the count through
-                        // the sleep made a provider that is merely *waiting to
-                        // retry* look in-flight for the whole backoff — LeastBusy
-                        // and the rate windows read that as real load.
-                        let load_guard = self
-                            .load
-                            .as_ref()
-                            .filter(|_| cand.name != super::NESTED_CHAIN_NODE)
-                            .map(|l| l.begin(&cand.name));
-                        let started = Instant::now();
                         // Same sentinel exclusion the load guard makes: it is
                         // not an endpoint, so it must not become the `original`
                         // half of a fallback notice either.
@@ -1605,16 +780,6 @@ impl FailoverProvider {
                         };
                         match attempt_result {
                             Ok(resp) => {
-                                // Feed the successful round-trip into the EWMA so
-                                // LatencyAware ordering reflects reality, and the
-                                // token usage into the rolling rate window so
-                                // UsageBased / the over-limit gate see real TPM.
-                                if let Some(g) = &load_guard {
-                                    g.record_latency(started.elapsed());
-                                    if let Some(u) = &resp.usage {
-                                        g.record_tokens(billed_tokens(u));
-                                    }
-                                }
                                 // A provider that reported a fault mid-stream
                                 // is not healthy, even though the partial answer
                                 // it already streamed is returned unchanged. The
@@ -1782,7 +947,6 @@ impl FailoverProvider {
                                     // before sleeping so the backoff does not
                                     // read as load (a fresh guard is taken when
                                     // the retry actually goes out).
-                                    drop(load_guard);
                                     tokio::time::sleep(jittered).await;
                                     attempt += 1;
                                     continue;
@@ -1885,9 +1049,9 @@ impl FailoverProvider {
                 //
                 // Read from the ladder's own provenance (`catalog_rungs`,
                 // derived where the list was chosen): a single model the CALLER
-                // named — a `select_model` pick, an agent `model_hint`, a
-                // `BrainRef::Strict` id, or simply a typo — indicts that name,
-                // never the endpoint, so it must not shed a healthy provider.
+                // named — a `select_model` pick, an explicit model/request
+                // override, a `BrainRef::Strict` id, or simply a typo — indicts
+                // that name, never the endpoint, so it must not shed a healthy provider.
                 //
                 // The equality is against what the CATALOG stated, never
                 // against the survivor set the request narrowed it to. Both
@@ -1921,13 +1085,9 @@ impl FailoverProvider {
 
             Err(last_error.unwrap_or_else(|| {
                 if total == 0 {
-                    // Nothing was attempted, so there is no provider error to
-                    // report — only the policy that emptied the chain. Read the
-                    // mode from the SAME route generation that ordered the
-                    // (empty) candidate set: re-reading the live handle here
-                    // could name a mode that hot-swapped in after the ordering
-                    // pass and had no part in emptying the chain.
-                    empty_chain_error(plan.route.mode)
+                    // No candidate was available, so report the failure without
+                    // depending on removed route-policy state.
+                    AlephError::provider("no provider is configured to serve this request")
                 } else {
                     AlephError::provider(format!("all {total} failover candidates failed"))
                 }
@@ -2037,30 +1197,5 @@ impl AiProvider for FailoverProvider {
     /// passes off for the rest of that run (a documented gap).
     fn clears_tool_results_server_side(&self) -> bool {
         self.primary.current().clears_tool_results_server_side()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{unpriced_cost, EndpointTier};
-
-    #[test]
-    fn unpriced_local_is_free_and_sorts_first() {
-        // A local / self-hosted model with no rate card is genuinely free.
-        assert_eq!(unpriced_cost(EndpointTier::Local), 0);
-    }
-
-    #[test]
-    fn unpriced_cloud_is_unknown_cost_and_sorts_last() {
-        // An unpriced cloud model has *unknown* cost, not zero — it must never
-        // out-rank a model whose price we can confirm, so it sorts last.
-        assert_eq!(unpriced_cost(EndpointTier::Cloud), u64::MAX);
-    }
-
-    #[test]
-    fn unpriced_unknown_tier_is_treated_as_cloud() {
-        // An unresolved base_url is treated conservatively as cloud — never
-        // assumed free under cost routing.
-        assert_eq!(unpriced_cost(EndpointTier::Unknown), u64::MAX);
     }
 }

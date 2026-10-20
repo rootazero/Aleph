@@ -1,4 +1,4 @@
-//! Generation Settings panel — output dir + thresholds + smart-routing toggle.
+//! Generation Settings panel — output dir + thresholds.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -20,7 +20,6 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
         output_dir: None,
         auto_paste_threshold_mb: 5,
         background_task_threshold_seconds: 30,
-        smart_routing_enabled: true,
     });
     let loading = RwSignal::new(true);
     let saving = RwSignal::new(false);
@@ -56,7 +55,6 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
     let output_dir = RwSignal::new(String::new());
     let auto_paste = RwSignal::new(5u32);
     let bg_threshold = RwSignal::new(30u32);
-    let smart_routing = RwSignal::new(true);
 
     // Sync local signals when config loads
     Effect::new(move || {
@@ -68,7 +66,6 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
             output_dir.set(cfg.output_dir.unwrap_or_default());
             auto_paste.set(cfg.auto_paste_threshold_mb);
             bg_threshold.set(cfg.background_task_threshold_seconds);
-            smart_routing.set(cfg.smart_routing_enabled);
         }
     });
 
@@ -81,7 +78,6 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
         cfg.output_dir = Some(output_dir.get());
         cfg.auto_paste_threshold_mb = auto_paste.get();
         cfg.background_task_threshold_seconds = bg_threshold.get();
-        cfg.smart_routing_enabled = smart_routing.get();
 
         spawn_local(async move {
             match GenerationConfigApi::update(&state, cfg).await {
@@ -169,24 +165,6 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
                                     {t!(i18n, settings.generation.bg_threshold_hint)}
                                 </p>
                             </div>
-                        </div>
-
-                        // Smart Routing
-                        <div class="bg-surface-raised rounded-lg border border-border p-4">
-                            <label class="flex items-center gap-3 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked=move || smart_routing.get()
-                                    on:change=move |ev| smart_routing.set(event_target_checked(&ev))
-                                    class="w-4 h-4 text-primary focus:ring-primary/30 rounded"
-                                />
-                                <div>
-                                    <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.generation.smart_routing)}</div>
-                                    <div class="text-xs text-text-tertiary">
-                                        {t!(i18n, settings.generation.smart_routing_hint)}
-                                    </div>
-                                </div>
-                            </label>
                         </div>
 
                         // Save feedback

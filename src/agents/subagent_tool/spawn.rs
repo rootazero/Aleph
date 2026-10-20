@@ -72,8 +72,7 @@ impl SubagentTool {
     /// finished (every spawn site calls `.cancel()` on the returned token after
     /// the child run completes). Without that second arm the watcher would park
     /// on `harness.cancelled()` until process exit on the normal-completion
-    /// path, leaking one task per subagent spawn (amplified by batch / MoA
-    /// fan-out).
+    /// path, leaking one task per subagent spawn (amplified by batch fan-out).
     pub(super) fn cancel_for_child_with(&self, harness: &CancellationToken) -> CancellationToken {
         let token = self.cancel_for_child();
         if harness.is_cancelled() {
@@ -477,9 +476,6 @@ impl SubagentTool {
         if let Some(sink) = self.trace.accounting_sink.clone() {
             runtime = runtime.with_accounting_sink(sink);
         }
-        if let Some(rs) = self.routing.routing_store.clone() {
-            runtime = runtime.with_routing_store(rs);
-        }
         if let Some(sc) = self.policy_inheritance.stall_config.clone() {
             runtime = runtime.with_stall_config(sc);
         }
@@ -517,7 +513,7 @@ impl SubagentTool {
             runtime = runtime.with_verifier_chain(vc);
         }
         if !self.providers.provider_overrides.is_empty() {
-            runtime = runtime.with_provider_overrides(self.providers.provider_overrides.clone());
+            runtime = runtime.with_provider_routes(self.providers.provider_overrides.clone());
         }
         // Stage 5a (#9) — thread the parent harness's guardrail registry so
         // the child's SpawnerBase → HarnessDeps inheritance chain (already

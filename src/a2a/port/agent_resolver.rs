@@ -80,8 +80,8 @@ impl RegisteredAgent {
 /// Port for discovering and managing remote A2A agents.
 ///
 /// Provides explicit registration and lookup. Remote card fetching is handled
-/// directly by `A2AClient` (see `service::card_refresh`); intent-based routing
-/// is handled by `service::SmartRouter`.
+/// directly by `A2AClient` (see `service::card_refresh`); explicit agent name/alias
+/// resolution is handled by `service::SmartRouter`.
 #[async_trait::async_trait]
 pub trait AgentResolver: Send + Sync {
     /// Register a remote agent, optionally attaching an outbound bearer

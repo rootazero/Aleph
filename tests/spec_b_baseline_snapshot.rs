@@ -131,7 +131,7 @@ fn build_assembler(
 ///
 /// All three use `created_at = 1_234_567_890` so the snapshot is
 /// reproducible across runs regardless of wall-clock time.
-async fn seed_facts(backend: &MemoryBackend, raw_store: &dyn RawMemoryStore) {
+async fn seed_facts(raw_store: &dyn RawMemoryStore) {
     // (a) Transcript fragment — represents a note-like retrieval candidate.
     let mut fact_a = RawMemory::new("Aleph uses Rust".to_string(), RawMemorySource::Transcript)
         .with_agent("agent-1")
@@ -298,7 +298,7 @@ async fn note_retrieval_default_behaviour_baseline() {
         Arc::new(MarkdownSessionStore::new(&notes_dir).await.unwrap());
 
     // ---- Seed deterministic facts ----
-    seed_facts(&backend, raw_store.as_ref()).await;
+    seed_facts(raw_store.as_ref()).await;
 
     // ---- Build HybridAssembler ----
     let assembler = build_assembler(backend, raw_store, notes_dir);

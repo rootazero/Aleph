@@ -14,7 +14,7 @@ use super::types::{
     failure_kind, AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView, CreateParams,
     DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams, ModelsRefreshResult,
     ModelsRefreshRow, ProviderGetResult, ProviderHealthResult, ProviderHealthRow, ProviderInfo,
-    ProviderListResult, RosterModel, SetDefaultParams, TestParams, TestResult, UpdateParams,
+    ProviderListResult, SetDefaultParams, TestParams, TestResult, UpdateParams,
 };
 use crate::config::{Config, ProviderConfig};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
@@ -50,19 +50,16 @@ async fn refresh_selectable_publication(
             }
         })
         .collect();
-    let authentication =
-        crate::routing::provider_availability_from_config(config.providers.clone(), vault.cloned());
+    // Authentication is only a selectable-model validation input. It must not
+    // synthesize routing availability or restore learned/semantic routing.
+    let env_provider = crate::gateway::available_provider_from_env();
     selection::refresh_selectable_models(&config, &available, |name| {
-        matches!(
-            authentication(name),
-            crate::routing::recall::ProviderStatus::Available
-        ) || config
-            .providers
-            .get(name)
-            .is_some_and(|pc| pc.protocol() == "ollama")
-            || (name != changed
-                && available.contains(name)
-                && crate::gateway::available_provider_from_env() == Some(name))
+        vault.is_some_and(|vault| resolve_api_key(name, vault).is_some())
+            || config
+                .providers
+                .get(name)
+                .is_some_and(|pc| pc.protocol() == "ollama")
+            || (name != changed && available.contains(name) && env_provider == Some(name))
     });
 }
 
@@ -569,9 +566,8 @@ async fn delete_provider_inner(
 ///
 /// This used to come in two variants — one taking the `MultiProviderRegistry`
 /// and one without — because the reset went through that registry's own health
-/// map. The breaker that actually gates dialing is reached through the process
-/// route-observability handle instead, so the registry is not needed here and
-/// the split collapsed with it.
+/// map. The breaker that actually gates dialing is the shared failover health,
+/// so the registry is not needed here and the split collapsed with it.
 pub async fn handle_test(
     request: JsonRpcRequest,
     config_store: Arc<RwLock<Config>>,
@@ -658,8 +654,8 @@ pub async fn handle_test(
             // cooldown despite "Test connection" going green. (There used to be
             // a second reset here, against a registry health map that fed only
             // the `ModelResolved` badge and gated no dial; that map is gone.)
-            if let Some(obs) = crate::providers::route_observe::global_route_observability() {
-                if obs.health.reset(name).await {
+            if let Some(health) = crate::providers::failover::global_health() {
+                if health.reset(name).await {
                     info!(provider = %name, "connection test passed; failover circuit reset");
                 }
             }
@@ -1128,9 +1124,8 @@ async fn set_default_provider_inner(
                     // provider whose circuit was open left it skipped for the
                     // rest of the cooldown. Same fix, and same reason, as the
                     // connection-test path above.
-                    if let Some(obs) = crate::providers::route_observe::global_route_observability()
-                    {
-                        if obs.health.reset(&name).await {
+                    if let Some(health) = crate::providers::failover::global_health() {
+                        if health.reset(&name).await {
                             info!(name = %name, "set as default; failover circuit reset");
                         }
                     }
@@ -1443,72 +1438,6 @@ pub async fn handle_catalog(
         CatalogView::Available => item.has_api_key,
         CatalogView::All => true,
     });
-
-    // Round-2 E3: MoA presets ride the picker as a pseudo-provider row.
-    // Selecting one sends model_override {provider:"moa", model:<preset>},
-    // which chat.send's `apply_moa_selector_semantics` intercept
-    // (`src/gateway/handlers/agent.rs`) converts into a session MoA
-    // activation — wired into both the Simulated-fallback path
-    // (`AgentRunManager::start_run`) and the real-`ExecutionEngine` path
-    // (`handle_chat_send_with_engine`, `src/bin/aleph-server/server_init.rs`,
-    // since the Task 18 fix that closed the gap where a real deployment
-    // silently ignored this pick). Appended AFTER the view retain: this
-    // synthetic row is always shown when presets exist (it has no
-    // credential of its own).
-    if let Some(moa_cfg) = crate::providers::moa::get_moa_config() {
-        let mut names: Vec<String> = moa_cfg
-            .presets
-            .iter()
-            .filter(|(_, p)| p.enabled)
-            .map(|(n, _)| n.clone())
-            .collect();
-        names.sort();
-        if !names.is_empty() {
-            let default_model = moa_cfg
-                .default_preset
-                .clone()
-                .filter(|d| names.contains(d))
-                .unwrap_or_else(|| names[0].clone());
-            items.push(CatalogEntry {
-                id: "moa".to_string(),
-                display_name: "Mixture of Agents".to_string(),
-                default_model,
-                base_url: "moa://virtual".to_string(),
-                protocol: "moa".to_string(),
-                color: "#8b5cf6".to_string(),
-                homepage: None,
-                notes: Some(
-                    "MoA advisory presets — selecting one activates advisor fan-out \
-                     for this session"
-                        .to_string(),
-                ),
-                signup_url: None,
-                aliases: Vec::new(),
-                modalities: vec!["chat".to_string()],
-                models: names.clone(),
-                has_api_key: true,
-                verified: true,
-                enabled: true,
-                is_default: false,
-                auth_kind: AuthKind::ApiKey,
-                // Virtual multiplexer, not a reachable host — conservatively
-                // "cloud" like any other absent/unparseable base_url.
-                endpoint: "cloud".to_string(),
-                requires_explicit_model: false,
-                // Virtual multiplexer: nothing to ask for a model listing.
-                discoverable: false,
-                // `RosterModel::new` leaves the reference data absent, which is
-                // the honest answer here: a preset *name* is not a vendor model
-                // id, so no window, price or vendor lifecycle applies to it. (A
-                // preset whose *slots* name retired models is caught where
-                // those slots are resolved, not here.)
-                roster: names
-                    .into_iter()
-                    .map(|n| RosterModel::new(n, ModelSource::Configured))
-                    .collect(),
-            });
-        }
-    }
 
     JsonRpcResponse::success(
         request.id,

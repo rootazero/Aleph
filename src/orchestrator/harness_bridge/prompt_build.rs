@@ -251,16 +251,15 @@ impl AgentHarnessRunner {
     /// keeps the harness path resilient.
     ///
     /// The third tuple element is the per-run recall context (hybrid memory
-    /// retrieval + routing experience). It is deliberately NOT welded into
-    /// the system prompt: recall varies with the user query, and varying
-    /// bytes in the system prompt sit ahead of every message-level
-    /// prompt-cache breakpoint — re-keying the entire conversation prefix
-    /// each run for every provider. The caller threads it into
-    /// `HarnessDeps::recall_context`, where `think` appends it as a
-    /// transient trailing user message (tail changes cost only themselves;
-    /// codex initial-context / hermes frozen-system-prompt parity). The
-    /// curated envelope stays in the Stable prefix — it is session-scoped
-    /// and rarely changes.
+    /// retrieval). It is deliberately NOT welded into the system prompt: recall
+    /// varies with the user query, and varying bytes in the system prompt sit
+    /// ahead of every message-level prompt-cache breakpoint — re-keying the
+    /// entire conversation prefix each run for every provider. The caller
+    /// threads it into `HarnessDeps::recall_context`, where `think` appends it
+    /// as a transient trailing user message (tail changes cost only themselves;
+    /// codex initial-context / hermes frozen-system-prompt parity). The curated
+    /// envelope stays in the Stable prefix — it is session-scoped and rarely
+    /// changes.
     ///
     /// The fourth tuple element is the measured [`PromptLayout`] of the prompt
     /// this call just assembled, for `context.breakdown`. It is RETURNED
@@ -285,7 +284,6 @@ impl AgentHarnessRunner {
         channel_manifest: Option<&crate::thinker::InteractionManifest>,
         sandbox: &dyn Sandbox,
         workspace: Option<&std::path::Path>,
-        routing_text: Option<String>,
         has_session_summaries: bool,
         prompt_token_budget: Option<u64>,
         // Cross-run calibrated estimator factor for the serving model (the
@@ -685,11 +683,11 @@ impl AgentHarnessRunner {
         // `memory_text`. Keep this line adjacent to `memory_chars`, which reads
         // the same value for the same reason.
         builder = builder.with_recalled_memory(memory_text.is_some());
-        // Per-query recall (memory + routing experience) is returned to the
-        // caller for tail-message delivery instead of being fed to the
-        // builder's `MemoryAugmentationLayer` — see the method doc. Both
-        // texts arrive already fenced (`<memory-context>` guard + "reference
-        // data, not user input" note), so plain concatenation suffices.
+        // Per-query recall (memory) is returned to the caller for tail-message
+        // delivery instead of being fed to the builder's
+        // `MemoryAugmentationLayer` — see the method doc. The memory text
+        // arrives already fenced (`<memory-context>` guard + "reference data,
+        // not user input" note), so plain concatenation suffices.
         // Third strand: the live countdowns for an active standing goal / timer
         // loop. These are wall-clock-derived and so may never enter the system
         // prompt (a byte that moves every run re-keys the whole cached
@@ -704,7 +702,7 @@ impl AgentHarnessRunner {
         // that must not enter the cached system prompt — so the model can wrap up
         // or checkpoint before the in-loop sensor compacts older turns away.
         let pressure_text = self.context_pressure_reminder(session_id, provider).await;
-        let strands: Vec<String> = [memory_text, routing_text, deadline_text, pressure_text]
+        let strands: Vec<String> = [memory_text, deadline_text, pressure_text]
             .into_iter()
             .flatten()
             .collect();

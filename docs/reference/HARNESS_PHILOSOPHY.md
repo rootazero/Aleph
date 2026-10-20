@@ -6,9 +6,10 @@
 
 本文档是 Aleph 架构的核心哲学之一，从 2026-04-24 启动的 `harness-dissolution` 重构（P0–P7，8 阶段）固化而来。它定义了 Aleph 在 Agent Harness 工程中的根本立场，与 [CLAUDE.md](../../CLAUDE.md) R3 / R8 / R10 / R11 共同构成不可逾越的红线。
 
----
+## Current runtime status
 
-## 1. 行业背景：Agent Harness 是什么
+The harness leaves task decomposition and collaboration to the main LLM. Runtime only guarantees generic subagent lifecycle, isolation, concurrency, and failure visibility; fixed MoA fan-out, strategy routing, and semantic model routing are superseded. Explicit provider/model/session/`BrainRef` bindings and named presets remain configuration references, not semantic routing, and fallback is attempted only after failure. Historical typed MoA traces remain decodable; old `[moa]`/routing tables plus AgentDef hints are tolerated with diagnostics and ignored.
+
 
 2026 年初，全球 AI 工程社区正式定义了 **Agent Harness**：包裹大语言模型的一整套操作系统级软件基础设施。它把一个只会输出文本、无状态、容易出错的裸 LLM，变成有目标、会用工具、能纠错、可持久运行的、靠谱的智能体。
 

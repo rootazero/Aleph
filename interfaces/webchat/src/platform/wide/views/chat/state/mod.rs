@@ -750,8 +750,8 @@ pub struct ChatState {
     /// server-side `preferred_model` persistence is a follow-up). Picker
     /// component owns reads/writes through this signal.
     pub selected_model: RwSignal<Option<crate::api::providers::ModelOverride>>,
-    /// A model override requested from OUTSIDE the chat view (e.g. the MoA
-    /// settings page's "Use in chat"). Parked here instead of written straight
+    /// A model override requested from outside the chat view (for example, a
+    /// settings surface's "Use in chat"). Parked here instead of written
     /// to `selected_model` because `restore_from` — which runs when the chat
     /// view activates a session on navigation — would immediately overwrite
     /// `selected_model` from the (empty) snapshot and lose it. Ephemeral: NOT in
@@ -2102,8 +2102,8 @@ impl ChatState {
         self.active_project_name.set(snap.active_project_name);
         self.room_project_id.set(snap.room_project_id);
         self.selected_model.set(snap.selected_model);
-        // A model requested from outside the chat view (MoA "Use in chat")
-        // survives this restore: apply it over the snapshot value, then consume.
+        // A model requested from outside the chat view survives this restore:
+        // apply it over the snapshot value, then consume it.
         if let Some(mo) = self.pending_model_override.get_untracked() {
             self.selected_model.set(Some(mo));
             self.pending_model_override.set(None);

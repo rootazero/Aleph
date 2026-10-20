@@ -2,8 +2,7 @@
 //!
 //! The `[search]` section is read once at boot into a [`SearchRegistry`] the
 //! `search` builtin tool captures. A config edit alone never reaches that
-//! capture — the same gap `providers::route_handle` closes for `[route]`.
-//! This handle is the search half of that fix: one process-global,
+//! capture, so this handle provides the live-apply path: one process-global,
 //! lock-free cell the tool reads on *every* call and the config-write path
 //! (`config::live_apply`'s `search` arm) swaps on every `[search]` write.
 //! The next search sees the new registry with **no daemon restart**.

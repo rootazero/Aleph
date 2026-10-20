@@ -130,7 +130,6 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "terminal_sessions_attach",
             "select_model",
             "list_models",
-            "moa",
             "vault_store",
             "channel_pairing",
             "google_meet",

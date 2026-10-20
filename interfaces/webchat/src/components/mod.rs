@@ -32,7 +32,6 @@ pub mod provider_badge;
 pub mod provider_key_field;
 pub mod provider_row_card;
 pub mod right_pane;
-pub mod route_labels;
 pub mod service_blocking_gate;
 pub mod settings_sidebar;
 pub mod sidebar;

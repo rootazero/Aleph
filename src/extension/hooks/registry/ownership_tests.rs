@@ -1,8 +1,11 @@
 //! Source-only ownership regressions. Main runs these after the writers stop.
 use super::*;
 use crate::capability::ownership::{ClaimState, RunId};
-use crate::extension::hooks::{HookContext, HookMemoSink, HookResult};
+#[cfg(unix)]
+use crate::extension::hooks::HookMemoSink;
+use crate::extension::hooks::{HookContext, HookResult};
 use crate::extension::types::{HookAction, HookEvent, HookKind, PluginKind, PluginOrigin};
+#[cfg(unix)]
 use std::sync::Mutex;
 
 fn declaration(label: &str) -> HookConfig {
@@ -345,8 +348,10 @@ async fn remove_and_readd_preserve_owner_and_duplicate_ordered_effects() {
     assert_eq!(result.action_results.len(), 3);
 }
 
+#[cfg(unix)]
 #[derive(Default)]
 struct Memo(Mutex<Vec<String>>);
+#[cfg(unix)]
 #[async_trait::async_trait]
 impl HookMemoSink for Memo {
     async fn record(&self, _event: HookEvent, _capability: Option<&str>, outcome: &str) {

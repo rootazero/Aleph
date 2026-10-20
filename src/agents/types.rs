@@ -237,15 +237,6 @@ pub struct AgentDef {
     pub max_iterations: Option<u32>,
     /// Token budget override for this agent's loop
     pub token_budget: Option<u32>,
-    /// Suggested model to use (e.g., "fast", "deep")
-    pub model_hint: Option<String>,
-    /// Provider this agent should run on — a `[providers]` toml name. When set
-    /// and the name resolves at boot, the agent's subagent runs on that
-    /// provider pinned as primary, then falls through the global failover
-    /// chain. `#[serde(default)]` for schema back-compat: legacy agent files
-    /// have no `provider_hint` key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_hint: Option<String>,
     /// Context mode: whether sub-agent gets parent context
     pub context_mode: ContextMode,
     /// Where this definition was loaded from
@@ -288,8 +279,6 @@ impl AgentDef {
             denied_tools: vec![],
             max_iterations: None,
             token_budget: None,
-            model_hint: None,
-            provider_hint: None,
             context_mode: ContextMode::default(),
             source: AgentSource::default(),
             mcp_servers: vec![],
@@ -392,18 +381,6 @@ impl AgentDef {
     #[must_use]
     pub const fn with_token_budget(mut self, budget: u32) -> Self {
         self.token_budget = Some(budget);
-        self
-    }
-
-    /// Set model hint
-    pub fn with_model_hint(mut self, hint: impl Into<String>) -> Self {
-        self.model_hint = Some(hint.into());
-        self
-    }
-
-    /// Set provider hint — the `[providers]` toml name this agent runs on.
-    pub fn with_provider_hint(mut self, hint: impl Into<String>) -> Self {
-        self.provider_hint = Some(hint.into());
         self
     }
 
@@ -571,7 +548,13 @@ mod tests {
         let agent = AgentDef::new("test", AgentMode::SubAgent);
         assert_eq!(agent.context_mode, ContextMode::Fresh);
         assert!(agent.token_budget.is_none());
-        assert!(agent.model_hint.is_none());
+    }
+
+    #[test]
+    fn legacy_routing_fields_are_not_serialized() {
+        let json = serde_json::to_string(&AgentDef::new("test", AgentMode::SubAgent)).unwrap();
+        assert!(!json.contains("model_hint"));
+        assert!(!json.contains("provider_hint"));
     }
 
     #[test]
@@ -587,30 +570,16 @@ mod tests {
         assert_eq!(agent.token_budget, Some(50_000));
     }
 
+    /// The old routing fields are intentionally ignored by serde when loading
+    /// persisted definitions. Filesystem frontmatter consumes them separately
+    /// so the loader can attach the Task 8 compatibility diagnostic.
     #[test]
-    fn test_with_model_hint() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent).with_model_hint("fast");
-        assert_eq!(agent.model_hint.as_deref(), Some("fast"));
-    }
-
-    #[test]
-    fn test_provider_hint_default_none_and_setter() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent);
-        assert!(agent.provider_hint.is_none());
-        let agent = agent.with_provider_hint("openai");
-        assert_eq!(agent.provider_hint.as_deref(), Some("openai"));
-    }
-
-    #[test]
-    fn test_provider_hint_serde_back_compat() {
-        // Legacy agent JSON with no `provider_hint` key still deserializes.
-        let json = serde_json::to_string(&AgentDef::new("a", AgentMode::SubAgent)).unwrap();
-        assert!(
-            !json.contains("provider_hint"),
-            "None must skip serialization"
-        );
-        let back: AgentDef = serde_json::from_str(&json).unwrap();
-        assert!(back.provider_hint.is_none());
+    fn legacy_routing_fields_are_ignored_on_deserialize() {
+        let def: AgentDef = serde_json::from_str(
+            r#"{"id":"test","description":"","when_to_use":null,"mode":"SubAgent","prompt_sections":[],"allowed_tools":["*"],"allowed_tool_sets":[],"denied_tools":[],"max_iterations":null,"token_budget":null,"model_hint":"fast","provider_hint":"openai","context_mode":"Fresh","source":"builtin","mcp_servers":[],"isolation":null}"#,
+        )
+        .unwrap();
+        assert_eq!(def.id, "test");
     }
 
     /// The body's one persisted home is the `.md` file: no serde path carries

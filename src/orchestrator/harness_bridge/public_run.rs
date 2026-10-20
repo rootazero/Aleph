@@ -4,7 +4,7 @@
 //! everything the run needs from scratch instead of reusing the owner path:
 //!
 //! - provider: the Core default provider handle only (no per-session model
-//!   preference, no MoA handle, no named-brain lookup);
+//!   binding, no named-brain lookup);
 //! - prompt: the fixed [`PUBLIC_SYSTEM_PROMPT`], the caller's current text and
 //!   the isolated, already-decrypted `request.history` of *completed public
 //!   turns of this binding* (no owner history, memory, profile, project
@@ -766,57 +766,6 @@ mod tests {
             rx.try_recv(),
             Err(broadcast::error::TryRecvError::Empty)
         ));
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(spend_global_policy)]
-    async fn runner_public_path_uses_core_default_not_owner_agent_provider_hint() {
-        let (default_llm, default_captured) = named_spy("core-default", "default public answer");
-        let (override_llm, override_captured) =
-            named_spy("owner-override", "owner override answer");
-        let (mut runner, owner) =
-            super::super::tests::runner_with_provider_for_public(default_llm, CANARY).await;
-        runner
-            .named_providers
-            .insert("owner-override".into(), override_llm);
-        runner.agent_registry.register(
-            crate::agents::AgentDef::new("main", crate::agents::AgentMode::Primary)
-                .with_provider_hint("owner-override")
-                .with_model_hint("owner-private-model"),
-        );
-        let owner_before = super::super::tests::owner_event_count(&runner, &owner).await;
-        let (tx, mut rx) = broadcast::channel(8);
-        let out = crate::orchestrator::dispatch::HarnessRunner::run_public_text(
-            &runner,
-            request("use the public default"),
-            CancellationToken::new(),
-            tx.clone(),
-        )
-        .await
-        .expect("public default provider run");
-        assert_eq!(out.final_text, "default public answer");
-        assert_eq!(
-            super::super::tests::owner_event_count(&runner, &owner).await,
-            owner_before
-        );
-        assert!(matches!(
-            rx.try_recv(),
-            Err(broadcast::error::TryRecvError::Empty)
-        ));
-        let c = default_captured.lock().unwrap();
-        assert_eq!(
-            c.payloads.len(),
-            1,
-            "default provider must actually be reached"
-        );
-        for input in c.messages.iter().chain(c.system.iter().flatten()) {
-            assert!(!input.contains(CANARY));
-            assert!(!input.contains("owner-private-model"));
-        }
-        assert!(
-            override_captured.lock().unwrap().payloads.is_empty(),
-            "owner named provider must never be reached"
-        );
     }
 
     #[tokio::test]

@@ -74,7 +74,6 @@ const OPERATOR_TOOLS: &[&str] = &[
     // matches on the tool NAME, and a chat-tier run that wants to know what is
     // installed has `doctor`, which is open.
     "runtime_manage",
-    "moa",
     // Cluster: driving remote execution arms. Local `bash` is deliberately open
     // to chat tier, but the fleet is a different blast radius — one call reaches
     // every machine the center owns, and `node_file` moves bytes across that
@@ -434,10 +433,10 @@ mod tests {
     fn config_tools_have_a_model_pick_branch() {
         // `select_model` mutates session model state and persists it across
         // turns (a non-trivial blast radius). Historically the channel gate
-        // had a special-case for `moa:` model picks only; any other model
-        // name was implicitly trusted. Tightening the policy requires an
-        // audit entry; this tripwire keeps the audit honest if the carve-out
-        // ever narrows back to "moa: only".
+        // had a historical special-case for the removed `moa:` model picks;
+        // any other model name was implicitly trusted. Tightening the policy
+        // requires an audit entry; this tripwire keeps the audit honest if the
+        // legacy compatibility carve-out ever narrows back to `moa:` only.
         assert!(
             !tool_requires_operator("select_model"),
             "select_model currently stays open to chat tier; revisit if the \

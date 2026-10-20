@@ -67,7 +67,8 @@ use crate::tools::service::ToolService;
 // SubagentTool struct
 // =============================================================================
 
-/// Role-grouped sub-config — default provider + `provider_hint` override map.
+/// Role-grouped sub-config — default provider + configured provider-route
+/// override map.
 pub(super) struct ProviderRouting {
     pub(super) provider: Arc<dyn AiProvider>,
     pub(super) provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
@@ -136,12 +137,6 @@ pub(super) struct BudgetInheritance {
     pub(super) verifier_chain: Option<Arc<crate::verification::VerifierChain>>,
 }
 
-/// Role-grouped sub-config — routing-experience store threaded into every
-/// child `AgentRuntime`.
-pub(super) struct RoutingExperience {
-    pub(super) routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
-}
-
 /// Role-grouped sub-config — the two sinks a spawned child writes into, split
 /// by PRODUCER (both decided at `gateway/execution_engine/run_trace_sinks.rs`).
 pub(super) struct TraceContext {
@@ -158,14 +153,13 @@ pub(super) struct TraceContext {
 /// Decomposed into role-grouped sub-configs so each concern lives in exactly
 /// one place. The full field set (33 fields) was previously a flat struct;
 /// now grouped by responsibility:
-///   * `providers`             — default provider + `provider_hint` overrides
+///   * `providers`             — default provider + configured provider-route overrides
 ///   * `agent_resolution`      — registry, plugin-registry, teammate/messaging, parent id
 ///   * `background`            — tracker, shared concurrency cap, parent cancel
 ///   * `memory`                — Delegation hook emit + parent session
 ///   * `tools`                 — session actor, parent tool service, chain depth
 ///   * `policy_inheritance`    — guardrails + resilience + run-style
 ///   * `budget_inheritance`    — iteration/parallel/context-budget/verifier
-///   * `routing`               — routing-experience store
 ///   * `trace`                 — trace sink
 pub struct SubagentTool {
     pub(super) providers: ProviderRouting,
@@ -175,7 +169,6 @@ pub struct SubagentTool {
     pub(super) tools: ToolingContext,
     pub(super) policy_inheritance: PolicyInheritance,
     pub(super) budget_inheritance: BudgetInheritance,
-    pub(super) routing: RoutingExperience,
     pub(super) trace: TraceContext,
 }
 
@@ -244,9 +237,6 @@ impl SubagentTool {
                 primary_context_window: None,
                 cheap_summary_provider: None,
                 verifier_chain: None,
-            },
-            routing: RoutingExperience {
-                routing_store: None,
             },
             trace: TraceContext {
                 trace_sink: None,
@@ -331,8 +321,9 @@ impl SubagentTool {
         self
     }
 
-    /// Phase 3 — wire the per-`provider_hint` override registry. A subagent
-    /// whose `AgentDef.provider_hint` matches a key runs on that provider.
+    /// Phase 3 — wire configured provider-route overrides. An explicit
+    /// `provider/model` route selects the matching configured provider; AgentDef
+    /// role metadata supplies no implicit provider route.
     #[must_use]
     pub fn with_provider_overrides(
         mut self,
@@ -449,17 +440,6 @@ impl SubagentTool {
         let (harness, accounting) = sinks.into_parts();
         self.trace.trace_sink = Some(harness);
         self.trace.accounting_sink = Some(accounting);
-        self
-    }
-
-    /// VESR v1.1 (b) — thread the routing-experience store so spawned subagents
-    /// capture their own routing experience.
-    #[must_use]
-    pub fn with_routing_store(
-        mut self,
-        store: Arc<crate::routing::RoutingExperienceStore>,
-    ) -> Self {
-        self.routing.routing_store = Some(store);
         self
     }
 

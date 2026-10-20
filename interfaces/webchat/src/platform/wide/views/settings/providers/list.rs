@@ -11,8 +11,8 @@
 //!
 //! # Why the sections are these two and not "preset vs custom"
 //!
-//! The server merges presets, operator-defined providers and the MoA pseudo
-//! row into one list and does **not** mark which is which, so that partition is
+//! The server merges presets, operator-defined providers and legacy virtual
+//! rows into one list and does **not** mark which is which, so that partition is
 //! not recoverable here — and re-deriving it would mean keeping a copy of the
 //! preset table, which is the drift this page was rewritten to delete. What
 //! *is* on the row is whether the operator has a `[providers.<id>]` section for
@@ -31,10 +31,11 @@ use crate::api::{configured_key, is_configured, ProvidersApi};
 
 /// Rows this page can edit.
 ///
-/// The MoA pseudo-provider (`protocol == "moa"`) is dropped: it is a virtual
-/// multiplexer over other providers' credentials with no config section of its
-/// own, so a settings row for it would open an editor that can only write
-/// nonsense. Same exclusion, same reason, as `moa::options::available_options`.
+/// Legacy virtual catalogue rows (`protocol == "moa"`) are intentionally
+/// dropped. They have no provider config section of their own, so exposing one
+/// would create a clickable row with no truthful editor behind it. Keep this
+/// defensive filter until old catalogue snapshots can no longer contain that
+/// protocol id.
 ///
 /// No query parameter: the panel now lists only sign-in rows and configured
 /// rows — at most a dozen — and the search box moved into [`super::picker`],

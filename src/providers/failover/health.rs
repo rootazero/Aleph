@@ -8,7 +8,27 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
+use crate::capability::{CapabilitySlot, MissingSemantics};
 use crate::sync_primitives::Arc;
+
+static GLOBAL_FAILOVER_HEALTH: CapabilitySlot<FailoverHealth> = CapabilitySlot::new(
+    "providers/failover-health",
+    MissingSemantics::ConsumerDecides,
+);
+
+/// Register the breaker state used by the boot-built failover chain.
+///
+/// The slot is process-wide and install-once. Cloning `FailoverHealth` shares
+/// the same underlying map, so gateway recovery paths observe the exact state
+/// that the provider chain mutates.
+pub fn register_global_health(health: FailoverHealth) {
+    let _ = GLOBAL_FAILOVER_HEALTH.install(health);
+}
+
+/// Return the boot-built failover health, if provider wiring has run.
+pub fn global_health() -> Option<&'static FailoverHealth> {
+    GLOBAL_FAILOVER_HEALTH.get()
+}
 
 /// Circuit-breaker state for a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,9 +77,8 @@ impl Default for FailoverHealth {
     }
 }
 
-/// Read-only view of one provider's circuit-breaker state, surfaced by the
-/// `self_config` `route_status` diagnostic (see
-/// [`route_observe`](crate::providers::route_observe)).
+/// Read-only view of one provider's circuit-breaker state, surfaced to
+/// recovery and diagnostic callers.
 #[derive(Debug, Clone)]
 pub struct ProviderHealthView {
     /// Provider name (the circuit-breaker key).
@@ -198,8 +217,7 @@ impl ModelCooldown {
     /// Snapshot every `(provider, model)` pair still inside its cooldown
     /// window as `(provider, model, remaining_secs)`, sorted. Expired entries
     /// are omitted — same strict `until > now` reading as
-    /// `is_cooling`. Diagnostic only — feeds the
-    /// `route_status` snapshot.
+    /// `is_cooling`. Diagnostic only — feeds health recovery and inspection.
     pub async fn snapshot(&self) -> Vec<(String, String, u64)> {
         let now = Instant::now();
         let mut out: Vec<(String, String, u64)> = self
@@ -279,7 +297,7 @@ impl ProviderCooldown {
     /// Snapshot every provider still inside its pacing window as
     /// `(provider, remaining_secs)`, name-sorted. Expired entries are omitted
     /// — same strict `until > now` reading as `remaining`.
-    /// Diagnostic only — feeds the `route_status` snapshot.
+    /// Diagnostic only — feeds health recovery and inspection.
     pub async fn snapshot(&self) -> Vec<(String, u64)> {
         let now = Instant::now();
         let mut out: Vec<(String, u64)> = self

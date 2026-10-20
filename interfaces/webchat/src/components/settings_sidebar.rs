@@ -19,8 +19,6 @@ pub enum SettingsTab {
     EmbeddingProviders,
     RerankingProviders,
     GenerationProviders,
-    ModelRoute,
-    Moa,
     Memory,
 
     // Extensions
@@ -36,7 +34,6 @@ pub enum SettingsTab {
     Browser,
     Search,
     Policies,
-    RoutingRules,
     Security,
     Execution,
     Workspaces,
@@ -56,8 +53,6 @@ impl SettingsTab {
             Self::EmbeddingProviders => "/settings/embedding-providers",
             Self::RerankingProviders => "/settings/reranking-providers",
             Self::GenerationProviders => "/settings/generation-providers",
-            Self::ModelRoute => "/settings/model-route",
-            Self::Moa => "/settings/moa",
             Self::Memory => "/settings/memory",
             Self::Mcp => "/settings/mcp",
             Self::Plugins => "/settings/plugins",
@@ -67,7 +62,6 @@ impl SettingsTab {
             Self::Browser => "/settings/browser",
             Self::Search => "/settings/search",
             Self::Policies => "/settings/policies",
-            Self::RoutingRules => "/settings/routing",
             Self::Security => "/settings/security",
             Self::Execution => "/settings/execution",
             Self::Workspaces => "/settings/workspaces",
@@ -85,8 +79,6 @@ impl SettingsTab {
             Self::EmbeddingProviders => t_string!(i18n, settings.tabs.embedding).to_string(),
             Self::RerankingProviders => t_string!(i18n, settings.tabs.reranking).to_string(),
             Self::GenerationProviders => t_string!(i18n, settings.tabs.generation).to_string(),
-            Self::ModelRoute => t_string!(i18n, settings.tabs.model_route).to_string(),
-            Self::Moa => t_string!(i18n, settings.tabs.moa).to_string(),
             Self::Memory => t_string!(i18n, settings.tabs.memory).to_string(),
             Self::Mcp => t_string!(i18n, settings.tabs.mcp).to_string(),
             Self::Plugins => t_string!(i18n, settings.tabs.plugins).to_string(),
@@ -96,7 +88,6 @@ impl SettingsTab {
             Self::Browser => t_string!(i18n, settings.tabs.browser).to_string(),
             Self::Search => t_string!(i18n, settings.tabs.search).to_string(),
             Self::Policies => t_string!(i18n, settings.tabs.policies).to_string(),
-            Self::RoutingRules => t_string!(i18n, settings.tabs.routing_rules).to_string(),
             Self::Security => t_string!(i18n, settings.tabs.security).to_string(),
             Self::Execution => t_string!(i18n, settings.tabs.execution).to_string(),
             Self::Workspaces => t_string!(i18n, settings.tabs.workspaces).to_string(),
@@ -131,12 +122,6 @@ impl SettingsTab {
             Self::GenerationProviders => {
                 r#"<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>"#
             }
-            Self::ModelRoute => {
-                r#"<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="12" r="3"/><path d="M9 6h3a3 3 0 0 1 3 3v0M9 18h3a3 3 0 0 0 3-3v0"/>"#
-            }
-            Self::Moa => {
-                r#"<circle cx="7" cy="7" r="3"/><circle cx="17" cy="7" r="3"/><circle cx="12" cy="18" r="3"/><path d="M9 9l3 6.5M15 9l-3 6.5"/>"#
-            }
             Self::Memory => {
                 r#"<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>"#
             }
@@ -159,9 +144,6 @@ impl SettingsTab {
             Self::Search => r#"<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>"#,
             Self::Policies => {
                 r#"<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>"#
-            }
-            Self::RoutingRules => {
-                r#"<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>"#
             }
             Self::Security => {
                 r#"<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>"#
@@ -211,9 +193,6 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
             SettingsTab::EmbeddingProviders,
             SettingsTab::RerankingProviders,
             SettingsTab::GenerationProviders,
-            SettingsTab::ModelRoute,
-            SettingsTab::Moa,
-            SettingsTab::RoutingRules,
             SettingsTab::Search,
             SettingsTab::Memory,
         ],

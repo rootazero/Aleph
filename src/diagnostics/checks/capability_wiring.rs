@@ -179,10 +179,8 @@ fn severity_for(m: MissingSemantics) -> Severity {
 ///
 /// The comparison is keyed off
 /// `gateway::execution_engine::concurrency_handle::concurrency_limiter_slot().id()`,
-/// not a second literal `"gateway/concurrency-limiter"` — same shape as
-/// `providers::route_handle`'s exemption in `capability::census`. A literal
-/// here would break the exception in production on a rename while a test
-/// that compares the same literal to itself stayed green.
+/// not a second literal `"gateway/concurrency-limiter"` — the capability slot
+/// itself is the source of truth.
 fn describe(slot_id: &str, missing: MissingSemantics) -> String {
     use crate::gateway::execution_engine::concurrency_handle::concurrency_limiter_slot;
 

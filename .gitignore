@@ -162,6 +162,9 @@ test-results/
 playwright-report/
 agentstructure/
 archive/
+!docs/archive/
+!docs/archive/removed-model-routing-moa/
+!docs/archive/removed-model-routing-moa/**
 _bmad/
 
 # Examples — track curated subdirs only

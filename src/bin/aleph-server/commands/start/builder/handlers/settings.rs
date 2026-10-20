@@ -359,11 +359,8 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::generation_config;
     use alephcore::gateway::handlers::generation_providers;
     use alephcore::gateway::handlers::memory_config;
-    use alephcore::gateway::handlers::moa;
     use alephcore::gateway::handlers::providers;
     use alephcore::gateway::handlers::rerank_config;
-    use alephcore::gateway::handlers::route_config;
-    use alephcore::gateway::handlers::routing_rules;
     use alephcore::gateway::handlers::search_config;
     use alephcore::gateway::handlers::security_config;
     use alephcore::gateway::handlers::voice;
@@ -560,79 +557,6 @@ pub(in crate::commands::start) fn register_config_handlers(
         providers::handle_models_refresh,
         config,
         shared_token_mgr
-    );
-
-    // MoA presets (visual config; shares MoaPresetStore with the `moa` tool)
-    register_handler!(server, "moa.listPresets", moa::handle_list_presets, config);
-    register_handler!(
-        server,
-        "moa.savePreset",
-        moa::handle_save_preset,
-        config,
-        config_patcher
-    );
-    register_handler!(
-        server,
-        "moa.deletePreset",
-        moa::handle_delete_preset,
-        config,
-        config_patcher
-    );
-    register_handler!(
-        server,
-        "moa.setDefault",
-        moa::handle_set_default,
-        config,
-        config_patcher
-    );
-    register_handler!(
-        server,
-        "moa.setSaveTraces",
-        moa::handle_set_save_traces,
-        config,
-        config_patcher
-    );
-
-    // Routing rules
-    register_handler!(
-        server,
-        "routing_rules.list",
-        routing_rules::handle_list,
-        config
-    );
-    register_handler!(
-        server,
-        "routing_rules.get",
-        routing_rules::handle_get,
-        config
-    );
-    register_handler!(
-        server,
-        "routing_rules.create",
-        routing_rules::handle_create,
-        config,
-        event_bus
-    );
-    register_handler!(
-        server,
-        "routing_rules.update",
-        routing_rules::handle_update,
-        config,
-        event_bus
-    );
-    register_handler!(
-        server,
-        "routing_rules.delete",
-        routing_rules::handle_delete,
-        config,
-        event_bus
-    );
-    register_handler!(
-        server,
-        "routing_rules.move",
-        routing_rules::handle_move,
-        config,
-        event_bus
     );
 
     // Memory config
@@ -989,16 +913,6 @@ pub(in crate::commands::start) fn register_config_handlers(
         event_bus
     );
 
-    // Local/cloud route mode (hot-applies to the live failover chain)
-    register_handler!(server, "route_config.get", route_config::handle_get, config);
-    register_handler!(
-        server,
-        "route_config.update",
-        route_config::handle_update,
-        config,
-        event_bus
-    );
-
     // ACP harness config (only if ACP manager is available)
     if let Some(ref acp) = acp_manager {
         use alephcore::gateway::handlers::acp_config;
@@ -1061,7 +975,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     }
 
     // Hand the patcher back to the caller so it can late-bind `self_config`
-    // and `moa` tool instances (see `BuiltinToolRegistry::set_config_patcher`).
+    // (see `BuiltinToolRegistry::set_config_patcher`).
     config_patcher
 }
 

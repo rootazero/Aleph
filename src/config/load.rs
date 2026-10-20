@@ -534,6 +534,25 @@ mod dead_key_tests {
         assert!(dead_keys_of("[agent.subagents]\nallow_agents = [\"x\"]\n").is_empty());
     }
 
+    #[test]
+    fn retired_model_routing_tables_boot_and_are_not_reported_dead() {
+        for section in ["moa", "route", "routing"] {
+            let dead = dead_keys_of(&format!(
+                "[{section}]\nstrategy = \"semantic\"\nprovider = \"legacy\"\n"
+            ));
+            assert!(
+                dead.is_empty(),
+                "[{section}] must be retired, not dead: {dead:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn retired_model_routing_tables_do_not_affect_unrelated_config() {
+        let dead = dead_keys_of("[moa]\nstrategy = \"semantic\"\n\n[browser]\nheadless = true\n");
+        assert_eq!(dead, vec!["browser".to_string()]);
+    }
+
     /// The compat stance is the point: naming a dead key must never turn an
     /// old config into a daemon that will not start.
     #[test]

@@ -8,6 +8,10 @@ Orchestrator → AgentHarness pipeline introduced in Phase 5/6. The Spawn mode
 `src/agent_loop/` directory has been deleted. All agent execution now routes
 through Orchestrator → AgentHarness.
 
+## Current runtime status
+
+The main LLM composes generic subagents. Fixed MoA fan-out and semantic model routing were removed; explicit provider/model/session/`BrainRef` binding remains, with failure-only provider fallback. Historical typed MoA traces decode for compatibility. Old `[moa]`, `[route]`/`[routing]`, `model_hint`, and `provider_hint` inputs are tolerated with diagnostics and ignored by the live agent system.
+
 ## Architecture Overview
 
 ```
@@ -40,8 +44,11 @@ through Orchestrator → AgentHarness.
 ## Mode 1: Spawn (Sub-Agent Dispatch)
 
 **Tool**: the single `subagent` tool — actions `run` (default; `batch_tasks`
-for parallel fan-out, MoA mode for mixture-of-agents), `check_status`, `wait`,
-`cancel`, `list`, `send_message`, `read_inbox`.
+for parallel ordinary subagents), `check_status`, `wait`, `cancel`, `list`,
+`send_message`, `read_inbox`.
+
+The main LLM composes ordinary, focused subagents. A batch is parallel execution
+of those subagents; it is not a model mixture or a semantic routing policy.
 
 The main agent spawns an ephemeral sub-agent to handle a focused sub-task. The
 sub-agent has its own tool registry (excluding subagent tools to prevent
@@ -128,11 +135,26 @@ Two sibling builders are deliberately **not** called for children, and
 `with_cache_carryover` (a 16-slot LRU that one-shot child sessions would evict the parent
 out of) and `with_summary_reuse` (keyed on a session that ends with the child).
 
-Per the P1 zero-override decision, subagents do not currently support per-agent overrides for these fields. `AgentDef` may be extended with `Option<T>` overrides in P4 if needed, with full backward compatibility.
+Per-agent provider and model overrides are not inferred from `AgentDef` metadata.
+The live binding is explicit at the turn/session boundary: a request may carry a
+per-turn model directive, a session may carry the `select_model` pin, and the
+run's `BrainRef` remains an explicit binding source. A spawned ordinary subagent
+receives its provider/model/session/`BrainRef` binding from that request context.
+`model_hint` and `provider_hint` are legacy input fields: startup tolerates them
+and emits a diagnostic, but they do not select a live provider or model.
 
-The shared assembly path lives in `src/orchestrator/deps_builder.rs` (`build_fallback_llm`, `build_stability_triple`); both the main runner (`aleph-server` boot) and the subagent spawner consume the same builders so wiring stays consistent.
+Provider fallback is failure-only. The configured provider/model ladder is
+consulted after a classified failure; retry budget, circuit state, and cooldown
+control whether another attempt is eligible. It is not a semantic, cost, or tier
+router and it does not fan out a turn to several providers.
 
-### Provider / model routing at spawn (round-7, 2026-07-25)
+### Historical / Superseded: provider and model routing at spawn (round-7, 2026-07-25)
+
+> The following record describes the retired `resolve_spawn_route` behavior.
+> Do not copy its `provider_hint`, qualified `proposer_models`, vendor matching,
+> or fan-out examples into current configuration. Use the explicit binding and
+> failure-only fallback rules above.
+
 
 `model` (and each `proposer_models` / `batch_tasks[].model` entry) is stamped
 onto the child's requests verbatim by `ModelOverrideProvider`. Which *provider*
@@ -284,6 +306,8 @@ as structured fields on the log record.
 
 #### User-Authored Markdown Schema
 
+> Migration-only example: `model_hint` is retained below for compatibility and historical documentation; explicit provider/model binding is the current contract.
+
 User and project agents declare configuration in YAML frontmatter:
 
 ```yaml
@@ -291,7 +315,7 @@ User and project agents declare configuration in YAML frontmatter:
 id: my-research-agent           # required, must match filename stem
 description: Researches topics  # required
 when_to_use: When ...           # required
-model_hint: claude-sonnet-4-6   # optional
+model_hint: claude-sonnet-4-6   # deprecated and ignored; explicit bindings only
 allowed_tools: [glob, grep]     # optional
 allowed_tool_sets: [INVESTIGATION]  # optional, see "Named Tool Sets"
 denied_tools: []                # optional
@@ -751,7 +775,12 @@ notifications cannot squeeze the conversation out of the window. Panels talking
 to an older core default `kind` to `"agent"` and fall back to the reserved-handle
 check for the user's own rows. (teams: rewire the group-chat Panel surface (§4.5))
 
-## Mode 4: A2A (Remote Agent Delegation)
+## Mode 4: A2A (Remote Agent Delegation) — historical reference
+
+> This section records the former outbound A2A surface. The semantic matcher and
+> its UI routes are removed from the current runtime. Treat remote-agent selection
+> as explicit binding when that integration is restored; this section does not
+> describe a live semantic routing capability.
 
 **Tools**: `a2a_delegate`, `a2a_agents`
 
@@ -770,13 +799,10 @@ Mode 4 wires the **outbound** half: Aleph as an A2A *client*. (Previously the
 outbound stack — `A2AClient`, `SmartRouter`, `A2ASubAgent` — was constructed at
 startup and immediately dropped; it was unreachable until these tools.)
 
-- **`a2a_agents`** — manage the set of known remote agents: `list` them,
-  `add` one by URL (its Agent Card is fetched so smart routing learns its
-  skills), or `remove` one. Remotes can also be pre-declared in the `[a2a]`
-  config section.
-- **`a2a_delegate`** — hand a self-contained task to a remote agent. The
-  `SmartRouter` (exact name → exact skill → LLM-semantic) picks the best
-  agent, or the caller pins one explicitly via the `agent` argument.
+- **`a2a_agents`** — historical management surface for known remote agents.
+- **`a2a_delegate`** — historical remote delegation surface. The former
+  `SmartRouter` exact-name/exact-skill/LLM-semantic selection is retired; a
+  caller must provide an explicit remote agent binding in any replacement.
 
 **Runtime**: `a2a_delegate` → `A2ASubAgent::execute_delegation` → `SmartRouter`
 routing → `A2AClientPool` (pooled per-agent HTTP clients) → remote `/a2a`
@@ -804,10 +830,14 @@ A one-shot background task at server startup fetches each agent's real Agent
 Card (skills, description, version) and replaces the placeholder, so smart
 routing and `a2a_agents list` see real skill data.
 
-## MoA (Mixture of Agents)
+### Historical / Superseded: MoA (Mixture of Agents)
 
-Aleph has two independent MoA surfaces. They are complementary, not
-overlapping — see the distinction at the end.
+> This entire section is retained for trace decoding and migration archaeology.
+> Fixed MoA fan-out, `[moa]` configuration, advisor/aggregator provider facades,
+> MoA UI routes, and semantic model-routing precedence are retired. The examples
+> below are historical records, not supported commands or configuration. Current
+> behavior is ordinary subagents with explicit bindings and failure-only fallback.
+
 
 ### Continuous Advisory (this port)
 

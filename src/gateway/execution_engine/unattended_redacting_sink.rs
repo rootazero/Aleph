@@ -28,29 +28,34 @@ use crate::harness::TraceSink;
 /// *seconds earlier* — so an unattended run put the credential on the wire
 /// before the masked copy arrived, and the two events in one trace disagreed
 /// about the same string. `VerifierVeto.reason` (the scratchpad pending-item
-/// list) and `MoaAdvisor.text` (advisor model output) were unmasked for the
-/// same reason.
+/// list) was unmasked for
+/// the same reason.
 ///
 /// So there is no whitelist any more and no judgement about which field is
-/// "free text": **every** text leaf of **every** variant is masked, and every
-/// arm destructures its variant *without* `..`, so both a new variant and a
-/// new field on an existing variant are compile errors here rather than a
-/// silent hole. Identifier-shaped fields (`agent_id`, advisor `label`, cache
-/// `scope`) cost one regex pass that will not match — cheaper than a rule that
-/// needs a person to re-classify each field correctly.
+/// "free text": **every** text leaf of **every** live variant is masked, and
+/// every known live arm destructures its variant *without* `..`. Historical
+/// variants and future additions take the fail-closed fallback below instead
+/// of being forwarded without a redaction policy. Identifier-shaped fields
+/// (`agent_id`, cache `scope`) cost one regex pass that will not match — cheaper
+/// than a rule that needs a person to re-classify each field correctly.
 ///
 /// Every event reaching this function is on its way to at least one of
 /// persistence (`task_traces`), the channel progress push, or the WS
 /// `agent_trace` mirror, so "does this variant reach a user surface" is not a
 /// question this function asks.
-pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent) -> bool {
+/// Mask every text leaf of `event` in place; `Some(true)` when anything
+/// changed, `Some(false)` when the clean event can be forwarded unchanged, and
+/// `None` when the event has no live redaction policy and must be dropped.
+pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent) -> Option<bool> {
     match event {
         LoopTraceEvent::TextEmitted {
             iteration: _,
             stream: _,
             text,
-        } => mask_in_place(masker, text),
-        LoopTraceEvent::ReasoningEmitted { iteration: _, text } => mask_in_place(masker, text),
+        } => Some(mask_in_place(masker, text)),
+        LoopTraceEvent::ReasoningEmitted { iteration: _, text } => {
+            Some(mask_in_place(masker, text))
+        }
         LoopTraceEvent::ToolCallStarted {
             iteration: _,
             call:
@@ -63,7 +68,7 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
             let mut changed = mask_json_strings(masker, input);
             changed |= mask_in_place(masker, tool_id);
             changed |= mask_in_place(masker, tool_name);
-            changed
+            Some(changed)
         }
         LoopTraceEvent::ToolCallCompleted {
             iteration: _,
@@ -93,18 +98,18 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
                     changed |= mask_in_place(masker, error);
                 }
             }
-            changed
+            Some(changed)
         }
-        LoopTraceEvent::TurnStarted { iteration: _ } => false,
+        LoopTraceEvent::TurnStarted { iteration: _ } => Some(false),
         LoopTraceEvent::TurnStateEntered {
             iteration: _,
             state: _,
-        } => false,
+        } => Some(false),
         LoopTraceEvent::TurnCompleted {
             iteration: _,
             outcome: _,
             metrics: _,
-        } => false,
+        } => Some(false),
         LoopTraceEvent::SessionCompleted {
             outcome: _,
             iterations: _,
@@ -116,11 +121,15 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
             duration_ms: _,
             token_breakdown: _,
             tool_timeline: _,
-        } => final_text
-            .as_mut()
-            .is_some_and(|t| mask_in_place(masker, t)),
-        LoopTraceEvent::WorktreeCreated { path } => mask_path_in_place(masker, path),
-        LoopTraceEvent::WorktreeCleanedUp { path, leaked: _ } => mask_path_in_place(masker, path),
+        } => Some(
+            final_text
+                .as_mut()
+                .is_some_and(|t| mask_in_place(masker, t)),
+        ),
+        LoopTraceEvent::WorktreeCreated { path } => Some(mask_path_in_place(masker, path)),
+        LoopTraceEvent::WorktreeCleanedUp { path, leaked: _ } => {
+            Some(mask_path_in_place(masker, path))
+        }
         LoopTraceEvent::McpScopeAttached {
             agent_id,
             references,
@@ -130,12 +139,12 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
             for r in references.iter_mut() {
                 changed |= mask_in_place(masker, r);
             }
-            changed
+            Some(changed)
         }
         LoopTraceEvent::McpScopeCleaned {
             agent_id,
             leaked: _,
-        } => mask_in_place(masker, agent_id),
+        } => Some(mask_in_place(masker, agent_id)),
         LoopTraceEvent::ProviderUsage {
             agent_id,
             input_tokens: _,
@@ -143,53 +152,26 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
             cache_read_tokens: _,
             cache_creation_tokens: _,
             thinking_tokens: _,
-        } => mask_in_place(masker, agent_id),
+        } => Some(mask_in_place(masker, agent_id)),
         LoopTraceEvent::ReactiveCompactionAttempted {
             token_gap: _,
             succeeded: _,
-        } => false,
+        } => Some(false),
         LoopTraceEvent::VerifierVeto {
             iteration: _,
             reason,
-        } => mask_in_place(masker, reason),
-        LoopTraceEvent::MoaAdvisor {
-            index: _,
-            count: _,
-            label,
-            text,
-            error,
-        } => {
-            let mut changed = mask_in_place(masker, label);
-            changed |= mask_in_place(masker, text);
-            if let Some(e) = error.as_mut() {
-                changed |= mask_in_place(masker, e);
-            }
-            changed
-        }
-        LoopTraceEvent::MoaAggregating {
-            aggregator,
-            advisor_count: _,
-            cached: _,
-        } => mask_in_place(masker, aggregator),
-        LoopTraceEvent::MoaAdvisorSpend {
-            advisor_count: _,
-            billed_count: _,
-            input_tokens: _,
-            output_tokens: _,
-            cost_usd: _,
-        } => false,
-        LoopTraceEvent::MoaTurnTrace { preset, payload } => {
-            let mut changed = mask_in_place(masker, preset);
-            changed |= mask_json_strings(masker, payload);
-            changed
-        }
+        } => Some(mask_in_place(masker, reason)),
         LoopTraceEvent::CacheHealthDegraded {
             scope,
             streak: _,
             reads: _,
             writes: _,
             prefix_changed: _,
-        } => mask_in_place(masker, scope),
+        } => Some(mask_in_place(masker, scope)),
+        // Events without a live redaction contract are dropped. This keeps
+        // historical trace variants and future enum additions out of the live
+        // unattended sink instead of treating an unmasked no-op as safe.
+        _ => None,
     }
 }
 
@@ -240,12 +222,10 @@ impl UnattendedRedactingSink {
 impl TraceSink for UnattendedRedactingSink {
     fn on_trace(&self, event: &LoopTraceEvent) {
         let mut ev = event.clone();
-        if mask_trace_event(&self.masker, &mut ev) {
-            self.inner.on_trace(&ev);
-        } else {
-            // Nothing matched: forward the original so the clean path is
-            // byte-identical to an unwrapped sink.
-            self.inner.on_trace(event);
+        match mask_trace_event(&self.masker, &mut ev) {
+            Some(true) => self.inner.on_trace(&ev),
+            Some(false) => self.inner.on_trace(event),
+            None => {}
         }
     }
 
@@ -431,13 +411,12 @@ mod tests {
     /// bytes are a secret — not a pattern this test invented.
     const KEY: &str = "AKIAIOSFODNN7EXAMPLE";
 
-    /// One instance of EVERY `LoopTraceEvent` variant, with [`KEY`] planted in
-    /// every text leaf it has.
+    /// One instance of every live `LoopTraceEvent` variant, with [`KEY`]
+    /// planted in every text leaf it has.
     ///
-    /// Completeness is not trusted to this list — it is checked against the
-    /// enum's own source by `every_trace_variant_has_a_fixture`, so a new
-    /// variant fails by name here instead of silently escaping the masker.
-    fn every_variant_with_a_planted_secret() -> Vec<LoopTraceEvent> {
+    /// Historical-only variants are intentionally absent: they have no live
+    /// redaction policy and are rejected by `mask_trace_event`.
+    fn every_live_variant_with_a_planted_secret() -> Vec<LoopTraceEvent> {
         use crate::harness::trace::{LoopTraceState, LoopTraceTurnMetrics, LoopTraceTurnOutcome};
         vec![
             LoopTraceEvent::TextEmitted {
@@ -529,29 +508,6 @@ mod tests {
                 iteration: 1,
                 reason: format!("- [ ] rotate {KEY}"),
             },
-            LoopTraceEvent::MoaAdvisor {
-                index: 0,
-                count: 1,
-                label: format!("p:{KEY}"),
-                text: format!("advice mentioning {KEY}"),
-                error: Some(format!("boom {KEY}")),
-            },
-            LoopTraceEvent::MoaAggregating {
-                aggregator: format!("agg-{KEY}"),
-                advisor_count: 1,
-                cached: false,
-            },
-            LoopTraceEvent::MoaAdvisorSpend {
-                advisor_count: 1,
-                billed_count: 1,
-                input_tokens: 1,
-                output_tokens: 1,
-                cost_usd: None,
-            },
-            LoopTraceEvent::MoaTurnTrace {
-                preset: format!("preset-{KEY}"),
-                payload: serde_json::json!({ "advice": format!("uses {KEY}") }),
-            },
             LoopTraceEvent::CacheHealthDegraded {
                 scope: format!("scope-{KEY}"),
                 streak: 1,
@@ -624,49 +580,49 @@ mod tests {
         names
     }
 
-    /// The fixture above must name every variant the enum declares.
+    /// The live fixture set is intentionally smaller than the enum because
+    /// historical-only variants are rejected before they reach the inner sink.
     ///
     /// Self-guard first: if the source walk stops finding variants, its green
     /// would mean nothing.
     #[test]
-    fn every_trace_variant_has_a_fixture() {
+    fn every_live_trace_variant_has_a_fixture() {
         let declared = variant_names_from_source();
-        assert!(
-            declared.len() >= 19,
-            "the enum-body walk found only {declared:?} — it stopped matching \
-             `harness/trace.rs`, so this guard would pass vacuously"
+        assert_eq!(
+            declared.len(),
+            19,
+            "the enum-body walk found {declared:?} — it stopped matching `harness/trace.rs`"
         );
 
-        let covered: std::collections::BTreeSet<String> = every_variant_with_a_planted_secret()
-            .iter()
-            .map(|e| {
-                serde_json::to_value(e).expect("trace event serializes")["type"]
-                    .as_str()
-                    .expect("serde tag")
-                    .to_string()
-            })
-            .collect();
-
-        let missing: Vec<&String> = declared
-            .iter()
-            .filter(|v| !covered.contains(&to_snake(v)))
-            .collect();
+        let covered: std::collections::BTreeSet<String> =
+            every_live_variant_with_a_planted_secret()
+                .iter()
+                .map(|e| {
+                    serde_json::to_value(e).expect("trace event serializes")["type"]
+                        .as_str()
+                        .expect("serde tag")
+                        .to_string()
+                })
+                .collect();
+        assert_eq!(covered.len(), 15, "the live redaction fixture set changed");
         assert!(
-            missing.is_empty(),
-            "these LoopTraceEvent variants have no redaction fixture, so nothing \
-             proves the unattended sink masks them: {missing:?}"
+            covered
+                .iter()
+                .all(|name| declared.iter().any(|declared| to_snake(declared) == *name)),
+            "a live redaction fixture names an undeclared trace variant: {covered:?}"
         );
     }
 
-    /// No text leaf of any trace event survives the unattended sink unmasked.
+    /// No text leaf of any live trace event survives the unattended sink
+    /// unmasked.
     ///
     /// This is the whole contract. It replaced a three-variant whitelist whose
-    /// `other => forward` arm shipped `ToolCallStarted.call.input` — the same
-    /// bytes the masked `ToolCallCompleted` carries, emitted seconds earlier —
-    /// verbatim to the WS `agent_trace` mirror and the `task_traces` table.
+    /// fallback shipped `ToolCallStarted.call.input` — the same bytes the
+    /// masked `ToolCallCompleted` carries, emitted seconds earlier — verbatim
+    /// to the WS `agent_trace` mirror and the `task_traces` table.
     #[test]
     fn no_trace_event_reaches_the_inner_sink_with_an_unmasked_secret() {
-        for event in every_variant_with_a_planted_secret() {
+        for event in every_live_variant_with_a_planted_secret() {
             let cap = Arc::new(CaptureSink::default());
             let sink = UnattendedRedactingSink::new(cap.clone());
             sink.on_trace(&event);

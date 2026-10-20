@@ -651,7 +651,7 @@ mod tests {
         // "why wasn't that saved" — was true for the hot zone and silently
         // empty for the correction rail. Both outcomes must be legible, and
         // under an `action` that keeps the two rails distinguishable.
-        let (_raw_dir, tool, backend, _decision_log) = make_tool().await;
+        let (_raw_dir, tool, _backend, _decision_log) = make_tool().await;
         tool.call(args("stop using JSDoc", Severity::Med))
             .await
             .unwrap();

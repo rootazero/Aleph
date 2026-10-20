@@ -1,16 +1,18 @@
-//! A plugin component's declared `model:` — a command's or an agent's — as
-//! the model it pins: ONE policy for both faces.
+//! A plugin component's declared `model:` metadata — for a command or an
+//! agent — validated under one policy.
 //!
 //! The command face (`gateway::execution_engine::slash_command_body::
-//! command_model_pin`) turns the answer into this turn's model override; the
-//! agent face (`extension::plugin_agent_to_def`) into the sub-agent's
-//! `model_hint`, which the spawner stamps on every request the child makes.
-//! Before this module the agent face passed `model:` through as written, and
-//! Claude Code's `model: inherit` — what most upstream agents declare — asked
-//! the provider for a model called "inherit".
+//! command_model_pin`) turns a valid declaration into this turn's model
+//! override. The agent face (`extension::plugin_agent_to_def`) validates the
+//! declaration for compatibility and diagnostics while retaining the plugin
+//! metadata; it does not copy the value into `AgentDef` or create an implicit
+//! child provider/model route. Before this module the agent face passed
+//! `model:` through as written, and Claude Code's `model: inherit` — what most
+//! upstream agents declare — asked the provider for a model called "inherit".
 
-/// What `declared` pins. `Ok(None)` pins nothing, `Ok(Some(id))` pins `id` as
-/// written, `Err(why)` names a model the provider would fail. `kind`
+/// What `declared_model_pin` validates and resolves. `Ok(None)` means the
+/// declaration requests no model pin, `Ok(Some(id))` resolves an explicit model
+/// id, and `Err(why)` names a model the provider would fail. `kind`
 /// (`command` / `agent`) only words the log line.
 ///
 /// - `inherit` and a blank value pin nothing.
@@ -25,8 +27,9 @@
 ///   catalog does not know. One no provider serves then fails at the
 ///   provider, or a fallback walk serves on another model and says so.
 ///
-/// What an `Err` costs is the caller's: a command's turn is refused, an
-/// agent loads with no hint.
+/// What an `Err` costs is the caller's: a command's turn is refused, while an
+/// agent registration remains available with a warning and its declared model
+/// stays metadata rather than an implicit route.
 pub(crate) fn declared_model_pin(
     kind: &str,
     declared: Option<&str>,

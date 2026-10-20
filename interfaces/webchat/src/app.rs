@@ -21,9 +21,9 @@ use crate::views::runtimes::RuntimesView;
 use crate::views::settings::{
     AcpHarnessesView, AppearanceView, BehaviorView, BrowserView, ChannelPlatformPage,
     ChannelsOverview, EmbeddingProvidersView, ExecutionView, GeneralView, GenerationProvidersView,
-    McpView, MemoryView, MoaView, NetworkView, PluginsView, PoliciesView, ProvidersView,
-    RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView, SessionsView,
-    Settings, SkillsView, WorkspacesView,
+    McpView, MemoryView, NetworkView, PluginsView, PoliciesView, ProvidersView,
+    RerankingProvidersView, SearchView, SecurityView, SessionsView, Settings, SkillsView,
+    WorkspacesView,
 };
 use crate::views::subagent_tree::SubagentTreeDeepLink;
 use crate::views::tasks::TasksView;
@@ -50,7 +50,6 @@ use crate::platform::phone::more::PhoneMore;
 use crate::platform::phone::settings::appearance::PhoneAppearance;
 use crate::platform::phone::settings::connection::PhoneConnection;
 use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
-use crate::platform::phone::settings::model_route::PhoneModelRoute;
 use crate::platform::phone::settings::providers::PhoneProviders;
 use crate::platform::phone::settings::{
     screen_for_path as phone_settings_screen, title_for_path as phone_settings_title, NativeScreen,
@@ -780,9 +779,6 @@ fn SettingsRouter() -> impl IntoView {
             PhoneSettingsScreen::Native(NativeScreen::Embeddings) => {
                 view! { <PhoneEmbeddings /> }.into_any()
             }
-            PhoneSettingsScreen::Native(NativeScreen::ModelRoute) => {
-                view! { <PhoneModelRoute /> }.into_any()
-            }
             PhoneSettingsScreen::Native(NativeScreen::Providers) => {
                 view! { <PhoneProviders /> }.into_any()
             }
@@ -817,8 +813,6 @@ fn desktop_settings_body(path: &str) -> AnyView {
         "/settings/embedding-providers" => view! { <EmbeddingProvidersView /> }.into_any(),
         "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
         "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
-        "/settings/moa" => view! { <MoaView /> }.into_any(),
-        "/settings/model-route" => view! { <RouteView /> }.into_any(),
         "/settings/memory" => view! { <MemoryView /> }.into_any(),
         "/settings/sessions" => view! { <SessionsView /> }.into_any(),
 
@@ -827,7 +821,6 @@ fn desktop_settings_body(path: &str) -> AnyView {
         "/settings/network" => view! { <NetworkView /> }.into_any(),
 
         // Extensions
-        "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
         "/settings/mcp" => view! { <McpView /> }.into_any(),
         "/settings/plugins" => view! { <PluginsView /> }.into_any(),
         "/settings/skills" => view! { <SkillsView /> }.into_any(),

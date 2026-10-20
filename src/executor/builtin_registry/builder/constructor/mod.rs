@@ -193,17 +193,6 @@ impl BuiltinToolRegistry {
             tool
         };
 
-        // Moa-manage tool (LLM-facing MoA session activation + preset CRUD).
-        // Reuses the already-injected config handle — same construction pattern
-        // as self_config (the patcher arrives later via `set_config_patcher`).
-        let moa_manage_tool = {
-            let mut tool = crate::builtin_tools::moa_manage::MoaManageTool::new();
-            if let Some(ref cfg) = config.config {
-                tool = tool.with_config(Arc::clone(cfg));
-            }
-            tool
-        };
-
         // List-models tool (LLM-facing model discovery: capability + cost).
         // Reuses the already-injected config + vault handles — no new wiring.
         let list_models_tool = {
@@ -1236,7 +1225,6 @@ impl BuiltinToolRegistry {
             self_manage_tool,
             hooks_manage_tool,
             self_config_tool,
-            moa_manage_tool,
             list_models_tool,
             runtime_manage_tool,
             doctor_tool,

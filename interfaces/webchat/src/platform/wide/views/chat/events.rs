@@ -334,10 +334,9 @@ pub(crate) fn apply_trace_event(
                 ),
             );
         }
-        // MoA (Mixture-of-Agents) advisor fan-out — one event per advisor per
-        // consultation. Rendered as a reasoning block so it appears inline
-        // with tool_summary/verifier_veto narration (same sink, live +
-        // replay both covered).
+        // Historical replay compatibility only: the removed runtime no longer
+        // emits any MoA events, and these are not live protocol behavior.
+        // Keep all four branches so historical traces still render by design.
         "moa_advisor" => {
             let index = trace_event
                 .get("index")
@@ -379,7 +378,8 @@ pub(crate) fn apply_trace_event(
                 );
             }
         }
-        // Fan-out complete; the aggregator (acting model) is being called.
+        // Historical replay compatibility only; retained for rendering old
+        // traces. The removed runtime no longer emits this event.
         "moa_aggregating" => {
             let aggregator = trace_event
                 .get("aggregator")
@@ -412,8 +412,8 @@ pub(crate) fn apply_trace_event(
                 );
             }
         }
-        // Summed advisor spend for one fan-out (priced separately from the
-        // aggregator's own usage — see LoopTraceEvent::MoaAdvisorSpend).
+        // Historical replay compatibility only; retained for rendering old
+        // traces. The removed runtime no longer emits this event.
         "moa_advisor_spend" => {
             let input = trace_event
                 .get("input_tokens")
@@ -444,9 +444,8 @@ pub(crate) fn apply_trace_event(
                 ),
             );
         }
-        // Heavy audit record — arrives only via trace.by_runs REPLAY (never
-        // wire-whitelisted). Renders the full "why did MoA advise this" view
-        // into the reasoning panel (round-2 W3b).
+        // Historical replay compatibility only; retained for rendering old
+        // traces. The removed runtime no longer emits this event.
         "moa_turn_trace" => {
             let preset = trace_event
                 .get("preset")

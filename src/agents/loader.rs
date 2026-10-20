@@ -6,7 +6,11 @@
 //!   - Builtin tier: `crate::agents::registry::builtin_agents()` (lowest precedence)
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
+
+use serde::de::{self, Visitor};
+use serde::Deserialize;
 
 use crate::agents::types::{AgentDef, AgentMode, AgentSource};
 
@@ -56,15 +60,69 @@ pub struct ShadowEvent {
     pub shadowed_source: AgentSource,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+enum LegacyHintPresence {
+    #[default]
+    Absent,
+    Null,
+    Value(String),
+}
+
+impl LegacyHintPresence {
+    fn is_present(&self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for LegacyHintPresence {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct LegacyHintVisitor;
+
+        impl<'de> Visitor<'de> for LegacyHintVisitor {
+            type Value = LegacyHintPresence;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a legacy hint string or null")
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(LegacyHintPresence::Null)
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(LegacyHintPresence::Null)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                String::deserialize(deserializer).map(LegacyHintPresence::Value)
+            }
+        }
+
+        deserializer.deserialize_option(LegacyHintVisitor)
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct UserFrontmatter {
     id: String,
     description: String,
     when_to_use: String,
-    #[serde(default)]
-    model_hint: Option<String>,
-    #[serde(default)]
-    provider_hint: Option<String>,
+    #[serde(default, rename = "model_hint")]
+    _legacy_model_hint: LegacyHintPresence,
+    #[serde(default, rename = "provider_hint")]
+    _legacy_provider_hint: LegacyHintPresence,
     /// `None` = key absent in frontmatter (loader keeps the constructor
     /// default). `Some(vec![])` = author wrote `allowed_tools: []` (explicit
     /// deny-all, must NOT be silently promoted to the wildcard default —
@@ -123,6 +181,21 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
             source: e,
         })?;
 
+    if fm._legacy_model_hint.is_present() {
+        tracing::warn!(
+            agent_id = %fm.id,
+            key = "model_hint",
+            "deprecated agent frontmatter key is ignored; use an explicit model/session/BrainRef binding"
+        );
+    }
+    if fm._legacy_provider_hint.is_present() {
+        tracing::warn!(
+            agent_id = %fm.id,
+            key = "provider_hint",
+            "deprecated agent frontmatter key is ignored; use an explicit provider/model/session/BrainRef binding"
+        );
+    }
+
     if fm.mode.is_some() {
         return Err(LoaderError::ForbiddenSystemField {
             path: path.to_path_buf(),
@@ -173,12 +246,6 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
     let mut def = AgentDef::new(&fm.id, AgentMode::SubAgent)
         .with_description(&fm.description)
         .with_when_to_use(&fm.when_to_use);
-    if let Some(m) = fm.model_hint {
-        def = def.with_model_hint(m);
-    }
-    if let Some(p) = fm.provider_hint {
-        def = def.with_provider_hint(p);
-    }
     // Apply the flat list iff the key was present. `Some(empty)` keeps the
     // empty list (explicit deny-all); `None` (absent) leaves the constructor
     // default `["*"]` in place. The old `!is_empty()` guard conflated the two
@@ -351,19 +418,63 @@ mod tests {
     }
 
     #[test]
-    fn parses_provider_hint_from_frontmatter() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = write_tmp(
-            &tmp,
-            "pinned.md",
-            "---\nid: pinned\ndescription: Pinned agent\nwhen_to_use: For tests\nprovider_hint: openai\n---\nbody\n",
+    fn legacy_hint_presence_tracks_absent_null_and_value() {
+        let absent: UserFrontmatter =
+            crate::yaml::from_str("id: agent\ndescription: d\nwhen_to_use: w\n").unwrap();
+        assert_eq!(absent._legacy_model_hint, LegacyHintPresence::Absent);
+        assert_eq!(absent._legacy_provider_hint, LegacyHintPresence::Absent);
+
+        let null: UserFrontmatter = crate::yaml::from_str(
+            "id: agent\ndescription: d\nwhen_to_use: w\nmodel_hint: null\nprovider_hint: null\n",
+        )
+        .unwrap();
+        assert_eq!(null._legacy_model_hint, LegacyHintPresence::Null);
+        assert_eq!(null._legacy_provider_hint, LegacyHintPresence::Null);
+
+        let value: UserFrontmatter = crate::yaml::from_str(
+            "id: agent\ndescription: d\nwhen_to_use: w\nmodel_hint: fast\nprovider_hint: openai\n",
+        )
+        .unwrap();
+        assert_eq!(
+            value._legacy_model_hint,
+            LegacyHintPresence::Value("fast".into())
         );
-        let def = parse_file(&path, AgentSource::User).unwrap();
-        assert_eq!(def.provider_hint.as_deref(), Some("openai"));
+        assert_eq!(
+            value._legacy_provider_hint,
+            LegacyHintPresence::Value("openai".into())
+        );
     }
 
     #[test]
-    fn provider_hint_absent_is_none() {
+    fn legacy_routing_fields_are_tolerated_and_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tmp(
+            &tmp,
+            "legacy.md",
+            "---\nid: legacy\ndescription: Legacy agent\nwhen_to_use: For tests\nmodel_hint: fast\nprovider_hint: openai\n---\nbody\n",
+        );
+        let def = parse_file(&path, AgentSource::User).unwrap();
+        let json = serde_json::to_string(&def).unwrap();
+        assert!(!json.contains("model_hint"));
+        assert!(!json.contains("provider_hint"));
+    }
+
+    #[test]
+    fn explicit_null_legacy_routing_fields_are_tolerated_and_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tmp(
+            &tmp,
+            "legacy-null.md",
+            "---\nid: legacy-null\ndescription: Legacy agent\nwhen_to_use: For tests\nmodel_hint: null\nprovider_hint: null\n---\nbody\n",
+        );
+        let def = parse_file(&path, AgentSource::User).unwrap();
+        let json = serde_json::to_string(&def).unwrap();
+        assert!(!json.contains("model_hint"));
+        assert!(!json.contains("provider_hint"));
+    }
+
+    #[test]
+    fn clean_frontmatter_still_loads_without_routing_metadata() {
         let tmp = tempfile::tempdir().unwrap();
         let path = write_tmp(
             &tmp,
@@ -371,7 +482,10 @@ mod tests {
             "---\nid: plain\ndescription: Plain agent\nwhen_to_use: For tests\n---\nbody\n",
         );
         let def = parse_file(&path, AgentSource::User).unwrap();
-        assert!(def.provider_hint.is_none());
+        let json = serde_json::to_string(&def).unwrap();
+        assert_eq!(def.id, "plain");
+        assert!(!json.contains("model_hint"));
+        assert!(!json.contains("provider_hint"));
     }
 
     #[test]

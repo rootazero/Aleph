@@ -1912,15 +1912,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             agent_result.memory_context_provider.clone(),
             agent_result.memory_backend.clone(),
             Some(raw_store.clone()),
-            agent_result.embedder.clone(),
             agent_result.tool_catalog.clone(),
             auth_bundle.auth_ctx.shared_token_mgr.clone(),
             auth_bundle.auth_ctx.security_store.clone(),
             epoch_registrar_for_orchestrator,
             mcp_handle.clone(),
-            // Route-mode cloud escalation reuses the shared ApprovalGate; its
-            // channel requester is late-bound below at `set_requester`.
-            Some(approval_gate.clone()),
             // The MCP `tool_registry_phase2` is the registry the live agent
             // loop resolves tool names against, so it is the only lookup whose
             // generation can back a durable `ToolCallRequested.identity`.
@@ -2124,8 +2120,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         mcp_handle.clone(),
     );
     let mut builtin_registration_scope: Option<alephcore::tools::ToolRegistrationScope> = None;
-    // `self_config` and `moa` tools need the same `ConfigPatcher`; it is built
-    // after the registry, so we late-bind it now. Both `Arc`s are cheap clones.
+    // Config-patching tools use the same `ConfigPatcher`; it is built after
+    // the registry, so we late-bind it now. Both `Arc`s are cheap clones.
     if let Some(tool_registry) = agent_result.tool_registry.as_ref() {
         BuiltinToolRegistry::set_config_patcher(tool_registry.as_ref(), config_patcher.clone());
 
@@ -2361,11 +2357,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Background health prober for circuit-open providers (LiteLLM/Bifrost
-    // parity). The loop self-gates on `[route] health_probe_interval_secs`
-    // (0/absent = off, the default — probing spends real requests), re-read
-    // from the live route handle at every 30s slice of the wait so
-    // `route_config.update` hot-tunes it in both directions. Spawned
-    // unconditionally: with the knob off it idles probe-free.
+    // parity).
     alephcore::gateway::health_prober::spawn_background(
         app_config_for_oauth.clone(),
         oauth_vault.clone(),
@@ -2758,26 +2750,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 });
                 server.set_a2a_state(a2a_server_state);
 
-                // 7. Create client-side components (CardRegistry, SmartRouter, ClientPool)
+                // 7. Create client-side components (CardRegistry, explicit resolver, ClientPool)
                 let card_registry = Arc::new(CardRegistry::new());
                 card_registry.load_from_config(&a2a_config).await;
-                // 8. Wire LLM semantic matcher (if default provider available)
-                let smart_router = if let Some(ref provider) = agent_result.default_provider {
-                    use alephcore::a2a::service::SemanticLlmMatcher;
-                    // Step 5 hot-reload: prefer the live registry handle so
-                    // semantic routing tracks UI default-provider swaps; fall
-                    // back to a static snapshot when no registry exists.
-                    let handle: Arc<dyn alephcore::providers::DefaultProviderHandle> =
-                        if let Some(reg) = agent_result.multi_registry.clone() {
-                            reg as Arc<dyn alephcore::providers::DefaultProviderHandle>
-                        } else {
-                            Arc::new(alephcore::providers::StaticDefault::new(provider.clone()))
-                        };
-                    let matcher = Arc::new(SemanticLlmMatcher::new(handle));
-                    Arc::new(SmartRouter::new(card_registry.clone()).with_llm_matcher(matcher))
-                } else {
-                    Arc::new(SmartRouter::new(card_registry.clone()))
-                };
+                let smart_router = Arc::new(SmartRouter::new(card_registry.clone()));
 
                 let client_pool = Arc::new(A2AClientPool::new());
 
@@ -2816,7 +2792,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // 12. Optional periodic agent health monitor (opt-in via
                 // `a2a.health_check_interval_secs`). Probes registered agents
                 // on an interval and keeps their `health` field current so
-                // smart routing can avoid unreachable agents.
+                // explicit agent resolution can avoid unreachable agents.
                 let health_interval = a2a_config.health_check_interval_secs;
                 if health_interval > 0 {
                     alephcore::a2a::service::spawn_health_monitor(
@@ -2834,9 +2810,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     println!("A2A protocol: enabled");
                     println!("  - Agent Card: /.well-known/agent-card.json");
                     println!("  - RPC:        /a2a (sync), /a2a/stream (SSE)");
-                    if agent_result.default_provider.is_some() {
-                        println!("  - LLM routing: enabled (semantic agent matching)");
-                    }
                     println!();
                 }
             } else if !args.daemon {

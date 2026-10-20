@@ -14,12 +14,12 @@
 //! - the two process-global handles ([`global_ledger`] / [`install_ledger`]
 //!   for the ledger, [`current_policy`] / [`install_policy`] /
 //!   [`update_policy`] for the policy) — process-global rather than
-//!   constructor parameters because `MeteringProvider` has 7 production
-//!   construction sites (`context::compact::compactor`,
-//!   `providers::moa::provider`, `agents::subagent_spawner::mod` ×2,
-//!   `orchestrator::harness_bridge::runner_impl` ×3); threading a handle
-//!   through them would wire some and miss others, and the missed ones would
-//!   meter without a floor while every unit test stayed green;
+//!   constructor parameters because `MeteringProvider` has several production
+//!   construction sites (the compactor, subagent spawner, and harness bridge);
+//!   historical advisor-trace spend remains compatible with that funnel, but
+//!   no retired advisor provider is a live construction site; threading a
+//!   handle through them would wire some and miss others, and the missed ones
+//!   would meter without a floor while every unit test stayed green;
 //! - the admission-arm principal resolver ([`principal_from_metadata`]) and
 //!   [`Principal::from_person`], which the floor arm applies to
 //!   `gateway::visibility::ambient_principal` (the one "who is the person"
@@ -566,8 +566,7 @@ impl SpendLedger for InMemorySpendLedger {
 // "nothing installed yet" (mirroring
 // `thinker::prompt_builder::cache_monitor::global_cache_monitor`), and the
 // install side is still first-writer-wins with a hot-apply path of its own
-// (mirroring `tools::result_store::set_global_tool_result_store` /
-// `providers::route_handle::global_route_handle`).
+// (mirroring `tools::result_store::set_global_tool_result_store`).
 
 static GLOBAL_LEDGER: CapabilitySlot<Arc<dyn SpendLedger>> = CapabilitySlot::new(
     "spend/ledger",
@@ -643,8 +642,7 @@ pub fn install_policy(policy: crate::config::types::policies::SpendPolicy) {
 /// policy into the already-installed handle. Returns `false` when no handle
 /// has been installed yet, so the live-apply verdict can downgrade to
 /// `Restart` honestly instead of reporting `Live` for a knob that silently
-/// did nothing — mirrors `providers::route_handle::try_global_route_handle`'s
-/// `None` arm.
+/// did nothing — the same fail-closed shape used by other global slots.
 ///
 /// The `false` branch is not exercisable through this global. `install_policy`
 /// is deliberately idempotent and `cargo test --lib` runs every unit test in

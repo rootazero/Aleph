@@ -29,11 +29,6 @@ impl HarnessRunner for AgentHarnessRunner {
         self.guardrails.clone()
     }
 
-    fn routing_store(&self) -> Option<Arc<crate::routing::RoutingExperienceStore>> {
-        // rust-doctor-disable-next-line excessive-clone
-        self.routing_store.clone()
-    }
-
     fn stall_config(&self) -> Option<crate::harness::deps::StallConfig> {
         // rust-doctor-disable-next-line excessive-clone
         self.stall_config.clone()
@@ -164,243 +159,75 @@ impl HarnessRunner for AgentHarnessRunner {
         //      (`chat.send.model_override`) or the `[voice]` low-TTFT pin. The
         //      most recent deliberate choice, so it outranks everything below;
         //      it is per-TURN, so nothing about it is remembered afterwards.
-        //      It is stamped directly via `ModelOverrideProvider` and BYPASSES
-        //      the live session wrapper below — a session `select_model` pick
-        //      must never shadow it.
-        //   1. a live `select_model` pick recorded for this session (A layer,
-        //      R8), read at every request boundary via `with_session_model`.
-        //      Keyed by the canonical `SessionKey` the tool wrote under.
-        //   2. the agent's own configured pin (`provider_hint` + `model_hint`)
-        //      — resolved into the session wrapper's *fallback*, so a live
-        //      session pick outranks it but it still beats the flow preset.
-        //   3. otherwise the flow's `BrainRef` preset via `pick_llm`, also a
-        //      fallback under the session wrapper.
+        //      Until this arm existed the pick reached the vision-capability
+        //      check and the `ModelResolved` banner and stopped there — the
+        //      turn was served by (1)/(2) while the UI reported otherwise;
+        //   1. a `select_model` pick recorded for this session (A layer, R8) —
+        //      keyed by the canonical `SessionKey` the tool wrote under;
+        //   2. otherwise the flow's `BrainRef` preset via `pick_llm`.
         //
-        // (0)/(2) resolve a *base provider* then stamp the model onto it via the
-        // shared `ModelOverrideProvider`. The base is, in turn:
-        //   * the named pin chain for `provider_opt` when it names a configured
-        //     provider (`named_providers`, wired from the route-shaped pin +
-        //     fall-through `FailoverProvider`s), so the directive still gets
-        //     failover, circuit-breaking and `[route]`-mode tier gating; else
-        //   * the global default chain — for a provider-less pin, and for an
-        //     agent hint whose provider no longer exists. An explicit TURN pin
-        //     naming an unconfigured provider is an error instead (see the two
-        //     resolvers below), never this fallback.
-        // The session wrapper (`with_session_model`) wraps ONLY the no-explicit-
-        // override fallback (agent hint or brain): it re-reads the live session
-        // selection at each request boundary, so a `select_model` change takes
-        // effect on the next Think/Act call rather than only at run construction.
+        // Explicit directives resolve a *base provider* then stamp the model
+        // onto it via the shared `ModelOverrideProvider`. The base is, in turn:
+        //   * the configured named provider for `provider_opt`, wrapped with
+        //     the configured failure-only `FailoverProvider` (retry,
+        //     circuit-breaking and cooldown); else
+        //   * the global default chain.
+        // Either way the base is a `FailoverProvider`, and its primary slot now
+        // honours the stamped model (see `failover.rs` model-list resolution) —
+        // so the explicitly chosen model actually reaches the wire instead of
+        // being shadowed by that provider's static catalog. The directive-less
+        // path is byte-identical to before — it uses `BrainRef` and lets the
+        // failover primary walk its catalog as usual.
         let session_pref_key = SessionKey::from_key_string(&session_key)
             // rust-doctor-disable-next-line excessive-clone
             .map_or_else(|| session_key.clone(), |s| s.to_key_string());
-        // (0) the explicit per-request override — bypasses the session wrapper.
-        let turn_directive: Option<(Option<String>, String)> = turn_model
-            .map(|pref| {
-                crate::providers::session_model_handle::resolve_selectable_model(
-                    pref.provider.as_deref(),
-                    &pref.model,
-                )
-                .map(|resolved| (resolved.provider, resolved.model))
-                .map_err(|rejection| FlowError::InvalidConfig(rejection.to_string()))
-            })
-            .transpose()?;
-        // (2) the agent's declared pin — the session wrapper's fallback.
-        let agent_hint: Option<(Option<String>, String)> = self
-            .agent_registry
-            .get(&spec.agent)
-            .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m)));
-        // The two directive sources do NOT share a failure policy:
-        //   * the explicit per-turn pin is a live user action — a provider it
-        //     names that is not configured is a hard error, never a silent
-        //     degrade to the default chain (the run would serve a model the
-        //     operator did not pick);
-        //   * an agent's `provider_hint` is stale config, not a live choice —
-        //     `select_model` refuses unknown keys outright, so an unknown hint
-        //     is only reachable via a provider deleted after the agent was
-        //     written. Keep the conversation alive (warn + default chain) but
-        //     drop the pin from the *attribution* with it: leaving the original
-        //     name in `routing_directive` would price the run against a
-        //     provider that never served a token and write that pair into the
-        //     routing-experience store the model later reads back as verified.
-        let turn_directive =
-            resolve_turn_directive(turn_directive, |p| self.named_providers.contains_key(p))?;
-        let agent_hint =
-            resolve_agent_hint_directive(agent_hint, |p| self.named_providers.contains_key(p));
-        // The only FIXED directive for routing/attribution: the turn override.
-        // Session selection, agent hint and brain resolve through the live
-        // wrapper, so the run-level snapshot reads the wrapper's serving hints.
+        let session_model_snapshot =
+            crate::providers::session_model_handle::get_session_model_snapshot(&session_pref_key);
+        let model_directive: Option<(Option<String>, String)> =
+            effective_model_directive(turn_model, session_model_snapshot.pref);
+        // *attribution* must fall back with it. `select_model` refuses an
+        // unknown key outright, so this is reachable only when an explicit
+        // session directive names a provider that has since been deleted;
+        // keeping the original name would price the run against a provider
+        // that never served a token.
+        let model_directive = model_directive.map(|(provider_opt, model)| {
+            let resolved = provider_opt.filter(|p| {
+                let known = self.named_providers.contains_key(p);
+                if !known {
+                    tracing::warn!(
+                        provider = %p,
+                        "model directive names an unconfigured provider; using the default chain",
+                    );
+                }
+                known
+            });
+            (resolved, model)
+        });
         // rust-doctor-disable-next-line excessive-clone
-        let routing_directive = turn_directive.clone();
-        let llm: Arc<dyn crate::providers::AiProvider> = match turn_directive {
+        let explicit_model_directive = model_directive.clone();
+        let llm = match model_directive {
             Some((provider_opt, model)) => {
-                // A named provider was validated above, so the only remaining
-                // base here is the explicit known provider or (for a
-                // provider-less `Raw { model }` pin) the default chain.
-                let base = match provider_opt.as_ref() {
-                    Some(p) => self
-                        .named_providers
-                        .get(p)
-                        .cloned()
-                        .ok_or_else(|| FlowError::ProviderUnavailable(p.clone()))?,
-                    None => self.default_provider.current(),
-                };
+                let base = provider_opt
+                    .as_ref()
+                    .and_then(|p| self.named_providers.get(p).cloned())
+                    .unwrap_or_else(|| self.default_provider.current());
                 Arc::new(crate::providers::ModelOverrideProvider::new(base, model))
                     as Arc<dyn crate::providers::AiProvider>
             }
-            None => {
-                let fallback: Arc<dyn crate::providers::AiProvider> = match agent_hint {
-                    Some((provider_opt, model)) => {
-                        let base = provider_opt
-                            .as_ref()
-                            .and_then(|p| self.named_providers.get(p).cloned())
-                            .unwrap_or_else(|| self.default_provider.current());
-                        Arc::new(crate::providers::ModelOverrideProvider::new(base, model))
-                            as Arc<dyn crate::providers::AiProvider>
-                    }
-                    None => {
-                        match llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers) {
-                            Ok(provider) => provider,
-                            Err(error)
-                                if crate::providers::session_model_handle::get_session_model_snapshot(
-                                    &session_pref_key,
-                                )
-                                .pref
-                                .is_some() =>
-                            {
-                                // A live session selection outranks a stale or
-                                // unavailable flow fallback. Keep construction
-                                // alive so SessionModelProvider can resolve the
-                                // selected target at the request boundary; if
-                                // that target is also gone, it fails closed
-                                // there instead of silently serving the flow.
-                                tracing::warn!(
-                                    error = %error,
-                                    "flow fallback unavailable; deferring to live session model selection"
-                                );
-                                self.default_provider.current()
-                            }
-                            Err(error) => return Err(error),
-                        }
-                    }
-                };
-                llm::with_session_model(
-                    // rust-doctor-disable-next-line excessive-clone
-                    session_pref_key.clone(),
-                    fallback,
-                    self.default_provider.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    Arc::new(self.named_providers.clone()),
-                )
-            }
+            None => llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?,
         };
-        // Step 3-MoA: a session MoA activation supersedes the directive/brain
-        // pick — the MoaProvider facade fans advisors out and lets the
-        // preset's aggregator act. `take_for_run` consumes a one-shot pref
-        // atomically (the single restore point: success, error and cancel
-        // paths all leave no state). Fail-soft: an unusable preset logs and
-        // falls back to the normal chain — the conversation never breaks.
-        // Spec: docs/superpowers/specs/2026-07-05-moa-continuous-advisory-port-design.md
-        let mut moa_active = false;
-        let mut moa_aggregator_identity: Option<(String, String)> = None;
-        // The acting model without the fan-out, for the run's NON-turn calls
-        // (history summarization). See `MoaProvider::acting_chain` for why a
-        // side channel that goes through the facade is wrong three ways at once.
-        let mut moa_acting_chain: Option<Arc<dyn crate::providers::AiProvider>> = None;
-        let llm: Arc<dyn crate::providers::AiProvider> =
-            match crate::providers::session_moa_handle::take_for_run(&session_pref_key) {
-                Some(pref) => {
-                    let moa_cfg = crate::providers::moa::get_moa_config();
-                    match crate::providers::moa::try_build_for_run(
-                        &pref,
-                        moa_cfg.as_ref(),
-                        &self.named_providers,
-                        // rust-doctor-disable-next-line excessive-clone
-                        trace_sink.clone(),
-                    ) {
-                        Ok(moa) => {
-                            moa_active = true;
-                            moa_aggregator_identity = Some(moa.aggregator_identity());
-                            moa_acting_chain = Some(moa.acting_chain());
-                            Arc::new(moa)
-                        }
-                        Err(reason) => {
-                            // Round-2 B5: a one-shot consumed by a build that
-                            // never engaged MoA is refilled — an empty slot OR
-                            // the displaced-sticky undo (restore_one_shot's CAS
-                            // re-stacks the one-shot over a reinstated sticky;
-                            // see its doc) — and the failure is surfaced to the
-                            // panel via the activation-failure advisor event
-                            // (count == 0).
-                            if pref.one_shot {
-                                crate::providers::session_moa_handle::restore_one_shot(
-                                    &session_pref_key,
-                                    // rust-doctor-disable-next-line excessive-clone
-                                    pref.clone(),
-                                );
-                            }
-                            if let Some(sink) = trace_sink.as_ref() {
-                                sink.on_trace(
-                                    &crate::harness::trace::LoopTraceEvent::MoaAdvisor {
-                                        index: 0,
-                                        count: 0,
-                                        label: format!(
-                                            "moa:{}",
-                                            pref.preset.as_deref().unwrap_or("<default>")
-                                        ),
-                                        text: String::new(),
-                                        error: Some(format!(
-                                            "MoA not activated: {reason}; run continues on the normal model"
-                                        )),
-                                    },
-                                );
-                            }
-                            tracing::warn!(
-                                reason = %reason,
-                                "MoA activation unusable; run proceeds on the normal provider chain"
-                            );
-                            llm
-                        }
-                    }
-                }
-                None => llm,
-            };
         // Stage J-pre: wrap the root provider with MeteringProvider so every
         // LLM call emits a LoopTraceEvent::ProviderUsage event labelled with
-        // the agent that actually spent the tokens. The trace_sink is available
-        // here (per-run, passed in from the gateway) and flows into the same
-        // sink as all other harness trace events.
-        //
-        // This label was hardcoded to "root". Team member tasks run through
-        // THIS path too (teams/dispatcher → ExecutionEngine → orchestrator →
-        // here), so every member's spend was filed under "root" — and
-        // `aggregate_usage_by_agents` filters `agent_id IN (member ids)`, so
-        // the `teams.usage` RPC, the `team_usage` tool and the Panel Usage view
-        // found zero rows for real member spend. `spec.agent` is the same value
-        // already handed to the VESR OutcomeObserver below.
+        // the agent that actually spent the tokens.
         let llm: Arc<dyn crate::providers::AiProvider> = Arc::new(
             // rust-doctor-disable-next-line excessive-clone
             crate::providers::MeteringProvider::new(llm, trace_sink.clone(), spec.agent.clone()),
         );
-        // The run's provider for calls that are NOT the user's turn. Identical
-        // to `llm` in the normal case; when MoA is armed it is the aggregator
-        // alone, metered under the same agent so side-channel spend is still
-        // attributed. Only the advisory fan-out is dropped.
-        let side_channel_llm: Arc<dyn crate::providers::AiProvider> = match moa_acting_chain {
-            Some(acting) => Arc::new(crate::providers::MeteringProvider::new(
-                acting,
-                // rust-doctor-disable-next-line excessive-clone
-                trace_sink.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                spec.agent.clone(),
-            )),
-            // rust-doctor-disable-next-line excessive-clone
-            None => llm.clone(),
-        };
-        // Remember the provider name so transient error classification below
-        // can attach it to FlowError::Transient (Gateway's outer retry loop
-        // reads this to call `report_outcome(&provider_name, ...)`).
+        // Non-turn calls use the same metered provider as the user's turn.
+        let side_channel_llm = llm.clone();
+        // Preserve the final provider-chain name for dynamic gauge fallback,
+        // cost attribution, and transient error classification below.
         let provider_name = llm.name().to_string();
-
         // Step 4: convert String → SessionId. Serialized SessionKeys parse
         // directly; otherwise treat the incoming string as an ephemeral id
         // under `spec.agent` so orchestrator ↔ harness session identity stays
@@ -448,42 +275,33 @@ impl HarnessRunner for AgentHarnessRunner {
             self.default_max_iterations,
         );
 
-        // Per-run routing handle: co-locates recall backfill (writer) with the
-        // completion observer (reader). §6/§7. Lives outside the harness (R10).
-        let routing_attribution = std::sync::Arc::new(crate::routing::RoutingAttribution::new(
-            session_id.to_key_string(),
-        ));
-
-        // Frozen attribution: the EXACT (provider, model) this run resolved.
-        // Only the explicit per-request override (`turn_directive`) is fixed here;
-        // the session `select_model` pick, the agent `model_hint`, and the brain
-        // preset all resolve through the live session wrapper, so the run-level
-        // serving facts read the wrapper's hints below ("(dynamic)" — genuinely
-        // unresolved until the chain answers, never the meaningless wrapper name
-        // "failover").
-        // ④ crash-recovery snapshot of the model half, taken here because the
-        // directive is consumed by the match below. Post-validation: the
-        // unconfigured-provider filter above has already run, so this is the
-        // pair the run is actually bound to. This is only the DIRECTIVE half —
-        // the run that carried none still served on some model, and
-        // `snapshot_model` below completes the pair from the provider chain.
+        // Frozen model identity for crash-recovery and context/cost accounting.
+        // `model_directive` folds the explicit turn and session picks; the
+        // dynamic pick_llm(brain) path uses BrainRef::Strict's pinned model when
+        // present, else "(dynamic)".
         // rust-doctor-disable-next-line excessive-clone
-        let directive_model: Option<(Option<String>, String)> = routing_directive.clone();
-        let (routing_model_id, routing_provider_id): (String, Option<String>) =
-            match routing_directive {
+        let directive_model: Option<(Option<String>, String)> = explicit_model_directive.clone();
+        let (identity_model_id, identity_provider_id): (String, Option<String>) =
+            match explicit_model_directive {
                 Some((provider_opt, model)) => (model, provider_opt),
-                None => ("(dynamic)".to_string(), None),
+                None => match &spec.brain {
+                    crate::orchestrator::flow_spec::BrainRef::Strict {
+                        model: Some(m),
+                        provider: p,
+                        // rust-doctor-disable-next-line excessive-clone
+                    } => (m.clone(), Some(p.clone())),
+                    _ => ("(dynamic)".to_string(), None),
+                },
             };
 
         // Model id that keys per-model lookups (context-gauge window + cost
-        // estimate). `routing_model_id` is the fixed turn directive when one
-        // exists; every other route (session pick, agent hint, brain) is
-        // "dynamic" and asks the live provider chain (the session wrapper)
-        // which model it would serve (`serving_model_hint`, delegated through
-        // Metering → Failover → primary), falling back to the provider name
-        // only when even that is unknown. Resolved ONCE here — pre-loop — so
-        // the same window rides on both per-turn gauge events and the final
-        // `FlowOutcome`.
+        // estimate). `identity_model_id` already folds the session
+        // `select_model` pick and the brain's strict pin; the genuinely dynamic
+        // path asks the live provider chain which model it would serve
+        // (`serving_model_hint`, delegated through Metering → Failover → primary),
+        // falling back to the provider name only when even that is unknown.
+        // Resolved ONCE here — pre-loop — so the same window rides on both
+        // per-turn gauge events and the final `FlowOutcome`.
         //
         // The hint is kept as an `Option` instead of being collapsed straight
         // into `gauge_model`, because the two consumers need different halves
@@ -495,11 +313,11 @@ impl HarnessRunner for AgentHarnessRunner {
         // record a model id no catalog has ever heard of — a resume would then
         // "recover" a model that never existed, which is worse than recording
         // nothing (判据 #17: a wrong label costs more than a missing one).
-        let dynamic_route = moa_active || routing_model_id == "(dynamic)";
-        let serving_hint: Option<String> = dynamic_route
+        let dynamic_identity = identity_model_id == "(dynamic)";
+        let serving_hint: Option<String> = dynamic_identity
             .then(|| llm.serving_model_hint().map(std::borrow::Cow::into_owned))
             .flatten();
-        let gauge_model: String = if dynamic_route {
+        let gauge_model: String = if dynamic_identity {
             // rust-doctor-disable-next-line excessive-clone
             serving_hint
                 .clone()
@@ -507,29 +325,12 @@ impl HarnessRunner for AgentHarnessRunner {
                 .unwrap_or_else(|| provider_name.clone())
         } else {
             // rust-doctor-disable-next-line excessive-clone
-            routing_model_id.clone()
+            identity_model_id.clone()
         };
-        // Provider id that keys the cost estimate, resolved with the same
-        // precedence as `gauge_model` above. `provider_name` (= `llm.name()`)
-        // is NOT usable here: every production `llm` is a `FailoverProvider`
-        // (optionally wrapped in Metering/ModelOverride, which delegate
-        // `name()`), so it is the literal `"failover"` — a key the price table
-        // does not know, which made `pricing::estimate` return
-        // `CostStatus::Unknown` ($0.00) on EVERY run. VESR's observer already
-        // dodges this trap (routing/observer.rs: "never the FailoverProvider
-        // wrapper name"); the pricing call just never got the same treatment.
-        //
-        // MoA supersedes the directive for the PROVIDER half exactly as it does
-        // for the model half above. Without this the pair is mismatched — the
-        // pre-MoA provider key next to the aggregator's model — and
-        // `pricing::estimate` answers `CostStatus::Unknown` ($0.00) while
-        // `FlowOutcome.serving_provider` names a provider that never served a
-        // token. Round-2 B8 made exactly this correction for VESR; the cost /
-        // serving pair never got it, because only `gauge_model` was branched.
-        // Same single source as VESR: `moa_aggregator_identity`.
+        // Provider id that keys the cost estimate. Prefer the explicit routing
+        // directive, then the provider's serving hint, and finally its wrapper name.
         let cost_provider: String = acting_provider_id(
-            moa_aggregator_identity.as_ref().map(|(p, _)| p.as_str()),
-            routing_provider_id.as_deref(),
+            identity_provider_id.as_deref(),
             llm.serving_provider_hint().as_deref(),
             &provider_name,
         );
@@ -601,23 +402,6 @@ impl HarnessRunner for AgentHarnessRunner {
         let prompt_estimate_factor =
             calibration_seed_for_model(&CALIBRATION_CARRYOVER, &gauge_model);
 
-        // Run-start recall (ONCE, pre-loop) → fenced String for the builder;
-        // also backfills routing_attribution.task_emb for the observer (symmetry).
-        let routing_text: Option<String> = if let Some(recall) = self.routing_recall.as_ref() {
-            match recall
-                .build_routing_experience_message(&user_query, &spec.agent, &routing_attribution)
-                .await
-            {
-                Ok(text) => text,
-                Err(e) => {
-                    tracing::warn!(error = %e, "run-start routing recall failed; recall skipped");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         // Step 5b (BUG-2/BUG-3 fix, Phase 6 follow-up): assemble the system
         // prompt from per-agent curated memory + hybrid retrieval before the
         // harness loop starts. Failures are warned and degraded to `None` so
@@ -632,7 +416,6 @@ impl HarnessRunner for AgentHarnessRunner {
                 interaction_manifest.as_ref(),
                 sandbox.as_ref(),
                 workspace_override.as_deref(),
-                routing_text,
                 has_session_summaries,
                 prompt_token_budget,
                 prompt_estimate_factor,
@@ -724,7 +507,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Per-run serving-model refinement (§2.2): the startup config
                 // is sized for the chain-MINIMUM window (failover-safe floor),
                 // but this run's serving model (`gauge_model`, folding the
-                // session select_model pick / agent model_hint / brain pin)
+                // session select_model pick / brain pin)
                 // may be a model that derivation never saw. Re-key budget,
                 // per-model thresholds, and fresh-tail onto it — min-floored
                 // by the chain-minimum, so refinement can only compact
@@ -751,10 +534,9 @@ impl HarnessRunner for AgentHarnessRunner {
                 let budget = Arc::new(Mutex::new(budget_inner));
                 let mut compactor_inner = ContextCompactor::new(
                     // NOT `llm`: summarization is a side channel, not the
-                    // user's turn. With MoA armed this is the aggregator alone
-                    // — see `MoaProvider::acting_chain`. `with_cheap_provider`
-                    // below still wins when a cheap tier is configured; this
-                    // fixes the (very common) case where it is not.
+                    // user's turn. `with_cheap_provider` below still wins when
+                    // a cheap tier is configured; this fixes the common case
+                    // where it is not.
                     // rust-doctor-disable-next-line excessive-clone
                     side_channel_llm.clone(),
                     CompactorConfig {
@@ -878,46 +660,6 @@ impl HarnessRunner for AgentHarnessRunner {
         let robustness_profile =
             crate::verification::ModelRobustnessProfile::for_behavior(Some(&*behavior_name))
                 .clamped();
-        // Wrap the per-run sink so this run's SessionCompleted is observed —
-        // harness-external (R10). Subagents hold the RAW sink (captured before
-        // this wrap in the gateway run loop), so they are never routed into THIS
-        // observer. v1.1 (b) captures them via their OWN OutcomeObserver wrapped
-        // at the spawn seam (subagent_spawner::spawn) — each run records under
-        // its own agent_id; no cross-agent leakage.
-        // Round-2 B8: when MoA is active the run's acting model is the
-        // preset's aggregator — record THAT into routing experience, not the
-        // pre-MoA directive/pin (which never served a token this run).
-        // Round-3 F4: attributing a MoA-assisted success to the SOLO aggregator
-        // model is deliberate — the aggregator is this run's actual executor;
-        // the advisor-guidance uplift is not modeled separately in routing
-        // experience (known, accepted attribution choice — metering is exact).
-        let (vesr_model_id, vesr_provider_id): (String, String) = match &moa_aggregator_identity {
-            // rust-doctor-disable-next-line excessive-clone
-            Some((p, m)) => (m.clone(), p.clone()),
-            None => (
-                // rust-doctor-disable-next-line excessive-clone
-                routing_model_id.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                routing_provider_id.clone().unwrap_or_default(),
-            ),
-        };
-        let trace_sink = match (trace_sink, self.routing_store.as_ref()) {
-            (Some(parent), Some(store)) => {
-                Some(std::sync::Arc::new(crate::routing::OutcomeObserver::new(
-                    parent,
-                    // rust-doctor-disable-next-line excessive-clone
-                    store.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    routing_attribution.clone(),
-                    vesr_model_id,
-                    vesr_provider_id,
-                    // rust-doctor-disable-next-line excessive-clone
-                    spec.agent.clone(),
-                ))
-                    as std::sync::Arc<dyn crate::harness::TraceSink>)
-            }
-            (other, _) => other,
-        };
         // B14: the Layer-3 per-turn tool-output cap tracks the model's real
         // window instead of one fixed constant. `token_budget` is the same
         // provider/capability-derived figure the compactor sizes itself from
@@ -1259,10 +1001,16 @@ impl HarnessRunner for AgentHarnessRunner {
                     // fallback only served to silently rewrite valid JSON
                     // payloads. Native tool_use is the canonical egress now.
                     //
-                    // Thinking-only completions are persisted as metadata and
-                    // never become a public final answer.
-                    // rust-doctor-disable-next-line excessive-clone
-                    final_text = content.text.clone();
+                    // Thinking-only completions (extended-thinking providers
+                    // that may put output in the `thinking` field on a
+                    // text-empty assistant turn) keep the explicit fallback.
+                    final_text = if content.text.is_empty() {
+                        // rust-doctor-disable-next-line excessive-clone
+                        content.thinking.clone().unwrap_or_default()
+                    } else {
+                        // rust-doctor-disable-next-line excessive-clone
+                        content.text.clone()
+                    };
                     iterations = iterations.saturating_add(1);
                 }
                 SessionEvent::ToolCallRequested { .. } => {
@@ -1434,23 +1182,21 @@ impl HarnessRunner for AgentHarnessRunner {
         let agent_id = session_id.agent_id().to_string();
         let canonical_key = session_id.to_key_string();
 
-        // 2. Resolve the model the next turn would use: session pin → agent
-        //    hint → the default provider chain's serving-model hint. The last
-        //    step mirrors `run`'s dynamic-brain fallback (`gauge_model`), so
-        //    the estimate's denominator matches the one a real turn will
-        //    report instead of dropping to the conservative 128k window.
+        // 2. Resolve the model the next turn would use: one atomic session
+        //    model snapshot, then the default provider chain's serving-model
+        //    hint. Reading the snapshot at this request boundary means a live
+        //    hot-switch cannot be observed halfway through model resolution.
+        //    `run`'s dynamic-brain fallback (`gauge_model`), so the estimate's
+        //    denominator matches the one a real turn will report instead of
+        //    dropping to the conservative 128k window.
         //    (Known gap, accepted: a `BrainRef::Strict` pin on a non-default
         //    flow is invisible here — the estimate has no `FlowSpec`. All
         //    chat presets use `brain = default`, and the `≈` label plus the
         //    first real turn self-correct the narrow mismatch.)
         let model: String =
-            crate::providers::session_model_handle::get_session_model(&canonical_key)
+            crate::providers::session_model_handle::get_session_model_snapshot(&canonical_key)
+                .pref
                 .map(|p| p.model)
-                .or_else(|| {
-                    self.agent_registry
-                        .get(&agent_id)
-                        .and_then(|d| d.model_hint)
-                })
                 .unwrap_or_else(|| {
                     self.default_provider
                         .current()
@@ -1513,7 +1259,6 @@ impl HarnessRunner for AgentHarnessRunner {
                     None,
                     sandbox.as_ref(),
                     None,
-                    None,
                     // Static overhead estimate: no real history, so no session
                     // summaries — keeps the cached estimate stable.
                     false,
@@ -1550,16 +1295,13 @@ impl HarnessRunner for AgentHarnessRunner {
             .await
             .unwrap_or_default();
         //    Reasoning is counted as the provider the next turn would use
-        //    sends it: `run` resolves a pinned provider through the live
-        //    session selection (or the agent hint) → `named_providers`, else
-        //    the default chain — the same resolution here, so a DeepSeek-pinned
-        //    session under an Anthropic default counts DeepSeek's
-        //    reasoning_content.
-        let pinned_provider = session_or_agent_directive(
+        //    sends it: `run` resolves a pinned provider through
+        //    `effective_model_directive` → `named_providers`, else the default
+        //    chain — the same resolution here, so a DeepSeek-pinned session
+        //    under an Anthropic default counts DeepSeek's reasoning_content.
+        let pinned_provider = effective_model_directive(
+            None,
             crate::providers::session_model_handle::get_session_model(&canonical_key),
-            self.agent_registry
-                .get(&agent_id)
-                .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m))),
         )
         .and_then(|(provider, _)| provider)
         .and_then(|p| self.named_providers.get(&p).cloned());
@@ -1662,105 +1404,35 @@ pub(crate) fn seeded_calibration_for_model(model: &str) -> Option<f64> {
     calibration_seed_for_model(&CALIBRATION_CARRYOVER, model)
 }
 
-/// The explicit per-turn pin — the chat composer's `chat.send.model_override`
-/// or the `[voice]` low-TTFT pin. The highest-priority directive, applied
-/// directly (it bypasses the session wrapper in `run`).
+/// The one place that says which model directive wins.
 ///
-/// Fail-closed on an unconfigured provider: this is a deliberate live choice,
-/// so serving the default chain instead would silently run a different model
-/// than the one picked. `None` (`no provider half`) is passed through
-/// untouched, as is the caller's `None` (no explicit pick this turn).
-fn resolve_turn_directive(
-    directive: Option<(Option<String>, String)>,
-    is_configured: impl Fn(&str) -> bool,
-) -> Result<Option<(Option<String>, String)>, FlowError> {
-    match directive {
-        None => Ok(None),
-        Some((None, model)) => Ok(Some((None, model))),
-        Some((Some(provider), model)) => {
-            if is_configured(&provider) {
-                Ok(Some((Some(provider), model)))
-            } else {
-                Err(FlowError::ProviderUnavailable(provider))
-            }
-        }
-    }
-}
-
-/// The agent's declared `provider_hint` + `model_hint` — the session wrapper's
-/// *fallback* (the live `select_model` pick outranks it).
+/// Two explicit sources want to name the model for a run, ranked by how
+/// recent and deliberate the choice was:
 ///
-/// Fail-soft on an unconfigured provider: warn, drop the provider half so the
-/// default chain serves the run, and keep the model half. Dropping it here is
-/// also what keeps the run's attribution honest — a pin that was not honoured
-/// must not be recorded as if it had been.
-fn resolve_agent_hint_directive(
-    directive: Option<(Option<String>, String)>,
-    is_configured: impl Fn(&str) -> bool,
-) -> Option<(Option<String>, String)> {
-    directive.map(|(provider_opt, model)| {
-        let resolved = provider_opt.filter(|p| {
-            let known = is_configured(p);
-            if !known {
-                tracing::warn!(
-                    provider = %p,
-                    "agent model hint names an unconfigured provider; using the default chain",
-                );
-            }
-            known
-        });
-        (resolved, model)
-    })
-}
-
-/// The session-or-agent half of the model-directive precedence, now that the
-/// live session selection is a WRAPPER rather than a folded construction-time
-/// pin.
-///
-/// The explicit per-request `turn` override bypasses the session wrapper
-/// entirely (see `run`), so it does not appear here. What remains is the
-/// ranking the wrapper enforces at each request boundary:
-///
-/// 1. `session` — the sticky `select_model` pick the model itself made earlier
-///    in this conversation (R8); read live, so it outranks the agent hint;
-/// 2. `agent_hint` — the agent's declared `provider_hint` + `model_hint`,
-///    resolved into the wrapper's *fallback*.
+/// 1. `turn` — this turn's explicit pick (chat-window picker / `[voice]` pin).
+///    A human just chose it for this message; nothing may outrank it;
+/// 2. `session` — the sticky `select_model` pick the model itself made earlier
+///    in this conversation (R8).
 ///
 /// `None` from both means "no directive": `pick_llm` resolves the flow's
 /// `BrainRef` and the failover primary walks its own catalog, exactly as it did
 /// before any of this existed.
-fn session_or_agent_directive(
+fn effective_model_directive(
+    turn: Option<crate::providers::session_model_handle::SessionModelPref>,
     session: Option<crate::providers::session_model_handle::SessionModelPref>,
-    agent_hint: Option<(Option<String>, String)>,
 ) -> Option<(Option<String>, String)> {
-    session.map(|p| (p.provider, p.model)).or(agent_hint)
+    turn.or(session).map(|p| (p.provider, p.model))
 }
 
 /// The provider key the run's cost estimate and `FlowOutcome.serving_provider`
 /// are keyed on, in the same precedence as `gauge_model`.
 ///
-/// 1. **MoA aggregator** — when MoA is armed the preset's aggregator IS the
-///    acting model, so it owns BOTH halves of the identity. Branching only the
-///    model half (which is what the code did) leaves a mismatched pair — the
-///    pre-MoA provider key next to the aggregator's model — and
-///    `pricing::estimate` answers `CostStatus::Unknown` ($0.00) while the
-///    outcome names a provider that never served a token. Reachable whenever a
-///    MoA run also carries a directive: an agent `provider_hint`, or a per-turn
-///    pick from the composer pill. Round-2 B8 made this correction for VESR;
-///    this is the same fact, read by the other two consumers.
-/// 2. **routing directive** — the pin the run resolved (select_model / hint).
-/// 3. **serving hint** — the dynamic chain answering which provider it serves.
-/// 4. **provider name** — last resort. NOT usable earlier: every production
-///    chain is a `FailoverProvider` (Metering/ModelOverride delegate `name()`),
-///    so this is the literal `"failover"`, a key the price table does not know.
 fn acting_provider_id(
-    moa_aggregator: Option<&str>,
-    routing_directive: Option<&str>,
+    directive_provider: Option<&str>,
     serving_hint: Option<&str>,
     provider_name: &str,
 ) -> String {
-    moa_aggregator
-        .or(routing_directive)
+    directive_provider
         .or(serving_hint)
         .unwrap_or(provider_name)
         .to_string()
@@ -2015,49 +1687,24 @@ mod acting_provider_tests {
     use super::acting_provider_id;
 
     #[test]
-    fn the_moa_aggregator_owns_both_halves_of_the_identity() {
-        // Agent pins `openai`, user arms a MoA preset whose aggregator is
-        // anthropic. The gauge already reported the aggregator's MODEL; if the
-        // provider half stayed `openai` the pair is unpriceable ($0.00) and the
-        // outcome credits a provider that served nothing.
+    fn the_directive_still_wins_then_the_serving_hint() {
         assert_eq!(
-            acting_provider_id(
-                Some("anthropic"),
-                Some("openai"),
-                Some("openai"),
-                "failover"
-            ),
-            "anthropic"
-        );
-    }
-
-    #[test]
-    fn without_moa_the_directive_still_wins_then_the_serving_hint() {
-        assert_eq!(
-            acting_provider_id(None, Some("openai"), Some("kimi"), "failover"),
+            acting_provider_id(Some("openai"), Some("kimi"), "failover"),
             "openai"
         );
-        assert_eq!(
-            acting_provider_id(None, None, Some("kimi"), "failover"),
-            "kimi"
-        );
+        assert_eq!(acting_provider_id(None, Some("kimi"), "failover"), "kimi");
     }
 
     #[test]
     fn the_wrapper_name_is_the_last_resort_only() {
-        assert_eq!(acting_provider_id(None, None, None, "failover"), "failover");
+        assert_eq!(acting_provider_id(None, None, "failover"), "failover");
     }
 }
 
 #[cfg(test)]
 mod model_directive_tests {
-    use super::{resolve_agent_hint_directive, resolve_turn_directive, session_or_agent_directive};
-    use crate::orchestrator::errors::FlowError;
+    use super::effective_model_directive;
     use crate::providers::session_model_handle::SessionModelPref;
-
-    fn known(p: &str) -> bool {
-        p == "kimi"
-    }
 
     fn pref(provider: Option<&str>, model: &str) -> SessionModelPref {
         SessionModelPref {
@@ -2066,80 +1713,37 @@ mod model_directive_tests {
         }
     }
 
-    /// The live session wrapper enforces this ranking at the request boundary:
-    /// the session `select_model` pick outranks the agent's declared hint.
-    /// (The explicit per-request `turn` override bypasses the wrapper entirely
-    /// in `run`, so it is not part of this function's input.)
     #[test]
-    fn the_session_pick_outranks_the_agent_hint() {
-        let out = session_or_agent_directive(
+    fn a_turn_pick_outranks_the_session_pick() {
+        // The regression this ranking exists for: the chat-window picker's
+        // choice used to reach the vision check and the `ModelResolved` banner
+        // and stop there, so the turn ran on the session pick while the UI
+        // announced the turn pick.
+        let out = effective_model_directive(
+            Some(pref(Some("openai"), "gpt-5")),
             Some(pref(None, "claude-sonnet-5")),
-            Some((Some("kimi".into()), "kimi-k2".into())),
         );
+        assert_eq!(out, Some((Some("openai".to_string()), "gpt-5".to_string())));
+    }
+
+    #[test]
+    fn the_session_pick_wins_when_no_turn_pick_is_present() {
+        let out = effective_model_directive(None, Some(pref(None, "claude-sonnet-5")));
         assert_eq!(out, Some((None, "claude-sonnet-5".to_string())));
     }
 
     #[test]
-    fn the_agent_hint_is_the_fallback_and_absence_means_no_directive() {
-        assert_eq!(
-            session_or_agent_directive(None, Some((Some("kimi".into()), "kimi-k2".into()))),
-            Some((Some("kimi".to_string()), "kimi-k2".to_string()))
-        );
+    fn absence_of_explicit_picks_means_no_directive() {
         // Nothing declared → `pick_llm` / catalog walk, byte-identical to before.
-        assert_eq!(session_or_agent_directive(None, None), None);
+        assert_eq!(effective_model_directive(None, None), None);
     }
 
     #[test]
-    fn a_provider_less_session_pick_pins_only_the_model() {
-        // `Raw { model }` from the picker: the model is stamped, the provider
-        // chain stands (breaker + route-mode gating preserved).
-        let out = session_or_agent_directive(Some(pref(None, "gpt-5")), None);
+    fn a_provider_less_turn_pick_pins_only_the_model() {
+        // `Raw { model }` from the picker: the model is stamped, while the
+        // failure-only provider chain remains responsible for fallback.
+        let out = effective_model_directive(Some(pref(None, "gpt-5")), None);
         assert_eq!(out, Some((None, "gpt-5".to_string())));
-    }
-
-    /// The explicit turn pin is fail-closed: an unknown provider is an error,
-    /// NOT a silent degrade to the default chain (which would serve a model
-    /// the operator never picked).
-    #[test]
-    fn an_unknown_turn_provider_is_an_error_not_a_default_fallback() {
-        let err = resolve_turn_directive(Some((Some("ghost".into()), "m".into())), known)
-            .expect_err("unknown explicit turn provider must fail closed");
-        match err {
-            FlowError::ProviderUnavailable(p) => assert_eq!(p, "ghost"),
-            other => panic!("expected ProviderUnavailable, got {other:?}"),
-        }
-    }
-
-    /// Known provider and provider-less (`Raw { model }`) turn pins pass
-    /// through byte-identical, and an absent pin stays absent (no directive).
-    #[test]
-    fn turn_pins_pass_through_when_known_or_provider_less() {
-        assert_eq!(
-            resolve_turn_directive(Some((Some("kimi".into()), "kimi-k2".into())), known)
-                .expect("known provider"),
-            Some((Some("kimi".to_string()), "kimi-k2".to_string()))
-        );
-        assert_eq!(
-            resolve_turn_directive(Some((None, "gpt-5".into())), known).expect("no provider half"),
-            Some((None, "gpt-5".to_string()))
-        );
-        assert_eq!(resolve_turn_directive(None, known).expect("no pin"), None);
-    }
-
-    /// The agent hint keeps the fail-soft policy: an unknown provider is
-    /// dropped (default chain serves the run) and the model half is retained.
-    /// The two paths therefore diverge on the SAME input.
-    #[test]
-    fn an_unknown_agent_hint_provider_falls_back_to_the_default_chain() {
-        assert_eq!(
-            resolve_agent_hint_directive(Some((Some("ghost".into()), "m".into())), known),
-            Some((None, "m".to_string()))
-        );
-        assert_eq!(
-            resolve_agent_hint_directive(Some((Some("kimi".into()), "kimi-k2".into())), known),
-            Some((Some("kimi".to_string()), "kimi-k2".to_string()))
-        );
-        assert_eq!(resolve_agent_hint_directive(None, known), None);
     }
 }
 

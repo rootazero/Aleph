@@ -6,7 +6,10 @@ This document outlines the core design principles that guide Aleph's Agent archi
 
 ---
 
-## 1. LLM Sovereignty (LLM 主权原则)
+## Current runtime status
+
+The main LLM owns task decomposition and composes generic subagents. For subagent coordination, Runtime only guarantees generic subagent lifecycle, isolation, concurrency, and failure visibility; it does not perform MoA fan-out, strategy routing, or semantic model routing. Fixed MoA/preset/routing strategies are superseded. Explicit provider/model/session/`BrainRef` bindings and named presets remain available as configuration references, not semantic routing; fallback is attempted only after failure. Historical typed MoA traces still decode. Old `[moa]`, routing tables, `model_hint`, and `provider_hint` inputs are tolerated with diagnostics and ignored.
+
 
 **Core Idea**: Let the LLM do what it's good at; the system only provides what the LLM cannot do alone.
 

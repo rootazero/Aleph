@@ -1146,7 +1146,7 @@ mod trace_tests {
     use super::*;
     use crate::memory::notes::store::NoteStore;
     use crate::memory::notes::KnowledgeNote;
-    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
     use serde_json::json;
@@ -1611,7 +1611,7 @@ mod search_tests {
     /// either.
     #[tokio::test]
     async fn total_reflects_filtered_count_not_store_count() {
-        let (_scratch, db, raw_store) = db().await;
+        let (_scratch, _db, raw_store) = db().await;
 
         for (i, content) in [
             "apple pie recipe",
@@ -1679,7 +1679,7 @@ mod search_tests {
     async fn foreign_partition_reads_empty_not_the_owners_rows() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let (_scratch, db, raw_store) = db().await;
+        let (_scratch, _db, raw_store) = db().await;
         let raw = RawMemory {
             id: "alice-secret".to_string(),
             content: "alice's private note".to_string(),
@@ -2153,7 +2153,7 @@ mod partition_union_tests {
     use super::*;
     use crate::memory::notes::store::NoteStore;
     use crate::memory::notes::KnowledgeNote;
-    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
     use serde_json::json;
@@ -2281,7 +2281,7 @@ mod partition_union_tests {
         let dir = tempfile::tempdir().unwrap();
         let db: crate::memory::store::MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
-        let (_raw_dir, raw_store) = raw_test_store().await;
+        let (_raw_dir, _raw_store) = raw_test_store().await;
 
         for (partition, title) in [("main", "org-tier-note"), ("main__u-alice", "alices-note")] {
             let note = KnowledgeNote {
@@ -2322,7 +2322,7 @@ mod partition_union_tests {
         let dir = tempfile::tempdir().unwrap();
         let db: crate::memory::store::MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
-        let (_raw_dir, raw_store) = raw_test_store().await;
+        let (_raw_dir, _raw_store) = raw_test_store().await;
 
         let note = KnowledgeNote {
             title: "alices-note".into(),

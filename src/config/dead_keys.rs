@@ -182,6 +182,27 @@ const TOLERATED: &[Tolerated] = &[
                the built-in local vault (src/secrets/vault_resolver.rs)",
         retired: true,
     },
+    Tolerated {
+        path: "moa",
+        why: "the whole [moa] table was retired with the MoA runtime; old presets are tolerated for \
+               startup compatibility, but no MoA provider or semantic routing is constructed. Remove \
+               this table and bind provider/model/session/BrainRef explicitly instead",
+        retired: true,
+    },
+    Tolerated {
+        path: "route",
+        why: "the whole [route] strategy table was retired with semantic model routing; old settings are \
+               tolerated for startup compatibility, but no route strategy is constructed. Remove this \
+               table and use explicit provider/model/session/BrainRef binding",
+        retired: true,
+    },
+    Tolerated {
+        path: "routing",
+        why: "the whole [routing] strategy table was retired with semantic model routing; old settings are \
+               tolerated for startup compatibility, but no route strategy is constructed. Remove this \
+               table and use explicit provider/model/session/BrainRef binding",
+        retired: true,
+    },
 ];
 
 /// Deserialize `contents`, returning the value alongside the dotted key paths
@@ -437,6 +458,33 @@ mod tests {
             entry.retired,
             "the table is inert, so it must be flagged retired (info!), not foreign-owned (debug!)"
         );
+    }
+
+    #[test]
+    fn retired_model_routing_sections_are_tolerated_with_actionable_reasons() {
+        for (section, required_reason) in [
+            ("moa", "Remove this table"),
+            ("route", "Remove this table"),
+            ("routing", "Remove this table"),
+        ] {
+            let entry = tolerated_entry(section)
+                .unwrap_or_else(|| panic!("{section} must remain a tolerated entry"));
+            assert!(entry.retired, "[{section}] must be marked retired");
+            assert!(
+                entry.why.contains(required_reason),
+                "[{section}] reason must tell the operator what to do: {}",
+                entry.why
+            );
+
+            let (_config, dead) = deserialize_reporting_dead_keys::<crate::config::Config>(
+                &format!("[{section}]\nlegacy = true\n"),
+            )
+            .unwrap_or_else(|e| panic!("[{section}] must still parse: {e}"));
+            assert!(
+                dead.is_empty(),
+                "[{section}] must be tolerated as retired, not reported dead: {dead:?}"
+            );
+        }
     }
 
     /// `[unified_tools.native.search]` lost its schema field when it was found

@@ -413,14 +413,11 @@ pub(crate) fn offending_lines(src: &str) -> Vec<usize> {
 ///
 /// The 40 the paragraph above deferred, less the tail this round did not reach.
 /// Like the first sweep it was mostly **wiring**, and one file made the point
-/// on its own: `platform/phone/settings/model_route.rs` rendered nine
-/// hard-coded English labels — `"Auto"`, `"Round Robin"`, `"Cost Aware"` — while
-/// `settings.route.mode_*` / `lb_*` had carried all nine in both locales since
-/// the wide screen was written. Both screens now read them through
-/// [`crate::components::route_labels`], which also swallows the `MODE_KEYS` /
-/// `LB_KEYS` pair the phone file had copied under a comment saying so.
-/// `settings.channels.perm_status_{granted,partial,missing}` were the same
-/// story on the Discord page.
+/// One earlier sweep also covered the now-removed route UI: its locale entries and
+/// duplicated label tables were deleted together with the settings screens, so this
+/// census records the cleanup without depending on those former modules.
+/// `settings.channels.perm_status_{granted,partial,missing}` were the same story
+/// on the Discord page.
 ///
 /// The rest needed keys written: the re-embed card's phase and result lines
 /// (whose result sentence was being *built inside a `'static` event closure*,

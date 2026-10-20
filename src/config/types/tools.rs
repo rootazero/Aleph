@@ -159,11 +159,8 @@ pub const fn default_shell_timeout() -> u64 {
 /// exists) — it cannot live in this static list, so `run_loop/inner.rs` adds
 /// it to the request's effective core set at registration time instead.
 ///
-/// `moa` is core so a user's "turn on MoA for this session" engages in one
-/// step — the activation toggle must not hide behind a get_tool_schema
-/// round-trip (R8 conversational management; round-2 W1). `session_set_mode`
-/// is core for the same R8 one-step reason: every mode's prompt line points
-/// at it, and its schema is a single string field.
+/// `session_set_mode` is core for the same R8 one-step reason: every mode's
+/// prompt line points at it, and its schema is a single string field.
 pub fn default_core_tools() -> Vec<String> {
     [
         "ask_user",
@@ -189,7 +186,6 @@ pub fn default_core_tools() -> Vec<String> {
         "note_manage",
         "system",
         "get_tool_schema",
-        "moa",
         "session_set_mode",
         // MCP native discovery+read mechanism — all four kept core (never
         // schema-collapsed) so discovery and read are each one step, mirroring
@@ -698,7 +694,6 @@ mod core_tools_tests {
         assert!(c.core.iter().any(|t| t == "bash"));
         assert!(c.core.iter().any(|t| t == "get_tool_schema"));
         assert!(c.core.iter().any(|t| t == "subagent"));
-        assert!(c.core.iter().any(|t| t == "moa"));
         assert!(c.core.iter().any(|t| t == "mcp_read_resource"));
         assert!(c.core.iter().any(|t| t == "mcp_get_prompt"));
         // Discovery half kept core too — symmetric with skill_list/skill_read
@@ -714,7 +709,7 @@ mod core_tools_tests {
         // was added to close.
         assert!(c.core.iter().any(|t| t == "grep"));
         assert!(c.core.iter().any(|t| t == "find"));
-        assert_eq!(c.core.len(), 28);
+        assert_eq!(c.core.len(), 27);
         assert!(!c.truncate_tool_descriptions);
     }
 

@@ -115,7 +115,7 @@ pub struct AgentHarnessRunner {
     pub context_budget_config: Option<ContextBudgetConfig>,
     /// Per-run companion to [`Self::context_budget_config`]: re-keys the
     /// chain-minimum startup budget onto the model actually serving each run
-    /// (session `select_model` pick, agent `model_hint`, brain pin), keeping
+    /// (session `select_model` pick, brain pin), keeping
     /// the failover-safe floor via `min(chain_min, serving)`. `None` (tests /
     /// direct injection) keeps every run on the startup config unchanged.
     pub context_budget_refiner: Option<crate::orchestrator::deps_builder::ContextBudgetRefiner>,
@@ -241,13 +241,6 @@ pub struct AgentHarnessRunner {
     /// already applies (`deps_builder::derive_token_budget`). `None` (unset /
     /// tests) keeps the gauge on the per-model catalog window.
     pub primary_context_window: Option<u32>,
-
-    /// Routing-experience store (record path). `None` when no embedder is
-    /// configured. Lives on the runner, never on `HarnessDeps` (R10).
-    pub routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
-    /// Run-start routing recall (read path). `None` when no embedder is
-    /// configured. Invoked once per run, pre-loop.
-    pub routing_recall: Option<Arc<crate::routing::RoutingRecall>>,
 
     /// Per-(session_key, model) prompt-overhead cache for the context-occupancy
     /// estimate. Populated on demand by `estimate_context`; bounded LRU, no TTL

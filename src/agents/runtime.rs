@@ -139,10 +139,10 @@ pub struct SubagentTranscript {
 // =============================================================================
 
 /// Role-grouped sub-config carried by [`AgentRuntime`] — provider routing
-/// (default provider + `provider_hint` override map).
+/// (default provider plus configured routes for explicit qualified model ids).
 pub(crate) struct ProviderRouting {
     pub(crate) provider: Arc<dyn AiProvider>,
-    pub(crate) provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
+    pub(crate) provider_routes: HashMap<String, Arc<dyn AiProvider>>,
 }
 
 /// Role-grouped sub-config — Delegation hook emit (RawMemory + capture
@@ -189,12 +189,6 @@ pub(crate) struct BudgetInheritance {
     pub(crate) verifier_chain: Option<Arc<crate::verification::VerifierChain>>,
 }
 
-/// Role-grouped sub-config — routing-experience store threaded into
-/// every `SpawnerBase`.
-pub(crate) struct RoutingExperience {
-    pub(crate) routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
-}
-
 /// Role-grouped sub-config — the harness and accounting sinks threaded into
 /// `SpawnerBase` (split by producer; see `SpawnerBase::accounting_sink`).
 pub(crate) struct TraceContext {
@@ -209,12 +203,12 @@ pub(crate) struct TraceContext {
 /// `session`, `parent_tools`) stay as direct fields because they ARE the
 /// runtime's identity — every spawn reads them directly. Everything else is
 /// grouped:
-///   * `provider_routing` — default provider + `provider_hint` overrides
+///   * `provider_routing` — default provider + configured routes for explicit
+///     qualified model ids
 ///   * `memory` — Delegation hook emit + parent identity
 ///   * `background` — shared concurrency cap + plugin-registry handle
 ///   * `policy_inheritance` — guardrails + resilience + run-style
 ///   * `budget_inheritance` — iteration / parallel / context-budget / verifier
-///   * `routing_experience` — routing store
 ///   * `trace` — trace sink
 pub struct AgentRuntime {
     child_chain: ChainContext,
@@ -231,7 +225,6 @@ pub struct AgentRuntime {
     background: BackgroundConfig,
     policy_inheritance: PolicyInheritance,
     budget_inheritance: BudgetInheritance,
-    routing_experience: RoutingExperience,
     trace: TraceContext,
 }
 
@@ -252,7 +245,7 @@ impl AgentRuntime {
             parent_tools,
             provider_routing: ProviderRouting {
                 provider,
-                provider_overrides: HashMap::new(),
+                provider_routes: HashMap::new(),
             },
             memory: MemoryCapture {
                 raw_memory_writer: None,
@@ -280,9 +273,6 @@ impl AgentRuntime {
                 primary_context_window: None,
                 cheap_summary_provider: None,
                 verifier_chain: None,
-            },
-            routing_experience: RoutingExperience {
-                routing_store: None,
             },
             trace: TraceContext {
                 trace_sink: None,
@@ -357,14 +347,10 @@ impl AgentRuntime {
         self
     }
 
-    /// Phase 3 — wire the per-`provider_hint` override registry. Each spawn
-    /// whose `agent_def.provider_hint` matches a key runs on that provider.
+    /// Wire configured provider routes used by explicit qualified model ids.
     #[must_use]
-    pub fn with_provider_overrides(
-        mut self,
-        overrides: HashMap<String, Arc<dyn AiProvider>>,
-    ) -> Self {
-        self.provider_routing.provider_overrides = overrides;
+    pub fn with_provider_routes(mut self, routes: HashMap<String, Arc<dyn AiProvider>>) -> Self {
+        self.provider_routing.provider_routes = routes;
         self
     }
 
@@ -425,16 +411,6 @@ impl AgentRuntime {
     /// Wire the sink the child's `MeteringProvider`s emit into.
     pub fn with_accounting_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
         self.trace.accounting_sink = Some(sink);
-        self
-    }
-
-    /// VESR v1.1 (b) — wire the routing-experience store inherited by subagents.
-    #[must_use]
-    pub fn with_routing_store(
-        mut self,
-        store: Arc<crate::routing::RoutingExperienceStore>,
-    ) -> Self {
-        self.routing_experience.routing_store = Some(store);
         self
     }
 
@@ -618,24 +594,12 @@ impl AgentRuntime {
             depth: self.child_chain.depth.saturating_sub(1),
             max_depth: self.child_chain.max_depth,
         };
-        // Phase 3 — resolve the per-agent provider: `provider_hint` pins a
-        // registered override (pinned, then falling through the global chain);
-        // a `provider/model` model id routes across vendors; otherwise the
-        // shared default. See `resolve_spawn_route`.
-        //
-        // The effective model is `model` then `model_hint` — the same order the
-        // spawner resolves — so a role whose frontmatter carries the qualified
-        // form routes too.
-        let effective_model = config.spawn_override.model.as_deref().or(config
-            .identity
-            .agent_def
-            .model_hint
-            .as_deref());
+        // Resolve only the caller's explicit model. Agent definitions carry
+        // role/tool policy and never provide an implicit model or provider.
         let (provider, routed_model) = resolve_spawn_route(
             &self.provider_routing.provider,
-            &self.provider_routing.provider_overrides,
-            &config.identity.agent_def,
-            effective_model,
+            &self.provider_routing.provider_routes,
+            config.spawn_override.model.as_deref(),
         );
         let base = SpawnerBase {
             session: self.session.clone(),
@@ -656,10 +620,7 @@ impl AgentRuntime {
             // P3 Stage I — per-agent MCP scope; provisioned when an agent_def
             // declares `mcp_servers` and a registry is wired (B2).
             plugin_registry: self.background.plugin_registry.clone(),
-            // A2 — subagent concurrency cap.
             subagent_semaphore: self.background.subagent_semaphore.clone(),
-            // VESR v1.1 (b) — threaded from the gateway so subagents capture.
-            routing_store: self.routing_experience.routing_store.clone(),
             // B15 — the parent's iteration cap, so a capless child role does
             // not run its loop unbounded until the spawn timeout kills it.
             default_max_iterations: self.budget_inheritance.default_max_iterations,
@@ -681,8 +642,7 @@ impl AgentRuntime {
             task: &config.identity.task,
             context_summary: config.identity.context_summary.as_deref(),
             // A rewritten (de-qualified) id wins; otherwise pass the caller's
-            // model through untouched and let the spawner apply its own
-            // `model_hint` fallback.
+            // explicit model through untouched.
             model: routed_model
                 .as_deref()
                 .or(config.spawn_override.model.as_deref()),
@@ -707,40 +667,19 @@ impl AgentRuntime {
 /// wire.
 ///
 /// Precedence:
-///   1. `agent_def.provider_hint` — an explicit author/operator choice, and the
-///      only form that existed before. Wins outright.
-///   2. A `provider/model` id whose prefix names the PARENT's own provider: keep
-///      the parent provider, stamp the bare model id. Without this a direct
-///      single-vendor deployment (the common case) sent `anthropic/claude-…` to
-///      Anthropic verbatim and got a 404.
-///   3. A `provider/model` id whose prefix names another CONFIGURED provider
-///      (`overrides`, keyed by `[providers]` toml name and matched through
-///      `canonical_provider_id`, so `kimi` ≡ `moonshot/…` and `vertex-anthropic`
-///      ≡ `anthropic/…`): run the child there with the bare model id. This is
-///      what makes a cross-vendor MoA fan-out
-///      (`proposer_models: ["openai/gpt-5.2", "anthropic/claude-opus-5"]`)
-///      actually reach two vendors instead of handing both strings to whichever
-///      provider the parent happened to hold.
-///   4. Otherwise: the parent's provider, model string untouched. Untouched
-///      matters — an OpenAI-compatible aggregator primary (OpenRouter and
-///      friends) *wants* `anthropic/claude-…` on the wire, and such a deployment
-///      has no separate `[providers] anthropic` entry to match in step 3.
+///   1. An explicit qualified `provider/model` id naming the PARENT's own
+///      provider keeps that provider and stamps the bare model id.
+///   2. A qualified id naming another CONFIGURED provider routes there with the
+///      bare model id.
+///   3. Otherwise the parent's provider receives the model string untouched.
 ///
 /// Returns the provider plus `Some(bare_model)` when the id was rewritten, and
 /// `None` when the caller's model string must be passed through as-is.
 fn resolve_spawn_route(
     parent: &Arc<dyn AiProvider>,
-    overrides: &HashMap<String, Arc<dyn AiProvider>>,
-    agent_def: &AgentDef,
+    routes: &HashMap<String, Arc<dyn AiProvider>>,
     model: Option<&str>,
 ) -> (Arc<dyn AiProvider>, Option<String>) {
-    if let Some(pinned) = agent_def
-        .provider_hint
-        .as_deref()
-        .and_then(|hint| overrides.get(hint))
-    {
-        return (pinned.clone(), None);
-    }
     let Some((prefix, bare)) = model.and_then(split_provider_prefix) else {
         return (parent.clone(), None);
     };
@@ -751,7 +690,7 @@ fn resolve_spawn_route(
     if want.is_some() && want == parent_vendor {
         return (parent.clone(), Some(bare.to_string()));
     }
-    match override_for_provider(overrides, prefix, want) {
+    match override_for_provider(routes, prefix, want) {
         Some(provider) => (provider, Some(bare.to_string())),
         None => (parent.clone(), None),
     }
@@ -762,15 +701,15 @@ fn resolve_spawn_route(
 /// lexicographically smallest key so two entries for one vendor pick
 /// deterministically (same rule as `MultiProviderRegistry::default_provider`).
 fn override_for_provider(
-    overrides: &HashMap<String, Arc<dyn AiProvider>>,
+    routes: &HashMap<String, Arc<dyn AiProvider>>,
     name: &str,
     canonical: Option<&'static str>,
 ) -> Option<Arc<dyn AiProvider>> {
-    if let Some(provider) = overrides.get(name) {
+    if let Some(provider) = routes.get(name) {
         return Some(provider.clone());
     }
     let want = canonical?;
-    overrides
+    routes
         .iter()
         .filter(|(key, _)| {
             crate::providers::model_catalog::canonical_provider_id(key) == Some(want)
@@ -864,19 +803,15 @@ mod tests {
             .collect()
     }
 
-    /// An explicit `provider_hint` is an author decision and still wins outright
-    /// — the model id never redirects it.
+    /// A qualified id is resolved from the explicit request model; it never
+    /// consults an AgentDef routing hint.
     #[test]
-    fn spawn_route_provider_hint_wins() {
+    fn spawn_route_request_model_wins_without_role_hint() {
         let parent = named("anthropic");
         let ovr = overrides(&[("openai", "openai")]);
-        let def = make_agent_def().with_provider_hint("openai");
-        let (provider, model) = resolve_spawn_route(&parent, &ovr, &def, Some("openai/gpt-5"));
+        let (provider, model) = resolve_spawn_route(&parent, &ovr, Some("openai/gpt-5"));
         assert_eq!(provider.name(), "openai");
-        assert_eq!(
-            model, None,
-            "a pinned provider passes the caller's model string through untouched"
-        );
+        assert_eq!(model, Some("gpt-5".to_string()));
     }
 
     /// A qualified id naming the parent's OWN vendor keeps the parent provider
@@ -886,24 +821,18 @@ mod tests {
     fn spawn_route_strips_prefix_for_parent_vendor() {
         let parent = named("anthropic");
         let ovr = overrides(&[("openai", "openai")]);
-        let (provider, model) = resolve_spawn_route(
-            &parent,
-            &ovr,
-            &make_agent_def(),
-            Some("anthropic/claude-opus-5"),
-        );
+        let (provider, model) = resolve_spawn_route(&parent, &ovr, Some("anthropic/claude-opus-5"));
         assert_eq!(provider.name(), "anthropic");
         assert_eq!(model.as_deref(), Some("claude-opus-5"));
     }
 
     /// A qualified id naming a different configured provider routes there — the
-    /// case that makes a cross-vendor MoA fan-out actually reach two vendors.
+    /// cross-vendor qualified-model routing case.
     #[test]
     fn spawn_route_crosses_to_configured_provider() {
         let parent = named("anthropic");
         let ovr = overrides(&[("openai", "openai-chain")]);
-        let (provider, model) =
-            resolve_spawn_route(&parent, &ovr, &make_agent_def(), Some("openai/gpt-5.2"));
+        let (provider, model) = resolve_spawn_route(&parent, &ovr, Some("openai/gpt-5.2"));
         assert_eq!(provider.name(), "openai-chain");
         assert_eq!(model.as_deref(), Some("gpt-5.2"));
     }
@@ -914,8 +843,7 @@ mod tests {
     fn spawn_route_matches_provider_alias() {
         let parent = named("anthropic");
         let ovr = overrides(&[("kimi", "kimi-chain")]);
-        let (provider, model) =
-            resolve_spawn_route(&parent, &ovr, &make_agent_def(), Some("moonshot/kimi-k2.7"));
+        let (provider, model) = resolve_spawn_route(&parent, &ovr, Some("moonshot/kimi-k2.7"));
         assert_eq!(provider.name(), "kimi-chain");
         assert_eq!(model.as_deref(), Some("kimi-k2.7"));
     }
@@ -926,12 +854,8 @@ mod tests {
     #[test]
     fn spawn_route_leaves_unmatched_prefix_untouched() {
         let parent = named("openrouter");
-        let (provider, model) = resolve_spawn_route(
-            &parent,
-            &HashMap::new(),
-            &make_agent_def(),
-            Some("anthropic/claude-opus-5"),
-        );
+        let (provider, model) =
+            resolve_spawn_route(&parent, &HashMap::new(), Some("anthropic/claude-opus-5"));
         assert_eq!(provider.name(), "openrouter");
         assert_eq!(model, None);
     }
@@ -943,7 +867,7 @@ mod tests {
         let parent = named("anthropic");
         let ovr = overrides(&[("openai", "openai")]);
         for model in [None, Some("gpt-5"), Some("claude-opus-5")] {
-            let (provider, routed) = resolve_spawn_route(&parent, &ovr, &make_agent_def(), model);
+            let (provider, routed) = resolve_spawn_route(&parent, &ovr, model);
             assert_eq!(provider.name(), "anthropic");
             assert_eq!(routed, None, "bare id {model:?} must not be rewritten");
         }
@@ -956,8 +880,7 @@ mod tests {
         let parent = named("anthropic");
         let ovr = overrides(&[("zeta-gpt", "zeta"), ("alpha-gpt", "alpha")]);
         for _ in 0..8 {
-            let (provider, _) =
-                resolve_spawn_route(&parent, &ovr, &make_agent_def(), Some("openai/gpt-5"));
+            let (provider, _) = resolve_spawn_route(&parent, &ovr, Some("openai/gpt-5"));
             assert_eq!(provider.name(), "alpha");
         }
     }

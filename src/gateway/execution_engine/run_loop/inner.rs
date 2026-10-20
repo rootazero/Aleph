@@ -1107,9 +1107,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 let run_chain = crate::harness::chain_context::ChainContext::new();
                 let sub_session = orchestrator.session_service.clone();
                 // Phase 3 — route spawned subagents through the same
-                // FailoverProvider chain the main harness uses, and surface the
-                // per-`provider_hint` override registry. Without this the
-                // gateway handed subagents a bare provider, bypassing failover.
+                // failure-only FailoverProvider chain the main harness uses.
+                // Provider/model selection is explicit at the binding point;
+                // this chain only retries a failed provider/model and does not
+                // perform semantic routing or consult legacy provider hints.
                 // Falls back to the bare default provider only when the
                 // orchestrator carries no chain (test / simple-engine paths).
                 let (sub_provider, agent_overrides) = match &orchestrator.subagent_routing {
@@ -1139,11 +1140,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // unguarded, matching the main harness.
                 if let Some(g) = orchestrator.harness.guardrails() {
                     t = t.with_guardrails(g);
-                }
-                // VESR v1.1 (b) — thread the routing store so spawned subagents
-                // capture their own routing experience under their agent_id.
-                if let Some(rs) = orchestrator.harness.routing_store() {
-                    t = t.with_routing_store(rs);
                 }
                 // Stage A (P1) — inherit the main harness's `[stability]`
                 // runaway protection so a stuck/looping/hung subagent aborts on
@@ -1645,9 +1641,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 ///
 /// `configured` is the model id the turn resolves to; `serving_hint` is the
 /// live provider chain's [`AiProvider::serving_model_hint`](crate::providers::AiProvider::serving_model_hint),
-/// which covers the ids the catalogue cannot answer for on its own (agent model
-/// left unset, MoA / failover dynamic routing). The first id the capability
-/// catalogue knows wins — a pure static table read, blind to message content.
+/// which covers ids the catalogue cannot answer for on its own (agent model
+/// left unset or the provider chain's failure-only fallback). The first id the
+/// capability catalogue knows wins — a pure static table read, blind to message
+/// content.
 ///
 /// **Unknown capabilities fail OPEN (image is sent).** The two failures are not
 /// symmetric: sending an image to an unlisted text-only model produces a loud,

@@ -37,8 +37,6 @@ pub struct AgentInfoOutput {
     pub max_iterations: Option<u32>,
     pub context_mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_hint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u32>,
     /// Channels currently bound to this agent (`agent_id -> Vec<channel>`,
     /// many-to-one aware). Empty for catalog agents that aren't bound at
@@ -152,7 +150,6 @@ impl AgentInfoTool {
             context_mode: crate::agents::SpawnContext::from_context_mode(&agent_def.context_mode)
                 .as_arg()
                 .to_string(),
-            model_hint: agent_def.model_hint,
             token_budget: agent_def.token_budget,
             bound_channels: Vec::new(), // Filled in by `call` from the store.
         })

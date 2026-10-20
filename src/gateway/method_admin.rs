@@ -225,8 +225,6 @@ const ADMIN_PREFIXES: &[&str] = &[
     "browser_config.",
     "rerank_config.",
     "search_config.",
-    "route_config.",
-    "routing_rules.",
     "logs.", // getLevel/setLevel/getDirectory — setLevel mutates the process-wide
     // tracing verbosity for every caller; getDirectory discloses a server
     // filesystem path. No read-only carve-out: getLevel alone isn't worth
@@ -247,9 +245,7 @@ const ADMIN_PREFIXES: &[&str] = &[
     "runtimes.", // sandbox/runtime capability install (list/refresh/install).
     // --- Agent-persona / shared config (server-global, not per-user) ---
     "identity.", // agent SOUL.md / persona file admin (get/set/clear/list).
-    "moa.",      // shared mixture-of-agents presets (save/delete/setDefault/…) —
-    // matches `moa` in method_authz.rs's OPERATOR_TOOLS.
-    "acp.", // agent-client-protocol integration presets/config.
+    "acp.",      // agent-client-protocol integration presets/config.
     // --- Scheduled automation: cross-checked against method_authz.rs's
     // tool-tier gate, which already treats mutation here as operator-only
     // (`cron_manage`, `heartbeat_{create,update,delete,toggle}` are all
@@ -283,7 +279,7 @@ const ADMIN_PREFIXES: &[&str] = &[
     // That floor covers RCE / `requires_confirmation` / continuation-driven
     // tools. It now ALSO covers the OPERATOR_TOOLS family `method_authz.rs`
     // already rules operator-only (`cron_manage`, `hooks_manage`,
-    // `agent_identity`, `agent_create`, `moa`, …) — P1 member hardening
+    // `agent_identity`, `agent_create`, legacy `moa`, …) — P1 member hardening
     // (Task 9) added a third hard floor to `handle_invoke` that reuses the
     // identical predicate (`method_authz::tool_requires_operator` +
     // `turn_context::role_is_operator`) the agent loop's own gate uses, so a
@@ -743,8 +739,6 @@ mod tests {
             "browser_config.update",
             "rerank_config.update",
             "search_config.update",
-            "route_config.update",
-            "routing_rules.create",
             "logs.setLevel",
             // extension / capability install
             "extensions.install",
@@ -758,7 +752,6 @@ mod tests {
             "runtimes.install",
             // agent / persona config
             "identity.set",
-            "moa.savePreset",
             "acp.create",
             // scheduled automation (fix round — method_authz.rs cross-check)
             "cron.create",

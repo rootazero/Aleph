@@ -788,7 +788,7 @@ pub(crate) fn set_nested_value(
 /// - If both are objects: merge keys recursively.
 /// - An explicit `null` in `source` deletes that key from `target` rather
 ///   than setting it to a literal null — the only way a JSON-merge patch can
-///   express "remove this map entry" (e.g. deleting a `[moa]` preset via
+///   express "remove this map entry" (e.g. deleting a config map entry via
 ///   `{"presets": {"name": null}}`). This is safe for `Option<T>` struct
 ///   fields too: a missing key deserializes to the same `None` a present
 ///   `null` value would (both go through `#[serde(default)]`).
@@ -1057,9 +1057,8 @@ mod tests {
 
     #[test]
     fn test_deep_merge_null_deletes_key() {
-        // Deleting a `[moa]` preset patches `{"presets": {"a": null}}` — the
-        // key must be REMOVED, not set to a literal null (which would fail
-        // to deserialize back into `HashMap<String, MoaPreset>`).
+        // A null-patched key must be deleted rather than retained as a literal
+        // null, because map values are typed configuration entries.
         let mut target = json!({
             "presets": {
                 "a": {"enabled": true},

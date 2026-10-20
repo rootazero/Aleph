@@ -1,15 +1,16 @@
 //! `SelectModelTool` — LLM-facing model picker (R8 "everything is a tool").
 //!
-//! The "A layer" of AI dynamic routing: lets the main-loop LLM choose the model
-//! for the rest of the conversation in one inference, rather than a separate
-//! routing model deciding for it (which would violate R7/R9). The pick is
-//! recorded in `session_model_handle` and resolved by `SessionModelProvider`
-//! at each provider request boundary. The request already in flight remains
+//! An explicit per-session model pin: the `select_model` tool lets the main-loop
+//! LLM choose a model and optionally pin its provider. This is explicit model
+//! binding selected by the user or LLM, with no automatic routing layer. The pick is
+//! recorded in `session_model_handle` and resolved by `SessionModelProvider` at
+//! each provider request boundary. The request already in flight remains
 //! immutable while subsequent requests use the pick.
 //!
-//! Model binding is resolved at each provider request boundary through
-//! `SessionModelProvider`. A pick therefore takes effect at the next LLM
-//! request for this session; the request already in flight remains immutable.
+//! A pick therefore takes effect at the next provider request for this session;
+//! the request already in flight remains immutable. Crash recovery preserves the
+//! interrupted run's frozen target, so a pick made after a crash applies to the
+//! next new message rather than retroactively changing the resumed run.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -30,15 +31,15 @@ pub struct SelectModelArgs {
     /// callers ever see, and this doc previously offered `deepseek-chat` —
     /// retired 2026-07-24 — as a suggestion.
     #[schemars(
-        description = "Model id to switch to for the rest of this conversation. Pass \"moa:<preset>\" \
-            (or \"moa\" for the default preset) to activate Mixture-of-Agents advisory instead of a \
-            plain model."
+        description = "Model id to switch to for the rest of this conversation. Pass a plain model id, or qualify it as provider/model."
     )]
     pub model: String,
     /// Optional configured provider id. Omit only for an unambiguous model id,
     /// or qualify the model as `provider/model`.
     #[serde(default)]
-    #[schemars(description = "Optional provider id to pin; omit to auto-route by model name.")]
+    #[schemars(
+        description = "Optional provider id to pin; omit to use the model's configured provider."
+    )]
     pub provider: Option<String>,
 }
 
@@ -51,8 +52,7 @@ pub struct SelectModelOutput {
     /// The provider pinned, if any.
     pub provider: Option<String>,
     /// Ordering generation the pick was recorded under. `None` when nothing
-    /// was written — refusals, no active turn, and MoA arming (which clears
-    /// the model slot rather than writing it).
+    /// was written — refusals and no active turn.
     pub generation: Option<u64>,
     /// Whether the pick names a known, generally-available model. `false` for
     /// previews, unknown ids, and every refusal.
@@ -76,8 +76,7 @@ impl AlephTool for SelectModelTool {
         problems, or a cheaper model for simple chat. Pass `model` (required) and optionally \
         `provider` to pin a specific provider. The change applies at the next provider request boundary: \
         the request currently in flight finishes on its immutable target, and subsequent requests use \
-        the new selection. Accepts \"moa:<preset>\" to switch the session onto a MoA advisory \
-        preset (advisors + aggregator).";
+        the new selection.";
 
     type Args = SelectModelArgs;
     type Output = SelectModelOutput;
@@ -104,69 +103,6 @@ impl AlephTool for SelectModelTool {
         };
 
         let key = ctx.session_key.to_key_string();
-
-        // Round-2 E3 / Round-3 F1: the selector is ONE slot — "moa:<preset>"
-        // (or bare "moa") arms MoA sticky and clears any model pick; a normal
-        // model pick clears MoA. Arm logic is the single source in
-        // moa::activation.
-        if args.model == "moa" || args.model.starts_with("moa:") {
-            // Audit AW1: operator gate — parity with the `moa` tool (listed in
-            // method_authz OPERATOR_TOOLS) and both `/moa` slash paths, which
-            // gate on `role_is_operator`. `select_model` is NOT in
-            // OPERATOR_TOOLS (its normal model picks stay open to chat tier),
-            // so the MoA-arm branch must gate INLINE — otherwise a chat-tier
-            // (guest) channel could arm advisory (advisor fan-out = cost/latency
-            // blast-radius) via the one arm surface the other three deny it.
-            if !ctx.caller_is_operator() {
-                let message = "MoA advisory requires operator; model unchanged.".to_string();
-                notify_tool_result(Self::NAME, &message, false);
-                return Ok(SelectModelOutput {
-                    rejection: None,
-                    ok: false,
-                    model: args.model,
-                    provider: None,
-                    generation: None,
-                    stable: false,
-                    message,
-                });
-            }
-            let preset = args
-                .model
-                .strip_prefix("moa:")
-                .filter(|s| !s.is_empty())
-                .map(str::to_string);
-            match crate::providers::moa::activation::arm_sticky(&key, preset) {
-                Ok(name) => {
-                    let message = format!(
-                        "MoA preset '{name}' activated for this session (sticky); model pick \
-                         cleared. The model selection takes effect at the next provider request \
-                         boundary; the request already in flight finishes on its current target."
-                    );
-                    notify_tool_result(Self::NAME, &message, true);
-                    return Ok(SelectModelOutput {
-                        rejection: None,
-                        ok: true,
-                        model: args.model,
-                        provider: None,
-                        generation: None,
-                        stable: false,
-                        message,
-                    });
-                }
-                Err(message) => {
-                    notify_tool_result(Self::NAME, &message, false);
-                    return Ok(SelectModelOutput {
-                        rejection: None,
-                        ok: false,
-                        model: args.model,
-                        provider: None,
-                        generation: None,
-                        stable: false,
-                        message,
-                    });
-                }
-            }
-        }
 
         // Resolve one immutable config/runtime projection before any state write.
         let pref = match session_model_handle::resolve_selectable_model(
@@ -219,8 +155,7 @@ impl AlephTool for SelectModelTool {
                 rejection: None,
             });
         }
-        // Refusals (including generation exhaustion) leave advisory state intact.
-        crate::providers::moa::activation::disarm(&key);
+        // Durable refusals leave the existing model pin intact.
         let args = SelectModelArgs {
             model: pref.model,
             provider: pref.provider,
@@ -702,8 +637,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolution_refusals_preserve_pin_generation_and_moa() {
-        use crate::providers::session_moa_handle;
+    async fn resolution_refusals_preserve_pin_generation() {
         for (id, model, provider, expected) in [
             ("unknown", "not-configured-v999", None, "unknown"),
             (
@@ -742,7 +676,6 @@ mod tests {
             let ctx = test_context(&format!("select-refusal-{id}"));
             let key = ctx.session_key.to_key_string();
             session_model_handle::set_session_model(&key, Some("openai".into()), "gpt-5".into());
-            session_moa_handle::set_session_moa(&key, Some("deep".into()), false);
             let before = session_model_handle::get_session_model_snapshot(&key);
             let out = TURN_CONTEXT
                 .scope(
@@ -764,16 +697,7 @@ mod tests {
                 before,
                 "{id}"
             );
-            assert_eq!(
-                session_moa_handle::get_session_moa(&key)
-                    .unwrap()
-                    .preset
-                    .as_deref(),
-                Some("deep"),
-                "{id}"
-            );
             session_model_handle::clear_session_model(&key);
-            session_moa_handle::clear_session_moa(&key);
         }
     }
 
@@ -851,8 +775,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generation_exhaustion_preserves_pin_and_moa() {
-        use crate::providers::session_moa_handle;
+    async fn generation_exhaustion_preserves_pin() {
         let ctx = test_context("select-generation-exhausted");
         let key = ctx.session_key.to_key_string();
         let old = session_model_handle::SessionModelPref {
@@ -864,7 +787,6 @@ mod tests {
             old.clone(),
             u64::MAX
         ));
-        session_moa_handle::set_session_moa(&key, Some("deep".into()), false);
         let out = TURN_CONTEXT
             .scope(
                 ctx,
@@ -885,280 +807,5 @@ mod tests {
                 generation: u64::MAX
             }
         );
-        assert_eq!(
-            session_moa_handle::get_session_moa(&key)
-                .unwrap()
-                .preset
-                .as_deref(),
-            Some("deep")
-        );
-        session_moa_handle::clear_session_moa(&key);
-    }
-
-    // Tests that mutate the process-global `[moa]` config slot serialize on
-    // the crate-wide lock in `config_handle` — shared with `moa_manage.rs`
-    // tests, which touch the same slot.
-    use crate::providers::moa::config_handle::moa_config_test_lock;
-
-    /// A `[moa]` config holding a single resolvable preset named "deep"
-    /// (mirrors `moa_manage.rs`'s `solo_preset()` setup style). As the sole
-    /// preset it also resolves for bare `"moa"` — no `default_preset` needed.
-    fn deep_preset_config() -> crate::config::MoaToml {
-        let mut cfg = crate::config::MoaToml::default();
-        cfg.presets.insert(
-            "deep".to_string(),
-            crate::config::MoaPreset {
-                enabled: true,
-                advisors: vec![crate::config::MoaSlot {
-                    provider: "openai".into(),
-                    model: "gpt-5".into(),
-                }],
-                aggregator: crate::config::MoaSlot {
-                    provider: "anthropic".into(),
-                    model: "claude-opus-4".into(),
-                },
-                fanout: crate::config::MoaFanout::default(),
-                advisor_timeout_secs: 120,
-                advisor_max_tokens: None,
-                advisor_temperature: None,
-                aggregator_temperature: None,
-            },
-        );
-        cfg
-    }
-
-    #[tokio::test]
-    async fn moa_prefix_activates_preset_and_clears_model_pick() {
-        use crate::providers::{session_moa_handle, session_model_handle};
-        let _guard = moa_config_test_lock();
-        let sk = SessionKey::Ephemeral {
-            agent_id: "main".to_string(),
-            ephemeral_id: "select-moa-test".to_string(),
-        };
-        let key = sk.to_key_string();
-        // Prime a model pick + a resolvable preset.
-        session_model_handle::set_session_model(&key, None, "gpt-5".to_string());
-        crate::providers::moa::store_moa_config(Some(deep_preset_config()));
-
-        let ctx = TurnContext {
-            session_key: sk.clone(),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: None,
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        };
-        let out = TURN_CONTEXT
-            .scope(ctx, async {
-                call_select_model(SelectModelArgs {
-                    model: "moa:deep".to_string(),
-                    provider: None,
-                })
-                .await
-            })
-            .await
-            .unwrap();
-
-        assert!(out.ok);
-        // Selector slot is exclusive: MoA armed, model pick cleared.
-        let moa = session_moa_handle::get_session_moa(&key).unwrap();
-        assert_eq!(moa.preset.as_deref(), Some("deep"));
-        assert!(!moa.one_shot);
-        assert!(session_model_handle::get_session_model(&key).is_none());
-        session_moa_handle::clear_session_moa(&key);
-        crate::providers::moa::store_moa_config(None);
-    }
-
-    #[tokio::test]
-    async fn normal_pick_clears_moa_sticky() {
-        use crate::providers::{session_moa_handle, session_model_handle};
-        let sk = SessionKey::Ephemeral {
-            agent_id: "main".to_string(),
-            ephemeral_id: "select-clears-moa".to_string(),
-        };
-        let key = sk.to_key_string();
-        session_moa_handle::set_session_moa(&key, Some("deep".to_string()), false);
-        let ctx = TurnContext {
-            session_key: sk,
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: None,
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        };
-        let out = TURN_CONTEXT
-            .scope(ctx, async {
-                call_select_model(SelectModelArgs {
-                    model: "gpt-5".to_string(),
-                    provider: None,
-                })
-                .await
-            })
-            .await
-            .unwrap();
-        assert!(out.ok);
-        assert!(session_moa_handle::get_session_moa(&key).is_none());
-        session_model_handle::clear_session_model(&key);
-    }
-
-    #[tokio::test]
-    async fn bare_moa_activates_default_preset_and_clears_model_pick() {
-        use crate::providers::{session_moa_handle, session_model_handle};
-        let _guard = moa_config_test_lock();
-        let sk = SessionKey::Ephemeral {
-            agent_id: "main".to_string(),
-            ephemeral_id: "select-moa-bare".to_string(),
-        };
-        let key = sk.to_key_string();
-        // Prime a model pick + a config whose sole preset resolves as default.
-        session_model_handle::set_session_model(&key, None, "gpt-5".to_string());
-        crate::providers::moa::store_moa_config(Some(deep_preset_config()));
-
-        let ctx = TurnContext {
-            session_key: sk.clone(),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: None,
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        };
-        let out = TURN_CONTEXT
-            .scope(ctx, async {
-                call_select_model(SelectModelArgs {
-                    model: "moa".to_string(),
-                    provider: None,
-                })
-                .await
-            })
-            .await
-            .unwrap();
-
-        assert!(out.ok, "{}", out.message);
-        // Bare "moa" arms the handle with preset=None ("follow the config
-        // default", late-bound at run construction); the resolved name only
-        // gates validation and names the confirmation message.
-        let moa = session_moa_handle::get_session_moa(&key).unwrap();
-        assert_eq!(moa.preset, None);
-        assert!(!moa.one_shot);
-        assert!(out.message.contains("deep"), "{}", out.message);
-        // Selector slot is exclusive: the primed model pick is cleared.
-        assert!(session_model_handle::get_session_model(&key).is_none());
-        session_moa_handle::clear_session_moa(&key);
-        crate::providers::moa::store_moa_config(None);
-    }
-
-    #[tokio::test]
-    async fn moa_prefix_with_unknown_preset_fails_gracefully() {
-        let _guard = moa_config_test_lock();
-        crate::providers::moa::store_moa_config(None);
-        let sk = SessionKey::Ephemeral {
-            agent_id: "main".to_string(),
-            ephemeral_id: "select-moa-unknown".to_string(),
-        };
-        let ctx = TurnContext {
-            session_key: sk,
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: None,
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        };
-        let out = TURN_CONTEXT
-            .scope(ctx, async {
-                call_select_model(SelectModelArgs {
-                    model: "moa:ghost".to_string(),
-                    provider: None,
-                })
-                .await
-            })
-            .await
-            .unwrap();
-        assert!(!out.ok);
-        assert!(out.message.contains("moa"));
-    }
-
-    #[tokio::test]
-    async fn moa_arm_denied_for_guest_caller() {
-        // Audit AW1: a chat-tier (guest) channel must NOT arm MoA via the
-        // select_model slot — parity with the operator-gated `moa` tool / `/moa`.
-        use crate::providers::{session_moa_handle, session_model_handle};
-        let _guard = moa_config_test_lock();
-        let sk = SessionKey::Ephemeral {
-            agent_id: "main".to_string(),
-            ephemeral_id: "select-moa-guest".to_string(),
-        };
-        let key = sk.to_key_string();
-        crate::providers::moa::store_moa_config(Some(deep_preset_config()));
-
-        let ctx = TurnContext {
-            session_key: sk.clone(),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        };
-        let out = TURN_CONTEXT
-            .scope(ctx, async {
-                call_select_model(SelectModelArgs {
-                    model: "moa:deep".to_string(),
-                    provider: None,
-                })
-                .await
-            })
-            .await
-            .unwrap();
-
-        assert!(!out.ok, "guest must be denied MoA arming");
-        assert!(out.message.contains("operator"), "{}", out.message);
-        // Nothing armed: the sticky handle stays empty.
-        assert!(session_moa_handle::get_session_moa(&key).is_none());
-
-        // A normal model pick from the SAME guest caller is still allowed.
-        let ctx2 = TurnContext {
-            session_key: sk,
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        };
-        let out2 = TURN_CONTEXT
-            .scope(ctx2, async {
-                call_select_model(SelectModelArgs {
-                    model: "gpt-5".to_string(),
-                    provider: None,
-                })
-                .await
-            })
-            .await
-            .unwrap();
-        assert!(out2.ok, "guest may still pick a normal model");
-        session_model_handle::clear_session_model(&key);
-        crate::providers::moa::store_moa_config(None);
     }
 }

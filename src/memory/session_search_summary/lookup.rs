@@ -27,11 +27,9 @@ pub async fn retrieve_summary_fact(
 
 #[cfg(test)]
 mod tests {
-    use crate::sync_primitives::Arc;
-
     use super::super::synthesizer::test_support::make_store;
     use super::*;
-    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
 
     #[tokio::test]
     async fn returns_none_when_no_summary_exists() {

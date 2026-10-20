@@ -1,6 +1,6 @@
 //! Generation configuration RPC handlers
 //!
-//! Provides RPC methods for managing generation settings (output dir, thresholds, routing).
+//! Provides RPC methods for managing generation settings (output dir, thresholds).
 
 use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
@@ -16,7 +16,7 @@ use tokio::sync::RwLock;
 /// was `String` there. On any install that had never set an output directory
 /// the server sent `null`, the Panel failed to deserialise the **whole** body,
 /// and the generation settings section rendered a bare
-/// `invalid type: null, expected a string` instead of its eight controls. One
+/// `invalid type: null, expected a string` instead of its remaining controls. One
 /// shared type makes that a compile error rather than a runtime surprise.
 pub use aleph_protocol::providers::GenerationSettings;
 
@@ -36,7 +36,6 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
             .map(|p| p.to_string_lossy().to_string()),
         auto_paste_threshold_mb: generation.auto_paste_threshold_mb,
         background_task_threshold_seconds: generation.background_task_threshold_seconds,
-        smart_routing_enabled: generation.smart_routing_enabled,
     };
 
     match serde_json::to_value(dto) {
@@ -109,7 +108,6 @@ pub async fn handle_update(
             .map(std::path::PathBuf::from);
         generation.auto_paste_threshold_mb = dto.auto_paste_threshold_mb;
         generation.background_task_threshold_seconds = dto.background_task_threshold_seconds;
-        generation.smart_routing_enabled = dto.smart_routing_enabled;
 
         if let Err(e) = cfg.save_incremental(&["generation"]) {
             return JsonRpcResponse::error(
@@ -186,7 +184,6 @@ mod tests {
             output_dir: Some("x".into()),
             auto_paste_threshold_mb: 1,
             background_task_threshold_seconds: 1,
-            smart_routing_enabled: true,
         })
         .expect("encode");
         let declared: std::collections::BTreeSet<&str> = reference
@@ -208,7 +205,6 @@ mod tests {
             "output_dir",
             "auto_paste_threshold_mb",
             "background_task_threshold_seconds",
-            "smart_routing_enabled",
         ] {
             assert!(sent.contains(required), "missing {required}");
         }
@@ -233,7 +229,6 @@ mod tests {
                 "output_dir": "   ",
                 "auto_paste_threshold_mb": 5,
                 "background_task_threshold_seconds": 30,
-                "smart_routing_enabled": true,
             })),
             id: Some(serde_json::json!(1)),
         };

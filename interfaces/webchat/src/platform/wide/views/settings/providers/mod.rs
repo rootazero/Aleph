@@ -24,7 +24,6 @@
 
 mod detail_panel;
 mod list;
-mod model_ladder;
 mod picker;
 
 use crate::api::{is_configured, CatalogEntry, CatalogView, ProviderInfo, ProvidersApi};

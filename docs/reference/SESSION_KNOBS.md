@@ -14,7 +14,7 @@
 | **会话模式 Session Mode** | `chat` / `work`(默认) / `code` | 工具**呈现面**静态分区（R10 渐进披露例外）。不授予不拒绝任何权限 | Panel pill + `chat.send{mode}` + `session_set_mode` 工具 + TUI `/mode` | `src/config/types/policies/session_mode.rs` → [MODE_SYSTEM.md](MODE_SYSTEM.md) |
 | **推理档 Think Level** | `off`…`xhigh`，**未设=不发指令** | 模型被要求想多深（reasoning token 按 output 计费） | Panel pill + `chat.send{thinking}` + `self_config` + TUI `/think` | `src/agents/thinking.rs` + `execution_engine/turn_thinking.rs` |
 | **记忆模式 Memory Mode** | `on` / `off`（默认跟 `[memory] enabled`） | 这一轮 prompt **注入**不注入 curated memory / 笔记索引 / 召回。**不闸工具、不闸写** | Panel pill + `chat.send{memory}` + TUI `/memory-mode` | `src/memory/session_memory_mode.rs` + `harness_bridge/prompt_build.rs`（唯一闸点）→ FEATURE_LOCATOR §5.23 |
-| **模型 pin Model Pin** | 任意 model id（+可选 provider） | 这个对话此后用哪个模型（下一 run 起生效） | **只有 `select_model` 工具**（R8 对话式）——`sessions.patch` 明确拒绝该键。TUI 的 `/providers` 选择器**不是第二个写者**：它确认时发 `/model <id>` 这条网关命令，仍然落到同一个工具。Panel 的 `ModelPicker` **只显示不设置**（无 per-turn override 时 pill 印的就是 pin，否则它会报出用户刚换掉的那个模型） | `src/providers/session_model_handle.rs` + `gateway/session_model_pin.rs` + `execution_engine/turn_model.rs` |
+- **模型 pin Model Pin** | 任意 model id（+可选 provider） | 这个对话此后用哪个模型（下一条消息起生效） | **只有 `select_model` 工具**（R8 对话式）——`sessions.patch` 明确拒绝该键。per-turn model directive 只覆盖当前请求；provider/model/session/`BrainRef` 的绑定由请求上下文显式携带。旧 AgentDef `model_hint` / `provider_hint` 仅容忍并诊断，不参与 live binding | `src/providers/session_model_handle.rs` + `gateway/session_model_pin.rs` + `execution_engine/turn_model.rs` + `harness_bridge/runner_impl.rs::effective_model_directive` |
 | **繁忙输入 Busy Input** | `Steer`(默认) / `Interrupt` / `Queue` | 会话已有 run 在跑时新消息怎么办 | **per-channel 配置**（channel 实例配置块里的扁平键 `busy_input_mode`，经 `ChannelPolicyConfig` 解析）+ 三个写死的生产者（team run / OpenAI 兼容面 / 续跑，全钉 `queue`）。**Panel 靠手势而非旋钮**：`＋`/Enter = 客户端幽灵队列（≈Queue，且可 ↑ 撤回）· 轮边界自动 flush = Steer（服务端默认档）· `⚡`/Esc = abort + 重排（≈Interrupt） | `src/gateway/busy_queue/` → FEATURE_LOCATOR §4.8 |
 
 > **显示密度 `brief`/`full` 刻意不是会话旋钮**（spec 2026-09-23 的用户裁定 R7，不是本仓红线 R7）：它是客户端 chrome，落点是每台设备（Panel `appearance` 的 localStorage 轴、TUI `<aleph_home>/tui-detail`——由 Phase T/P 建，2026-09-23 时两处都还不存在），取值与默认在 `shared_ui_logic::transcript::detail`（`DetailLevel`）。哪天要按本仓红线 R8 做一个会话式（对话即管理面板）入口，落点见 [spec 2026-09-23 §13](../superpowers/specs/2026-09-23-stepwise-transcript-folding-design.md)——先记落点，不预建。
@@ -46,20 +46,20 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 - **model 先校验再回放。** `validate_snapshot_model` 复用 `model_catalog::lifecycle_for` 与 `pinnable_providers()`：退役且有继任 → 换继任；无继任、或 provider 已不在本机配置里 → 落回 agent 默认链。任一降级都写进 `ResumeReport.degraded`，并**对模型说一句**（有悬空调用时附在第一条边界修复的 `ToolError` 上，没有时单独追加一条 `SystemMessage`）。`project_root` 消失走同一条路（裁定 A9）。
 - **载体是 `RunRequest.model_override`**，它从不写回会话行——所以崩溃之后用户新调的 `select_model` 仍然从**下一条消息**起生效，正是 `select_model` 打印给模型的那句承诺。
 - **没有快照的 marker 计入 `ResumeReport.unsnapshotted`**（envelope 出现之前写下的 marker，以及 `RunStarted` 追加失败的那种 run）。它们照旧按今天的会话/全局值恢复——数出来，而不是假装不存在。
-- **MoA 预设不持久化**（裁定 A5）：恢复的 run 不重建崩溃时的 MoA 组合。
+- **主模型绑定与 failure-only fallback**：`model` / `model_provider` 在 `RunStarted` envelope 中记录本次实际显式绑定；恢复时只回放仍可用的 binding，并把失效/退役值写入 `ResumeReport.degraded`。per-turn model directive、session pin 与 `BrainRef` / 命名 preset 都是显式绑定或配置引用；provider fallback 只在失败后发生，受 retry budget、circuit 与 cooldown 约束。
 
 ## 模型热切换语义（Model Hot-Switch，2026-10，Phase M）
 
-**SessionModelProvider 每次 `process` / `execute_streaming_dyn` 请求边界读取 `SessionModelSnapshot`**（含 `model` + `model_provider`），该快照在本次请求内 immutable；切换在下一次请求边界才生效，in-flight 请求不受影响。
+**SessionModelProvider 每次 `process` / `execute_streaming_dyn` 请求边界读取 `SessionModelSnapshot`**（含 `model`、`model_provider` 与 `generation`），该快照在本次请求内 immutable；切换在下一次请求边界才生效，in-flight 请求不受影响。
 
-**generation monotonic / conditional durable persistence**：`generation` 单调递增；pin 变更写入带 generation 前置条件的 durable store，失败 fail-closed 回滚。普通 `sessions.patch` **明确禁止写入 model pin 键**（`knob_validators` 拦截），仅 `select_model` 工具拥有写权限。
+**generation monotonic / conditional durable persistence**：`generation` 单调递增；pin 变更写入带 generation 前置条件的 durable store，stale 或冲突写入 fail-closed，不能覆盖更新的 generation，失败时保留旧 pin。普通 `sessions.patch` **明确禁止写入 model pin 键**（`knob_validators` 拦截），仅 `select_model` 工具拥有写权限。
 
-**runner 模型选择优先级**：显式 turn override（Panel pill / `[voice]` 钉 → `FlowRequest.model_directive`）→ session `select_model` pin → agent `model_hint` → `BrainRef` preset。每层是前一层的 fallback。
+**runner 模型绑定**：显式 turn override（Panel pill / `[voice]` 钉 → `FlowRequest.model_directive`）→ session `select_model` pin → `BrainRef` preset；这些都是显式绑定或配置引用，不是按语义动态路由，provider fallback 只在请求失败后发生。
 
 **per-call provenance**：每条 `AssistantMessage` 可携带可选 per-call `model` / `provider` / `generation` provenance，支撑 trace 与成本归因。
 
 **TUI `/model` 和 webchat session picker 都走 gateway `/model` 到 `select_model`**；per-turn picker（Panel 模型 pill / `[voice]` 钉）走独立 `FlowRequest.model_directive` 路径，两者分开。
 
-**selectable roster 在 startup / provider reload 时发布**；unknown / ambiguous / unauthenticated / unsupported 模型 id 在 `select_model` 层**拒绝并保留旧 pin**，不做静默接受或 fallback 到未知 id。
+**resume 使用快照**：崩溃恢复回放 `RunStarted` envelope 中冻结的有效 model/provider binding，而不是重新读取恢复时的当前 pin；恢复仍执行可用性校验，并将降级记录到 `ResumeReport.degraded`。新 pin 从下一条正常请求起生效。
 
-SessionModelProvider reads `SessionModelSnapshot` at each request boundary; the snapshot is immutable within that request, switch takes effect next request. `generation` monotonic + conditional durable persistence; stale or conflicting writes cannot overwrite a newer generation. Ordinary `sessions.patch` rejects model pin keys; only `select_model` may write them. Runner precedence: explicit turn override → session pin → agent hint → `BrainRef` preset. `AssistantMessage` carries optional per-call provenance. TUI `/model` and webchat picker both route to `select_model`; per-turn picker is separate. Roster published at startup/reload; unknown/ambiguous/unauthenticated/unsupported IDs are rejected with old pin preserved.
+SessionModelProvider reads `SessionModelSnapshot` at each request boundary; the snapshot is immutable within that request, and a switch takes effect on the next request. `generation` is monotonic and durable writes use CAS, so stale writes fail closed. `select_model` is the sole writer; ordinary `sessions.patch` rejects model pin keys. Explicit turn directives, session pins, and `BrainRef` presets remain explicit bindings; provider fallback is failure-only. `AssistantMessage` carries optional per-call provenance.

@@ -363,12 +363,6 @@ async fn catalog_all_view_lists_every_chat_preset() {
 
 #[tokio::test]
 async fn catalog_configured_view_filters_empty_config_to_empty() {
-    // [moa] config is process-global; pin it to None under the shared lock so
-    // a concurrent moa-catalog test can't inject a stray "moa" row while this
-    // test asserts strict emptiness (same pattern as moa_manage.rs tests).
-    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
-    crate::providers::moa::store_moa_config(None);
-
     let config = Arc::new(RwLock::new(Config::default()));
     let (_vault_scratch, vault) = test_vault();
     let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
@@ -382,10 +376,6 @@ async fn catalog_configured_view_filters_empty_config_to_empty() {
 
 #[tokio::test]
 async fn catalog_default_view_is_configured() {
-    // Emptiness assertion → pin the process-global [moa] slot (see above).
-    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
-    crate::providers::moa::store_moa_config(None);
-
     let config = Arc::new(RwLock::new(Config::default()));
     let (_vault_scratch, vault) = test_vault();
     let response = handle_catalog(catalog_request(None), config, vault).await;
@@ -398,10 +388,6 @@ async fn catalog_default_view_is_configured() {
 
 #[tokio::test]
 async fn catalog_configured_view_returns_verified_enabled_entry() {
-    // Strict `len == 1` assertion → pin the process-global [moa] slot.
-    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
-    crate::providers::moa::store_moa_config(None);
-
     let mut config = Config::default();
     let mut cfg = ProviderConfig::test_config("gpt-4o");
     cfg.enabled = true;
@@ -563,11 +549,6 @@ async fn catalog_entries_carry_modalities_default_model() {
 /// (判据 §1).
 #[tokio::test]
 async fn catalog_unknown_view_is_refused_not_widened() {
-    // Row-set assertion → pin the process-global [moa] slot so a passing
-    // `view` is exactly the preset catalog, no synthetic moa row.
-    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
-    crate::providers::moa::store_moa_config(None);
-
     let config = Arc::new(RwLock::new(Config::default()));
     let (_vault_scratch, vault) = test_vault();
     let response = handle_catalog(
@@ -590,73 +571,6 @@ async fn catalog_unknown_view_is_refused_not_widened() {
         items.len() >= 20,
         "a known view still returns the preset catalog, got {}",
         items.len()
-    );
-}
-
-// ============================================================================
-// Round-2 E3: MoA presets ride providers.catalog as a "moa" pseudo-provider
-// row. `[moa]` config lives in a process-global slot (`config_handle`), so
-// these tests take `moa_config_test_lock()` — the same guard
-// `builtin_tools::moa_manage`'s tests use — to serialize against other tests
-// that mutate it.
-// ============================================================================
-
-fn solo_moa_preset() -> crate::config::MoaPreset {
-    crate::config::MoaPreset {
-        enabled: true,
-        advisors: vec![crate::config::MoaSlot {
-            provider: "openai".to_string(),
-            model: "gpt-5".to_string(),
-        }],
-        aggregator: crate::config::MoaSlot {
-            provider: "anthropic".to_string(),
-            model: "claude-opus-4".to_string(),
-        },
-        fanout: crate::config::MoaFanout::default(),
-        advisor_timeout_secs: 120,
-        advisor_max_tokens: None,
-        advisor_temperature: None,
-        aggregator_temperature: None,
-    }
-}
-
-#[tokio::test]
-async fn catalog_includes_moa_pseudo_entry_when_presets_enabled() {
-    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
-    let mut moa = crate::config::MoaToml::default();
-    moa.presets.insert("deep".to_string(), solo_moa_preset());
-    moa.default_preset = Some("deep".to_string());
-    crate::providers::moa::store_moa_config(Some(moa));
-
-    let config = Arc::new(RwLock::new(Config::default()));
-    let (_vault_scratch, vault) = test_vault();
-    let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
-    let items = items_array(&response);
-    let entry = items
-        .iter()
-        .find(|e| e["id"] == "moa")
-        .expect("moa pseudo-entry must appear when an enabled preset exists");
-    assert_eq!(entry["display_name"], "Mixture of Agents");
-    assert_eq!(entry["default_model"], "deep");
-    assert_eq!(entry["models"], json!(["deep"]));
-    assert_eq!(entry["has_api_key"], true);
-    assert_eq!(entry["protocol"], "moa");
-
-    crate::providers::moa::store_moa_config(None);
-}
-
-#[tokio::test]
-async fn catalog_omits_moa_entry_without_moa_config() {
-    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
-    crate::providers::moa::store_moa_config(None);
-
-    let config = Arc::new(RwLock::new(Config::default()));
-    let (_vault_scratch, vault) = test_vault();
-    let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
-    let items = items_array(&response);
-    assert!(
-        !items.iter().any(|e| e["id"] == "moa"),
-        "no moa entry expected when [moa] config is absent"
     );
 }
 
@@ -957,7 +871,7 @@ async fn every_catalog_row_deserialises_into_the_contract_type() {
     let (_vault_scratch, vault_) = test_vault();
     // The other direction: a client holding only `aleph-protocol` must be able
     // to read what the server sends, including the rows built by the custom
-    // and MoA arms rather than the preset arm.
+    // and preset arms rather than a single arm.
     let mut config = Config::default();
     let mut cfg = ProviderConfig::test_config("some-relay-model");
     cfg.enabled = true;

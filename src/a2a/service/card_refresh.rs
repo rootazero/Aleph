@@ -4,7 +4,8 @@
 //! `CardRegistry::load_from_config` seeds config-declared agents with
 //! placeholder cards (no skills/description, `version = "unknown"`). This
 //! module fetches each agent's real Agent Card once at startup and upserts it,
-//! so smart routing and `a2a_agents list` see real skill data.
+//! so explicit agent name/alias resolution and `a2a_agents list` see current
+//! Agent Card data.
 //!
 //! The health monitor (opt-in via `a2a.health_check_interval_secs > 0`) keeps
 //! each agent's `health` field current by probing reachability on an interval.

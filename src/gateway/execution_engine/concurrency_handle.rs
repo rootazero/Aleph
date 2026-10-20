@@ -1,6 +1,6 @@
-//! Process-global handle to the live `ConcurrencyLimiter`, mirroring
-//! `providers::route_handle`. The limiter is built once inside the
-//! `ExecutionEngine`; a `[execution]` config patch alone never reaches it.
+//! Process-global handle to the live `ConcurrencyLimiter`. The limiter is built
+//! once inside the `ExecutionEngine`; a `[execution]` config patch alone never
+//! reaches it.
 //! This handle lets `self_config` hot-apply new run caps on the next
 //! admission — no daemon restart (the task's hot-state requirement).
 //!

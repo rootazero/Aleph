@@ -14,12 +14,8 @@
 //! ## Deliberate constraints
 //!
 //! * **Off by default.** A probe is a real request against a real endpoint —
-//!   it costs money and rate budget. The operator opts in with
-//!   `[route] health_probe_interval_secs`; `0`/absent means the loop idles.
-//!   The knob is re-read from the live [`RouteHandle`] at every slice of the
-//!   wait (see `wait_for_next_pass`), so a `route_config.update` hot-tunes it
-//!   with no restart — including switching it off before the pass it was
-//!   already waiting on.
+//!   it costs money and rate budget. There is currently no ordinary health
+//!   configuration for enabling this loop, so it idles at `0`.
 //! * **Only circuit-open providers the operator left enabled are probed.** A
 //!   healthy provider is never sent a probe request — the loop spends nothing
 //!   while everything works — and a provider the operator switched off is not
@@ -33,11 +29,12 @@
 //!   [`ProviderCooldown`](crate::providers::failover::ProviderCooldown) windows
 //!   are deliberately left alone.
 //!
+//! This prober is disabled until a future ordinary health configuration exists;
+//! it has no semantic routing role.
+//!
 //! Lifecycle mirrors [`codex_token_refresher`](super::codex_token_refresher):
 //! one process-local `tokio::spawn` loop (the daemon is an OS-level
 //! singleton), no shutdown signal — the task lives as long as the process.
-//!
-//! [`RouteHandle`]: crate::providers::route_handle::RouteHandle
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -47,20 +44,19 @@ use tracing::{debug, info, warn};
 
 use crate::config::{Config, ProviderConfig};
 use crate::gateway::security::SharedTokenManager;
-use crate::providers::failover::FailoverHealth;
+use crate::providers::failover::{global_health, FailoverHealth};
 use crate::providers::probe::{probe_disposition, probe_provider_bounded, ProbeDisposition};
 use crate::sync_primitives::Arc;
 
 /// Poll cadence while the prober is disabled (`interval == 0`). Cheap and
-/// probe-free: the loop must still notice a later `route_config.update`
-/// switching the prober on without a restart.
+/// probe-free: the loop remains idle until a future ordinary health
+/// configuration enables it.
 const DISABLED_POLL: Duration = Duration::from_secs(30);
 
-/// The configured probe interval, read fresh from the live route handle.
-/// `0` (or no handle wired — tests, pre-boot) means disabled.
+/// There is no ordinary health configuration yet, so the background prober is
+/// disabled. This loop has no semantic routing role.
 fn probe_interval_secs() -> u64 {
-    crate::providers::route_handle::try_global_route_handle()
-        .map_or(0, |h| h.snapshot().health_probe_interval_secs)
+    0
 }
 
 /// One probe pass: ping every provider whose circuit is currently **open**,
@@ -124,11 +120,8 @@ where
     outcomes
 }
 
-/// Sleep until the next probe pass is due, re-reading `interval` after every
-/// [`DISABLED_POLL`] slice. Sleeping the whole interval in one call would read
-/// the knob only *before* the wait, so a `route_config.update` switching the
-/// prober off mid-interval still bought one more full paid pass; `0` at any
-/// slice boundary discards the wait accumulated so far.
+/// Sleep until the next probe pass is due. The interval remains disabled
+/// until a future ordinary health configuration exists.
 async fn wait_for_next_pass<F: Fn() -> u64>(interval: F) {
     let mut waited = Duration::ZERO;
     loop {
@@ -150,10 +143,8 @@ async fn wait_for_next_pass<F: Fn() -> u64>(interval: F) {
     }
 }
 
-/// Spawn the background probe loop. Ticks at the configured interval (read
-/// fresh every slice of the wait, so the knob hot-tunes in both directions),
-/// idling probe-free while disabled. Spawned once at boot; the loop self-gates,
-/// so there is nothing to start or stop later.
+/// Spawn the background probe loop. It remains idle while the probe interval
+/// is disabled; a future ordinary health configuration may enable it.
 pub fn spawn_background(config: Arc<RwLock<Config>>, vault: Arc<SharedTokenManager>) {
     tokio::spawn(async move {
         loop {
@@ -161,11 +152,10 @@ pub fn spawn_background(config: Arc<RwLock<Config>>, vault: Arc<SharedTokenManag
 
             // The shared breaker map the chains mutate — same reachability
             // `providers.test` uses. Absent in tests / before boot wiring.
-            let Some(obs) = crate::providers::route_observe::global_route_observability() else {
+            let Some(health) = global_health() else {
                 continue;
             };
-            let open: Vec<String> = obs
-                .health
+            let open: Vec<String> = health
                 .snapshot()
                 .await
                 .into_iter()
@@ -198,7 +188,7 @@ pub fn spawn_background(config: Arc<RwLock<Config>>, vault: Arc<SharedTokenManag
                     .collect()
             };
 
-            let outcomes = probe_open_circuits_once(&obs.health, &configs, |name, pc| {
+            let outcomes = probe_open_circuits_once(health, &configs, |name, pc| {
                 let name = name.to_string();
                 async move { probe_provider_bounded(&name, pc).await.success }
             })

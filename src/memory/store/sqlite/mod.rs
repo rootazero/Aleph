@@ -14,7 +14,6 @@ pub mod memory_write_decisions;
 pub mod notes;
 pub mod query_filed;
 pub mod recall_signals;
-pub mod routing_experience;
 mod sessions;
 
 use crate::error::AlephError;
@@ -62,11 +61,10 @@ impl Default for RetrievalTuning {
 /// wraps a closure in `tokio::task::spawn_blocking`. Migrating the 48+
 /// `lock_conn!(self)` sites in `notes/store_impl.rs` plus the ~18 sites
 /// in the helper files (`dream_reports.rs`, `memory_write_decisions.rs`,
-/// `query_filed.rs`, `recall_signals.rs`,
-/// `routing_experience.rs`) to the async helper is mechanical (each call
-/// becomes `with_conn(...).await?`) but spans enough surface that doing
-/// it in one review-round commit risks regressions across the 130+ store
-/// tests. Call it out as a separate sprint item with its own testing
+/// `query_filed.rs`, `recall_signals.rs`) to the async helper is
+/// mechanical (each call becomes `with_conn(...).await?`) but spans enough
+/// surface that doing it in one review-round commit risks regressions across
+/// the 130+ store tests. Call it out as a separate sprint item with its own testing
 /// budget. Until then, treat high-concurrency note-store usage as a known
 /// performance ceiling rather than a correctness bug.
 ///

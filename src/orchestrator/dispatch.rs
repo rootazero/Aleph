@@ -584,7 +584,7 @@ pub struct FlowRequest {
     /// This turn's explicit (provider, model) pick — the chat-window model
     /// picker's `chat.send.model_override`, or the `[voice]` low-TTFT pin on a
     /// voice turn. Highest-priority model directive: it outranks the session's
-    /// sticky `select_model` pick and the agent's own `model_hint`, because it
+    /// sticky `select_model` pick and the flow's `BrainRef` pin, because it
     /// is the most recent deliberate choice.
     ///
     /// It has to travel as a request field. The binder resolves its directive
@@ -657,9 +657,10 @@ pub struct Orchestrator {
     pub sandbox_factory: SandboxFactory,
     /// Harness runner injected at construction — test mocks can swap this out.
     pub harness: Arc<dyn HarnessRunner>,
-    /// Phase 3 — provider routing for spawned subagents (the global failover
-    /// chain + per-`provider_hint` overrides). `None` for test mocks and the
-    /// simple engine; `Some` once `build_failover_chain` has run at boot.
+    /// Phase 3 — provider selection for spawned subagents: the global
+    /// failure-only fallback chain plus explicit configured provider overrides.
+    /// `None` for test mocks and the simple engine; `Some` once
+    /// `build_failover_chain` has run at boot.
     pub subagent_routing: Option<crate::orchestrator::deps_builder::ProviderChain>,
     /// Shared `AgentRegistry`. Same `Arc` cloned into `AgentHarnessRunner` at
     /// boot so all subagent dispatchers see user-defined agents. `None` only
@@ -824,8 +825,8 @@ pub trait HarnessRunner: Send + Sync {
         // segments. `TurnEnvelope::none()` leaves all three lines absent.
         envelope: crate::thinker::TurnEnvelope,
         // This turn's explicit model pick (chat-window picker / voice pin).
-        // Outranks the session's sticky `select_model` pick and the agent's
-        // `model_hint`; `None` leaves the directive chain untouched.
+        // Outranks the session's sticky `select_model` pick and the flow's
+        // `BrainRef` pin; `None` leaves the directive chain untouched.
         model_directive: Option<crate::providers::session_model_handle::SessionModelPref>,
         // The engine's run id (`FlowRequest::run_id`). Implementations that
         // write run markers MUST write this id on them — see that field's doc.
@@ -882,14 +883,6 @@ pub trait HarnessRunner: Send + Sync {
     /// keeps test mocks and the simple engine unguarded, matching their
     /// main-harness behavior.
     fn guardrails(&self) -> Option<Arc<crate::guardrails::GuardrailRegistry>> {
-        None
-    }
-
-    /// VESR v1.1 (b) — the routing-experience store this runner records into,
-    /// if any. The gateway threads it into `SubagentTool` so spawned subagents
-    /// capture their own routing experience under their agent_id. Default `None`
-    /// keeps test mocks and the simple engine capture-free.
-    fn routing_store(&self) -> Option<Arc<crate::routing::RoutingExperienceStore>> {
         None
     }
 
@@ -1067,8 +1060,8 @@ impl Orchestrator {
 
     /// Phase 3 — attach the subagent provider routing built by
     /// `build_failover_chain`. The gateway execution engine reads it to route
-    /// spawned subagents through the failover chain and to honour
-    /// `AgentDef.provider_hint`.
+    /// spawned subagents through the global failover chain or an explicit
+    /// configured provider route.
     #[must_use]
     pub fn with_subagent_routing(
         mut self,

@@ -207,9 +207,8 @@ pub(super) const BATCH_ABORT_DRAIN_SECS: u64 = 5;
 /// The clamp in `parse` bounds a child by [`max_run_timeout_secs`], which
 /// assumes **one child per call**. A batch of `rows` against `permits`
 /// concurrency slots does not run flat: it runs in `ceil(rows / permits)`
-/// WAVES, and an MoA reduce adds one more serial round after them. So the call's
-/// real wall clock is `per_child × (waves + agg_rounds)`, and clamping each
-/// child to the whole share guarantees the tool budget fires first and the
+/// WAVES, so the call's real wall clock is `per_child × waves`, and clamping
+/// each child to the whole share guarantees the tool budget fires first and the
 /// entire batch is discarded — five 1500 s children against four permits is two
 /// waves, i.e. 3000 s of work inside a 1500 s share.
 ///
@@ -217,8 +216,8 @@ pub(super) const BATCH_ABORT_DRAIN_SECS: u64 = 5;
 /// already held by this run's background children (which really do narrow this
 /// batch's concurrency) shorten the per-child share instead of being wished
 /// away.
-pub(super) fn wave_aware_child_timeout_cap(rows: usize, permits: usize, agg_rounds: usize) -> u64 {
-    let rounds = u64::try_from(wave_count(rows, permits).saturating_add(agg_rounds))
+pub(super) fn wave_aware_child_timeout_cap(rows: usize, permits: usize) -> u64 {
+    let rounds = u64::try_from(wave_count(rows, permits))
         .unwrap_or(u64::MAX)
         .max(1);
     (max_run_timeout_secs() / rounds).max(1)
@@ -246,19 +245,15 @@ pub(super) fn wave_count(rows: usize, permits: usize) -> usize {
 pub(super) const ACCEPTED_ARG_KEYS: &[&str] = &[
     "action",
     "agent_type",
-    "aggregator_model",
     "batch_tasks",
     "context",
     "context_summary",
     "fork_turns",
     "model",
     "name",
-    "proposer_models",
     "request_id",
     "request_ids",
     "run_in_background",
-    "synthesis_instruction",
-    "synthesize",
     "task",
     "team_name",
     "text",
@@ -269,7 +264,11 @@ pub(super) const ACCEPTED_ARG_KEYS: &[&str] = &[
 /// Parsed arguments for the subagent tool.
 #[derive(Debug)]
 pub(super) enum SubagentAction {
-    /// Run a new sub-agent task.
+    /// Run a new sub-agent task. A background single task returns one
+    /// `request_id`; a background batch returns `request_ids`. A synchronous
+    /// batch waits for all rows until its bounded deadline; when the deadline
+    /// wins, it returns `batch_partial` with completed results and unfinished
+    /// rows, then cancels and aborts unfinished children.
     Run(RunArgs),
     /// Check status of a background sub-agent.
     CheckStatus(String),
@@ -321,25 +320,11 @@ pub(super) struct RunArgs {
     /// target agent's `context_mode`, which is what an omitted `context`
     /// argument means and what every pre-knob caller gets.
     pub(super) spawn_context: Option<crate::agents::SpawnContext>,
-    /// Batch tasks for parallel execution. When provided, all tasks run in
-    /// background automatically and a list of `request_ids` is returned.
+    /// Batch tasks for parallel execution. With `run_in_background=false`, the
+    /// batch waits for every row until a bounded deadline; a deadline expiry
+    /// returns `batch_partial` with unfinished rows and cancels/aborts those
+    /// children. With `true`, returns `request_ids` for later polling.
     pub(super) batch_tasks: Option<Vec<BatchTask>>,
-    /// Mixture-of-Agents convenience: replicate the top-level `task` across
-    /// these models as parallel proposers. `["claude-opus-4-8", "gpt-5"]`
-    /// expands to one batch entry per model running the same prompt — the
-    /// classic MoA shape. Ignored when explicit `batch_tasks` is supplied.
-    pub(super) proposer_models: Option<Vec<String>>,
-    /// When true, after a synchronous batch fans out and every proposer
-    /// returns, run ONE aggregator sub-agent that synthesizes the proposals
-    /// into a single answer (Mixture-of-Agents reduce step). Requires a
-    /// foreground batch (`run_in_background = false`).
-    pub(super) synthesize: bool,
-    /// Model for the aggregator run. Falls back to the top-level `model`,
-    /// then the agent's default. Use a strong model here for best synthesis.
-    pub(super) aggregator_model: Option<String>,
-    /// Optional extra guidance handed to the aggregator on top of the default
-    /// "merge the strongest parts, resolve conflicts" instruction.
-    pub(super) synthesis_instruction: Option<String>,
 }
 
 #[cfg(test)]

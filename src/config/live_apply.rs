@@ -70,31 +70,6 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
             continue;
         }
         let landed = match *target {
-            // The failover chain reads its route state from an `ArcSwap`
-            // installed at boot; storing here is what a "live" route change
-            // means.
-            "route" => {
-                // The `config_problems` half of the same hot write. The
-                // observability bundle's list is computed at boot, so without
-                // this the one field that answers "why did my routing config
-                // do nothing" describes the *previous* generation — a typo'd
-                // pin written at runtime would never appear in it. Poked
-                // unconditionally, like `execution`'s sub-agent cap and for
-                // the same reason: its success is deliberately NOT folded
-                // into `landed`, which tracks the route HANDLE (the part that
-                // needs a live chain). A process with no observability bundle
-                // has nothing to republish; that is not a failed route apply.
-                if let Some(obs) = crate::providers::route_observe::global_route_observability() {
-                    obs.hot_apply_problems(&cfg.route);
-                }
-                match crate::providers::route_handle::try_global_route_handle() {
-                    Some(handle) => {
-                        handle.store(&cfg.route);
-                        true
-                    }
-                    None => false,
-                }
-            }
             // New admission caps bind on the next run admission.
             "execution" => {
                 // W27 — the sub-agent fan-out cap is a process-global atomic
@@ -232,7 +207,6 @@ mod tests {
     #[test]
     fn every_live_section_has_an_apply_arm() {
         let known_arms = [
-            "route",
             "execution",
             "behavior",
             "policies.spend",
@@ -293,14 +267,6 @@ mod tests {
             observed, 11,
             "[execution] max_concurrent_subagents must reach the fan-out semaphore's source"
         );
-    }
-
-    #[test]
-    fn route_without_a_registered_chain_downgrades_to_restart() {
-        // In a process where the failover chain was never assembled (CLI,
-        // tests, early boot) nothing received the change, so claiming Live
-        // would be a lie the user only discovers by the change not happening.
-        assert_eq!(classify_verified("route.mode", &[]), ReloadImpact::Restart);
     }
 
     #[test]
@@ -566,97 +532,6 @@ mod tests {
         assert_eq!(
             classify_verified("policies.spend.per_user_usd", &[]),
             ReloadImpact::Restart
-        );
-    }
-
-    /// The `route` arm republishes `config_problems`, not just the handle.
-    ///
-    /// This executor is reached by the `update_config` tool / `config.patch`
-    /// RPC, `ConfigPatcher::rollback` and `config.reload`. `config_problems`
-    /// — the one field that answers "why did my routing config do nothing" —
-    /// must therefore be recomputed here and not only in the dedicated
-    /// `route_config.update` handler, or a pin patched at runtime is judged
-    /// against the previous generation.
-    ///
-    /// Asserted through the **process-global** bundle `route_status` reads,
-    /// because that is what the arm looks up: a local `RouteObservability`
-    /// would prove the function works, not that the executor reaches it. Both
-    /// directions of the gate are exercised (a broken config raises a problem,
-    /// a clean one drains it) — a republish that only ever appends would leave
-    /// a fixed config permanently accused.
-    ///
-    /// ⚠️ The slot is a `CapabilitySlot` (install-once, no uninstall), so this
-    /// bundle outlives the test in the `--lib` binary. The serial key is shared
-    /// with `route_config`'s handler-face test, which pokes the same bundle
-    /// through `apply_live_sections` and would otherwise race these two
-    /// assertions.
-    #[tokio::test]
-    #[serial_test::serial(route_observability_global)]
-    async fn a_route_patch_through_the_executor_republishes_config_problems() {
-        use crate::config::types::route::{ModelRouteConfig, RouteMode};
-        use crate::providers::default_handle::StaticDefault;
-        use crate::providers::mock::MockProvider;
-        use crate::providers::route_observe::{
-            global_route_observability, set_global_route_observability, test_observability,
-        };
-        use crate::providers::route_policy::EndpointTier;
-        use crate::sync_primitives::Arc;
-
-        set_global_route_observability(test_observability(
-            Arc::new(StaticDefault::new(Arc::new(MockProvider::new("ok")))),
-            std::collections::HashMap::from([("ollama".to_string(), EndpointTier::Local)]),
-        ));
-        let obs = global_route_observability()
-            .expect("a bundle is installed (this test's, or an earlier installer's)");
-
-        // Installed (get-or-init) so the arm's verdict is decided, not left to
-        // whether some other test in this binary happened to init it first:
-        // `landed` tracks the HANDLE, so without this the returned vec would be
-        // empty here for reasons that have nothing to do with `config_problems`.
-        let handle =
-            crate::providers::route_handle::global_route_handle(&ModelRouteConfig::default());
-
-        let mut cfg = Config::default();
-        // A pin naming a provider that is not configured: a problem against
-        // ANY tier catalog, so this holds even if another test in this binary
-        // won the install-once race with a different bundle.
-        cfg.route.local_provider = Some("olama".to_string());
-        cfg.route.mode = RouteMode::AlwaysLocal;
-        let applied = apply_live_sections(&cfg, &["route"]);
-        assert!(
-            applied.contains(&"route"),
-            "the route target must report as applied once its handle exists; got {applied:?}"
-        );
-        assert_eq!(
-            handle.snapshot().mode,
-            RouteMode::AlwaysLocal,
-            "`applied` naming `route` must mean the handle carries the new config"
-        );
-
-        let problems = obs.snapshot().await["config_problems"].clone();
-        let problems = problems.as_array().expect("array").clone();
-        assert_eq!(
-            problems.len(),
-            1,
-            "a [route] write through the executor must republish config_problems; got: \
-             {problems:?}"
-        );
-        assert_eq!(problems[0]["field"], "local_provider");
-        assert!(problems[0]["detail"]
-            .as_str()
-            .expect("detail")
-            .contains("olama"));
-
-        // The other direction: fixing the config must drain the list, not
-        // leave the old accusation standing.
-        cfg.route.local_provider = None;
-        let _ = apply_live_sections(&cfg, &["route"]);
-        assert!(
-            obs.snapshot().await["config_problems"]
-                .as_array()
-                .expect("array")
-                .is_empty(),
-            "a clean [route] write must clear the previous generation's problems"
         );
     }
 

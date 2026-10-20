@@ -7,10 +7,10 @@
 //! or to a public API ([`EndpointKind::Cloud`])?
 //!
 //! Design stance (R7 LLM sovereignty): this is a connectivity *fact*, never an
-//! inference. It never reads the prompt, never scores a task. It feeds the
-//! route policy ([`crate::providers::route_policy`]) — a positional
-//! infrastructure filter — with a hard signal so an operator's `[route]` mode
-//! can shape the failover chain around on-machine vs off-machine providers.
+//! inference. It never reads the prompt, never scores a task. The model catalog
+//! exposes this endpoint metadata to clients, while capability gating uses
+//! deterministic request-shape checks before the failure-only provider fallback
+//! walk.
 //!
 //! Locality keys on the **host** of `base_url`, deliberately *not* the vendor:
 //! `ollama.com` (Cloud) and a local Ollama at `http://localhost:11434` (Local)

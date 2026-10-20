@@ -11,9 +11,10 @@
 //! best model" router — the LLM still owns model choice; this only removes
 //! candidates that would deterministically fail.
 //!
-//! Like [`route_policy`](super::route_policy), it shapes the candidate SET
-//! handed to the existing failover engine; the harness never learns of it. It
-//! is modelled on `LiteLLM`'s `_pre_call_checks` and is **fail-open**:
+//! The capability gate applies these checks to catalog candidates and shapes
+//! the candidate SET handed to the existing failure-only provider fallback
+//! engine; the harness never learns of it. It is modelled on `LiteLLM`'s
+//! `_pre_call_checks` and is **fail-open**:
 //!
 //! * a model with unknown capabilities ([`capabilities_for`] = `None`) is kept
 //!   — the static table is best-effort, not authoritative;

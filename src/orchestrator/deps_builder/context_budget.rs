@@ -485,10 +485,10 @@ pub fn build_context_budget_config(
 /// (deliberately conservative, chain-minimum) budget onto the model ACTUALLY
 /// serving each run.
 ///
-/// The startup config is frozen to the smallest window on the failover chain —
-/// the right floor for in-request migrations, but blind to per-run model
-/// selection: a session `select_model` pick, an agent `model_hint`, or a
-/// brain-level strict pin can all put a run on a model the chain-min
+/// The startup config is frozen to the smallest window on the failure-only
+/// fallback chain — the right floor for provider recovery, but blind to
+/// explicit per-run model binding: a session `select_model` pick, an explicit
+/// per-run/provider-model binding, or a brain-level strict pin can all put a run on a model the
 /// derivation never saw, while the context gauge already follows that serving
 /// model (`runner_impl`'s `gauge_model`). A run pinned to a NARROWER model
 /// than the chain minimum then compacts against a budget its real window

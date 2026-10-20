@@ -1,15 +1,16 @@
 //! Process-global per-session model preference.
 //!
-//! Model binding is resolved at each provider request boundary through
-//! `SessionModelProvider`; the live session snapshot is not frozen at run
-//! construction. A selection therefore affects the next request, while the
-//! request already in flight keeps its immutable provider/model target.
+//! An explicit per-session model binding: the `select_model` tool lets the
+//! main-loop LLM choose the provider/model for this conversation. This is
+//! explicit model binding. The selection does not inspect prompts, scores, or task
+//! semantics. The live binding is read at each provider request boundary, so a
+//! selection affects the next request while an in-flight request keeps its
+//! immutable target. Provider fallback remains failure-only and follows the
+//! configured failover policy.
 //!
-//! Mirrors [`route_handle`](super::route_handle): a single process-global,
-//! lock-guarded map holds the live per-session selection; `SessionModelProvider`
-//! reads that selection at each request boundary and `select_model` updates it.
-//! the tool. Keyed by the canonical `SessionKey` string so the writer (tool,
-//! from `TURN_CONTEXT`) and reader (bridge, from its run key) agree.
+//! The process-global, lock-guarded state is keyed by the canonical
+//! `SessionKey` string. The tool writes it from `TURN_CONTEXT`; the request
+//! provider reads it at the boundary so both sides agree on the session.
 //!
 //! # The map is a cache; the session row is the record
 //!

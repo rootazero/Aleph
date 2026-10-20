@@ -4,7 +4,9 @@
 
 ---
 
-## Overview
+## Current runtime status
+
+The main LLM composes generic subagents. Fixed MoA fan-out and semantic model routing are not live. Explicit provider/model/session/`BrainRef` binding remains authoritative; provider-configured fallback is failure-only. Historical typed MoA traces decode, while old config tables and AgentDef hints are tolerated with diagnostics and ignored.
 
 The Agent System implements the **Think → Act** loop, the heart of Aleph's intelligence. The LLM handles all reasoning (intent, planning, tool selection) in a single inference call, keeping the system minimal.
 
@@ -734,8 +736,7 @@ pub struct LoopConfig {
     /// Compression threshold (tokens)
     pub compression_threshold: usize,
 
-    /// Model routing strategy
-    pub model_routing: ModelRoutingConfig,
+    /// Model selection is explicit per-turn/session/BrainRef; failure-only fallback is provider runtime behavior.
 
     /// Thinking level
     pub thinking_level: ThinkingLevel,

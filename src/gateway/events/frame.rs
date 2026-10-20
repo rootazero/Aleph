@@ -203,8 +203,9 @@ pub enum GatewayEventFrame {
     /// (a fast-path slash command — `fast_path.rs` re-emits the event by hand
     /// precisely "so the projector writes them to messages"), and the text it
     /// would carry is `request.input`, which is not always what lands in the
-    /// transcript (`/moa X` is rewritten before seeding; multimodal turns take
-    /// another path entirely). A bubble the next reload contradicts is worse
+    /// transcript (the historical removed `/moa X` form was rewritten before
+    /// seeding; multimodal turns take another path entirely). A bubble the next
+    /// reload contradicts is worse
     /// than a bubble that arrives late, so this frame is published from the
     /// projector at the instant the row exists instead.
     ///

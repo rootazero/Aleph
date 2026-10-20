@@ -66,6 +66,7 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// fail-open: every tool stays visible.
     pub(super) tool_health: Option<Arc<crate::tool_metadata::ToolHealthCache>>,
     /// Memory backend for auto-memorization of conversations
+    #[allow(dead_code)]
     pub(super) memory_backend: Option<crate::memory::store::MemoryBackend>,
     /// Raw-memory writer, independent of the derived SQLite indexes.
     pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,

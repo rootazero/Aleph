@@ -10,7 +10,7 @@
 //! would have reached two of them and been forgotten in the third — silently,
 //! since a missing field is not a compile error.
 //!
-//! (`route_observe::price_milli_per_mtok` and `failover::price_hint` read
+//! (`failover::price_hint` reads
 //! [`crate::pricing`] alone and stay that way: they need one scalar to sort on,
 //! not a record to display.)
 //!

@@ -15,19 +15,15 @@
 //!
 //! Screens come in two shapes, decided by [`screen_for_path`]:
 //!   * **Native** — a hand-built iOS screen (Appearance / Connection /
-//!     Embeddings / Model route / Providers). It brings its own `PhoneShell`.
+//!     Embeddings / Providers). It brings its own `PhoneShell`.
 //!   * **Wrapped** — the desktop view mounted inside a `PhoneShell` with a
-//!     `‹ Settings` back button and the tab bar. Same move `PhoneDashboard`
-//!     already makes for Overview / Logs / Tasks …; zero duplicated UI, and the
-//!     page tracks the desktop automatically. Without it these paths rendered
-//!     the 256 px desktop sidebar into a 390 px viewport with no way back.
+//!     `‹ Settings` back button and the tab bar.
 //!
 //! I/O-only (R4): the landing only navigates.
 
 pub mod appearance;
 pub mod connection;
 pub mod embeddings;
-pub mod model_route;
 pub mod providers;
 
 use crate::components::settings_sidebar::{SettingsTab, SETTINGS_GROUPS};
@@ -44,7 +40,6 @@ pub enum NativeScreen {
     Appearance,
     Connection,
     Embeddings,
-    ModelRoute,
     Providers,
 }
 
@@ -75,7 +70,6 @@ pub fn screen_for_path(path: &str) -> PhoneSettingsScreen {
         "/settings/appearance" => PhoneSettingsScreen::Native(NativeScreen::Appearance),
         "/settings/network" => PhoneSettingsScreen::Native(NativeScreen::Connection),
         "/settings/embedding-providers" => PhoneSettingsScreen::Native(NativeScreen::Embeddings),
-        "/settings/model-route" => PhoneSettingsScreen::Native(NativeScreen::ModelRoute),
         "/settings/providers" => PhoneSettingsScreen::Native(NativeScreen::Providers),
         // Every other `/settings/**` path — including `/settings/channels/<id>`
         // — falls to the wrapped desktop view rather than to nothing, so an
@@ -116,9 +110,9 @@ fn tab_for_path(path: &str) -> Option<SettingsTab> {
 /// Deliberately sparse. The rule it enforces: **a value shown on the landing
 /// must have a producer we can name.** Theme reads the same `read_mode()` the
 /// Appearance screen writes; Connection reads the same host the Connection
-/// screen prints. Everything else (provider name, embedding model, route model)
-/// lives behind an async RPC and belongs on its own screen — a constant here
-/// would be the fiction this module just deleted.
+/// screen prints. Provider and embedding values live behind an async RPC and
+/// belong on their own screens — a constant here would be the fiction this
+/// module just deleted.
 fn live_value(
     tab: SettingsTab,
     i18n: leptos_i18n::I18nContext<crate::i18n::Locale>,
@@ -230,7 +224,6 @@ mod tests {
             "/settings/appearance",
             "/settings/network",
             "/settings/embedding-providers",
-            "/settings/model-route",
             "/settings/providers",
         ] {
             assert!(

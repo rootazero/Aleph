@@ -75,7 +75,6 @@ use alephcore::Config;
 /// first-writer-wins, so it is a no-op on anything already stamped `Installed`.
 pub(in crate::commands::start) fn decline_orchestrator_slots(because: &'static str) {
     alephcore::gateway::i18n::decline_locale(because);
-    alephcore::providers::route_observe::decline_global_route_observability(because);
     alephcore::providers::session_model_handle::decline_pinnable_providers(because);
     alephcore::context::compact::manual::decline_manual_compaction(because);
 }
@@ -105,7 +104,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     memory_backend: Option<alephcore::memory::store::MemoryBackend>,
     // Markdown-backed raw memory store used by compaction summary reuse.
     raw_memory_store: Option<Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>>,
-    embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     // Tool catalog — owns the `ToolHealthCache` whose snapshot
     // feeds `runtime_state_blocks`. Threaded so `build_system_prompt` can
     // populate `<tool_runtime_state>` fragments.
@@ -123,13 +121,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // connected servers' advertised `instructions` into the system prompt
     // (`McpInstructionsLayer`). `None` keeps that layer silent.
     mcp_handle: Option<alephcore::mcp::McpManagerHandle>,
-    // Approval gate for route-mode cloud escalation (borrow-cloud under
-    // `[route] mode = always_local`). Reuses the shared `ApprovalGate` whose
-    // channel requester is late-bound after channels are up. `None` fails any
-    // escalation closed.
-    escalation_approval: Option<
-        Arc<dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester>,
-    >,
     // Call-time descriptor identity lookup for `ToolCallRequested` stamping.
     // Wired from the MCP `tool_registry_phase2` — the only registry whose
     // tool-name space the live agent loop resolves against. `None` (tests /
@@ -294,117 +285,71 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
 
     // Wire the provider failover chain: wrap the live default-provider handle
     // in a FailoverProvider that walks [primary, ...[fallback_provider].chain],
-    // each provider expanded across its `models` list. Hot-reload is preserved
-    // — the wrapper resolves `default_provider.current()` on every call.
-    // `build_failover_chain` also yields the per-`provider_hint` override
-    // registry; both are carried on the orchestrator (`with_subagent_routing`)
-    // so the gateway routes spawned subagents through the same chain.
-    // Seed the process-global live route handle from the loaded `[route]`
-    // section and hand the chain a clone. Now a `route_config.update` /
-    // `self_config` mode switch hot-applies to the very next prompt with no
-    // daemon restart (the chain is otherwise built once and never rebuilt).
-    let route_handle = alephcore::providers::route_handle::global_route_handle(&config.route);
-    // Publish readiness from the existing constructed registry, not from the
-    // pin chains (which may exist for a provider without usable credentials).
+    // each provider expanded across its `models` list. The wrapper resolves
+    // `default_provider.current()` on every call, so provider swaps remain live.
+    // The provider catalog below is also the readiness source for selectable
+    // model publication; it does not consult learned routing state.
     let registered_provider_names: std::collections::BTreeSet<String> =
         default_provider.provider_names().into_iter().collect();
     let provider_chain = alephcore::orchestrator::build_failover_chain(
         config,
         primary_provider_key,
         default_provider,
-        escalation_approval,
-        Some(route_handle),
     );
     let default_provider = provider_chain.default.clone();
     // The providers this chain can migrate a request into, as the chain itself
     // answers it — the compaction budget is sized for the narrowest of them,
     // so it reads the live walk rather than re-deriving the chain from config.
     let chain_fallbacks = alephcore::orchestrator::chain_fallback_names(&provider_chain);
-    // Surface the chain's live runtime state (circuit breakers, cooldowns,
-    // load, chain composition) as the process-global observability bundle the
-    // `self_config` `route_status` action renders — the provider-health status
-    // surface the breaker's diagnostic accessor was built to feed. First-set-
-    // wins OnceLock, mirroring `global_route_handle`; production-only, so
-    // library tests never see a populated global.
-    alephcore::providers::route_observe::set_global_route_observability(
-        provider_chain.observability.clone(),
-    );
     // Wire the per-provider pin chains as the harness `named_providers` so the
-    // dynamic-routing model directive composes with failover, not around it:
-    // `BrainRef::Strict`/`Preferred` and a `select_model(provider=…)` pick now
-    // resolve to the matching pin+fall-through `FailoverProvider` (route-shaped,
-    // circuit-broken) instead of a raw provider — or, when unmatched, fall back
-    // to the global default. Each entry pins one configured provider as primary
-    // then falls through the whole global chain, so a pinned provider's outage
-    // still degrades gracefully. (Realizes the prior "PHASE-6: populate
-    // named_providers" TODO by reusing the chain `build_failover_chain` already
-    // built for subagent routing — no second construction.)
+    // explicit model directive composes with failure-only fallback, not around
+    // it: `BrainRef::Strict`/`Preferred` and a `select_model(provider=…)` pick
+    // now resolve to the matching pin+fall-through `FailoverProvider` (route-
+    // shaped, circuit-broken) instead of a raw provider — or, when unmatched,
+    // fall back to the global default. Each entry pins one configured provider
+    // as primary then falls through the whole global chain, so a pinned
+    // provider's outage still degrades gracefully. (Realizes the prior
+    // "PHASE-6: populate named_providers" TODO by reusing the chain
+    // `build_failover_chain` already built for subagent routing — no second
+    // construction.)
     let mut named_providers = provider_chain.agent_overrides.clone();
     // `agent_overrides` deliberately omits the primary provider (it is the head
     // of the default chain, not a separate pin). But consumers that resolve a
-    // provider BY KEY — `select_model(provider=…)`, `BrainRef::Strict`, and
-    // MoA preset slots (`try_build_for_run` resolves each advisor/aggregator
-    // against this map) — must be able to name the primary too. Without this
-    // entry, a MoA preset whose slots use the default provider (the most common
-    // shape) fails activation with "provider '<primary>' is not configured/
-    // keyed" and silently falls back to the plain chain. Map the primary key to
-    // the default chain (whose head IS the primary); other consumers already
-    // fell through to the same chain when the key missed, so this only closes
-    // the MoA gap without changing their behavior. Found in round-2 runtime QA.
+    // provider BY KEY — `select_model(provider=…)` and `BrainRef::Strict` — must
+    // be able to name the primary too. Without this entry, a provider selection
+    // using the default provider key fails with "provider '<primary>' is not
+    // configured/keyed" and silently falls back to the plain chain. Map the
+    // primary key to the default chain (whose head IS the primary); other
+    // consumers already fell through to the same chain when the key missed.
     if !primary_provider_key.is_empty() {
         named_providers
             .entry(primary_provider_key.to_string())
             .or_insert_with(|| default_provider.current());
     }
-    // The selector reads an immutable projection of this same routing map and
-    // configured/preset/discovered roster. No publication means no selection.
-    let authentication = alephcore::routing::provider_availability_from_config(
-        config.providers.clone(),
-        Some(shared_token_mgr.clone()),
-    );
+    // Publish the generation-bearing selectable-model roster from the live
+    // provider catalog and runtime config. Availability here means that the
+    // provider was constructed by the startup registry; authentication is a
+    // separate config/vault/env check. No learned routing or semantic
+    // availability is involved in this projection.
     let snapshot =
         alephcore::providers::session_model_handle::SelectableModelsSnapshot::from_config(
             config,
             named_providers.keys().cloned().collect(),
             &registered_provider_names,
             |name| {
-                matches!(
-                    authentication(name),
-                    alephcore::routing::recall::ProviderStatus::Available
-                ) || config
-                    .providers
-                    .get(name)
-                    .is_some_and(|pc| pc.protocol() == "ollama")
+                config.providers.get(name).is_some_and(|pc| {
+                    pc.protocol() == "ollama"
+                        || pc.api_key.as_ref().is_some_and(|key| !key.is_empty())
+                }) || shared_token_mgr
+                    .get_secret(&format!("ai:{name}"))
+                    .ok()
+                    .flatten()
+                    .is_some()
                     || (registered_provider_names.contains(name)
                         && alephcore::gateway::available_provider_from_env() == Some(name))
             },
         );
     alephcore::providers::session_model_handle::publish_selectable_models(snapshot);
-
-    let routing_store = match (embedder.clone(), memory_backend.clone()) {
-        (Some(embedder), Some(backend)) => Some(std::sync::Arc::new(
-            alephcore::routing::RoutingExperienceStore::new(backend, embedder),
-        )),
-        _ => None,
-    };
-    let routing_recall = routing_store.clone().map(|store| {
-        let availability = alephcore::routing::provider_availability_from_config(
-            config.providers.clone(),
-            Some(shared_token_mgr.clone()),
-        );
-        std::sync::Arc::new(alephcore::routing::RoutingRecall::new(store, availability))
-    });
-
-    // MoA: publish the [moa] section to the process-global handle so run
-    // construction (runner_impl Step 3-MoA) and the `moa` tool read live
-    // presets. The tool re-stores after successful config patches (hot
-    // reload, mirroring route_handle).
-    alephcore::providers::moa::store_moa_config(config.moa.clone());
-    if let Some(moa) = &config.moa {
-        for err in moa.validation_errors() {
-            tracing::warn!(error = %err, "[moa] config validation");
-        }
-    }
 
     // Cheap-tier summarization provider, built once and used twice: by the
     // per-run compactor (via `AgentHarnessRunner.cheap_provider`, below) and by
@@ -455,8 +400,8 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // summarizer-input budget from the same value).
         context_budget_config,
         // Per-run serving-model refinement (§2.2): re-keys the chain-minimum
-        // budget onto the model each run actually serves (select_model /
-        // model_hint / brain pin), min-floored by the chain-minimum so
+        // budget onto the model each run actually serves (select_model / explicit per-run/provider-model
+        // binding / brain pin), min-floored by the chain-minimum so
         // failover safety is preserved. Same enablement gate as the config.
         context_budget_refiner: build_context_budget_refiner(config, primary_provider_key),
         skill_system: Some(alephcore::skill::shared_skill_system().clone()),
@@ -511,12 +456,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // production consumer (`ExtraFilesLayer` via `build_system_prompt`).
         // Disabled / empty config keeps prompts byte-identical.
         prompt_extra_files: Some(config.prompt.extra_files.clone()),
-        // Wire `[tool_service] parallel_tool_concurrency` (default 8) so the
-        // Act-phase fast-path cap is operator-tunable instead of a hardcoded
-        // literal. `Some(8)` keeps the prior behaviour byte-identical.
         parallel_tool_concurrency: config.tool_service.parallel_tool_concurrency_opt(),
-        routing_store,
-        routing_recall,
         estimate_overhead_cache: std::sync::Arc::new(
             alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
         ),

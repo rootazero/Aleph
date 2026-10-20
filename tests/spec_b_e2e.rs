@@ -422,7 +422,7 @@ impl TestEnv {
         let backend: MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&db_path).expect("SqliteMemoryBackend"));
         let raw_store: Arc<dyn RawMemoryStore> = Arc::new(
-            MarkdownSessionStore::new(&tmp.path().to_path_buf())
+            MarkdownSessionStore::new(tmp.path())
                 .await
                 .expect("MarkdownSessionStore"),
         );

@@ -6,7 +6,7 @@
 //! had no way to delegate a task to a *remote* A2A agent. These two tools close
 //! that gap, honouring R8 ("Everything is a Tool").
 //!
-//! - `a2a_delegate` — hand a task to a remote A2A agent (auto-routed or pinned).
+//! - `a2a_delegate` — hand a task to a remote A2A agent (explicitly resolved or pinned).
 //! - `a2a_agents`   — list / add / remove remote A2A agents at runtime.
 
 use arc_swap::ArcSwapOption;
@@ -35,7 +35,7 @@ use crate::tools::AlephTool;
 /// built, so the tools hold an [`A2AToolHandle`] that the startup sequence
 /// fills in once `A2ASubAgent` + `CardRegistry` exist.
 pub struct A2AToolDeps {
-    /// Outbound delegation engine (smart routing + client pool).
+    /// Outbound delegation engine (explicit agent resolution + client pool).
     pub sub_agent: Arc<A2ASubAgent>,
     /// Registry of known remote agents (backs the `a2a_agents` tool).
     pub card_registry: Arc<CardRegistry>,
@@ -80,8 +80,8 @@ pub struct A2ADelegateArgs {
     /// has no access to this conversation.
     pub prompt: String,
     /// Optional: pin the delegation to a specific remote agent by name or id
-    /// (see `a2a_agents` with action `list`). When omitted, the best match is
-    /// chosen automatically from the prompt.
+    /// (see `a2a_agents` with action `list`). When omitted, an explicitly quoted
+    /// agent name or alias in the prompt is resolved; without one, no agent is selected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
 }
@@ -304,7 +304,7 @@ impl AlephTool for A2AAgentsTool {
                 // host-policy gate, so an LLM-supplied url like
                 // `http://169.254.169.254/latest/meta-data/` or
                 // `http://127.0.0.1:8123/` would be happily registered and
-                // called on every smart-route, with the persisted token
+                // called on every delegated request, with the persisted token
                 // attached. validate_url_with_pinned returns the same
                 // host-policy decision web_fetch uses, so the operator's
                 // existing config controls both surfaces.
@@ -332,7 +332,8 @@ impl AlephTool for A2AAgentsTool {
                     ))
                 })?;
 
-                // Fetch the remote Agent Card so smart routing knows its skills.
+                // Fetch the remote Agent Card so explicit name/alias resolution
+                // has current skill data.
                 let client = match args.token.clone() {
                     Some(token) => A2AClient::with_auth(&url, token),
                     None => A2AClient::new(&url),

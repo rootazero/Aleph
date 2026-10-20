@@ -7,23 +7,12 @@
 //! value" — §5.22 round-7 recorded the shape on `spend`: `spend.query` reports
 //! `configured: false`, which is a true statement about a box with no ceiling
 //! AND a true statement about a box that configured one whose handle was never
-//! installed. That round fixed two handles by hand. There are 46 — counted by
-//! the rule in `census`, not by hand.
+//! installed. That round fixed two handles by hand. The rule in `census`
+//! derives the current handle inventory from the source tree.
 //!
-//! ⚠️ That 46 is NOT the 46 an earlier hand count reported, even though the
-//! numbers agree: three members differ, and the decomposition is the tell — as
-//! first derived on 2026-08-24, **before any migration**, this one was 45
-//! written + 1 first-caller-wins and that one was 46 written. `census` names
-//! all three and why each moved. Do not read the agreement as confirmation that
-//! nothing changed.
-//!
-//! Those two figures are a first derivation, not a live reading: migration moves
-//! members from `written` into `slots`, and the invariant is the SUM. Compare
-//! against the live split `census`'s assertion prints on failure — never
-//! against a figure written in prose, this paragraph included. An earlier draft
-//! named the split as of the `spend` migration and would have gone stale at the
-//! very next migrated handle: the same defect the sentence above qualifies,
-//! reintroduced one paragraph lower by the fix for it.
+//! Migration moves members from `written` into `slots`, and the invariant is
+//! the SUM. Compare against the live split `census`'s assertion prints on
+//! failure rather than copying a historical figure into prose.
 //!
 //! # The shape
 //!
@@ -290,22 +279,9 @@ impl<T: Send + Sync + 'static> SlotStatus for MutableCapabilitySlot<T> {
 /// ID when a new slot is not listed. The list is a data structure; the rule
 /// is the guard.
 ///
-/// Exactly one entry SHORT of the handle census, and the missing one is
-/// `providers::route_handle::GLOBAL`: it is the census's one
-/// first-caller-wins member and by ruling stays a raw `OnceLock` rather than
-/// migrating onto [`CapabilitySlot`] — see this module's `census` submodule
-/// doc ("Why form 2 is a rule and not an exemption") and
-/// `census::route_handle_global_is_selected_by_the_first_caller_wins_arm_alone`
-/// for why it genuinely belongs to the handle census while staying off this
-/// list. Fitting it to [`CapabilitySlot::install`] would need either a
-/// different `Outcome` shape or a changed call site — and the second one would
-/// change which caller's config wins the initialisation. **Adjudicated
-/// 2026-08-25: it stays raw**, and the full reasoning lives at the static
-/// itself (`providers::route_handle::GLOBAL`), not only here, so a migrator who
-/// reaches the code before the doc still finds the ruling.
-/// `census::every_installed_global_is_a_capability_slot` names it as the one
-/// deliberate exception rather than excluding it silently, so a second bare
-/// handle appearing anywhere else still fails that guard.
+/// `census::every_installed_global_is_a_capability_slot` rejects bare handles;
+/// `census::every_declared_slot_is_in_the_roster` compares this roster against
+/// the live slot census. Neither requires a raw-handle exception.
 ///
 /// No count is written here any more. The previous wording carried one
 /// ("46 entries, not 47") and it had already gone stale in a sibling doc
@@ -342,7 +318,6 @@ pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
     crate::config::load::effective_config_path_slot(),
     crate::config::defaults_override::defaults_override_slot(),
     crate::looping::global_slot(),
-    crate::providers::route_observe::global_route_observability_slot(),
     crate::providers::session_model_handle::pin_sink_slot(),
     crate::providers::session_model_handle::pinnable_providers_slot(),
     crate::mcp::sampling_bridge::sampling_llm_slot(),
@@ -464,13 +439,10 @@ mod tests {
     /// doc above argues this type exists to prevent — Task 12's diagnostics
     /// would tell an operator a live capability is missing.
     ///
-    /// It is NOT hypothetical once migration lands, and the second writer is
-    /// nowhere near the `else` arm its author is reading: e.g.
-    /// `providers/moa/config_handle.rs::MOA_CONFIG` is written at boot
-    /// (`orchestrator_init.rs`) *and* again from a live-apply path
-    /// (`preset_store.rs`, after a `moa` preset patch). "`[moa]` absent at boot
-    /// ⇒ decline; operator patches a preset ⇒ install" is decline-then-install
-    /// in production.
+    /// A handle with both a boot-time conditional install and a later live
+    /// install can reach this sequence: input absent at boot ⇒ decline; input
+    /// supplied later ⇒ install. The second writer can be far from the boot
+    /// `else` arm, so that arm alone cannot justify adding a decline.
     ///
     /// **Decide this in Task 14, not here.** Whether `install` should overwrite
     /// the stamp depends on what the migration finds; deciding with zero callers

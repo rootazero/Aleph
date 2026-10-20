@@ -71,8 +71,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) hooks_manage_tool: crate::builtin_tools::HooksManageTool,
     /// Self-config tool instance (identity files + config.toml access)
     pub(crate) self_config_tool: crate::builtin_tools::self_config::SelfConfigTool,
-    /// Moa-manage tool instance (session MoA activation + preset CRUD)
-    pub(crate) moa_manage_tool: crate::builtin_tools::moa_manage::MoaManageTool,
     /// List-models tool instance (LLM-facing model discovery: capability + cost)
     pub(crate) list_models_tool: crate::builtin_tools::list_models::ListModelsTool,
     /// Runtime-manage tool instance (external runtime ledger: list + install)
@@ -385,6 +383,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) memory_project_scoped: bool,
     /// Memory backend for the `recall_context` tool (pre-compression recovery).
     /// Built per-call with the active session id from `session_context_handle`.
+    #[allow(dead_code)]
     pub(crate) recall_context_db: Option<crate::memory::store::MemoryBackend>,
     /// Memory backend for the `memory_trace` tool (evidence-chain walk).
     pub(crate) memory_trace_db: Option<crate::memory::store::MemoryBackend>,
