@@ -296,15 +296,16 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // so it reads the live walk rather than re-deriving the chain from config.
     let chain_fallbacks = alephcore::orchestrator::chain_fallback_names(&provider_chain);
     // Wire the per-provider pin chains as the harness `named_providers` so the
-    // dynamic-routing model directive composes with failover, not around it:
-    // `BrainRef::Strict`/`Preferred` and a `select_model(provider=…)` pick now
-    // resolve to the matching pin+fall-through `FailoverProvider` (route-shaped,
-    // circuit-broken) instead of a raw provider — or, when unmatched, fall back
-    // to the global default. Each entry pins one configured provider as primary
-    // then falls through the whole global chain, so a pinned provider's outage
-    // still degrades gracefully. (Realizes the prior "PHASE-6: populate
-    // named_providers" TODO by reusing the chain `build_failover_chain` already
-    // built for subagent routing — no second construction.)
+    // explicit model directive composes with failure-only fallback, not around
+    // it: `BrainRef::Strict`/`Preferred` and a `select_model(provider=…)` pick
+    // now resolve to the matching pin+fall-through `FailoverProvider` (route-
+    // shaped, circuit-broken) instead of a raw provider — or, when unmatched,
+    // fall back to the global default. Each entry pins one configured provider
+    // as primary then falls through the whole global chain, so a pinned
+    // provider's outage still degrades gracefully. (Realizes the prior
+    // "PHASE-6: populate named_providers" TODO by reusing the chain
+    // `build_failover_chain` already built for subagent routing — no second
+    // construction.)
     let mut named_providers = provider_chain.agent_overrides.clone();
     // `agent_overrides` deliberately omits the primary provider (it is the head
     // of the default chain, not a separate pin). But consumers that resolve a
@@ -375,8 +376,8 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // summarizer-input budget from the same value).
         context_budget_config,
         // Per-run serving-model refinement (§2.2): re-keys the chain-minimum
-        // budget onto the model each run actually serves (select_model /
-        // model_hint / brain pin), min-floored by the chain-minimum so
+        // budget onto the model each run actually serves (select_model / explicit per-run/provider-model
+        // binding / brain pin), min-floored by the chain-minimum so
         // failover safety is preserved. Same enablement gate as the config.
         context_budget_refiner: build_context_budget_refiner(config, primary_provider_key),
         skill_system: Some(alephcore::skill::shared_skill_system().clone()),

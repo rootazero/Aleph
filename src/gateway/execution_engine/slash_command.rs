@@ -41,8 +41,8 @@ pub(crate) use crate::tool_metadata::aliases::is_shorthand_alias;
 /// channel router (`serialize_parsed_command`) consult this single source so
 /// the exclusion can never drift between surfaces — the drift that this fixes
 /// was exactly that: only the resolver excluded them, so a channel `/loop`
-/// stalled. `moa` is excluded for a different, surface-specific reason (its
-/// one-shot form is intercepted earlier) and is handled inline where relevant.
+/// stalled. The historical, removed `moa` one-shot form was excluded for a
+/// different, surface-specific reason and is handled inline where relevant.
 pub(crate) fn is_continuation_driven_slash(name: &str) -> bool {
     matches!(name, "loop" | "goal")
 }

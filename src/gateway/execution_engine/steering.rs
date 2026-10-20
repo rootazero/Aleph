@@ -177,9 +177,9 @@ pub(super) fn find_steering_target(
 ///   `FlowInput::Multimodal`).
 /// * **Slash commands.** The L0 fast path and the skill/allowed-tools overlay
 ///   both read `SLASH_COMMAND_MODE_KEY` in `execute()`, *after* the gate. A
-///   steered `/moa on` therefore never executes: it lands in the transcript as
-///   the literal string `/moa on`, the running loop reads it as a mid-task
-///   interjection, and the client gets zero events and no error. This module
+///   historical removed `/moa on` input therefore never executed: it landed in
+///   the transcript as the literal string `/moa on`, the running loop read it
+///   as a mid-task interjection, and the client got zero events and no error. This module
 ///   already knew the metadata was load-bearing in the other direction —
 ///   [`build_steering_rescue_request`] strips it so a rescue cannot re-enter the
 ///   fast path — but nothing checked the reverse. Reachable only since the lane
@@ -832,8 +832,8 @@ mod tests {
         assert!(
             carries_more_than_text(&command),
             "the L0 fast path and the skill overlay both read this key AFTER the \
-             gate, so a steered command lands in the transcript as the literal \
-             string `/moa on` and never runs"
+             gate, so the historical removed `/moa on` command lands in the \
+             transcript as literal text and never runs"
         );
         // The text alone is indistinguishable — only the metadata says it is a
         // command, which is why this cannot be a look-at-the-string check.

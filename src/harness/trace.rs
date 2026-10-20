@@ -125,12 +125,8 @@ pub enum LoopTraceEvent {
     /// `[verifier veto]` message injected for the model, but surfaced to the
     /// user stream so the interception reason is not a black box.
     VerifierVeto { iteration: usize, reason: String },
-    /// MoA advisor consultation result — one per advisor per fan-out
-    /// (cache-MISS iterations only). Emitted by the `MoaProvider` facade
-    /// through the run's TraceSink (MeteringProvider pattern — zero harness
-    /// logic; this enum is the carrier, not the brain).
-    /// `count == 0` is the activation-failure form: MoA could not engage for
-    /// this run (preset missing / slot unresolvable) and `error` says why.
+    /// Legacy typed MoA advisor event retained solely so historical trace blobs
+    /// decode. The removed MoA runtime no longer emits this event.
     MoaAdvisor {
         index: usize,
         count: usize,
@@ -141,9 +137,8 @@ pub enum LoopTraceEvent {
         /// success. The guidance-block `[failed:]` note is the display twin.
         error: Option<String>,
     },
-    /// MoA fan-out complete (or reused); the aggregator (acting model) is
-    /// being called. `cached: true` = this iteration reuses the previous
-    /// fan-out's advice (no advisor re-run, no new spend).
+    /// Legacy typed MoA aggregation event retained solely for historical trace
+    /// decoding; the removed runtime no longer emits it.
     MoaAggregating {
         aggregator: String,
         advisor_count: usize,
@@ -151,9 +146,8 @@ pub enum LoopTraceEvent {
     },
     /// Summed advisor spend for one fan-out. Priced per-advisor at each
     /// advisor's OWN model rate; kept out of `ProviderResponse.usage` so the
-    /// context gauge stays honest (spec §8). `advisor_count` = advisors
-    /// consulted this fan-out; `billed_count` = advisors that returned usage
-    /// (denominator for cost-per-advisor math).
+    /// Legacy MoA spend event retained solely for historical trace decoding;
+    /// current spend accounting has no MoA advisor producer.
     MoaAdvisorSpend {
         advisor_count: usize,
         billed_count: usize,
@@ -161,9 +155,8 @@ pub enum LoopTraceEvent {
         output_tokens: u32,
         cost_usd: Option<f64>,
     },
-    /// Full advisor I/O snapshot for one fan-out. Heavy; emitted only when
-    /// `[moa] save_traces = true`; persisted-only (never whitelisted onto
-    /// the wire). Opaque JSON keeps the payload shape free to evolve.
+    /// Legacy typed MoA trace payload retained solely for historical decoding.
+    /// It was persisted-only and is no longer produced by the runtime.
     MoaTurnTrace { preset: String, payload: Value },
     /// Prompt-cache watchdog alarm, fired once per miss-streak (rising edge)
     /// by `MeteringProvider`. Field docs live on the protocol twin

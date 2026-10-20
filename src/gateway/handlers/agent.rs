@@ -748,7 +748,7 @@ fn bound_workspace_of(
 ///
 /// Single source of truth for the whole gateway→engine hand-off: run metadata
 /// (surface / authorization / conversation routing), the `project_root` gate,
-/// base64 attachment decoding, the MoA selector semantics and the voice model
+/// base64 attachment decoding, the model override semantics and the voice model
 /// pin. Both the real-`ExecutionEngine` handlers in `aleph-server`'s
 /// `server_init` and the Simulated-fallback [`AgentRunManager::start_run`] call
 /// it, so a field can never again be honored on one path and silently dropped
@@ -1100,11 +1100,6 @@ pub async fn build_run_request_with_telecom(
     Ok(request)
 }
 
-/// Round-2 E3: a picker selection of the "moa" pseudo-provider arms session
-/// MoA (sticky) instead of riding as a per-turn model override. Returns the
-/// override that should continue down the run path (None when consumed).
-/// An explicit NON-moa override clears any MoA sticky — the selector is one
-/// exclusive slot. No override touches nothing (bare sends must not disturb
 /// Handle agent.run RPC request
 pub async fn handle_run(
     request: JsonRpcRequest,

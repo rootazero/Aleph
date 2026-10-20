@@ -1,4 +1,7 @@
-//! Process-global per-session record of what the failover walk *actually dialed*.
+//! Process-global per-session record of failure-only serving attribution from the
+//! [`FailoverProvider`](super::failover::FailoverProvider) walk.
+//!
+//! This is a diagnostic witness, not a live semantic router or a MoA producer.
 //!
 //! ## Why this exists
 //!
@@ -14,12 +17,11 @@
 //! That table is gone; this is its replacement, and it reports instead of
 //! predicting.
 //!
-//! Prediction was never fixable here. The walk's real pick depends on route mode
-//! and tier gating, live load ordering, round-robin rotation, rate-window
-//! saturation and the circuit breaker — none of which a pre-request resolver
-//! sees. Two implementations of "which endpoint answers this request" is the
-//! shape that produced the `SlotKind` / `tier == Unknown` bug; the walk is the
-//! only honest source, so the walk speaks.
+//! Prediction was never fixable here. The serving result belongs to the
+//! failure-only failover walk, whose actual pick depends on route mode and tier
+//! gating, live load ordering, round-robin rotation, rate-window saturation and
+//! the circuit breaker — none of which a pre-request resolver sees. This module
+//! records that result after the walk rather than producing routing decisions.
 //!
 //! ## Shape
 //!
@@ -62,9 +64,9 @@
 //!   in the end, served by what the caller asked for, and announcing
 //!   `X → X` would be noise.
 //! * **The nested-chain sentinel.** A `provider_hint` override chain is
-//!   `[pinned provider, <the entire global chain>]`; the sentinel is not an
-//!   endpoint (see `failover::NESTED_CHAIN_NODE`) and the inner chain records
-//!   the real provider itself. Recording the sentinel would publish a provider
+//!   `[pinned provider, <the configured failure-only fallback chain>]`; the
+//!   sentinel is not an endpoint (see `failover::NESTED_CHAIN_NODE`) and the
+//!   inner chain records the real provider itself. Recording the sentinel would publish a provider
 //!   name the operator never configured.
 //!
 //!   A pin the outer chain *keeps* is no longer lost with it. The walk anchors
@@ -81,12 +83,9 @@
 //!   becomes the run's only writer again. See `CandidatePlan::anchor` for why
 //!   anchoring the dropped head is not obviously the right answer either.
 //! * **A walk whose payload carries no `session_id`.** Only the main Think turn
-//!   stamps one (`harness::agent::think::build_request_payload`). MoA advisor
-//!   dials in particular build a bare `RequestPayload::new(view)`
-//!   (`providers::moa::fan_out::run_fan_out`), so an advisor — which shares the
-//!   turn's session and would otherwise be free to anchor it — writes nothing
-//!   here, before or after the plan-time anchor. The MoA *aggregation* dial does
-//!   carry the metadata, and it is the dial that answers the user.
+//!   stamps one (`harness::agent::think::build_request_payload`). Ordinary
+//!   subagent calls without that metadata do not create a witness entry; this
+//!   module records serving attribution for the user-facing request only.
 //!
 //! ## What an anchor that never gets an answer reads as
 //!
@@ -215,7 +214,7 @@ impl Dialed {
     }
 }
 
-/// What the walk did for one session's run.
+/// What the failure-only failover walk recorded for one session's run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteWitness {
     /// The first endpoint the walk *set out for* in this run — its own first
@@ -396,12 +395,12 @@ fn map() -> &'static RwLock<BoundedWitnesses> {
     WITNESSES.get_or_init(|| RwLock::new(BoundedWitnesses::default()))
 }
 
-/// Record a successful dial for `session_key`.
+/// Record the serving attribution observed after a successful failover dial.
 ///
-/// `attempted` is the first endpoint *this walk* tried; `served` is the one that
-/// answered. The earliest `attempted` of a run wins (a run spans many walks, one
-/// per Think turn) and the latest `served` wins, so the stored record reads
-/// "this run set out for A and last got its answer from B".
+/// This records what [`FailoverProvider`](super::failover::FailoverProvider)
+/// actually served; it does not select a provider or produce semantic routing.
+/// `provider_hint` remains relevant only as historical input to the nested-chain
+/// sentinel handling documented above.
 pub fn record_success(session_key: &str, attempted: Dialed, served: Dialed) {
     let key = witness_key(session_key);
     map()

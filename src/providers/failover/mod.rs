@@ -67,10 +67,11 @@ pub use provider::FailoverProvider;
 /// Name of the sentinel node that wraps a whole *nested* chain rather than a
 /// real endpoint.
 ///
-/// A per-`provider_hint` override chain is `[pinned provider, <the entire global
-/// chain>]`; the second slot needs a name, and it must not collide with a real
-/// provider (names come from `[providers]` toml keys, which cannot start with
-/// `__`). It is not an endpoint, so it takes part in nothing that describes one:
+/// A per-`provider_hint` explicit provider override chain is `[pinned provider,
+/// <the configured failure-only fallback chain>]`; the second slot needs a
+/// name, and it must not collide with a real provider (names come from
+/// `[providers]` toml keys, which cannot start with `__`). It is not an endpoint,
+/// so it takes part in nothing that describes one:
 /// no load accounting (its in-flight count and latency EWMA would be the *sum*
 /// of the nested dials it delegates to, and its name would surface as a
 /// provider the operator never configured), and no health sidelining (the

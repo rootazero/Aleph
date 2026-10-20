@@ -1212,7 +1212,7 @@ async fn extract_run_result(
 ///   [`crate::agents::subagent_tool::recovery`], and
 ///   `child_key_roundtrips_through_the_request_id` is the test that goes red
 ///   first if the shape changes.
-/// * `None` — a foreground / batch / MoA-aggregator child, which delivers its
+/// * `None` — a foreground / batch / aggregator child, which delivers its
 ///   result inside the tool call that spawned it. Keeps the historical
 ///   `sub-<nonce>` shape.
 ///

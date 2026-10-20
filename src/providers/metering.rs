@@ -11,15 +11,15 @@
 //!
 //! This is also the single funnel every LLM call in the process passes
 //! through — `record_usage` is shared by `process` and
-//! `execute_streaming_dyn`, and sub-agent/MoA-advisor/compactor spend each
-//! wrap their own `MeteringProvider` rather than reuse the parent run's (the
-//! source comment on those call sites says wrapping again "would
-//! double-count"). That makes this the one place that sees *every* dollar,
-//! including the three kinds of call the run-admission gate (Task 7 of the
-//! per-principal spend plan) structurally cannot see: a sub-agent drives
-//! `AgentHarness::run` directly without building a `FlowRequest`, and a MoA
-//! advisor or a compactor call is never folded into the parent run's
-//! `token_breakdown` at all.
+//! `execute_streaming_dyn`, and sub-agent/historical-trace-compatibility and
+//! compactor spend each wrap their own `MeteringProvider` rather than reuse the
+//! parent run's (the source comment on those call sites says wrapping again
+//! "would double-count"). That makes this the one place that sees *every*
+//! dollar, including the three kinds of call the run-admission gate (Task 7 of
+//! the per-principal spend plan) structurally cannot see: a sub-agent drives
+//! `AgentHarness::run` directly without building a `FlowRequest`, and a
+//! historical trace compatibility or compactor call is never folded into the
+//! parent run's `token_breakdown` at all.
 //!
 //! `enforce_spend_ceiling` runs first inside each arm's `Box::pin(async move
 //! { .. })`, before `fut.await` — denying there means the request never

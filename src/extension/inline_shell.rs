@@ -48,8 +48,8 @@ pub(crate) const PENDING_APPROVAL: &str =
 ///
 /// An inline command is a shell run as the daemon's user, outside the
 /// sandbox and the `[sandbox.command_policy]` floor, whose output the model
-/// reads. So — as `/moa` arms only for an operator on its channel face — it
-/// runs only for an OPERATOR (`role_is_operator`: loopback and authorized
+/// reads. The historical removed `/moa` arms had the same operator-only
+/// channel-face rule; this path runs only for an OPERATOR (`role_is_operator`: loopback and authorized
 /// clients; a channel's chat-tier sender is a guest), and only on a turn
 /// whose tool gate would not deny the model its own shell (`bash`): an
 /// approved command would otherwise be the very shell the operator switched

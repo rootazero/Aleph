@@ -168,10 +168,9 @@ impl HarnessRunner for AgentHarnessRunner {
         //
         // Explicit directives resolve a *base provider* then stamp the model
         // onto it via the shared `ModelOverrideProvider`. The base is, in turn:
-        //   * the named pin chain for `provider_opt` when it names a configured
-        //     provider (`named_providers`, wired from the route-shaped pin +
-        //     fall-through `FailoverProvider`s), so the directive still gets
-        //     failover, circuit-breaking and `[route]`-mode tier gating; else
+        //   * the configured named provider for `provider_opt`, wrapped with
+        //     the configured failure-only `FailoverProvider` (retry,
+        //     circuit-breaking and cooldown); else
         //   * the global default chain.
         // Either way the base is a `FailoverProvider`, and its primary slot now
         // honours the stamped model (see `failover.rs` model-list resolution) —

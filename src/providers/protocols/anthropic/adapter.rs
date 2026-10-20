@@ -686,11 +686,11 @@ impl ProtocolAdapter for AnthropicProtocol {
             //
             // Skipping injection is NOT enough: markers arrive here pre-placed
             // from two upstream producers that never see this gate.
-            // `split_system_blocks_for_cache` stamps the stable system block
-            // via `SystemBlock::cached_text()`, and the MoA advisory view
-            // (`providers/moa/advisory_view.rs::mark_cache_breakpoints`) stamps
-            // message content. Both used to survive `retention = "off"` and
-            // every `supports_cache_control = false` endpoint, so the config
+            // Historical removed path: the old advisory view
+            // (`providers/moa/advisory_view.rs::mark_cache_breakpoints`) stamped
+            // message content. Along with the system-block producer, it used to
+            // survive `retention = "off"` and every
+            // `supports_cache_control = false` endpoint, so the config
             // switch was inert (Anthropic still billed `cache_creation` at
             // 1.25x) and strict-schema proxies 400'd the whole turn. That was
             // observed once, on Kimi, and patched per-host; enforcing the

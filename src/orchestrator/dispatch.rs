@@ -657,9 +657,10 @@ pub struct Orchestrator {
     pub sandbox_factory: SandboxFactory,
     /// Harness runner injected at construction — test mocks can swap this out.
     pub harness: Arc<dyn HarnessRunner>,
-    /// Phase 3 — provider routing for spawned subagents (the global failover
-    /// chain + per-`provider_hint` overrides). `None` for test mocks and the
-    /// simple engine; `Some` once `build_failover_chain` has run at boot.
+    /// Phase 3 — provider selection for spawned subagents: the global
+    /// failure-only fallback chain plus explicit configured provider overrides.
+    /// `None` for test mocks and the simple engine; `Some` once
+    /// `build_failover_chain` has run at boot.
     pub subagent_routing: Option<crate::orchestrator::deps_builder::ProviderChain>,
     /// Shared `AgentRegistry`. Same `Arc` cloned into `AgentHarnessRunner` at
     /// boot so all subagent dispatchers see user-defined agents. `None` only

@@ -55,8 +55,9 @@ pub struct ProviderPreset {
     /// Eliminates duplicate `m.insert()` calls per name variant.
     pub aliases: &'static [&'static str],
     /// Curated fallback model IDs. First entry is the recommended fallback
-    /// and must equal `default_model` (drift-guarded). This chain is both
-    /// the picker roster and the failover walk order *within* the provider:
+    /// and must equal `default_model` (drift-guarded). This chain is the
+    /// provider-configured failure-only fallback order and picker roster; it
+    /// is not semantic model routing:
     /// `deps_builder::provider_chain` appends any rungs the operator did not
     /// list to the provider's failover model catalog.
     pub fallback_models: &'static [&'static str],
@@ -277,9 +278,9 @@ pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
 /// One provider's model ladder: `base` first, then any rungs of the preset's
 /// curated `fallback_models` chain the base did not list.
 ///
-/// The preset chain *is* the single curated ladder per provider, and this
-/// function is its only merge point — every surface consumes the same leaf so
-/// they cannot disagree:
+/// Provider-configured failure-only fallback order used by the failover walk.
+/// It is not a semantic strategy or a model-routing decision; explicit model
+/// bindings remain authoritative.
 ///
 /// * **failover walk** (`deps_builder/provider_chain.rs`): seeds `base` with
 ///   the operator's `models`, giving the in-provider failover ladder.

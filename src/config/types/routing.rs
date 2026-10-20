@@ -137,10 +137,8 @@ pub struct RoutingRuleConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent_type: Option<String>,
 
-    /// Preferred model ID for this rule (optional)
-    ///
-    /// If specified, this model is used instead of automatic selection.
-    /// Must be a valid model profile ID (e.g., "claude-opus", "gpt-4o").
+    /// Preferred model ID retained for old command-rule files. It is not used
+    /// for semantic or automatic model selection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_model: Option<String>,
 

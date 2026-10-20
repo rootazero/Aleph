@@ -1,14 +1,15 @@
 //! Process-global per-session model preference.
 //!
-//! The "A layer" of AI dynamic routing (R8): the `select_model` tool lets the
-//! main-loop LLM pick the model for the rest of a conversation. Model binding
+//! An explicit per-session model pin: the `select_model` tool lets the
+//! main-loop LLM choose the model for the rest of a conversation. This is
+//! model binding selected by the user or LLM, not AI dynamic routing. Binding
 //! happens per-run at `pick_llm` time — once, before the Think→Act loop starts
 //! — so a mid-run pick takes effect at the next *run* (the next user message),
 //! not at the next loop iteration. This handle is that cross-run channel.
 //!
-//! Mirrors [`route_handle`](super::route_handle): a single process-global,
-//! lock-guarded map read at run construction (`harness_bridge`) and written by
-//! the tool. Keyed by the canonical `SessionKey` string so the writer (tool,
+//! Mirrors the same process-global, lock-guarded pattern: a single map read at
+//! run construction (`harness_bridge`) and written by the tool. Keyed by the
+//! canonical `SessionKey` string so the writer (tool,
 //! from `TURN_CONTEXT`) and reader (bridge, from its run key) agree.
 //!
 //! # The map is a cache; the session row is the record
@@ -207,8 +208,8 @@ pub(crate) const fn pinnable_providers_slot() -> &'static dyn SlotStatus {
 /// `(provider, model)` pair was written into the routing-experience store the
 /// model later reads back as "verified routing experience".
 ///
-/// First call wins (one chain assembly per boot), matching
-/// [`route_observe`](super::route_observe)'s global.
+/// First call wins (one chain assembly per boot), matching the process-global
+/// installation semantics used by the other runtime slots.
 pub fn set_pinnable_providers(names: impl IntoIterator<Item = String>) {
     let _ = PINNABLE_PROVIDERS.install(names.into_iter().collect());
 }

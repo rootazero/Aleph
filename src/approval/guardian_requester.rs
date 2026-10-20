@@ -207,7 +207,8 @@ impl GuardianApprovalRequester {
     async fn judge(&self, action: &ApprovalAction) -> JudgeOutcome {
         let prompt = render_action(action);
         let msgs = [UnifiedMessage::user(&prompt)];
-        // Set BOTH forms (as `harness/agent/think.rs` and `moa/provider.rs` do):
+        // Set BOTH forms (as `harness/agent/think.rs` does; the historical
+        // `moa/provider.rs` path used the same shape):
         // the Anthropic adapter prefers `system_blocks` (cache-marked trunk),
         // but EVERY non-Anthropic adapter (OpenAI-protocol, Gemini, Ollama)
         // reads ONLY the flat `system_prompt` — sending blocks alone would drop

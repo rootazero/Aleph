@@ -30,7 +30,7 @@
 
 永不延迟的生命线：`tool_search` / `get_tool_schema` / `ask_user` / `session_set_mode` / `self_config`
 （`NEVER_DEFER`——延迟发现机制本身会把模型困死在分区里）。`session_set_mode` 同时**常驻默认核**
-（moa 先例：R8 一步开关不藏在 get_tool_schema 往返后面）。`tool_search` 在 deferred 层非空且披露启用时
+（R8 一步开关不藏在 get_tool_schema 往返后面）。`tool_search` 在 deferred 层非空且披露启用时
 由 `run_loop/inner.rs` 推进本请求的 core 集——它注册于 schema 快照**之后**（collapsed-but-unsnapshotted
 类第三成员，见 `default_core_tools` 不变量注释），折叠它会让模型被指向一次必然 miss 的快照查询。
 
@@ -108,7 +108,7 @@ whenToUse 目录（chat=快问答 / work=通用多步 / code=repo 工程）+ "�
 `config.update_tool_permissions` 接受 `mode` 部分更新。
 
 **Panel**（`interfaces/webchat/`）：`views/chat/mode_picker.rs`（composer pill，exec_tier_picker
-克隆；presets 空=旧核→整体隐藏）+ `components/mode_labels.rs`（i18n 显式 match，未知 id 降级裸 id）+
+克隆；mode presets 空=旧核→整体隐藏）+ `components/mode_labels.rs`（i18n 显式 match，未知 id 降级裸 id）+
 `ChatState.session_mode`（会话覆盖，5 生命周期位点 + SessionSnapshot）+ **`ChatState.global_mode`**
 （全局默认镜像，picker fetch 喂入，全局态不随 clear_session 清空、不进快照）+ locales
 `settings.policies.mode_*`（en/zh）。**载运纪律（v2 P1 修复）**：4 条 send 路径（typed / queue-flush /
@@ -142,7 +142,8 @@ request 携带的 `TEAM_RUN_MODE` 继续赢过 stored 值——工具回报"已�
 
 ## 4. 刻意不做 (Deliberately NOT)
 
-1. 不绑 per-mode 模型（`select_model`/agent hint 已覆盖；session_model_handle 重启即失）；
+1. 不按 session mode 绑定模型或 provider。模型选择使用 per-turn binding、session `select_model` pin、显式 `BrainRef` 或命名 preset；这些是显式绑定/配置引用，不是 semantic routing；旧 AgentDef hint 只作兼容诊断；
+
 2. 不动 PromptMode Full/Compact/Minimal（prompt_mode.rs 实测警告）；
 3. mode 不携带/不联动 exec tier（两 pill 各自显示、互不写入）；
 4. 不做 mode 的 channel clamp（模式非安全边界）；

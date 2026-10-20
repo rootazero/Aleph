@@ -1,9 +1,9 @@
 //! `SelectModelTool` — LLM-facing model picker (R8 "everything is a tool").
 //!
-//! The "A layer" of AI dynamic routing: lets the main-loop LLM choose the model
-//! for the rest of the conversation in one inference, rather than a separate
-//! routing model deciding for it (which would violate R7/R9). The pick is
-//! recorded in `session_model_handle`
+//! An explicit model pin: the `select_model` tool lets the main-loop LLM
+//! choose the model for the rest of the conversation in one inference. This is
+//! user/LLM-selected model binding, not dynamic routing. The pick is recorded
+//! in `session_model_handle`
 //! and applied at the next run's construction (`harness_bridge`), where it
 //! wraps the chosen provider in a `ModelOverrideProvider` to stamp the model.
 //!

@@ -432,10 +432,10 @@ mod tests {
     fn config_tools_have_a_model_pick_branch() {
         // `select_model` mutates session model state and persists it across
         // turns (a non-trivial blast radius). Historically the channel gate
-        // had a special-case for `moa:` model picks only; any other model
-        // name was implicitly trusted. Tightening the policy requires an
-        // audit entry; this tripwire keeps the audit honest if the carve-out
-        // ever narrows back to "moa: only".
+        // had a historical special-case for the removed `moa:` model picks;
+        // any other model name was implicitly trusted. Tightening the policy
+        // requires an audit entry; this tripwire keeps the audit honest if the
+        // legacy compatibility carve-out ever narrows back to `moa:` only.
         assert!(
             !tool_requires_operator("select_model"),
             "select_model currently stays open to chat tier; revisit if the \

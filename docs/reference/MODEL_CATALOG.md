@@ -3,13 +3,9 @@
 > 对应 [FEATURE_LOCATOR.md §5.4](FEATURE_LOCATOR.md)。本文是**模型参考数据层的契约文档**：四张表怎么分工、怎么 join、什么时候允许陈旧、漂移由谁守。
 > 内含 **openclaw / opencode / kimi-cli / pi 对照表（Gap Analysis）**——**改这一层之前先看那张表，不必重做一遍对比**。
 >
-> ⚠️ **本文只回答「这个模型是什么」，不回答「这一轮用哪个模型」**。后者只有一个决定点：
-> `src/orchestrator/harness_bridge/runner_impl.rs::effective_model_directive`
-> —— **per-turn pick（Panel 模型 pill / `[voice]` 钉，经 `FlowRequest.model_directive`）▸
-> session `select_model` pick ▸ agent `model_hint` ▸ `BrainRef` preset**。
-> 新增任何模型来源都必须进那个函数：Panel 的模型 pill 曾经完整地产出到 `RunRequest.model_override`
-> 却从未抵达绑定点，只到达附件的 vision 判断与 `ModelResolved` 横幅——**UI 确认了切换，作答的仍是旧模型**
-> （详见 [FEATURE_LOCATOR §3.6](FEATURE_LOCATOR.md) round-2）。
+> **当前运行时状态（2026-10）**：主 LLM 组合通用子代理；没有固定 MoA 扇出或语义模型路由。provider/model/session/`BrainRef` 绑定必须显式，provider 配置的 `model_ladder` 只用于失败后的 fallback。历史 typed MoA traces 仍可解码；旧 `[moa]`、`[route]`/`[routing]` 表和 AgentDef 的 `model_hint`/`provider_hint` 会容忍并诊断，但不会驱动 live runtime。
+>
+> 本文只把模型参考数据、provider catalog 和 failure-only fallback 讲清楚；它不再定义 per-turn 的语义选模策略。
 
 ---
 
@@ -29,7 +25,7 @@ Aleph 的模型参考数据是**编译期静态表**：升级二进制才更新�
 |----|------|-----------|-------------|
 | Presets | `src/providers/presets/registry.rs` | 每个 provider 默认用哪个模型、备选链、廉价 aux 档 | 开箱不可用。`fallback_models` 同时是 picker roster、`list_models` roster **与 failover 的模型游走梯**（**`presets::model_ladder` 唯一合并点**：failover 以 operator `models` 为 base、catalog `roster` 字段以 operator `models`（空则默认）为 base，把 operator 未列出的档位接在后面；operator 改过 `base_url` 则不接） |
 | Capabilities | `src/providers/model_catalog/capabilities.rs` | 窗口 / max-output / vision / tools / reasoning | 回落 `CONSERVATIVE_CONTEXT_WINDOW` (128K) ⇒ **过早压缩**（§2.2 消费方 `derive_token_budget`） |
-| Pricing | `src/pricing.rs` | USD/Mtok（含长上下文 tier） | `CostStatus::Unknown`；`cost_aware` 路由按 `unpriced_cost(tier)` 排 |
+| Pricing | `src/pricing.rs` | USD/Mtok（含长上下文 tier） | `CostStatus::Unknown`；成本只用于诊断与账务投影，不选择 live provider/model |
 | Lifecycle | `src/providers/model_catalog/lifecycle.rs` | 厂商还在不在服务这个 id | 模型被推荐一个已下线 id ⇒ 下一轮不透明 400 |
 
 **唯一 join 点：`src/providers/model_catalog/record.rs::ModelRecord::resolve(provider, model, base_url, source)`**
@@ -416,7 +412,12 @@ round-3 比的是**目录数据**；这一轮比的是**人怎么挑**，因为�
 
 round-3/8.3b 比的是**机制**；本轮比的是**数字本身**。pi 的目录是生成期 hydrate（`generate-models.ts` 从 models.dev / OpenRouter / Vercel 拉取，烧进 JSON shard 随包发布 + CI 定时重生成），本轮拿它当「models.dev 的加工视图」、并另取 models.dev 原始 `api.json`（185 provider / 6293 模型）逐条复核后刷新四表。**pi 的两个生成器抉择值得记录**：① `OPENAI_SHORT_CONTEXT_CAPPED_MODEL_IDS` 把 gpt-5.4/5.5/5.6 系的 `contextWindow` 压到 272K——那是**让请求默认停在便宜档的计费选择，不是窗口事实**（models.dev 原始值 1.05M）；Aleph 的窗口字段喂压缩预算，故采 1.05M、把 272K 档位留在 `TIER_TABLE`。② 弃用模型在生成期被静默滤掉（无 lifecycle 概念），所以「pi 没列」不能用作退役证据——本轮零条 lifecycle 变更。具体采纳与存疑项见 §9 的 round-5 补记与 FEATURE_LOCATOR §5.4 本轮条目。
 
-### 8.4 RouteLLM / vLLM semantic-router / Bifrost（2026-08 round-4）
+### 8.4 Historical / Superseded: RouteLLM / vLLM semantic-router / Bifrost（2026-08 round-4）
+
+> This comparison is retained for architectural history. Its semantic, cost-aware,
+> and tier-aware routing guidance is superseded; current provider selection uses
+> explicit bindings and failure-only configured fallback.
+
 
 三个参考项目讲的主要是**运行时路由**（§3.6 C 层），目录层可比维度比前三个项目少；逐项裁决如下。注意 `/Volumes/TBU4/Github/semantic-router` 的实际检出是 **vLLM Semantic Router**（Go + Rust candle bindings），不是 aurelio-labs 的 Python 库。
 
@@ -601,7 +602,8 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | 某模型支不支持 vision/tool-use | `model_catalog/capabilities.rs` + `capability_gate.rs` |
 | 本地还是云端 | `model_catalog/endpoint.rs` |
 | 成本 | `pricing.rs`（`RateCard` = picker 的费率投影） |
-| 按成本路由 | `[route] load_balance = "cost_aware"`；连线点 `failover/provider.rs::price_hint`，sort 在 `route_policy::balance_group`。**候选的 tier 从 `with_tier_catalog` 来**（2026-07-27）——此前 live 派生的候选一律 `Unknown`，`unpriced_cost` 因此把**免费本地端点排最后**，与本表第二次修复的方向正好相反 |
+| 按失败后的 provider/model fallback ladder | provider 的 `models` / `model_ladder` 与 `src/providers/failover/`；只在当前尝试失败后按配置顺序 retry/fallback，并受 cooldown/circuit 状态约束 |
+
 | 单 provider 内的 failover 游走梯 / picker roster | preset `fallback_models` 即游走梯；**唯一合并点 `presets::model_roster`**（operator `models` → curated rungs → discovered ids，带 `source` 与 `lifecycle`；operator 改过 `base_url` 则不合 curated rungs，**但仍合 discovered**——那些 id 正是从那个端点拿回来的）。`model_ladder` 是它把出处投影掉的那个投影，failover 用它，传空 `discovered` 逐字节复现旧梯。前端 picker 纯渲染不再自算 |
 | 这条 wire 的形状 / 加一个响应字段 | **`shared/protocol/src/providers/`**，不在 handler 旁边——四个说它的 crate 里有两个不许依赖 `alephcore`。**用契约类型 build 响应，不只是 parse 它**（解析只证明超集，超发看不见） |
 | provider / 模型搜索的排序规则 | `shared/protocol/src/providers/search.rs`（Panel 与 TUI 共用；顺序保留子串 + 分层，**不是 fuzzy**） |
@@ -617,7 +619,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | **想一次看完所有 provider 通不通** | `al providers health`（`providers.healthcheck`）。`al doctor` 是更宽的那一问。**「要不要拨这个 provider」只有 `probe::probe_disposition` 一处派生，「拨号」只有 `probe::probe_provider_bounded` 一个出口**（`probe_provider` 自 round-6 起私有，于是 `PROBE_TIMEOUT` 是结构属性不是约定）——别在这里数调用者，census 是 `grep -rn probe_provider_bounded src/`；后台健康探测（§8.5 / FL §3.6 round-6）就是它第三张脸，且只认 `Disabled` 一臂 |
 | **给 `QUOTA_BILLED_MODELS` 加一条** | 写 **canonical** 形式（表在 `canonicalize_model` 之后被读），线上拼法留注释；守卫 `quota_billed_ids_are_stated_in_lookup_form` |
 | **要一个表里没有的新模型** | **`list_models { refresh: true }` 或 `providers.modelsRefresh`** |
-| 子代理 / MoA 扇出跨厂商 | `provider/model` 限定名；消费点 `agents/runtime.rs::resolve_spawn_route`（见 §4.5 round-7）。守卫是"前缀须命中已配置 provider 才剥离"，**别改成无守卫剥离**。主循环侧同型解析是 `thinker/mod.rs::MultiProviderRegistry::get`（同一守卫；此前并排的 `resolve_model_to_provider_and_model` 只服务那条已 CUT 的预测式 `resolve_with_fallback`，见 §3.6 round-3） |
+| 子代理 / provider/model 绑定 | Generic subagents receive explicit provider/model/session/`BrainRef` binding; provider fallback occurs only after failure. Historical MoA/provider-routing notes below are retained for traceability and are not live guidance |
 | **某模型的 API 会不会自己丢掉早先轮次的 thinking / 会不会把 thinking 绑到对话前缀** | 模型事实：`model_catalog/capabilities.rs` 的 `STRIPS_PRIOR_TURN_THINKING(_EXACT)` / `PREFIX_BOUND_THINKING`（经 `strips_prior_turn_thinking` / `binds_thinking_to_prefix` 读，与 `capabilities_for` 同一套 id 归一）。主机能不能接对应的请求控制是协议策略的问题，见 §11 |
 | **某个目标该收到哪段历史推理** | `providers/reasoning_replay.rs::ReasoningReplay::for_target` 一张表，见 §11。**别在 adapter 或 harness 里另加一条规则** |
 
@@ -662,6 +664,6 @@ server_context_editing = { enabled = true }   # 或 server_context_editing = tru
 - 开了但不生效（非 1P 主机、OAuth 路径）时在构建 `HttpProvider` 那一刻 warn（`server_context_editing_unhonoured`），不在配置校验层——那一层看不见 vault 注入的 key，也看不见 YAML 协议的基协议。
 - Panel 的 provider 表单不展示也不写这个键（`ProviderConfigJson` 闭集）；从 Panel 改别的字段会保留它（守卫在 `gateway`）。
 
-**转发 · Forwarding**：`AiProvider::reasoning_replay()` / `clears_tool_results_server_side()` 是 leaf-only 默认，每个包装型 provider（failover、metering、think-level、MoA、model-override）都要转发；`providers::forwarding_census` 从源码派生，发现未转发且不在具名 leaf 名单上的生产 impl 按名字红。
+**转发 · Forwarding**：`AiProvider::reasoning_replay()` / `clears_tool_results_server_side()` 是 leaf-only 默认；每个仍在使用的包装型 provider（failover、metering、think-level、model-override）都要转发。历史 MoA wrapper 说明保留在变更记录中，不代表当前生产实现；`providers::forwarding_census` 从源码派生，发现未转发且不在具名 leaf 名单上的生产 impl 按名字红。
 
 **已知缺口**：见 FEATURE_LOCATOR §2.21「刻意不做 / 延后」（`redacted_thinking`、Responses 历史 item、Claude Platform on AWS 的绑定分类、Opus 5 / Sonnet 5 请求 Off 仍会思考、推理来源是派生的等）。

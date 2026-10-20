@@ -3,10 +3,8 @@
 //! Self-management SSOT. The agent edits `config.toml` through `self_config`'s
 //! `update_config`, but [`crate::config::patcher::ConfigPatcher::apply`] only
 //! refreshes the in-memory `Config` + the file on disk — it does **not** reach
-//! runtime structures that captured their configuration at startup. As
-//! [`crate::providers::route_handle`] states plainly: *"a config edit alone
-//! never reaches the already-built chain — nothing rebuilds it."* Only `route`
-//! carries explicit hot-swap wiring (the `RouteHandle` `ArcSwap`).
+//! runtime structures that captured their configuration at startup. Sections
+//! with explicit hot-swap wiring are the exception.
 //!
 //! Until now the reload rules lived as prose scattered through the `/self`
 //! SKILL.md ("generation providers need restart", "route hot-applies", the
@@ -31,7 +29,7 @@ use serde::Serialize;
 pub enum ReloadImpact {
     /// Hot-swapped onto the running runtime immediately — effective on the next
     /// prompt, no restart needed. Only sections with explicit live-apply wiring
-    /// (currently `route`, via [`crate::providers::route_handle`]) qualify.
+    /// qualify.
     Live,
     /// Persisted to `config.toml`, but the running runtime will not observe it
     /// until `aleph-server` restarts: the consuming subsystem captured this
@@ -354,7 +352,6 @@ mod tests {
         // A name that merely starts with the same characters as a declared
         // target must not match — only a `.`-bounded segment counts.
         assert!(!dotted_prefix_matches("policies", "policies_v2.foo"));
-        assert!(!dotted_prefix_matches("route", "route_config.mode"));
         // Exact equality and a real segment boundary both count.
         assert!(dotted_prefix_matches("policies.spend", "policies.spend"));
         assert!(dotted_prefix_matches(

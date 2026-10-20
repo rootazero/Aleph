@@ -279,7 +279,7 @@ const ADMIN_PREFIXES: &[&str] = &[
     // That floor covers RCE / `requires_confirmation` / continuation-driven
     // tools. It now ALSO covers the OPERATOR_TOOLS family `method_authz.rs`
     // already rules operator-only (`cron_manage`, `hooks_manage`,
-    // `agent_identity`, `agent_create`, `moa`, …) — P1 member hardening
+    // `agent_identity`, `agent_create`, legacy `moa`, …) — P1 member hardening
     // (Task 9) added a third hard floor to `handle_invoke` that reuses the
     // identical predicate (`method_authz::tool_requires_operator` +
     // `turn_context::role_is_operator`) the agent loop's own gate uses, so a

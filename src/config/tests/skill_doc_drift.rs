@@ -709,7 +709,7 @@ fn the_audit_reports_drift_when_it_is_present() {
 
 | Path | Meaning |
 |---|---|
-| `general` | Prefer the `route_status` action to view this |
+| `general` | Prefer the `inspect_settings` action to view this |
 | `ghost` | Bogus |
 ";
 
@@ -741,11 +741,11 @@ fn the_audit_reports_drift_when_it_is_present() {
 
     // The Quick Reference is deliberately placed *before* the Path Examples
     // here — the order the live doc does not use. With a `## `-only terminator
-    // the first table's scan runs into the second, and `route_status` (prose in
-    // a `Meaning` cell, never a field name) is reported as `general.route_status`.
+    // the first table's scan runs into the second, and `inspect_settings` (prose in
+    // a `Meaning` cell, never a field name) is reported as `general.inspect_settings`.
     // This is the over-report the guard must never produce.
     assert!(
-        !doc_mentions_finding(&report, "route_status"),
+        !doc_mentions_finding(&report, "inspect_settings"),
         "the Quick-Reference field scan bled into the following table's prose"
     );
     assert_eq!(report.unchecked, BTreeSet::from(["gateway".to_string()]));

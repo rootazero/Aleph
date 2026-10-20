@@ -1637,9 +1637,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 ///
 /// `configured` is the model id the turn resolves to; `serving_hint` is the
 /// live provider chain's [`AiProvider::serving_model_hint`](crate::providers::AiProvider::serving_model_hint),
-/// which covers the ids the catalogue cannot answer for on its own (agent model
-/// left unset, MoA / failover dynamic routing). The first id the capability
-/// catalogue knows wins — a pure static table read, blind to message content.
+/// which covers ids the catalogue cannot answer for on its own (agent model
+/// left unset or the provider chain's failure-only fallback). The first id the
+/// capability catalogue knows wins — a pure static table read, blind to message
+/// content.
 ///
 /// **Unknown capabilities fail OPEN (image is sent).** The two failures are not
 /// symmetric: sending an image to an unlisted text-only model produces a loud,
