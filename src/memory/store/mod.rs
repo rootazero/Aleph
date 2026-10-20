@@ -11,11 +11,17 @@
 //! - **`DreamStore`** -- dream daemon state persistence.
 //! - **`CompressionStore`** -- compression session metadata.
 
+pub mod markdown;
 pub mod raw_memory;
+pub mod session;
 pub mod sqlite;
 pub mod types;
 
 pub use raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+pub use session::{
+    Attachment, AttachmentInfo, AttachmentRef, CompressionStatus, MessageRole, RawSessionStore,
+    SessionMetadata, SessionSearchResult, ToolResult,
+};
 
 pub use sqlite::SqliteMemoryBackend;
 

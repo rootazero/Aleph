@@ -1,769 +1,809 @@
-# Aleph Raw Memory Migration Guide
+# Aleph Memory Storage Migration Guide
 
-> **Version**: 1.0
-> **Date**: 2026-10-18
-> **Target Audience**: Aleph users upgrading from SQLite raw_memories to Markdown storage
+**Version**: 1.0
+**Last Updated**: 2026-10-18
+**Target**: Users migrating from SQLite `raw_memories` to Markdown-based storage
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [What's Changing](#whats-changing)
+3. [Why Migrate](#why-migrate)
+4. [Pre-Migration Checklist](#pre-migration-checklist)
+5. [Migration Process](#migration-process)
+6. [Post-Migration Verification](#post-migration-verification)
+7. [Troubleshooting](#troubleshooting)
+8. [Migration Tool Reference](#migration-tool-reference)
+9. [Advanced Topics](#advanced-topics)
+10. [Rollback Plan](#rollback-plan)
 
 ---
 
 ## 1. Overview
 
-### 1.1 What's Changing
+Aleph is transitioning from SQLite-based raw memory storage to a Markdown-first architecture. This guide walks you through migrating your existing session data to the new format.
 
-**Before** (Legacy):
-- Raw memories stored in SQLite `raw_memories` table as TEXT
-- Attachments as BLOBs in database
-- Location: `~/Library/Application Support/aleph/aleph.db` (macOS) or equivalent
+### Migration Strategy
 
-**After** (New):
-- Sessions stored as Markdown files in `~/.aleph/raw/sessions/`
-- Attachments as content-addressed files in `~/.aleph/raw/attachments/`
-- SQLite only for IDs/indexes: `~/.aleph/metadata.db`
+- **Manual process**: No automatic migration on upgrade
+- **Tool-assisted**: Use `aleph-migrate` CLI for each step
+- **Verification-heavy**: Multiple checkpoints to ensure data integrity
+- **Rollback-ready**: Old database preserved until you confirm success
 
-### 1.2 Why Migrate
+### Timeline
 
-✅ **Git-friendly**: Text diffs, version control
-✅ **Cross-agent compatible**: Standard Markdown format
-✅ **Human-readable**: Direct access with any text editor
-✅ **Portable**: Entire `~/.aleph` relocatable
-✅ **Deduplication**: Content-addressed attachments save space
-
-### 1.3 Migration Strategy
-
-**No Automatic Migration** — manual process:
-1. Export existing data from SQLite
-2. Transform to Markdown format
-3. Import into new structure
-4. Verify integrity
-5. Archive old database
-
-**Estimated Time**: 30 minutes to 2 hours (depends on data volume)
+- **Small datasets** (< 100 sessions): 15–30 minutes
+- **Medium datasets** (100–1000 sessions): 1–2 hours
+- **Large datasets** (> 1000 sessions): 3–6 hours
 
 ---
 
-## 2. Pre-Migration Checklist
+## 2. What's Changing
 
-### 2.1 Backup Current Data
+### Before (SQLite)
 
-```bash
-# 1. Stop Aleph
-killall aleph 2>/dev/null || true
-
-# 2. Backup existing database
-mkdir -p ~/aleph-backup-$(date +%Y%m%d)
-cp -r ~/Library/Application\ Support/aleph/*.db ~/aleph-backup-$(date +%Y%m%d)/
-
-# 3. Backup existing memory notes
-cp -r ~/.aleph/memory ~/aleph-backup-$(date +%Y%m%d)/
-
-# 4. Verify backup
-ls -lh ~/aleph-backup-$(date +%Y%m%d)/
+```
+~/.aleph/metadata.db  ← All session data in SQLite
+~/.aleph/memory/note/                         ← Knowledge notes (unchanged)
 ```
 
-### 2.2 Check Data Volume
+**Storage**:
+- Session transcripts → `raw_memories.content` TEXT column
+- Attachments → scattered in `plugins/`, `output/`, `workspaces/`
+- Metadata → SQLite tables
 
-```bash
-# Check database size
-du -h ~/Library/Application\ Support/aleph/aleph.db
+### After (Markdown)
 
-# Count raw memories
-sqlite3 ~/Library/Application\ Support/aleph/aleph.db \
-  "SELECT COUNT(*) FROM raw_memories;"
-
-# Count attachments (if stored as BLOBs)
-sqlite3 ~/Library/Application\ Support/aleph/aleph.db \
-  "SELECT COUNT(*) FROM attachments WHERE data IS NOT NULL;"
+```
+~/.aleph/
+├── metadata.db                    ← IDs, indexes, search only
+├── raw/
+│   ├── sessions/
+│   │   ├── {session_id}/
+│   │   │   ├── transcript.md      ← Human-readable transcript
+│   │   │   ├── tool_outputs.md    ← Tool execution logs
+│   │   │   └── metadata.json      ← Session metadata
+│   └── attachments/
+│       ├── images/                ← Content-addressed storage
+│       ├── videos/
+│       └── documents/
+└── archive/                       ← Auto-archived old sessions
 ```
 
-### 2.3 Install Dependencies
+**Key Changes**:
+1. **Content in Markdown**: Transcripts stored as `.md` files
+2. **Unified attachments**: All binary data in `raw/attachments/`
+3. **Content-addressed**: Attachments deduplicated by SHA256 hash
+4. **Git-friendly**: All content is version-controllable
+5. **Relocatable**: Entire `~/.aleph` can be moved across machines
+
+---
+
+## 3. Why Migrate
+
+### Benefits
+
+✅ **Version Control**: Git-track your session history
+✅ **Portability**: Share data across AI agents (Pi, Claude, etc.)
+✅ **Human-Readable**: Open `.md` files in any text editor
+✅ **Deduplication**: Attachments stored once, referenced many times
+✅ **Future-Proof**: Standard Markdown format outlives any tool
+
+### What You Keep
+
+- All session transcripts (messages, timestamps, roles)
+- All tool execution outputs
+- All attachments (images, PDFs, videos)
+- All metadata (agent ID, workspace, tags, compression status)
+- FTS5 search index (rebuilt from Markdown)
+
+### What Changes
+
+- File paths (from SQLite to Markdown directories)
+- Storage format (from BLOB to content-addressed files)
+- No loss of data or functionality
+
+---
+
+## 4. Pre-Migration Checklist
+
+### 4.1 Backup Your Data
+
+**Critical**: Always backup before migration.
 
 ```bash
-# Install migration tool (will be provided)
-cargo install --path tools/aleph-migrate
+# 1. Backup entire Aleph directory
+cd ~/.aleph
+tar -czf ~/aleph-backup-$(date +%Y%m%d).tar.gz .
 
-# Or build from source
-cd /path/to/aleph
+# 2. Backup old database (if exists)
+if [ -f ~/.aleph/metadata.db ]; then
+    cp ~/.aleph/metadata.db ~/aleph.db.backup
+fi
+
+# 3. Verify backup integrity
+tar -tzf ~/aleph-backup-$(date +%Y%m%d).tar.gz | wc -l
+```
+
+### 4.2 Check Data Volume
+
+```bash
+# Count sessions in old database
+sqlite3 ~/.aleph/metadata.db \
+  "SELECT COUNT(*) FROM raw_memories WHERE source='session';"
+
+# Estimate migration time
+# < 100 sessions: 15–30 min
+# 100–1000 sessions: 1–2 hours
+# > 1000 sessions: 3–6 hours
+```
+
+### 4.3 Install Dependencies
+
+```bash
+# Ensure you have the migration tool
+aleph-migrate --version
+
+# If not installed, build from source
+cd /path/to/Aleph
 cargo build --release --bin aleph-migrate
+export PATH="$PWD/target/release:$PATH"
+```
+
+### 4.4 Disk Space Check
+
+```bash
+# Estimate required space (3x current database size)
+du -sh ~/.aleph/metadata.db
+df -h ~/.aleph  # Ensure sufficient free space
 ```
 
 ---
 
-## 3. Migration Process
+## 5. Migration Process
 
-### 3.1 Export from SQLite
+### Overview
 
-**Step 1: Export raw memories to JSON**
+The migration is a **4-step process**:
+
+1. **Export**: SQLite → JSON (intermediate format)
+2. **Transform**: JSON → Markdown sessions + attachments
+3. **Index**: Build `metadata.db` from Markdown files
+4. **Verify**: Integrity checks + diff comparison
+
+### Step 1: Export from SQLite
 
 ```bash
+# Export all sessions to JSON
 aleph-migrate export \
-  --db ~/Library/Application\ Support/aleph/aleph.db \
-  --output ~/aleph-export-$(date +%Y%m%d).json \
-  --format json
+  --db ~/.aleph/metadata.db \
+  --output ~/.aleph/migration/export.json \
+  --include-attachments
+
+# Verify export
+jq '.sessions | length' ~/.aleph/migration/export.json
 ```
 
-**Export format** (`aleph-export-YYYYMMDD.json`):
+**Options**:
+- `--agent-id <ID>`: Export only specific agent's sessions
+- `--start-date <YYYY-MM-DD>`: Export sessions after date
+- `--end-date <YYYY-MM-DD>`: Export sessions before date
+- `--compression-status <pending|compressed|archived>`: Filter by status
+
+**Output Format** (JSON):
 
 ```json
 {
-  "version": 1,
-  "exported_at": "2026-10-18T18:00:00Z",
+  "version": "1.0",
+  "exported_at": 1729267535,
   "sessions": [
     {
-      "session_id": "sess_2026-10-18_abc123",
-      "agent_id": "main",
-      "workspace_id": "ws_default",
+      "session_id": "sess_001",
+      "agent_id": "agent_main",
+      "workspace_id": "ws_001",
       "started_at": 1729267535,
-      "ended_at": 1729271792,
+      "ended_at": 1729270000,
       "messages": [
         {
-          "timestamp": 1729267535,
+          "timestamp": 1729267536,
           "role": "user",
-          "content": "帮我实现一个函数"
+          "content": "Hello, world!"
         },
         {
-          "timestamp": 1729267542,
+          "timestamp": 1729267540,
           "role": "assistant",
-          "content": "好的，我来实现..."
+          "content": "Hi there!"
         }
       ],
       "tool_outputs": [
         {
-          "timestamp": 1729267550,
+          "timestamp": 1729267545,
           "tool_name": "bash",
           "args": "ls -la",
-          "stdout": "total 0\n",
+          "exit_code": 0,
+          "stdout": "...",
           "stderr": "",
-          "exit_code": 0
+          "duration_ms": 123
         }
       ],
       "attachments": [
         {
-          "attachment_id": "att_xyz789",
-          "data_base64": "iVBORw0KGgoAAAANSUhEUg...",
+          "attachment_id": "att_001",
           "mime_type": "image/png",
-          "original_name": "screenshot.png"
+          "size_bytes": 12345,
+          "data_base64": "iVBORw0KG..."
         }
       ],
-      "tags": ["rust", "function"]
+      "tags": ["important", "project-alpha"],
+      "compression_status": "pending"
     }
   ]
 }
 ```
 
-**Step 2: Verify export**
+### Step 2: Transform to Markdown
 
 ```bash
-# Check export file size
-du -h ~/aleph-export-*.json
-
-# Validate JSON structure
-jq '.sessions | length' ~/aleph-export-*.json
-
-# Check first session
-jq '.sessions[0] | {session_id, agent_id, message_count: (.messages | length)}' \
-  ~/aleph-export-*.json
-```
-
-### 3.2 Transform to Markdown
-
-**Step 3: Convert JSON to Markdown sessions**
-
-```bash
+# Transform JSON to Markdown sessions
 aleph-migrate transform \
-  --input ~/aleph-export-$(date +%Y%m%d).json \
-  --output ~/.aleph/raw/sessions/ \
-  --attachments ~/.aleph/raw/attachments/
+  --input ~/.aleph/migration/export.json \
+  --output ~/.aleph/raw/sessions \
+  --attachments-dir ~/.aleph/raw/attachments
+
+# This will create:
+# ~/.aleph/raw/sessions/{session_id}/transcript.md
+# ~/.aleph/raw/sessions/{session_id}/tool_outputs.md
+# ~/.aleph/raw/sessions/{session_id}/metadata.json
+# ~/.aleph/raw/attachments/{type}/{hash_prefix}.{ext}
 ```
 
-**What happens**:
-1. Creates `~/.aleph/raw/sessions/{session_id}/` for each session
-2. Generates `transcript.md` from messages
-3. Generates `tool_outputs.md` from tool calls
-4. Extracts attachments to `~/.aleph/raw/attachments/{type}/{hash}.{ext}`
-5. Creates `metadata.json` for each session
+**What Happens**:
+1. Each session → separate directory
+2. Messages → `transcript.md` with timestamps
+3. Tool outputs → `tool_outputs.md` with execution details
+4. Attachments → content-addressed files (SHA256)
+5. Metadata → `metadata.json` (preserves all fields)
 
-**Example output**:
+**Example Output** (`transcript.md`):
 
+```markdown
+# Session sess_001
+
+Started: 2024-10-18T18:05:35Z
+
+## User - 18:05:36
+
+Hello, world!
+
+## Assistant - 18:05:40
+
+Hi there!
 ```
-~/.aleph/raw/sessions/sess_2026-10-18_abc123/
-├── transcript.md
-├── tool_outputs.md
-└── metadata.json
 
-~/.aleph/raw/attachments/images/
-└── a3f5b2c8d1e4f7a9.png
-```
-
-### 3.3 Import into SQLite Metadata
-
-**Step 4: Build metadata index**
+### Step 3: Index Metadata
 
 ```bash
+# Build metadata.db from Markdown files
 aleph-migrate index \
-  --base-dir ~/.aleph \
-  --db ~/.aleph/metadata.db
+  --sessions-dir ~/.aleph/raw/sessions \
+  --output ~/.aleph/metadata.db
+
+# This will:
+# 1. Scan all session directories
+# 2. Create metadata.db
+# 3. Populate sessions, agents, workspaces tables
+# 4. Build FTS5 search index
 ```
 
-**What happens**:
-1. Creates `metadata.db` with schema
-2. Scans `raw/sessions/` for all sessions
-3. Inserts metadata into `sessions` table
-4. Inserts attachment info into `attachments` table
-5. Builds FTS5 index for search
+**Index Progress**:
 
-**Verify**:
+```
+[1/4] Scanning session directories... 142 found
+[2/4] Creating database schema... OK
+[3/4] Indexing sessions... 142/142 (100%)
+[4/4] Building FTS5 index... OK
 
-```bash
-# Check metadata.db was created
-ls -lh ~/.aleph/metadata.db
-
-# Count sessions
-sqlite3 ~/.aleph/metadata.db \
-  "SELECT COUNT(*) FROM sessions;"
-
-# Check FTS5 index
-sqlite3 ~/.aleph/metadata.db \
-  "SELECT COUNT(*) FROM session_transcripts_fts;"
+✓ Indexed 142 sessions
+✓ Registered 3 agents
+✓ Registered 5 workspaces
+✓ Indexed 1,247 attachments
+✓ FTS5 index: 98,432 tokens
 ```
 
-### 3.4 Verify Migration
-
-**Step 5: Integrity checks**
+### Step 4: Verify Integrity
 
 ```bash
+# Run comprehensive verification
 aleph-migrate verify \
-  --base-dir ~/.aleph \
-  --db ~/.aleph/metadata.db \
-  --report ~/migration-report.txt
+  --sessions-dir ~/.aleph/raw/sessions \
+  --metadata-db ~/.aleph/metadata.db \
+  --original-db ~/.aleph/metadata.db \
+  --fix
+
+# Verification checks:
+# 1. Session count matches
+# 2. All referenced attachments exist
+# 3. Content hashes match
+# 4. Metadata consistency
+# 5. FTS5 index integrity
 ```
 
-**Checks performed**:
-- ✅ All sessions have `transcript.md` and `tool_outputs.md`
-- ✅ All attachments referenced in metadata exist on disk
-- ✅ Content hashes match file contents
-- ✅ No orphaned files
-- ✅ SQLite row count matches file count
-
-**Sample report** (`~/migration-report.txt`):
+**Verification Report**:
 
 ```
-=== Aleph Migration Verification Report ===
-Date: 2026-10-18 18:30:45
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Verification Report
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-✅ Sessions: 127 (all valid)
-✅ Attachments: 45 (all present, 0 orphaned)
-✅ Content hashes: 45/45 match
-✅ FTS5 index: 127 sessions indexed
+✓ Session count: 142 (matches original)
+✓ Attachment files: 1,247/1,247 present
+✓ Content hashes: 142/142 valid
+✓ Metadata.json: 142/142 parseable
+✓ Database indexes: OK
+✓ FTS5 search: OK
 
-Total disk usage:
-  - Sessions (Markdown): 12.3 MB
-  - Attachments: 8.7 MB
-  - Metadata DB: 2.1 MB
-  - Total: 23.1 MB
+Warnings:
+  ⚠ 3 sessions missing ended_at timestamp
+    → sess_120, sess_135, sess_141
 
-Old database size: 25.8 MB
-Space saved: 2.7 MB (10.5% reduction via deduplication)
+Errors: 0
 
-🎉 Migration successful! No errors found.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Migration Status: SUCCESS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
+
+**Auto-Fix**:
+- `--fix` flag repairs common issues:
+  - Regenerates missing `metadata.json`
+  - Recomputes content hashes
+  - Rebuilds FTS5 index
+  - Fixes file permissions
 
 ---
 
-## 4. Post-Migration
+## 6. Post-Migration Verification
 
-### 4.1 Test with Aleph
+### 6.1 Manual Spot Checks
 
 ```bash
-# Start Aleph with new storage
-aleph --config ~/.aleph/config.toml
+# 1. Check a random session
+ls -la ~/.aleph/raw/sessions/sess_042/
+cat ~/.aleph/raw/sessions/sess_042/transcript.md
 
-# Test basic operations
-aleph-cli memory list-sessions --limit 5
-aleph-cli memory search "rust function"
-aleph-cli memory get-session sess_2026-10-18_abc123
+# 2. Verify attachment deduplication
+find ~/.aleph/raw/attachments -type f | wc -l
+# Should be < original count if duplicates existed
+
+# 3. Test FTS5 search
+sqlite3 ~/.aleph/metadata.db \
+  "SELECT session_id FROM session_transcripts_fts WHERE content MATCH 'error';"
 ```
 
-### 4.2 Verify Panel UI
+### 6.2 Launch Aleph
 
-1. Open Aleph Panel: `http://localhost:5173`
-2. Navigate to **Settings → Memory → Sessions**
-3. Verify session list displays
-4. Click a session and verify transcript renders
-5. Check attachments preview
+```bash
+# Start Aleph and verify UI
+aleph
 
-### 4.3 Archive Old Database
+# Check:
+# 1. Settings → Memory → Sessions (should list all sessions)
+# 2. Search works (FTS5 index operational)
+# 3. Attachments render correctly
+# 4. No error logs
+```
+
+### 6.3 Archive Old Database
 
 **Only after confirming everything works**:
 
 ```bash
 # Move old database to archive
-mkdir -p ~/.aleph/archive/legacy
-mv ~/Library/Application\ Support/aleph/aleph.db \
-   ~/.aleph/archive/legacy/aleph-legacy-$(date +%Y%m%d).db
+mkdir -p ~/.aleph/archive/pre-migration
+mv ~/.aleph/metadata.db \
+   ~/.aleph/archive/pre-migration/aleph.db.$(date +%Y%m%d)
 
-# Keep for 30 days, then delete
+# Keep backup for 30 days, then delete
 ```
 
 ---
 
-## 5. Troubleshooting
+## 7. Troubleshooting
 
-### 5.1 Export Fails
+### Issue: Export fails with "table not found"
 
-**Error**: `raw_memories table does not exist`
-
-**Cause**: Database is already using new storage (no migration needed)
-
-**Solution**: Skip migration, you're already on the new system.
-
----
-
-**Error**: `database is locked`
-
-**Cause**: Aleph is still running
+**Cause**: Old database schema, missing `raw_memories` table.
 
 **Solution**:
+
 ```bash
-killall aleph
-lsof | grep aleph.db  # verify no process holding it
+# Check if table exists
+sqlite3 ~/.aleph/metadata.db \
+  ".schema raw_memories"
+
+# If missing, database may be empty (no data to migrate)
 ```
 
----
+### Issue: Transform fails with "invalid JSON"
 
-### 5.2 Transform Fails
-
-**Error**: `failed to create directory: Permission denied`
-
-**Cause**: Insufficient permissions on `~/.aleph/`
+**Cause**: Export JSON corrupted or incomplete.
 
 **Solution**:
+
 ```bash
-mkdir -p ~/.aleph/raw/{sessions,attachments}
-chmod -R u+w ~/.aleph/
+# Validate JSON
+jq empty ~/.aleph/migration/export.json
+
+# If invalid, re-run export
+aleph-migrate export --db ... --output ... --force
 ```
 
----
+### Issue: Attachment files missing
 
-**Error**: `invalid UTF-8 in content`
-
-**Cause**: Binary data stored in TEXT column
+**Cause**: Attachments were in old database but files deleted.
 
 **Solution**:
+
 ```bash
-# Re-export with binary-safe encoding
-aleph-migrate export \
-  --db ~/Library/Application\ Support/aleph/aleph.db \
-  --output ~/aleph-export.json \
-  --encoding base64
+# Run verification to identify missing files
+aleph-migrate verify --fix
+
+# If files unrecoverable, remove references
+aleph-migrate verify --fix --remove-orphans
 ```
 
----
+### Issue: FTS5 index search returns no results
 
-### 5.3 Verification Fails
-
-**Error**: `content hash mismatch for attachment att_xyz789`
-
-**Cause**: File corrupted during copy or deduplication bug
+**Cause**: Index not built or corrupted.
 
 **Solution**:
-```bash
-# Re-transform that specific session
-aleph-migrate transform \
-  --input ~/aleph-export.json \
-  --output ~/.aleph/raw/sessions/ \
-  --session sess_2026-10-18_abc123 \
-  --force
-```
 
----
-
-**Error**: `FTS5 index out of sync`
-
-**Cause**: Index not updated after manual file edits
-
-**Solution**:
 ```bash
 # Rebuild FTS5 index
-aleph-migrate reindex \
-  --base-dir ~/.aleph \
-  --db ~/.aleph/metadata.db
+sqlite3 ~/.aleph/metadata.db \
+  "DELETE FROM session_transcripts_fts; \
+   INSERT INTO session_transcripts_fts(session_id, content) \
+   SELECT session_id, content FROM sessions;"
+
+# Or re-run index command
+aleph-migrate index --sessions-dir ~/.aleph/raw/sessions \
+                     --output ~/.aleph/metadata.db \
+                     --rebuild-fts
 ```
 
----
+### Issue: Migration is very slow
 
-### 5.4 Common Questions
+**Cause**: Large attachments, slow disk I/O.
 
-**Q: Can I edit Markdown files directly?**
+**Solution**:
 
-A: Yes, but you must update `content_hash` in SQLite or rebuild index:
 ```bash
-# After editing transcript.md
-aleph-migrate update-hash \
-  --session sess_2026-10-18_abc123 \
-  --base-dir ~/.aleph
+# Use parallel processing
+aleph-migrate transform \
+  --input ~/.aleph/migration/export.json \
+  --output ~/.aleph/raw/sessions \
+  --parallel 4  # Use 4 CPU cores
+
+# Or migrate incrementally (see Advanced Topics)
 ```
 
 ---
 
-**Q: How do I restore from backup?**
+## 8. Migration Tool Reference
 
-A: Copy backup files back and restart Aleph:
-```bash
-cp -r ~/aleph-backup-YYYYMMDD/* ~/Library/Application\ Support/aleph/
-rm -rf ~/.aleph/raw/  # remove new structure
-# Restart Aleph (will use old database)
-```
+### `aleph-migrate export`
 
----
-
-**Q: Can I run both old and new versions simultaneously?**
-
-A: **No**. The new version does not read from `raw_memories` table. Migrate first.
-
----
-
-**Q: What if migration takes too long?**
-
-A: Migrate in batches:
-```bash
-# Export first 100 sessions
-aleph-migrate export \
-  --db ~/Library/Application\ Support/aleph/aleph.db \
-  --output ~/export-batch1.json \
-  --limit 100 \
-  --offset 0
-
-# Transform batch 1
-aleph-migrate transform --input ~/export-batch1.json --output ~/.aleph/raw/sessions/
-
-# Repeat for remaining batches
-```
-
----
-
-## 6. Migration Tool Reference
-
-### 6.1 `aleph-migrate export`
+Export sessions from SQLite to JSON.
 
 **Usage**:
+
 ```bash
 aleph-migrate export [OPTIONS]
 ```
 
 **Options**:
-- `--db <PATH>` — Path to legacy aleph.db (required)
-- `--output <PATH>` — Output JSON file path (required)
-- `--format <FORMAT>` — Output format: `json` (default)
-- `--encoding <ENCODING>` — Binary data encoding: `base64` (default), `hex`
-- `--limit <N>` — Limit number of sessions (optional)
-- `--offset <N>` — Skip first N sessions (optional)
-- `--agent <ID>` — Filter by agent_id (optional)
-- `--start-date <DATE>` — Filter by start date (ISO 8601, optional)
-- `--end-date <DATE>` — Filter by end date (ISO 8601, optional)
 
-**Example**:
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--db <PATH>` | Path to old SQLite database | `~/.aleph/metadata.db` |
+| `--output <PATH>` | Output JSON file path | `./export.json` |
+| `--agent-id <ID>` | Export only this agent's sessions | All agents |
+| `--start-date <DATE>` | Export sessions after this date (YYYY-MM-DD) | No filter |
+| `--end-date <DATE>` | Export sessions before this date (YYYY-MM-DD) | No filter |
+| `--compression-status <STATUS>` | Filter by status (`pending`, `compressed`, `archived`) | All |
+| `--include-attachments` | Include attachment binary data (base64) | Enabled |
+| `--force` | Overwrite existing output file | Disabled |
+
+**Examples**:
+
 ```bash
-# Export all sessions for 'main' agent from 2026-10-01 onwards
+# Export all sessions
+aleph-migrate export --db ~/old.db --output export.json
+
+# Export only main agent's sessions from 2024
 aleph-migrate export \
-  --db ~/Library/Application\ Support/aleph/aleph.db \
-  --output ~/export-main-oct.json \
-  --agent main \
-  --start-date 2026-10-01
+  --agent-id agent_main \
+  --start-date 2024-01-01 \
+  --end-date 2024-12-31
+
+# Export without attachments (faster, smaller JSON)
+aleph-migrate export --no-include-attachments
 ```
 
 ---
 
-### 6.2 `aleph-migrate transform`
+### `aleph-migrate transform`
+
+Transform JSON export to Markdown sessions.
 
 **Usage**:
+
 ```bash
 aleph-migrate transform [OPTIONS]
 ```
 
 **Options**:
-- `--input <PATH>` — Input JSON export file (required)
-- `--output <PATH>` — Output sessions directory (required)
-- `--attachments <PATH>` — Output attachments directory (required)
-- `--session <ID>` — Process only this session (optional)
-- `--force` — Overwrite existing files (optional)
-- `--dry-run` — Show what would be created without writing (optional)
 
-**Example**:
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--input <PATH>` | Input JSON file (from export) | Required |
+| `--output <PATH>` | Output sessions directory | `~/.aleph/raw/sessions` |
+| `--attachments-dir <PATH>` | Attachments directory | `~/.aleph/raw/attachments` |
+| `--parallel <N>` | Number of parallel workers | 1 |
+| `--overwrite` | Overwrite existing sessions | Disabled |
+
+**Examples**:
+
 ```bash
-# Dry-run to preview
-aleph-migrate transform \
-  --input ~/export.json \
-  --output ~/.aleph/raw/sessions/ \
-  --attachments ~/.aleph/raw/attachments/ \
-  --dry-run
+# Basic transform
+aleph-migrate transform --input export.json
 
-# Actually write files
+# Fast parallel transform
 aleph-migrate transform \
-  --input ~/export.json \
-  --output ~/.aleph/raw/sessions/ \
-  --attachments ~/.aleph/raw/attachments/
+  --input export.json \
+  --parallel 8
+
+# Custom output paths
+aleph-migrate transform \
+  --input export.json \
+  --output /mnt/storage/sessions \
+  --attachments-dir /mnt/storage/attachments
 ```
 
 ---
 
-### 6.3 `aleph-migrate index`
+### `aleph-migrate index`
+
+Build `metadata.db` from Markdown sessions.
 
 **Usage**:
+
 ```bash
 aleph-migrate index [OPTIONS]
 ```
 
 **Options**:
-- `--base-dir <PATH>` — Base directory (`~/.aleph`, required)
-- `--db <PATH>` — Metadata database path (default: `{base-dir}/metadata.db`)
-- `--force` — Drop existing tables and rebuild (optional)
 
-**Example**:
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--sessions-dir <PATH>` | Sessions directory to index | `~/.aleph/raw/sessions` |
+| `--output <PATH>` | Output database path | `~/.aleph/metadata.db` |
+| `--rebuild-fts` | Rebuild FTS5 index even if exists | Disabled |
+
+**Examples**:
+
 ```bash
-# Initial index
-aleph-migrate index --base-dir ~/.aleph
+# Basic indexing
+aleph-migrate index
 
-# Rebuild from scratch
-aleph-migrate index --base-dir ~/.aleph --force
+# Rebuild FTS5 index
+aleph-migrate index --rebuild-fts
+
+# Custom paths
+aleph-migrate index \
+  --sessions-dir /mnt/storage/sessions \
+  --output /mnt/storage/metadata.db
 ```
 
 ---
 
-### 6.4 `aleph-migrate verify`
+### `aleph-migrate verify`
+
+Verify migration integrity.
 
 **Usage**:
+
 ```bash
 aleph-migrate verify [OPTIONS]
 ```
 
 **Options**:
-- `--base-dir <PATH>` — Base directory (required)
-- `--db <PATH>` — Metadata database path (optional)
-- `--report <PATH>` — Write report to file (optional)
-- `--fix` — Attempt to auto-fix issues (optional)
 
-**Example**:
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--sessions-dir <PATH>` | Sessions directory to verify | `~/.aleph/raw/sessions` |
+| `--metadata-db <PATH>` | Metadata database path | `~/.aleph/metadata.db` |
+| `--original-db <PATH>` | Original SQLite database (for comparison) | Optional |
+| `--fix` | Auto-fix common issues | Disabled |
+| `--remove-orphans` | Remove orphaned attachment references | Disabled |
+
+**Examples**:
+
 ```bash
-# Verify and generate report
-aleph-migrate verify \
-  --base-dir ~/.aleph \
-  --report ~/migration-report.txt
+# Basic verification
+aleph-migrate verify
 
-# Verify and auto-fix
+# Verify with auto-fix
+aleph-migrate verify --fix
+
+# Compare against original database
 aleph-migrate verify \
-  --base-dir ~/.aleph \
+  --original-db ~/old.db \
   --fix
 ```
 
 ---
 
-## 7. Advanced Topics
+## 9. Advanced Topics
 
-### 7.1 Incremental Migration
+### 9.1 Incremental Migration
 
-If you have ongoing work during migration, use incremental approach:
+For large datasets, migrate in batches:
 
-**Day 1**: Export current state
 ```bash
-aleph-migrate export --db ~/Library/Application\ Support/aleph/aleph.db \
-  --output ~/export-day1.json
+# Export by date ranges
+aleph-migrate export \
+  --db ~/old.db \
+  --start-date 2024-01-01 \
+  --end-date 2024-03-31 \
+  --output q1.json
+
+aleph-migrate export \
+  --db ~/old.db \
+  --start-date 2024-04-01 \
+  --end-date 2024-06-30 \
+  --output q2.json
+
+# Transform each batch
+aleph-migrate transform --input q1.json
+aleph-migrate transform --input q2.json
+
+# Final index (once)
+aleph-migrate index
 ```
 
-**Day 2**: Export delta (new sessions only)
+### 9.2 Selective Migration
+
+Migrate only specific agents or workspaces:
+
 ```bash
-aleph-migrate export --db ~/Library/Application\ Support/aleph/aleph.db \
-  --output ~/export-day2.json \
-  --start-date 2026-10-19  # day 2 onwards
+# Export agent_main only
+aleph-migrate export --agent-id agent_main --output main.json
+
+# Export workspace ws_project_alpha only
+aleph-migrate export --workspace-id ws_project_alpha --output alpha.json
+
+# Transform and index
+aleph-migrate transform --input main.json
+aleph-migrate index
 ```
 
-**Merge exports**:
+### 9.3 Custom Transformation
+
+Edit JSON before transformation:
+
 ```bash
-jq -s '.[0] * .[1] | .sessions = ([.[0].sessions, .[1].sessions] | add)' \
-  ~/export-day1.json ~/export-day2.json > ~/export-merged.json
+# Export
+aleph-migrate export --output raw.json
+
+# Edit JSON (e.g., remove sensitive data, fix timestamps)
+jq '.sessions |= map(select(.agent_id != "agent_test"))' raw.json > filtered.json
+
+# Transform edited JSON
+aleph-migrate transform --input filtered.json
 ```
 
-**Transform merged**:
+### 9.4 Performance Tuning
+
 ```bash
-aleph-migrate transform --input ~/export-merged.json \
-  --output ~/.aleph/raw/sessions/ \
-  --attachments ~/.aleph/raw/attachments/
+# For SSDs (high IOPS)
+aleph-migrate transform --parallel 16
+
+# For HDDs (sequential writes)
+aleph-migrate transform --parallel 2
+
+# For network storage
+aleph-migrate transform --parallel 1 --batch-size 10
 ```
 
 ---
 
-### 7.2 Selective Migration
-
-Migrate only specific agents or date ranges:
-
-```bash
-# Export only 'main' agent
-aleph-migrate export --db ~/Library/Application\ Support/aleph/aleph.db \
-  --output ~/export-main.json \
-  --agent main
-
-# Export only last 30 days
-aleph-migrate export --db ~/Library/Application\ Support/aleph/aleph.db \
-  --output ~/export-recent.json \
-  --start-date $(date -d '30 days ago' +%Y-%m-%d)
-```
-
----
-
-### 7.3 Custom Transformation
-
-If you need custom Markdown formatting:
-
-1. Export to JSON
-2. Write custom script (Python/Node.js/Rust)
-3. Generate Markdown files with your template
-4. Run `aleph-migrate index` to build metadata
-
-**Example Python script** (`custom-transform.py`):
-
-```python
-import json
-from pathlib import Path
-import hashlib
-import base64
-
-def transform_session(session, output_dir, attachments_dir):
-    session_id = session['session_id']
-    session_path = output_dir / session_id
-    session_path.mkdir(parents=True, exist_ok=True)
-
-    # Custom Markdown template
-    transcript = f"""---
-session_id: {session_id}
-agent_id: {session['agent_id']}
----
-
-# My Custom Session Format
-
-"""
-
-    for msg in session['messages']:
-        role = msg['role'].capitalize()
-        transcript += f"## {role} ({msg['timestamp']})\n\n{msg['content']}\n\n"
-
-    (session_path / 'transcript.md').write_text(transcript)
-
-    # ... handle tool_outputs and attachments
-
-# Load export
-with open('~/export.json') as f:
-    data = json.load(f)
-
-for session in data['sessions']:
-    transform_session(session, Path('~/.aleph/raw/sessions'), Path('~/.aleph/raw/attachments'))
-```
-
----
-
-### 7.4 Migration Performance
-
-**Optimize for large datasets**:
-
-```bash
-# Parallel processing (if safe)
-aleph-migrate transform \
-  --input ~/export.json \
-  --output ~/.aleph/raw/sessions/ \
-  --attachments ~/.aleph/raw/attachments/ \
-  --parallel 4  # use 4 threads
-
-# Disable FTS5 during bulk import
-aleph-migrate index \
-  --base-dir ~/.aleph \
-  --skip-fts5
-
-# Rebuild FTS5 after all sessions imported
-aleph-migrate reindex --base-dir ~/.aleph --fts5-only
-```
-
----
-
-## 8. Rollback Plan
+## 10. Rollback Plan
 
 If migration fails or you need to revert:
 
-**Step 1: Stop Aleph**
+### Step 1: Restore Old Database
+
 ```bash
-killall aleph
+# Copy backup back
+cp ~/aleph.db.backup ~/.aleph/metadata.db
 ```
 
-**Step 2: Remove new structure**
+### Step 2: Remove New Files
+
 ```bash
-rm -rf ~/.aleph/raw/
+# Delete Markdown files
+rm -rf ~/.aleph/raw/sessions
+rm -rf ~/.aleph/raw/attachments
 rm ~/.aleph/metadata.db
 ```
 
-**Step 3: Restore backup**
-```bash
-cp ~/aleph-backup-YYYYMMDD/aleph.db \
-   ~/Library/Application\ Support/aleph/aleph.db
-```
+### Step 3: Restart Aleph
 
-**Step 4: Restart Aleph**
 ```bash
+# Launch with old database
 aleph
 ```
 
-**Step 5: Verify**
-```bash
-sqlite3 ~/Library/Application\ Support/aleph/aleph.db \
-  "SELECT COUNT(*) FROM raw_memories;"
-```
+### Step 4: Report Issue
+
+If migration failed, please report:
+
+1. Migration command used
+2. Error message
+3. Verification report (if reached that step)
+4. Dataset size (number of sessions, total size)
+
+**Report to**: https://github.com/YourRepo/Aleph/issues
 
 ---
 
-## 9. Migration Checklist
+## Migration Checklist
 
-**Before Migration**:
-- [ ] Backup `aleph.db` to `~/aleph-backup-YYYYMMDD/`
-- [ ] Backup `~/.aleph/memory/` to `~/aleph-backup-YYYYMMDD/`
-- [ ] Check disk space (need ~2x current DB size)
+Use this checklist to track your progress:
+
+### Before Migration
+
+- [ ] Backup entire `~/.aleph` directory
+- [ ] Backup old database (`~/.aleph/metadata.db`)
+- [ ] Verify backup integrity
+- [ ] Check available disk space (3x current database size)
 - [ ] Install `aleph-migrate` tool
-- [ ] Stop Aleph process
+- [ ] Estimate migration time based on dataset size
 
-**During Migration**:
-- [ ] Export to JSON: `aleph-migrate export`
-- [ ] Verify JSON structure with `jq`
-- [ ] Transform to Markdown: `aleph-migrate transform`
-- [ ] Index metadata: `aleph-migrate index`
-- [ ] Verify integrity: `aleph-migrate verify`
+### During Migration
 
-**After Migration**:
-- [ ] Test Aleph CLI: `aleph-cli memory list-sessions`
-- [ ] Test Panel UI: Browse sessions in Settings
-- [ ] Verify search works: `aleph-cli memory search "test"`
-- [ ] Check attachments display correctly
-- [ ] Archive old database after 7 days of successful use
-- [ ] Delete backup after 30 days
+- [ ] Export: SQLite → JSON
+- [ ] Verify export JSON is valid
+- [ ] Transform: JSON → Markdown
+- [ ] Check session directories were created
+- [ ] Index: Build `metadata.db`
+- [ ] Verify: Run integrity checks
+- [ ] Review verification report
+- [ ] Fix any reported issues
+
+### After Migration
+
+- [ ] Spot-check random sessions
+- [ ] Launch Aleph and verify UI
+- [ ] Test FTS5 search
+- [ ] Verify attachments render correctly
+- [ ] Check error logs (no migration-related errors)
+- [ ] Archive old database (keep for 30 days)
+- [ ] Delete backup after 30 days (if everything works)
 
 ---
 
-## 10. Support
+## Need Help?
 
-### 10.1 Report Issues
-
-If you encounter problems during migration:
-
-1. Save error output: `aleph-migrate verify --base-dir ~/.aleph > error.log 2>&1`
-2. Create issue: https://github.com/your-org/aleph/issues
-3. Include:
-   - Aleph version
-   - OS version
-   - Error log
-   - Migration report (redact sensitive content)
-
-### 10.2 Community Help
-
-- Discord: https://discord.gg/aleph
-- Forum: https://discuss.aleph.ai
-- Docs: https://docs.aleph.ai/migration
+- **Documentation**: [docs/specs/2026-10-18-markdown-storage-design.md](../specs/2026-10-18-markdown-storage-design.md)
+- **Issues**: https://github.com/YourRepo/Aleph/issues
+- **Discord**: https://discord.gg/aleph-community
 
 ---
 
 **Last Updated**: 2026-10-18
 **Document Version**: 1.0
-**Applies To**: Aleph v0.9.0+
+**Migration Tool Version**: 0.1.0

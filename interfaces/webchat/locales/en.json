@@ -2447,7 +2447,13 @@
     "no_providers": "no configured providers. Add a key in Settings → Providers.",
     "pick_model_title": "Pick model for this turn",
     "filter_placeholder": "Filter providers and models…",
-    "no_match": "no matching models"
+    "no_match": "no matching models",
+    "no_active_conversation": "No active conversation",
+    "sent_notice": "Sent: {{ command }} (selection unconfirmed)",
+    "send_failed": "Send failed: {{ command }}: {{ error }}",
+    "session_title": "Send {{ command }} — session; per-turn override unchanged",
+    "session_aria_label": "Session: {{ command }}",
+    "session_action": "Session"
   },
   "layout_toggle": {
     "open_pane": "Open workspace pane",
