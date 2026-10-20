@@ -1653,6 +1653,11 @@ impl ToolRegistry for BuiltinToolRegistry {
             // was billed on every request for a tool whose every invocation
             // answered "Unknown tool". Registration is not dispatch; the census
             // in `dispatchable.rs` now says so in a way that fails the build.
+            "context_plugin" => Box::pin(async move {
+                crate::builtin_tools::context_plugin::ContextPluginTool
+                    .call_json(arguments)
+                    .await
+            }),
             "plugin_manage" => Box::pin(async move {
                 crate::builtin_tools::plugin_manage::PluginManageTool::new()
                     .call_json(arguments)

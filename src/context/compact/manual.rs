@@ -344,6 +344,22 @@ pub async fn compact_session(
     session_id: &SessionId,
     opts: &ManualCompactOptions,
 ) -> anyhow::Result<ManualCompactOutcome> {
+    let fabric = crate::extension::try_extension_manager().map(|manager| {
+        crate::context::fabric::ContextFabric::builder(manager.plugin_registry_handle())
+            .handler_resolver(manager.context_handler_resolver())
+            .build()
+    });
+    compact_session_with_fabric(service, summarizer, fabric.as_ref(), session_id, opts).await
+}
+
+/// Explicit host seam used by event-log tests and non-global hosts.
+pub async fn compact_session_with_fabric(
+    service: &dyn SessionService,
+    summarizer: Option<&ContextCompactor>,
+    fabric: Option<&crate::context::fabric::ContextFabric>,
+    session_id: &SessionId,
+    opts: &ManualCompactOptions,
+) -> anyhow::Result<ManualCompactOutcome> {
     // Claim the session before the log is read: a snapshot taken outside the
     // bracket can already describe a log another compaction is about to retire.
     let Some(_bracket) = CompactionBracket::try_acquire(session_id) else {
@@ -414,15 +430,30 @@ pub async fn compact_session(
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    let body = match summarizer {
-        Some(compactor) => {
-            compactor
-                .summarize_slice(summarizer_input, focus.as_deref(), instructions)
-                .await?
-        }
-        // No provider wired: a blunt summary still beats replaying the raw
-        // span forever, and it is exactly what the LLM path falls back to.
-        None => deterministic_truncation(summarizer_input),
+    let (body, owner) = if let Some(fabric) = fabric {
+        let caller = crate::context::fabric::AuthenticatedCaller::from_host_boundary(
+            session_id.to_key_string(),
+        )?;
+        fabric
+            .summarize_slice(
+                summarizer_input,
+                focus.as_deref(),
+                instructions,
+                summarizer,
+                &caller,
+                None,
+            )
+            .await?
+    } else {
+        let body = match summarizer {
+            Some(compactor) => {
+                compactor
+                    .summarize_slice(summarizer_input, focus.as_deref(), instructions)
+                    .await?
+            }
+            None => deterministic_truncation(summarizer_input),
+        };
+        (body, crate::context::fabric::ContextOwner::Builtin)
     };
     let body = cap_summary_lines(body, MAX_SUMMARY_LINES);
     let body = if elided > 0 {
@@ -485,8 +516,8 @@ pub async fn compact_session(
         },
         // The fold-registry record, in the SAME batch as its checkpoint —
         // both land or neither does (Context Fabric spec §3.1a, FL §2.14).
-        // Manual compaction is a Core builtin producer, so the durable owner
-        // is explicit even though older records use `None` for builtin.
+        // Host-selected producer, committed atomically with this fold.
+        // A fallback is Core-owned; legacy None continues to mean builtin.
         SessionEvent::FoldRecorded {
             fold_id: crate::context::compact::folds::derive_fold_id(
                 &session_id.to_key_string(),
@@ -503,7 +534,10 @@ pub async fn compact_session(
                 .to_string(),
             folded_tokens: tokens_before as u64,
             summary_tokens: tokens_after as u64,
-            owner: Some(crate::context::compact::folds::BUILTIN_FOLD_OWNER.to_string()),
+            owner: Some(match &owner {
+                crate::context::fabric::ContextOwner::Plugin(key) => key.clone(),
+                _ => crate::context::compact::folds::BUILTIN_FOLD_OWNER.to_string(),
+            }),
             at,
         },
     ];
@@ -538,6 +572,21 @@ pub async fn compact_session(
                 "manual compaction: transaction did not commit; context unchanged",
             );
             return Err(anyhow::Error::from(e));
+        }
+    }
+    // Notify only after the event-store transaction committed; observers are
+    // disposable and cannot turn a successful commit into a failed operation.
+    if let Some(fabric) = fabric {
+        if let Ok(caller) = crate::context::fabric::AuthenticatedCaller::from_host_boundary(
+            session_id.to_key_string(),
+        ) {
+            fabric
+                .notify_lifecycle(
+                    crate::context::fabric::ContextLifecycleEvent::FoldRecorded,
+                    &caller,
+                    None,
+                )
+                .await;
         }
     }
     // Tell the prompt-cache watchdog this break was deliberate.

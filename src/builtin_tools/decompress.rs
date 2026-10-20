@@ -277,6 +277,10 @@ pub(crate) async fn decompress_fold_span(
         )));
     }
 
+    crate::context::fabric::tool_admission::notify_current_lifecycle(
+        crate::context::fabric::ContextLifecycleEvent::RestoreRequested,
+    )
+    .await;
     let lines: Vec<(EventSeq, String)> = span
         .iter()
         .filter_map(|r| render_line(r.record.seq, &r.record.event).map(|line| (r.record.seq, line)))

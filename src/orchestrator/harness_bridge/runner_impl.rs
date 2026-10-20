@@ -716,7 +716,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // sessions. The compactor reuses this run's SIDE-CHANNEL provider for
         // summarization (deterministic-truncation fallback on provider error) —
         // `side_channel_llm`, not `llm`: see its construction above.
-        let (context_budget, context_compactor, preflight_pipeline) = match self
+        let (context_budget, context_compactor, context_fabric) = match self
             .context_budget_config
             .as_ref()
         {
@@ -848,11 +848,23 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Stage list + preventive-band gate live in ONE place
                 // (`preflight::default_pipeline`) so the subagent spawner builds
                 // the identical pipeline instead of re-deriving it.
-                let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(
-                    cfg,
-                    llm.as_ref(),
-                ));
-                (Some(budget), Some(compactor), Some(pipeline))
+                let pipeline =
+                    crate::context::budget::preflight::default_pipeline(cfg, llm.as_ref());
+                let registry = crate::extension::try_extension_manager()
+                    .map(|manager| manager.plugin_registry_handle())
+                    .unwrap_or_else(|| {
+                        Arc::new(tokio::sync::RwLock::new(
+                            crate::extension::registry::PluginRegistry::new(),
+                        ))
+                    });
+                let mut builder = crate::context::fabric::ContextFabric::builder(registry)
+                    .native_pipeline(pipeline)
+                    .compactor(compactor.clone());
+                if let Some(manager) = crate::extension::try_extension_manager() {
+                    builder = builder.handler_resolver(manager.context_handler_resolver());
+                }
+                let fabric = Arc::new(builder.build());
+                (Some(budget), Some(compactor), Some(fabric))
             }
             None => (None, None, None),
         };
@@ -984,7 +996,7 @@ impl HarnessRunner for AgentHarnessRunner {
             verifier_chain: self.verifier_chain.clone(),
             context_budget,
             context_compactor,
-            preflight_pipeline,
+            context_fabric,
             // rust-doctor-disable-next-line excessive-clone
             trace_sink: trace_sink.clone(),
             system_prompt,
@@ -1248,16 +1260,10 @@ impl HarnessRunner for AgentHarnessRunner {
                     // fallback only served to silently rewrite valid JSON
                     // payloads. Native tool_use is the canonical egress now.
                     //
-                    // Thinking-only completions (extended-thinking providers
-                    // that may put output in the `thinking` field on a
-                    // text-empty assistant turn) keep the explicit fallback.
-                    final_text = if content.text.is_empty() {
-                        // rust-doctor-disable-next-line excessive-clone
-                        content.thinking.clone().unwrap_or_default()
-                    } else {
-                        // rust-doctor-disable-next-line excessive-clone
-                        content.text.clone()
-                    };
+                    // Thinking-only completions are persisted as metadata and
+                    // never become a public final answer.
+                    // rust-doctor-disable-next-line excessive-clone
+                    final_text = content.text.clone();
                     iterations = iterations.saturating_add(1);
                 }
                 SessionEvent::ToolCallRequested { .. } => {

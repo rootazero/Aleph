@@ -4,7 +4,11 @@
 //! `SessionManager`; during the migration it reads events from `SessionService`
 //! and projects them into the same shape here.
 
-use crate::session::events::{ErrorKind, SessionEvent};
+use crate::providers::adapter::ProviderResponse;
+use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::providers::reasoning_replay::{ReasoningReplay, ThinkingOrigin};
+use crate::session::events::{ErrorKind, MessageContent, SessionEvent};
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectedRow {
@@ -22,6 +26,88 @@ pub struct ProjectedRow {
     /// `messages` table is what the USER sees, `session_events` is what the
     /// MODEL sees) and neither is derived from the other.
     pub author_user_id: Option<String>,
+}
+
+/// Project one provider response into the durable assistant content shape.
+///
+/// The response carries the replay policy used for the actual request. This
+/// helper intentionally projects through the typed `UnifiedMessage` policy so
+/// persisted reasoning follows the same rules as outbound replay. An
+/// unattested response has no policy and therefore uses `Drop`.
+#[must_use]
+pub(crate) fn project_assistant_response(
+    response: &ProviderResponse,
+    text: String,
+    blocks: Vec<Value>,
+) -> MessageContent {
+    let policy = response.reasoning_replay.unwrap_or(ReasoningReplay::Drop);
+    let signature_only = policy == ReasoningReplay::ResponsesEncrypted
+        && !response.tool_calls.is_empty()
+        && ThinkingOrigin::of(response.thinking_signature.as_deref())
+            == ThinkingOrigin::ResponsesEncrypted;
+    let mut policy_content = Vec::with_capacity(
+        usize::from(!text.is_empty())
+            + response.tool_calls.len()
+            + usize::from(response.thinking.is_some() || signature_only),
+    );
+    if !text.is_empty() {
+        policy_content.push(ContentBlock::Text {
+            text: text.clone(),
+            cache_control: None,
+        });
+    }
+    policy_content.extend(
+        response
+            .tool_calls
+            .iter()
+            .map(|call| ContentBlock::ToolCall {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
+                thought_signature: call.thought_signature.clone(),
+            }),
+    );
+    if response.thinking.is_some() || signature_only {
+        policy_content.push(ContentBlock::Thinking {
+            thinking: response.thinking.clone().unwrap_or_default(),
+            signature: response.thinking_signature.clone(),
+            earlier_turn: false,
+        });
+    }
+
+    let message = UnifiedMessage::Assistant {
+        content: policy_content,
+    };
+    let projected = policy.project_message(&message);
+    let mut projected_thinking = None;
+    let mut projected_signature = None;
+    if let Some(projected) = projected.as_deref() {
+        for block in projected.content_blocks() {
+            if let ContentBlock::Thinking {
+                thinking,
+                signature,
+                ..
+            } = block
+            {
+                // Do not persist a synthetic `fill_missing` placeholder. Only
+                // the reasoning produced by this response may enter the log.
+                if response.thinking.is_some() || signature_only {
+                    projected_thinking = response.thinking.as_ref().map(|_| thinking.clone());
+                    projected_signature = signature.clone();
+                }
+            }
+        }
+    }
+
+    MessageContent {
+        text,
+        // These are the original public session blocks. They intentionally
+        // bypass ContentBlock serde: legacy `tool_use` JSON and Gemini
+        // `thought_signature` are protocol-shaped persistence data.
+        blocks,
+        thinking: projected_thinking,
+        thinking_signature: projected_signature,
+    }
 }
 
 /// Pure map: one session event → at most one projected message row.
@@ -226,6 +312,155 @@ mod tests {
         assert_eq!(parse_source_seq("agent:main:xyz", "agent:main"), None);
     }
 
+    #[test]
+    fn project_assistant_response_preserves_legacy_tool_use_blocks_verbatim() {
+        let blocks = vec![serde_json::json!({
+            "type": "tool_use",
+            "id": "call-1",
+            "name": "search",
+            "input": {"q": "rust"},
+            "thought_signature": "gemini-sig",
+        })];
+        let response = ProviderResponse {
+            tool_calls: vec![crate::providers::adapter::NativeToolCall {
+                id: "call-1".into(),
+                name: "search".into(),
+                arguments: serde_json::json!({"q": "rust"}),
+                thought_signature: Some("gemini-sig".into()),
+            }],
+            thinking: Some("signed reasoning".into()),
+            thinking_signature: Some("anthropic-sig".into()),
+            reasoning_replay: Some(
+                crate::providers::reasoning_replay::ReasoningReplay::AnthropicSigned {
+                    strip_earlier_turns: false,
+                },
+            ),
+            ..Default::default()
+        };
+
+        let projected = project_assistant_response(&response, "answer".into(), blocks.clone());
+        assert_eq!(projected.text, "answer");
+        assert_eq!(projected.blocks, blocks);
+        assert_eq!(projected.thinking.as_deref(), Some("signed reasoning"));
+        assert_eq!(
+            projected.thinking_signature.as_deref(),
+            Some("anthropic-sig")
+        );
+    }
+
+    #[test]
+    fn project_signature_only_responses_preserves_only_attested_tool_signature() {
+        let signature = "{\"id\":\"rs_1\",\"ec\":\"encrypted\"}\n";
+        let blocks = vec![serde_json::json!({
+            "type": "tool_use", "id": "c1", "name": "search", "input": {"q": "rust"},
+        })];
+        let call = crate::providers::adapter::NativeToolCall {
+            id: "c1".into(),
+            name: "search".into(),
+            arguments: serde_json::json!({"q": "rust"}),
+            thought_signature: None,
+        };
+        for (policy, tool_turn, origin, keep) in [
+            (
+                Some(ReasoningReplay::ResponsesEncrypted),
+                true,
+                Some(signature),
+                true,
+            ),
+            (
+                Some(ReasoningReplay::ResponsesEncrypted),
+                false,
+                Some(signature),
+                false,
+            ),
+            (
+                Some(ReasoningReplay::ResponsesEncrypted),
+                true,
+                Some("ordinary-sig"),
+                false,
+            ),
+            (Some(ReasoningReplay::ResponsesEncrypted), true, None, false),
+            (Some(ReasoningReplay::Drop), true, Some(signature), false),
+            (
+                Some(ReasoningReplay::default()),
+                true,
+                Some(signature),
+                false,
+            ),
+            (None, true, Some(signature), false),
+        ] {
+            let response = ProviderResponse {
+                thinking: None,
+                thinking_signature: origin.map(str::to_string),
+                reasoning_replay: policy,
+                tool_calls: if tool_turn {
+                    vec![call.clone()]
+                } else {
+                    vec![]
+                },
+                ..Default::default()
+            };
+            let raw_blocks = if tool_turn { blocks.clone() } else { vec![] };
+            let projected =
+                project_assistant_response(&response, String::new(), raw_blocks.clone());
+            assert_eq!(projected.thinking, None);
+            assert_eq!(
+                projected.thinking_signature.as_deref(),
+                keep.then_some(signature)
+            );
+            assert_eq!(projected.blocks, raw_blocks);
+            assert!(projected.text.is_empty());
+            let row = project_row(&SessionEvent::AssistantMessage {
+                turn_id: uuid::Uuid::new_v4(),
+                content: projected,
+                usage: None,
+                at: 0,
+                model: None,
+                model_provider: None,
+                model_generation: None,
+            })
+            .unwrap();
+            assert!(
+                row.text.is_empty(),
+                "Core signature must not enter public text"
+            );
+        }
+    }
+
+    #[test]
+    fn project_assistant_response_drops_unattested_thinking_but_keeps_public_blocks() {
+        let blocks = vec![serde_json::json!({
+            "type": "tool_use",
+            "id": "legacy",
+            "name": "tool",
+            "input": {"value": 1},
+        })];
+        let response = ProviderResponse {
+            thinking: Some("must not persist".into()),
+            thinking_signature: Some("bad-origin".into()),
+            ..Default::default()
+        };
+
+        let projected = project_assistant_response(&response, String::new(), blocks.clone());
+        assert!(projected.text.is_empty());
+        assert_eq!(projected.blocks, blocks);
+        assert_eq!(projected.thinking, None);
+        assert_eq!(projected.thinking_signature, None);
+    }
+
+    #[test]
+    fn project_assistant_response_keeps_thinking_only_response_empty() {
+        let response = ProviderResponse {
+            thinking: Some("internal only".into()),
+            reasoning_replay: Some(crate::providers::reasoning_replay::ReasoningReplay::Drop),
+            ..Default::default()
+        };
+
+        let projected = project_assistant_response(&response, String::new(), Vec::new());
+        assert!(projected.text.is_empty());
+        assert!(projected.blocks.is_empty());
+        assert_eq!(projected.thinking, None);
+    }
     #[test]
     fn project_row_maps_message_and_tool_events() {
         let tid = uuid::Uuid::new_v4();

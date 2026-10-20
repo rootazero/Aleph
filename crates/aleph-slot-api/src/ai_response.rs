@@ -5,6 +5,7 @@
 //! single authoritative definition lives here; `alephcore` re-exports the
 //! same types (one `TypeId`).
 
+use crate::ai_reasoning::ReasoningReplay;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -25,6 +26,13 @@ pub struct ProviderResponse {
     /// the same assistant message also contains `tool_use` blocks. `None` for
     /// providers that do not sign thinking output.
     pub thinking_signature: Option<String>,
+    /// Request-bound reasoning replay policy attested by the response producer.
+    /// `None` means that the producer did not identify a policy, so persisted
+    /// thinking must be dropped rather than guessed from a later target.
+    ///
+    /// This is local producer attestation. `ProviderResponse` has no serde wire
+    /// representation; provider parsers set this only after resolving a request.
+    pub reasoning_replay: Option<ReasoningReplay>,
     /// Why the LLM stopped generating
     pub stop_reason: StopReason,
     /// Token usage statistics

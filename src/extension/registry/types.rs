@@ -56,7 +56,6 @@ impl ContextRegistration {
         self.grants.get(session_id)
     }
 
-    #[must_use]
     pub fn sessions(&self) -> impl Iterator<Item = &str> {
         self.grants.keys().map(String::as_str)
     }
@@ -113,7 +112,7 @@ pub enum ContextRegistryError {
 }
 
 /// Context registry observability counters.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ContextStats {
     pub registrations: usize,
     pub builtin_registrations: usize,

@@ -59,6 +59,11 @@ pub struct WasmRuntime {
 #[derive(Debug)]
 struct LoadedWasmPlugin {
     plugin: Mutex<extism::Plugin>,
+    // Captured from the effective configuration at build time, never from a
+    // manifest supplied by a later binding caller. No per-call attenuation.
+    context_effect_free: bool,
+    // Immutable discovery facts of THIS incarnation, not active registrations.
+    context_declarations: Vec<crate::extension::capability::ContextDeclaration>,
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +80,22 @@ impl WasmBinding {
 
     pub(crate) fn export(&self) -> &str {
         &self.export
+    }
+
+    pub(crate) fn context_effect_free(&self) -> bool {
+        self.instance.context_effect_free
+    }
+
+    pub(crate) fn context_declaration(
+        &self,
+        id: &str,
+    ) -> Option<&crate::extension::capability::ContextDeclaration> {
+        self.instance
+            .context_declarations
+            .iter()
+            .find(|declaration| {
+                declaration.descriptor.id == id && declaration.handler == self.export
+            })
     }
 }
 
@@ -191,6 +212,8 @@ impl WasmRuntime {
         let capabilities = manifest.wasm_capabilities.clone().unwrap_or_default();
         let limits = manifest.wasm_resource_limits.clone().unwrap_or_default();
         let call_timeout = std::time::Duration::from_secs(limits.timeout_secs);
+        let memory_pages = limits.memory_mb.checked_mul(16).filter(|pages| *pages > 0);
+        let fuel = limits.fuel;
 
         // Build the per-plugin kernel. The resolver is installed via the
         // builder so the kernel can be cloned freely; the default
@@ -208,10 +231,17 @@ impl WasmRuntime {
                 .with_secret_resolver(resolver),
         );
 
-        // Create host state for Extism UserData
+        let has_contexts = manifest
+            .aleph_extensions
+            .as_ref()
+            .is_some_and(|extensions| !extensions.contexts.is_empty());
+        // Create host state for Extism UserData. Context guests receive only
+        // the audited host imports; WASI stdout/stderr and ambient I/O are not
+        // part of their authority, even when an ordinary plugin enables WASI.
         let host_state = UserData::new(host_functions::HostState {
             kernel: kernel.clone(),
             workspace_root: manifest.root_dir.clone(),
+            suppress_guest_logs: has_contexts,
         });
 
         // Enforce a wall-clock deadline on guest execution: this is
@@ -221,6 +251,21 @@ impl WasmRuntime {
         // reloaded).
         let mut extism_manifest =
             ExtismManifest::new([Wasm::file(&wasm_path)]).with_timeout(call_timeout);
+        if has_contexts {
+            // WASM pages are 64 KiB; memory_mb is measured in MiB. Apply the
+            // existing mounted limits to the VM, not just the host kernel.
+            let pages = memory_pages.ok_or_else(|| {
+                ExtensionError::Runtime(
+                    "context WASM memory limit must be positive and fit in pages".into(),
+                )
+            })?;
+            if fuel == 0 {
+                return Err(ExtensionError::Runtime(
+                    "context WASM fuel limit must be positive".into(),
+                ));
+            }
+            extism_manifest = extism_manifest.with_memory_max(pages);
+        }
 
         // The operator's configuration, as Extism config keys. Scalars are
         // passed in their natural spelling and structured values as JSON, so
@@ -237,8 +282,8 @@ impl WasmRuntime {
             }
         }
 
-        let plugin = PluginBuilder::new(extism_manifest)
-            .with_wasi(true)
+        let mut builder = PluginBuilder::new(extism_manifest)
+            .with_wasi(!has_contexts)
             .with_function(
                 "log",
                 [PTR, PTR],
@@ -273,12 +318,59 @@ impl WasmRuntime {
                 [PTR],
                 host_state,
                 host_functions::host_http_fetch,
-            )
+            );
+        if has_contexts {
+            let debug = extism::DebugOptions {
+                coredump: None,
+                memdump: None,
+                ..Default::default()
+            };
+            builder = builder.with_fuel_limit(fuel).with_debug_options(debug);
+            // Extism installs these independently of our `log` import. Its
+            // linker explicitly permits namespaced host functions to shadow
+            // builtins, so raw context cannot escape through PDK logging.
+            for name in [
+                "log_warn",
+                "log_info",
+                "log_debug",
+                "log_error",
+                "log_trace",
+            ] {
+                builder = builder.with_function_in_namespace(
+                    "extism:host/env",
+                    name,
+                    [PTR],
+                    [],
+                    UserData::new(()),
+                    |plugin, input, _, _| {
+                        let Some(extism::Val::I64(offset)) = input.first() else {
+                            return Ok(());
+                        };
+                        if let Some(handle) = plugin.memory_handle(*offset as u64) {
+                            plugin.memory_free(handle)?;
+                        }
+                        Ok(())
+                    },
+                );
+            }
+        }
+        let plugin = builder
             .build()
             .map_err(|e| ExtensionError::Runtime(format!("Failed to load WASM: {e}")))?;
 
+        let context_declarations = manifest
+            .aleph_extensions
+            .as_ref()
+            .map(|ext| ext.contexts.clone())
+            .unwrap_or_default();
         let loaded = Arc::new(LoadedWasmPlugin {
             plugin: Mutex::new(plugin),
+            context_declarations,
+            context_effect_free: super::super::context_adapter::require_no_ambient_authority(
+                manifest,
+            )
+            .is_ok()
+                && (settings.is_null() || settings.as_object().is_some_and(|map| map.is_empty())),
         });
 
         self.plugins.insert(manifest.id.clone(), loaded);
@@ -355,28 +447,29 @@ impl WasmRuntime {
         })
     }
 
+    pub(crate) fn binding_is_current(&self, binding: &WasmBinding) -> bool {
+        self.plugins
+            .get(&binding.plugin_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &binding.instance))
+    }
+
     pub(crate) fn call_bound(
         &self,
         binding: &WasmBinding,
         input: WasmToolInput,
     ) -> Result<WasmToolOutput, ExtensionError> {
-        let current = self
+        let mounted = self
             .plugins
             .get(&binding.plugin_id)
             .ok_or_else(|| ExtensionError::PluginNotFound(binding.plugin_id.clone()))?;
-        if !Arc::ptr_eq(current, &binding.instance) {
+        if !Arc::ptr_eq(mounted, &binding.instance) {
             return Err(ExtensionError::Runtime(format!(
                 "WASM binding no longer mounted: {}",
                 binding.plugin_id
             )));
         }
 
-        Self::call_loaded(
-            &binding.instance,
-            &binding.plugin_id,
-            &binding.export,
-            input,
-        )
+        Self::call_loaded(mounted, &binding.plugin_id, &binding.export, input)
     }
 
     /// Call a tool handler in a WASM plugin

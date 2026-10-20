@@ -4,9 +4,9 @@
 //! All fields are `Arc<dyn Trait>` so the harness is cheaply cloneable and
 //! thread-safe.
 
-use crate::context::budget::preflight::PreflightPipeline;
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
+use crate::context::fabric::ContextFabric;
 use crate::harness::trace_sink::TraceSink;
 use crate::providers::AiProvider;
 use crate::session::service::SessionService;
@@ -45,16 +45,13 @@ pub struct HarnessDeps {
     /// surfaces as `FlowOutcome::hit_limit = true` via
     /// `AgentHarness::hit_limit()`.
     pub context_budget: Option<Arc<Mutex<ContextBudget>>>,
-    /// LLM-based compactor invoked when the budget directive is
-    /// `CompactAndContinue`. Falls back to deterministic truncation on
-    /// provider failure (see `ContextCompactor::compact`).
+    /// Native summarizer retained for session-split only. In-turn preflight
+    /// and compaction go through `context_fabric`, which owns this same
+    /// compactor as its builtin fallback.
     pub context_compactor: Option<Arc<ContextCompactor>>,
-    /// Cheap-pass preflight pipeline (`tool_result` pruning + historical
-    /// image stripping) that runs BEFORE the budget check + compactor so
-    /// token savings happen even when the compactor's LLM call fails.
-    /// `None` when `[context_budget]` is disabled — same gating as
-    /// `context_compactor`. See `src/context/budget/cheap_passes/`.
-    pub preflight_pipeline: Option<Arc<PreflightPipeline>>,
+    /// Session-authorized preflight and compaction facade. Owns the native
+    /// pipeline and bounded plugin fallback; absent when context is disabled.
+    pub context_fabric: Option<Arc<ContextFabric>>,
     /// Gateway-side observability sink. `None` falls back to no-op tracing.
     /// Production path: Gateway wraps its persistence callback in `GatewayTraceSink`.
     pub trace_sink: Option<Arc<dyn TraceSink>>,

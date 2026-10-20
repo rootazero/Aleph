@@ -785,7 +785,14 @@ const BUDGETED: [&str; 12] = [
 /// see state that was compacted away before it booted. (3) **consumers
 /// today** — the 2d-G2 injection point (sole producer/consumer) and the
 /// `harness::tests::think` cross-run seeding tests.
-const CEILING: usize = 5545;
+/// 2026-10-20 — Context Fabric integration: pressure/preflight mechanics moved
+/// into context::compact::directive, and all root/child compaction consumers
+/// use the same facade. Normal/Grace persistence shares the Core projection.
+/// The original 79a2494f6 surface measured 5570 lines, already above 5545;
+/// the final integrated surface is 5535 lines across the same 12 files.
+/// No inline-test cut, file-set rule, or production comment was removed to
+/// obtain this reduction. Ratchet down to the measured value.
+const CEILING: usize = 5535;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -231,6 +231,15 @@ pub struct ContextGrantAudit {
     pub at: u64,
 }
 
+/// Discovery metadata only; a declaration never issues a context grant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextDeclaration {
+    pub descriptor: ContextCapabilityDescriptor,
+    /// An existing export using the runtime's WasmToolInput/WasmToolOutput ABI.
+    pub handler: String,
+}
+
 /// Unified enum of everything a plugin can contribute.
 ///
 /// Each variant maps 1:1 to a registration type in the `PluginRegistry`.
@@ -254,6 +263,8 @@ pub enum CapabilityDeclaration {
     Agent(AgentDeclaration),
     /// An MCP server configuration
     McpServer(McpServerDeclaration),
+    /// A context descriptor and its WASM transport export; not authorization.
+    Context(ContextDeclaration),
 }
 
 impl CapabilityDeclaration {
@@ -266,7 +277,7 @@ impl CapabilityDeclaration {
             // P1: Always allowed, no permission check
             Self::Agent(_) => Tier::Important,
             // P2: Some are permission-gated (Service needs Background)
-            Self::Service(_) | Self::McpServer(_) => Tier::Pluggable,
+            Self::Service(_) | Self::McpServer(_) | Self::Context(_) => Tier::Pluggable,
         }
     }
 
@@ -280,6 +291,7 @@ impl CapabilityDeclaration {
             Self::Skill(_) => "skill",
             Self::Agent(_) => "agent",
             Self::McpServer(_) => "mcp_server",
+            Self::Context(_) => CONTEXT_CAPABILITY_KIND,
         }
     }
 
@@ -292,6 +304,7 @@ impl CapabilityDeclaration {
             // P2: some need permission
             Self::Service(_) => Some(PluginPermission::Background),
             Self::McpServer(_) => None, // MCP is the standard extension mechanism
+            Self::Context(_) => None,   // Discovery only; ContextGrant is checked at invocation.
         }
     }
 }
@@ -300,12 +313,7 @@ impl CapabilityDeclaration {
 // Context capability classification
 // ============================================================================
 
-/// The catalog kind context capabilities are meant to report, alongside `tool`,
-/// `hook`, `service`, `skill`, `agent` and `mcp_server`.
-///
-/// This is a constant, not a wiring claim: nothing in the manifest parser, the
-/// capability registry or the catalog projection emits `"context"` yet. Task 2
-/// connects it. Until then a catalog reader will never observe this kind.
+/// Discovery kind for manifest-declared context capabilities.
 pub const CONTEXT_CAPABILITY_KIND: &str = "context";
 
 /// Tier and manifest permission one context phase requires.
@@ -320,19 +328,13 @@ pub struct ContextCapabilityClass {
 
 /// Map one phase onto the extension capability model.
 ///
-/// **Classification helper only.** This function is not reached from
-/// manifest parsing, the capability registry or the catalog projection — there
-/// is no `CapabilityDeclaration` variant for context yet, and adding one would
-/// mean editing `manifest/adapter.rs` and `lifecycle.rs`. Treat the mapping as
-/// the agreed shape Task 2 will wire, not as evidence that a context capability
-/// is already reported as registered. The dynamic phase data lives in
-/// [`ContextCapabilityDescriptor`](crate::context::fabric::ContextCapabilityDescriptor).
+/// Phase classification does not confer a host grant or register a handler.
 ///
 /// Only `Status` is read-only, so only `Status` maps to no permission. Every
 /// phase that can change what the model sees requires an explicit
 /// `context:<phase>` permission; `network_egress`, `project_write` and
 /// cross-session reads are *additional* permissions the descriptor must declare
-/// and the host must grant (Task 2), never implied by a phase.
+/// and the host must grant, never implied by a phase.
 #[must_use]
 pub fn context_capability_class(phase: ContextPhase) -> ContextCapabilityClass {
     let permission = match phase {

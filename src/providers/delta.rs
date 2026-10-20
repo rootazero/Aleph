@@ -274,6 +274,7 @@ impl DeltaCollector {
             // The collector drops `ProviderDelta::Error` (see `push`); the
             // caller that owns the stream captures it and sets this field.
             provider_error: None,
+            reasoning_replay: None,
         }
     }
 
@@ -1071,6 +1072,7 @@ mod tests {
             thinking: None,
             truncated_tool_call: None,
             provider_error: None,
+            reasoning_replay: None,
         };
 
         let deltas: Vec<_> = response_to_delta_stream(resp).collect::<Vec<_>>().await;

@@ -74,7 +74,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+pub(crate) mod privacy;
+mod protocol_frames;
 pub mod runtime;
+pub(crate) mod tool_admission;
 pub use crate::context::budget::preflight::NativePreflightRegistry;
 pub use runtime::{
     AdmissionOutcome, CompactionOutcome, ContextFabric, ContextFabricBuilder, ContextFabricError,
@@ -83,6 +86,9 @@ pub use runtime::{
 
 #[cfg(test)]
 mod runtime_task3_tests;
+
+#[cfg(test)]
+mod lifecycle_tests;
 
 use crate::tools::descriptor::canonicalize_json;
 
@@ -545,12 +551,13 @@ pub enum ContextOperation {
     Restore,
     Search,
     Status,
+    Notify,
     Shutdown,
 }
 
 impl ContextOperation {
     /// Every operation, in wire order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Describe,
         Self::Admit,
         Self::Preflight,
@@ -558,6 +565,7 @@ impl ContextOperation {
         Self::Restore,
         Self::Search,
         Self::Status,
+        Self::Notify,
         Self::Shutdown,
     ];
 
@@ -572,6 +580,7 @@ impl ContextOperation {
             Self::Restore => "restore",
             Self::Search => "search",
             Self::Status => "status",
+            Self::Notify => "notify",
             Self::Shutdown => "shutdown",
         }
     }
@@ -588,12 +597,17 @@ impl ContextOperation {
     /// `describe` reports a descriptor, `status` reports pressure/health and
     /// `shutdown` disposes the capability: none of them read context, so none of
     /// them take a snapshot. Everything else (`admit`, `preflight`, `compact`,
-    /// `restore`, `search`) operates on context and is rejected without one.
+    /// `restore`, `search`, `notify`) reads a bounded snapshot and is rejected without one.
     #[must_use]
     pub const fn requires_snapshot(self) -> bool {
         match self {
             Self::Describe | Self::Status | Self::Shutdown => false,
-            Self::Admit | Self::Preflight | Self::Compact | Self::Restore | Self::Search => true,
+            Self::Admit
+            | Self::Preflight
+            | Self::Compact
+            | Self::Restore
+            | Self::Search
+            | Self::Notify => true,
         }
     }
 
@@ -609,6 +623,7 @@ impl ContextOperation {
             Self::Restore => Some(ContextPhase::Recovery),
             Self::Search => Some(ContextPhase::Search),
             Self::Status => Some(ContextPhase::Status),
+            Self::Notify => Some(ContextPhase::Lifecycle),
             Self::Shutdown => Some(ContextPhase::Lifecycle),
         }
     }
@@ -1466,12 +1481,13 @@ mod tests {
     ];
 
     /// The transforming operations, with the phase each one belongs to.
-    const TRANSFORMING_OPERATIONS: [(ContextPhase, ContextOperation); 5] = [
+    const TRANSFORMING_OPERATIONS: [(ContextPhase, ContextOperation); 6] = [
         (ContextPhase::Admission, ContextOperation::Admit),
         (ContextPhase::Preflight, ContextOperation::Preflight),
         (ContextPhase::Compaction, ContextOperation::Compact),
         (ContextPhase::Recovery, ContextOperation::Restore),
         (ContextPhase::Search, ContextOperation::Search),
+        (ContextPhase::Lifecycle, ContextOperation::Notify),
     ];
 
     /// Find the schema object that declares `property`, wherever the generator
@@ -2959,6 +2975,11 @@ mod tests {
                 Some(ContextPhase::Status),
             ),
             (
+                ContextOperation::Notify,
+                "notify",
+                Some(ContextPhase::Lifecycle),
+            ),
+            (
                 ContextOperation::Shutdown,
                 "shutdown",
                 Some(ContextPhase::Lifecycle),
@@ -2992,6 +3013,7 @@ mod tests {
                     | ContextOperation::Compact
                     | ContextOperation::Restore
                     | ContextOperation::Search
+                    | ContextOperation::Notify
             );
             assert_eq!(
                 operation.requires_snapshot(),

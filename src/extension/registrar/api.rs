@@ -84,6 +84,9 @@ impl<'a> CapabilityApi<'a> {
             CapabilityDeclaration::Agent(agent) => {
                 self.registry.register_agent(agent);
             }
+            CapabilityDeclaration::Context(_) => {
+                // Discovery only. Context registry admission requires a host-issued grant.
+            }
             CapabilityDeclaration::McpServer(_) => {
                 // No-op: MCP servers are mounted by `lifecycle.rs` (the
                 // `mcp_server` step), not written into the registry.
@@ -99,7 +102,7 @@ impl<'a> CapabilityApi<'a> {
             CapabilityDeclaration::Service(value) => Some(value.plugin_id.as_str()),
             CapabilityDeclaration::Skill(value) => Some(value.plugin_id.as_str()),
             CapabilityDeclaration::Agent(value) => Some(value.plugin_id.as_str()),
-            CapabilityDeclaration::McpServer(_) => None,
+            CapabilityDeclaration::McpServer(_) | CapabilityDeclaration::Context(_) => None,
         };
         if owner.is_some_and(|owner| owner != self.plugin_id.as_str()) {
             return Err(anyhow!(

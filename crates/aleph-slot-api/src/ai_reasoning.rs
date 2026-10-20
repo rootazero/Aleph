@@ -190,7 +190,8 @@ impl ReasoningReplay {
                     && !(strip_earlier_turns && earlier_turn)
             }
             Self::ResponsesEncrypted => {
-                tool_turn && !thinking.is_empty() && origin == ThinkingOrigin::ResponsesEncrypted
+                // Encrypted reasoning can arrive without any summary text.
+                tool_turn && origin == ThinkingOrigin::ResponsesEncrypted
             }
             Self::ReasoningContent { .. } => {
                 !thinking.is_empty() && origin == ThinkingOrigin::Unsigned
@@ -684,6 +685,57 @@ mod tests {
             ),
             Some(vec![])
         );
+    }
+
+    #[test]
+    fn responses_projection_preserves_signature_only_tool_turns() {
+        for earlier_turn in [false, true] {
+            let message = assistant(vec![thinking("", Some(NDJSON), earlier_turn), tool()]);
+            let projected = ReasoningReplay::ResponsesEncrypted
+                .project_message(&message)
+                .expect("tool turn survives");
+            assert_eq!(
+                serde_json::to_value(projected.as_ref()).unwrap(),
+                serde_json::to_value(&message).unwrap(),
+            );
+            assert!(matches!(
+                &projected.content_blocks()[0],
+                ContentBlock::Thinking { thinking, signature, .. }
+                    if thinking.is_empty() && signature.as_deref() == Some(NDJSON)
+            ));
+            for policy in [
+                ReasoningReplay::default(),
+                ReasoningReplay::ReasoningContent {
+                    fill_missing: false,
+                },
+                ReasoningReplay::Drop,
+            ] {
+                assert_eq!(
+                    serde_json::to_value(policy.project(&[message.clone()])).unwrap(),
+                    serde_json::to_value(vec![assistant(vec![tool()])]).unwrap(),
+                    "foreign signature must not cross policies: {policy:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn signature_only_reasoning_requires_responses_origin_and_a_tool_turn() {
+        let policy = ReasoningReplay::ResponsesEncrypted;
+        for signature in [None, Some("ordinary-sig"), Some("")] {
+            let message = assistant(vec![thinking("", signature, false), tool()]);
+            assert_eq!(
+                serde_json::to_value(policy.project(&[message])).unwrap(),
+                serde_json::to_value(vec![assistant(vec![tool()])]).unwrap(),
+            );
+        }
+        let text_turn = assistant(vec![thinking("", Some(NDJSON), false), text()]);
+        assert_eq!(
+            serde_json::to_value(policy.project(&[text_turn])).unwrap(),
+            serde_json::to_value(vec![assistant(vec![text()])]).unwrap(),
+        );
+        let signature_only = assistant(vec![thinking("", Some(NDJSON), false)]);
+        assert!(policy.project_message(&signature_only).is_none());
     }
 
     #[test]

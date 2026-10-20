@@ -1,7 +1,7 @@
 # Aleph Context Fabric：Capability 化上下文编排与第三方压缩插件设计
 
 - **日期**：2026-10-19
-- **状态**：待用户批准（approval required before implementation）
+- **状态**：用户已批准设计与实施计划；提供商协议必需推理保留决策已补充（approved; implementation and verification in progress）
 - **范围**：上下文 Admission、Lifecycle、恢复/检索、内置压缩与第三方插件接入
 - **基线**：Aleph 当前 `src/context/*`、`src/tool_output/*`、`src/extension/*` 与已有 Context Fabric 实现
 - **参考**：`context-mode`、`billion-context`、pi、pi-ctx

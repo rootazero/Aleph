@@ -124,6 +124,7 @@ impl AiProvider for OneShotToolProvider {
                     truncated_tool_call: None,
                     provider_error: None,
                     usage: None,
+                    reasoning_replay: None,
                 })
             } else {
                 Ok(ProviderResponse::text_only("done".into()))
@@ -277,7 +278,7 @@ pub(super) fn minimal_deps(
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,
-        preflight_pipeline: None,
+        context_fabric: None,
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
@@ -415,6 +416,7 @@ async fn tool_failure_recovers_in_next_think() {
                         truncated_tool_call: None,
                         provider_error: None,
                         usage: None,
+                        reasoning_replay: None,
                     })
                 } else {
                     Ok(ProviderResponse::text_only("recovered".into()))
@@ -501,6 +503,7 @@ async fn partial_batch_failure_continues() {
                         truncated_tool_call: None,
                         provider_error: None,
                         usage: None,
+                        reasoning_replay: None,
                     })
                 } else {
                     Ok(ProviderResponse::text_only("done".into()))
@@ -569,6 +572,7 @@ async fn consecutive_total_failure_caps_loop() {
                     truncated_tool_call: None,
                     provider_error: None,
                     usage: None,
+                    reasoning_replay: None,
                 })
             })
         }
@@ -842,6 +846,7 @@ async fn long_think_does_not_falsely_trip_stall() {
                         truncated_tool_call: None,
                         provider_error: None,
                         usage: None,
+                        reasoning_replay: None,
                     })
                 } else {
                     Ok(ProviderResponse::text_only("done".into()))

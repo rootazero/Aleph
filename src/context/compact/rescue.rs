@@ -32,8 +32,9 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::budget::ContextBudget;
-use crate::context::compact::compactor::ContextCompactor;
 use crate::context::compact::directive::compact_to_fit_and_note;
+use crate::context::fabric::runtime::ContextFabricError;
+use crate::context::fabric::ContextFabric;
 use crate::error::AlephError;
 use crate::providers::adapter::{ProviderResponse, StopReason};
 use crate::providers::llm_retry::{classify, RetryVerdict};
@@ -81,10 +82,10 @@ pub struct RescueCx<'a> {
     /// persisted turns. Travels with the prompt surroundings because every
     /// compaction the rescue performs runs on that same vector, and a protected
     /// tail that counts scaffolding as conversation protects the wrong messages
-    /// — see [`ContextCompactor::compact`]'s doc.
+    /// — see [`crate::context::compact::compactor::ContextCompactor::compact`]'s doc.
     pub transient_tail: usize,
     pub started: std::time::Instant,
-    pub compactor: Option<&'a ContextCompactor>,
+    pub fabric: Option<&'a ContextFabric>,
     pub budget: Option<&'a Arc<Mutex<ContextBudget>>>,
 }
 
@@ -96,6 +97,9 @@ pub trait RescueHost: Sync {
     /// The driver's fatal-error type. Only `From<AlephError>` is required, so
     /// this module never names the harness's error enum.
     type Fatal: From<AlephError> + Send;
+
+    /// Preserve the driver's fatal cancellation identity without issuing a call.
+    fn cancelled(&self) -> Self::Fatal;
 
     /// Issue one LLM call with `messages`, raced against cancellation and the
     /// driver's per-turn timeout. Outer `Err` is driver-fatal (cancelled /
@@ -275,7 +279,7 @@ pub async fn try_reactive_compact_and_retry<H: RescueHost>(
     };
 
     // 2. The compactor must be wired AND we must still have a rescue slot.
-    let Some(compactor) = cx.compactor else {
+    let Some(fabric) = cx.fabric else {
         // No LLM compactor wired — fall back to the deterministic floor + one
         // retry instead of hard-stopping. A full context window must not end
         // the run (never-break).
@@ -303,16 +307,20 @@ pub async fn try_reactive_compact_and_retry<H: RescueHost>(
         ?token_gap,
         "provider hit context overflow; running reactive compaction",
     );
-    let session_id_str = cx.session_id.to_string();
-    if let Err(e) = compactor
-        .compact(
-            messages,
-            0,
-            cx.transient_tail,
-            Some(session_id_str.as_str()),
-        )
-        .await
+    if let Err(e) = super::directive::compact_for_session(
+        fabric,
+        messages,
+        0,
+        cx.transient_tail,
+        cx.session_id,
+        parent_cancel,
+    )
+    .await
     {
+        // Cancellation is never a successful floor/retry path.
+        if matches!(e, ContextFabricError::Cancelled) {
+            return Err(host.cancelled());
+        }
         // LLM compaction failed — fall back to the deterministic floor + one
         // retry instead of hard-stopping (never-break). `reactive_fit_and_retry`
         // re-runs `compact_to_fit`, whose floor guarantees fit even when the
@@ -409,15 +417,24 @@ async fn reactive_fit_and_retry<H: RescueHost>(
     // rescue cap; the floor alone guarantees fit.
     compact_to_fit_and_note(
         cx.budget,
-        cx.compactor,
+        cx.fabric,
         cx.session_id,
         messages,
         cx.system_prompt,
         cx.budget_tool_tokens,
         cx.transient_tail,
         false,
+        parent_cancel,
     )
-    .await;
+    .await
+    .map_err(|e| match e {
+        ContextFabricError::Cancelled => host.cancelled(),
+        other => AlephError::ProviderError {
+            message: other.to_string(),
+            suggestion: None,
+        }
+        .into(),
+    })?;
 
     // 2. Retry the provider once with the fitted prompt.
     match host

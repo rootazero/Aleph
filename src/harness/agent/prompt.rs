@@ -9,6 +9,7 @@
 //! always `Ok`), so this is now an infallible sync fn.
 
 use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::providers::reasoning_replay::ThinkingOrigin;
 use crate::session::events::{RunOutcome, SessionEvent, SessionEventRecord, TurnId};
 use crate::thinker::nudges::{orphan_tool_result_note, user_turn_text, INTERRUPTION_NOTE};
 
@@ -393,9 +394,12 @@ fn reconstruct_assistant_blocks(
         return None;
     }
     let mut blocks: Vec<ContentBlock> = Vec::new();
-    if let Some(thinking) = content.thinking.as_ref().filter(|t| !t.is_empty()) {
+    let signature_only = !tool_blocks.is_empty()
+        && ThinkingOrigin::of(content.thinking_signature.as_deref())
+            == ThinkingOrigin::ResponsesEncrypted;
+    if content.thinking.as_ref().is_some_and(|t| !t.is_empty()) || signature_only {
         blocks.push(ContentBlock::Thinking {
-            thinking: thinking.clone(),
+            thinking: content.thinking.clone().unwrap_or_default(),
             signature: content.thinking_signature.clone(),
             earlier_turn,
         });
@@ -508,6 +512,126 @@ mod tests {
             event,
             created_at_ms: now_ms(),
         }
+    }
+
+    #[test]
+    fn signature_only_response_survives_event_round_trip_and_prompt_replay() {
+        use crate::providers::adapter::{NativeToolCall, ProviderResponse};
+        use crate::providers::reasoning_replay::ReasoningReplay;
+        use crate::session::projection::project_assistant_response;
+
+        let signature = "{\"id\":\"rs_1\",\"ec\":\"encrypted\"}\n";
+        let raw_blocks = vec![json!({
+            "type": "tool_use", "id": "c1", "name": "search", "input": {"q": "rust"},
+        })];
+        let response = ProviderResponse {
+            thinking: None,
+            thinking_signature: Some(signature.into()),
+            reasoning_replay: Some(ReasoningReplay::ResponsesEncrypted),
+            tool_calls: vec![NativeToolCall {
+                id: "c1".into(),
+                name: "search".into(),
+                arguments: json!({"q": "rust"}),
+                thought_signature: None,
+            }],
+            ..Default::default()
+        };
+        let content = project_assistant_response(&response, String::new(), raw_blocks.clone());
+        assert_eq!(content.thinking, None);
+        assert_eq!(content.thinking_signature.as_deref(), Some(signature));
+        assert_eq!(content.blocks, raw_blocks);
+        assert!(content.text.is_empty());
+        let turn = uuid::Uuid::new_v4();
+        let event = SessionEvent::AssistantMessage {
+            turn_id: turn,
+            content,
+            usage: None,
+            at: now_ms(),
+            model: None,
+            model_provider: None,
+            model_generation: None,
+        };
+        // Exercise the durable JSON boundary, as a restart does.
+        let restored = serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap();
+        let events = vec![
+            mk_record(restored),
+            mk_record(SessionEvent::ToolResult {
+                turn_id: turn,
+                call_id: "c1".into(),
+                output: ToolOutput {
+                    value: json!("ok"),
+                    metadata: ToolOutputMetadata::default(),
+                },
+                at: now_ms(),
+            }),
+        ];
+        let messages = build_prompt(&events, 0);
+        let replayed = ReasoningReplay::ResponsesEncrypted.project(&messages);
+        let UnifiedMessage::Assistant { content } = &replayed[0] else {
+            panic!("expected assistant tool turn");
+        };
+        assert_eq!(content.len(), 2);
+        assert!(
+            matches!(&content[0], ContentBlock::Thinking { thinking, signature: sig, .. }
+            if thinking.is_empty() && sig.as_deref() == Some(signature))
+        );
+        assert!(
+            matches!(&content[1], ContentBlock::ToolCall { id, name, arguments, .. }
+            if id == "c1" && name == "search" && arguments == &json!({"q": "rust"}))
+        );
+        assert!(
+            matches!(&replayed[1], UnifiedMessage::ToolResult { tool_call_id, .. }
+            if tool_call_id == "c1")
+        );
+        let ordinary = ReasoningReplay::Drop.project(&messages);
+        assert!(!ordinary[0]
+            .content_blocks()
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Thinking { .. })));
+    }
+
+    #[test]
+    fn replay_signature_only_requires_responses_origin_and_surviving_tool() {
+        let encrypted = "{\"id\":\"rs_1\",\"ec\":\"encrypted\"}\n";
+        for signature in [None, Some("ordinary-sig"), Some(""), Some(encrypted)] {
+            for resolved_tool in [false, true] {
+                let content = MessageContent {
+                    text: "answer".into(),
+                    blocks: vec![json!({
+                        "type": "tool_use", "id": "c1", "name": "search", "input": {},
+                    })],
+                    thinking: None,
+                    thinking_signature: signature.map(str::to_string),
+                };
+                let resolved = if resolved_tool {
+                    std::collections::HashSet::from(["c1"])
+                } else {
+                    std::collections::HashSet::new()
+                };
+                let blocks = reconstruct_assistant_blocks(&content, &resolved, false).unwrap();
+                let reasoning: Vec<_> = blocks
+                    .iter()
+                    .filter(|block| matches!(block, ContentBlock::Thinking { .. }))
+                    .collect();
+                assert_eq!(
+                    reasoning.len(),
+                    usize::from(resolved_tool && signature == Some(encrypted))
+                );
+                assert!(blocks.iter().any(
+                    |block| matches!(block, ContentBlock::Text { text, .. } if text == "answer")
+                ));
+            }
+        }
+        let orphan = MessageContent {
+            text: String::new(),
+            blocks: vec![json!({"type": "tool_use", "id": "c1", "name": "t", "input": {}})],
+            thinking: None,
+            thinking_signature: Some(encrypted.into()),
+        };
+        assert!(
+            reconstruct_assistant_blocks(&orphan, &std::collections::HashSet::new(), false)
+                .is_none()
+        );
     }
 
     #[test]

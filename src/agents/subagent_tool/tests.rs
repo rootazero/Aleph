@@ -1461,6 +1461,7 @@ impl AiProvider for UsageMockProvider {
                     thinking_tokens: None,
                     cost: None,
                 }),
+                reasoning_replay: None,
             })
         })
     }

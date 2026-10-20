@@ -3,7 +3,7 @@
 use super::PluginRegistry;
 use crate::context::fabric::{
     AdmittedContextCall, AuthenticatedCaller, ContextCapabilityDescriptor, ContextCapabilityMode,
-    ContextCapabilityRequest, ContextNamespace,
+    ContextCapabilityRequest, ContextNamespace, ContextOperation,
 };
 use crate::extension::capability::{ContextGrant, ContextGrantAudit, ContextGrantError};
 use crate::extension::registry::{
@@ -361,8 +361,11 @@ impl PluginRegistry {
             let grant = registration
                 .grant_for_session(caller.session_id())
                 .ok_or(ContextGrantError::SessionDenied)?;
+            // Metadata-only notifications carry a snapshot, but their output
+            // is discarded. Snapshot presence does not imply a transform.
             if registration.owner_mode == ContextCapabilityMode::Observer
                 && request.operation.requires_snapshot()
+                && request.operation != ContextOperation::Notify
             {
                 return Err(ContextRegistryError::ObserverTransformDenied);
             }

@@ -468,6 +468,15 @@ fn build_deps(
     llm: Arc<dyn AiProvider>,
     context_compactor: Option<Arc<ContextCompactor>>,
 ) -> HarnessDeps {
+    let context_fabric = context_compactor.clone().map(|compactor| {
+        Arc::new(
+            crate::context::fabric::ContextFabric::builder(Arc::new(tokio::sync::RwLock::new(
+                crate::extension::registry::PluginRegistry::new(),
+            )))
+            .compactor(compactor)
+            .build(),
+        )
+    });
     HarnessDeps {
         tool_descriptor_lookup: None,
         session,
@@ -477,7 +486,7 @@ fn build_deps(
         verifier_chain: None,
         context_budget: None,
         context_compactor,
-        preflight_pipeline: None,
+        context_fabric,
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,

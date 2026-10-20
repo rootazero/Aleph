@@ -4,7 +4,7 @@ use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::budget::ContextPressure;
 use crate::extension::capability::{ContextGrant, ContextGrantApproval};
 use crate::extension::registry::{ContextRegistration, PluginRegistry};
-use crate::extension::types::{PluginKind, PluginOrigin, PluginRecord};
+use crate::extension::{PluginKind, PluginOrigin, PluginRecord};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -15,11 +15,11 @@ use tokio_util::sync::CancellationToken;
 
 const SESSION: &str = "session-a";
 
-fn caller() -> AuthenticatedCaller {
+pub(super) fn caller() -> AuthenticatedCaller {
     AuthenticatedCaller::from_host_boundary(SESSION).unwrap()
 }
 
-fn descriptor(
+pub(super) fn descriptor(
     id: &str,
     phase: ContextPhase,
     mode: ContextCapabilityMode,
@@ -43,7 +43,7 @@ fn descriptor(
     }
 }
 
-async fn registry_with(
+pub(super) async fn registry_with(
     registrations: Vec<(&str, ContextCapabilityDescriptor)>,
 ) -> Arc<RwLock<PluginRegistry>> {
     let mut registry = PluginRegistry::new();
@@ -70,23 +70,37 @@ async fn registry_with(
         )
         .unwrap();
         registry
-            .register_context(ContextRegistration::new(descriptor, grant, None), now)
+            .register_context(
+                ContextRegistration::new(descriptor, grant, Some(plugin.into())),
+                now,
+            )
             .unwrap();
     }
     Arc::new(RwLock::new(registry))
 }
 
-fn pressure() -> ContextPressure {
+pub(super) fn pressure() -> ContextPressure {
     ContextPressure {
-        used_tokens: 900,
+        used_tokens: 1_000,
         budget_tokens: 1_000,
-        ratio: 0.9,
+        ratio: 1.0,
         overhead_tokens: 0,
         available_for_messages: 1_000,
     }
 }
 
-fn output(value: Value) -> ContextTransformResult {
+#[test]
+fn external_preflight_rejects_growth_even_when_flush_waives_savings() {
+    let pipeline = crate::context::budget::preflight::PreflightPipeline::new(Vec::new())
+        .with_cache_stability(1, 0.0, 1.0);
+    let original = vec![UnifiedMessage::user("short")];
+    let grown = vec![UnifiedMessage::user("unbounded growth ".repeat(100))];
+    assert!(pipeline
+        .accept_external_candidate(&original, grown, &pressure())
+        .is_none());
+}
+
+pub(super) fn output(value: Value) -> ContextTransformResult {
     let bytes = serde_json::to_vec(&value).unwrap();
     let tokens = estimate_tokens_smart(std::str::from_utf8(&bytes).unwrap()) as u64;
     ContextTransformResult {
@@ -97,6 +111,7 @@ fn output(value: Value) -> ContextTransformResult {
         strategy: "test".into(),
         continuation: None,
         quality: ContextQuality::Exact,
+        degraded: None,
     }
 }
 
@@ -123,7 +138,7 @@ impl ContextHandler for Handler {
     }
 }
 
-fn handler(
+pub(super) fn handler(
     transform: impl Fn(ContextCapabilityRequest) -> Result<ContextTransformResult, String>
         + Send
         + Sync
@@ -172,6 +187,126 @@ fn unix_seconds() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
+}
+
+fn native_protocol_messages() -> Vec<UnifiedMessage> {
+    vec![
+        UnifiedMessage::Assistant {
+            content: vec![
+                ContentBlock::Thinking {
+                    thinking: "core-private-thinking".into(),
+                    signature: Some("core-thinking-signature".into()),
+                    earlier_turn: false,
+                },
+                ContentBlock::ToolCall {
+                    id: "signed-call".into(),
+                    name: "tool".into(),
+                    arguments: serde_json::json!({"path": "document"}),
+                    thought_signature: Some("core-tool-signature".into()),
+                },
+            ],
+        },
+        UnifiedMessage::tool_result_json(
+            "signed-call",
+            "tool",
+            serde_json::json!("large-tool-result".repeat(100)),
+            false,
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn plugin_pruning_keeps_core_protocol_frames_private_and_replayable() {
+    let declaration = descriptor(
+        "prune",
+        ContextPhase::Preflight,
+        ContextCapabilityMode::Replace,
+    );
+    let registry = registry_with(vec![("plugin-a", declaration)]).await;
+    let fabric = ContextFabric::builder(registry)
+        .handler(
+            "plugin-a:prune",
+            handler(|request| {
+                let payload = request.snapshot.unwrap().payload;
+                assert!(!payload.to_string().contains("core-private-thinking"));
+                assert!(!payload.to_string().contains("core-thinking-signature"));
+                assert!(!payload.to_string().contains("core-tool-signature"));
+                let mut projected: Vec<UnifiedMessage> = serde_json::from_value(payload).unwrap();
+                projected[1] = UnifiedMessage::tool_result_json(
+                    "signed-call",
+                    "tool",
+                    serde_json::json!("short"),
+                    false,
+                );
+                Ok(messages_output(projected))
+            }),
+        )
+        .build();
+    let mut messages = native_protocol_messages();
+    let native_frame = serde_json::to_value(&messages[0]).unwrap();
+    let outcome = fabric
+        .preflight(&mut messages, &pressure(), 0, &caller(), None)
+        .await
+        .unwrap();
+    assert_eq!(outcome.owner, ContextOwner::Plugin("plugin-a:prune".into()));
+    assert_eq!(serde_json::to_value(&messages[0]).unwrap(), native_frame);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(
+        serde_json::to_value(&messages[1]).unwrap(),
+        serde_json::to_value(UnifiedMessage::tool_result_json(
+            "signed-call",
+            "tool",
+            serde_json::json!("short"),
+            false
+        ))
+        .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn plugin_cannot_rebind_core_signatures_to_a_changed_tool_call() {
+    let declaration = descriptor(
+        "prune",
+        ContextPhase::Preflight,
+        ContextCapabilityMode::Replace,
+    );
+    let registry = registry_with(vec![("plugin-a", declaration)]).await;
+    let native_calls = Arc::new(Mutex::new(0));
+    let calls = native_calls.clone();
+    let fabric = ContextFabric::builder(registry)
+        .native_preflight_stage(native_stage(move |_, _| *calls.lock().unwrap() += 1))
+        .handler(
+            "plugin-a:prune",
+            handler(|request| {
+                let mut projected: Vec<UnifiedMessage> =
+                    serde_json::from_value(request.snapshot.unwrap().payload).unwrap();
+                for block in projected[0].content_blocks_mut() {
+                    if let ContentBlock::ToolCall { arguments, .. } = block {
+                        *arguments = serde_json::json!({"path": "forged"});
+                    }
+                }
+                projected[1] = UnifiedMessage::tool_result_json(
+                    "signed-call",
+                    "tool",
+                    serde_json::json!("short"),
+                    false,
+                );
+                Ok(messages_output(projected))
+            }),
+        )
+        .build();
+    let mut messages = native_protocol_messages();
+    let original = serde_json::to_value(&messages).unwrap();
+    let outcome = fabric
+        .preflight(&mut messages, &pressure(), 0, &caller(), None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome.owner,
+        ContextOwner::BuiltinFallback { .. }
+    ));
+    assert_eq!(*native_calls.lock().unwrap(), 1);
+    assert_eq!(serde_json::to_value(&messages).unwrap(), original);
 }
 
 #[tokio::test]
@@ -288,20 +423,26 @@ async fn successful_replace_is_followed_by_compose_and_skips_native() {
         }))
         .handler(
             "plugin-a:replace",
-            handler(|_| Ok(messages_output(vec![UnifiedMessage::user("replace")]))),
+            handler(|_| {
+                Ok(messages_output(vec![UnifiedMessage::user(
+                    "replace ".repeat(100),
+                )]))
+            }),
         )
         .handler(
             "plugin-b:compose",
             handler(|request| {
                 let mut messages: Vec<UnifiedMessage> =
                     serde_json::from_value(request.snapshot.unwrap().payload).unwrap();
+                assert!(messages[0].text_content().starts_with("replace"));
+                messages[0] = UnifiedMessage::user("replace");
                 messages.push(UnifiedMessage::user("compose"));
                 Ok(messages_output(messages))
             }),
         )
         .build();
 
-    let mut messages = vec![UnifiedMessage::user("original")];
+    let mut messages = vec![UnifiedMessage::user("original ".repeat(1000))];
     let outcome = fabric
         .preflight(&mut messages, &pressure(), 0, &caller(), None)
         .await
@@ -435,7 +576,7 @@ impl crate::providers::AiProvider for CountedSummaryProvider {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             tokio::time::sleep(self.delay).await;
             Ok(crate::providers::adapter::ProviderResponse::text_only(
-                "Summary of the older exchanges.",
+                "Summary of the older exchanges.".into(),
             ))
         })
     }

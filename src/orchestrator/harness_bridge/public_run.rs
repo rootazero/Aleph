@@ -251,7 +251,7 @@ async fn run_isolated(
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,
-        preflight_pipeline: None,
+        context_fabric: None,
         trace_sink: None,
         system_prompt: Some(system_prompt),
         system_prompt_parts: None,

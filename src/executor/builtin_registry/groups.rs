@@ -98,6 +98,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "self_manage",
             "hooks_manage",
             "plugin_manage",
+            "context_plugin",
             "self_config",
             "read_config_guide",
             "config_audit",

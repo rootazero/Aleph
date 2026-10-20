@@ -38,12 +38,24 @@
 - Ruling: Treat Task 3's facade injection change and Task 6's cache change as serialized even where both touch compaction code. This lowers parallelism but avoids silently crossing the fallback/cache contract.
 - Ruling: Treat `src/harness/` edits as allowed only after the facade exists and the 12-file ratchet is re-counted. This preserves R10; the cost if wrong is one extra integration checkpoint.
 
+## Current continuation checkpoint / 当前续作检查点
+
+- Task3 facade integrated in parent at `bda8c05cc`; native fallback, rollback, protected window and measured results use the accepted runtime seam. Earlier candidate agents are no longer running.
+- Task5a code and static re-review complete; slot `ai_reasoning` 27 and `ai_compat` 12 tests passed, Core execution still pending. `ProviderResponse` is a local DTO with no serde derive; the optional request-bound replay policy is not a plugin wire field.
+- Task5b root/child/deps/Think/directive/fit/rescue wiring is on disk. Independent reviewer `4d4704f7-9ed2-4da` found proactive fresh_tail=0; parent fixed it to budget.fresh_tail_count() before await (fallback six). Remaining reviewed boundaries had no new Important findings. Harness measured 5528 lines across 12 files against ceiling5545; repeat after final format.
+- Task6a/6b actual-mounted WASM discovery, identity binding, explicit grant, resolver, blocking permits and lifecycle disposal are on disk. `ContextHandler::invoke_authenticated` is wired; context_plugin canonical-confirmation grant/revoke and plugin_manage context_status are reachable. RegistryToolAdapter's separate confirmation list includes context_plugin. Static reviewer `80456ee7-01bc-468` is running.
+- Main added actual-session task-local Admission at ScopedToolService pre-ingress and manual compaction facade routing, preserving exact-read/no-budget behavior and original result storage. Owner commits atomically with the existing FoldRecorded transaction.
+- Lifecycle worker `4e929c50-1c3d-4a1` owns only wire Notify/runtime before-after events/new lifecycle tests, no cargo/commit. Parent will wire TurnEnd/FoldRecorded/RestoreRequested. Do not substitute per-run boundaries for durable SessionStart/SessionShutdown.
+- First integrated check used an old trait/test AST: E0407 invoke_authenticated, missing degraded fields, text_only(&str), Vec<UnifiedMessage> equality. All identified sites repaired. Stale own process tree PID6196 stopped; this is NOT a successful check. Build slot now free; next batch must use fresh output.
+- Shared target remains parent target; jobs4/debug0; check AvailablePhysicalMemory>=4194304KiB before every cargo; do not kill unrelated workspace builds.
+- New reference CONTEXT_PLUGINS.md and updates FEATURE_LOCATOR/PLUGIN_SYSTEM/AGENT_LOOP_CONTEXT_BUDGET are on disk. Final tests and status markers pending. No performance reduction percentages claimed.
+
 ## Task state
 
-- Task 1: `c65f50d3a`; canonical payload verification `fe4da3fb1`. Context batch: 41 fabric tests passed, one old digest-boundary assertion failed; assertion corrected to reject a noncanonical digest, pending the next shared test run.
-- Task 2: `a97dc0f52`, final independent review APPROVED. Accepted: all 26 registry tests plus 8 extension capability tests passed. Multiple-session grants, per-session owners, bounded audit and descriptor-bound consent implemented.
-- Task 3: candidate implementer `0e22ddae-5e48-406` works on isolated branch `codex/context-fabric-runtime`, worktree `D:/Workspace/Aleph/.worktrees/context-fabric-runtime`, from `b30a9c778`. No cargo there. Parent targeted registry/fold verification is complete; candidate review and integrated facade verification are pending.
-- Task 4: `b30a9c778`, independent review APPROVED. Accepted: folds 9, manual compaction 23, ledger 5, decompression 9, diagnostics 4 and session events 31 tests passed.
-- Task 5: pending. R10 baseline is demonstrably 5570 lines against CEILING 5545 both at `79a2494f6` and after Task 4: zero new budgeted lines. Fix the existing 25-line overrun by genuine scaffolding extraction when integrating the facade; do not raise the ceiling.
-- Task 6: pending
-- Task 7: pending
+- Task1 `c65f50d3a` + `fe4da3fb1`; canonical digest-boundary test correction in `535195c18`, pending next batch.
+- Task2 `a97dc0f52`, independent review APPROVED; registry 26 + capability 8 tests passed.
+- Task3 production integrated `bda8c05cc`; post-integration focused regression batch pending.
+- Task4 `b30a9c778`, independent review APPROVED; folds9/manual23/ledger5/decompress9/diagnostics4/session-events31 passed.
+- Task5a/b and actual ingress/manual integration implemented, Core batch and lifecycle completion pending.
+- Task6 actual WASM mount/grant/resolver/tool implemented, static review and executable fixture verification pending. Historical foreign-owner restoration remains explicitly degraded Core recovery; no raw history sent to a newly selected owner. No new plugin disk cache/network/write/cross-session authorization.
+- Task7 reference updates drafted; final static check, meaningful focused tests, clippy/fmt/R10 and final commits remain.

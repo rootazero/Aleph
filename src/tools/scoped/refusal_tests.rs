@@ -283,7 +283,7 @@ fn harness(session: Arc<dyn SessionService>, tools: ScopedToolService) -> AgentH
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,
-        preflight_pipeline: None,
+        context_fabric: None,
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,

@@ -851,7 +851,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             base.default_max_iterations.unwrap_or(0),
         ));
 
-        let (context_budget, context_compactor, preflight_pipeline) = child_context_triple(
+        let (context_budget, context_compactor, context_fabric) = child_context_triple(
             base,
             &llm,
             &req.agent_def.id,
@@ -926,7 +926,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             verifier_chain: base.verifier_chain.clone(),
             context_budget,
             context_compactor,
-            preflight_pipeline,
+            context_fabric,
             // Stage A (P1) — inherited from parent SpawnerBase. VESR v1.1 (b):
             // when routing capture is on, this is the child's own OutcomeObserver
             // wrapping that sink; otherwise the raw sink (unchanged).
@@ -1351,7 +1351,7 @@ pub fn parent_session_id_of(raw: &str) -> Option<SessionId> {
 /// cross-contaminate a parent and its concurrently-running children.
 ///
 /// All-or-nothing by construction, which is the gating `HarnessDeps` documents
-/// (`preflight_pipeline` is `None` exactly when `context_compactor` is): a
+/// (`context_fabric` is `None` exactly when `context_compactor` is): a
 /// compactor without a preflight pipeline would pay for LLM summarisation where
 /// free structural pruning was available.
 /// The child's context triple, with its cheap summarizer metered.
@@ -1389,13 +1389,17 @@ fn child_context_triple(
         agent_id,
         child_id,
         cancel,
+        base.plugin_registry.clone().or_else(|| {
+            crate::extension::try_extension_manager()
+                .map(|manager| manager.plugin_registry_handle())
+        }),
     )
 }
 
 type ContextTriple = (
     Option<Arc<tokio::sync::Mutex<crate::context::budget::ContextBudget>>>,
     Option<Arc<crate::context::compact::compactor::ContextCompactor>>,
-    Option<Arc<crate::context::budget::preflight::PreflightPipeline>>,
+    Option<Arc<crate::context::fabric::ContextFabric>>,
 );
 
 /// `agent_id` + `child_id` scope the compactor's cache-watchdog reset to this
@@ -1443,6 +1447,7 @@ fn build_context_triple(
     // would let this site inherit that silently — and a subagent is exactly
     // where nobody would notice, because the parent is already waiting.
     cancel: CancellationToken,
+    registry: Option<Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>>,
 ) -> ContextTriple {
     use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
     let Some(cfg) = cfg else {
@@ -1473,11 +1478,21 @@ fn build_context_triple(
         // count is per child.
         .with_cheap_provider(cheap_summary.cloned()),
     );
-    let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(
-        cfg,
-        llm.as_ref(),
-    ));
-    (Some(budget), Some(compactor), Some(pipeline))
+    let pipeline = crate::context::budget::preflight::default_pipeline(cfg, llm.as_ref());
+    // Reuse the manager's live handle whenever present; never mirror authority.
+    let registry = registry.unwrap_or_else(|| {
+        Arc::new(tokio::sync::RwLock::new(
+            crate::extension::registry::PluginRegistry::new(),
+        ))
+    });
+    let mut builder = crate::context::fabric::ContextFabric::builder(registry)
+        .native_pipeline(pipeline)
+        .compactor(compactor.clone());
+    if let Some(manager) = crate::extension::try_extension_manager() {
+        builder = builder.handler_resolver(manager.context_handler_resolver());
+    }
+    let fabric = Arc::new(builder.build());
+    (Some(budget), Some(compactor), Some(fabric))
 }
 
 /// Whether `target` is the last `AssistantMessage` in `events` (by seq).

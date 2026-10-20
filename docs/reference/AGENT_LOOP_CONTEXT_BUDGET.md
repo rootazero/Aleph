@@ -62,8 +62,9 @@ LLM-free transforms.
 ### Wiring
 
 `src/harness/agent/think.rs::run_turn` step 2a invokes
-`HarnessDeps.preflight_pipeline.run(&mut messages, &pressure, fresh_tail)`
-on every turn unless context management is switched off
+`HarnessDeps.context_fabric` routes `context::compact::directive::preflight` to the native/plugin pipeline. The helper snapshots pressure and fresh-tail count before awaiting handlers; no budget lock crosses the await. / `context_fabric` 统一内置与插件入口，压力和尾部先快照、再异步调用。 See [Context Plugins](CONTEXT_PLUGINS.md).
+
+The pipeline runs on every turn unless context management is switched off
 (`[context_budget] enabled = false`; a missing section is on — see
 `Config::effective_context_budget`). The pipeline is assembled in
 `src/orchestrator/harness_bridge/runner_impl.rs` and is `Some` whenever

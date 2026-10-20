@@ -114,6 +114,33 @@ impl AdapterRegistry {
                     "Adapter matched"
                 );
                 let mut output = adapter.parse(dir)?;
+                // Use the metadata parser selected by the same directory precedence.
+                // Context declarations remain discovery metadata, never registrations.
+                let has_manifest = [
+                    super::CC_PLUGIN_TOML,
+                    super::CC_PLUGIN_JSON,
+                    super::ALEPH_PLUGIN_TOML,
+                ]
+                .iter()
+                .any(|path| dir.join(path).is_file());
+                let extensions = if has_manifest {
+                    super::parse_manifest_from_dir_sync(dir)?.aleph_extensions
+                } else {
+                    None
+                };
+                if let Some(extensions) = extensions {
+                    for context in extensions.contexts {
+                        context.descriptor.validate().map_err(|e| anyhow!("{e}"))?;
+                        if context.handler.trim().is_empty()
+                            || context.handler.trim() != context.handler
+                        {
+                            return Err(anyhow!("context handler must name a WASM export"));
+                        }
+                        output
+                            .capabilities
+                            .push(CapabilityDeclaration::Context(context));
+                    }
+                }
                 Self::expand_plugin_variables(&mut output, dir);
                 return Ok(output);
             }
@@ -171,7 +198,8 @@ impl AdapterRegistry {
                 CapabilityDeclaration::Hook(_)
                 | CapabilityDeclaration::Tool(_)
                 | CapabilityDeclaration::Service(_)
-                | CapabilityDeclaration::McpServer(_) => {}
+                | CapabilityDeclaration::McpServer(_)
+                | CapabilityDeclaration::Context(_) => {}
             }
         }
     }

@@ -999,7 +999,10 @@ fn observer_can_inspect_metadata_but_cannot_receive_transform_admission() {
         let admitted = registry.validate_context_grant("one:observer", &call, &authenticated, NOW);
         if matches!(
             operation,
-            ContextOperation::Describe | ContextOperation::Status | ContextOperation::Shutdown
+            ContextOperation::Describe
+                | ContextOperation::Status
+                | ContextOperation::Shutdown
+                | ContextOperation::Notify
         ) {
             assert!(admitted.is_ok(), "{operation:?}");
         } else {

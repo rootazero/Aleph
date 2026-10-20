@@ -52,6 +52,7 @@ pub mod command_canonicalize;
 pub mod command_ledger;
 pub mod config_audit;
 pub mod config_guide;
+pub mod context_plugin;
 pub mod crawl4ai;
 pub mod cron_manage;
 pub mod ctx_search;

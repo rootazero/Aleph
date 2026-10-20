@@ -286,6 +286,9 @@ impl PreflightPipeline {
         let after_tokens = crate::context::budget::pressure::estimate_tokens_smart(
             &serde_json::to_string(&candidate).unwrap_or_default(),
         );
+        if after_tokens > before_tokens {
+            return None;
+        }
         let freed = before_tokens.saturating_sub(after_tokens);
         #[allow(
             clippy::cast_precision_loss,

@@ -145,6 +145,7 @@ const OPERATOR_TOOLS: &[&str] = &[
     // their own read-only tool name — not a carve-out inside a tool whose
     // other arms rewrite install-wide trust.
     "plugin_manage",
+    "context_plugin",
     // `terminal` LOOKS like the `*_list`/`*_status`/`*_read` shape this
     // list's own doc comment says is deliberately absent — it is not one of
     // those. Read-only self-management (`config_audit`, `gateway_route`)

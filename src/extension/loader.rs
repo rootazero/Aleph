@@ -41,6 +41,9 @@ pub struct PluginLoader {
 
     /// Map of `plugin_id` -> runtime kind for fast lookup
     loaded_plugins: HashMap<String, PluginKind>,
+    // Runtime exports only. Descriptors, owners and grants live in PluginRegistry.
+    context_bindings: HashMap<String, crate::extension::runtime::wasm::WasmBinding>,
+    context_call_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl PluginLoader {
@@ -51,6 +54,8 @@ impl PluginLoader {
             plugin_settings: std::collections::HashMap::new(),
             wasm_runtime: None,
             loaded_plugins: HashMap::new(),
+            context_bindings: HashMap::new(),
+            context_call_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
 
@@ -183,6 +188,8 @@ impl PluginLoader {
             }
         }
 
+        self.context_bindings
+            .retain(|_, binding| binding.plugin_id() != plugin_id);
         Ok(())
     }
 
@@ -228,13 +235,97 @@ impl PluginLoader {
         if self.loaded_plugins.get(plugin_id) == Some(&PluginKind::Wasm) {
             self.loaded_plugins.remove(plugin_id);
         }
+        self.context_bindings
+            .retain(|_, binding| binding.plugin_id() != plugin_id);
+    }
+
+    pub(crate) fn context_call_slots(&self) -> Arc<tokio::sync::Semaphore> {
+        Arc::clone(&self.context_call_slots)
+    }
+
+    pub(crate) fn context_binding(
+        &self,
+        key: &str,
+    ) -> Option<crate::extension::runtime::wasm::WasmBinding> {
+        self.context_bindings
+            .get(key)
+            .filter(|binding| self.wasm_binding_is_current(binding))
+            .cloned()
+    }
+
+    /// Validated declarations on the actual mounted instance; never re-read disk.
+    pub(crate) fn context_declarations(
+        &self,
+        plugin_id: &str,
+    ) -> ExtensionResult<Vec<crate::extension::capability::ContextDeclaration>> {
+        if !self.is_loaded(plugin_id) {
+            return Err(ExtensionError::PluginNotFound(plugin_id.into()));
+        }
+        let mut declarations = Vec::new();
+        for (key, binding) in &self.context_bindings {
+            if binding.plugin_id() != plugin_id {
+                continue;
+            }
+            if !binding.context_effect_free() || !self.wasm_binding_is_current(binding) {
+                return Err(ExtensionError::Runtime(
+                    "context binding is unavailable".into(),
+                ));
+            }
+            let declaration =
+                binding
+                    .context_declaration(key.strip_prefix(&format!("{plugin_id}:")).ok_or_else(
+                        || ExtensionError::Runtime("invalid context binding key".into()),
+                    )?)
+                    .ok_or_else(|| {
+                        ExtensionError::Runtime("mounted context declaration missing".into())
+                    })?;
+            declaration
+                .descriptor
+                .validate()
+                .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+            declarations.push(declaration.clone());
+        }
+        declarations.sort_by(|left, right| left.descriptor.id.cmp(&right.descriptor.id));
+        Ok(declarations)
+    }
+
+    pub(crate) fn wasm_binding_is_current(
+        &self,
+        binding: &crate::extension::runtime::wasm::WasmBinding,
+    ) -> bool {
+        self.loaded_plugins.get(binding.plugin_id()) == Some(&PluginKind::Wasm)
+            && self
+                .wasm_runtime
+                .as_ref()
+                .is_some_and(|runtime| runtime.binding_is_current(binding))
+    }
+
+    /// Called only by the normal mount effect. Does not register any grant.
+    fn bind_context_exports(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
+        let mut bindings = Vec::new();
+        for declaration in manifest
+            .aleph_extensions
+            .iter()
+            .flat_map(|ext| &ext.contexts)
+        {
+            let adapter =
+                super::context_adapter::WasmContextAdapter::bind(self, manifest, declaration)?;
+            let key =
+                super::registry::namespaced_component_key(&manifest.id, &declaration.descriptor.id);
+            if bindings.iter().any(|(existing, _)| existing == &key) {
+                return Err(ExtensionError::Runtime(format!(
+                    "duplicate context binding: {key}"
+                )));
+            }
+            bindings.push((key, adapter.binding().clone()));
+        }
+        self.context_bindings.extend(bindings);
+        Ok(())
     }
 
     // ===== Tool / Hook / Command Execution =====
 
     /// Bind an export on the currently mounted WASM plugin instance.
-    // Temporary until the C2 producer adopts this bridge.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn bind_wasm(
         &self,
         plugin_id: &str,
@@ -258,8 +349,6 @@ impl PluginLoader {
     }
 
     /// Call a previously bound export without accepting a second identity.
-    // Temporary until the C2 producer adopts this bridge.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn call_bound(
         &self,
         binding: &crate::extension::runtime::wasm::WasmBinding,
@@ -378,6 +467,7 @@ impl PluginLoader {
 
         // Drop the mounted runtime so retained bindings cannot execute through it.
         self.wasm_runtime = None;
+        self.context_bindings.clear();
         self.loaded_plugins.clear();
 
         info!("PluginLoader shutdown complete");
@@ -431,6 +521,10 @@ pub(crate) async fn load_wasm_effect(
         if skipped_duplicate {
             None
         } else {
+            if let Err(error) = guard.bind_context_exports(manifest) {
+                guard.unload_plugin(&plugin_id)?;
+                return Err(error);
+            }
             let identity = guard.wasm_mount_identity(&plugin_id);
             debug_assert!(
                 identity.is_some(),

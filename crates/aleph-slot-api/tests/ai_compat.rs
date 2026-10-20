@@ -315,6 +315,7 @@ fn default_streaming_replays_ordered_full_response_without_losing_diagnostics() 
         }),
         truncated_tool_call: Some("third: unexpected end of JSON".into()),
         provider_error: Some("upstream fault after partial response".into()),
+        reasoning_replay: None,
     };
     let usage = expected.usage.as_ref().unwrap();
     assert_eq!(

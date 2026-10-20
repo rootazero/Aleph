@@ -95,6 +95,7 @@ mod tests {
                     truncated_tool_call: None,
                     provider_error: None,
                     usage: None,
+                    reasoning_replay: None,
                 })
             })
         }
@@ -165,6 +166,7 @@ mod tests {
                     truncated_tool_call: None,
                     provider_error: None,
                     usage: None,
+                    reasoning_replay: None,
                 })
             })
         }
@@ -260,7 +262,7 @@ mod tests {
     // -- Context management ------------------------------------------------
 
     /// A subagent used to run with `context_budget` / `context_compactor` /
-    /// `preflight_pipeline` all hardcoded `None`, i.e. with no context
+    /// `context_fabric` all hardcoded `None`, i.e. with no context
     /// management whatsoever: the child prompt replays the whole child log
     /// every turn, nothing compacted it, and a `prompt_too_long` had no
     /// compactor to rescue with — the reactive drain went straight to
@@ -282,6 +284,7 @@ mod tests {
             "child-agent",
             &ephemeral_for("child-agent", None),
             CancellationToken::new(),
+            None,
         );
         assert!(
             budget.is_none() && compactor.is_none() && preflight.is_none(),
@@ -307,6 +310,7 @@ mod tests {
             "child-agent",
             &child_id,
             CancellationToken::new(),
+            None,
         );
         assert!(
             budget.is_some() && compactor.is_some() && preflight.is_some(),
@@ -359,6 +363,7 @@ mod tests {
             "child-agent",
             &child_id,
             CancellationToken::new(),
+            None,
         );
         assert_eq!(
             with_cheap.as_ref().map(|c| c.summarizer_name()),
@@ -377,6 +382,7 @@ mod tests {
             "child-agent",
             &child_id,
             CancellationToken::new(),
+            None,
         );
         assert_eq!(
             without.as_ref().map(|c| c.summarizer_name()),
@@ -491,6 +497,7 @@ mod tests {
                 thinking_tokens: None,
                 cost: None,
             }),
+            reasoning_replay: None,
         }]);
         let base = make_base(provider);
 
@@ -706,6 +713,7 @@ mod tests {
                 truncated_tool_call: None,
                 provider_error: None,
                 usage: None,
+                reasoning_replay: None,
             },
             // Turn 2: terminal text.
             ProviderResponse::text_only("all done".to_string()),
@@ -1355,6 +1363,7 @@ mod tests {
                         thinking_tokens: None,
                         cost: None,
                     }),
+                    reasoning_replay: None,
                 })
             })
         }
@@ -2018,6 +2027,7 @@ mod tests {
                 truncated_tool_call: None,
                 provider_error: None,
                 usage: None,
+                reasoning_replay: None,
             },
             ProviderResponse::text_only("finished anyway".to_string()),
         ]);

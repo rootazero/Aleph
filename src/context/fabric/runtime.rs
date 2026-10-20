@@ -7,9 +7,9 @@
 
 use super::{
     canonical_fingerprint, AuthenticatedCaller, ContextCapabilityDescriptor, ContextCapabilityMode,
-    ContextCapabilityRequest, ContextContractError, ContextNamespace, ContextOperation,
-    ContextPhase, ContextScope, ContextSnapshot, ContextTransformResult, DegradedReason,
-    CONTEXT_CAPABILITY_API_VERSION,
+    ContextCapabilityRequest, ContextContractError, ContextLifecycleEvent, ContextNamespace,
+    ContextOperation, ContextPhase, ContextScope, ContextSnapshot, ContextTransformResult,
+    DegradedReason, CONTEXT_CAPABILITY_API_VERSION,
 };
 use crate::context::budget::preflight::{
     NativePreflightRegistry, PreflightPipeline, PreflightStage,
@@ -19,8 +19,8 @@ use crate::context::budget::ContextPressure;
 use crate::context::compact::compactor::{CompactResult, CompactStrategy, ContextCompactor};
 use crate::extension::registry::{ContextRegistryError, PluginRegistry};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
-use aleph_slot_api::ai_reasoning::ReasoningReplay;
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,6 +36,16 @@ pub trait ContextHandler: Send + Sync {
         &self,
         request: ContextCapabilityRequest,
     ) -> Result<ContextTransformResult, String>;
+
+    /// The caller is supplied by the authenticated host, outside the wire DTO.
+    /// Native handlers keep their existing API; transports may require this seam.
+    async fn invoke_authenticated(
+        &self,
+        request: ContextCapabilityRequest,
+        _caller: &AuthenticatedCaller,
+    ) -> Result<ContextTransformResult, String> {
+        self.invoke(request).await
+    }
 }
 
 /// Who supplied the committed result. Task 5 can persist this owner beside
@@ -181,6 +191,62 @@ impl ContextFabric {
         ContextFabricBuilder::new(registry)
     }
 
+    /// Deliver bounded, read-only notifications through the existing transport.
+    /// A notification carries only its event tag. Observer output is validated
+    /// and discarded; delivery failure cannot change committed Core state.
+    pub async fn notify_lifecycle(
+        &self,
+        event: ContextLifecycleEvent,
+        caller: &AuthenticatedCaller,
+        cancel: Option<&CancellationToken>,
+    ) {
+        self.notify_lifecycle_selected(event, caller, cancel, None)
+            .await;
+    }
+
+    pub(crate) async fn notify_lifecycle_selected(
+        &self,
+        event: ContextLifecycleEvent,
+        caller: &AuthenticatedCaller,
+        cancel: Option<&CancellationToken>,
+        selected_keys: Option<&[String]>,
+    ) {
+        if check_cancel(cancel).is_err() {
+            return;
+        }
+        let Ok(entries) = self
+            .phase_entries(ContextPhase::Lifecycle, caller.session_id())
+            .await
+        else {
+            return;
+        };
+        let deliveries =
+            futures::stream::iter(entries.into_iter().filter(|(key, descriptor, _)| {
+                descriptor.lifecycle.contains(&event)
+                    && selected_keys.is_none_or(|keys| keys.contains(key))
+            }))
+            .for_each_concurrent(4, |(key, descriptor, _)| async move {
+                let Some(handler) = self.resolve_handler(&key) else {
+                    return;
+                };
+                let payload = serde_json::json!({"event": event});
+                let Ok(request) = make_payload_request(
+                    &key,
+                    &descriptor,
+                    &payload,
+                    ContextPhase::Lifecycle,
+                    caller,
+                ) else {
+                    return;
+                };
+                let _ = self
+                    .invoke_request(&key, &descriptor, request, caller, handler, cancel)
+                    .await;
+            });
+        // One deadline bounds the whole observer batch, including a slow guest.
+        let _ = tokio::time::timeout(self.timeout, deliveries).await;
+    }
+
     /// Run one native candidate and the eligible external preflight owners.
     /// Replace/bundle owners get the first chance; Core runs native work only
     /// when no usable owner exists or a bounded external call falls back.
@@ -192,6 +258,9 @@ impl ContextFabric {
         caller: &AuthenticatedCaller,
         cancel: Option<&CancellationToken>,
     ) -> Result<PreflightOutcome, ContextFabricError> {
+        check_cancel(cancel)?;
+        self.notify_lifecycle(ContextLifecycleEvent::BeforePreflight, caller, cancel)
+            .await;
         check_cancel(cancel)?;
         let entries = self
             .phase_entries(ContextPhase::Preflight, caller.session_id())
@@ -260,10 +329,12 @@ impl ContextFabric {
                 .unwrap_or(ContextOwner::Builtin)
         });
 
-        for (key, descriptor, _) in entries
-            .iter()
-            .filter(|(_, _, mode)| *mode == ContextCapabilityMode::Compose)
-        {
+        for (key, descriptor, _) in entries.iter().filter(|(_, _, mode)| {
+            matches!(
+                mode,
+                ContextCapabilityMode::Compose | ContextCapabilityMode::Interceptor
+            )
+        }) {
             let Some(handler) = self.resolve_handler(key) else {
                 degraded = Some(DegradedReason::Unavailable);
                 continue;
@@ -294,12 +365,41 @@ impl ContextFabric {
         check_cancel(cancel)?;
         let tokens_freed = freed_tokens(&original, &current);
         *messages = current;
+        self.notify_lifecycle(ContextLifecycleEvent::AfterPreflight, caller, cancel)
+            .await;
         Ok(PreflightOutcome {
             tokens_freed,
             owner,
             degraded,
             skipped_observers,
         })
+    }
+
+    /// Resolve the session's admitted output transformer in stable registry order.
+    pub(crate) async fn admission_key(
+        &self,
+        caller: &AuthenticatedCaller,
+    ) -> Result<Option<String>, ContextFabricError> {
+        let entries = self
+            .phase_entries(ContextPhase::Admission, caller.session_id())
+            .await?;
+        Ok(entries
+            .iter()
+            .find(|(_, _, mode)| {
+                matches!(
+                    mode,
+                    ContextCapabilityMode::Replace | ContextCapabilityMode::Bundle
+                )
+            })
+            .or_else(|| {
+                entries.iter().find(|(_, _, mode)| {
+                    matches!(
+                        mode,
+                        ContextCapabilityMode::Compose | ContextCapabilityMode::Interceptor
+                    )
+                })
+            })
+            .map(|(key, _, _)| key.clone()))
     }
 
     /// Existing synchronous native admission path. It performs no registry
@@ -413,10 +513,27 @@ impl ContextFabric {
             });
         };
         let original = value.clone();
+        let plugin_input = if matches!(
+            mode,
+            ContextCapabilityMode::Compose | ContextCapabilityMode::Interceptor
+        ) {
+            let mut native = original.clone();
+            Value::String(
+                crate::tool_output::ingress::clean_for_ingress_of(
+                    tool_name,
+                    &mut native,
+                    budget,
+                    Some(tool_call_id),
+                )
+                .model_facing,
+            )
+        } else {
+            original.clone()
+        };
         let request = match make_payload_request(
             capability_key,
             &descriptor,
-            &original,
+            &plugin_input,
             ContextPhase::Admission,
             caller,
         ) {
@@ -472,6 +589,42 @@ impl ContextFabric {
             }
         };
         let mut candidate = response.output;
+        let mut committed_key = capability_key.to_string();
+        for (key, descriptor, mode) in self
+            .phase_entries(ContextPhase::Admission, caller.session_id())
+            .await?
+        {
+            if key == capability_key
+                || !matches!(
+                    mode,
+                    ContextCapabilityMode::Compose | ContextCapabilityMode::Interceptor
+                )
+            {
+                continue;
+            }
+            let Some(handler) = self.resolve_handler(&key) else {
+                continue;
+            };
+            let request = make_payload_request(
+                &key,
+                &descriptor,
+                &candidate,
+                ContextPhase::Admission,
+                caller,
+            )?;
+            match self
+                .invoke_request(&key, &descriptor, request, caller, handler, cancel)
+                .await
+            {
+                Ok(response) => {
+                    candidate = response.output;
+                    committed_key = key;
+                }
+                Err(ContextFabricError::Cancelled) => return Err(ContextFabricError::Cancelled),
+                Err(_) => {}
+            }
+        }
+        check_cancel(cancel)?;
         let original_text = serde_json::to_string(&original)
             .map_err(|e| ContextFabricError::Serialization(e.to_string()))?;
         let output_changed = candidate != original;
@@ -498,7 +651,7 @@ impl ContextFabric {
         );
         Ok(AdmissionOutcome {
             result,
-            owner: ContextOwner::Plugin(capability_key.to_string()),
+            owner: ContextOwner::Plugin(committed_key),
             degraded: None,
         })
     }
@@ -541,6 +694,9 @@ impl ContextFabric {
         caller: &AuthenticatedCaller,
         cancel: Option<&CancellationToken>,
     ) -> Result<CompactionOutcome, ContextFabricError> {
+        check_cancel(cancel)?;
+        self.notify_lifecycle(ContextLifecycleEvent::BeforeCompaction, caller, cancel)
+            .await;
         check_cancel(cancel)?;
         let original = messages.clone();
         let entries = self
@@ -628,10 +784,12 @@ impl ContextFabric {
                 ContextOwner::Builtin
             }
         });
-        for (key, descriptor, _) in entries
-            .iter()
-            .filter(|(_, _, mode)| *mode == ContextCapabilityMode::Compose)
-        {
+        for (key, descriptor, _) in entries.iter().filter(|(_, _, mode)| {
+            matches!(
+                mode,
+                ContextCapabilityMode::Compose | ContextCapabilityMode::Interceptor
+            )
+        }) {
             let Some(handler) = self.resolve_handler(key) else {
                 degraded = Some(DegradedReason::Unavailable);
                 continue;
@@ -668,12 +826,143 @@ impl ContextFabric {
         } else {
             strategy.expect("base strategy is selected before composition")
         };
+        self.notify_lifecycle(ContextLifecycleEvent::AfterCompaction, caller, cancel)
+            .await;
         Ok(CompactionOutcome {
             result: measured_compact_result(&original, messages, strategy),
             owner,
             degraded,
             skipped_observers,
         })
+    }
+
+    /// Summarize an event-log slice without changing manual compaction's cut,
+    /// focus, user instructions, savings gate or atomic store transaction.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn summarize_slice(
+        &self,
+        messages: &[UnifiedMessage],
+        focus: Option<&str>,
+        instructions: Option<&str>,
+        native: Option<&ContextCompactor>,
+        caller: &AuthenticatedCaller,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<(String, ContextOwner), ContextFabricError> {
+        check_cancel(cancel)?;
+        self.notify_lifecycle(ContextLifecycleEvent::BeforeCompaction, caller, cancel)
+            .await;
+        check_cancel(cancel)?;
+        let entries = self
+            .phase_entries(ContextPhase::Compaction, caller.session_id())
+            .await?;
+        let mut summary: Option<String> = None;
+        let mut owner = ContextOwner::Builtin;
+        let mut failed_owner = None;
+        for (key, descriptor, mode) in &entries {
+            if !matches!(
+                mode,
+                ContextCapabilityMode::Replace | ContextCapabilityMode::Bundle
+            ) {
+                continue;
+            }
+            let Some(handler) = self.resolve_handler(key) else {
+                failed_owner = Some(key.clone());
+                continue;
+            };
+            let payload = serde_json::json!({
+                "messages": safe_project(messages), "focus": focus,
+                "instructions": instructions, "summary": null,
+            });
+            let response = match make_payload_request(
+                key,
+                descriptor,
+                &payload,
+                ContextPhase::Compaction,
+                caller,
+            ) {
+                Ok(request) => {
+                    self.invoke_request(key, descriptor, request, caller, handler, cancel)
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            match response {
+                Ok(result)
+                    if result
+                        .output
+                        .as_str()
+                        .is_some_and(|body| !body.trim().is_empty()) =>
+                {
+                    summary = result.output.as_str().map(str::to_owned);
+                    owner = ContextOwner::Plugin(key.clone());
+                    break;
+                }
+                Err(ContextFabricError::Cancelled) => return Err(ContextFabricError::Cancelled),
+                _ => failed_owner = Some(key.clone()),
+            }
+        }
+        if summary.is_none() {
+            summary = Some(match native {
+                Some(compactor) => self
+                    .run_native(
+                        cancel,
+                        compactor.summarize_slice(messages, focus, instructions),
+                    )
+                    .await?
+                    .map_err(|error| ContextFabricError::Compaction(error.to_string()))?,
+                None => crate::context::compact::compactor::deterministic_truncation(messages),
+            });
+            if let Some(plugin) = failed_owner {
+                owner = ContextOwner::BuiltinFallback {
+                    plugin,
+                    reason: DegradedReason::Unavailable,
+                };
+            }
+        }
+        let mut body = summary.expect("base summary selected");
+        for (key, descriptor, mode) in &entries {
+            if !matches!(
+                mode,
+                ContextCapabilityMode::Compose | ContextCapabilityMode::Interceptor
+            ) {
+                continue;
+            }
+            let Some(handler) = self.resolve_handler(key) else {
+                continue;
+            };
+            let payload = serde_json::json!({
+                "messages": safe_project(messages), "focus": focus,
+                "instructions": instructions, "summary": body,
+            });
+            let response = match make_payload_request(
+                key,
+                descriptor,
+                &payload,
+                ContextPhase::Compaction,
+                caller,
+            ) {
+                Ok(request) => {
+                    self.invoke_request(key, descriptor, request, caller, handler, cancel)
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            match response {
+                Ok(result) => {
+                    if let Some(candidate) = result.output.as_str().filter(|s| !s.trim().is_empty())
+                    {
+                        body = candidate.to_owned();
+                        owner = ContextOwner::Plugin(key.clone());
+                    }
+                }
+                Err(ContextFabricError::Cancelled) => return Err(ContextFabricError::Cancelled),
+                Err(_) => {}
+            }
+        }
+        check_cancel(cancel)?;
+        self.notify_lifecycle(ContextLifecycleEvent::AfterCompaction, caller, cancel)
+            .await;
+        Ok((body, owner))
     }
 
     fn resolve_handler(&self, key: &str) -> Option<Arc<dyn ContextHandler>> {
@@ -757,6 +1046,8 @@ impl ContextFabric {
             return Err(ContextFabricError::PreflightGated);
         }
         let projected = safe_project(&messages[window.clone()]);
+        let public_original = serde_json::to_value(&projected)
+            .map_err(|e| ContextFabricError::Serialization(e.to_string()))?;
         let request = make_request_from_projected(key, descriptor, projected, phase, caller)?;
         let response = self
             .invoke_request(key, descriptor, request, caller, handler, cancel)
@@ -788,6 +1079,16 @@ impl ContextFabric {
             return Err(ContextFabricError::MalformedOutput(
                 "tool-call/result pairing changed".into(),
             ));
+        }
+        if normalized_candidate == public_original {
+            // Projection may have removed whole private-only messages. Preserve
+            // the complete native frame when the plugin kept its public view.
+            candidate = messages[window.clone()].to_vec();
+        } else {
+            super::protocol_frames::restore_private_frames(
+                &messages[window.clone()],
+                &mut candidate,
+            )?;
         }
         let mut staged = messages[..window.start].to_vec();
         staged.extend(candidate);
@@ -826,8 +1127,16 @@ impl ContextFabric {
         let admitted_descriptor = self
             .validate_grant(key, descriptor, &request, caller)
             .await?;
+        if request.snapshot.as_ref().is_some_and(|snapshot| {
+            super::privacy::contains_recognised_credential(&snapshot.payload)
+        }) {
+            return Err(ContextFabricError::SensitiveInput);
+        }
         let response = self
-            .run_with_cancel(cancel, handler.invoke(request.clone()))
+            .run_with_cancel(
+                cancel,
+                handler.invoke_authenticated(request.clone(), caller),
+            )
             .await?
             .map_err(ContextFabricError::Handler)?;
         let post_descriptor = self
@@ -921,17 +1230,7 @@ impl ContextFabric {
 }
 
 fn safe_project(messages: &[UnifiedMessage]) -> Vec<UnifiedMessage> {
-    let mut projected = ReasoningReplay::Drop.project(messages);
-    for message in &mut projected {
-        for block in message.content_blocks_mut() {
-            if let ContentBlock::ToolCall {
-                thought_signature, ..
-            } = block
-            {
-                *thought_signature = None;
-            }
-        }
-    }
+    let mut projected = super::protocol_frames::public_messages(messages);
     crate::providers::message::normalize_tool_pairs(&mut projected);
     projected
 }
@@ -978,7 +1277,7 @@ fn make_payload_request(
         ContextPhase::Recovery => ContextOperation::Restore,
         ContextPhase::Search => ContextOperation::Search,
         ContextPhase::Status => ContextOperation::Status,
-        ContextPhase::Lifecycle => ContextOperation::Shutdown,
+        ContextPhase::Lifecycle => ContextOperation::Notify,
     };
     Ok(ContextCapabilityRequest {
         request_id: format!("context-fabric-{}", now_millis()),
@@ -1058,6 +1357,8 @@ pub enum ContextFabricError {
     Compaction(String),
     #[error("external preflight candidate did not pass pressure/cache gates")]
     PreflightGated,
+    #[error("context snapshot contains a recognised credential")]
+    SensitiveInput,
     #[error("context result exceeds the descriptor output budget")]
     OutputExceedsBudget,
 }
@@ -1075,6 +1376,7 @@ impl ContextFabricError {
             | Self::ProtectedTailChanged
             | Self::Serialization(_)
             | Self::PreflightGated
+            | Self::SensitiveInput
             | Self::OutputExceedsBudget => DegradedReason::InvalidContract,
             Self::BuiltinUnavailable(_)
             | Self::Registry(_)
