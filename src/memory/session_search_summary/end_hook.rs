@@ -100,6 +100,7 @@ mod tests {
 
     use async_trait::async_trait;
 
+    use super::super::synthesizer::test_support::make_store;
     use crate::gateway::router::SessionKey;
     use crate::gateway::session_manager::SessionState;
     use crate::gateway::session_store::error::SessionStoreError;
@@ -107,7 +108,6 @@ mod tests {
     use crate::gateway::session_store::SessionStore;
     use crate::memory::session_search_summary::lookup::retrieve_summary_fact;
     use crate::memory::session_search_summary::synthesizer::SummaryLlm;
-    use crate::memory::store::sqlite::SqliteMemoryBackend;
 
     // -----------------------------------------------------------------------
     // MockSummaryLlm — counts calls, returns a fixed response
@@ -380,10 +380,6 @@ mod tests {
     // Helper
     // -----------------------------------------------------------------------
 
-    fn make_store() -> Arc<dyn RawMemoryStore> {
-        Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"))
-    }
-
     fn make_summarizer(
         store: Arc<dyn RawMemoryStore>,
         session_store: Arc<dyn SessionStore>,
@@ -399,7 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn short_circuits_when_summary_exists() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let session_store = InMemorySessionStore::new();
         let llm = MockSummaryLlm::with_response("LLM should not be called");
 
@@ -437,7 +433,7 @@ mod tests {
 
     #[tokio::test]
     async fn reuses_highest_depth_fact_without_llm() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let session_store = InMemorySessionStore::new();
         let llm = MockSummaryLlm::with_response("LLM should not be called");
 
@@ -488,7 +484,7 @@ mod tests {
 
     #[tokio::test]
     async fn falls_back_to_synthesizer_when_no_d_facts() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let session_store = InMemorySessionStore::new().with_messages(
             "agent-1",
             "sk3",

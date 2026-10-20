@@ -8,6 +8,7 @@ use crate::memory::curated::CuratedConfig;
 use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::notes::NoteIndexer;
 use crate::memory::session_resume::reader::SnapshotReader;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
@@ -17,23 +18,34 @@ use std::collections::HashMap;
 use tokio::sync::RwLock as TokioRwLock;
 
 impl MemoryContextProvider {
-    /// Create a provider with the legacy 2-argument signature. No
+    /// Create a provider with an explicitly injected raw-memory store. No
     /// [`AiProvider`] supplied → the assembler falls back to the deterministic
     /// skeleton for every turn. Use [`Self::with_provider`] to wire a real
     /// LLM reranker. `embedder: None` = FTS-only deployment: retrieval
     /// degrades to keyword search, memory injection keeps working.
-    pub fn new(memory_db: MemoryBackend, embedder: Option<Arc<dyn EmbeddingProvider>>) -> Self {
-        Self::with_config(memory_db, embedder, MemoryContextConfig::default())
+    pub fn new(
+        memory_db: MemoryBackend,
+        raw_store: Arc<dyn RawMemoryStore>,
+        embedder: Option<Arc<dyn EmbeddingProvider>>,
+    ) -> Self {
+        Self::with_config(
+            memory_db,
+            raw_store,
+            embedder,
+            MemoryContextConfig::default(),
+        )
     }
 
-    /// Create with legacy 2-arg + custom config.
+    /// Create with an injected raw-memory store and custom config.
     pub fn with_config(
         memory_db: MemoryBackend,
+        raw_store: Arc<dyn RawMemoryStore>,
         embedder: Option<Arc<dyn EmbeddingProvider>>,
         config: MemoryContextConfig,
     ) -> Self {
         Self::assemble_default(
             memory_db,
+            raw_store,
             embedder,
             None,
             AssemblerConfig::default(),
@@ -44,6 +56,7 @@ impl MemoryContextProvider {
     /// Create with an [`AiProvider`] so the LLM re-rank path is active.
     pub fn with_provider(
         memory_db: MemoryBackend,
+        raw_store: Arc<dyn RawMemoryStore>,
         embedder: Option<Arc<dyn EmbeddingProvider>>,
         provider: Arc<dyn AiProvider>,
         assembler_config: AssemblerConfig,
@@ -51,6 +64,7 @@ impl MemoryContextProvider {
     ) -> Self {
         Self::assemble_default(
             memory_db,
+            raw_store,
             embedder,
             Some(provider),
             assembler_config,
@@ -188,6 +202,7 @@ impl MemoryContextProvider {
 
     pub(crate) fn assemble_default(
         memory_db: MemoryBackend,
+        raw_store: Arc<dyn RawMemoryStore>,
         embedder: Option<Arc<dyn EmbeddingProvider>>,
         provider: Option<Arc<dyn AiProvider>>,
         assembler_config: AssemblerConfig,
@@ -250,6 +265,7 @@ impl MemoryContextProvider {
             retrieval,
             snapshots,
             memory_db,
+            raw_store,
             profile,
             feedback_floor,
             reranker,

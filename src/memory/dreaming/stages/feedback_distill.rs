@@ -113,6 +113,7 @@ fn meets_distill_quorum(corrections: &[RawMemory], min_candidates: usize) -> boo
 /// withhold one on a failed read.
 pub(crate) async fn has_undistilled_corrections(
     store: &crate::memory::store::MemoryBackend,
+    raw_store: Option<&dyn RawMemoryStore>,
     agent_id: &str,
     lookback: usize,
     min_candidates: usize,
@@ -121,7 +122,10 @@ pub(crate) async fn has_undistilled_corrections(
         .get_dream_watermark(WATERMARK_CONSUMER, agent_id)
         .unwrap_or(None)
         .unwrap_or(0);
-    store
+    let Some(raw_store) = raw_store else {
+        return false;
+    };
+    raw_store
         .get_raw_by_path_prefix_since(CORRECTION_PATH_PREFIX, agent_id, watermark, lookback)
         .await
         .map_or(true, |rows| {
@@ -150,6 +154,10 @@ impl DreamStage for FeedbackDistillStage {
         // rust-doctor-disable-next-line excessive-clone
         let store = ctx.database.clone();
 
+        let Some(raw_store) = ctx.raw_store.as_deref() else {
+            return Ok(ctx);
+        };
+
         // Per-agent watermark — only re-process correction rows whose
         // `created_at` is strictly greater than what the previous cycle
         // committed. Missing/corrupt watermark falls back to 0 (process
@@ -167,7 +175,7 @@ impl DreamStage for FeedbackDistillStage {
 
         // Read correction signals via path-prefix + since-filter
         // (Phase 3 Decision D2 + watermark fix).
-        let mut corrections = match store
+        let mut corrections = match raw_store
             .get_raw_by_path_prefix_since(
                 CORRECTION_PATH_PREFIX,
                 &ctx.agent_id,
@@ -991,13 +999,18 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let raw_store = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(dir.path())
+                .await
+                .unwrap(),
+        );
         let indexer = NoteIndexer::new(dir.path().join("note"), store.clone());
 
         for i in 0..3 {
             let id = format!("c{i}");
             let raw = fake_correction(&id, &format!("user corrected me {i}"), "med")
                 .with_agent("default");
-            store.insert_raw_memory(&raw).await.unwrap();
+            raw_store.insert_raw_memory(&raw).await.unwrap();
         }
 
         let spy = Arc::new(RefreshSpy {
@@ -1010,6 +1023,7 @@ mod tests {
             note_contents: std::collections::HashMap::new(),
             agent_id: "default".into(),
             database: store.clone(),
+            raw_store: Some(raw_store),
             indexer,
             provider: Arc::new(crate::providers::mock::MockProvider::new(llm_response)),
             embedder: Arc::new(StubEmbedder),
@@ -1135,28 +1149,48 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let raw_store = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(dir.path())
+                .await
+                .unwrap(),
+        );
         let lookback = crate::config::types::memory::default_feedback_lookback();
         let min = crate::config::types::memory::default_feedback_distill_min_candidates();
         let backend: crate::memory::store::MemoryBackend = store.clone();
 
         // Quiet to start, for both agents.
         assert!(
-            !has_undistilled_corrections(&backend, "researcher", lookback, min).await,
+            !has_undistilled_corrections(
+                &backend,
+                Some(raw_store.as_ref()),
+                "researcher",
+                lookback,
+                min
+            )
+            .await,
             "an agent with no corrections must not wake its corpus"
         );
 
         let raw =
             fake_correction("r1", "stop guessing at file paths", "high").with_agent("researcher");
-        store.insert_raw_memory(&raw).await.unwrap();
+        raw_store.insert_raw_memory(&raw).await.unwrap();
 
         assert!(
-            has_undistilled_corrections(&backend, "researcher", lookback, min).await,
+            has_undistilled_corrections(
+                &backend,
+                Some(raw_store.as_ref()),
+                "researcher",
+                lookback,
+                min
+            )
+            .await,
             "a fresh correction must make its own corpus eligible"
         );
         // Partitioning is the whole point: another agent's corpus must not be
         // woken by it, or the fan-out budget drains on empty cycles.
         assert!(
-            !has_undistilled_corrections(&backend, "main", lookback, min).await,
+            !has_undistilled_corrections(&backend, Some(raw_store.as_ref()), "main", lookback, min)
+                .await,
             "a correction must only wake the agent it was filed against"
         );
 
@@ -1166,7 +1200,14 @@ mod tests {
             .set_dream_watermark(WATERMARK_CONSUMER, "researcher", raw.created_at)
             .unwrap();
         assert!(
-            !has_undistilled_corrections(&backend, "researcher", lookback, min).await,
+            !has_undistilled_corrections(
+                &backend,
+                Some(raw_store.as_ref()),
+                "researcher",
+                lookback,
+                min
+            )
+            .await,
             "a distilled correction must not re-wake the corpus every night"
         );
     }
@@ -1186,6 +1227,11 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let raw_store = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(dir.path())
+                .await
+                .unwrap(),
+        );
         let lookback = 50;
         let min_candidates = 3;
         let backend: crate::memory::store::MemoryBackend = store.clone();
@@ -1193,9 +1239,16 @@ mod tests {
         // One low-severity correction: the stage would skip it, so the gate
         // must not admit for it.
         let raw = fake_correction("q1", "prefer tabs here", "low").with_agent("default");
-        store.insert_raw_memory(&raw).await.unwrap();
+        raw_store.insert_raw_memory(&raw).await.unwrap();
         assert!(
-            !has_undistilled_corrections(&backend, "default", lookback, min_candidates).await,
+            !has_undistilled_corrections(
+                &backend,
+                Some(raw_store.as_ref()),
+                "default",
+                lookback,
+                min_candidates
+            )
+            .await,
             "a single low correction is below the stage's quorum — admitting the \
              corpus for it burns a fan-out slot on a cycle the stage skips"
         );
@@ -1203,10 +1256,17 @@ mod tests {
         // Two more rows reach the count quorum; now the stage would run.
         for id in ["q2", "q3"] {
             let raw = fake_correction(id, "another nit", "low").with_agent("default");
-            store.insert_raw_memory(&raw).await.unwrap();
+            raw_store.insert_raw_memory(&raw).await.unwrap();
         }
         assert!(
-            has_undistilled_corrections(&backend, "default", lookback, min_candidates).await,
+            has_undistilled_corrections(
+                &backend,
+                Some(raw_store.as_ref()),
+                "default",
+                lookback,
+                min_candidates
+            )
+            .await,
             "min_candidates rows meet the same quorum the stage applies"
         );
     }
@@ -1222,14 +1282,19 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let raw_store = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(dir.path())
+                .await
+                .unwrap(),
+        );
         let backend: crate::memory::store::MemoryBackend = store.clone();
 
         let raw = fake_correction("u1", "never commit without asking me first", "critical")
             .with_agent("default");
-        store.insert_raw_memory(&raw).await.unwrap();
+        raw_store.insert_raw_memory(&raw).await.unwrap();
 
         assert!(
-            has_undistilled_corrections(&backend, "default", 50, 3).await,
+            has_undistilled_corrections(&backend, Some(raw_store.as_ref()), "default", 50, 3).await,
             "one critical correction is a standing directive: it bypasses the \
              count quorum in the stage, so it must bypass it in the gate too"
         );

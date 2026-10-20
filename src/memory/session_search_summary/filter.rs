@@ -112,7 +112,11 @@ mod integration_tests {
         }
     }
 
-    fn build_assembler(backend: MemoryBackend, notes_dir: std::path::PathBuf) -> HybridAssembler {
+    fn build_assembler(
+        backend: MemoryBackend,
+        raw_store: Arc<dyn RawMemoryStore>,
+        notes_dir: std::path::PathBuf,
+    ) -> HybridAssembler {
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(ZeroEmbedder);
         let indexer = Arc::new(NoteIndexer::new(notes_dir.clone(), backend.clone()));
         let retrieval = Arc::new(NoteFactRetrieval::new(indexer, embedder));
@@ -139,6 +143,7 @@ mod integration_tests {
             retrieval,
             snapshots,
             backend,
+            raw_store,
             profile,
             feedback_floor,
             reranker,
@@ -158,13 +163,18 @@ mod integration_tests {
         tokio::fs::create_dir_all(&notes_dir).await.unwrap();
 
         let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
+        let raw_store = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(tmp.path())
+                .await
+                .unwrap(),
+        );
 
         // Seed 2 Transcript fragments with matching content
         for i in 0..2u32 {
             let raw = RawMemory::new(format!("Transcript body {i}"), RawMemorySource::Transcript)
                 .with_agent("agent-filter-test")
                 .with_session("sess-filter");
-            backend.insert_raw_memory(&raw).await.unwrap();
+            raw_store.insert_raw_memory(&raw).await.unwrap();
         }
 
         // Seed 1 SessionCompressed fact — the key target
@@ -175,9 +185,9 @@ mod integration_tests {
         .with_agent("agent-filter-test")
         .with_session("sess-filter")
         .with_path("aleph://session/sess-filter/d0/0");
-        backend.insert_raw_memory(&compressed).await.unwrap();
+        raw_store.insert_raw_memory(&compressed).await.unwrap();
 
-        let assembler = build_assembler(backend, notes_dir);
+        let assembler = build_assembler(backend, raw_store, notes_dir);
 
         // session_id = None forces the cross-session fetch path for
         // Only(SessionCompressed), which queries by source rather than path prefix.

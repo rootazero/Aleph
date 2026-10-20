@@ -339,6 +339,7 @@ pub(super) async fn initialize_session_store(
 pub(super) fn build_sqlite_session_service(
     db_path: &std::path::Path,
     observer: Option<Arc<dyn alephcore::session::observer::SessionEventObserver>>,
+    raw_store: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
 ) -> Option<(
     Arc<dyn alephcore::session::service::SessionService>,
     Arc<dyn alephcore::session::store::SessionEventStore>,
@@ -363,7 +364,8 @@ pub(super) fn build_sqlite_session_service(
     }
     let store: Arc<dyn alephcore::session::store::SessionEventStore> =
         Arc::new(alephcore::session::store::SqliteEventStore::new(conn));
-    let svc = alephcore::session::in_process::InProcessActorSessionService::new(store.clone());
+    let svc = alephcore::session::in_process::InProcessActorSessionService::new(store.clone())
+        .with_raw_memory_writer(raw_store);
     let svc = match observer {
         Some(o) => svc.with_observer(o),
         None => svc,

@@ -577,6 +577,7 @@ mod tests {
             note_contents: std::collections::HashMap::new(),
             agent_id: "default".into(),
             database: store.clone(),
+            raw_store: None,
             indexer,
             provider,
             embedder,
@@ -652,7 +653,7 @@ mod tests {
             {"path":"entity/us-iran-conflict","keywords":["us-iran-conflict","ceasefire"]},
             {"path":"personal/news-monitoring","keywords":["us-iran-conflict","cron"]}
         ]}"#;
-        // Create the dir first so SqliteMemoryBackend nests memory.db *inside*
+        // Create the dir first so SqliteMemoryBackend nests metadata.db *inside*
         // it (db_path.is_dir() branch) — otherwise `temp` itself becomes the DB
         // file and append_to_note can't mkdir `temp/<agent>/<cat>/`.
         let (_temp_guard, temp) = crate::memory::dreaming::scratch_root();
@@ -667,6 +668,7 @@ mod tests {
             note_contents: std::collections::HashMap::new(),
             agent_id: "default".into(),
             database: store.clone(),
+            raw_store: None,
             indexer,
             provider,
             embedder,
@@ -752,6 +754,7 @@ mod tests {
             note_contents: std::collections::HashMap::new(),
             agent_id: "default".into(),
             database: store.clone(),
+            raw_store: None,
             indexer,
             provider,
             embedder,
@@ -833,6 +836,7 @@ mod tests {
             note_contents: std::collections::HashMap::new(),
             agent_id: "default".into(),
             database: store.clone(),
+            raw_store: None,
             indexer,
             provider,
             embedder,
@@ -1043,6 +1047,7 @@ mod tests {
             note_contents: std::collections::HashMap::new(),
             agent_id: "default".into(),
             database: store.clone(),
+            raw_store: None,
             indexer,
             provider,
             embedder,

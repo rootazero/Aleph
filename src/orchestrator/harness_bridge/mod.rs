@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use crate::agents::AgentRegistry;
 use crate::context::budget::ContextBudgetConfig;
 use crate::mcp::manager::McpManagerHandle;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
 use crate::providers::{AiProvider, DefaultProviderHandle};
 use crate::session::service::SessionService;
@@ -173,6 +174,10 @@ pub struct AgentHarnessRunner {
     /// `SessionCompactor` for zero-API-cost compaction. `None` (tests / boot
     /// without a memory backend) keeps the LLM summarization path.
     pub memory_backend: Option<MemoryBackend>,
+
+    /// Raw-memory store used by the session-summary reuse reader. The derived
+    /// SQLite backend stores notes and metadata; raw bodies live in Markdown.
+    pub raw_memory_store: Option<Arc<dyn RawMemoryStore>>,
 
     /// Mirror of `MemoryConfig.project_scoped`. The d0/d1/d2 session summaries
     /// the compactor's reuse path reads are *written* under

@@ -475,13 +475,14 @@ impl BuiltinToolRegistry {
             None
         };
 
-        // Session-complete tool — requires memory_db (same guard as note_manage)
-        let session_complete_tool = if let Some(ref db) = config.memory_db {
+        // Session-complete signals belong to the raw store, not the notes index.
+        let session_complete_tool = if let Some(ref store) = config.raw_memory_store {
             let agent_id = "main".to_string();
-            let mut tool = crate::builtin_tools::session_complete::SessionCompleteTool::new(
-                db.clone(),
-                agent_id,
-            );
+            let mut tool =
+                crate::builtin_tools::session_complete::SessionCompleteTool::new_with_store(
+                    store.clone(),
+                    agent_id,
+                );
             if let Some(ref reg) = config.capture_registry {
                 tool = tool.with_capture_registry(Arc::clone(reg));
             }

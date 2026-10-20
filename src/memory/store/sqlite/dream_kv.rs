@@ -1,6 +1,6 @@
 //! Dream-pipeline per-consumer watermark persistence.
 //!
-//! Stages that consume from `raw_memories` (or any append-only source) keep a
+//! Stages that consume from `RawMemoryStore` (or any append-only source) keep a
 //! `(consumer_name, agent_id) -> last_processed_created_at` cursor so the
 //! pipeline does not re-process the same rows on every cycle.
 //!

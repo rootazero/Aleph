@@ -443,6 +443,7 @@ mod tests {
             note_contents: std::collections::HashMap::new(),
             agent_id: "default".into(),
             database: store.clone(),
+            raw_store: None,
             indexer,
             provider: Arc::new(crate::providers::mock::MockProvider::new(llm_response)),
             embedder: Arc::new(StubEmbedder),

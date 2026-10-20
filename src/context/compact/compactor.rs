@@ -23,7 +23,7 @@ use super::summary_utils::{
     SUMMARIZER_INPUT_TOKEN_BUDGET,
 };
 use crate::memory::session_compactor::summary_source::SessionSummarySource;
-use crate::memory::store::MemoryBackend;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::{dispatch_unified_message, UnifiedMessage};
 use crate::providers::AiProvider;
@@ -290,7 +290,7 @@ impl ContextCompactor {
     /// d0/d1/d2 facts; `agent_id` is the owning agent they were written under.
     pub fn with_summary_reuse(
         mut self,
-        backend: MemoryBackend,
+        backend: Arc<dyn RawMemoryStore>,
         agent_id: impl Into<String>,
     ) -> Self {
         self.summary_reuse = Some(SummaryReuse {
@@ -2705,10 +2705,13 @@ mod tests {
         // turn's validation hashed a different range, missed every time, and
         // recompacted via session memory on every single turn.
         use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-        use crate::memory::store::sqlite::SqliteMemoryBackend;
 
-        let backend: crate::memory::store::MemoryBackend =
-            Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let raw_dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(raw_dir.path())
+                .await
+                .unwrap(),
+        );
         let raw = RawMemory::new(
             "Earlier turns: set up the project and ran the tests.".to_string(),
             RawMemorySource::SessionCompressed,
@@ -3028,9 +3031,13 @@ mod tests {
         // four hand forward — so the one path that costs nothing was the one path
         // where the model lost its own checklist and its file ledger.
         use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-        use crate::memory::store::sqlite::SqliteMemoryBackend;
 
-        let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let raw_dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(raw_dir.path())
+                .await
+                .unwrap(),
+        );
         let raw = RawMemory::new(
             "Earlier turns: scaffolded the importer.".to_string(),
             RawMemorySource::SessionCompressed,

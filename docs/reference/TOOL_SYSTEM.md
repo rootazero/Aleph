@@ -764,7 +764,7 @@ let indexer = TranscriptIndexer::new(database);
 let chunks = indexer.chunk_text(&long_conversation);
 ```
 
-No embedder: the indexer writes plain `raw_memories` rows; recall over them
+No embedder: the indexer writes Markdown-backed raw records with metadata in `raw_memory_index`; recall over them
 is the substring transcripts leg of `memory_search`.
 
 ### ValueEstimator
@@ -817,7 +817,7 @@ let budget = TokenBudget::new(10000);
 let arbitrated = comptroller.arbitrate(retrieval_result, budget);
 
 // arbitrated.facts: Deduplicated facts
-// arbitrated.raw_memories: Deduplicated transcripts
+// arbitrated.raw_markdown: Deduplicated transcripts
 // arbitrated.tokens_saved: Tokens saved through deduplication
 ```
 

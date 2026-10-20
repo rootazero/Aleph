@@ -17,6 +17,7 @@ use crate::error::AlephError;
 use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::session_resume::reader::SnapshotReader;
 use crate::memory::session_search_summary::FactSourceFilter;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
 use crate::memory::SqliteMemoryBackend;
 use crate::providers::adapter::RequestPayload;
@@ -114,6 +115,7 @@ impl HybridAssembler {
         retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
         snapshots: Arc<SnapshotReader>,
         backend: MemoryBackend,
+        raw_store: Arc<dyn RawMemoryStore>,
         profile: Arc<UserProfileLoader>,
         feedback_floor: Arc<FeedbackFloorLoader>,
         reranker: Arc<dyn LlmReranker>,
@@ -124,6 +126,7 @@ impl HybridAssembler {
                 retrieval,
                 snapshots,
                 backend,
+                raw_store,
                 profile,
                 feedback_floor,
                 project_scoped: config.project_scoped,

@@ -24,6 +24,7 @@ use crate::error::AlephError;
 use crate::memory::embedding_provider::EmbeddingProvider;
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
 use crate::memory::notes::NoteIndexer;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::store::{DreamStore, MemoryBackend};
 use crate::providers::AiProvider;
@@ -172,6 +173,9 @@ pub struct DreamContext {
     pub note_contents: HashMap<String, String>,
     pub agent_id: String,
     pub database: MemoryBackend,
+    /// Markdown-backed raw signals. `None` is retained for tests that exercise
+    /// note-only stages without a raw store.
+    pub raw_store: Option<Arc<dyn RawMemoryStore>>,
     pub indexer: NoteIndexer<SqliteMemoryBackend>,
     pub provider: Arc<dyn AiProvider>,
     pub embedder: Arc<dyn EmbeddingProvider>,
@@ -631,6 +635,7 @@ pub fn ensure_dream_daemon(
         None,
         None,
         None,
+        None,
     );
 }
 
@@ -643,6 +648,7 @@ pub fn ensure_dream_daemon_with_orientation(
     orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     embedder: Option<Arc<dyn EmbeddingProvider>>,
     note_memory_dir: Option<PathBuf>,
+    raw_store: Option<Arc<dyn RawMemoryStore>>,
 ) {
     // Four distinct reasons this function can return without a daemon, and one
     // that is not a reason at all. Each gets its own `because`: an operator
@@ -688,7 +694,7 @@ pub fn ensure_dream_daemon_with_orientation(
     };
 
     let daemon_builder = match DreamDaemon::from_config(database, &config) {
-        Ok(d) => d,
+        Ok(d) => d.with_optional_raw_store(raw_store),
         Err(err) => {
             warn!(error = %err, "DreamDaemon not started: invalid config");
             DREAM_DAEMON.decline(
@@ -885,6 +891,7 @@ pub struct DreamDaemon {
     /// `get_note_memory_dir()` when unset; injected explicitly so the dir
     /// matches the rest of the boot wiring and the daemon is unit-testable.
     note_memory_dir: Option<PathBuf>,
+    raw_store: Option<Arc<dyn RawMemoryStore>>,
     /// Optional wiki orientation — forwarded into `DreamContext` for `IndexRefresherStage`.
     orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     /// Best-ever memory-health score, tracked across cycles for the evolution
@@ -935,6 +942,7 @@ impl DreamDaemon {
             provider: None,
             embedder: None,
             note_memory_dir: None,
+            raw_store: None,
             orientation: None,
             best_health: crate::sync_primitives::Mutex::new(best_health),
             activity_probe: Arc::new(move || idle_seconds() < idle_threshold),
@@ -976,6 +984,13 @@ impl DreamDaemon {
     /// Set the note memory directory (parent of per-agent note dirs).
     pub fn with_note_memory_dir(mut self, dir: PathBuf) -> Self {
         self.note_memory_dir = Some(dir);
+        self
+    }
+
+    /// Attach the Markdown-backed raw signal store used by distillation and
+    /// session-summary reuse.
+    pub fn with_optional_raw_store(mut self, raw_store: Option<Arc<dyn RawMemoryStore>>) -> Self {
+        self.raw_store = raw_store;
         self
     }
 
@@ -1447,6 +1462,7 @@ impl DreamDaemon {
                     agent_id: DEFAULT_AGENT_ID.to_string(),
                     // rust-doctor-disable-next-line excessive-clone
                     database: self.database.clone(),
+                    raw_store: self.raw_store.clone(),
                     indexer,
                     // rust-doctor-disable-next-line excessive-clone
                     provider: provider.clone(),
@@ -1507,6 +1523,7 @@ impl DreamDaemon {
                 let deps = project_cycle::ProjectCycleDeps {
                     memory_dir: &memory_dir,
                     database: &self.database,
+                    raw_store: &self.raw_store,
                     provider: &provider,
                     embedder: &embedder,
                     config: &self.config,
@@ -2829,6 +2846,7 @@ mod tests {
         _guard: tempfile::TempDir,
         dir: PathBuf,
         store: Arc<SqliteMemoryBackend>,
+        raw_store: Option<Arc<dyn RawMemoryStore>>,
         provider: Arc<dyn AiProvider>,
         embedder: Arc<dyn EmbeddingProvider>,
         cfg: MemoryConfig,
@@ -2839,17 +2857,23 @@ mod tests {
     impl ProjectFixture {
         /// `user_active` drives the activity checker: `true` makes every stage
         /// yield, which is how an interrupted cycle is forced deterministically.
-        fn new(tag: &str, user_active: bool) -> Self {
+        async fn new(tag: &str, user_active: bool) -> Self {
             let guard = tempfile::tempdir().expect("tempdir");
             // `tag` names the directory so a `KEEP`-style post-mortem can tell
             // the four project fixtures apart.
             let dir = guard.path().join(tag);
             std::fs::create_dir_all(&dir).unwrap();
             let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
+            let raw_store: Arc<dyn RawMemoryStore> = Arc::new(
+                crate::memory::store::markdown::MarkdownSessionStore::new(guard.path())
+                    .await
+                    .unwrap(),
+            );
             Self {
                 _guard: guard,
                 dir,
                 store,
+                raw_store: Some(raw_store),
                 provider: Arc::new(MockProvider::new("")),
                 embedder: Arc::new(StubEmbedder),
                 cfg: MemoryConfig::default(),
@@ -2862,6 +2886,7 @@ mod tests {
             project_cycle::ProjectCycleDeps {
                 memory_dir: &self.dir,
                 database: &self.store,
+                raw_store: &self.raw_store,
                 provider: &self.provider,
                 embedder: &self.embedder,
                 config: &self.cfg.dreaming,
@@ -2930,7 +2955,7 @@ mod tests {
     /// notes it does not own.
     #[tokio::test]
     async fn project_namespace_cycle_writes_only_its_own_event_log() {
-        let fx = ProjectFixture::new("dream_proj_log", false);
+        let fx = ProjectFixture::new("dream_proj_log", false).await;
         let ns = format!("{DEFAULT_AGENT_ID}__proj-abc123");
         fx.seed_note(&ns).await;
 
@@ -3019,7 +3044,7 @@ mod tests {
     /// that a once-a-day cycle almost always straddles.
     #[tokio::test]
     async fn project_namespace_gate_folds_its_own_history() {
-        let fx = ProjectFixture::new("dream_proj_gate", false);
+        let fx = ProjectFixture::new("dream_proj_gate", false).await;
         let ns = format!("{DEFAULT_AGENT_ID}__proj-degraded");
         fx.seed_note(&ns).await;
         let log = EventLog::new(fx.dir.join(&ns));
@@ -3046,7 +3071,7 @@ mod tests {
     /// when the corpus is being touched most.
     #[tokio::test]
     async fn an_immediately_interrupted_project_cycle_spends_no_window_slot() {
-        let fx = ProjectFixture::new("dream_proj_intr", true);
+        let fx = ProjectFixture::new("dream_proj_intr", true).await;
         let ns = format!("{DEFAULT_AGENT_ID}__proj-busy");
         fx.seed_note(&ns).await;
 
@@ -3073,7 +3098,7 @@ mod tests {
     /// `flag_user_correction` writes and `feedback_distill` reads. `critical`
     /// so a single row passes the gate's urgency bypass.
     async fn file_critical_correction(fx: &ProjectFixture, agent_id: &str, id: &str) {
-        use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+        use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
         let mut raw = RawMemory::new(
             "never commit without asking me first".into(),
             RawMemorySource::Correction {
@@ -3086,7 +3111,12 @@ mod tests {
             "{}{id}",
             stages::feedback_distill::CORRECTION_PATH_PREFIX
         ));
-        fx.store.insert_raw_memory(&raw).await.unwrap();
+        fx.raw_store
+            .as_ref()
+            .expect("project raw store")
+            .insert_raw_memory(&raw)
+            .await
+            .unwrap();
     }
 
     /// A Conserve night must not spend a fan-out slot on a corpus whose ONLY
@@ -3100,7 +3130,7 @@ mod tests {
     /// rows re-admitted the corpus the next Conserve night too.
     #[tokio::test]
     async fn conserve_with_only_distill_work_is_idle_and_spends_no_fan_out_slot() {
-        let fx = ProjectFixture::new("dream_proj_conserve_distill", false);
+        let fx = ProjectFixture::new("dream_proj_conserve_distill", false).await;
         let ns = format!("{DEFAULT_AGENT_ID}__proj-conserved");
         let log = EventLog::new(fx.dir.join(&ns));
         // Degraded prior cycle => tonight's strategy is Conserve.
@@ -3152,7 +3182,7 @@ mod tests {
     /// nothing to write.
     #[tokio::test]
     async fn a_project_sub_cycle_returns_its_decision() {
-        let fx = ProjectFixture::new("dream_proj_decision", false);
+        let fx = ProjectFixture::new("dream_proj_decision", false).await;
         let ns = format!("{DEFAULT_AGENT_ID}__proj-decide");
         fx.seed_note(&ns).await;
 

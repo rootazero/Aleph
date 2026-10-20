@@ -1,59 +1,52 @@
 # Raw Memory (L0)
 
-> Short-lived, high-volume conversation and attachment data consumed by the compression pipeline and session-context restore.
+> Short-lived, high-volume conversation and attachment data consumed by the compression pipeline and session-context restore. Markdown is the source of truth; SQLite stores only a rebuildable metadata index.
 
 ## 1. Role
 
-Raw memory is the L0 **ephemeral** layer of Aleph's memory stack. Every conversation turn, every session-compaction summary (d0/d1/d2), and every attachment text extraction lands here first as a row in the SQLite `raw_memories` table. Rows are short-lived: once the `CompressionService` has folded a batch of rows into Notes (L1), the rows are flipped to `is_processed = 1` and no longer participate in downstream distillation. They remain queryable by path prefix so session-scoped tools (`recall_context`, `SessionSummarySource`) can still reach them for as long as the row is in the database.
+Raw memory is the L0 **ephemeral** layer of Aleph's memory stack. Conversation turns, session-compaction summaries, tool output, attachment text, corrections, and related capture events are written through `RawMemoryStore`. The production implementation is `MarkdownSessionStore`: each record's body is a readable Markdown file under `raw/memories/<sha256(agent_id)>/`, while `metadata.db` stores `raw_memory_index` fields such as ID, owner, session, source, path, processing state, and timestamp.
 
-Everything here is **structured, indexed SQLite** — not a pile of markdown files. The anti-example is a per-turn file on disk: that burns filesystem I/O, fragments the agent's memory, and forces the compression pipeline to re-parse human-unreadable noise. A single append-only SQLite table with a compound `(is_processed, created_at)` partial index gives the compactor an O(1) batch-fetch and lets raw data age out cleanly.
+`metadata.db` also owns the `agents`, `workspaces`, and `sessions` identity/index tables. These tables preserve the original IDs. They are derived metadata and may be rebuilt; raw content is never stored in a SQLite content table. The compression pipeline reads the Markdown body through `RawMemoryStore`, then marks the metadata index row processed after the note write succeeds.
 
-## 2. When to Use raw_memories vs Notes
+Raw records remain queryable by literal path prefix, source, session, ID, and owner for session-context tools. Owner and visibility checks are applied before reads, dashboard results, and deletion.
+
+## 2. When to Use Raw Memory vs Notes
 
 | Data kind                              | Storage        | Why |
 |----------------------------------------|----------------|-----|
-| Conversation turn transcripts          | `raw_memories` | High volume, ephemeral, consumed by `TranscriptIndexer` and compression. |
-| Session d0/d1/d2 hierarchical summaries | `raw_memories` | Session-scoped; read back by `SessionSummarySource` for zero-cost compaction. |
-| Attachment extracted text (PDF/Word/image OCR) | `raw_memories` (`attachment_text` column) | Travels with its originating turn; consumed by compression. |
-| Tool outputs that should feed compression | `raw_memories` | `RawMemorySource::ToolOutput`; optional input to Note extraction. |
-| User preferences, stable decisions     | Notes (L1)     | Long-lived; belong in versioned, human-readable markdown. |
-| Synthesized insights / distilled facts | Notes (L1)     | Output of `CompressionService`; survives `raw_memories` cleanup. |
+| Conversation turn transcripts          | Markdown raw memory + `metadata.db` index | High volume, ephemeral, consumed by `TranscriptIndexer` and compression. |
+| Session d0/d1/d2 hierarchical summaries | Markdown raw memory + `metadata.db` index | Session-scoped; read back by `SessionSummarySource`. |
+| Attachment extracted text              | Markdown raw memory + `metadata.db` index | Travels with its originating turn and remains file-backed. |
+| Tool outputs that should feed compression | Markdown raw memory + `metadata.db` index | `RawMemorySource::ToolOutput`; optional input to note extraction. |
+| User preferences, stable decisions     | Notes (L1)     | Long-lived; belong in versioned, human-readable Markdown. |
+| Synthesized insights / distilled facts | Notes (L1)     | Output of `CompressionService`; survives raw capture processing. |
 
-The rule of thumb: **if the row only has to live long enough to be compressed, it belongs in `raw_memories`**. Anything a human might want to read directly a week later belongs in Notes.
+The rule of thumb: capture data that must remain auditable or feed compression in Markdown raw memory; store durable, human-facing knowledge as Notes.
 
-## 3. `raw_memories` Schema
+## 3. Markdown Layout and Metadata Index
 
-Verbatim from `src/memory/store/sqlite/schema.rs` (`CREATE_RAW_MEMORIES`):
+A raw body is stored as readable Markdown with metadata frontmatter. The physical directory uses a SHA-256 agent key and a UUID file name, so caller-controlled IDs cannot escape the store. Deletion uses a durable recovery tombstone under `raw/recovery/` and startup recovery repairs interrupted filesystem/SQLite boundaries.
+
+The SQLite side contains metadata only:
 
 ```sql
-CREATE TABLE IF NOT EXISTS raw_memories (
+CREATE TABLE IF NOT EXISTS raw_memory_index (
     id              TEXT PRIMARY KEY,
-    content         TEXT NOT NULL,
-    source          TEXT NOT NULL,
-    agent_id        TEXT NOT NULL DEFAULT 'default',
+    file_id         TEXT NOT NULL UNIQUE,
+    agent_id        TEXT NOT NULL,
     session_id      TEXT,
     path            TEXT,
-    attachment_text TEXT,
-    is_processed    INTEGER DEFAULT 0,
+    source          TEXT NOT NULL,
+    is_processed    INTEGER NOT NULL CHECK (is_processed IN (0, 1)),
     created_at      INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_raw_unprocessed ON raw_memories(is_processed, created_at)
-    WHERE is_processed = 0;
-CREATE INDEX IF NOT EXISTS idx_raw_agent ON raw_memories(agent_id);
-CREATE INDEX IF NOT EXISTS idx_raw_session ON raw_memories(session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_memory_agent_path
+    ON raw_memory_index(agent_id, path) WHERE path IS NOT NULL;
 ```
 
-Column notes:
+The index is never the raw content source. Every lookup and search reads the current Markdown body. `is_processed` is durable work state, and pending rows are ordered by `created_at`. The partial unique path index preserves the old per-agent path identity rule while allowing different agents to use the same path.
 
-- `id` — UUID string, primary key.
-- `content` — the raw text body (transcript turn, d-summary, tool output).
-- `source` — discriminator matching `RawMemorySource` (`session_compressed` | `transcript` | `tool_output` | `attachment`).
-- `agent_id` — agent/workspace scope; `CompressionService` consumes one agent at a time.
-- `session_id` — nullable; populated for transcript and session-compressed rows.
-- `path` — VFS-style traceability pointer (see §6 for path conventions).
-- `attachment_text` — extracted text from file attachments, injected into the prompt during compression.
-- `is_processed` — `0` = pending compression, `1` = consumed. The partial index only covers `is_processed = 0`, keeping the pending-work query cheap as the table grows.
-- `created_at` — Unix epoch seconds.
+The old SQLite `raw_memories` table and its production implementation were removed. The optional `aleph-migrate` binary is an offline, explicitly selected legacy importer only; the server never opens it and never falls back to it.
 
 ## 4. `RawMemory` + `RawMemorySource`
 
@@ -136,19 +129,19 @@ pub struct RawMemory {
 
 ## 5. `RawMemoryStore` Trait
 
-Trait defined in `src/memory/store/raw_memory.rs`; implemented by the SQLite backend in `src/memory/store/sqlite/raw_memories.rs`.
+Trait defined in `src/memory/store/raw_memory.rs`; the production implementation is `MarkdownSessionStore` in `src/memory/store/markdown/raw_memory.rs`.
 
 | Method | Purpose |
 |---|---|
 | `async fn insert_raw_memory(&self, raw: &RawMemory) -> Result<(), AlephError>` | Persist a single record. Used by every writer in §6. |
-| `async fn insert_raw_memory_or_ignore(&self, raw: &RawMemory) -> Result<(), AlephError>` | Like `insert_raw_memory`, but silently discards unique-constraint violations (first writer wins). SQLite backend uses `INSERT OR IGNORE`. |
-| `async fn get_unprocessed_raw_memories(&self, agent_id: &str, limit: usize) -> Result<Vec<RawMemory>, AlephError>` | Batch-fetch pending rows, ordered by `created_at ASC`. Backed by the `idx_raw_unprocessed` partial index. |
+| `async fn insert_raw_memory_or_ignore(&self, raw: &RawMemory) -> Result<(), AlephError>` | Like `insert_raw_memory`, but silently discards duplicate identity conflicts (first writer wins). The Markdown implementation keeps the body file-backed and indexes metadata only. |
+| `async fn get_unprocessed_raw_memories(&self, agent_id: &str, limit: usize) -> Result<Vec<RawMemory>, AlephError>` | Batch-fetch pending Markdown-backed records, ordered by `created_at ASC`, using the `raw_memory_index` pending index. |
 | `async fn mark_raw_as_processed(&self, ids: &[String]) -> Result<usize, AlephError>` | Flip rows to `is_processed = 1` after `CompressionService` consumes them. Returns affected row count. |
 | `async fn count_unprocessed(&self, agent_id: &str) -> Result<usize, AlephError>` | Backpressure / scheduling signal for compression triggers. |
 | `async fn unprocessed_agent_ids(&self) -> Result<Vec<String>, AlephError>` | Distinct `agent_id` values with pending work. Used by `CompressionService` to fan out across agents. |
 | `async fn get_raw_by_path_prefix(&self, path_prefix: &str, agent_id: &str, limit: usize) -> Result<Vec<RawMemory>, AlephError>` | Path-scoped lookup used by session-context tooling (e.g. `aleph://session/{id}/`). |
 | `async fn get_raw_by_path_prefix_since(&self, path_prefix: &str, agent_id: &str, since_created_at: i64, limit: usize) -> Result<Vec<RawMemory>, AlephError>` | Like `get_raw_by_path_prefix`, but only returns rows with `created_at > since`. Used by watermark-based consumers. |
-| `async fn find_by_path(&self, path: &str, agent_id: &str) -> Result<Option<RawMemory>, AlephError>` | Exact-match lookup by `(agent_id, path)`. SQLite backend uses indexed exact-match SELECT. |
+| `async fn find_by_path(&self, path: &str, agent_id: &str) -> Result<Option<RawMemory>, AlephError>` | Exact-match lookup by `(agent_id, path)` through the metadata index, followed by Markdown body loading. |
 | `async fn get_raw_by_source(&self, source: RawMemorySource, agent_id: &str, limit: usize) -> Result<Vec<RawMemory>, AlephError>` | Filter by source type. Used for cross-session retrieval of specific source kinds. |
 
 ## 6. Writers
@@ -171,15 +164,15 @@ The `attachment_text` column and the `RawMemory::with_attachment_text` builder e
 
 ### 6.4 Capture Hooks (Spec 1)
 
-Three additional producers feed `raw_memories` via the Spec 1 memory capture hooks. Each writes rows with a dedicated `RawMemorySource` variant; `CompressionService::compress_to_notes` groups the drained batch per source and hands each group to `CompoundIngestor::ingest_batch`, which derives the group's specialised system prompt via `memory::compression::source_prompts::prompt_for`.
+Capture hooks write Markdown-backed raw records through `RawMemoryStore`. Each record has a dedicated `RawMemorySource` variant; `CompressionService::compress_to_notes` groups the drained batch per source and hands each group to `CompoundIngestor::ingest_batch`, which derives the group's specialised system prompt via `memory::compression::source_prompts::prompt_for`.
 
-- **`PreCompress`** — emitted by `SessionCompactor` before a session chunk is dropped to summary. The pre-drop raw text lands in `raw_memories` so the RESCUE prompt can extract durable knowledge before the chunk is gone. Producer: `src/memory/session_compactor/mod.rs` (production path) and `src/components/session_compactor/compactor.rs::replace_with_summary` (event-driven variant). Writer injected via `SessionCompactor::with_raw_memory_writer(..)`.
+- **`PreCompress`** — emitted by `SessionCompactor` before a session chunk is dropped to summary. The pre-drop raw text is written to Markdown raw storage so the RESCUE prompt can extract durable knowledge before the chunk is gone. Producer: `src/memory/session_compactor/mod.rs` (production path) and `src/components/session_compactor/compactor.rs::replace_with_summary` (event-driven variant). Writer injected via `SessionCompactor::with_raw_memory_writer(..)`.
 - **`Delegation { child_agent_id }`** — emitted by `A2ASubAgent::execute` (`src/a2a/sub_agent.rs`) on the success branch just before `Ok(SubAgentResult)`. Content carries delegation prompt + sub-agent summary; the LESSON prompt distills durable parent-agent lessons (tool patterns, gotchas, failure modes). Parent `agent_id` lifted from `request.execution_context.metadata["parent_agent_id"]` (falls back to `"default"`).
 - **`SessionEnd { reason }`** — two flavours:
   - `reason = Disconnect`: emitted by `SessionManager::close_session` (`src/gateway/session_manager/ops/emit.rs`) with the conversation tail (up to 64 most-recent messages). The row passes the memory-extension `on_capture` filters (registry resolved from the startup-registered `SESSION_END_MCP` cell; no registry → direct insert). DIGEST prompt distills user preferences, project progress, unfinished items.
   - `reason = TaskDone`: emitted by the new `session_complete` builtin tool (`src/builtin_tools/session_complete.rs`) when the LLM marks a self-contained task complete. RETRO prompt captures transferable lessons — the R8 LLM-sovereignty path for task-boundary detection.
 
-All producers are synchronous-write / async-extract: each writes exactly one `raw_memories` row and returns; extraction runs later in `CompressionService` per its normal schedule. Emission is fire-and-forget (`tokio::spawn`) so hook overhead is kept out of the hot path.
+All producers are synchronous-write / async-extract: each writes exactly one Markdown-backed raw record and returns; extraction runs later in `CompressionService` per its normal schedule. Emission is fire-and-forget (`tokio::spawn`) so hook overhead is kept out of the hot path.
 
 See: [docs/superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-design.md](../../../superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-design.md)
 
@@ -187,13 +180,13 @@ See: [docs/superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-des
 
 ### 7.1 CompressionService
 
-`src/memory/compression/service.rs` drives the L0→L1 distillation. Per workspace tick it calls `get_unprocessed_raw_memories(workspace_id, batch_size)`, then partitions the batch: `RawMemorySource::ToolInvocation` rows are per-call **telemetry** (consumed by the insights aggregator and dream signal metrics by source, independent of `is_processed`), not knowledge — they never enter the note-extraction LLM batch and are marked processed immediately so the unprocessed queue stays bounded. `Transcript` rows **are** ingested alongside SessionEnd / PreCompress / Delegation / Reflection (the historical filter that excluded them assumed a separate per-turn pipeline that never landed; excluding them starved L1 — Spec 1 G3-B). `Correction` rows are primarily consumed by the `FeedbackDistill` dream stage via the `aleph://correction/` path prefix, isolated from the `is_processed` flag this pipeline owns.
+`src/memory/compression/service.rs` drives the L0→L1 distillation. Per workspace tick it calls `get_unprocessed_raw_memories(workspace_id, batch_size)` from the Markdown-backed store, then partitions the batch: `RawMemorySource::ToolInvocation` rows are per-call **telemetry** (consumed by the insights aggregator and dream signal metrics by source, independent of `is_processed`), not knowledge — they never enter the note-extraction LLM batch and are marked processed immediately so the unprocessed queue stays bounded. `Transcript` rows **are** ingested alongside SessionEnd / PreCompress / Delegation / Reflection (the historical filter that excluded them assumed a separate per-turn pipeline that never landed; excluding them starved L1 — Spec 1 G3-B). `Correction` rows are primarily consumed by the `FeedbackDistill` dream stage via the `aleph://correction/` path prefix, isolated from the `is_processed` flag this pipeline owns.
 
 The remaining ingestable rows are grouped by prompt-affecting source identity (a mixed drain MUST be split — the ingestor derives its per-source prompt from `raws[0].source`, so ungrouped Reflection/SessionEnd/Delegation rows would silently degrade to whichever source was fetched first). Each group goes through `CompoundIngestor::ingest_batch`, which writes/updates markdown notes under `<memory_dir>/<workspace>/<category>/<file>.md`; rows are marked processed per group right after that group's ingest settles (a failed group stays unprocessed and retries; an empty plan defers rows still within a 6-hour grace window). The latest `created_at` of the drained batch becomes the new `last_compression_timestamp`.
 
 #### Partitions a flush is responsible for
 
-`raw_memories` is keyed by `agent_id`, and **one session writes into more than one partition**: turn-level rows go through `project_scope::session_write_id` (composed with the project namespace and/or the session's personal scope when either axis is active) while the SessionEnd digest is filed under the bare agent id. The hourly background tick iterates `unprocessed_agent_ids()` and so covers all of them; the real-time flush (`memory::flush::flush_agent_memory`, Pillar 2) drained only the id it was handed.
+`RawMemoryStore` is keyed by `agent_id`, and **one session writes into more than one partition**: turn-level records go through `project_scope::session_write_id` while the SessionEnd digest is filed under the bare agent id. The hourly background tick iterates `unprocessed_agent_ids()` and so covers all of them; the real-time flush (`memory::flush::flush_agent_memory`, Pillar 2) drained only the id it was handed.
 
 `flush_partitions` now resolves the base id **plus every composed sibling** (`{base}__…`) that currently holds unprocessed rows, and drains each. Without it, with project or personal scoping enabled, "real-time flush" was real time for the digest and up to an hour for everything the session actually said — while `FlushRegistry::await_ready`, keyed on the base id, told the next session the consolidation it was waiting for had finished.
 
@@ -223,17 +216,17 @@ Rows move through four phases:
 ```
 
 1. **Insert** — writers in §6 call `insert_raw_memory`.
-2. **Queryable** — `CompressionService` batches the row via `get_unprocessed_raw_memories`; path-prefix readers (`recall_context`, `SessionSummarySource`, `SessionCompactor::count_valid_facts_at_depth`) can see it regardless of `is_processed`.
-3. **Consumed** — on successful Note write, `mark_raw_as_processed(ids)` flips `is_processed = 1`. The row drops out of the `idx_raw_unprocessed` partial index but stays readable by path.
-4. **Retained-but-inert** — the row persists. There is **no time-based eviction of `raw_memories`** in the current codebase: no `DELETE FROM raw_memories`, no TTL constant, no scheduled cleanup job. Nor does one exist further up the stack: this paragraph used to cite `SessionCompactorConfig::session_fact_retention_hours = 24` as governing session-summary retention "higher up", but that field was read by nothing anywhere in the workspace and was removed 2026-08-04 — the retention it named never existed at any level. Housekeeping is currently manual/external; a dedicated GC is future work, and would introduce its own knob.
+2. **Queryable** — `CompressionService` batches the record via `get_unprocessed_raw_memories`; path-prefix readers (`recall_context`, `SessionSummarySource`, `SessionCompactor::count_valid_facts_at_depth`) load it from Markdown regardless of `is_processed`.
+3. **Consumed** — on successful Note write, `mark_raw_as_processed(ids)` flips the metadata index state to `is_processed = 1`. The record drops out of the pending index but stays readable by path.
+4. **Retained-but-inert** — the Markdown body and metadata index row persist until an owner-authorized deletion. There is no automatic time-based eviction in the current codebase; explicit deletion goes through `RawMemoryStore::remove_raw` so the body, index row, and recovery tombstone stay consistent.
 
-The partial index (`WHERE is_processed = 0`) ensures that even with unbounded historical rows, pending-compression queries stay cheap. Path-prefix queries used by §7.2 and §7.3 rely on the prefix match over `path`; they are bounded by the caller's `limit` (typically 50–500) rather than a dedicated index, which is acceptable because the session-scoped prefix is highly selective.
+The metadata pending index (`WHERE is_processed = 0`) keeps compression work queries bounded. Path-prefix queries are filtered by owner and literal path semantics, then load the current Markdown body.
 
-Operational implication: if rows must be truly deleted (privacy, disk pressure), the correct escape hatch today is an explicit `DELETE FROM raw_memories WHERE is_processed = 1 AND created_at < ?` run out-of-band. The memory subsystem does not issue such a DELETE on its own.
+Operational implication: owner-authorized raw deletion is exposed through the raw store API. The server does not issue ad-hoc SQL deletes against a content table.
 
 ## 9. Retention Invariant (Provenance Chain Protection)
 
-**Any future time-based or size-based garbage-collection sweep of `raw_memories` must exclude rows referenced by the provenance chain.** Concretely: before deleting a row, verify that `notes_citing(raw_id)` is empty — i.e. the row is not cited as a `source_notes` entry in any note, and is not referenced in any `notes_provenance` or `notes_sources` table. If a row is still referenced, it must be retained even if it falls outside the retention window.
+**Any future time-based or size-based garbage-collection sweep of Markdown raw memory must exclude records referenced by the provenance chain.** Concretely: before deleting a row, verify that `notes_citing(raw_id)` is empty — i.e. the row is not cited as a `source_notes` entry in any note, and is not referenced in any `notes_provenance` or `notes_sources` table. If a row is still referenced, it must be retained even if it falls outside the retention window.
 
 Today (as of 2026-06-27) no time-based sweep exists; this invariant documents the pin to honor when one is added.
 

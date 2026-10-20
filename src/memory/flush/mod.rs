@@ -14,7 +14,6 @@ use std::sync::OnceLock;
 use tracing::warn;
 
 use crate::memory::compression::CompressionService;
-use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::sync_primitives::Arc;
 
 /// Process-global flush registry (one per daemon). Mirrors the `OnceCell`
@@ -163,6 +162,7 @@ mod tests {
     use super::*;
     use crate::memory::compression::{CompressionConfig, CompressionService};
     use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
+    use crate::memory::store::markdown::MarkdownSessionStore;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
     use crate::memory::store::SqliteMemoryBackend;
     use crate::memory::EmbeddingProvider;
@@ -193,6 +193,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let database: Arc<SqliteMemoryBackend> =
             Arc::new(SqliteMemoryBackend::new(temp_dir.path()).unwrap());
+        let raw_store = Arc::new(MarkdownSessionStore::new(temp_dir.path()).await.unwrap());
 
         let provider = create_mock_provider();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
@@ -204,6 +205,7 @@ mod tests {
 
         let service = CompressionService::new(
             database.clone(),
+            raw_store.clone(),
             provider,
             embedder,
             CompressionConfig::default(),
@@ -217,10 +219,10 @@ mod tests {
             RawMemorySource::Transcript,
         );
         raw.created_at = chrono::Utc::now().timestamp() - 7 * 3600;
-        database.insert_raw_memory(&raw).await.unwrap();
+        raw_store.insert_raw_memory(&raw).await.unwrap();
 
         assert_eq!(
-            database.count_unprocessed("default").await.unwrap(),
+            raw_store.count_unprocessed("default").await.unwrap(),
             1,
             "precondition: one pending raw memory"
         );
@@ -230,7 +232,7 @@ mod tests {
         flush_agent_memory(guard, "default".into(), Arc::new(service)).await;
 
         assert_eq!(
-            database.count_unprocessed("default").await.unwrap(),
+            raw_store.count_unprocessed("default").await.unwrap(),
             0,
             "flush_agent_memory must drain the agent's pending raw memory via compress_to_notes"
         );
@@ -247,6 +249,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let database: Arc<SqliteMemoryBackend> =
             Arc::new(SqliteMemoryBackend::new(temp_dir.path()).unwrap());
+        let raw_store = Arc::new(MarkdownSessionStore::new(temp_dir.path()).await.unwrap());
 
         let provider = create_mock_provider();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
@@ -257,6 +260,7 @@ mod tests {
         );
         let service = CompressionService::new(
             database.clone(),
+            raw_store.clone(),
             provider,
             embedder,
             CompressionConfig::default(),
@@ -270,16 +274,16 @@ mod tests {
             let mut raw =
                 RawMemory::new(format!("tool call {i} output"), RawMemorySource::Transcript);
             raw.created_at = aged + i;
-            database.insert_raw_memory(&raw).await.unwrap();
+            raw_store.insert_raw_memory(&raw).await.unwrap();
         }
-        assert_eq!(database.count_unprocessed("default").await.unwrap(), 130);
+        assert_eq!(raw_store.count_unprocessed("default").await.unwrap(), 130);
 
         let reg = FlushRegistry::new();
         let guard = reg.begin("default");
         flush_agent_memory(guard, "default".into(), Arc::new(service)).await;
 
         assert_eq!(
-            database.count_unprocessed("default").await.unwrap(),
+            raw_store.count_unprocessed("default").await.unwrap(),
             0,
             "a single flush must drain the whole backlog, not just the first batch"
         );
@@ -298,6 +302,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let database: Arc<SqliteMemoryBackend> =
             Arc::new(SqliteMemoryBackend::new(temp_dir.path()).unwrap());
+        let raw_store = Arc::new(MarkdownSessionStore::new(temp_dir.path()).await.unwrap());
 
         let provider = create_mock_provider();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
@@ -308,6 +313,7 @@ mod tests {
         );
         let service = CompressionService::new(
             database.clone(),
+            raw_store.clone(),
             provider,
             embedder,
             CompressionConfig::default(),
@@ -327,7 +333,7 @@ mod tests {
             let mut raw = RawMemory::new(body.to_string(), RawMemorySource::Transcript)
                 .with_agent(agent.to_string());
             raw.created_at = aged;
-            database.insert_raw_memory(&raw).await.unwrap();
+            raw_store.insert_raw_memory(&raw).await.unwrap();
         }
 
         let reg = FlushRegistry::new();
@@ -336,13 +342,13 @@ mod tests {
 
         for agent in ["default", "default__u-owner", "default__proj-abc123"] {
             assert_eq!(
-                database.count_unprocessed(agent).await.unwrap(),
+                raw_store.count_unprocessed(agent).await.unwrap(),
                 0,
                 "{agent} is part of this agent's memory and must be drained by its flush"
             );
         }
         assert_eq!(
-            database.count_unprocessed("defaultish").await.unwrap(),
+            raw_store.count_unprocessed("defaultish").await.unwrap(),
             1,
             "`defaultish` is an unrelated corpus, not a scoped partition of `default`"
         );

@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::memory::store::raw_memory::RawMemoryStore;
-use crate::memory::store::MemoryBackend;
+use crate::sync_primitives::Arc;
 
 const fn default_max_results() -> usize {
     3
@@ -51,7 +51,7 @@ pub struct RecallContextResult {
 /// recover specific code, error messages, or decision details that were
 /// present before the context was compressed.
 pub struct RecallContextTool {
-    database: MemoryBackend,
+    database: Arc<dyn RawMemoryStore>,
     session_id: String,
     /// Resolved (optionally project-scoped) agent id the compaction pipeline
     /// writes raw chunks under — must match `session_compactor::store_raw_chunk`,
@@ -75,7 +75,7 @@ impl RecallContextTool {
     /// `session_compactor::store_raw_chunk`); reading under a different id
     /// silently returns nothing.
     pub fn new(
-        database: MemoryBackend,
+        database: Arc<dyn RawMemoryStore>,
         session_id: impl Into<String>,
         agent_id: impl Into<String>,
     ) -> Self {
@@ -202,8 +202,11 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let temp = tempfile::tempdir().unwrap();
-        let database: MemoryBackend =
-            Arc::new(crate::memory::store::sqlite::SqliteMemoryBackend::new(temp.path()).unwrap());
+        let database = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(temp.path())
+                .await
+                .unwrap(),
+        );
         let raw = RawMemory::new(
             "[user]: the API key lives in .env.local".to_string(),
             RawMemorySource::SessionCompressed,

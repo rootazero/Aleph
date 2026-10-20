@@ -108,13 +108,13 @@ fn default_cfg() -> AssemblerConfig {
 
 struct Fixture {
     assembler: HybridAssembler,
-    backend: MemoryBackend,
+    raw_store: Arc<dyn RawMemoryStore>,
     _tmp_mem: tempfile::TempDir,
     _tmp_snap: tempfile::TempDir,
     reranker: Arc<StubReranker>,
 }
 
-fn fixture(reranker: Arc<StubReranker>, config: AssemblerConfig) -> Fixture {
+async fn fixture(reranker: Arc<StubReranker>, config: AssemblerConfig) -> Fixture {
     // rust-doctor-disable-next-line unwrap-in-production
     let tmp_mem = tempfile::tempdir().unwrap();
     // rust-doctor-disable-next-line unwrap-in-production
@@ -129,6 +129,11 @@ fn fixture(reranker: Arc<StubReranker>, config: AssemblerConfig) -> Fixture {
         backend.clone(),
     ));
     let retrieval = Arc::new(NoteFactRetrieval::new(indexer, embedder));
+    let raw_store = Arc::new(
+        crate::memory::store::markdown::MarkdownSessionStore::new(tmp_mem.path())
+            .await
+            .unwrap(),
+    );
     let snapshots = Arc::new(SnapshotReader::new(tmp_snap.path()));
     let profile = UserProfileLoader::new(tmp_mem.path().join("notes"));
     let feedback_floor = FeedbackFloorLoader::new(tmp_mem.path().join("notes"));
@@ -139,6 +144,7 @@ fn fixture(reranker: Arc<StubReranker>, config: AssemblerConfig) -> Fixture {
         snapshots,
         // rust-doctor-disable-next-line excessive-clone
         backend.clone(),
+        raw_store.clone(),
         profile,
         feedback_floor,
         reranker_dyn,
@@ -146,14 +152,14 @@ fn fixture(reranker: Arc<StubReranker>, config: AssemblerConfig) -> Fixture {
     );
     Fixture {
         assembler,
-        backend,
+        raw_store,
         _tmp_mem: tmp_mem,
         _tmp_snap: tmp_snap,
         reranker,
     }
 }
 
-async fn seed_raw(backend: &MemoryBackend, session_id: &str, count: usize) {
+async fn seed_raw(backend: &Arc<dyn RawMemoryStore>, session_id: &str, count: usize) {
     for i in 0..count {
         let raw = RawMemory::new(format!("body {i}"), RawMemorySource::Transcript)
             .with_agent("default")
@@ -171,7 +177,7 @@ async fn path_tiny_pool_skips_llm() {
     // With zero candidates seeded, pool < 3 → tiny_pool fast-path; LLM untouched.
     let reranker = StubReranker::invalid_json();
     // rust-doctor-disable-next-line excessive-clone
-    let fx = fixture(reranker.clone(), default_cfg());
+    let fx = fixture(reranker.clone(), default_cfg()).await;
     let env = fx
         .assembler
         .assemble(
@@ -197,8 +203,8 @@ async fn path_llm_timeout_falls_back() {
     // Seed enough raw fragments to bypass the tiny_pool fast-path.
     let reranker = StubReranker::timing_out();
     // rust-doctor-disable-next-line excessive-clone
-    let fx = fixture(reranker.clone(), default_cfg());
-    seed_raw(&fx.backend, "sess-a", 5).await;
+    let fx = fixture(reranker.clone(), default_cfg()).await;
+    seed_raw(&fx.raw_store, "sess-a", 5).await;
     let env = fx
         .assembler
         .assemble(
@@ -220,8 +226,8 @@ async fn path_llm_timeout_falls_back() {
 async fn path_llm_invalid_json_falls_back() {
     let reranker = StubReranker::invalid_json();
     // rust-doctor-disable-next-line excessive-clone
-    let fx = fixture(reranker.clone(), default_cfg());
-    seed_raw(&fx.backend, "sess-b", 5).await;
+    let fx = fixture(reranker.clone(), default_cfg()).await;
+    seed_raw(&fx.raw_store, "sess-b", 5).await;
     let env = fx
         .assembler
         .assemble(
@@ -257,8 +263,8 @@ async fn path_happy_b_with_valid_response() {
         r#"{"slots":[{"kind":"relevant_notes","item_ids":["note://fake"],"tokens_budget":500}]}"#,
     );
     // rust-doctor-disable-next-line excessive-clone
-    let fx = fixture(reranker.clone(), default_cfg());
-    seed_raw(&fx.backend, "sess-d", 5).await;
+    let fx = fixture(reranker.clone(), default_cfg()).await;
+    seed_raw(&fx.raw_store, "sess-d", 5).await;
     let env = fx
         .assembler
         .assemble(
@@ -283,7 +289,7 @@ async fn path_disabled_config_short_circuits() {
     cfg.enabled = false;
     let reranker = StubReranker::invalid_json();
     // rust-doctor-disable-next-line excessive-clone
-    let fx = fixture(reranker.clone(), cfg);
+    let fx = fixture(reranker.clone(), cfg).await;
     let env = fx
         .assembler
         .assemble(
@@ -312,8 +318,8 @@ async fn path_force_fallback_bypasses_llm() {
     cfg.force_fallback = true;
     let reranker = StubReranker::invalid_json();
     // rust-doctor-disable-next-line excessive-clone
-    let fx = fixture(reranker.clone(), cfg);
-    seed_raw(&fx.backend, "sess-e", 5).await;
+    let fx = fixture(reranker.clone(), cfg).await;
+    seed_raw(&fx.raw_store, "sess-e", 5).await;
     let env = fx
         .assembler
         .assemble(
@@ -341,8 +347,8 @@ async fn skeleton_fallback_respects_the_runtime_token_budget() {
     cfg.force_fallback = true;
     let reranker = StubReranker::invalid_json();
     // rust-doctor-disable-next-line excessive-clone
-    let fx = fixture(reranker.clone(), cfg);
-    seed_raw(&fx.backend, "sess-budget", 40).await;
+    let fx = fixture(reranker.clone(), cfg).await;
+    seed_raw(&fx.raw_store, "sess-budget", 40).await;
 
     let env = fx
         .assembler
@@ -386,8 +392,8 @@ async fn zero_budget_yields_a_near_empty_skeleton_envelope() {
     cfg.force_fallback = true;
     let reranker = StubReranker::invalid_json();
     // rust-doctor-disable-next-line excessive-clone
-    let fx = fixture(reranker.clone(), cfg);
-    seed_raw(&fx.backend, "sess-zero", 20).await;
+    let fx = fixture(reranker.clone(), cfg).await;
+    seed_raw(&fx.raw_store, "sess-zero", 20).await;
 
     let env = fx
         .assembler
@@ -438,7 +444,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let reranker = StubReranker::invalid_json();
-            let fx = fixture(reranker, default_cfg());
+            let fx = fixture(reranker, default_cfg()).await;
             let env = fx
                 .assembler
                 .assemble("q", "default", None, AssemblyBudget { total_tokens: budget }, crate::memory::session_search_summary::FactSourceFilter::Any)

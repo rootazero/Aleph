@@ -39,8 +39,9 @@ use alephcore::memory::notes::NoteIndexer;
 use alephcore::memory::session_resume::reader::SnapshotReader;
 use alephcore::memory::session_search_summary::end_hook::SessionEndSummarizer;
 use alephcore::memory::session_search_summary::synthesizer::{SummaryLlm, SummarySynthesizer};
+use alephcore::memory::store::markdown::MarkdownSessionStore;
 use alephcore::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-use alephcore::memory::SqliteMemoryBackend;
+use alephcore::memory::{MemoryBackend, SqliteMemoryBackend};
 use alephcore::tools::AlephTool;
 use alephcore::AlephError;
 use alephcore::AssemblerConfig;
@@ -399,7 +400,8 @@ impl SessionStore for E2eSessionStore {
 /// Shared test harness. `build()` creates an empty environment; callers seed
 /// data with `seed_session()` / `seed_raw_memory()` before each test.
 pub struct TestEnv {
-    pub raw_store: Arc<SqliteMemoryBackend>,
+    pub raw_store: Arc<dyn RawMemoryStore>,
+    pub backend: MemoryBackend,
     pub session_store: Arc<E2eSessionStore>,
     pub mock_llm: Arc<MockSummaryLlm>,
     pub synthesizer: Arc<SummarySynthesizer>,
@@ -417,19 +419,25 @@ impl TestEnv {
         let db_path = tmp.path().join("raw.db");
         let notes_dir = tmp.path().join("notes");
         std::fs::create_dir_all(&notes_dir).expect("notes dir");
-        let raw_store = Arc::new(SqliteMemoryBackend::new(&db_path).expect("SqliteMemoryBackend"));
+        let backend: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&db_path).expect("SqliteMemoryBackend"));
+        let raw_store: Arc<dyn RawMemoryStore> = Arc::new(
+            MarkdownSessionStore::new(&tmp.path().to_path_buf())
+                .await
+                .expect("MarkdownSessionStore"),
+        );
         let session_store = E2eSessionStore::new();
         let mock_llm = MockSummaryLlm::new("[default response — override with set_response]");
 
         let synthesizer = Arc::new(SummarySynthesizer::new(
-            raw_store.clone() as Arc<dyn RawMemoryStore>,
+            raw_store.clone(),
             session_store.clone() as Arc<dyn SessionStore>,
             mock_llm.clone(),
         ));
 
         // Build HybridAssembler with force_fallback=true (skeleton path, zero LLM calls).
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(ZeroEmbedder);
-        let indexer = Arc::new(NoteIndexer::new(notes_dir.clone(), raw_store.clone()));
+        let indexer = Arc::new(NoteIndexer::new(notes_dir.clone(), backend.clone()));
         let retrieval = Arc::new(NoteFactRetrieval::new(indexer, embedder));
         let snap_dir = notes_dir.join("_snapshots");
         std::fs::create_dir_all(&snap_dir).expect("snap dir");
@@ -453,6 +461,7 @@ impl TestEnv {
         let assembler: Arc<dyn WorkingMemoryAssembler> = Arc::new(HybridAssembler::new(
             retrieval,
             snapshots,
+            backend.clone(),
             raw_store.clone(),
             profile,
             feedback_floor,
@@ -473,6 +482,7 @@ impl TestEnv {
 
         Self {
             raw_store,
+            backend,
             session_store,
             mock_llm,
             synthesizer,

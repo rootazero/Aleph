@@ -19,7 +19,6 @@ use tokio::sync::Mutex as TokioMutex;
 
 use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::store::raw_memory::RawMemoryStore;
-use crate::memory::store::MemoryBackend;
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
@@ -66,7 +65,7 @@ mod chunker_tests;
 /// and read by nothing, so an operator could set either and observe no effect —
 /// and `docs/reference/memory/RAW_MEMORY.md` described the first as governing
 /// retention, which it never did. There is still no time-based eviction of
-/// `raw_memories`; if one is built it should introduce its own knob rather than
+/// Markdown-backed raw memories; if one is built it should introduce its own knob rather than
 /// resurrect a name that spent this long meaning nothing. Removal is safe for
 /// existing configs: this struct has no `deny_unknown_fields`, so TOML still
 /// carrying the keys continues to parse (same precedent as `context_threshold`,
@@ -105,7 +104,7 @@ impl Default for SessionCompactorConfig {
 /// Ties together [`context_window`], [`summary_engine`], and [`fallback`]
 /// to keep long conversations within the model's token budget.
 pub struct SessionCompactor {
-    pub(crate) database: MemoryBackend,
+    pub(crate) database: Arc<dyn RawMemoryStore>,
     pub(crate) provider: Option<Arc<dyn AiProvider>>,
     pub(crate) config: SessionCompactorConfig,
     pub(crate) indexer: Option<crate::memory::transcript_indexer::TranscriptIndexer>,

@@ -32,6 +32,7 @@ use alephcore::memory::note_retrieval::NoteFactRetrieval;
 use alephcore::memory::notes::NoteIndexer;
 use alephcore::memory::session_resume::reader::SnapshotReader;
 use alephcore::memory::session_search_summary::FactSourceFilter;
+use alephcore::memory::store::markdown::MarkdownSessionStore;
 use alephcore::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use alephcore::memory::{MemoryBackend, SqliteMemoryBackend};
 use alephcore::{AlephError, AssemblerConfig};
@@ -96,7 +97,11 @@ fn force_fallback_cfg() -> AssemblerConfig {
     }
 }
 
-fn build_assembler(backend: MemoryBackend, notes_dir: std::path::PathBuf) -> HybridAssembler {
+fn build_assembler(
+    backend: MemoryBackend,
+    raw_store: Arc<dyn RawMemoryStore>,
+    notes_dir: std::path::PathBuf,
+) -> HybridAssembler {
     let embedder: Arc<dyn EmbeddingProvider> = Arc::new(ZeroEmbedder);
     let indexer = Arc::new(NoteIndexer::new(notes_dir.clone(), backend.clone()));
     let retrieval = Arc::new(NoteFactRetrieval::new(indexer, embedder));
@@ -114,6 +119,7 @@ fn build_assembler(backend: MemoryBackend, notes_dir: std::path::PathBuf) -> Hyb
         retrieval,
         snapshots,
         backend,
+        raw_store,
         profile,
         feedback_floor,
         reranker,
@@ -125,14 +131,14 @@ fn build_assembler(backend: MemoryBackend, notes_dir: std::path::PathBuf) -> Hyb
 ///
 /// All three use `created_at = 1_234_567_890` so the snapshot is
 /// reproducible across runs regardless of wall-clock time.
-async fn seed_facts(backend: &MemoryBackend) {
+async fn seed_facts(backend: &MemoryBackend, raw_store: &dyn RawMemoryStore) {
     // (a) Transcript fragment — represents a note-like retrieval candidate.
     let mut fact_a = RawMemory::new("Aleph uses Rust".to_string(), RawMemorySource::Transcript)
         .with_agent("agent-1")
         .with_session("sess-baseline")
         .with_path("aleph://session/sess-baseline/raw/frag-a");
     fact_a.created_at = 1_234_567_890;
-    backend.insert_raw_memory(&fact_a).await.unwrap();
+    raw_store.insert_raw_memory(&fact_a).await.unwrap();
 
     // (b) Tool output fragment — a distinct source type.
     let mut fact_b = RawMemory::new(
@@ -143,7 +149,7 @@ async fn seed_facts(backend: &MemoryBackend) {
     .with_session("sess-baseline")
     .with_path("aleph://session/sess-baseline/raw/frag-b");
     fact_b.created_at = 1_234_567_890;
-    backend.insert_raw_memory(&fact_b).await.unwrap();
+    raw_store.insert_raw_memory(&fact_b).await.unwrap();
 
     // (c) Session-compressed summary fact — the key target for Spec B.
     let mut fact_c = RawMemory::new(
@@ -154,7 +160,7 @@ async fn seed_facts(backend: &MemoryBackend) {
     .with_session("sess-baseline")
     .with_path("aleph://session/xyz/d0/0");
     fact_c.created_at = 1_234_567_890;
-    backend.insert_raw_memory(&fact_c).await.unwrap();
+    raw_store.insert_raw_memory(&fact_c).await.unwrap();
 }
 
 // ---- Deterministic serialiser helpers -------------------------------------
@@ -288,11 +294,14 @@ async fn note_retrieval_default_behaviour_baseline() {
 
     let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
 
+    let raw_store: Arc<dyn RawMemoryStore> =
+        Arc::new(MarkdownSessionStore::new(&notes_dir).await.unwrap());
+
     // ---- Seed deterministic facts ----
-    seed_facts(&backend).await;
+    seed_facts(&backend, raw_store.as_ref()).await;
 
     // ---- Build HybridAssembler ----
-    let assembler = build_assembler(backend, notes_dir);
+    let assembler = build_assembler(backend, raw_store, notes_dir);
 
     // ---- Run with the 5-arg signature (FactSourceFilter::Any = pre-Spec-B behaviour) ----
     let envelope = assembler

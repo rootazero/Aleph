@@ -53,6 +53,14 @@ pub struct SessionHandle {
 
 #[async_trait]
 pub trait SessionService: Send + Sync + 'static {
+    /// Optional raw-memory writer shared by session-scoped runtime producers.
+    fn raw_memory_writer(
+        &self,
+    ) -> Option<crate::sync_primitives::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>
+    {
+        None
+    }
+
     async fn attach(&self, id: SessionId) -> Result<SessionHandle, SessionError>;
 
     async fn get_events(

@@ -428,7 +428,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Initialize memory backend (SQLite + sqlite-vec)
     let data_dir = alephcore::utils::paths::get_data_dir()
         .map_err(|e| format!("Error: Failed to resolve data directory: {e}. Memory backend requires a persistent directory."))?;
-    let db_path = data_dir.join("memory.db");
+    let aleph_home = alephcore::utils::paths::get_config_dir().map_err(|e| {
+        format!("Error: Failed to resolve config directory for metadata database: {e}")
+    })?;
+    let db_path = aleph_home.join("metadata.db");
 
     // Notify user if old LanceDB data directory exists
     let lance_path = data_dir.join("memory.lance");
@@ -452,6 +455,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         };
 
+    // Raw memories and the session projector share one Markdown store/metadata connection.
+    // A missing raw store is a startup error, never a silent fallback to SQLite.
+    let markdown_session_store = Arc::new(
+        alephcore::memory::store::markdown::MarkdownSessionStore::new(&aleph_home)
+            .await
+            .map_err(|e| format!("Error: Failed to initialize Markdown session store: {e}"))?,
+    );
+    let raw_store: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore> =
+        markdown_session_store.clone();
+
     let event_bus = server.event_bus().clone();
 
     // Shared sink that bumps the `config` state-version + broadcasts a
@@ -468,7 +481,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         args.daemon,
         &loaded_app_config.general.session_store_backend,
         event_bus.clone(),
-        Some(memory_db.clone() as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>),
+        Some(raw_store.clone()),
     )
     .await?;
 
@@ -500,9 +513,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // SSOT: messages are materialized from session_events by MessageProjector; the legacy dual-write shim has been removed.
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
         let sm = sm
-            .with_raw_memory_writer(
-                memory_db.clone() as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>
-            )
+            .with_raw_memory_writer(raw_store.clone())
             .with_event_bus(event_bus.clone());
         Arc::new(sm)
     } else {
@@ -542,56 +553,26 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // ever held a session store. Without it that check reports UNKNOWN.
     alephcore::gateway::session_projector::set_global_message_projector(message_projector.clone());
 
-    // Initialize Markdown session storage (Phase B: Event Sourcing Read Side)
-    let markdown_store_result: Result<
-        Arc<alephcore::memory::store::markdown::MarkdownSessionStore>,
-        Box<dyn std::error::Error>,
-    > = async {
-        let aleph_home = alephcore::utils::paths::get_config_dir()?;
-        let store =
-            alephcore::memory::store::markdown::MarkdownSessionStore::new(&aleph_home).await?;
-        Ok(Arc::new(store))
-    }
-    .await;
+    let markdown_projector = Arc::new(
+        alephcore::session::markdown_projector::MarkdownProjector::new(
+            markdown_session_store.clone(),
+        ),
+    );
+    tracing::info!("Markdown session projector initialized successfully");
 
-    let markdown_session_store = markdown_store_result.as_ref().ok().cloned();
-
-    let markdown_projector = match markdown_store_result {
-        Ok(ref store) => {
-            let projector = Arc::new(
-                alephcore::session::markdown_projector::MarkdownProjector::new(store.clone()),
-            );
-            tracing::info!("Markdown session projector initialized successfully");
-            Some(projector as Arc<dyn alephcore::session::observer::SessionEventObserver>)
-        }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "Failed to initialize Markdown session projector; sessions will not be saved as Markdown files"
-            );
-            None
-        }
-    };
-
-    // Combine MessageProjector and MarkdownProjector using CompositeObserver
-    let projector: Arc<dyn alephcore::session::observer::SessionEventObserver> = {
-        let mut observers = vec![message_projector.clone()
-            as Arc<dyn alephcore::session::observer::SessionEventObserver>];
-        if let Some(md_proj) = markdown_projector {
-            observers.push(md_proj);
-        }
-        if observers.len() == 1 {
-            // Only MessageProjector, use it directly
-            observers.into_iter().next().unwrap()
-        } else {
-            // Multiple observers, use CompositeObserver
-            Arc::new(alephcore::session::composite_observer::CompositeObserver::new(observers))
-        }
-    };
+    // Both projections observe the same event stream; raw storage reuses the Markdown Arc.
+    let projector: Arc<dyn alephcore::session::observer::SessionEventObserver> = Arc::new(
+        alephcore::session::composite_observer::CompositeObserver::new(vec![
+            message_projector.clone()
+                as Arc<dyn alephcore::session::observer::SessionEventObserver>,
+            markdown_projector as Arc<dyn alephcore::session::observer::SessionEventObserver>,
+        ]),
+    );
 
     let session_service_and_store = build_sqlite_session_service(
         &alephcore::gateway::SessionManagerConfig::default().db_path,
         Some(projector),
+        raw_store.clone(),
     );
     let session_service_for_orchestrator = session_service_and_store
         .as_ref()
@@ -1570,6 +1551,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &*app_config.read().await,
         app_config.clone(),
         &memory_db,
+        raw_store.clone(),
         workspace_manager.clone(),
         agent_manager.clone(),
         acp_manager.clone(),
@@ -1929,6 +1911,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             &stop_hook_configs,
             agent_result.memory_context_provider.clone(),
             agent_result.memory_backend.clone(),
+            Some(raw_store.clone()),
             agent_result.embedder.clone(),
             agent_result.tool_catalog.clone(),
             auth_bundle.auth_ctx.shared_token_mgr.clone(),
@@ -2257,7 +2240,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_session_handlers(
         &mut server,
         &session_store,
-        &memory_db,
+        &raw_store,
         Some(agent_result.run_manager.clone()),
         Some(app_config.clone()),
         args.daemon,
@@ -2279,6 +2262,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_memory_handlers(
         &mut server,
         &memory_db,
+        &raw_store,
         &agent_result.compression_service,
         &agent_result.embedder,
         &event_bus,
@@ -2292,12 +2276,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.memory_context_provider.clone(),
         args.daemon,
     );
-    // Register session management handlers if markdown store initialized
-    if let Some(ref store) = markdown_session_store {
-        register_session_management_handlers(&mut server, store, &session_store, args.daemon);
-        // Install store for HTTP attachment route
-        server.set_markdown_session_store(store.clone());
-    }
+    register_session_management_handlers(
+        &mut server,
+        &markdown_session_store,
+        &session_store,
+        args.daemon,
+    );
+    // Install the same store for the HTTP attachment route.
+    server.set_markdown_session_store(markdown_session_store.clone());
     register_daemon_handlers(&mut server, start_time, args.daemon);
     // Explicit denying seam until the real browser backend/registry/public
     // origin composition root is supplied. No bind-address origin inference.
@@ -2799,8 +2785,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // Spec 1 G2: wire raw-memory writer so the delegation hook fires.
                 let a2a_sub_agent = Arc::new(
                     A2ASubAgent::new(smart_router, client_pool.clone())
-                        .with_raw_memory_writer(memory_db.clone()
-                            as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>)
+                        .with_raw_memory_writer(raw_store.clone())
                         .with_capture_registry(agent_result.memory_ext_registry.clone()),
                 );
 
@@ -3017,7 +3002,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()));
     let delivery_engine_shared = build_task_delivery_engine(
         task_channel_cell.clone(),
-        memory_db.clone(),
+        raw_store.clone(),
         webhook_ssrf_policy.clone(),
     );
 

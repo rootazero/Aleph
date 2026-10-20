@@ -804,7 +804,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 // inside this run's spawned task, so build-time resolution here
                 // sees the same root the writes see at call time.
                 // rust-doctor-disable-next-line excessive-clone
-                if let Some(backend) = self.memory_backend.clone() {
+                if let Some(backend) = self.raw_memory_store.clone() {
                     let reuse_agent_id = crate::memory::project_scope::session_write_id(
                         &spec.agent,
                         self.memory_project_scoped,
@@ -1023,7 +1023,7 @@ impl HarnessRunner for AgentHarnessRunner {
             // tool call completion flows into `raw_memories` for the
             // Dream cycle's metric aggregator to read. No store → no-op.
             // rust-doctor-disable-next-line excessive-clone
-            tool_signal_sink: match self.memory_backend.clone() {
+            tool_signal_sink: match self.session_service.raw_memory_writer() {
                 Some(store) => {
                     // The composed PARTITION, not the bare persona — the same
                     // resolution `with_summary_reuse` performs ~170 lines above
@@ -1041,8 +1041,7 @@ impl HarnessRunner for AgentHarnessRunner {
                         crate::projects::current_project_root().as_deref(),
                     );
                     std::sync::Arc::new(crate::memory::tool_signal_sink::RawMemoryToolSink::new(
-                        store
-                            as std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+                        store,
                         sink_agent_id,
                         session_id.to_key_string(),
                     ))

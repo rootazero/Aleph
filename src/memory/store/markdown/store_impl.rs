@@ -18,8 +18,8 @@ use super::utils::{
 
 /// Markdown-based session storage implementation.
 pub struct MarkdownSessionStore {
-    base_dir: PathBuf,
-    db: Arc<Mutex<Connection>>,
+    pub(super) base_dir: PathBuf,
+    pub(super) db: Arc<Mutex<Connection>>,
 }
 
 impl MarkdownSessionStore {
@@ -29,6 +29,7 @@ impl MarkdownSessionStore {
     /// 1. Create the base directory if it doesn't exist
     /// 2. Create or open `metadata.db` at `~/.aleph/metadata.db`
     /// 3. Initialize all tables
+    /// 4. Recover interrupted raw-memory deletions
     pub async fn new(base_dir: &Path) -> Result<Self, AlephError> {
         // Database at ~/.aleph/metadata.db (NOT ~/Library/Application Support/)
         let db_path = base_dir.join("metadata.db");
@@ -65,15 +66,19 @@ impl MarkdownSessionStore {
         // Initialize tables
         session_ddl::init_session_tables(&conn)?;
 
-        Ok(Self {
+        let store = Self {
             base_dir: base_dir.to_path_buf(),
             db: Arc::new(Mutex::new(conn)),
-        })
+        };
+        store.recover_raw_deletions().await?;
+        Ok(store)
     }
 
-    /// Get the session directory path.
+    /// Resolve a session ID to one portable directory component, never a path.
     fn session_dir(&self, session_id: &str) -> PathBuf {
-        self.base_dir.join("raw/sessions").join(session_id)
+        self.base_dir
+            .join("raw/sessions")
+            .join(session_directory_key(session_id))
     }
 
     /// Get the attachment file path for a given hash and MIME type.
@@ -122,9 +127,17 @@ impl MarkdownSessionStore {
 
 #[async_trait]
 impl RawSessionStore for MarkdownSessionStore {
-    async fn create_session(&self, metadata: SessionMetadata) -> Result<(), AlephError> {
+    async fn create_session(&self, mut metadata: SessionMetadata) -> Result<(), AlephError> {
+        let session_key = session_directory_key(&metadata.session_id);
         let session_dir = self.session_dir(&metadata.session_id);
         let metadata_path = session_dir.join("metadata.json");
+
+        // Derive paths here rather than trusting caller-supplied paths. Keep IDs
+        // unchanged in both metadata stores, but never use them as path components.
+        metadata.transcript_path =
+            PathBuf::from(format!("raw/sessions/{session_key}/transcript.md"));
+        metadata.tool_outputs_path =
+            PathBuf::from(format!("raw/sessions/{session_key}/tool_outputs.md"));
 
         // RunStarted can be replayed. A fully initialized session must remain
         // untouched so replay never truncates an existing transcript.
@@ -210,8 +223,7 @@ impl RawSessionStore for MarkdownSessionStore {
         fs::write(
             &transcript_path,
             format!(
-                "# Session {}\n\nStarted: {}\n\n",
-                metadata.session_id,
+                "# Session {session_key}\n\nStarted: {}\n\n",
                 format_timestamp_full(metadata.started_at)
             ),
         )
@@ -225,7 +237,7 @@ impl RawSessionStore for MarkdownSessionStore {
 
         fs::write(
             &tool_outputs_path,
-            format!("# Tool Outputs - Session {}\n\n", metadata.session_id),
+            format!("# Tool Outputs - Session {session_key}\n\n"),
         )
         .await
         .map_err(|e| {
@@ -262,14 +274,8 @@ impl RawSessionStore for MarkdownSessionStore {
                 metadata.agent_id,
                 metadata.workspace_id,
                 metadata.started_at,
-                format!(
-                    "raw/sessions/{}/transcript.md",
-                    metadata.session_id
-                ),
-                format!(
-                    "raw/sessions/{}/tool_outputs.md",
-                    metadata.session_id
-                ),
+                metadata.transcript_path.to_string_lossy(),
+                metadata.tool_outputs_path.to_string_lossy(),
                 metadata.started_at,
                 metadata.started_at,
             ],
@@ -763,7 +769,7 @@ impl RawSessionStore for MarkdownSessionStore {
         })?;
 
         let src = self.session_dir(session_id);
-        let dst = archive_dir.join(session_id);
+        let dst = archive_dir.join(session_directory_key(session_id));
 
         fs::rename(&src, &dst).await.map_err(|e| {
             AlephError::other(format!(
@@ -781,6 +787,12 @@ impl RawSessionStore for MarkdownSessionStore {
 }
 
 // Helper functions
+
+/// Full SHA-256 hex preserves case-sensitive ID distinctions without truncation
+/// or lossy sanitization, and contains no platform-specific path syntax.
+fn session_directory_key(session_id: &str) -> String {
+    compute_sha256(session_id.as_bytes())
+}
 
 /// Treat ordinary user text as one literal FTS5 phrase, not query syntax.
 fn normalize_fts_query(query: &str) -> Option<String> {
@@ -824,6 +836,49 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
+    async fn test_session_dir_uses_stable_portable_keys() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = MarkdownSessionStore::new(temp_dir.path()).await.unwrap();
+        let sessions_root = temp_dir.path().join("raw/sessions");
+        let mut keys = std::collections::HashSet::new();
+
+        for session_id in [
+            "agent:session",
+            r"C:\outside\session",
+            r"..\escape",
+            "/absolute",
+            "../escape",
+            "agent/session",
+            "agent_session",
+            "AGENT:SESSION",
+            "CON",
+            "",
+            ".",
+            "..",
+            "会话:一",
+            &"a".repeat(1024),
+        ] {
+            let path = store.session_dir(session_id);
+            assert_eq!(
+                path.parent(),
+                Some(sessions_root.as_path()),
+                "{session_id:?}"
+            );
+            let key = path.file_name().unwrap().to_str().unwrap();
+            assert_eq!(key.len(), 64, "{session_id:?}");
+            assert!(key
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+            assert!(keys.insert(key.to_string()), "aliased ID: {session_id:?}");
+            assert_eq!(path, store.session_dir(session_id));
+        }
+        assert_eq!(
+            store.session_dir("abc").file_name().unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[tokio::test]
     async fn test_create_session() {
         let temp_dir = TempDir::new().unwrap();
         let store = MarkdownSessionStore::new(temp_dir.path()).await.unwrap();
@@ -847,11 +902,215 @@ mod tests {
         store.create_session(metadata.clone()).await.unwrap();
 
         // Verify directory structure
-        let session_dir = temp_dir.path().join("raw/sessions/test_session_001");
+        let session_dir = temp_dir
+            .path()
+            .join("raw/sessions")
+            .join(compute_sha256(b"test_session_001"));
         assert!(session_dir.exists());
         assert!(session_dir.join("transcript.md").exists());
         assert!(session_dir.join("tool_outputs.md").exists());
         assert!(session_dir.join("metadata.json").exists());
+    }
+
+    #[tokio::test]
+    async fn test_unsafe_session_ids_preserve_metadata_and_crud() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = MarkdownSessionStore::new(temp_dir.path()).await.unwrap();
+        let sessions_root = temp_dir.path().join("raw/sessions");
+        let canonical_root = fs::canonicalize(&sessions_root).await.unwrap();
+        let session_ids = [
+            "agent:session",
+            r"C:\outside\session",
+            r"..\escape",
+            "/absolute",
+            "../escape",
+        ];
+        let agent_id = "agent:original";
+        let workspace_id = r"C:\workspace\original";
+        // Read the actual temporary database independently of store accessors.
+        let db = Connection::open_with_flags(
+            temp_dir.path().join("metadata.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+
+        for (index, session_id) in session_ids.iter().enumerate() {
+            let metadata = SessionMetadata {
+                session_id: (*session_id).to_string(),
+                agent_id: agent_id.to_string(),
+                workspace_id: Some(workspace_id.to_string()),
+                started_at: 1729267535,
+                ended_at: None,
+                duration_seconds: None,
+                // Deliberately unsafe inputs must not become stored file paths.
+                transcript_path: PathBuf::from(format!("{session_id}/transcript.md")),
+                tool_outputs_path: PathBuf::from(format!("{session_id}/tool_outputs.md")),
+                message_count: 0,
+                tool_call_count: 0,
+                content_hash: None,
+                compression_status: CompressionStatus::Pending,
+                tags: vec![],
+            };
+            store.create_session(metadata.clone()).await.unwrap();
+            let key = compute_sha256(session_id.as_bytes());
+            let session_dir = sessions_root.join(&key);
+            let expected_transcript = format!("raw/sessions/{key}/transcript.md");
+            let expected_tools = format!("raw/sessions/{key}/tool_outputs.md");
+            assert_eq!(session_dir.parent(), Some(sessions_root.as_path()));
+            assert_eq!(
+                fs::canonicalize(&session_dir).await.unwrap().parent(),
+                Some(canonical_root.as_path())
+            );
+            assert!(key.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            assert!(!key.contains([':', '\\', '/', '.']));
+            for name in ["transcript.md", "tool_outputs.md", "metadata.json"] {
+                assert!(session_dir.join(name).is_file());
+            }
+            let transcript = store.read_transcript(session_id).await.unwrap();
+            assert!(transcript.starts_with(&format!("# Session {key}\n")));
+            assert!(!transcript.contains(session_id));
+            let tools = store.read_tool_outputs(session_id).await.unwrap();
+            assert!(tools.starts_with(&format!("# Tool Outputs - Session {key}\n")));
+            assert!(!tools.contains(session_id));
+
+            let content = format!("safetranscript{index}");
+            store
+                .append_transcript(session_id, 1729267536, MessageRole::User, &content)
+                .await
+                .unwrap();
+            store
+                .append_tool_output(
+                    session_id,
+                    1729267537,
+                    "echo",
+                    "{}",
+                    &ToolResult {
+                        exit_code: Some(0),
+                        stdout: "safe tool result".to_string(),
+                        stderr: String::new(),
+                        duration_ms: 1,
+                    },
+                )
+                .await
+                .unwrap();
+            // Replaying creation must resolve to the same key without truncation.
+            store.create_session(metadata).await.unwrap();
+            assert!(store
+                .read_transcript(session_id)
+                .await
+                .unwrap()
+                .contains(&content));
+            assert!(store
+                .read_tool_outputs(session_id)
+                .await
+                .unwrap()
+                .contains("safe tool result"));
+            store
+                .finalize_session(session_id, 1729267538)
+                .await
+                .unwrap();
+
+            let stored = store.get_session_metadata(session_id).await.unwrap();
+            assert_eq!(stored.session_id, *session_id);
+            assert_eq!(stored.agent_id, agent_id);
+            assert_eq!(stored.workspace_id.as_deref(), Some(workspace_id));
+            assert_eq!(stored.transcript_path, PathBuf::from(&expected_transcript));
+            assert_eq!(stored.tool_outputs_path, PathBuf::from(&expected_tools));
+            assert_eq!(stored.message_count, 1);
+            assert_eq!(stored.tool_call_count, 1);
+            assert_eq!(stored.ended_at, Some(1729267538));
+            assert!(stored.content_hash.is_some());
+            let json: SessionMetadata = serde_json::from_str(
+                &fs::read_to_string(session_dir.join("metadata.json"))
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(json.session_id, *session_id);
+            assert_eq!(json.agent_id, agent_id);
+            assert_eq!(json.workspace_id.as_deref(), Some(workspace_id));
+            assert_eq!(json.transcript_path, stored.transcript_path);
+            assert_eq!(json.tool_outputs_path, stored.tool_outputs_path);
+
+            let row: (String, String, String, String, String) = db.query_row(
+                "SELECT session_id, agent_id, workspace_id, transcript_path, tool_outputs_path FROM sessions WHERE session_id = ?",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            ).unwrap();
+            assert_eq!(
+                row,
+                (
+                    session_id.to_string(),
+                    agent_id.to_string(),
+                    workspace_id.to_string(),
+                    expected_transcript,
+                    expected_tools
+                )
+            );
+            let stored_agent: String = db
+                .query_row("SELECT agent_id FROM agents", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(stored_agent, agent_id);
+            let stored_workspace: String = db
+                .query_row("SELECT workspace_id FROM workspaces", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(stored_workspace, workspace_id);
+            let hits = store
+                .search_transcripts(&content, Some(agent_id), 10)
+                .await
+                .unwrap();
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].session_id, *session_id);
+        }
+
+        let sessions = store
+            .list_sessions(Some(agent_id), Some(workspace_id), None, None, None, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), session_ids.len());
+        for session_id in session_ids {
+            assert!(sessions
+                .iter()
+                .any(|metadata| metadata.session_id == session_id));
+        }
+        let mut entries = fs::read_dir(&sessions_root).await.unwrap();
+        let mut count = 0;
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            let key = entry.file_name();
+            let key = key.to_str().unwrap();
+            assert_eq!(key.len(), 64);
+            assert!(key.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            count += 1;
+        }
+        assert_eq!(count, session_ids.len());
+        // Persisted sessions must remain addressable after reopening the store.
+        drop(store);
+        let store = MarkdownSessionStore::new(temp_dir.path()).await.unwrap();
+        for session_id in session_ids {
+            assert_eq!(
+                store
+                    .get_session_metadata(session_id)
+                    .await
+                    .unwrap()
+                    .session_id,
+                session_id
+            );
+            store.archive_session(session_id).await.unwrap();
+            let archived = temp_dir
+                .path()
+                .join("archive/2024/10")
+                .join(compute_sha256(session_id.as_bytes()));
+            assert!(archived.join("metadata.json").is_file());
+            assert!(!store.session_dir(session_id).exists());
+            let status: String = db
+                .query_row(
+                    "SELECT compression_status FROM sessions WHERE session_id = ?",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(status, "archived");
+        }
     }
 
     #[tokio::test]

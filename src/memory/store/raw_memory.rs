@@ -242,6 +242,50 @@ impl RawMemory {
 /// Storage trait for raw memory records.
 #[async_trait]
 pub trait RawMemoryStore: Send + Sync {
+    /// User-facing raw records, newest first (`created_at DESC`). Excludes
+    /// tool-invocation telemetry. `None` selects all partitions; `Some(&[])`
+    /// selects none. A trimmed, nonempty query matches a literal substring of
+    /// the Markdown body, folding ASCII case only. Offset applies AFTER search.
+    async fn raw_dashboard(
+        &self,
+        _agent_ids: Option<&[String]>,
+        _query: Option<&str>,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        Err(AlephError::other(
+            "Raw dashboard is not supported by this store",
+        ))
+    }
+
+    /// Count the same filtered records as `raw_dashboard`, without pagination.
+    async fn raw_dashboard_count(
+        &self,
+        _agent_ids: Option<&[String]>,
+        _query: Option<&str>,
+    ) -> Result<i64, AlephError> {
+        Err(AlephError::other(
+            "Raw dashboard count is not supported by this store",
+        ))
+    }
+
+    /// Resolve an id's owning partition without reading its body.
+    async fn raw_owner(&self, _id: &str) -> Result<Option<String>, AlephError> {
+        Err(AlephError::other(
+            "Raw ownership lookup is not supported by this store",
+        ))
+    }
+
+    /// Delete a raw file and its index entry, only if the owner still matches.
+    /// `Ok(false)` means no matching index entry. Missing/unreadable files and
+    /// failed deletion return errors, not a successful no-op. Implementations
+    /// must keep the index unchanged on filesystem failure.
+    async fn remove_raw(&self, _id: &str, _agent_id: &str) -> Result<bool, AlephError> {
+        Err(AlephError::other(
+            "Raw deletion is not supported by this store",
+        ))
+    }
+
     /// Insert a raw memory record.
     async fn insert_raw_memory(&self, raw: &RawMemory) -> Result<(), AlephError>;
 

@@ -74,24 +74,6 @@ CREATE TABLE IF NOT EXISTS compression_metadata (
 );
 "#;
 
-pub const CREATE_RAW_MEMORIES: &str = "
-CREATE TABLE IF NOT EXISTS raw_memories (
-    id              TEXT PRIMARY KEY,
-    content         TEXT NOT NULL,
-    source          TEXT NOT NULL,
-    agent_id        TEXT NOT NULL DEFAULT 'default',
-    session_id      TEXT,
-    path            TEXT,
-    attachment_text TEXT,
-    is_processed    INTEGER DEFAULT 0,
-    created_at      INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_raw_unprocessed ON raw_memories(is_processed, created_at)
-    WHERE is_processed = 0;
-CREATE INDEX IF NOT EXISTS idx_raw_agent ON raw_memories(agent_id);
-CREATE INDEX IF NOT EXISTS idx_raw_session ON raw_memories(session_id);
-";
-
 pub const NOTES_INDEX_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS notes_index (
     path            TEXT NOT NULL,

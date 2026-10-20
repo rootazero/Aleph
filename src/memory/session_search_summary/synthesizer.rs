@@ -427,12 +427,21 @@ pub(crate) mod test_support {
     }
 
     // -----------------------------------------------------------------------
-    // Helper: in-memory raw memory store (pub(crate) for integration tests)
+    // Helper: Markdown-backed raw memory store with an owned scratch directory
     // -----------------------------------------------------------------------
 
-    pub(crate) fn make_store() -> Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> {
-        use crate::memory::store::sqlite::SqliteMemoryBackend;
-        Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"))
+    pub(crate) async fn make_store() -> (
+        tempfile::TempDir,
+        Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) {
+        use crate::memory::store::markdown::MarkdownSessionStore;
+        let dir = tempfile::tempdir().expect("raw memory scratch directory");
+        let store = Arc::new(
+            MarkdownSessionStore::new(dir.path())
+                .await
+                .expect("Markdown raw store"),
+        );
+        (dir, store)
     }
 }
 
@@ -454,7 +463,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_existing_fact_when_already_present() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let session_store = InMemorySessionStore::new();
         let llm = MockSummaryLlm::with_response("LLM should not be called");
 
@@ -488,7 +497,7 @@ mod tests {
 
     #[tokio::test]
     async fn synthesizes_when_no_existing_summary() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let session_store = InMemorySessionStore::new().with_messages(
             "agent-2",
             "sess-new",
@@ -519,7 +528,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_error_when_transcript_empty() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let session_store = InMemorySessionStore::new(); // no messages seeded
         let llm = MockSummaryLlm::with_response("never");
 
@@ -542,7 +551,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_calls_produce_one_fact() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let session_store = InMemorySessionStore::new().with_messages(
             "agent-4",
             "sess-concurrent",
@@ -602,7 +611,7 @@ mod tests {
         // With the UNIQUE(agent_id, path) partial index in place, the race
         // window is genuinely small: only callers that pass the read fast-path
         // before any writer commits will issue an LLM call. In a single-thread
-        // tokio runtime serving a make_store() in-memory backend, the
+        // tokio runtime serving the Markdown-backed test store, the
         // expected count is 1 (≤ 2 allows a tiny scheduling jitter cushion).
         assert!(
             llm.call_count() <= 2,

@@ -21,9 +21,10 @@ Gateway / Agent Loop
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ raw_memories (SQLite)                                        │
-│   sessions · transcripts · attachment_text                   │
-│   consumed by CompressionService (is_processed flag)         │
+│ raw Markdown + metadata.db index                            │
+│   raw/memories/{agent-sha256}/{uuid}.md                     │
+│   agents · workspaces · sessions · raw_memory_index          │
+│   consumed by CompressionService (is_processed metadata)     │
 └─────────────────────────────────────────────────────────────┘
     │  CompressionService (realtime)
     ▼
@@ -40,7 +41,7 @@ Gateway / Agent Loop
  queries: NoteFactRetrieval.retrieve() → ScoredFact<MemoryFact>
 ```
 
-Gateway writes conversation turns to `raw_memories` through `RawMemoryStore`. `CompressionService` periodically drains unprocessed rows, asks an LLM to extract durable facts, and writes them back as markdown notes under `~/.aleph/memory/note/{agent}/{category}/`. `NoteIndexer` keeps the SQLite side (index, wikilinks, FTS5, per-dimension vec0 tables) in sync on every write. Offline, the Dream Daemon consolidates clusters, resolves drift, synthesizes insights, lints schemas, decays weak notes, and emits digests. Queries flow through `NoteFactRetrieval` and return `ScoredFact<MemoryFact>` — see [RETRIEVAL.md](memory/RETRIEVAL.md).
+Gateway writes conversation turns to Markdown raw memory through `RawMemoryStore`. `CompressionService` periodically drains pending metadata-index rows, reads their Markdown bodies, asks an LLM to extract durable facts, and writes them back as Markdown notes under `~/.aleph/memory/note/{agent}/{category}/`. `NoteIndexer` keeps the separate SQLite notes side (index, wikilinks, FTS5, per-dimension vec0 tables) in sync on every note write. Offline, the Dream Daemon consolidates clusters, resolves drift, synthesizes insights, lints schemas, decays weak notes, and emits digests. Queries flow through `NoteFactRetrieval` and return `ScoredFact<MemoryFact>` — see [RETRIEVAL.md](RETRIEVAL.md).
 
 ### 3.1 Cognitive-layer view (working → episodic → semantic → raw)
 
@@ -51,7 +52,7 @@ The two physical tiers above *realise* a human-memory-style four-layer model; [`
 | **Working** (current task) | live session / scratchpad + raw items in the `session_recent` slot | n/a (ephemeral) |
 | **Episodic** (experiences, causal chains) | session summaries, `transcript` / `subagent-*` notes | retrieval recency + dream decay |
 | **Semantic** (facts & rules) | distilled `preference` / `learning` / `skill` / `reference` notes | severity-floored confidence decay |
-| **Raw** (audit / 回溯 base) | `raw_memories` rows behind every distillation | retention sweep only |
+| **Raw** (audit / 回溯 base) | Markdown bodies indexed by `raw_memory_index` | owner-authorized deletion |
 
 Retrieved items are stamped with their layer in the assembled memory context (markdown header + XML `layer="…"` attribute) so the model perceives the structure. Notes flagged `permanent: true` (or tagged `permanent` / `pinned`), and categories in `memory.memory_decay.protected_types`, are exempt from decay/archival — the "永久核心知识不受影响" guarantee (see [DREAM_DAEMON.md](memory/DREAM_DAEMON.md) §5.5).
 
@@ -64,11 +65,11 @@ Retrieved items are stamped with their layer in the assembled memory context (ma
 | Trait | File | Purpose | Primary caller |
 |---|---|---|---|
 | `NoteStore` | `src/memory/notes/store.rs` | Notes index, wikilinks, FTS, vector search | `NoteFactRetrieval`, `NoteIndexer` |
-| `RawMemoryStore` | `src/memory/store/raw_memory.rs` | Raw memory CRUD + is_processed flag | `CompressionService`, `SessionCompactor` |
+| `RawMemoryStore` | `src/memory/store/raw_memory.rs` + `src/memory/store/markdown/` | Markdown raw CRUD + metadata `is_processed` flag | `CompressionService`, `SessionCompactor` |
 | `DreamStore` | `src/memory/store/mod.rs` | Dream status + daily insights | `DreamDaemon` |
 | `CompressionStore` | `src/memory/store/mod.rs` | Compression-run audit metadata | `CompressionService` |
 
-All four are implemented by `SqliteMemoryBackend`, wrapped in `MemoryBackend = Arc<SqliteMemoryBackend>`.
+The production `RawMemoryStore` implementation is `MarkdownSessionStore`; `SqliteMemoryBackend` remains the notes/vector/Dream backend and does not implement raw-memory storage. `metadata.db` stores the rebuildable identity and raw metadata indexes.
 
 ## 5. Working Memory Assembler
 
@@ -408,7 +409,7 @@ Evidence traceability from user profile → synthesized notes → distilled note
 
 Both are materialized into SQLite tables `notes_sources` and `notes_provenance` by the `NoteIndexer` via `index_note()`.
 
-**L0 (Raw source):** `raw_memories` rows are the authoritative source. Read APIs:
+**L0 (Raw source):** Markdown raw bodies are authoritative; `metadata.db` stores the rebuildable `raw_memory_index`. Read APIs:
 - `RawMemoryStore::get_raws_by_ids(ids)` — fetch raw rows by ID.
 - `RawMemoryStore::get_raws_by_session(session_id)` — fetch all raws in a session.
 - `NoteStore::notes_citing(raw_id)` — every note that references a raw, from **both** tables: `notes_sources` (note-level, the `source_notes` frontmatter list) `UNION` `notes_provenance` (fact-level, an inline `<!-- src: ... -->` marker on one line). Neither contains the other — a note can quote a raw in a single fact without that raw reaching its frontmatter — and until 2026-08-23 the query read only the first, while this line, the trait doc, and the `RAW_MEMORY.md` retention invariant all already described the union.
@@ -416,7 +417,7 @@ Both are materialized into SQLite tables `notes_sources` and `notes_provenance` 
 **Consumer:** The `memory_trace` builtin tool and the `memory.trace` gateway RPC expose the drill-down chain:
 - Kind `profile_section` → session IDs from `USER.md ## Sources`.
 - Kind `note` → `source_notes` list (L2→L1), plus a `facts[]` block: every fact of the note with its marker text stripped, its `origin` (`raw_source` / `prior_note` / `inferred` / `system` / `legacy`), its `inferred` flag and its `source_id`. This is the first structured read of that axis. The markers are written on every fact at ingest and stripped from every other rendering; the one other path that reaches a caller is `note_manage(action='get')`, which returns the raw file — capped, unstructured, and with nothing saying what the HTML comments mean.
-- Kind `raw` → raw-memory content from `raw_memories`.
+- Kind `raw` → raw-memory content loaded from Markdown through `RawMemoryStore`.
 
 Missing or pruned raws are gracefully degraded with `pruned: true` marker; the chain never errors.
 
@@ -567,7 +568,7 @@ are derived and rebuildable — the same shape as Aleph).
 | Failed-batch retry | retry-once-then-drop | backoff `[5s,15s,60s]` | 2-level budget + `retryable` classification | 6h grace window, both arms | **Fixed 2026-08-01** — Aleph's own `Ok` arm was already right; the `Err` arm had regressed from it |
 | Always-on rule floor under budget | — | — | — | pinned `relevance: 1.0`, sorted first | **Aleph-original**, was half-wired; fixed |
 | Recall→usefulness feedback | — | `recallVerifier` roundtrip probe | — | `recall_signals` → reinforcement + 5th relevance signal | **Aleph already has the equivalent** |
-| Durable sync work queue | — | — | `md_change_state` (status/lsn/claim/orphan sweep) | `raw_memories.is_processed` | **Deliberately not doing** — R3/P6, a large subsystem for a property an anti-join already gives |
+| Durable sync work queue | — | — | `md_change_state` (status/lsn/claim/orphan sweep) | `raw_memory_index.is_processed` | **Implemented** — pending state is metadata-only and raw bodies remain Markdown source of truth |
 | Epoch / env-change invalidation | — | `checkEpochBoundary` | — | wall-clock decay only | **Deliberately not doing** — R10, no consumer |
 | Deterministic claim state machine | — | — | — | LLM-driven Strengthen/Supersede | **Deliberately not doing** — R7 |
 | Recall credit weighted by channel/outcome | — | `stable_no_error → inert` | — | all channels equal | **Deferred** — genuinely attractive (breaks the circular "retrieved ⇒ proven" loop in `evidence::recall_support`) and R7/R10-legal, but no confirmed defect. Wants its own change with its own evidence |

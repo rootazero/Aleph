@@ -2,7 +2,7 @@ use super::SessionCompactor;
 use crate::error::AlephError;
 use crate::memory::extensions::insert_with_capture_filter;
 use crate::memory::extensions::types::CaptureCtx;
-use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 use crate::sync_primitives::Arc;
@@ -285,7 +285,6 @@ impl SessionCompactor {
 #[cfg(test)]
 mod tests {
     use crate::memory::session_compactor::{SessionCompactor, SessionCompactorConfig};
-    use crate::memory::store::MemoryBackend;
     use crate::sync_primitives::Arc;
 
     /// Regression: `store_raw_chunk` used to hardcode agent `"default"` while
@@ -297,8 +296,11 @@ mod tests {
         use crate::memory::store::raw_memory::RawMemoryStore;
 
         let temp = tempfile::tempdir().unwrap();
-        let database: MemoryBackend =
-            Arc::new(crate::memory::store::sqlite::SqliteMemoryBackend::new(temp.path()).unwrap());
+        let database = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(temp.path())
+                .await
+                .unwrap(),
+        );
         let compactor = SessionCompactor::new(database.clone(), SessionCompactorConfig::default());
 
         compactor

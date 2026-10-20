@@ -146,6 +146,7 @@ impl ToolFailureDistillStage {
     async fn pending(
         &self,
         store: &MemoryBackend,
+        raw_store: &dyn RawMemoryStore,
         agent_id: &str,
     ) -> Result<Option<ToolFailureDigest>, AlephError> {
         let watermark = store
@@ -188,9 +189,8 @@ impl ToolFailureDistillStage {
         } else {
             (now - self.lookback_secs).max(0)
         };
-        let raw: &dyn RawMemoryStore = store.as_ref();
         let digest = aggregate_tool_failures(
-            raw,
+            raw_store,
             agent_id,
             since,
             (now - since).max(0),
@@ -215,9 +215,16 @@ impl ToolFailureDistillStage {
 /// `DreamPipeline::from_strategy` builds. If this stage ever gains config
 /// knobs, both construction sites must read them or the two will drift apart
 /// silently (the gate admitting corpora the stage then no-ops on, or worse).
-pub(crate) async fn has_undistilled_tool_failures(store: &MemoryBackend, agent_id: &str) -> bool {
+pub(crate) async fn has_undistilled_tool_failures(
+    store: &MemoryBackend,
+    raw_store: Option<&dyn RawMemoryStore>,
+    agent_id: &str,
+) -> bool {
+    let Some(raw_store) = raw_store else {
+        return false;
+    };
     ToolFailureDistillStage::default()
-        .pending(store, agent_id)
+        .pending(store, raw_store, agent_id)
         .await
         .map_or(true, |o| o.is_some())
 }
@@ -233,7 +240,11 @@ impl DreamStage for ToolFailureDistillStage {
         // rust-doctor-disable-next-line excessive-clone
         let store = ctx.database.clone();
 
-        let digest = match self.pending(&store, &ctx.agent_id).await {
+        let Some(raw_store) = ctx.raw_store.as_deref() else {
+            return Ok(ctx);
+        };
+
+        let digest = match self.pending(&store, raw_store, &ctx.agent_id).await {
             Ok(Some(d)) => d,
             Ok(None) => {
                 tracing::debug!("ToolFailureDistill: no new failures above quorum, skipping");
@@ -605,12 +616,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let note_root = dir.path().join("note");
         let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let raw_store = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(dir.path())
+                .await
+                .unwrap(),
+        );
         let indexer = NoteIndexer::new(note_root.clone(), store.clone());
 
         for i in 0..n {
             let mut row = failure_row(&format!("f{i}"), "bash", &format!("exit {i}"));
             row.created_at -= age_secs;
-            store.insert_raw_memory(&row).await.unwrap();
+            raw_store.insert_raw_memory(&row).await.unwrap();
         }
 
         let ctx = DreamContext {
@@ -618,6 +634,7 @@ mod tests {
             note_contents: std::collections::HashMap::new(),
             agent_id: "default".into(),
             database: store.clone(),
+            raw_store: Some(raw_store),
             indexer,
             provider: Arc::new(crate::providers::mock::MockProvider::new(llm_response)),
             embedder: Arc::new(StubEmbedder),
@@ -893,25 +910,30 @@ mod tests {
     async fn the_corpus_gate_sees_exactly_what_the_stage_would_distill() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let raw_store = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(dir.path())
+                .await
+                .unwrap(),
+        );
         let backend: MemoryBackend = store.clone();
 
         assert!(
-            !has_undistilled_tool_failures(&backend, "researcher").await,
+            !has_undistilled_tool_failures(&backend, Some(raw_store.as_ref()), "researcher",).await,
             "a corpus with no failures must not be woken"
         );
 
         for i in 0..DEFAULT_MIN_FAILURES {
             let mut row = failure_row(&format!("r{i}"), "bash", "exit 127");
             row.agent_id = "researcher".into();
-            store.insert_raw_memory(&row).await.unwrap();
+            raw_store.insert_raw_memory(&row).await.unwrap();
         }
 
         assert!(
-            has_undistilled_tool_failures(&backend, "researcher").await,
+            has_undistilled_tool_failures(&backend, Some(raw_store.as_ref()), "researcher",).await,
             "a quorum of fresh failures must make its own corpus eligible"
         );
         assert!(
-            !has_undistilled_tool_failures(&backend, "default").await,
+            !has_undistilled_tool_failures(&backend, Some(raw_store.as_ref()), "default",).await,
             "failures must only wake the agent they were recorded against"
         );
 
@@ -920,7 +942,7 @@ mod tests {
             .set_dream_watermark(WATERMARK_CONSUMER, "researcher", newest)
             .unwrap();
         assert!(
-            !has_undistilled_tool_failures(&backend, "researcher").await,
+            !has_undistilled_tool_failures(&backend, Some(raw_store.as_ref()), "researcher",).await,
             "distilled failures must not re-wake the corpus every night"
         );
     }

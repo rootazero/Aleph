@@ -163,7 +163,7 @@ pub async fn handle_reset_db(
 
 /// Handle sessions.delete RPC request with database backend.
 ///
-/// Before dropping the transcript we capture its tail into `raw_memories`
+/// Before dropping the transcript we capture its tail through `RawMemoryStore`
 /// as a `SessionEnd` raw so the `CompressionService` / `ProfileSynthesizer`
 /// can mine durable knowledge from the dying session. Without this hook
 /// `USER.md` never updates and per-session digests are silently lost.
@@ -273,7 +273,7 @@ async fn handle_delete_db_inner(
                         // The `_without_resume` entry point is the one that
                         // does NOT also write a `resume.json` of the
                         // conversation being deleted; the tail capture into
-                        // `raw_memories` (this function's documented purpose)
+                        // `RawMemoryStore` (this function's documented purpose)
                         // is unchanged.
                         crate::gateway::session_manager::ops::emit_session_end_raw_without_resume(
                             Arc::clone(w),

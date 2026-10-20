@@ -4,7 +4,7 @@
 //! the lazy synthesizer must run.
 //!
 //! Naming note: the plan calls this "`retrieve_summary_fact`" / "`MemoryFact`"
-//! but actual storage is `RawMemory` in the `raw_memories` table.
+//! but actual storage is Markdown-backed `RawMemory` through `RawMemoryStore`.
 
 use crate::sync_primitives::Arc;
 
@@ -29,17 +29,13 @@ pub async fn retrieve_summary_fact(
 mod tests {
     use crate::sync_primitives::Arc;
 
+    use super::super::synthesizer::test_support::make_store;
     use super::*;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-    use crate::memory::store::sqlite::SqliteMemoryBackend;
-
-    async fn build_in_memory_store() -> Arc<dyn RawMemoryStore> {
-        Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"))
-    }
 
     #[tokio::test]
     async fn returns_none_when_no_summary_exists() {
-        let store = build_in_memory_store().await;
+        let (_raw_dir, store) = make_store().await;
         let result = retrieve_summary_fact(&store, "agent-1", "sess-empty")
             .await
             .unwrap();
@@ -48,7 +44,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_raw_when_summary_exists() {
-        let store = build_in_memory_store().await;
+        let (_raw_dir, store) = make_store().await;
         let raw = RawMemory::new(
             "Test summary".to_string(),
             RawMemorySource::SessionCompressed,
@@ -74,7 +70,7 @@ mod tests {
     async fn ignores_non_session_compressed_at_same_path() {
         // Defensive — if some bug ever puts a non-SessionCompressed RawMemory
         // at /end-summary, we don't accidentally serve it as a summary.
-        let store = build_in_memory_store().await;
+        let (_raw_dir, store) = make_store().await;
         let raw = RawMemory::new("Wrong".to_string(), RawMemorySource::Transcript)
             .with_agent("agent-1")
             .with_session("sess-bad")

@@ -485,7 +485,7 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
 /// write the *caller's* data — they sweep **every corpus on disk**, including
 /// every `main__u-*` and `main__p-*` partition:
 ///
-/// - `memory.compress` iterates `SELECT DISTINCT agent_id FROM raw_memories`
+/// - `memory.compress` enumerates agent IDs through `RawMemoryStore`
 ///   and rewrites each one's raw memories.
 /// - `memory.reembed` enumerates every corpus and re-embeds it; a member could
 ///   start an install-wide migration.

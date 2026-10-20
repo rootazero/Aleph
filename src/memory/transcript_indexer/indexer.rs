@@ -2,7 +2,6 @@ use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::RawMemoryStore;
-use crate::memory::store::MemoryBackend;
 use crate::sync_primitives::Arc;
 
 use super::config::TranscriptIndexerConfig;
@@ -11,11 +10,11 @@ use super::config::TranscriptIndexerConfig;
 /// `memory_search` transcripts leg) must query by this same constant.
 pub const TRANSCRIPT_PATH_PREFIX: &str = "aleph://transcript/";
 
-/// Stores per-turn transcript chunks as plain `raw_memories` rows — no
+/// Stores per-turn transcript chunks as Markdown-backed raw memories — no
 /// vectors are produced here; recall over these rows is substring-based
 /// (`memory_search` transcripts leg) and later compression consumes them.
 pub struct TranscriptIndexer {
-    database: MemoryBackend,
+    database: Arc<dyn RawMemoryStore>,
     config: TranscriptIndexerConfig,
     /// Optional capture-filter registry (Spec 4 Task 6).
     /// When set, transcript raw-memory rows go through `insert_with_capture_filter`.
@@ -25,7 +24,7 @@ pub struct TranscriptIndexer {
 
 impl TranscriptIndexer {
     /// Create new indexer with default config
-    pub fn new(database: MemoryBackend) -> Self {
+    pub fn new(database: Arc<dyn RawMemoryStore>) -> Self {
         Self {
             database,
             config: TranscriptIndexerConfig::default(),
@@ -34,7 +33,7 @@ impl TranscriptIndexer {
     }
 
     /// Create with custom config
-    pub fn with_config(database: MemoryBackend, config: TranscriptIndexerConfig) -> Self {
+    pub fn with_config(database: Arc<dyn RawMemoryStore>, config: TranscriptIndexerConfig) -> Self {
         Self {
             database,
             config,
@@ -95,7 +94,7 @@ impl TranscriptIndexer {
                 format!("{TRANSCRIPT_PATH_PREFIX}{session_key}/{seq}")
             };
 
-            // Insert to raw_memories
+            // Insert through RawMemoryStore
             {
                 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
                 // rust-doctor-disable-next-line excessive-clone

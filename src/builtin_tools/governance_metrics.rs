@@ -27,6 +27,7 @@ use crate::error::Result;
 // cannot drift apart. A local literal here counted nothing the day the writer
 // changed its prefix, and nothing would have said so.
 use crate::memory::dreaming::stages::feedback_distill::CORRECTION_PATH_PREFIX;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::sqlite::dream_reports::DreamPipelineStat;
 use crate::memory::store::MemoryBackend;
 use crate::tools::AlephTool;
@@ -77,12 +78,13 @@ pub struct GovernanceMetricsOutput {
 #[derive(Clone)]
 pub struct GovernanceMetricsTool {
     db: MemoryBackend,
+    raw_store: std::sync::Arc<dyn RawMemoryStore>,
 }
 
 impl GovernanceMetricsTool {
     #[must_use]
-    pub const fn new(db: MemoryBackend) -> Self {
-        Self { db }
+    pub fn new(db: MemoryBackend, raw_store: std::sync::Arc<dyn RawMemoryStore>) -> Self {
+        Self { db, raw_store }
     }
 }
 
@@ -141,8 +143,15 @@ last_run_status); for the loop topology use `loop_graph(action="status")`."#;
         let (window_days, since_epoch_secs) = resolve_window(args.window_days, now_epoch_secs());
 
         let corrections = self
-            .db
-            .count_raw_by_path_prefix_since(CORRECTION_PATH_PREFIX, since_epoch_secs)?;
+            .raw_store
+            .get_raw_by_path_prefix_since(
+                CORRECTION_PATH_PREFIX,
+                crate::routing::DEFAULT_AGENT_ID,
+                since_epoch_secs,
+                usize::MAX,
+            )
+            .await?
+            .len();
         // Base corpus only. Project sub-cycles now write rows of their own, and
         // summing them here would inflate `runs` by the number of open projects
         // while leaving `feedback_distilled_sum` flat — that stage is
@@ -201,6 +210,11 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let backend = Arc::new(crate::memory::store::SqliteMemoryBackend::new(tmp.path()).unwrap());
+        let raw_store = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(tmp.path())
+                .await
+                .unwrap(),
+        );
 
         // A very recent correction (created_at ≈ now) must fall inside a 7d window.
         let now = now_epoch_secs();
@@ -211,7 +225,7 @@ mod tests {
         .with_path("aleph://correction/c1")
         .with_agent("main");
         corr.created_at = now - 100;
-        backend.insert_raw_memory(&corr).await.unwrap();
+        raw_store.insert_raw_memory(&corr).await.unwrap();
 
         backend
             .insert_dream_report(&PersistedDreamReport {
@@ -257,7 +271,7 @@ mod tests {
             })
             .unwrap();
 
-        let tool = GovernanceMetricsTool::new(backend);
+        let tool = GovernanceMetricsTool::new(backend, raw_store);
         let out = tool
             .call(GovernanceMetricsArgs { window_days: None })
             .await

@@ -149,6 +149,7 @@ pub struct BuiltinToolRegistry {
     /// `BuiltinToolRegistry::build_flag_user_correction`). `None` disables the
     /// tool — it requires a memory backend.
     pub(crate) flag_user_correction_db: Option<crate::memory::store::MemoryBackend>,
+    pub(crate) raw_memory_store: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
     /// Shared workspace handle for memory tools — written by `ExecutionEngine` after workspace resolution
     pub(crate) memory_workspace_handle: Option<Arc<RwLock<String>>>,
     /// Gateway context for sessions tools (session.list, session.send).

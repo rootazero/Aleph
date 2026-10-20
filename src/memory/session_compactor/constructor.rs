@@ -1,19 +1,19 @@
 use std::collections::HashMap;
 
 use super::{SessionCompactor, SessionCompactorConfig};
-use crate::memory::store::MemoryBackend;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 
 impl SessionCompactor {
     /// Create a new `SessionCompactor` with the given storage backend and config.
-    pub fn new(database: MemoryBackend, config: SessionCompactorConfig) -> Self {
+    pub fn new(database: Arc<dyn RawMemoryStore>, config: SessionCompactorConfig) -> Self {
         Self {
+            raw_memory_writer: Some(database.clone()),
             database,
             provider: None,
             config,
             indexer: None,
-            raw_memory_writer: None,
             capture_registry: None,
             project_scoped: false,
             compress_locks: tokio::sync::Mutex::new(HashMap::new()),
@@ -52,6 +52,18 @@ impl SessionCompactor {
         mut self,
         writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     ) -> Self {
+        self.database = writer.clone();
+        if self.indexer.is_some() {
+            self.indexer = Some(crate::memory::transcript_indexer::TranscriptIndexer::new(
+                writer.clone(),
+            ));
+            if let Some(registry) = self.capture_registry.clone() {
+                self.indexer = self
+                    .indexer
+                    .take()
+                    .map(|i| i.with_capture_registry(registry));
+            }
+        }
         self.raw_memory_writer = Some(writer);
         self
     }

@@ -692,7 +692,11 @@ impl BuiltinToolRegistry {
             memory_explore_tool,
             memory_workspace_handle,
             memory_session_key_handle,
-        ) = if let (Some(ref db), Some(ref embedder)) = (&config.memory_db, &config.embedder) {
+        ) = if let (Some(ref db), Some(ref embedder), Some(ref raw_store)) = (
+            &config.memory_db,
+            &config.embedder,
+            &config.raw_memory_store,
+        ) {
             // Cross-encoder rerank + retrieval-scoring config (both disabled by
             // default → no behaviour change). Read once to avoid re-locking.
             let (rerank_cfg, scoring_cfg, expansion_cfg): (
@@ -712,6 +716,7 @@ impl BuiltinToolRegistry {
             };
             let search_tool = MemorySearchTool::new_with_config(
                 db.clone(),
+                raw_store.clone(),
                 Arc::clone(embedder),
                 rerank_cfg.as_ref(),
                 scoring_cfg.as_ref(),
@@ -1354,6 +1359,7 @@ impl BuiltinToolRegistry {
             // call, in the dispatch arm, because its agent id must be the one
             // executing the turn. See `build_flag_user_correction`.
             flag_user_correction_db: config.memory_db.clone(),
+            raw_memory_store: config.raw_memory_store.clone(),
             browser_open_tool,
             browser_companion_tool,
             browser_click_tool,
@@ -1507,20 +1513,14 @@ impl BuiltinToolRegistry {
     /// never reads.
     pub(crate) fn build_flag_user_correction(
         db: &crate::memory::store::MemoryBackend,
+        raw_store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
         agent_id: String,
     ) -> crate::builtin_tools::FlagUserCorrectionTool {
-        // The cast to Arc<dyn RawMemoryStore> is zero-cost (vtable lookup).
-        crate::builtin_tools::FlagUserCorrectionTool::new(
-            db.clone()
-                as crate::sync_primitives::Arc<
-                    dyn crate::memory::store::raw_memory::RawMemoryStore,
-                >,
-            agent_id,
-        )
-        // Same backend `remember` audits to and `memory_trace` reads back, so
-        // "why isn't that in memory?" covers rung 2 of the destination ladder
-        // and not just rung 1.
-        .with_decision_log(Some(db.clone()))
+        crate::builtin_tools::FlagUserCorrectionTool::new(raw_store, agent_id)
+            // Same backend `remember` audits to and `memory_trace` reads back, so
+            // "why isn't that in memory?" covers rung 2 of the destination ladder
+            // and not just rung 1.
+            .with_decision_log(Some(db.clone()))
     }
 }
 

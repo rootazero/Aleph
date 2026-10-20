@@ -67,6 +67,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) tool_health: Option<Arc<crate::tool_metadata::ToolHealthCache>>,
     /// Memory backend for auto-memorization of conversations
     pub(super) memory_backend: Option<crate::memory::store::MemoryBackend>,
+    /// Raw-memory writer, independent of the derived SQLite indexes.
+    pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
     /// Compression service for turn-based fact extraction
     pub(super) compression_service: Option<Arc<crate::memory::compression::CompressionService>>,
     /// Memory context provider for SQLite-backed prompt augmentation
@@ -169,6 +171,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             workspace_manager: None,
             tool_health: None,
             memory_backend,
+            raw_memory_writer: None,
             compression_service: None,
             memory_context_provider: None,
             app_config: None,
@@ -267,6 +270,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         provider: Arc<crate::thinker::MemoryContextProvider>,
     ) -> Self {
         self.memory_context_provider = Some(provider);
+        self
+    }
+
+    /// Inject the raw-memory store inherited by spawned subagents.
+    #[must_use]
+    pub fn with_raw_memory_writer(
+        mut self,
+        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) -> Self {
+        self.raw_memory_writer = Some(writer);
         self
     }
 

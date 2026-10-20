@@ -50,6 +50,7 @@ use crate::error::AlephError;
 use crate::memory::embedding_provider::EmbeddingProvider;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::NoteIndexer;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
@@ -73,6 +74,7 @@ use super::{
 pub(super) struct ProjectCycleDeps<'a> {
     pub memory_dir: &'a Path,
     pub database: &'a MemoryBackend,
+    pub raw_store: &'a Option<Arc<dyn RawMemoryStore>>,
     pub provider: &'a Arc<dyn AiProvider>,
     pub embedder: &'a Arc<dyn EmbeddingProvider>,
     pub config: &'a ConfigDreamingConfig,
@@ -221,6 +223,7 @@ pub(super) async fn run_namespace_cycle(
     let has_corrections =
         crate::memory::dreaming::stages::feedback_distill::has_undistilled_corrections(
             deps.database,
+            deps.raw_store.as_deref(),
             agent_id,
             deps.config.feedback_lookback,
             deps.config.feedback_distill_min_candidates,
@@ -233,6 +236,7 @@ pub(super) async fn run_namespace_cycle(
     let has_tool_failures =
         crate::memory::dreaming::stages::tool_failure_distill::has_undistilled_tool_failures(
             deps.database,
+            deps.raw_store.as_deref(),
             agent_id,
         )
         .await;
@@ -300,6 +304,7 @@ pub(super) async fn run_namespace_cycle(
         notes,
         note_contents: HashMap::new(),
         agent_id: agent_id.to_string(),
+        raw_store: deps.raw_store.clone(),
         // rust-doctor-disable-next-line excessive-clone
         database: deps.database.clone(),
         indexer,

@@ -49,8 +49,8 @@ use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
 use crate::gateway::session_store::SessionStore;
 use crate::looping::types::{Cadence, LoopState};
 use crate::looping::LoopRegistry;
+use crate::memory::store::markdown::MarkdownSessionStore;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-use crate::memory::store::SqliteMemoryBackend;
 use crate::scope::{with_scope, ScopeAttribution};
 
 /// Build a minimal JSON-RPC request for a handler call in these tests.
@@ -151,8 +151,8 @@ async fn two_users_cannot_see_each_other_end_to_end() {
         })
         .unwrap(),
     );
-    let memory: Arc<SqliteMemoryBackend> =
-        Arc::new(SqliteMemoryBackend::new(&temp.path().join("memory.db")).unwrap());
+    let memory: Arc<dyn RawMemoryStore> =
+        Arc::new(MarkdownSessionStore::new(temp.path()).await.unwrap());
     let artifacts = Arc::new(ArtifactStore::new(temp.path().join("artifacts")));
     let events = EventVisibilityIndex::new();
     let loops = LoopRegistry::default();
@@ -743,8 +743,8 @@ async fn two_members_share_one_room_memory_and_nobody_elses() {
         .unwrap_or_else(|e| e.into_inner());
 
     let temp = TempDir::new().unwrap();
-    let memory: Arc<SqliteMemoryBackend> =
-        Arc::new(SqliteMemoryBackend::new(&temp.path().join("memory.db")).unwrap());
+    let memory: Arc<dyn RawMemoryStore> =
+        Arc::new(MarkdownSessionStore::new(temp.path()).await.unwrap());
 
     // A real room with a real roster: alice owns it, bob is on it, mallory is
     // not. The roster IS the authorization (spec §6.1) — there is no second
