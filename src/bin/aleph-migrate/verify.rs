@@ -1,5 +1,6 @@
 //! Verify module: Check migration integrity
 
+use crate::export::session_dir_name;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashSet;
@@ -96,7 +97,7 @@ fn check_session_count(
     if let Some(orig_path) = original_db {
         let orig_conn = Connection::open(orig_path)?;
         report.session_count_original = Some(orig_conn.query_row(
-            "SELECT COUNT(DISTINCT session_id) FROM raw_memories WHERE source = 'session' AND session_id IS NOT NULL",
+            "SELECT COUNT(DISTINCT session_id) FROM raw_memories WHERE session_id IS NOT NULL",
             [],
             |row| row.get(0),
         )?);
@@ -135,7 +136,7 @@ fn check_session_files(
         .collect::<Result<Vec<_>, _>>()?;
 
     for session_id in session_ids {
-        let session_dir = sessions_dir.join(&session_id);
+        let session_dir = sessions_dir.join(session_dir_name(&session_id)?);
 
         // Check required files
         let transcript = session_dir.join("transcript.md");
@@ -184,7 +185,9 @@ fn check_metadata_consistency(
         .collect::<Result<Vec<_>, _>>()?;
 
     for session_id in session_ids {
-        let metadata_path = sessions_dir.join(&session_id).join("metadata.json");
+        let metadata_path = sessions_dir
+            .join(session_dir_name(&session_id)?)
+            .join("metadata.json");
 
         if !metadata_path.exists() {
             continue; // Already reported in check_session_files
@@ -279,7 +282,9 @@ fn check_content_hashes(
         .collect::<Result<Vec<_>, _>>()?;
 
     for (session_id, stored_hash) in rows {
-        let transcript_path = sessions_dir.join(&session_id).join("transcript.md");
+        let transcript_path = sessions_dir
+            .join(session_dir_name(&session_id)?)
+            .join("transcript.md");
 
         if !transcript_path.exists() {
             continue;

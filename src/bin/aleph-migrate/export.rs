@@ -105,11 +105,11 @@ pub fn run_export(
     let ended_expr = optional_column(&columns, "ended_at");
     let status_expr = optional_column(&columns, "compression_status");
     let tags_expr = optional_column(&columns, "tags");
-    let source_clause = if columns.contains("source") {
-        " WHERE source = 'session'"
-    } else {
-        " WHERE session_id IS NOT NULL"
-    };
+    // The legacy store records session rows under several source values
+    // (transcript, tool_invocation, session_compressed, and others). The
+    // durable session boundary is session_id, so filtering by a synthetic
+    // source = 'session' would silently export nothing from real databases.
+    let source_clause = " WHERE session_id IS NOT NULL";
 
     let mut query = format!(
         "SELECT session_id, agent_id, {workspace_expr}, {timestamp_column}, {ended_expr}, content, {status_expr}, {tags_expr} FROM raw_memories{source_clause}"
@@ -205,6 +205,37 @@ pub fn run_export(
     serde_json::to_writer_pretty(file, &export_data).context("Failed to write JSON")?;
     log::info!("✓ Export completed successfully");
     Ok(())
+}
+
+pub fn session_dir_name(session_id: &str) -> Result<String> {
+    if session_id.is_empty() {
+        anyhow::bail!("session_id must not be empty");
+    }
+
+    // Session IDs are opaque values and commonly contain `:` on Windows.
+    // Encode every byte outside a conservative portable filename alphabet so
+    // the same export can be transformed on Windows, macOS, and Linux.
+    let mut encoded = String::with_capacity(session_id.len());
+    for byte in session_id.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_') {
+            encoded.push(*byte as char);
+        } else {
+            use std::fmt::Write;
+            write!(encoded, "%{byte:02X}").expect("writing to String cannot fail");
+        }
+    }
+
+    // Avoid Windows device names even when the original ID contains only
+    // portable characters.
+    let upper = encoded.to_ascii_uppercase();
+    let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4
+            && matches!(&upper[..3], "COM" | "LPT")
+            && upper.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        encoded.insert_str(0, "%00");
+    }
+    Ok(encoded)
 }
 
 fn table_columns(conn: &rusqlite::Connection, table: &str) -> Result<HashSet<String>> {

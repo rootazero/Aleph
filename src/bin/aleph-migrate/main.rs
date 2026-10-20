@@ -42,7 +42,7 @@ enum Commands {
     /// Export sessions from SQLite to JSON
     Export {
         /// Path to old SQLite database
-        #[arg(long, default_value = "~/.aleph/metadata.db")]
+        #[arg(long, default_value = "~/.aleph/data/memory.db")]
         db: PathBuf,
 
         /// Output JSON file path

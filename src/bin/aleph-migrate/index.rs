@@ -1,5 +1,6 @@
 //! Index module: Build metadata.db from Markdown sessions
 
+use crate::export::session_dir_name;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
@@ -152,13 +153,8 @@ fn index_single_session(conn: &Connection, session_path: &Path) -> Result<()> {
     let session_id = metadata["session_id"]
         .as_str()
         .context("Missing session_id")?;
-    if session_id.is_empty()
-        || session_id.contains('/')
-        || session_id.contains('\\')
-        || Path::new(session_id).is_absolute()
-        || Path::new(session_id).components().count() != 1
-        || session_path.file_name().and_then(|name| name.to_str()) != Some(session_id)
-    {
+    let expected_dir = session_dir_name(session_id)?;
+    if session_path.file_name().and_then(|name| name.to_str()) != Some(expected_dir.as_str()) {
         anyhow::bail!("metadata session_id does not match a safe session directory");
     }
     let agent_id = metadata["agent_id"].as_str().context("Missing agent_id")?;
@@ -326,7 +322,9 @@ fn build_fts5_index(conn: &Connection, sessions_dir: &Path, rebuild: bool) -> Re
             log::info!("  Indexing transcripts: {}/{}", idx, total);
         }
 
-        let transcript_path = sessions_dir.join(session_id).join("transcript.md");
+        let transcript_path = sessions_dir
+            .join(session_dir_name(session_id)?)
+            .join("transcript.md");
         if !transcript_path.exists() {
             continue;
         }

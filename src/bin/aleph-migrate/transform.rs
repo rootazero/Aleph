@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::export::{ExportData, ExportSession};
+use crate::export::{session_dir_name, ExportData, ExportSession};
 
 pub fn run_transform(
     input_path: PathBuf,
@@ -106,8 +106,7 @@ fn transform_session(
     migration_root: &Path,
     overwrite: bool,
 ) -> Result<()> {
-    validate_session_id(&session.session_id)?;
-    let session_dir = output_dir.join(&session.session_id);
+    let session_dir = output_dir.join(session_dir_name(&session.session_id)?);
     let existed = session_dir.exists();
 
     let result = (|| {
@@ -164,18 +163,6 @@ fn migration_root(output_dir: &Path) -> Result<PathBuf> {
         parent.to_path_buf()
     };
     Ok(root)
-}
-
-fn validate_session_id(session_id: &str) -> Result<()> {
-    if session_id.is_empty()
-        || session_id.contains('/')
-        || session_id.contains('\\')
-        || Path::new(session_id).is_absolute()
-        || Path::new(session_id).components().count() != 1
-    {
-        anyhow::bail!("Invalid session_id for filesystem path: {session_id:?}");
-    }
-    Ok(())
 }
 
 #[derive(Debug, Serialize, Deserialize)]

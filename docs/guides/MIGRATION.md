@@ -45,8 +45,8 @@ Aleph is transitioning from SQLite-based raw memory storage to a Markdown-first 
 ### Before (SQLite)
 
 ```
-~/.aleph/metadata.db  ← All session data in SQLite
-~/.aleph/memory/note/                         ← Knowledge notes (unchanged)
+~/.aleph/data/memory.db  ← Legacy SQLite raw memory store
+~/.aleph/memory/note/             ← Knowledge notes (unchanged)
 ```
 
 **Storage**:
@@ -119,8 +119,8 @@ cd ~/.aleph
 tar -czf ~/aleph-backup-$(date +%Y%m%d).tar.gz .
 
 # 2. Backup old database (if exists)
-if [ -f ~/.aleph/metadata.db ]; then
-    cp ~/.aleph/metadata.db ~/aleph.db.backup
+if [ -f ~/.aleph/data/memory.db ]; then
+    cp ~/.aleph/data/memory.db ~/aleph-memory.db.backup
 fi
 
 # 3. Verify backup integrity
@@ -131,8 +131,8 @@ tar -tzf ~/aleph-backup-$(date +%Y%m%d).tar.gz | wc -l
 
 ```bash
 # Count sessions in old database
-sqlite3 ~/.aleph/metadata.db \
-  "SELECT COUNT(*) FROM raw_memories WHERE source='session';"
+sqlite3 ~/.aleph/data/memory.db \
+  "SELECT COUNT(DISTINCT session_id) FROM raw_memories WHERE session_id IS NOT NULL;"
 
 # Estimate migration time
 # < 100 sessions: 15–30 min
@@ -156,7 +156,7 @@ export PATH="$PWD/target/release:$PATH"
 
 ```bash
 # Estimate required space (3x current database size)
-du -sh ~/.aleph/metadata.db
+du -sh ~/.aleph/data/memory.db
 df -h ~/.aleph  # Ensure sufficient free space
 ```
 
@@ -178,7 +178,7 @@ The migration is a **4-step process**:
 ```bash
 # Export all sessions to JSON
 aleph-migrate export \
-  --db ~/.aleph/metadata.db \
+  --db ~/.aleph/data/memory.db \
   --output ~/.aleph/migration/export.json \
   --include-attachments
 
@@ -319,7 +319,7 @@ aleph-migrate index \
 aleph-migrate verify \
   --sessions-dir ~/.aleph/raw/sessions \
   --metadata-db ~/.aleph/metadata.db \
-  --original-db ~/.aleph/metadata.db \
+  --original-db ~/.aleph/data/memory.db \
   --fix
 
 # Verification checks:
@@ -402,8 +402,8 @@ aleph
 ```bash
 # Move old database to archive
 mkdir -p ~/.aleph/archive/pre-migration
-mv ~/.aleph/metadata.db \
-   ~/.aleph/archive/pre-migration/aleph.db.$(date +%Y%m%d)
+mv ~/.aleph/data/memory.db \
+   ~/.aleph/archive/pre-migration/memory.db.$(date +%Y%m%d)
 
 # Keep backup for 30 days, then delete
 ```
@@ -420,7 +420,7 @@ mv ~/.aleph/metadata.db \
 
 ```bash
 # Check if table exists
-sqlite3 ~/.aleph/metadata.db \
+sqlite3 ~/.aleph/data/memory.db \
   ".schema raw_memories"
 
 # If missing, database may be empty (no data to migrate)
@@ -507,7 +507,7 @@ aleph-migrate export [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--db <PATH>` | Path to old SQLite database | `~/.aleph/metadata.db` |
+| `--db <PATH>` | Path to old SQLite database | `~/.aleph/data/memory.db` |
 | `--output <PATH>` | Output JSON file path | `./export.json` |
 | `--agent-id <ID>` | Export only this agent's sessions | All agents |
 | `--start-date <DATE>` | Export sessions after this date (YYYY-MM-DD) | No filter |
@@ -727,8 +727,8 @@ If migration fails or you need to revert:
 ### Step 1: Restore Old Database
 
 ```bash
-# Copy backup back
-cp ~/aleph.db.backup ~/.aleph/metadata.db
+# Copy the legacy source backup back if it was archived
+cp ~/aleph-memory.db.backup ~/.aleph/data/memory.db
 ```
 
 ### Step 2: Remove New Files
@@ -767,7 +767,7 @@ Use this checklist to track your progress:
 ### Before Migration
 
 - [ ] Backup entire `~/.aleph` directory
-- [ ] Backup old database (`~/.aleph/metadata.db`)
+- [ ] Backup old database (`~/.aleph/data/memory.db`)
 - [ ] Verify backup integrity
 - [ ] Check available disk space (3x current database size)
 - [ ] Install `aleph-migrate` tool
