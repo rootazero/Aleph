@@ -1,10 +1,11 @@
-//! `ToolRegistry` — the tool lookup + execution trait for the agent loop.
+//! `ToolRegistry` — compatibility lookup + execution for builtin tools.
 //!
-//! The production tool stack dispatches every tool call through this trait,
-//! implemented by [`BuiltinToolRegistry`](super::BuiltinToolRegistry).
+//! Implemented by [`BuiltinToolRegistry`](super::BuiltinToolRegistry).
 //! `RegistryToolAdapter` (see [`crate::tools::adapters::registry_adapter`])
-//! wraps any `ToolRegistry` implementor as a `LoopTool`, which the gateway's
-//! `ScopedToolService` then exposes to the harness.
+//! wraps it as a `LoopTool` for scoped harness dispatch. This trait does not
+//! enforce `ScopedToolService` gates: ordinary `tools.invoke` calls it directly
+//! under that transport's narrower hard-floor contract. Canonical handlers
+//! live in `ToolHandlerRegistry`, not in this compatibility trait.
 //!
 //! The handle accessors (`workspace_handle`, …) let the execution engine hand
 //! workspace- and session-scoped context to tools without threading it

@@ -3,10 +3,10 @@
 //! route a prompt back to the user.
 //!
 //! Scoped by [`ScopedToolService::execute`](crate::tools::scoped::ScopedToolService)
-//! — the single production tool-dispatch chokepoint — for the duration of
-//! every tool call. Reading it never crosses a `tokio::spawn` boundary, so
-//! unlike `SESSION_ID` (which the gateway path never scopes) it is reliably
-//! visible inside tool execution.
+//! for calls dispatched through that service. Ordinary raw `tools.invoke`
+//! compatibility calls do not install this context or pass through its gates.
+//! Reading it never crosses a `tokio::spawn` boundary; tools must not assume
+//! that every execution surface supplies a turn context.
 //!
 //! Read by:
 //! - the approval requester adapter (sandbox escalations + `requires_confirmation`)

@@ -65,17 +65,47 @@ impl Default for LinuxSandboxOptions {
 #[derive(Debug, Clone)]
 pub struct BubblewrapDriver {
     options: LinuxSandboxOptions,
+    /// Git-style glob patterns whose matches must be unreadable inside every
+    /// sandboxed command — a security floor over the per-command FS policy.
+    /// See [`crate::sandbox::deny_globs`].
+    ///
+    /// Not enforceable here: bwrap has no per-access glob-deny primitive,
+    /// Landlock read grants are additive, and hiding an enumerated snapshot
+    /// with extra mounts is unsound. A non-empty vec therefore makes
+    /// `generate_args` fail closed with [`SandboxError::UnsupportedPolicy`];
+    /// the default empty vec leaves the floor off and the driver unchanged.
+    deny_read_globs: Vec<String>,
 }
 
 impl BubblewrapDriver {
     pub fn new() -> Self {
         Self {
             options: LinuxSandboxOptions::default(),
+            deny_read_globs: Vec::new(),
         }
     }
 
     pub fn with_options(options: LinuxSandboxOptions) -> Self {
-        Self { options }
+        Self {
+            options,
+            deny_read_globs: Vec::new(),
+        }
+    }
+
+    /// Build a driver that records `SandboxConfig.deny_read_globs`.
+    ///
+    /// Mirrors `WindowsSandboxDriver::with_options_and_deny_globs` so the
+    /// platform-agnostic floor is wired the same way, but this driver cannot
+    /// enforce it: a non-empty vec makes `generate_args` / `profile_for` fail
+    /// closed with `UnsupportedPolicy` instead of spawning unprotected.
+    pub fn with_options_and_deny_globs(
+        options: LinuxSandboxOptions,
+        deny_read_globs: Vec<String>,
+    ) -> Self {
+        Self {
+            options,
+            deny_read_globs,
+        }
     }
 
     fn find_bwrap(&self) -> Option<PathBuf> {
@@ -125,6 +155,27 @@ impl BubblewrapDriver {
         policy: &SandboxPolicy,
         cwd: &Path,
     ) -> Result<Vec<String>, SandboxError> {
+        // Fail closed: bwrap has no per-access glob-deny primitive; Landlock
+        // read grants are additive (a child of a granted hierarchy cannot be
+        // subtracted), and hiding a pre-enumerated snapshot with extra mounts
+        // is insufficient (the walk can be truncated, skips unreadable trees
+        // and platform defaults, and misses names created or symlinked after
+        // the snapshot). Refuse rather than run with the floor dropped.
+        if !self.deny_read_globs.is_empty() {
+            return Err(SandboxError::UnsupportedPolicy {
+                platform: "linux/bwrap",
+                feature: "deny_read_globs".into(),
+                reason: "Linux/bwrap has no per-access deny-read glob primitive. \
+                         Landlock read grants are additive and cannot subtract a \
+                         child of a granted hierarchy, and hiding an enumerated \
+                         snapshot with mounts is insufficient. Refusing to execute \
+                         rather than run with the floor silently dropped; clear \
+                         `deny_read_globs` or use a backend with per-access \
+                         enforcement, such as macOS seatbelt."
+                    .into(),
+            });
+        }
+
         self.check_wsl();
 
         let mut args = vec![
@@ -1057,5 +1108,72 @@ mod tests {
         let cwd = Path::new("/tmp/ws");
         let profile = driver.profile_for(&caps, cwd).unwrap();
         assert_eq!(profile.max_memory_mb, Some(256));
+    }
+
+    #[test]
+    fn nonempty_deny_read_globs_rejects_profile_for() {
+        // Every shape an operator can configure — including an absolute
+        // pattern, a malformed pattern, and an empty-string entry — must fail
+        // closed. The guard runs before any glob is compiled or resolved, so
+        // this stays deterministic and never touches the host filesystem.
+        let cases: [&[&str]; 4] = [&["**/.env"], &["/etc/shadow"], &["[malformed"], &[""]];
+        for globs in cases {
+            let configured: Vec<String> = globs.iter().map(|g| (*g).to_string()).collect();
+            let driver = BubblewrapDriver::with_options_and_deny_globs(
+                LinuxSandboxOptions::default(),
+                configured.clone(),
+            );
+
+            let err = driver
+                .profile_for(&SandboxCapabilities::default(), Path::new("/tmp/ws"))
+                .expect_err("non-empty deny_read_globs must fail profile generation");
+            match err {
+                SandboxError::UnsupportedPolicy {
+                    platform,
+                    feature,
+                    reason,
+                } => {
+                    assert_eq!(platform, "linux/bwrap");
+                    assert_eq!(feature, "deny_read_globs");
+                    assert!(
+                        reason.contains("per-access"),
+                        "reason must name the missing primitive, got: {reason}"
+                    );
+                }
+                other => panic!("expected UnsupportedPolicy for {configured:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn empty_deny_read_globs_preserve_profile_generation() {
+        // The default constructors and an explicitly empty floor must leave
+        // profile generation exactly as before: a real workspace profile, no
+        // shadow mounts invented.
+        let ws = tempfile::tempdir().unwrap();
+        let cwd = ws.path();
+        let cases = [
+            BubblewrapDriver::new(),
+            BubblewrapDriver::with_options(LinuxSandboxOptions::default()),
+            BubblewrapDriver::with_options_and_deny_globs(
+                LinuxSandboxOptions::default(),
+                Vec::new(),
+            ),
+        ];
+        for driver in cases {
+            let profile = driver
+                .profile_for(&SandboxCapabilities::default(), cwd)
+                .expect("empty deny_read_globs must not reject a profile");
+            assert!(
+                profile.contents.contains("--bind"),
+                "workspace bind must still be generated, got: {}",
+                profile.contents
+            );
+            assert!(
+                !profile.contents.contains("/dev/null"),
+                "an empty floor must add no shadow mounts, got: {}",
+                profile.contents
+            );
+        }
     }
 }
