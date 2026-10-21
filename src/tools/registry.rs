@@ -93,7 +93,65 @@ impl ToolHandler for AdmissionHandler {
     }
 }
 
+/// A derived callable view of one provider generation. The canonical entry
+/// remains the only source of the handler, descriptor and result budget.
+struct ProviderCallHandler {
+    inner: Arc<dyn ToolHandler>,
+    provider: ProviderHandle,
+    generation: u64,
+    name: String,
+}
+
+#[async_trait::async_trait]
+impl ToolHandler for ProviderCallHandler {
+    async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
+        self.provider
+            .acquire_call(self.generation)
+            .map_err(|error| ToolError::PermissionDenied {
+                name: self.name.clone(),
+                reason: error.to_string(),
+            })?;
+        self.inner.invoke(input).await
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        self.inner.definition()
+    }
+
+    fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        self.inner.concurrency_claim(input)
+    }
+
+    fn fences_output(&self) -> bool {
+        self.inner.fences_output()
+    }
+
+    fn bind_visible_servers(&self, visible: &McpServerFilter) -> Option<Arc<dyn ToolHandler>> {
+        self.inner.bind_visible_servers(visible).map(|inner| {
+            Arc::new(Self {
+                inner,
+                provider: self.provider.clone(),
+                generation: self.generation,
+                name: self.name.clone(),
+            }) as Arc<dyn ToolHandler>
+        })
+    }
+}
+
 impl RegistryEntry {
+    fn for_provider(&self, provider: &ProviderHandle, generation: u64) -> Self {
+        Self {
+            handler: Arc::new(ProviderCallHandler {
+                inner: Arc::clone(&self.handler),
+                provider: provider.clone(),
+                generation,
+                name: self.descriptor.name.clone(),
+            }),
+            descriptor: Arc::clone(&self.descriptor),
+            max_result_tokens: self.max_result_tokens,
+        }
+    }
+
     fn admitted(
         handler: Arc<dyn ToolHandler>,
         descriptor: ToolCapabilityDescriptor,
@@ -618,15 +676,20 @@ impl ToolHandlerRegistry {
 
     /// Capture the handler and descriptor for `name` from one atomic generation.
     ///
-    /// The owned entry remains paired and usable after replacement or removal.
+    /// The owned entry remains paired after replacement or removal, but its
+    /// captured provider generation must still be Ready at invocation time.
     /// This is an exact canonical-name lookup, not dispatch authorization.
     #[must_use]
     pub fn resolve_entry(&self, name: &str) -> Option<RegistryEntry> {
-        if !self.provider.is_ready() {
+        let (provider_state, provider_generation) = self.provider.snapshot();
+        if provider_state != ProviderState::Ready {
             return None;
         }
         let state = self.shared.snapshot();
-        state.value.entry(name).cloned()
+        state
+            .value
+            .entry(name)
+            .map(|entry| entry.for_provider(&self.provider, provider_generation))
     }
 
     /// Resolve the live handler for `name`.
@@ -649,6 +712,7 @@ impl ToolHandlerRegistry {
     /// derived name set.
     #[must_use]
     pub fn unregister(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
+        let provider_generation = self.provider.generation();
         let outcome: Result<Option<Arc<dyn ToolHandler>>, std::convert::Infallible> =
             self.shared.transact(|current, revision| {
                 let Some(entry) = current.value.entry(name) else {
@@ -667,7 +731,9 @@ impl ToolHandlerRegistry {
                         }],
                         catalog_changed: false,
                     },
-                    Arc::clone(&entry.handler),
+                    entry
+                        .for_provider(&self.provider, provider_generation)
+                        .handler,
                 )))
             });
         match outcome {
@@ -724,10 +790,22 @@ impl ToolHandlerRegistry {
     /// Recovery adapters must use this instead of pairing independent reads.
     #[must_use]
     pub fn snapshot_state(&self) -> RegistrySnapshot {
-        let state = self.shared.snapshot();
         let (provider_state, provider_generation) = self.provider.snapshot();
+        let state = self.shared.snapshot();
         let entries = if provider_state == ProviderState::Ready {
-            Arc::clone(&state.value.callable_projection)
+            Arc::new(
+                state
+                    .value
+                    .callable_projection
+                    .iter()
+                    .map(|(name, entry)| {
+                        (
+                            name.clone(),
+                            entry.for_provider(&self.provider, provider_generation),
+                        )
+                    })
+                    .collect(),
+            )
         } else {
             Arc::new(HashMap::new())
         };
@@ -1264,6 +1342,129 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn provider_fencing_rejects_cached_views_and_preserves_other_providers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let provider = ProviderHandle::new(ProviderLifecycle::ready(
+            ProviderId::new("test/fenced").unwrap(),
+            ProviderTransport::InProcess,
+        ));
+        let other = ProviderHandle::new(ProviderLifecycle::ready(
+            ProviderId::new("test/unaffected").unwrap(),
+            ProviderTransport::InProcess,
+        ));
+        let registry = ToolHandlerRegistry::new_with_provider(provider.clone());
+        let other_registry = ToolHandlerRegistry::new_with_provider(other);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let other_calls = Arc::new(AtomicUsize::new(0));
+        for (registry, counter, name) in [
+            (&registry, &calls, "counted"),
+            (&registry, &calls, "removed"),
+            (&other_registry, &other_calls, "counted"),
+        ] {
+            let raw: Arc<dyn ToolHandler> = Arc::new(AdmissionCountingHandler {
+                name: name.into(),
+                calls: counter.clone(),
+            });
+            registry
+                .register(
+                    ToolCapabilityDescriptor::from_definition(&raw.definition(), 0),
+                    raw,
+                )
+                .unwrap();
+        }
+        let entry = registry.resolve_entry("counted").unwrap();
+        let visible: McpServerFilter = Arc::new(|_| true);
+        let removed = registry.resolve_entry("removed").unwrap();
+        let cached = vec![
+            entry.clone(),
+            registry.snapshot_state().entry("counted").unwrap().clone(),
+            registry.entries_snapshot().get("counted").unwrap().clone(),
+            RegistryEntry {
+                handler: registry.resolve("counted").unwrap(),
+                ..entry.clone()
+            },
+            RegistryEntry {
+                handler: registry.snapshot().get("counted").unwrap().clone(),
+                ..entry.clone()
+            },
+            RegistryEntry {
+                handler: entry.handler.bind_visible_servers(&visible).unwrap(),
+                ..entry.clone()
+            },
+            RegistryEntry {
+                handler: registry.unregister("removed").unwrap(),
+                ..removed
+            },
+        ];
+        for entry in &cached {
+            assert_eq!(
+                invoke_captured(entry).await.value,
+                serde_json::json!({"executed": true})
+            );
+        }
+        let admitted = calls.load(Ordering::SeqCst);
+        assert_eq!(admitted, cached.len());
+        let unaffected = other_registry.resolve_entry("counted").unwrap();
+
+        // Even a future constructed before stop must check admission when polled.
+        let pending = try_invoke_captured(&cached[0]);
+        provider.transition(ProviderState::Stopping).unwrap();
+        assert_provider_denied(pending.await);
+        for state in [
+            ProviderState::Stopping,
+            ProviderState::Stopped,
+            ProviderState::Disabled,
+        ] {
+            if state != ProviderState::Stopping {
+                provider.transition(state).unwrap();
+            }
+            assert!(registry.resolve_entry("counted").is_none());
+            assert!(registry.snapshot_state().entries().is_empty());
+            for entry in &cached {
+                assert_provider_denied(try_invoke_captured(entry).await);
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), admitted);
+            invoke_captured(&unaffected).await;
+        }
+
+        provider.transition(ProviderState::Starting).unwrap();
+        assert_provider_denied(try_invoke_captured(&cached[0]).await);
+        provider.transition(ProviderState::Ready).unwrap();
+        for entry in &cached {
+            assert_provider_denied(try_invoke_captured(entry).await);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), admitted);
+        let fresh = registry.resolve_entry("counted").unwrap();
+        invoke_captured(&fresh).await;
+        assert_eq!(calls.load(Ordering::SeqCst), admitted + 1);
+        provider.transition(ProviderState::Failed).unwrap();
+        assert!(registry.resolve_entry("counted").is_none());
+        assert!(registry.snapshot_state().entries().is_empty());
+        assert_provider_denied(try_invoke_captured(&fresh).await);
+        for entry in &cached {
+            assert_provider_denied(try_invoke_captured(entry).await);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), admitted + 1);
+        invoke_captured(&unaffected).await;
+        assert_eq!(other_calls.load(Ordering::SeqCst), 4);
+
+        provider.transition(ProviderState::Starting).unwrap();
+        provider.transition(ProviderState::Ready).unwrap();
+        assert_provider_denied(try_invoke_captured(&fresh).await);
+        invoke_captured(&registry.resolve_entry("counted").unwrap()).await;
+        assert_eq!(calls.load(Ordering::SeqCst), admitted + 2);
+    }
+
+    fn assert_provider_denied(result: Result<ToolOutput, ToolError>) {
+        assert!(
+            matches!(result, Err(ToolError::PermissionDenied { ref reason, .. })
+            if reason.contains("rejects call")),
+            "unexpected admission result: {result:?}"
+        );
+    }
+
     // This raw fixture deliberately knows nothing about admission proof.
     // Only the canonical registry entry may stop its observable effect.
     struct AdmissionCountingHandler {
@@ -1273,6 +1474,13 @@ mod tests {
 
     #[async_trait]
     impl ToolHandler for AdmissionCountingHandler {
+        fn bind_visible_servers(&self, _visible: &McpServerFilter) -> Option<Arc<dyn ToolHandler>> {
+            Some(Arc::new(Self {
+                name: self.name.clone(),
+                calls: self.calls.clone(),
+            }))
+        }
+
         async fn invoke(&self, _input: Value) -> Result<ToolOutput, ToolError> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(ToolOutput {
@@ -1400,6 +1608,12 @@ mod tests {
     // Invoke a frozen fixture entry through the real gates, never by minting
     // proof in a test or exposing the registry-owned wrapper's raw handler.
     async fn invoke_captured(entry: &RegistryEntry) -> ToolOutput {
+        try_invoke_captured(entry)
+            .await
+            .expect("frozen fixture entry passes real gates")
+    }
+
+    async fn try_invoke_captured(entry: &RegistryEntry) -> Result<ToolOutput, ToolError> {
         use crate::tools::service::ToolService;
         let mut projection = crate::tools::runtime::LoopToolRegistry::new();
         // Frozen fixture store containing the actual captured, already wrapped
@@ -1435,11 +1649,10 @@ mod tests {
             }),
             service.execute(&entry.descriptor.name, serde_json::json!({})),
         )
-        .await
-        .expect("frozen fixture entry passes real gates");
+        .await?;
         output.value =
             serde_json::from_str(output.value.as_str().expect("Layer 2 rendered JSON")).unwrap();
-        output
+        Ok(output)
     }
 
     // Break caught: a captured entry pairs rev1 authority with rev2 code, or
@@ -1480,7 +1693,7 @@ mod tests {
             assert_eq!(identity.replay_policy, ReplayPolicy::Unsafe);
             assert_eq!(identity.replay_contract_fingerprint, None);
             assert_eq!(captured.descriptor.description, "terminal implementation 1");
-            assert!(Arc::ptr_eq(&captured.handler, &first_published));
+            assert_eq!(captured.handler.definition(), first_published.definition());
             let output = invoke_captured(&captured).await;
             assert_eq!(output.value, serde_json::json!({"generation": 1}));
             captured
@@ -1502,10 +1715,10 @@ mod tests {
         assert_eq!(identity.replay_policy, ReplayPolicy::Safe);
         assert!(identity.replay_contract_fingerprint.is_some());
         assert_eq!(current.descriptor.description, "terminal implementation 2");
-        assert!(Arc::ptr_eq(
-            &current.handler,
-            &reg.resolve("terminal").unwrap()
-        ));
+        assert_eq!(
+            current.handler.definition(),
+            reg.resolve("terminal").unwrap().definition()
+        );
         assert!(
             !Arc::ptr_eq(&current.handler, &next_handler),
             "replacement also owns an admission wrapper"
@@ -1738,17 +1951,20 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn snapshot_projection_reuses_arc_and_rebuild_preserves_admitted_members() {
+    #[tokio::test]
+    async fn snapshot_projection_preserves_admitted_members_and_frozen_identity() {
         let reg = ToolHandlerRegistry::new();
         reg.register(desc("stable"), fake("stable")).unwrap();
         let before = reg.snapshot_state();
         let repeated = reg.snapshot_state();
-        assert!(Arc::ptr_eq(&before.entries, &repeated.entries));
-        assert!(Arc::ptr_eq(&before.entries, &reg.entries_snapshot()));
+        assert_eq!(before.revision(), repeated.revision());
+        assert_eq!(before.entries().len(), reg.entries_snapshot().len());
         let admitted = reg.resolve_entry("stable").unwrap();
         let stable = before.entry("stable").unwrap();
-        assert!(Arc::ptr_eq(&stable.handler, &admitted.handler));
+        assert_eq!(
+            invoke_captured(stable).await.value,
+            invoke_captured(&admitted).await.value
+        );
         assert!(Arc::ptr_eq(&stable.descriptor, &admitted.descriptor));
 
         reg.register(desc("unrelated"), fake("unrelated")).unwrap();
@@ -1760,9 +1976,12 @@ mod tests {
         assert_eq!(after.revision(), 2);
         assert_eq!(after.entries().len(), 2);
         let retained = after.entry("stable").unwrap();
-        assert!(Arc::ptr_eq(&stable.handler, &retained.handler));
+        assert_eq!(
+            invoke_captured(stable).await.value,
+            invoke_captured(retained).await.value
+        );
         assert!(Arc::ptr_eq(&stable.descriptor, &retained.descriptor));
-        assert!(Arc::ptr_eq(&after.entries, &reg.snapshot_state().entries));
+        assert_eq!(after.revision(), reg.snapshot_state().revision());
     }
 
     #[test]
@@ -1793,7 +2012,7 @@ mod tests {
         assert_eq!(state.value.records.len(), 1);
         assert!(!state.value.records.contains_key(&old_key));
         let stored = state.value.records.get(&new_key).unwrap();
-        assert!(Arc::ptr_eq(&stored.handler, &entry.handler));
+        assert_eq!(stored.handler.definition(), entry.handler.definition());
         assert!(Arc::ptr_eq(&stored.descriptor, &entry.descriptor));
         assert_eq!(after.entries().len(), 1);
         assert_eq!(entry.descriptor.revision, current.revision());
@@ -1802,7 +2021,7 @@ mod tests {
             ToolSource::Builtin
         );
         assert!(!stale.dispose());
-        assert!(Arc::ptr_eq(&after.entries, &reg.snapshot_state().entries));
+        assert_eq!(after.revision(), reg.snapshot_state().revision());
         reg.close();
         assert!(current.dispose());
         assert!(reg.shared.snapshot().value.records.is_empty());
@@ -1836,8 +2055,8 @@ mod tests {
         assert_eq!(after.closed, before.closed);
         assert_eq!(after.value.records.len(), 1);
         assert!(Arc::ptr_eq(
-            &frozen.entries,
-            &after.value.callable_projection
+            &frozen.entry("duplicate").unwrap().descriptor,
+            &after.value.entry("duplicate").unwrap().descriptor
         ));
         assert!(matches!(
             primary.try_recv(),
@@ -1884,10 +2103,14 @@ mod tests {
         assert!(!first.dispose());
         reg.close();
         let removed = reg.unregister("terminal").unwrap();
-        assert!(Arc::ptr_eq(
-            &removed,
-            &replaced.entry("terminal").unwrap().handler
-        ));
+        let removed_entry = RegistryEntry {
+            handler: removed,
+            ..replaced.entry("terminal").unwrap().clone()
+        };
+        assert_eq!(
+            invoke_captured(&removed_entry).await.value,
+            serde_json::json!({"generation": 2})
+        );
         assert!(!second.dispose());
         assert!(reg.shared.snapshot().value.records.is_empty());
         assert!(reg.snapshot_state().entries().is_empty());
@@ -2001,9 +2224,9 @@ mod tests {
         assert_eq!(handle.revision(), 1);
         assert_eq!(state.revision(), 1);
         assert_eq!(entry.max_result_tokens, Some(17));
-        assert!(Arc::ptr_eq(&entry.handler, &resolved.handler));
+        assert_eq!(entry.handler.definition(), resolved.handler.definition());
         assert!(Arc::ptr_eq(&entry.descriptor, &resolved.descriptor));
-        assert!(Arc::ptr_eq(&state.entries, &reg.entries_snapshot()));
+        assert_eq!(state.entries().len(), reg.entries_snapshot().len());
         assert!(matches!(
             projected.try_recv(),
             Ok(RegistryChange::Registered { name, revision: 1, .. }) if name == "budgeted"
@@ -2035,10 +2258,10 @@ mod tests {
         assert_eq!(old.max_result_tokens, Some(17));
         let frozen_entry = frozen.entry("budgeted").expect("frozen entry retained");
         assert_eq!(frozen_entry.max_result_tokens, Some(17));
-        assert!(Arc::ptr_eq(&frozen_entry.handler, &old.handler));
+        assert_eq!(frozen_entry.handler.definition(), old.handler.definition());
         assert!(Arc::ptr_eq(&frozen_entry.descriptor, &old.descriptor));
         assert_eq!(current.max_result_tokens, Some(91));
-        assert!(Arc::ptr_eq(&current.handler, &live_handler));
+        assert_eq!(current.handler.definition(), live_handler.definition());
         assert!(Arc::ptr_eq(&current.descriptor, &live_descriptor));
         assert!(!Arc::ptr_eq(&old.handler, &current.handler));
         assert!(!Arc::ptr_eq(&old.descriptor, &current.descriptor));

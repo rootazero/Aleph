@@ -55,6 +55,58 @@ Aleph 的组合方式：
 - 替换像 pi：每个可替换能力都是具名槽位；pi 扩展最常用的拦截点（`before_agent_start`、`tool_call`、`tool_result`、`turn_end`、compaction）在 Aleph 里都有对应的行为槽位。
 - 安全比两者更严：第三方实现默认跑在隔离边界里（WASM 能力内核或独立进程），不进入宿主进程拿完全权限。prompt 只能按层替换，安全相关层固定；沙箱、审批、secrets 永不开放拦截。超出「增补」的权力需要逐项授权，授权与内容哈希绑定。
 
+### 0.3 参考项目对比摘要
+
+> 本表是 §0.1（Codex / pi 取舍）与 §0.2（oh-my-pi）的汇总版，供审阅者一屏看清「谁借鉴谁、借鉴到哪一层、什么明确不抄」。
+> 事实来源全部落在仓库已有证据里，不引入未验证的对比结论。
+
+| 参考项目 | 一句话定位 | 可借鉴点（吸收） | 不应照搬点（规避） | Aleph 落点 / 现状 |
+|---|---|---|---|---|
+| **Aleph（自身）** | 一核多端的 Rust Core + 多端 I/O；已有唯一 Tool 注册表与 capability 事实源 | ——（本列即基线） | —— | Tool capability 闭环**已完成**：`src/tools/registry.rs` 是唯一权威，`src/tool_metadata/registry/mod.rs` 降级为投影，`src/capability/{backend,facade,zahir_facade}.rs` 落地 describe / resolve / validate_lease / subscribe / project |
+| **pi**（`@earqil-works/pi-coding-agent`） | 扩展是一等公民的极简 coding agent；TS 扩展在进程内跑 | 扩展 API 的**面**（`registerTool` / `registerCommand` / `sendMessage` / `events.on` / `on`）与事件命名；`session_shutdown` 是唯一 dispose 钩子的克制设计；配置文件 `package.json#pi {extensions, skills, prompts, themes}` 的声明式发现 | 进程内**完全权限**（无沙箱）；静默同名覆盖；允许整段替换 system prompt——等于把安全约束一起交出去 | 已决议「**Aleph 不托管 pi 扩展**」，方向是 pi → Aleph 走 MCP server / `aleph-cli`。证据：`docs/superpowers/specs/2026-09-20-plugin-scope-and-cc-compat-evidence/scan-pi.md`（2026-09-20 扫描 0.85.1）；本方案 §10.2 pi sidecar A/B/C 档 |
+| **oh-my-pi**（omp，pi-mono 分支） | 单二进制 + 60+ provider / 31 工具 / LSP / DAP，开箱即用且兼容 pi 生态 | 配置分层可观测（`omp config list/get` 显示生效值**与覆盖来源**）；原生绑定版本固定槽（升级不必重编译）；记忆后端 / compaction / provider / LSP 皆可替换 | 同名覆盖「最后注册胜出」的静默冲突；扩展在进程内拿全部权限；工具替换对用户不可见 | 本方案 §5.2 双信任轴、§11 `served_by` + `slots list` / `hooks list` 负责可观测与冲突 fail-closed；§0.2 已有逐条对照 |
+| **acpx / A2A** | acpx 是 ACP runtime，带 15+ agent 的 `AGENT_REGISTRY`；A2A 是 agent↔agent 协议 | 「协议即投影」的纪律：一份 wire type、一处审批推导；agent / 工具清单的**注册表形态**（注册表是唯一权威，其余是投影） | 把**外部进程的清单**当运行时权威（Aleph 的所有权在 `src/capability/ownership.rs::OwnershipTree`）；为兼容 TS runtime 引入 Node 依赖 | acpx 证据：`docs/superpowers/specs/2026-04-18-acp-harness-refactor.md` §1.3；Aleph 自有实现 `src/a2a/`（adapter / config / domain / port / service / sub_agent）与 `src/acp/`（client 方向）；本方案 §12 协议投影三条硬规则 |
+| **pi-btw**（`@lanlance/pi-btw`） | 单文件 TS 扩展：把「顺带问一句」做成独立子会话 | 旁路提问的**形态**：独立子会话 + 工具白名单（`read` / `grep` / `find` / `ls`）+ 显式保留窗口（20 轮往返） | 整段复制主会话做上下文（Aleph 已改为**游标增量**：只追加上次关闭以来新增的部分） | Aleph 已有 `/btw`：`src/gateway/btw/`、`src/gateway/execution_engine/btw_wire_tests.rs`、`src/config/types/policies/mod.rs` 的 `btw_fork_turns`；对照见 `docs/superpowers/specs/2026-08-20-btw-side-questions-design.md` §2 |
+
+English mirror: one screen of "who borrows from whom, at which layer, and what is explicitly not copied". Aleph's Tool capability closure is done (registry is the sole authority, catalog is a projection); pi contributes the extension-API *shape* but not its in-process full-permission model; oh-my-pi contributes observable config layering but not last-wins silent override; acpx/A2A contribute "protocols are projections" but not an external process's registry as runtime authority; pi-btw contributes the side-question shape but not whole-session copying (Aleph uses a cursor delta).
+
+### 0.4 当前基线与本阶段边界（2026-10-22 复核）
+
+> 本节把「文档里的方案」与「代码里的现状」对齐，避免把设计读成已实现。
+> 同一基线的条目另见 `docs/reference/FEATURE_LOCATOR.md` §3.5d 的「三态基线」与 `docs/reference/PLUGIN_SYSTEM.md` 的 `Provider lifecycle foundation` 段落。
+> English mirror: this section reconciles the design with the current tree — what is implemented (including provider call admission), what this phase only designs, what stays deferred, and the four things this phase explicitly does not do.
+
+**三态 / Tri-state**
+
+| 状态 | 范围 | 路径 | 验证标准（怎么验） | 旧代码清理点 |
+|---|---|---|---|---|
+| ✅ 已实现 | Tool capability 闭环：registry 唯一权威、catalog 降级为投影、facade 的 describe / resolve / validate_lease / subscribe / project 全落地 | `src/tools/registry.rs` · `src/tool_metadata/registry/mod.rs` · `src/capability/{backend,facade,zahir_facade}.rs` | `cargo test -p alephcore --lib`；facade / backend 定向测试 | 已完成回收：`CapabilityBackend::generation()` 与 `CapabilityDescriptor.owner_generation` 已删，generation 权威只在 `BackendLease.owner_generation` + `OwnershipTree::generation()` |
+| ✅ 已实现 | provider lifecycle fencing：无副作用状态机 + generation + 旧 lease fail-closed（`ResolveError::StaleProvider`） | `src/capability/provider.rs` · `src/capability/facade.rs`（`BackendLease.provider_generation`）· `src/tools/registry.rs`（`new_with_provider` + callable 闸） | 定向测试：`provider_not_ready_hides_callable_snapshots_until_ready`（`src/tools/registry.rs`）· `provider_restart_invalidates_old_tool_leases_and_hides_projection`（`src/capability/zahir_facade.rs`）· `lifecycle_allocates_a_new_generation_on_each_start` / `invalid_transition_is_fail_closed` / `handle_shares_state_and_publishes_committed_transitions`（`src/capability/provider.rs`） | 本切片**没有引入第二 registry**，因此没有旧结构被取代、无删除项（判据「引入一个 Zahir 组件须同轮删掉被取代的旧结构」在本切片为空） |
+| 🟡 本阶段（只做设计 + 入口，不接线） | **lazy activation**：provider 不在 boot 期启动，第一次被真正需要时才启动；入口 = `ProviderHandle` + `ToolHandlerRegistry::new_with_provider` 装配缝 + `ProviderHandle::subscribe_changes()` 通知面 | 设计落点：本节；契约面：`src/capability/provider.rs`（`transition(Starting)` 是唯一 generation 递增点） | 设计验收 = 能回答四个问题：谁触发启动（runtime owner，而不是读侧投影）· 启动失败落到 `Failed` 还是 `Stopped`（`Failed`）· 并发启动是否单飞（`transition` 对非法迁移返回 `ProviderLifecycleError::InvalidTransition`，需 owner 侧串行）· 未 `Ready` 期间 `describe/resolve` 返回什么（非 Ready 时 callable projection / `describe` 隐藏能力；`resolve` 不应签发可调用 lease——若 resolve 过程中发生 restart / 状态竞态，直接返回 `StaleProvider`；`validate_lease` 是对已有 lease 的再次 fail-closed 校验） | 下次引入 lazy activation 时**不得**新增第二份 enabled/disabled 判定：`src/extension/plugin_state.rs` 的 durable enabled 状态 + `src/extension/lifecycle.rs::ExtensionManager` 是唯一权威；若出现第二份判定，必须同轮删除 |
+| ✅ 已实现 | provider call admission（已提交）：每代 handler 包装 + 调用点准入（`ProviderLifecycle::acquire_call` / `ProviderHandle::acquire_call` / `ProviderCallError` / `ProviderLifecycleError::GenerationExhausted`） | `src/capability/provider.rs`（`acquire_call` 同判 state 与 generation；`transition(Starting)` 的 generation 递增改为 `checked_add`，溢出即 `GenerationExhausted` fail-closed）· `src/tools/registry.rs`（`ProviderCallHandler` 包装 resolve / snapshot / unregister 取到的 handler，准入失败映射为 `ToolError::PermissionDenied`）· `src/capability/zahir_facade.rs`（`resolve` / `validate_lease` 在签发与复验 lease 时做 `acquire_call`，失败即 `StaleProvider`） | 定向测试：`call_admission_requires_ready_and_the_current_generation` / `exhausted_generation_cannot_restart_or_readmit_old_calls`（`src/capability/provider.rs`，已随本阶段提交）· 实跑 `cargo test -p alephcore --lib capability::provider::` → 5 passed / 0 failed | 未引入新 registry；旧 lease 失效语义沿用 `StaleProvider` |
+| ⛔ Deferred | Gateway / Terminal / Memory 接入统一 backend；sidecar supervisor；Rust dylib 热卸载；EffectClaim producer；automatic Safe Replay；其余 kind backend | `src/gateway/**` · `src/gateway/pty/manager.rs::PtyManager` · `src/memory/extensions/registry.rs::MemoryExtensionRegistry` · `src/gateway/channel_registry.rs::ChannelRegistry` · `src/extension/lifecycle.rs::ExtensionManager` | 未实现 ⇒ 任何文档、汇报、README 不得写「已接入统一 backend」 | —— |
+
+**仍是独立边界的四件事（不要合并叙述）/ Still separate boundaries（do not merge in prose）**：
+
+- `src/extension/lifecycle.rs::ExtensionManager` —— 插件发现 / mount / unmount / reload 的权威，与 provider lifecycle **并排**而非上下级。
+- `src/gateway/channel_registry.rs::ChannelRegistry` —— 通道工厂注册表，重复注册直接报错。
+- `src/gateway/pty/manager.rs::PtyManager` —— 终端进程管理，与 capability backend 无关。
+- `src/memory/extensions/registry.rs::MemoryExtensionRegistry` —— 记忆扩展注册表（被 `src/agents/**` 与 `src/a2a/sub_agent.rs` 使用）。
+
+**明确不做（本阶段边界）/ Explicit non-goals**：
+
+1. **不做 Rust dylib 热卸载** —— native Rust 动态库的卸载语义（析构顺序、静态状态、后台线程）不在本契约内；native backend 的换装走「进程边界 + 重启」，不是「热卸载」。
+2. **不做 sidecar supervisor** —— `ProviderTransport::Bridge` 只是契约里的一个 transport 标记；进程监督、握手、健康检查、重启策略属于将来的 supervisor 组件，本阶段没有这个组件。
+3. **不引入第二 registry** —— 工具的唯一权威仍是 `src/tools/registry.rs::ToolHandlerRegistry`；provider lifecycle 不新建任何注册表。
+4. **不让 catalog / diagnostic / MCP projection 隐式启动 disabled provider** —— `src/tool_metadata/registry/mod.rs`（catalog）、`src/capability/diagnostic_control.rs`、`src/tools/handlers/mcp.rs` 都是**只读**投影：读 provider 状态不得产生 `Starting` 转换；disabled 的判定只认 `src/extension/plugin_state.rs` 的 durable enabled 状态。
+
+**接线实况（避免把设计读成已接线）/ Current wiring reality**：
+
+- 全仓 `ProviderState::Starting` / `transition(ProviderState::…)` 的调用点**只有测试**（`src/capability/zahir_facade.rs`、`src/tools/registry.rs` 的 test 模块），生产路径没有一处驱动 transition。
+- 生产只调用 `ToolHandlerRegistry::new()`（`src/tools/registry.rs::ToolHandlerRegistry::new`），它造的是 `ProviderLifecycle::ready(...)`（`Ready`、generation 1）；`new_with_provider` **没有生产调用点**。
+- 结论：fail-closed 闸门今天在生产里是 dormant 的——默认路径永远 `Ready`，既不会隐式启动，也不会被停止。这既是事实，也是 lazy activation 要接手的位置。
+- 已提交的 call admission 切片：`acquire_call` 准入 + 每代 handler 包装把「状态 + generation」的比对从 lease 校验延伸到调用点，但仍**不驱动任何 transition**——「谁来启动 provider」这一环依旧空着，那正是 lazy activation 的位置。生产路径的 handler 已由 `ProviderCallHandler` 包装（`resolve_entry` / `unregister` / `snapshot_state`），但生产 provider 恒为 `Ready` / generation 1 ⇒ 今天的准入不会拒绝任何调用。
+
 ---
 
 ## 1. 架构基线（现有资产）

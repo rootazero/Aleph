@@ -21,7 +21,7 @@ use crate::capability::facade::{
 use crate::capability::ownership::{
     LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, VisibilityScope,
 };
-use crate::capability::provider::{ProviderHandle, ProviderState};
+use crate::capability::provider::ProviderHandle;
 use crate::sync_primitives::Arc;
 use crate::tools::registry::{
     RegistryChange, RegistryEntry, RegistryPublication, RegistrySnapshot, ToolHandlerRegistry,
@@ -338,6 +338,8 @@ impl Zahir for ZahirFacade {
     }
 
     fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError> {
+        let provider = self.adapter.registry.provider();
+        let provider_generation = provider.generation();
         self.reconcile_registry_bindings();
         let mut descriptor = self
             .adapter
@@ -348,11 +350,15 @@ impl Zahir for ZahirFacade {
         // checks against the same binding key (custom visibility never falls
         // back to the default binding).
         descriptor.visibility = reference.visibility.clone();
+        // Never stamp a descriptor read before restart with the new generation.
+        provider
+            .acquire_call(provider_generation)
+            .map_err(|_| ResolveError::StaleProvider)?;
         match self.tree.generation(&reference.id, &reference.visibility) {
             Some(owner_generation) => Ok(BackendLease {
                 descriptor,
                 owner_generation,
-                provider_generation: self.adapter.registry.provider_generation(),
+                provider_generation,
             }),
             None if self.tree.is_revoked(&reference.id) => Err(ResolveError::Revoked),
             None => Err(ResolveError::NotVisible),
@@ -361,13 +367,9 @@ impl Zahir for ZahirFacade {
 
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError> {
         let provider = self.adapter.registry.provider();
-        let (provider_state, provider_generation) = provider.snapshot();
-        if provider_state != ProviderState::Ready {
-            return Err(ResolveError::StaleProvider);
-        }
-        if lease.provider_generation != provider_generation {
-            return Err(ResolveError::StaleProvider);
-        }
+        provider
+            .acquire_call(lease.provider_generation)
+            .map_err(|_| ResolveError::StaleProvider)?;
 
         // ① binding location — the lease's own visibility selects the binding.
         match self
@@ -393,7 +395,9 @@ impl Zahir for ZahirFacade {
                 if current.revision == lease.descriptor.revision
                     && current.schema.fingerprint == lease.descriptor.schema.fingerprint =>
             {
-                Ok(())
+                provider
+                    .acquire_call(lease.provider_generation)
+                    .map_err(|_| ResolveError::StaleProvider)
             }
             _ => Err(ResolveError::Unknown),
         }
@@ -537,13 +541,35 @@ mod tests {
         );
 
         provider.transition(ProviderState::Stopped).unwrap();
+        assert_eq!(
+            facade.validate_lease(&lease),
+            Err(ResolveError::StaleProvider)
+        );
+        provider.transition(ProviderState::Disabled).unwrap();
+        assert!(facade.describe(scope_all()).capabilities.is_empty());
+        assert_eq!(
+            facade.validate_lease(&lease),
+            Err(ResolveError::StaleProvider)
+        );
         provider.transition(ProviderState::Starting).unwrap();
+        assert_eq!(
+            facade.validate_lease(&lease),
+            Err(ResolveError::StaleProvider)
+        );
         provider.transition(ProviderState::Ready).unwrap();
         assert_eq!(
             facade.validate_lease(&lease),
             Err(ResolveError::StaleProvider)
         );
-        assert!(facade.resolve(ref_for(&id)).is_ok());
+        let fresh = facade.resolve(ref_for(&id)).unwrap();
+        assert_eq!(fresh.provider_generation, 2);
+        assert_eq!(facade.validate_lease(&fresh), Ok(()));
+        provider.transition(ProviderState::Failed).unwrap();
+        assert!(facade.describe(scope_all()).capabilities.is_empty());
+        assert_eq!(
+            facade.validate_lease(&fresh),
+            Err(ResolveError::StaleProvider)
+        );
     }
 
     #[test]

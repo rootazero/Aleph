@@ -23,6 +23,10 @@ The lifecycle contract does not create a second plugin manager. `src/extension/l
 
 该生命周期契约不会新建第二个插件管理器。`src/extension/lifecycle.rs::ExtensionManager` 仍负责发现、mount/unmount effect 和 reload；`src/extension/plugin_state.rs` 仍是持久化 enabled 配置的事实源。Provider handle 是未来由这些 owner 驱动的 Core 边界。本切片尚未启动 sidecar、加载动态库，也未把 ExtensionManager 的副作用直接接入状态机。
 
+三态基线（已实现 / 本阶段 / Deferred）、四条明确边界（不做 Rust dylib 热卸载、不做 sidecar supervisor、不引入第二 registry、不让 catalog / diagnostic / MCP projection 隐式启动 disabled provider）与具体验证入口见 `docs/reference/FEATURE_LOCATOR.md` §3.5d 的「三态基线」条目与 `docs/research/aleph_modularization_plan.md` §0.4。接线实况：生产路径没有一处驱动 provider transition，`ToolHandlerRegistry::new_with_provider` 尚无生产调用点，因此本节的 fail-closed 闸门目前是 dormant 的——插件侧要启动 provider，仍须经 `ExtensionManager` 与 `plugin_state.rs` 这条唯一权威链。
+
+The tri-state baseline (implemented / this phase / deferred), the four explicit non-goals, and the verification entry points live in `docs/reference/FEATURE_LOCATOR.md` §3.5d and `docs/research/aleph_modularization_plan.md` §0.4. Wiring reality: no production call site drives a provider transition and `ToolHandlerRegistry::new_with_provider` has no production caller, so the fail-closed gate is dormant today; starting a provider from the plugin side still has to go through `ExtensionManager` and `plugin_state.rs`.
+
 ---
 
 ## Context Capability 授权契约 / Context capability authorization

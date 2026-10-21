@@ -73,12 +73,24 @@ pub struct ProviderTransition {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProviderLifecycleError {
+    #[error("provider generation exhausted for {provider_id}")]
+    GenerationExhausted { provider_id: ProviderId },
     #[error("invalid provider transition for {provider_id}: {from:?} -> {to:?}")]
     InvalidTransition {
         provider_id: ProviderId,
         from: ProviderState,
         to: ProviderState,
     },
+}
+
+/// A call was not admitted to the expected live provider instance.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("provider {provider_id} rejects call: {state:?}, expected generation {expected_generation}, current generation {actual_generation}")]
+pub struct ProviderCallError {
+    pub provider_id: ProviderId,
+    pub state: ProviderState,
+    pub expected_generation: u64,
+    pub actual_generation: u64,
 }
 
 /// Pure provider lifecycle state machine.
@@ -142,6 +154,19 @@ impl ProviderLifecycle {
         self.state == ProviderState::Ready
     }
 
+    /// Check admission against both state and generation from the same instance.
+    pub fn acquire_call(&self, expected_generation: u64) -> Result<(), ProviderCallError> {
+        if !self.is_ready() || self.generation != expected_generation {
+            return Err(ProviderCallError {
+                provider_id: self.provider_id.clone(),
+                state: self.state,
+                expected_generation,
+                actual_generation: self.generation,
+            });
+        }
+        Ok(())
+    }
+
     /// Apply one lifecycle transition and return its committed evidence.
     pub fn transition(
         &mut self,
@@ -157,7 +182,11 @@ impl ProviderLifecycle {
         }
 
         if next == ProviderState::Starting {
-            self.generation = self.generation.saturating_add(1);
+            self.generation = self.generation.checked_add(1).ok_or_else(|| {
+                ProviderLifecycleError::GenerationExhausted {
+                    provider_id: self.provider_id.clone(),
+                }
+            })?;
         }
         self.state = next;
         Ok(ProviderTransition {
@@ -233,6 +262,19 @@ impl ProviderHandle {
         self.state() == ProviderState::Ready
     }
 
+    /// Admit a call atomically with respect to lifecycle transitions.
+    ///
+    /// Invoke this at the handler boundary, not just when resolving it. A
+    /// successful check is the admission linearization point: calls admitted
+    /// before `Stopping` may finish. This does not drain or cancel in-flight
+    /// work and is not permission to unload its code or transport.
+    pub fn acquire_call(&self, expected_generation: u64) -> Result<(), ProviderCallError> {
+        self.lifecycle
+            .lock()
+            .expect("provider lifecycle mutex poisoned")
+            .acquire_call(expected_generation)
+    }
+
     /// Commit a state transition and notify live observers after the state is
     /// visible. The broadcast is a notification tap, not a recovery source.
     pub fn transition(
@@ -302,6 +344,41 @@ mod tests {
         ));
         assert_eq!(lifecycle.state(), ProviderState::Discovered);
         assert_eq!(lifecycle.generation(), 0);
+    }
+
+    #[test]
+    fn call_admission_requires_ready_and_the_current_generation() {
+        let handle = ProviderHandle::new(provider());
+        assert!(handle.acquire_call(0).is_err());
+        handle.transition(ProviderState::Starting).unwrap();
+        assert!(handle.acquire_call(1).is_err());
+        handle.transition(ProviderState::Ready).unwrap();
+        assert_eq!(handle.acquire_call(1), Ok(()));
+        handle.transition(ProviderState::Stopping).unwrap();
+        assert!(handle.acquire_call(1).is_err());
+        handle.transition(ProviderState::Stopped).unwrap();
+        assert!(handle.acquire_call(1).is_err());
+        handle.transition(ProviderState::Starting).unwrap();
+        handle.transition(ProviderState::Ready).unwrap();
+        assert!(handle.acquire_call(1).is_err());
+        assert_eq!(handle.acquire_call(2), Ok(()));
+        handle.transition(ProviderState::Failed).unwrap();
+        assert!(handle.acquire_call(2).is_err());
+        handle.transition(ProviderState::Disabled).unwrap();
+        assert!(handle.acquire_call(2).is_err());
+    }
+
+    #[test]
+    fn exhausted_generation_cannot_restart_or_readmit_old_calls() {
+        let mut lifecycle = provider();
+        lifecycle.state = ProviderState::Stopped;
+        lifecycle.generation = u64::MAX;
+        assert!(matches!(
+            lifecycle.transition(ProviderState::Starting),
+            Err(ProviderLifecycleError::GenerationExhausted { .. })
+        ));
+        assert_eq!(lifecycle.state(), ProviderState::Stopped);
+        assert!(lifecycle.acquire_call(u64::MAX).is_err());
     }
 
     #[test]
